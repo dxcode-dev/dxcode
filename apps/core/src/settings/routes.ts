@@ -67,6 +67,7 @@ import { personalUsageRoutes } from "./usage/routes.js";
 import { workspaceUsageRoutes } from "./usage/workspace-routes.js";
 import { WorkspaceRepositoryD1 } from "./workspace/repository-d1.js";
 import { workspaceProfileRoutes } from "./workspace/routes.js";
+import { workspaceAgentInstructionsRoutes } from "./workspace-agent-instructions/routes.js";
 import { workspacePolicyRoutes } from "./workspace-policy/routes.js";
 
 const responseData = (
@@ -276,5 +277,9 @@ settingsRoutes.route(
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/model-routing",
   workspaceModelRoutingRoutes,
+);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/agent-instructions",
+  workspaceAgentInstructionsRoutes,
 );
 settingsRoutes.get("/personal", handlePersonalSettingsContext);

@@ -16,6 +16,11 @@ import { Effect, Redacted, Schema } from "effect";
 import type { DeploymentOrbs } from "../../execution/deployment-orbs.js";
 import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
 import {
+  rescueUnsavedWork,
+  restoreUnsavedWork,
+  type UnsavedWorkRescue,
+} from "../../execution/read-only-rescue.js";
+import {
   type ExecutionCredentialUnavailableReason,
   type ExecutionTargetCredential,
   resolveExecutionTarget,
@@ -24,6 +29,7 @@ import type { SourceWorkspaceRuntimeOptions } from "../../execution/source-prepa
 import type { Bindings } from "../../http/types.js";
 import { orbProvidersLogger } from "../../logging.js";
 import { stepTiming } from "../../observability/step-timing.js";
+import type { RestoredWork } from "../../orb-disk/read-only.js";
 import { prefetchExecutionEnvironment } from "../../settings/environment-variables/execution.js";
 import { drainThreadDaemon } from "../../threads/daemon-client.js";
 import {
@@ -100,8 +106,12 @@ export interface EnsureDaemonInput {
   readonly threadId: ThreadId;
   readonly endpoint: string;
   readonly signal?: AbortSignal;
-  /** A key minted for this activation, present only when none existed. */
-  readonly credential?: DaemonCredential;
+  /**
+   * A key minted for this activation, present only when none existed or the
+   * guest's was replaced. It may still be in preparation; the activation
+   * awaits it before it reaches the workspace.
+   */
+  readonly credential?: DaemonCredential | Promise<DaemonCredential>;
   /** Mint a key when the guest lost its configuration. */
   readonly mintCredential: () => Promise<DaemonCredential>;
   /**
@@ -235,6 +245,12 @@ export interface ExecutionWorkspaceProvider<
     owner: ExecutionWorkspaceOwner,
     options: ExecutionWorkspaceCreateOptions,
   ): Promise<Handle>;
+  /**
+   * `connect` runs `authorize` before it resumes an Orb, beside its own
+   * reads, so Core's checks may still be in flight when it is called.
+   * Without it, Core finishes them before `connect`.
+   */
+  readonly connectAuthorizes?: true;
   /** Reconnects to the owner's existing workspace; never creates one. */
   connect(
     context: ExecutionContext,
@@ -274,7 +290,10 @@ export interface ExecutionWorkspaceRecovery {
    * `unsaved`: not restarted, since its files could not be kept.
    */
   readonly files: "kept" | "earlier" | "lost" | "unsaved";
-  /** When the restored files were saved (epoch ms). */
+  /**
+   * When the restored files were saved (epoch ms). With `unsaved`, the last
+   * good save a restart that drops the unsaved work would start from.
+   */
   readonly savedAt?: number;
 }
 
@@ -341,9 +360,15 @@ export interface ExecutionActivation {
     context: ExecutionContext,
     threadId: ThreadId,
   ) => Promise<void>;
+  /**
+   * `admission` is the Thread's checks, started beside its target
+   * (`ExecutionActivationFactory.admitDaemon` and the workspace policy);
+   * without it the activation checks the Thread itself.
+   */
   readonly ensureDaemon: (
     context: ExecutionContext,
     input: EnsureDaemonInput,
+    admission?: Promise<void>,
   ) => Promise<DaemonInstallation>;
   /**
    * Terminal input renews the workspace's idle deadline. It runs on every
@@ -384,6 +409,8 @@ export type ExecutionActivationFactory = ((
 ) => ExecutionActivation) & {
   /** Starts a run's checks beside its target resolution. */
   readonly admit?: (threadId: string) => ExecutionRunAdmission;
+  /** Starts a daemon activation's Thread check beside its target. */
+  readonly admitDaemon?: (threadId: string) => Promise<void>;
 };
 
 export class ExecutionProviderUnavailable extends Schema.TaggedError<ExecutionProviderUnavailable>()(
@@ -487,6 +514,34 @@ export interface ExecutionWorkspaces {
   readonly archive: (threadId: ThreadId) => Promise<void>;
   /** Thread deleted: drain dxd, then destroy the workspace. */
   readonly destroy: (threadId: ThreadId) => Promise<void>;
+  /**
+   * A person restarts the Thread's Orb (#1592): its provider saves it and
+   * stops it, and the next open starts it from that save. Never drops
+   * files: `unsaved` when the save failed and the Orb was left running,
+   * `unsupported` when the provider can't restart an Orb.
+   */
+  readonly restart: (
+    threadId: ThreadId,
+    options?: {
+      /**
+       * The person accepted losing what changed since the last save: the
+       * checkout's unsaved work is copied out first when it can be, and
+       * put in the restarted Orb and the Thread's storage.
+       */
+      readonly discardUnsaved?: boolean;
+    },
+  ) => Promise<
+    | {
+        readonly outcome: "restarted";
+        readonly files: "kept" | "earlier" | "lost";
+        readonly savedAt?: number;
+        /** Only when unsaved work was dropped: what dx copied out. */
+        readonly rescue?: "copied" | "nothing" | "failed";
+        readonly restored?: RestoredWork;
+      }
+    | { readonly outcome: "unsaved"; readonly savedAt?: number }
+    | { readonly outcome: "unsupported" }
+  >;
   /**
    * A new Thread's first message is being dispatched: start its Orb now, so
    * the run finds it starting or up. True when an Orb was started.
@@ -702,6 +757,7 @@ export const composeExecutionWorkspaces = (
       },
       archive: unavailable,
       destroy: unavailable,
+      restart: async () => ({ outcome: "unsupported" }),
       prestart: async () => false,
       ensureDaemon: unavailable,
       pinnedProvider: unavailable,
@@ -863,6 +919,76 @@ export const composeExecutionWorkspaces = (
       tools: executionWorkspaceTools,
     },
     archive: (threadId) => release(threadId, "archive"),
+    restart: async (threadId, options = {}) => {
+      // The Thread's checks and the workspace policy, as for a run: a
+      // restart starts the Orb again.
+      const { entry, target } = await resolve(threadId, true);
+      await target.policy;
+      const workspace = entry.implementation.workspace;
+      const recover = workspace.recover;
+      if (recover === undefined) return { outcome: "unsupported" };
+      const resolvedContext = contextFor(entry, target);
+      const authorize = async () => undefined;
+      if (options.discardUnsaved !== true) {
+        const recovery = await recover.call(
+          workspace,
+          resolvedContext,
+          { threadId },
+          { discardUnsaved: false },
+        );
+        return recovery.files === "unsaved"
+          ? {
+              outcome: "unsaved",
+              ...(recovery.savedAt === undefined
+                ? {}
+                : { savedAt: recovery.savedAt }),
+            }
+          : { outcome: "restarted", files: recovery.files };
+      }
+      // A full disk or a wedged filesystem can fail every save (#1614).
+      // Copy the checkout's unsaved work out through /dev/shm first, as a
+      // read-only Orb's restart does; the person accepted the loss either
+      // way.
+      const rescue = await workspace
+        .connect(resolvedContext, { threadId }, { authorize })
+        .then((handle) => rescueUnsavedWork(handle.guest))
+        .catch(
+          (cause: unknown): UnsavedWorkRescue => ({
+            kind: "failed",
+            reason: cause instanceof Error ? cause.message : String(cause),
+          }),
+        );
+      const recovery = await recover.call(
+        workspace,
+        resolvedContext,
+        { threadId },
+        { discardUnsaved: true },
+      );
+      if (recovery.files === "unsaved") return { outcome: "unsaved" };
+      const restored =
+        recovery.files !== "kept" && rescue.kind === "archive"
+          ? await workspace
+              .connect(resolvedContext, { threadId }, { authorize })
+              .then((handle) =>
+                restoreUnsavedWork(bindings, threadId, handle.guest, rescue),
+              )
+              .catch(() => undefined)
+          : undefined;
+      return {
+        outcome: "restarted",
+        files: recovery.files,
+        ...(recovery.savedAt === undefined
+          ? {}
+          : { savedAt: recovery.savedAt }),
+        rescue:
+          rescue.kind === "archive"
+            ? "copied"
+            : rescue.kind === "none"
+              ? "nothing"
+              : "failed",
+        ...(restored === undefined ? {} : { restored }),
+      };
+    },
     destroy: (threadId) => release(threadId, "destroy"),
     prestart: async (threadId) => {
       const { context: resolvedContext, entry } = await context(threadId, true);
@@ -874,12 +1000,26 @@ export const composeExecutionWorkspaces = (
       residentEntries.length === 0
         ? daemonUnavailable
         : async (input) => {
-            const { context: resolvedContext, entry } = await context(
-              input.threadId,
-              true,
-            );
+            // The Thread's check reads beside its target, and the workspace
+            // policy check beside the provider's own reads; both gate the
+            // Orb's resume (`authorize`), as for a run.
+            const active = activation.admitDaemon?.(input.threadId);
+            const { entry, target } = await resolve(input.threadId, true, true);
+            const resolvedContext = contextFor(entry, target);
             if (!entry.residentDaemon) return daemonUnavailable();
-            return entry.pipeline.ensureDaemon(resolvedContext, input);
+            if (active === undefined) {
+              await target.policy;
+              return entry.pipeline.ensureDaemon(resolvedContext, input);
+            }
+            const admitted = Promise.all([active, target.policy]).then(
+              () => undefined,
+            );
+            admitted.catch(() => undefined);
+            return entry.pipeline.ensureDaemon(
+              resolvedContext,
+              input,
+              admitted,
+            );
           },
     pinnedProvider: async (threadId) =>
       (threadProviders.get(threadId) ?? (await resolve(threadId, false)).entry)

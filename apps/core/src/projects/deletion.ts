@@ -151,6 +151,11 @@ export const deleteProject = async (
       `DELETE FROM environment_variable
         WHERE scope = 'project' AND target_id = ?1 AND ${deletedNow}`,
     ),
+    // A kept Thread is read-only for good: everyone's unsent drafts go.
+    statement(
+      `DELETE FROM thread_draft
+        WHERE thread_id IN (${projectThreads}) AND ${deletedNow}`,
+    ),
   ]);
   if (results[0]?.results.length !== 1) throw new ProjectDeletionNotFound();
   const tombstoned = new Set(

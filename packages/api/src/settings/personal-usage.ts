@@ -82,6 +82,7 @@ export type UsageDailyTrendData = typeof UsageDailyTrendDataSchema.Type;
 
 export const UsageThreadDataSchema = Schema.Struct({
   threadId: ThreadId,
+  title: Schema.String,
   projectId: ProjectId,
   projectName: Schema.String,
   createdAt: Schema.DateTimeUtcFromString,
@@ -100,6 +101,19 @@ export const UsageThreadDataSchema = Schema.Struct({
 });
 
 export type UsageThreadData = typeof UsageThreadDataSchema.Type;
+
+/** Model turns by the provider and model that answered them. */
+export const UsageModelDataSchema = Schema.Struct({
+  providerId: ModelProviderId,
+  modelId: UsageModelId,
+  totalTokens: Schema.Int,
+  unknownTokenEvents: Schema.Int,
+  estimatedCostMicros: Schema.Int,
+  unknownCostEvents: Schema.Int,
+  modelTurns: Schema.Int,
+});
+
+export type UsageModelData = typeof UsageModelDataSchema.Type;
 
 export const UsageRunnerDataSchema = Schema.Struct({
   provider: Schema.Literal("e2b"),
@@ -174,6 +188,7 @@ export const PersonalUsageDataSchema = Schema.Struct({
   summary: UsageSummaryDataSchema,
   daily: Schema.Array(UsageDailyTrendDataSchema),
   threads: Schema.Array(UsageThreadDataSchema),
+  models: Schema.Array(UsageModelDataSchema),
   runners: Schema.Array(UsageRunnerDataSchema),
   plugins: Schema.Array(PluginUsageDataSchema),
   priceSources: Schema.Array(UsagePriceSourceDataSchema),

@@ -21,6 +21,8 @@ export const ACCOUNT_ORB_METHODS = [
   "pause",
   "destroy",
   "recover",
+  "readRescue",
+  "clearRescue",
 ] as const;
 
 export type AccountOrbMethod = (typeof ACCOUNT_ORB_METHODS)[number];

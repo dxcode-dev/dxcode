@@ -96,6 +96,7 @@ const fakeStorage = () => {
       put: async (key, value) => {
         values.set(key, structuredClone(value));
       },
+      delete: async (key) => values.delete(key),
       setAlarm: async (time) => {
         alarm = time;
       },
@@ -266,6 +267,175 @@ describe("Orb container object", () => {
       running: false,
       status: "paused",
     });
+  });
+
+  it("stops a container whose idle snapshots keep failing on its last good save, and says so at the next activation (#1620)", async () => {
+    // thr_43b94def's Orb: 29 failed snapshots over 23 hours, never stopped.
+    const orb = setup();
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    const savedAt = orb.now();
+    orb.advance(60_000);
+    await orb.controller.open({ ...create, create: false });
+    await orb.controller.setIdleDeadline(60_000);
+    let attempts = 0;
+    orb.container.snapshotContainer.mockImplementation(async () => {
+      attempts += 1;
+      throw new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: ef5320d5)",
+      );
+    });
+    const startedAt = orb.now();
+    const stopsBefore = orb.container.destroy.mock.calls.length;
+    let stoppedAt: number | undefined;
+    while (orb.now() < startedAt + 16 * 3_600_000) {
+      orb.advance(ORB_HEARTBEAT_MS);
+      await expect(orb.controller.alarm()).resolves.toBeUndefined();
+      if (stoppedAt === undefined && !orb.container.running)
+        stoppedAt = orb.now();
+    }
+    // Stopped within a few hours, not left running.
+    expect(orb.container.running).toBe(false);
+    expect(orb.container.destroy.mock.calls.length - stopsBefore).toBe(1);
+    expect((stoppedAt ?? Number.POSITIVE_INFINITY) - startedAt).toBeLessThan(
+      3 * 3_600_000,
+    );
+    expect(attempts).toBeLessThanOrEqual(10);
+    await expect(orb.controller.status()).resolves.toEqual({
+      running: false,
+      status: "paused",
+    });
+    // A Terminal reconnect restores the last good save and keeps the news
+    // for the run that tells the agent.
+    await expect(
+      orb.controller.open({ ...create, create: false, allowReset: false }),
+    ).resolves.not.toHaveProperty("unsavedStop");
+    expect(orb.starts.at(-1)).toMatchObject({
+      containerSnapshot: { id: "snapshot-1" },
+    });
+    orb.container.snapshotContainer.mockImplementation(async () => ({
+      id: "snapshot-fixed",
+      size: 1,
+    }));
+    await orb.controller.pause();
+    // The next activation restores and says what happened, once.
+    const activation = { ...create, allowReset: true } as const;
+    const opened = await orb.controller.open(activation);
+    expect(opened).toMatchObject({
+      kind: "ready",
+      unsavedStop: { savedAt, failures: attempts },
+    });
+    await expect(orb.controller.open(activation)).resolves.not.toHaveProperty(
+      "unsavedStop",
+    );
+  });
+
+  it("archives a container whose snapshot fails by stopping it on its last good save, and says so (#1620)", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    const savedAt = orb.now();
+    orb.advance(60_000);
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValue(
+      new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: b4089c47)",
+      ),
+    );
+    await expect(orb.controller.pause()).resolves.toBe("stopped");
+    expect(orb.container.running).toBe(false);
+    await expect(orb.controller.status()).resolves.toEqual({
+      running: false,
+      status: "paused",
+    });
+    await expect(
+      orb.controller.open({ ...create, allowReset: true }),
+    ).resolves.toMatchObject({ unsavedStop: { savedAt } });
+    expect(orb.starts.at(-1)).toMatchObject({
+      containerSnapshot: { id: "snapshot-1" },
+    });
+  });
+
+  it("copies every checkout's unsaved work out before it stops an Orb it cannot save, and keeps it until Core has it (#1620)", async () => {
+    // The owner's ask: a person's latest work must be recoverable.
+    const archive = new Uint8Array([31, 139, 8, 0, 1, 2, 3]);
+    let base64 = "";
+    for (const byte of archive) base64 += String.fromCharCode(byte);
+    const orb = setup(({ argv }) => {
+      const script = argv.join(" ");
+      if (script.includes("mktemp -d /dev/shm/dx-rescue"))
+        return {
+          stdout: `archive /dev/shm/dx-rescue.Ab12 ${String(archive.length)} 3 1 2 1 ${String(archive.length)}\n`,
+        };
+      if (script.includes("/dev/shm/dx-rescue.Ab12/archive.tar.gz"))
+        return { stdout: btoa(base64) };
+      return {};
+    });
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
+    const destroysBefore = orb.container.destroy.mock.calls.length;
+    await expect(orb.controller.pause()).resolves.toBe("stopped");
+    // Copied while the container still ran, then stopped; /dev/shm cleaned.
+    const scripts = orb.execs.map(({ argv }) => argv.join(" "));
+    expect(scripts.some((script) => script.includes("dx-rescue"))).toBe(true);
+    expect(
+      scripts.some((script) =>
+        script.includes("rm -rf -- /dev/shm/dx-rescue.Ab12"),
+      ),
+    ).toBe(true);
+    expect(orb.container.destroy.mock.calls.length - destroysBefore).toBe(1);
+
+    const activation = { ...create, allowReset: true } as const;
+    await expect(orb.controller.open(activation)).resolves.toMatchObject({
+      unsavedStop: {
+        rescue: {
+          size: archive.length,
+          chunks: 1,
+          changes: 3,
+          commits: 1,
+          checkouts: 2,
+          untracked: true,
+        },
+      },
+    });
+    await expect(orb.controller.readRescue(0)).resolves.toEqual(archive);
+    // Until Core stores it, the next activation is told again.
+    await expect(orb.controller.open(activation)).resolves.toHaveProperty(
+      "unsavedStop",
+    );
+    await orb.controller.clearRescue();
+    await expect(orb.controller.readRescue(0)).resolves.toBeUndefined();
+    await expect(orb.controller.open(activation)).resolves.not.toHaveProperty(
+      "unsavedStop",
+    );
+  });
+
+  it("says the work is lost when the copy fails, instead of claiming it was kept (#1620)", async () => {
+    const orb = setup(({ argv }) =>
+      argv.join(" ").includes("dx-rescue")
+        ? { stdout: "", stderr: "tar: write error", exitCode: 1 }
+        : {},
+    );
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
+    await orb.controller.pause();
+    const opened = await orb.controller.open({ ...create, allowReset: true });
+    expect(opened).toMatchObject({
+      unsavedStop: { rescueFailed: expect.any(String) },
+    });
+    expect(opened).not.toHaveProperty("unsavedStop.rescue");
+  });
+
+  it("still never stops a container that was never saved, since that would lose every file (#1620)", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
+    await expect(orb.controller.pause()).rejects.toThrow();
+    expect(orb.container.running).toBe(true);
   });
 
   it("keeps a container running when Core used it while the snapshot ran", async () => {

@@ -50,6 +50,7 @@ const data = Schema.decodeUnknownSync(PersonalUsageDataSchema)({
   threads: [
     {
       threadId: "thr_00000000-0000-4000-8000-000000000038",
+      title: "Trace the usage page",
       projectId: "prj_00000000-0000-4000-8000-000000000038",
       projectName: "Usage observability",
       createdAt: "2026-08-03T07:15:00.000Z",
@@ -65,6 +66,17 @@ const data = Schema.decodeUnknownSync(PersonalUsageDataSchema)({
       runnerDurationMs: 240,
       modelTurns: 2,
       errorEvents: 1,
+    },
+  ],
+  models: [
+    {
+      providerId: "cloudflare",
+      modelId: "@cf/zai-org/glm-5.2",
+      totalTokens: 1680,
+      unknownTokenEvents: 1,
+      estimatedCostMicros: 4100,
+      unknownCostEvents: 1,
+      modelTurns: 2,
     },
   ],
   runners: [
@@ -96,25 +108,30 @@ const data = Schema.decodeUnknownSync(PersonalUsageDataSchema)({
 });
 
 describe("personal usage settings", () => {
-  it("renders content-free unknown-aware token, cost, Thread, and E2B views", () => {
-    const markup = renderToStaticMarkup(
-      <UsageDashboard
-        data={data}
-        mode="tokens"
-        detail="threads"
-        onModeChange={() => undefined}
-        onDetailChange={() => undefined}
-      />,
+  it("renders content-free, unknown-aware totals, providers, models, days, and Threads", () => {
+    const tokens = renderToStaticMarkup(
+      <UsageDashboard data={data} mode="tokens" days={7} />,
     );
-    expect(markup).toContain("Estimated cost");
-    expect(markup).toContain("Usage observability");
-    expect(markup).toContain("unknown");
-    expect(markup).toContain("E2B");
-    expect(markup).toContain("Aggregated in UTC+05:30");
-    expect(markup).toContain(
+    expect(tokens).toContain("1.7K Total Tokens");
+    expect(tokens).toContain("in the last 7 days");
+    expect(tokens).toContain("From");
+    expect(tokens).toContain("cloudflare");
+    expect(tokens).toContain("Models");
+    expect(tokens).toContain("Trace the usage page");
+    expect(tokens).toContain("Daily Tokens");
+    expect(tokens).toContain("Day boundaries are based on UTC.");
+    expect(tokens).toContain(
       "not prompts, responses, messages, or tool payloads",
     );
-    expect(markup).toContain("180-day deletion policy");
-    expect(markup).not.toMatch(/credits|subscription|gift plan/i);
+    expect(tokens).toContain("180-day deletion policy");
+
+    const cost = renderToStaticMarkup(
+      <UsageDashboard data={data} mode="cost" days={7} />,
+    );
+    expect(cost).toContain("Total Cost");
+    expect(cost).toContain("1 model turn has no price");
+    expect(cost).toContain("Daily Spend");
+    expect(cost).toContain("$0.0041");
+    expect(cost).not.toMatch(/credits|subscription|gift plan/i);
   });
 });

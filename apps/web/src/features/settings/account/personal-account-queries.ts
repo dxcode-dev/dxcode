@@ -2,7 +2,7 @@ import {
   GetPersonalAccountThreadCountResponseSchema,
   type PersonalAccountData,
 } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import { personalAppearanceFields, type UserId } from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
@@ -39,11 +39,10 @@ const hasAppearanceValues = (
   expected: Partial<PersonalAccountData>,
 ) =>
   account !== undefined &&
-  (expected.appearance === undefined ||
-    account.appearance === expected.appearance) &&
-  (expected.palette === undefined || account.palette === expected.palette) &&
-  (expected.terminalTheme === undefined ||
-    account.terminalTheme === expected.terminalTheme);
+  personalAppearanceFields.every(
+    (field) =>
+      expected[field] === undefined || account[field] === expected[field],
+  );
 
 export const personalAccountQueryOptions = (userId: UserId) =>
   queryOptions({

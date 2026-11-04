@@ -25,6 +25,14 @@ export interface SettingsAuditEvent {
     | "shortName"
     | "palette"
     | "terminalTheme"
+    | "textSize"
+    | "threadWidth"
+    | "terminalAppearance"
+    | "codeFontFamily"
+    | "codeFontSize"
+    | "codeLineHeight"
+    | "logoAnimation"
+    | "uiSounds"
     | "username"
   >;
   readonly scope: SettingsScope | "project";

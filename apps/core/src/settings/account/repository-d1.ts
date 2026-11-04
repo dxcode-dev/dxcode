@@ -21,10 +21,25 @@ const PersonalAccountRow = Schema.Struct({
   appearance: Schema.String,
   palette: Schema.String,
   terminal_theme: Schema.String,
+  text_size: Schema.String,
+  thread_width: Schema.String,
+  terminal_appearance: Schema.String,
+  code_font_family: Schema.NullOr(Schema.String),
+  code_font_size: Schema.NullOr(Schema.String),
+  code_line_height: Schema.NullOr(Schema.String),
+  logo_animation: Schema.Literals([0, 1]),
+  ui_sounds: Schema.Literals([0, 1]),
   avatar_key: Schema.NullOr(Schema.String),
 });
 
 const UpdatedRow = Schema.Struct({ user_id: Schema.String });
+
+/** 1 when a nullable field was sent, so `null` clears it. */
+const sets = (value: unknown) => (value === undefined ? 0 : 1);
+
+/** A switch as its 0 or 1 column, or `null` to keep the stored value. */
+const flag = (value: boolean | undefined) =>
+  value === undefined ? null : value ? 1 : 0;
 
 const ComposerDefaultsRow = Schema.Struct({
   composer_project: Schema.NullOr(Schema.String),
@@ -50,6 +65,14 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             profile.appearance,
             profile.palette,
             profile.terminal_theme,
+            profile.text_size,
+            profile.thread_width,
+            profile.terminal_appearance,
+            profile.code_font_family,
+            profile.code_font_size,
+            profile.code_line_height,
+            profile.logo_animation,
+            profile.ui_sounds,
             profile.avatar_key,
             identity.email,
             identity.emailVerified AS email_verified,
@@ -91,6 +114,14 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
           appearance: row.appearance,
           palette: row.palette,
           terminalTheme: row.terminal_theme,
+          textSize: row.text_size,
+          threadWidth: row.thread_width,
+          terminalAppearance: row.terminal_appearance,
+          codeFontFamily: row.code_font_family,
+          codeFontSize: row.code_font_size,
+          codeLineHeight: row.code_line_height,
+          logoAnimation: row.logo_animation === 1,
+          uiSounds: row.ui_sounds === 1,
           ...(row.avatar_key === null ? {} : { avatarKey: row.avatar_key }),
         });
       },
@@ -251,6 +282,32 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             appearance = COALESCE(${input.appearance ?? null}, appearance),
             palette = COALESCE(${input.palette ?? null}, palette),
             terminal_theme = COALESCE(${input.terminalTheme ?? null}, terminal_theme),
+            text_size = COALESCE(${input.textSize ?? null}, text_size),
+            thread_width = COALESCE(${input.threadWidth ?? null}, thread_width),
+            terminal_appearance = COALESCE(
+              ${input.terminalAppearance ?? null},
+              terminal_appearance
+            ),
+            code_font_family = CASE
+              WHEN ${sets(input.codeFontFamily)} = 1
+                THEN ${input.codeFontFamily ?? null}
+              ELSE code_font_family
+            END,
+            code_font_size = CASE
+              WHEN ${sets(input.codeFontSize)} = 1
+                THEN ${input.codeFontSize ?? null}
+              ELSE code_font_size
+            END,
+            logo_animation = COALESCE(
+              ${flag(input.logoAnimation)},
+              logo_animation
+            ),
+            ui_sounds = COALESCE(${flag(input.uiSounds)}, ui_sounds),
+            code_line_height = CASE
+              WHEN ${sets(input.codeLineHeight)} = 1
+                THEN ${input.codeLineHeight ?? null}
+              ELSE code_line_height
+            END,
             updated_at = datetime('now')
           WHERE user_id = ${userId}
           RETURNING user_id

@@ -197,26 +197,29 @@ describe("More Actions", () => {
       await vi.waitFor(() =>
         expect(document.querySelector(".shortcut-keycaps")).not.toBeNull(),
       );
-      expect(menuLabels()).toEqual(
-        expect.arrayContaining([
-          ...(shown === child
-            ? [expect.stringMatching(/Open Source Thread$/)]
-            : ["Snooze"]),
-          "Open Thread Tree",
-          expect.stringMatching(/^Copy Thread URL.*C$/),
-          "Copy Thread ID",
-          "Export",
-          "OrbPaused",
-          "$6.39",
-          ...(shown === claudeCode ? ["Claude Code Costs Not Tracked"] : []),
-          "Share…",
-          "Pin",
-          "Archive",
-          "Rename",
-          "Color",
-          "Delete",
-          "Report Bug",
-        ]),
+      // The Orb and cost rows load with the open menu.
+      await vi.waitFor(() =>
+        expect(menuLabels()).toEqual(
+          expect.arrayContaining([
+            ...(shown === child
+              ? [expect.stringMatching(/Open Source Thread$/)]
+              : ["Snooze"]),
+            "Open Thread Tree",
+            expect.stringMatching(/^Copy Thread URL.*C$/),
+            "Copy Thread ID",
+            "Export",
+            "OrbPaused",
+            "$6.39",
+            ...(shown === claudeCode ? ["Claude Code Costs Not Tracked"] : []),
+            "Share…",
+            "Pin",
+            "Archive",
+            "Rename",
+            "Color",
+            "Delete",
+            "Report Bug",
+          ]),
+        ),
       );
       expect(cutLabels()).toEqual([]);
 

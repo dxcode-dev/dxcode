@@ -25,21 +25,62 @@ import {
 const instructionsFieldError = (errors: ReadonlyArray<SettingsFieldError>) =>
   errors.find(({ field }) => field === "instructions")?.message;
 
-export function PersonalAgentInstructionsForm({
+interface InstructionsSettings {
+  readonly instructions: string;
+  readonly revision: number;
+}
+
+interface AgentInstructionsFormProps<Settings extends InstructionsSettings>
+  extends SettingsSectionProps {
+  readonly initialSettings: Settings;
+  readonly onReload: () => Promise<Settings | undefined>;
+  readonly updateInstructions: (input: {
+    readonly instructions: string;
+    readonly expectedRevision: number;
+  }) => Promise<Settings>;
+  readonly saving?: boolean;
+}
+
+export function PersonalAgentInstructionsForm(
+  props: AgentInstructionsFormProps<PersonalAgentInstructionsData>,
+) {
+  return (
+    <AgentInstructionsForm
+      {...props}
+      heading="What dx should know about you. The agent gets these alongside each project's AGENTS.md, even in projects without one."
+      fileName="Global AGENTS.md"
+      fileDescription="Personal guidance for the top-level agent in every new Thread, like an AGENTS.md that follows you across projects. Subagents and system tasks do not receive it."
+      maxLength={MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH}
+      savedMessage="Saved. New Threads use these instructions."
+    />
+  );
+}
+
+/**
+ * One AGENTS.md in Settings: Save, Reset, and a character count. Read-only
+ * when `readOnlyNote` is set.
+ */
+export function AgentInstructionsForm<Settings extends InstructionsSettings>({
   initialSettings,
   onDirtyChange,
   onReload,
   updateInstructions,
   saving = false,
-}: SettingsSectionProps & {
-  readonly initialSettings: PersonalAgentInstructionsData;
-  readonly onReload: () => Promise<PersonalAgentInstructionsData | undefined>;
-  readonly updateInstructions: (input: {
-    readonly instructions: string;
-    readonly expectedRevision: number;
-  }) => Promise<PersonalAgentInstructionsData>;
-  readonly saving?: boolean;
+  heading,
+  fileName,
+  fileDescription,
+  maxLength,
+  savedMessage,
+  readOnlyNote,
+}: AgentInstructionsFormProps<Settings> & {
+  readonly heading: string;
+  readonly fileName: string;
+  readonly fileDescription: string;
+  readonly maxLength: number;
+  readonly savedMessage: string;
+  readonly readOnlyNote?: string;
 }) {
+  const readOnly = readOnlyNote !== undefined;
   const [baseline, setBaseline] = React.useState(initialSettings);
   const [instructions, setInstructions] = React.useState<string>(
     initialSettings.instructions,
@@ -56,8 +97,8 @@ export function PersonalAgentInstructionsForm({
   const formId = React.useId();
   const serverFieldError = instructionsFieldError(state.fieldErrors);
   const localFieldError =
-    instructions.length > MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH
-      ? `Enter no more than ${MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH.toLocaleString()} characters.`
+    instructions.length > maxLength
+      ? `Enter no more than ${maxLength.toLocaleString()} characters.`
       : undefined;
   const fieldError = serverFieldError ?? localFieldError;
 
@@ -86,7 +127,8 @@ export function PersonalAgentInstructionsForm({
   };
 
   const save = async () => {
-    if (!state.dirty || busy || localFieldError !== undefined) return;
+    if (readOnly || !state.dirty || busy || localFieldError !== undefined)
+      return;
     setConflictRevision(undefined);
     try {
       const updated = await updateInstructions({
@@ -95,10 +137,7 @@ export function PersonalAgentInstructionsForm({
       });
       setBaseline(updated);
       setInstructions(updated.instructions);
-      dispatch({
-        type: "saveSucceeded",
-        message: "Saved. New Threads use these instructions.",
-      });
+      dispatch({ type: "saveSucceeded", message: savedMessage });
       onDirtyChange(false);
     } catch (cause) {
       const error = personalAdvancedMutationError(
@@ -140,19 +179,12 @@ export function PersonalAgentInstructionsForm({
 
   return (
     <div className="personal-advanced-settings">
-      <SettingsHeading
-        title="Instructions"
-        description="What dx should know about you. The agent gets these alongside each project's AGENTS.md, even in projects without one."
-      />
+      <SettingsHeading title="Instructions" description={heading} />
 
       <SettingsCard
-        title="Global AGENTS.md"
+        title={fileName}
         description={
-          <span id={`${formId}-description`}>
-            Personal guidance for the top-level agent in every new Thread, like
-            an AGENTS.md that follows you across projects. Subagents and system
-            tasks do not receive it.
-          </span>
+          <span id={`${formId}-description`}>{fileDescription}</span>
         }
       >
         <form
@@ -168,10 +200,11 @@ export function PersonalAgentInstructionsForm({
             ref={textarea}
             id={`${formId}-instructions`}
             name="instructions"
-            aria-label="Global AGENTS.md"
+            aria-label={fileName}
             value={instructions}
             rows={6}
             spellCheck
+            readOnly={readOnly}
             disabled={busy}
             aria-invalid={fieldError === undefined ? undefined : true}
             aria-describedby={`${formId}-description ${formId}-instructions-count${
@@ -189,38 +222,45 @@ export function PersonalAgentInstructionsForm({
             </p>
           )}
           <footer className="agent-instructions-actions">
-            <Button
-              size="xs"
-              type="submit"
-              disabled={!state.dirty || busy || localFieldError !== undefined}
-            >
-              {saving ? "Saving…" : "Save"}
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={!state.dirty || busy}
-              onClick={discard}
-            >
-              Reset
-            </Button>
-            <span
-              className="agent-instructions-status"
-              data-error={state.status === "error" || undefined}
-              aria-live="polite"
-            >
-              {state.status === "saved" || state.status === "error"
-                ? state.message
-                : null}
-            </span>
+            {readOnly ? (
+              <span className="agent-instructions-status">{readOnlyNote}</span>
+            ) : (
+              <>
+                <Button
+                  size="xs"
+                  type="submit"
+                  disabled={
+                    !state.dirty || busy || localFieldError !== undefined
+                  }
+                >
+                  {saving ? "Saving…" : "Save"}
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  disabled={!state.dirty || busy}
+                  onClick={discard}
+                >
+                  Reset
+                </Button>
+                <span
+                  className="agent-instructions-status"
+                  data-error={state.status === "error" || undefined}
+                  aria-live="polite"
+                >
+                  {state.status === "saved" || state.status === "error"
+                    ? state.message
+                    : null}
+                </span>
+              </>
+            )}
             <span
               id={`${formId}-instructions-count`}
               className="agent-instructions-count"
               data-invalid={localFieldError === undefined ? undefined : true}
             >
               {instructions.length.toLocaleString()} /{" "}
-              {MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH.toLocaleString()}{" "}
-              characters
+              {maxLength.toLocaleString()} characters
             </span>
           </footer>
         </form>

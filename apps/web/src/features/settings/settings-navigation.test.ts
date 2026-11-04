@@ -27,7 +27,7 @@ describe("settings navigation", () => {
 
     expect(menu("workspace", "admin")).toEqual([
       [null, ["Workspace", "Members", "Integrations & MCP"]],
-      ["Agent", ["Mode Dial", "Model Routing"]],
+      ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
       [
         "Library",
         ["Secrets & Env Vars", "Skills", "Plugins", "External API Apps"],
@@ -40,6 +40,7 @@ describe("settings navigation", () => {
     // and so do the headings they leave empty.
     expect(menu("workspace", "member")).toEqual([
       [null, ["Workspace", "Members", "Integrations & MCP"]],
+      ["Agent", ["Instructions"]],
       ["Library", ["Skills", "Plugins"]],
       ["Interface", ["Composer"]],
     ]);

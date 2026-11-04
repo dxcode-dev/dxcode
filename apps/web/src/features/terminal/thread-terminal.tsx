@@ -698,14 +698,16 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
 }
 
 export function ThreadTerminal(props: ThreadTerminalProps) {
-  const { resolvedAppearance, terminalTheme } = useTheme();
+  const { terminalScheme, terminalTheme, codeFontFamily, codeFontSize } =
+    useTheme();
   const session = React.use(TerminalSessionContext);
+  // The emulator reads its font when it mounts, so a new font remounts it.
   return (
     <ThreadTerminalSession
-      key={`${terminalTheme}:${resolvedAppearance}:${session}`}
+      key={`${terminalTheme}:${terminalScheme}:${codeFontFamily}:${codeFontSize}:${session}`}
       {...props}
       session={session}
-      terminalTheme={terminalThemeFor(terminalTheme, resolvedAppearance)}
+      terminalTheme={terminalThemeFor(terminalTheme, terminalScheme)}
     />
   );
 }

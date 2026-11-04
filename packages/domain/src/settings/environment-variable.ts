@@ -26,10 +26,19 @@ export const EnvironmentVariableAuditId = Schema.String.check(
 
 export type EnvironmentVariableAuditId = typeof EnvironmentVariableAuditId.Type;
 
+/**
+ * A POSIX shell variable name in either case: ASCII letters, digits, and
+ * underscores, not starting with a digit. Names are case-sensitive, as in
+ * the shell: `MY_TOKEN` and `my_token` are two variables, and reserved names
+ * match exactly. dxd's `valid_shape` in `apps/dxd/src/environment.rs` must
+ * accept the same names.
+ */
+const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export const EnvironmentVariableName = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH),
-  Schema.isPattern(/^[A-Z_][A-Z0-9_]*$/),
+  Schema.isPattern(ENVIRONMENT_VARIABLE_NAME_PATTERN),
 ).pipe(Schema.brand("@dx/EnvironmentVariableName"));
 
 export type EnvironmentVariableName = typeof EnvironmentVariableName.Type;
@@ -351,17 +360,20 @@ export const environmentVariableNameProblem = (
   if (name.length === 0) return "Enter a name.";
   if (name.length > MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH)
     return `Name must be ${MAX_ENVIRONMENT_VARIABLE_NAME_LENGTH} characters or fewer.`;
-  if (!/^[A-Z_][A-Z0-9_]*$/.test(name))
-    return "Use uppercase letters, digits, and underscores, not starting with a digit (e.g. MY_VAR).";
+  if (!ENVIRONMENT_VARIABLE_NAME_PATTERN.test(name))
+    return "Use letters, digits, and underscores, not starting with a digit (e.g. MY_VAR).";
   if (isReservedEnvironmentVariableName(name))
     return `${name} is set by dx in Orbs. Choose a different name.`;
   return undefined;
 };
 
 const secretNameSuffix =
-  /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|PRIVATE_KEY|SECRET_KEY|CLIENT_SECRET|CREDENTIALS?|PAT)$/;
+  /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY|PRIVATE_KEY|SECRET_KEY|CLIENT_SECRET|CREDENTIALS?|PAT)$/i;
 
-/** Whether a name ends like a credential: `_TOKEN`, `_API_KEY`, `_PASSWORD`. */
+/**
+ * Whether a name ends like a credential, in either case: `_TOKEN`,
+ * `_api_key`, `_PASSWORD`.
+ */
 export const looksLikeSecretName = (name: string): boolean =>
   secretNameSuffix.test(name);
 

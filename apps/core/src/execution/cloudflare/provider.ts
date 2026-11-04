@@ -10,6 +10,8 @@ import {
   type StepTiming,
   stepTiming,
 } from "../../observability/step-timing.js";
+import type { RestoredWork } from "../../orb-disk/read-only.js";
+import { rememberUnsavedStop } from "../../orb-disk/unsaved-stop.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import type {
   ExecutionContext,
@@ -28,6 +30,7 @@ import {
   type DaemonGuestHandle,
   guestResidentDaemon,
 } from "../guest/resident-daemon.js";
+import { restoreUnsavedWork } from "../read-only-rescue.js";
 import {
   type ExecutionWorkspaceRecord,
   type ExecutionWorkspaceRecords,
@@ -40,6 +43,7 @@ import {
 import {
   ORB_WORKSPACE_RESET_DETAIL,
   type OrbOpenResult,
+  type UnsavedStop,
 } from "./orb-container.js";
 
 /** Default limit for one agent command, as E2B's sandbox timeout. */
@@ -147,6 +151,8 @@ const IDEMPOTENT = new Set<string>([
   "readdir",
   "exists",
   "setIdleDeadline",
+  "readRescue",
+  "clearRescue",
 ]);
 
 const InactivityMs = Schema.Finite.check(
@@ -285,6 +291,8 @@ const resilientOrb = (
     "pause",
     "destroy",
     "recover",
+    "readRescue",
+    "clearRescue",
   ];
   return Object.fromEntries(
     methods.map((method) => [method, call(method)]),
@@ -308,6 +316,60 @@ const handleFor = (
     commandTimeoutMs: DEFAULT_CLOUDFLARE_COMMAND_TIMEOUT_MS,
     ...(processesStartedAt === undefined ? {} : { processesStartedAt }),
   };
+};
+
+/**
+ * The unsaved work the Orb container object copied out before an unsaved
+ * stop (#1620), put in the restored Orb (`~/dx-recovered/`), where the
+ * files it copies were, with the same audience; never in Thread storage.
+ * The object's copy is dropped only once the Orb has it; until then the
+ * next activation tries again.
+ */
+const restoreRescue = async (
+  stub: OrbContainerStub,
+  threadId: string,
+  idleMs: number,
+  stop: UnsavedStop,
+): Promise<RestoredWork | undefined> => {
+  const rescue = stop.rescue;
+  if (rescue === undefined) return undefined;
+  try {
+    const bytes = new Uint8Array(rescue.size);
+    let offset = 0;
+    for (let index = 0; index < rescue.chunks; index += 1) {
+      const piece = await stub.readRescue(index);
+      if (piece === undefined || offset + piece.byteLength > rescue.size)
+        return undefined;
+      bytes.set(piece, offset);
+      offset += piece.byteLength;
+    }
+    if (offset !== rescue.size) return undefined;
+    const restored = await restoreUnsavedWork(
+      env as Bindings,
+      threadId,
+      handleFor(stub, idleMs, undefined).guest,
+      {
+        kind: "archive",
+        bytes,
+        changes: rescue.changes,
+        commits: rescue.commits,
+      },
+      new Date(),
+      // It may hold untracked secrets: the Orb only, never Thread storage.
+      false,
+    );
+    if (restored.orbPath !== undefined)
+      await stub.clearRescue().catch(() => undefined);
+    return restored;
+  } catch (cause) {
+    orbContainerLogger.error("Rescued work could not be restored.", {
+      event: "orb_container_rescue_restore",
+      threadId,
+      outcome: "error",
+      error: cause instanceof Error ? cause.message.slice(0, 300) : "failed",
+    });
+    return undefined;
+  }
 };
 
 /**
@@ -423,6 +485,34 @@ const openCloudflareWorkspaceTimed = async (
         ),
       );
       if (result.kind === "ready") timing.set("residency", result.residency);
+      // dx stopped it without saving its latest files: this activation's
+      // turn tells the person (#1620).
+      if (result.kind === "ready" && result.unsavedStop !== undefined) {
+        const restored = await restoreRescue(
+          stub,
+          id,
+          idleMs,
+          result.unsavedStop,
+        );
+        rememberUnsavedStop(id, {
+          ...result.unsavedStop,
+          ...(restored === undefined ? {} : { restored }),
+        });
+        orbContainerLogger.warn("Orb restored from its last good save.", {
+          ...details,
+          event: "orb_container_unsaved_stop_told",
+          stoppedAt: result.unsavedStop.stoppedAt,
+          savedAt: result.unsavedStop.savedAt,
+          rescue:
+            restored !== undefined
+              ? "restored"
+              : result.unsavedStop.rescue !== undefined
+                ? "unread"
+                : result.unsavedStop.rescueFailed !== undefined
+                  ? "failed"
+                  : "none",
+        });
+      }
       orbContainerLogger.info("Orb container open returned.", {
         ...details,
         outcome: result.kind,
@@ -528,6 +618,8 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
           ...(onPreparationPhase === undefined ? {} : { onPreparationPhase }),
         });
       },
+      // Its open reads the record beside `authorize`, then resumes.
+      connectAuthorizes: true,
       connect: (context, { threadId }, options) =>
         openCloudflareWorkspace(context, threadId, {
           existingOnly: true,

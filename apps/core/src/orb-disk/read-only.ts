@@ -57,8 +57,12 @@ export interface RestoredWork {
 /** A restart, and the copy of unsaved work it needed. */
 export type WorkspaceRestart = ExecutionWorkspaceRecovery & {
   readonly restored?: RestoredWork;
-  /** Why dx restarted it: a read-only disk unless it stopped answering. */
-  readonly cause?: "unresponsive";
+  /**
+   * Why it restarted: a read-only disk, unless it stopped answering or a
+   * person restarted it (`by`, their name as dx shows it; #1592).
+   */
+  readonly cause?: "unresponsive" | "manual";
+  readonly by?: string;
 };
 
 /** What the restart kept, in a sentence for the person or the agent. */
@@ -82,15 +86,27 @@ export const WORKSPACE_RECOVERY_SIGNAL = "workspace_recovered";
 
 /** The note for the turn that runs on the restarted Orb. */
 export const workspaceRecoveryNote = (restart: WorkspaceRestart) =>
-  restart.cause === "unresponsive"
-    ? `This Orb stopped responding (every command hung, most likely from heavy processes overloading it), so dx restarted it before this turn. ${workspaceRecoveryFiles(restart)} Processes that were running in it, such as dev servers, test runs, and other background jobs, were stopped. Before anything else, tell the person: "The Orb stopped responding, so dx restarted it. Files are kept; running processes were stopped." Then continue with the request below, and avoid running several heavy jobs at once.`
-    : `This Orb's disk became read-only, so every write failed. dx restarted the Orb before this turn. ${workspaceRecoveryFiles(restart)}${
+  restart.cause === "manual"
+    ? `${restart.by ?? "Someone"} restarted this Orb from dx's Restart Orb action before this turn. ${workspaceRecoveryFiles(restart)} Processes that were running in it, such as dev servers, test runs, and other background jobs, were stopped.${
         restart.restored === undefined
           ? ""
           : ` ${restoredText(restart.restored)}`
-      } Tell the person in one sentence that dx restarted their Orb and what it kept${
-        restart.restored === undefined ? "" : " and restored"
-      }, then continue with the request below.`;
+      } Begin your final reply to the people in the Thread, the text after any tool calls, with this sentence: "${restart.by ?? "Someone"} restarted the Orb. ${
+        restart.files === "kept"
+          ? "Files kept"
+          : restart.files === "earlier"
+            ? `Files are as of its last save${savedAtText(restart.savedAt)}${restart.restored === undefined ? "" : ", and the unsaved work was copied out"}`
+            : "It started from a fresh image"
+      }; running processes stopped." Then continue with the request below; start again any process the work still needs.`
+    : restart.cause === "unresponsive"
+      ? `This Orb stopped responding (every command hung, most likely from heavy processes overloading it), so dx restarted it before this turn. ${workspaceRecoveryFiles(restart)} Processes that were running in it, such as dev servers, test runs, and other background jobs, were stopped. Begin your final reply, the text after any tool calls, with this sentence: "The Orb stopped responding, so dx restarted it. Files are kept; running processes were stopped." Then continue with the request below, and avoid running several heavy jobs at once.`
+      : `This Orb's disk became read-only, so every write failed. dx restarted the Orb before this turn. ${workspaceRecoveryFiles(restart)}${
+          restart.restored === undefined
+            ? ""
+            : ` ${restoredText(restart.restored)}`
+        } Tell the person in one sentence that dx restarted their Orb and what it kept${
+          restart.restored === undefined ? "" : " and restored"
+        }, then continue with the request below.`;
 
 /**
  * The restart each Thread's activation made in this isolate, for the turn

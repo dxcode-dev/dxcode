@@ -2460,7 +2460,31 @@ export const createThreadRoutes = (
                 ExecutionWorkspaces.archive(id),
               ),
             ),
-          catch: () => new ThreadArchiveExecutionUnavailable(),
+          catch: (cause) => {
+            // Which Orb failed to stop, and the provider's own reason: a
+            // snapshot Cloudflare cannot take (full btrfs metadata) reads
+            // differently from a provider outage, and neither is D1.
+            threadPersistenceLogger.error(
+              "Archived Thread's Orb could not be stopped.",
+              {
+                event: "thread_archive_stop_failed",
+                requestId,
+                threadId: thread.id,
+                children: children.length,
+                errorName:
+                  cause instanceof Error
+                    ? (((cause as { readonly _tag?: unknown })._tag as
+                        | string
+                        | undefined) ?? cause.name)
+                    : typeof cause,
+                error:
+                  cause instanceof Error
+                    ? cause.message.slice(0, 500)
+                    : String(cause).slice(0, 500),
+              },
+            );
+            return new ThreadArchiveExecutionUnavailable();
+          },
         });
       }
       // Whatever changed is published and stopped; then a child that could
@@ -2538,8 +2562,15 @@ export const createThreadRoutes = (
             }),
             503,
           ),
-        PersistenceUnavailable: () =>
-          context.json(
+        PersistenceUnavailable: (error) => {
+          threadPersistenceLogger.error("Archive failed: persistence.", {
+            event: "thread_archive_persistence_failed",
+            requestId,
+            threadId: context.req.param("threadId"),
+            errorName: error._tag,
+            error: error.message.slice(0, 500),
+          });
+          return context.json(
             Schema.encodeUnknownSync(
               ArchiveThreadPersistenceUnavailableResponseSchema,
             )({
@@ -2551,7 +2582,8 @@ export const createThreadRoutes = (
               },
             }),
             503,
-          ),
+          );
+        },
         D1BindingUnavailable: (error) => {
           throw error;
         },

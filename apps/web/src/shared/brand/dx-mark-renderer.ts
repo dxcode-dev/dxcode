@@ -24,6 +24,7 @@ export function mountDxMark(
   canvas: HTMLCanvasElement,
   state: DxMarkState,
   interactive: boolean,
+  still = false,
 ) {
   let disposed = false;
   let teardown: () => void = () => undefined;
@@ -31,6 +32,8 @@ export function mountDxMark(
   const mark = canvas.parentElement;
   const pointer = { x: 0.5, y: 0.5 };
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  // Logo Animation off holds the mark as reduced motion does.
+  const motionless = () => still || reducedMotion.matches;
   const handlePointerMove = (event: PointerEvent) => {
     if (!interactive || state === "error" || state === "loading") return;
     const bounds = canvas.getBoundingClientRect();
@@ -110,7 +113,7 @@ export function mountDxMark(
       const loop = frameLoop(
         gpu,
         (frame) => {
-          const elapsed = reducedMotion.matches
+          const elapsed = motionless()
             ? state === "loading"
               ? 10
               : 0
@@ -127,7 +130,7 @@ export function mountDxMark(
           canvas.dataset.ready = "true";
           if (mark !== null) mark.dataset.ready = "true";
         },
-        { fps: reducedMotion.matches ? 1 : 30 },
+        { fps: motionless() ? 1 : 30 },
       );
       teardown = () => {
         loop.stop();

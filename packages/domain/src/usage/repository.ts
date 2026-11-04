@@ -59,6 +59,7 @@ export interface UsageDailyTrend {
 
 export interface UsageThreadAggregate {
   readonly threadId: ThreadId;
+  readonly title: string;
   readonly projectId: ProjectId;
   readonly projectName: string;
   readonly createdAt: DateTime.Utc;
@@ -74,6 +75,17 @@ export interface UsageThreadAggregate {
   readonly runnerDurationMs: number;
   readonly modelTurns: number;
   readonly errorEvents: number;
+}
+
+/** Model turns by the provider and model that answered them. */
+export interface UsageModelAggregate {
+  readonly providerId: ModelProviderId;
+  readonly modelId: UsageModelId;
+  readonly totalTokens: number;
+  readonly unknownTokenEvents: number;
+  readonly estimatedCostMicros: number;
+  readonly unknownCostEvents: number;
+  readonly modelTurns: number;
 }
 
 export interface UsageUserAggregate {
@@ -173,6 +185,8 @@ export interface UsageDashboard {
   readonly summary: UsageSummary;
   readonly daily: ReadonlyArray<UsageDailyTrend>;
   readonly threads: ReadonlyArray<UsageThreadAggregate>;
+  /** Every provider and model in the range, highest estimated cost first. */
+  readonly models: ReadonlyArray<UsageModelAggregate>;
   readonly runners: ReadonlyArray<UsageRunnerAggregate>;
   readonly plugins: ReadonlyArray<PluginUsageAggregate>;
   readonly priceSources: ReadonlyArray<UsagePriceSourceSummary>;

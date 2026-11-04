@@ -37,9 +37,17 @@ const AuthenticatedApplication = lazy(() =>
   })),
 );
 
+// A Thread draft's pending write must not reach the next account's session.
+// The module is already loaded whenever one is pending, so this runs first.
+const discardUnsavedThreadDrafts = () =>
+  void import("./features/threads/thread-draft-queries.js").then((drafts) =>
+    drafts.discardUnsavedThreadDrafts(),
+  );
+
 const clearDraftsBeforeSignOut = (userId: UserId) => {
   forgetShellPrefetch();
   queryClient.clear();
+  discardUnsavedThreadDrafts();
   void import("./features/threads/new-thread-draft-store.js").then((drafts) => {
     drafts.clearNewThreadDraftsForUser(userId);
   });
@@ -55,6 +63,7 @@ onSessionEnded(() => {
   if (userId === undefined) return;
   forgetShellPrefetch();
   queryClient.setQueryData(sessionQueryOptions.queryKey, null);
+  discardUnsavedThreadDrafts();
   queryClient.removeQueries({
     predicate: (query) => query.queryKey[0] !== "auth",
   });

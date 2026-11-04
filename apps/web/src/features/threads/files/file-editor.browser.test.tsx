@@ -36,12 +36,7 @@ it("keeps Pierre's external file stable while updating theme, wrap, and change c
     appearance: Appearance = "dark",
   ) =>
     root.render(
-      <ThemeProvider
-        appearance={appearance}
-        palette="daydream"
-        onAppearanceChange={() => undefined}
-        onPaletteChange={() => undefined}
-      >
+      <ThemeProvider preferences={{ appearance }}>
         <ThreadFileEditor
           path="proof.py"
           content={content}

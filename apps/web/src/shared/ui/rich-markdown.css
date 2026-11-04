@@ -1,5 +1,6 @@
 .markdown.transcript-markdown {
-  --markdown-mono: "IBM Plex Mono", monospace;
+  /* A Code Font family the person chose replaces Plex. */
+  --markdown-mono: var(--code-font-family, "IBM Plex Mono", monospace);
   --markdown-keyword: light-dark(#a52270, #ff7ac6);
 
   color: var(--chat-foreground);
@@ -74,7 +75,7 @@
   margin: 1.1em 0;
 }
 .markdown.transcript-markdown pre {
-  font: 12.5px / 1.375 var(--markdown-mono);
+  font: var(--code-font-size, 12.5px) / 1.375 var(--markdown-mono);
   padding: 8px 36px 8px 12px;
   background: color-mix(in oklab, var(--chat-foreground) 5%, transparent);
   outline: 1px solid
@@ -88,7 +89,7 @@
   min-width: 100%;
   font: inherit;
   background: transparent;
-  line-height: 1;
+  line-height: var(--code-line-height, 1);
   font-variant-ligatures: none;
   letter-spacing: 0;
 }

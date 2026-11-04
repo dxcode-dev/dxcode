@@ -28,6 +28,7 @@ import { installFlueObservation } from "./observability/flue.js";
 import { installRuntimeTracing } from "./observability/platform-tracing.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
+import { threadOrbRestartRoutes } from "./orb-restart/routes.js";
 import { d1Session } from "./persistence/d1-session.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
@@ -67,6 +68,7 @@ import { threadDaemonRoutes } from "./threads/daemon-route.js";
 import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
+import { threadDraftRoutes } from "./threads/thread-draft-route.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
 
 installRuntimeTracing();
@@ -150,6 +152,9 @@ app.use("/v1/threads/:threadId/memory/*", authorizeThread);
 app.route("/v1/threads", threadOrbMemoryRoutes);
 app.use("/v1/threads/:threadId/disk/*", authorizeThread);
 app.route("/v1/threads", threadOrbDiskRoutes);
+// Viewers are refused by authorizeThread; the route refuses an archived Thread.
+app.use("/v1/threads/:threadId/orb/*", authorizeThread);
+app.route("/v1/threads", threadOrbRestartRoutes);
 // `/automations/*` also matches `/automations`; see Portals above.
 app.use("/v1/threads/:threadId/automations/*", authorizeThread);
 app.route("/v1/threads", threadAutomationRoutes);
@@ -158,6 +163,8 @@ app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
 app.route("/v1/threads", threadDesktopRoutes);
 // Per person, not per Thread: a member's panes never replace the owner's.
 app.route("/v1/threads", threadPaneLayoutRoutes);
+// Per person too: each member of a shared Thread has their own draft.
+app.route("/v1/threads", threadDraftRoutes);
 app.route("/v1/agents/dx", dxAgentRoutes);
 
 app.notFound(notFoundHandler);

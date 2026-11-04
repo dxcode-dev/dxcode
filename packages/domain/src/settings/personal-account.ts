@@ -55,6 +55,98 @@ export const PersonalTerminalTheme = Schema.Literals([
 ]);
 export type PersonalTerminalTheme = typeof PersonalTerminalTheme.Type;
 
+/** How much the web app scales its text (and the layout around it). */
+export const PersonalTextSize = Schema.Literals([
+  "small",
+  "default",
+  "large",
+  "larger",
+]);
+export type PersonalTextSize = typeof PersonalTextSize.Type;
+
+/** How wide a Thread's transcript and composer may grow. */
+export const PersonalThreadWidth = Schema.Literals([
+  "narrow",
+  "default",
+  "wide",
+  "full",
+]);
+export type PersonalThreadWidth = typeof PersonalThreadWidth.Type;
+
+/** Whether the terminal follows the app's theme or always uses one scheme. */
+export const PersonalTerminalAppearance = Schema.Literals([
+  "match",
+  "light",
+  "dark",
+]);
+export type PersonalTerminalAppearance = typeof PersonalTerminalAppearance.Type;
+
+const cssLength = /^(\d{1,3}(?:\.\d{1,3})?)(px|rem|em|pt|%)?$/;
+
+/** The pixels a Code Font size means: a bare number is pixels. */
+export const codeFontSizePixels = (value: string): number | undefined => {
+  const match = cssLength.exec(value);
+  if (match === null) return undefined;
+  const amount = Number(match[1]);
+  const unit = match[2] ?? "px";
+  const pixels =
+    unit === "px"
+      ? amount
+      : unit === "rem"
+        ? amount * 16
+        : unit === "pt"
+          ? (amount * 4) / 3
+          : undefined;
+  return pixels !== undefined && pixels >= 6 && pixels <= 48
+    ? pixels
+    : undefined;
+};
+
+/** A line height as a multiple, a percentage, or a px, rem, or em length. */
+export const isCodeLineHeight = (value: string): boolean => {
+  const match = cssLength.exec(value);
+  if (match === null || match[2] === "pt") return false;
+  const amount = Number(match[1]);
+  switch (match[2]) {
+    case undefined:
+    case "rem":
+    case "em":
+      return amount >= 0.5 && amount <= 4;
+    case "%":
+      return amount >= 50 && amount <= 400;
+    default:
+      return amount >= 6 && amount <= 96;
+  }
+};
+
+/**
+ * Font families in order of preference, as CSS writes them. Only names,
+ * quotes, and commas: the value lands in a CSS custom property.
+ */
+export const PersonalCodeFontFamily = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(200),
+  Schema.isPattern(/^[A-Za-z0-9"'][A-Za-z0-9 ,"'._-]*$/),
+);
+export type PersonalCodeFontFamily = typeof PersonalCodeFontFamily.Type;
+
+/** A number in pixels, or a CSS length in px, rem, or pt. */
+export const PersonalCodeFontSize = Schema.String.check(
+  Schema.isMaxLength(16),
+  Schema.makeFilter((value) => codeFontSizePixels(value) !== undefined, {
+    description: "a size from 6 to 48 pixels in px, rem, or pt",
+  }),
+);
+export type PersonalCodeFontSize = typeof PersonalCodeFontSize.Type;
+
+export const PersonalCodeLineHeight = Schema.String.check(
+  Schema.isMaxLength(16),
+  Schema.makeFilter(isCodeLineHeight, {
+    description: "a multiple, a percentage, or a px, rem, or em length",
+  }),
+);
+export type PersonalCodeLineHeight = typeof PersonalCodeLineHeight.Type;
+
 export const PersonalAccount = Schema.Struct({
   userId: UserId,
   displayName: PersonalAccountDisplayName,
@@ -65,6 +157,17 @@ export const PersonalAccount = Schema.Struct({
   appearance: PersonalAppearance,
   palette: PersonalPalette,
   terminalTheme: PersonalTerminalTheme,
+  textSize: PersonalTextSize,
+  threadWidth: PersonalThreadWidth,
+  terminalAppearance: PersonalTerminalAppearance,
+  /** `null` uses the default Code Font value. */
+  codeFontFamily: Schema.NullOr(PersonalCodeFontFamily),
+  codeFontSize: Schema.NullOr(PersonalCodeFontSize),
+  codeLineHeight: Schema.NullOr(PersonalCodeLineHeight),
+  /** Animate the dx logo on the home page (reduced motion still holds it). */
+  logoAnimation: Schema.Boolean,
+  /** Short sounds for dictation, the mode dial, and other interactions. */
+  uiSounds: Schema.Boolean,
   avatarKey: Schema.optional(AvatarKey),
 });
 
@@ -81,10 +184,42 @@ export const UpdatePersonalAppearanceInput = Schema.Struct({
   appearance: Schema.optional(PersonalAppearance),
   palette: Schema.optional(PersonalPalette),
   terminalTheme: Schema.optional(PersonalTerminalTheme),
+  textSize: Schema.optional(PersonalTextSize),
+  threadWidth: Schema.optional(PersonalThreadWidth),
+  terminalAppearance: Schema.optional(PersonalTerminalAppearance),
+  /** `null` clears the value back to the default. */
+  codeFontFamily: Schema.optional(Schema.NullOr(PersonalCodeFontFamily)),
+  codeFontSize: Schema.optional(Schema.NullOr(PersonalCodeFontSize)),
+  codeLineHeight: Schema.optional(Schema.NullOr(PersonalCodeLineHeight)),
+  logoAnimation: Schema.optional(Schema.Boolean),
+  uiSounds: Schema.optional(Schema.Boolean),
 });
 
 export type UpdatePersonalAppearanceInput =
   typeof UpdatePersonalAppearanceInput.Type;
+
+/** Each appearance value the account stores, by its API field name. */
+export const PersonalAppearanceFields = {
+  appearance: PersonalAppearance,
+  palette: PersonalPalette,
+  terminalTheme: PersonalTerminalTheme,
+  textSize: PersonalTextSize,
+  threadWidth: PersonalThreadWidth,
+  terminalAppearance: PersonalTerminalAppearance,
+  codeFontFamily: Schema.NullOr(PersonalCodeFontFamily),
+  codeFontSize: Schema.NullOr(PersonalCodeFontSize),
+  codeLineHeight: Schema.NullOr(PersonalCodeLineHeight),
+  logoAnimation: Schema.Boolean,
+  uiSounds: Schema.Boolean,
+} as const satisfies {
+  readonly [Field in keyof UpdatePersonalAppearanceInput]-?: Schema.Top;
+};
+
+export type PersonalAppearanceField = keyof typeof PersonalAppearanceFields;
+
+export const personalAppearanceFields = Object.keys(
+  PersonalAppearanceFields,
+) as ReadonlyArray<PersonalAppearanceField>;
 
 /** A remembered New Thread Project: a Project, or deliberately no Project. */
 export const ComposerProjectChoice = Schema.Union([

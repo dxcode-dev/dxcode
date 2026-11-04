@@ -310,6 +310,8 @@ export const makeE2BExecutionProvider = (
           authorize: options.authorize,
           observeResidency: options.observeResidency,
         }),
+      // Its resolution reads the state beside `authorize`, then resumes.
+      connectAuthorizes: true,
       connect: (context, { threadId }, options) =>
         openE2BWorkspace(resolvers(), context, threadId, {
           existingOnly: true,

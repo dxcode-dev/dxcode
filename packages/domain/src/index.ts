@@ -422,6 +422,8 @@ export {
 } from "./settings/model-subscriptions.js";
 export {
   ComposerProjectChoice,
+  codeFontSizePixels,
+  isCodeLineHeight,
   isDefaultPersonalAccountUsername,
   normalizePersonalAccountDisplayName,
   normalizePersonalAccountUsername,
@@ -431,11 +433,20 @@ export {
   PersonalAccountIdentityAuthority,
   PersonalAccountUsername,
   PersonalAppearance,
+  type PersonalAppearanceField,
+  PersonalAppearanceFields,
+  PersonalCodeFontFamily,
+  PersonalCodeFontSize,
+  PersonalCodeLineHeight,
   PersonalComposerDefaults,
   PersonalPalette,
+  PersonalTerminalAppearance,
   PersonalTerminalTheme,
+  PersonalTextSize,
+  PersonalThreadWidth,
   personalAccountDisplayNameProblem,
   personalAccountUsernameProblem,
+  personalAppearanceFields,
   UpdatePersonalAccountInput,
   UpdatePersonalAppearanceInput,
   UpdatePersonalComposerDefaultsInput,
@@ -732,6 +743,10 @@ export {
   workspaceRoleHasPermission,
 } from "./settings/workspace.js";
 export {
+  MAX_WORKSPACE_AGENT_INSTRUCTIONS_LENGTH,
+  WorkspaceAgentInstructionsContent,
+} from "./settings/workspace-agent-instructions.js";
+export {
   defaultWorkspacePolicy,
   isRemoteRunnerAdapter,
   WorkspacePolicy,
@@ -863,6 +878,7 @@ export {
   type PluginUsageUserAggregate,
   type UsageDailyTrend,
   type UsageDashboard,
+  type UsageModelAggregate,
   type UsagePriceSourceSummary,
   type UsageProjectAggregate,
   UsageRepository,

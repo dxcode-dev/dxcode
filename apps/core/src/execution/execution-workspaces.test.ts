@@ -3,7 +3,10 @@ import { FlueError, type Sandbox, type SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../logging.js";
-import { takeWorkspaceRecovery } from "../orb-disk/read-only.js";
+import {
+  takeWorkspaceRecovery,
+  workspaceRecoveryNote,
+} from "../orb-disk/read-only.js";
 import type {
   ExecutionContext,
   ExecutionWorkspaceHandle,
@@ -181,6 +184,16 @@ const mocks = vi.hoisted(() => {
       sha256: "a".repeat(64),
     })),
     ensureDaemonInGuest: vi.fn(async () => undefined),
+    takeOrbRestartNote: vi.fn(
+      async (): Promise<
+        | {
+            by: string;
+            files: "kept" | "earlier" | "lost";
+            restartedAt: string;
+          }
+        | undefined
+      > => undefined,
+    ),
   };
 });
 
@@ -232,6 +245,9 @@ vi.mock("./guest/daemon-release.js", () => ({
 vi.mock("./guest/daemon-installer.js", () => ({
   ensureDaemonInGuest: mocks.ensureDaemonInGuest,
 }));
+vi.mock("../orb-restart/execution-object.js", () => ({
+  takeOrbRestartNoteFor: mocks.takeOrbRestartNote,
+}));
 vi.mock("../source-control/tools.js", () => ({
   executeSourcePush: mocks.executeSourcePush,
 }));
@@ -271,6 +287,8 @@ beforeEach(() => {
   mocks.loadDaemonRelease.mockClear();
   mocks.loadDaemonReleaseMetadata.mockClear();
   mocks.ensureDaemonInGuest.mockClear();
+  mocks.takeOrbRestartNote.mockReset();
+  mocks.takeOrbRestartNote.mockResolvedValue(undefined);
 });
 
 it("implements exactly the resident daemon each registered Execution provider claims", () => {
@@ -873,6 +891,42 @@ describe("unresponsive Orb recovery (#1584)", () => {
     expect(recover).toHaveBeenCalledOnce();
   });
 
+  it("tells the next run's agent who restarted the Orb with Restart Orb (#1592)", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001594");
+    mocks.takeOrbRestartNote.mockResolvedValueOnce({
+      by: "Ravi",
+      files: "kept",
+      restartedAt: "2026-11-03T04:00:00.000Z",
+    });
+    const fake = provider([handle(10)]);
+
+    expect(await activateWithin(fake, threadId, 1)).toMatchObject({
+      settled: true,
+      value: expect.anything(),
+    });
+    const recovery = takeWorkspaceRecovery(threadId);
+    expect(recovery).toEqual({ files: "kept", cause: "manual", by: "Ravi" });
+    expect(workspaceRecoveryNote(recovery ?? { files: "kept" })).toContain(
+      '"Ravi restarted the Orb. Files kept; running processes stopped."',
+    );
+  });
+
+  it("lets an automatic restart in the same run replace a person's note", async () => {
+    const threadId = thread("thr_00000000-0000-4000-8000-000000001595");
+    mocks.takeOrbRestartNote.mockResolvedValueOnce({
+      by: "Ravi",
+      files: "kept",
+      restartedAt: "2026-11-03T04:00:00.000Z",
+    });
+    const recover = vi.fn(async () => ({ files: "kept" as const }));
+    const fake = provider([handle("never"), handle(10)], recover);
+
+    await activateWithin(fake, threadId, 5);
+    expect(takeWorkspaceRecovery(threadId)).toMatchObject({
+      cause: "unresponsive",
+    });
+  });
+
   it("leaves a slow Orb that still answers alone", async () => {
     const threadId = thread("thr_00000000-0000-4000-8000-000000001585");
     const recover = vi.fn(async () => ({ files: "kept" as const }));
@@ -1110,10 +1164,11 @@ describe("execution workspace admission", () => {
       awaitRegistration: async () => false,
     });
 
+    // The workspace policy check runs beside the provider's own reads.
     expect(mocks.resolveProfile).toHaveBeenCalledWith(
       mocks.workerEnv,
       threadId,
-      { admission: true },
+      { admission: true, deferPolicy: true },
     );
     expect(mocks.connectWorkspace).toHaveBeenCalledOnce();
     expect(mocks.resolveWorkspace).not.toHaveBeenCalled();
@@ -1231,6 +1286,72 @@ describe("execution workspace admission", () => {
 
     expect(awaitRegistration).not.toHaveBeenCalled();
     expect(mocks.ensureDaemonInGuest).toHaveBeenCalledOnce();
+  });
+
+  it("reaches the Orb only once a key still in preparation settles", async () => {
+    const connected = () =>
+      mocks.connectWorkspace.mockReturnValueOnce(
+        Effect.succeed({
+          commands: { run: vi.fn(async () => ({ exitCode: 0 })) },
+          files: { write: vi.fn(async () => undefined) },
+        }) as never,
+      );
+    const key = { id: "key_2", key: Redacted.make("dxd_test-api-key-value") };
+
+    // A key that resolves later: no Orb before it, then no registration
+    // wait (dxd can't hold it yet), and the installer writes that key.
+    connected();
+    let resolveKey: (value: typeof key) => void = () => undefined;
+    const minted = vi.fn(
+      async () => await new Promise<typeof key>((r) => (resolveKey = r)),
+    );
+    const awaitRegistration = vi.fn(async () => true);
+    const install = ExecutionWorkspaces.ensureDaemon({
+      threadId: thread("thr_00000000-0000-4000-8000-000000000301"),
+      endpoint: "https://daemon.test",
+      credential: minted(),
+      mintCredential,
+      awaitRegistration,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(mocks.connectWorkspace).not.toHaveBeenCalled();
+    resolveKey(key);
+    await install;
+    expect(awaitRegistration).not.toHaveBeenCalled();
+    expect(mocks.ensureDaemonInGuest).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ credential: key }),
+    );
+
+    // A preparation that settles with no key: wait for dxd, then nudge
+    // with no new config.
+    connected();
+    const waited = vi.fn(async () => false);
+    await ExecutionWorkspaces.ensureDaemon({
+      threadId: thread("thr_00000000-0000-4000-8000-000000000302"),
+      endpoint: "https://daemon.test",
+      credential: Promise.resolve(undefined) as unknown as Promise<typeof key>,
+      mintCredential,
+      awaitRegistration: waited,
+    });
+    expect(waited).toHaveBeenCalledWith(3_000);
+    expect(mocks.ensureDaemonInGuest).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({ credential: undefined }),
+    );
+
+    // A key that failed or was revoked: the Orb is never reached.
+    mocks.connectWorkspace.mockClear();
+    await expect(
+      ExecutionWorkspaces.ensureDaemon({
+        threadId: thread("thr_00000000-0000-4000-8000-000000000303"),
+        endpoint: "https://daemon.test",
+        credential: Promise.reject(new Error("activation deadline exceeded")),
+        mintCredential,
+        awaitRegistration: vi.fn(async () => true),
+      }),
+    ).rejects.toThrow("activation deadline exceeded");
+    expect(mocks.connectWorkspace).not.toHaveBeenCalled();
   });
 
   it("renews the sandbox deadline while source preparation outlasts a poll", async () => {

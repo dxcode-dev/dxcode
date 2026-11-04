@@ -35,7 +35,7 @@ import {
 } from "../../thread-changes/candidate.js";
 
 export const DXD_PROTOCOL_MAJOR = 2;
-export const DXD_RELEASE = "0.14.0";
+export const DXD_RELEASE = "0.15.0";
 export const DXD_TERMINAL_VERSION = 1;
 export const DXD_WORKLOAD_IDENTITY_VERSION = 1;
 export const DXD_HEARTBEAT_INTERVAL_MS = 2_000;
@@ -238,6 +238,18 @@ const releaseAtLeast = (release: string | undefined, floorRelease: string) => {
 /** Whether a daemon on `release` accepts Core's current environment rule. */
 export const dxdAcceptsCurrentEnvironment = (release: string | undefined) =>
   releaseAtLeast(release, DXD_CURRENT_ENVIRONMENT_RELEASE);
+
+/**
+ * The first release whose `environment.activate` accepts lowercase names
+ * such as `my_token`. An earlier daemon rejects the whole activation on one,
+ * so it gets only the uppercase names.
+ */
+export const DXD_LOWERCASE_ENVIRONMENT_RELEASE = "0.15.0";
+
+/** Whether a daemon on `release` accepts lowercase environment names. */
+export const dxdAcceptsLowercaseEnvironmentNames = (
+  release: string | undefined,
+) => releaseAtLeast(release, DXD_LOWERCASE_ENVIRONMENT_RELEASE);
 
 /** Whether a daemon on `release` accepts `git.coAuthor`. */
 export const dxdAcceptsCoAuthor = (release: string | undefined) =>

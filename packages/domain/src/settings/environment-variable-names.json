@@ -52,6 +52,12 @@
     "DX_SUBMODULE_"
   ],
   "allowed": [
+    "my_token",
+    "http_proxy",
+    "no_proxy",
+    "_private",
+    "home",
+    "path",
     "CLOUDFLARE_API_TOKEN",
     "CLOUDFLARE_ACCOUNT_ID",
     "CF_API_TOKEN",

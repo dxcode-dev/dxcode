@@ -60,6 +60,7 @@ import {
   workspaceUsageSettingsSection,
 } from "./usage/registration.js";
 import { workspaceProfileSettingsSection } from "./workspace/registration.js";
+import { workspaceInstructionsSettingsSection } from "./workspace-instructions/registration.js";
 
 export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistration> =
   [
@@ -89,6 +90,7 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     workspaceIntegrationsSettingsSection,
     workspaceUsageSettingsSection,
     workspacePluginUsageSettingsSection,
+    workspaceInstructionsSettingsSection,
     workspaceModeDialSettingsSection,
     workspaceModelRoutingSettingsSection,
     workspaceEnvironmentVariablesSettingsSection,

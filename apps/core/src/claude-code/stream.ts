@@ -18,7 +18,7 @@ import { claudePlanReadingFromEvent } from "./plan.js";
 /** Written by the runner after the last line of each full chunk file. */
 export const CHUNK_END_LINE = '{"type":"dx_chunk_end"}';
 
-const MARKER = /\[REDACTED:[A-Z_][A-Z0-9_]*\]/y;
+const MARKER = /\[REDACTED:[A-Za-z_][A-Za-z0-9_]*\]/y;
 
 /**
  * Workspace reads replace each secret value with its marker

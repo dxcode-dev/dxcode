@@ -193,6 +193,7 @@ import {
   RemoveWorkspaceMemberResponseSchema,
   type ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
+  RestartThreadOrbResponseSchema,
   RetryInitialDispatchResponseSchema,
   RetryPluginTriggerDeliveryResponseSchema,
   ReviewMcpToolResponseSchema,
@@ -234,10 +235,12 @@ import {
   type ThreadData,
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
+  ThreadDraftResponseSchema,
   ThreadFollowResponseSchema,
   ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
   ThreadOrbProcessErrorResponseSchema,
+  ThreadOrbRestartErrorResponseSchema,
   type ThreadPaneLayout,
   ThreadPaneLayoutResponseSchema,
   ThreadPortalPublicErrorResponseSchema,
@@ -274,6 +277,9 @@ import {
   UpdateThreadSharingResponseSchema,
   UpdateWorkspacePolicyResponseSchema,
   UpdateWorkspaceProfileResponseSchema,
+  type WorkspaceAgentInstructionsData,
+  WorkspaceAgentInstructionsErrorResponseSchema,
+  WorkspaceAgentInstructionsResponseSchema,
   WorkspaceInviteLinkResponseSchema,
   WorkspaceInvitePreviewResponseSchema,
   WorkspaceMemberResponseSchema,
@@ -335,6 +341,8 @@ export class ApiError extends Error {
   readonly currentRevision?: number;
   readonly fieldErrors?: ReadonlyArray<SettingsFieldError>;
   readonly hasValidatedPayload: boolean;
+  /** The decoded error's own fields, for a caller that offers a next step. */
+  readonly data?: Readonly<Record<string, unknown>>;
 
   constructor(
     status: number,
@@ -343,6 +351,7 @@ export class ApiError extends Error {
     fieldErrors?: ReadonlyArray<SettingsFieldError>,
     currentRevision?: number,
     hasValidatedPayload = false,
+    data?: Readonly<Record<string, unknown>>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -351,6 +360,7 @@ export class ApiError extends Error {
     this.fieldErrors = fieldErrors;
     this.currentRevision = currentRevision;
     this.hasValidatedPayload = hasValidatedPayload;
+    if (data !== undefined) this.data = data;
   }
 }
 
@@ -396,6 +406,7 @@ export const request = async <
         GetSettingsContextErrorResponseSchema,
         PersonalAccountErrorResponseSchema,
         PersonalAgentInstructionsErrorResponseSchema,
+        WorkspaceAgentInstructionsErrorResponseSchema,
         PersonalSecurityErrorResponseSchema,
         WorkspaceProfileErrorResponseSchema,
         WorkspaceMembersErrorResponseSchema,
@@ -464,6 +475,7 @@ export const request = async <
         ThreadSharingErrorResponseSchema,
         ThreadPortalPublicErrorResponseSchema,
         ThreadOrbProcessErrorResponseSchema,
+        ThreadOrbRestartErrorResponseSchema,
         SearchThreadsInvalidRequestResponseSchema,
         SearchThreadsUnavailableResponseSchema,
         NeedsYouRankingErrorResponseSchema,
@@ -485,6 +497,7 @@ export const request = async <
           ? settingsError.data.currentRevision
           : undefined,
         true,
+        settingsError.data,
       );
     }
     throw new ApiError(response.status, "Request failed.");
@@ -1588,6 +1601,22 @@ export const deleteProject = async (
     await request(
       `/v1/projects/${encodeURIComponent(projectId)}/delete`,
       DeleteProjectResponseSchema,
+      { method: "POST", body: JSON.stringify(input) },
+    )
+  ).data;
+
+/**
+ * Restart Orb (#1592): the Thread's Orb is saved, stopped, and started again
+ * from that save, files kept, processes stopped. Owner or Contribute access.
+ */
+export const restartThreadOrb = async (
+  threadId: ThreadId,
+  input: { readonly discardUnsaved?: true } = {},
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/orb/restart`,
+      RestartThreadOrbResponseSchema,
       { method: "POST", body: JSON.stringify(input) },
     )
   ).data;
@@ -2756,6 +2785,37 @@ export const updatePersonalAgentInstructions = async (input: {
     )
   ).data;
 
+/** A workspace's AGENTS.md: members read it, admins change it. */
+const workspaceAgentInstructionsPath = (workspaceSlug: string) =>
+  `/v1/settings/workspaces/${encodeURIComponent(workspaceSlug)}/agent-instructions`;
+
+export const getWorkspaceAgentInstructions = async (
+  workspaceSlug: string,
+  signal?: AbortSignal,
+): Promise<WorkspaceAgentInstructionsData> =>
+  (
+    await request(
+      workspaceAgentInstructionsPath(workspaceSlug),
+      WorkspaceAgentInstructionsResponseSchema,
+      { signal },
+    )
+  ).data;
+
+export const updateWorkspaceAgentInstructions = async (
+  workspaceSlug: string,
+  input: {
+    readonly instructions: string;
+    readonly expectedRevision: number;
+  },
+): Promise<WorkspaceAgentInstructionsData> =>
+  (
+    await request(
+      workspaceAgentInstructionsPath(workspaceSlug),
+      WorkspaceAgentInstructionsResponseSchema,
+      { method: "PUT", body: JSON.stringify(input) },
+    )
+  ).data;
+
 export const listPersonalApiTokens = async (
   signal?: AbortSignal,
 ): Promise<ReadonlyArray<PersonalApiTokenData>> =>
@@ -3108,6 +3168,40 @@ export const putThreadPaneLayout = async (
       { method: "PUT", body: JSON.stringify(layout) },
     )
   ).data.layout;
+
+/** The signed-in person's unsent message in a Thread's composer; "" if none. */
+export const getThreadDraft = async (
+  threadId: ThreadId,
+  signal?: AbortSignal,
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/draft`,
+      ThreadDraftResponseSchema,
+      { signal },
+    )
+  ).data.text;
+
+/**
+ * Saves the person's draft in a Thread's composer; `""` removes it.
+ * `keepalive` lets a save started as the page unloads finish.
+ */
+export const putThreadDraft = async (
+  threadId: ThreadId,
+  text: string,
+  options: { readonly keepalive?: boolean } = {},
+) =>
+  (
+    await request(
+      `/v1/threads/${encodeURIComponent(threadId)}/draft`,
+      ThreadDraftResponseSchema,
+      {
+        method: "PUT",
+        body: JSON.stringify({ text }),
+        ...(options.keepalive ? { keepalive: true } : {}),
+      },
+    )
+  ).data.text;
 
 export const markAllNotificationsRead = async () =>
   (

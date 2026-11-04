@@ -3,7 +3,9 @@ import { Download, Mic, RotateCcw, Square } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
+import { playUiSound } from "../../../shared/ui/ui-sounds.js";
 import { Waveform } from "../../../shared/ui/waveform.js";
 import { ThreadPresentationContext } from "../thread-session-context.js";
 import {
@@ -150,6 +152,7 @@ export const useDictation = ({
   const send = React.useRef(onSend);
   const lockedRef = React.useRef(false);
   const thread = React.useContext(ThreadPresentationContext);
+  const { uiSounds } = useTheme();
   const [fallbackRecovery] = React.useState(
     () => new DictationRecoverySession(),
   );
@@ -263,6 +266,7 @@ export const useDictation = ({
     if (capture.getSnapshot().state !== "recording" || finishing.current)
       return;
     finishing.current = true;
+    if (uiSounds) playUiSound("stop");
     setProcessingIntent(intent);
     const ownGeneration = generation.current;
     const audio = await capture.finish();
@@ -280,6 +284,7 @@ export const useDictation = ({
   };
 
   const record = () => {
+    if (uiSounds) playUiSound("start");
     recording.current?.take()?.close();
     const live = liveRecording();
     recording.current = live;

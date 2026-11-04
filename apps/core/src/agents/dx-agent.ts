@@ -45,10 +45,16 @@ import {
   workspaceRecoveryNote,
 } from "../orb-disk/read-only.js";
 import {
+  takeUnsavedStop,
+  unsavedStopNote,
+  WORKSPACE_UNSAVED_STOP_SIGNAL,
+} from "../orb-disk/unsaved-stop.js";
+import {
   agentPluginHostContext,
   agentThreadToolsContext,
   resolveAgentBugReportReader,
   resolveAgentPluginTools,
+  resolveAgentWorkspaceInstructions,
 } from "../plugins/agent-context.js";
 import { analyzeOnThreadRoute } from "../plugins/execution/media/analysis.js";
 import { createViewMediaTool } from "../plugins/execution/media/view-media.js";
@@ -77,6 +83,7 @@ import {
   composeClaudeCodePrompt,
   composeDxAgentPrompt,
   dxWorkspaceSkill,
+  settingsInstructions,
 } from "./dx-agent-prompt.js";
 import {
   installSettingsSkills,
@@ -94,6 +101,8 @@ interface DxAgentPromptData {
   };
   /** The owner is a report reader, so the bug report tools mount. */
   readonly bugReportReader?: true;
+  /** The AGENTS.md of the owner's workspace, as of this submission. */
+  readonly workspaceInstructions?: string;
 }
 
 const localModelPreviewPrompt = `You are dx, a coding assistant running in a local UI preview.
@@ -411,6 +420,13 @@ const usePluginLifecycle = (
         type: WORKSPACE_DISK_SIGNAL,
         body: note,
       });
+    const unsavedStop = takeUnsavedStop(threadId);
+    if (unsavedStop !== undefined)
+      context.append({
+        kind: "signal",
+        type: WORKSPACE_UNSAVED_STOP_SIGNAL,
+        body: unsavedStopNote(unsavedStop),
+      });
     const recovery = takeWorkspaceRecovery(threadId);
     if (recovery !== undefined)
       context.append({
@@ -468,11 +484,15 @@ export function DxAgent(props: AgentProps) {
         initialData?.startedByThreadId,
       );
       // Claude Code gets this prompt itself, not Flue's composition of it,
-      // and the person's instructions as its own user-level instructions.
+      // and the workspace's and the person's instructions as its own
+      // user-level instructions (~/.claude/CLAUDE.md).
       rememberClaudeCodePrompt(
         props.id,
         prompt,
-        initialData?.personalInstructions ?? "",
+        settingsInstructions(
+          promptData?.workspaceInstructions ?? "",
+          initialData?.personalInstructions ?? "",
+        ),
       );
       return prompt;
     }
@@ -493,6 +513,7 @@ export function DxAgent(props: AgentProps) {
       ? threadPortalPrompt(props.id)
       : "",
     initialData?.startedByThreadId,
+    promptData?.workspaceInstructions,
   );
 }
 
@@ -512,37 +533,47 @@ DxAgent.resolvePromptData = async (
 ): Promise<DxAgentPromptData | undefined> => {
   const scope = context.scope;
   const activation = startActivation(context.instanceId);
-  const [route, plugins, bugReportReader] = await traceSpan(
-    "agent.resolvePromptData",
-    "phase",
-    {
-      "dx.thread_id": context.instanceId,
-      "dx.submission_id":
-        scope?.kind === "prompt" ? scope.submissionId : undefined,
-    },
-    () =>
-      Promise.all([
-        agentRuntimeComposition.model.resolvePromptData(context),
-        agentRuntimeComposition.capabilities === "workspace" &&
-        scope?.kind === "prompt"
-          ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
-          : Promise.resolve(undefined),
-        agentRuntimeComposition.capabilities === "workspace" &&
-        scope?.kind === "prompt"
-          ? resolveAgentBugReportReader(context.instanceId)
-          : Promise.resolve(false),
-      ]),
-  ).catch((error: unknown) => {
-    if (startedActivations.get(context.instanceId) === activation)
-      startedActivations.delete(context.instanceId);
-    throw error;
-  });
-  if (route === undefined && plugins === undefined && !bugReportReader)
+  const [route, plugins, bugReportReader, workspaceInstructions] =
+    await traceSpan(
+      "agent.resolvePromptData",
+      "phase",
+      {
+        "dx.thread_id": context.instanceId,
+        "dx.submission_id":
+          scope?.kind === "prompt" ? scope.submissionId : undefined,
+      },
+      () =>
+        Promise.all([
+          agentRuntimeComposition.model.resolvePromptData(context),
+          agentRuntimeComposition.capabilities === "workspace" &&
+          scope?.kind === "prompt"
+            ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
+            : Promise.resolve(undefined),
+          agentRuntimeComposition.capabilities === "workspace" &&
+          scope?.kind === "prompt"
+            ? resolveAgentBugReportReader(context.instanceId)
+            : Promise.resolve(false),
+          agentRuntimeComposition.capabilities === "workspace"
+            ? resolveAgentWorkspaceInstructions(context.instanceId)
+            : Promise.resolve(""),
+        ]),
+    ).catch((error: unknown) => {
+      if (startedActivations.get(context.instanceId) === activation)
+        startedActivations.delete(context.instanceId);
+      throw error;
+    });
+  if (
+    route === undefined &&
+    plugins === undefined &&
+    !bugReportReader &&
+    workspaceInstructions.length === 0
+  )
     return undefined;
   return {
     ...(route === undefined ? {} : { route }),
     ...(plugins === undefined ? {} : { plugins }),
     ...(bugReportReader ? { bugReportReader: true as const } : {}),
+    ...(workspaceInstructions.length === 0 ? {} : { workspaceInstructions }),
   };
 };
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {

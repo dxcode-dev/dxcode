@@ -10,6 +10,7 @@ import { DateTime } from "effect";
 import { userImageSql } from "../avatars/storage.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { threadUnreadSql } from "../threads/attention-d1.js";
+import { pruneUnreadableThreadDrafts } from "../threads/thread-draft-store.js";
 import { sharedThreadAccessSql, sharedThreadVisibleSql } from "./access.js";
 
 export class ThreadSharingError extends Error {
@@ -392,6 +393,8 @@ export const updateThreadSharing = async (
           now.toISOString(),
         ),
     );
+  // Members who can no longer read the family lose their drafts in it.
+  statements.push(pruneUnreadableThreadDrafts(db));
   await db.batch(statements);
   const sharing = sharingData(
     {

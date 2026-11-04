@@ -75,6 +75,7 @@ import {
   useSetThreadFollowing,
 } from "./sharing/sharing-mutations.js";
 import { threadMembersQueryOptions } from "./sharing/thread-chat-queries.js";
+import { useThreadDraftValue } from "./thread-draft-queries.js";
 import {
   type ThreadFileNavigation,
   ThreadFileNavigationContext,
@@ -111,10 +112,7 @@ import {
   transcriptMediaSource,
 } from "./transcript-file-link.js";
 import { useFrameCoalescedAgentSource } from "./use-frame-coalesced-agent-session.js";
-import {
-  useThreadPresentation,
-  useThreadPresentationValue,
-} from "./use-thread-presentation.js";
+import { useThreadPresentation } from "./use-thread-presentation.js";
 
 const filesPath = (path: ThreadChangesPath) => {
   try {
@@ -1048,7 +1046,8 @@ function ThreadSessionContent({
       ? undefined
       : () => onOpenModelRouting?.(modelRoutingDestination);
   // Passed down without subscribing: only the composer renders the draft.
-  const draft = useThreadPresentationValue("draft", "");
+  // Core keeps it per person, so a reload or another device shows it.
+  const draft = useThreadDraftValue(thread.id);
   const retainedImageProps = useRetainedImageProps();
   const [liveWorkspaceStatus, setLiveWorkspaceStatus] =
     React.useState<string>();

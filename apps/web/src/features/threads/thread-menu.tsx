@@ -1,6 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
-import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
@@ -12,31 +11,26 @@ import {
   Bug,
   Check,
   ChevronRight,
-  DollarSign,
   Ellipsis,
   FileDown,
   FileText,
-  FolderGit2,
-  Gauge,
   Hash,
-  Info,
   Link2,
   Network,
   Pencil,
   Pin,
   PinOff,
   Share2,
-  Sparkles,
   Trash2,
 } from "lucide-react";
 import * as React from "react";
-import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import {
   type CommandId,
   getBrowserCommandRegistry,
 } from "../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
+import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import {
@@ -48,24 +42,58 @@ import {
   useOptionalThreadSnooze,
 } from "../../shared/thread-snooze.js";
 import { Button } from "../../shared/ui/button.js";
-import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
-import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
-import { formatCost } from "../../shared/usage-cost.js";
 import { BugReportDialog } from "./bug-reports/bug-report-dialog.js";
 import type { DictationRecord } from "./dictation/dictation-session.js";
-import { threadOrbMemoryQueryOptions } from "./orb-memory/orb-memory-queries.js";
-import { threadCostQueryOptions } from "./thread-cost-queries.js";
+import { useRestartOrbMenu } from "./orb-restart/restart-orb-menu.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
   threadExportFilename,
 } from "./thread-export.js";
-import { threadSelectionSummary } from "./thread-selection-summary.js";
 import { ThreadPresentationContext } from "./thread-session-context.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
+
+// The Orb and cost rows read the Orb and usage once the menu opens, so their
+// code stays out of the Thread page's first load. It loads once the page is
+// idle, or sooner at the first sign of reaching for the menu (a pointer over
+// or down on its button, or focus). Loaded, the rows render in the menu's
+// first frame, so the menu never grows: loading on the tap itself left them
+// 170-230 ms behind the menu on a phone at 4x CPU.
+let loadedDetails: typeof import("./thread-menu-details.js") | undefined;
+const loadDetails = () =>
+  import("./thread-menu-details.js").then((module) => {
+    loadedDetails = module;
+    return module;
+  });
+const LazyDetails = React.lazy(loadDetails);
+const preloadDetails = () => void loadDetails();
+
+/** Loads the rows once the browser is idle; returns its cancellation. */
+const preloadDetailsWhenIdle = () => {
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(preloadDetails, { timeout: 4_000 });
+    return () => window.cancelIdleCallback(id);
+  }
+  const timer = window.setTimeout(preloadDetails, 1_500);
+  return () => window.clearTimeout(timer);
+};
+const menuParts = { Item: Menu.Item, Separator: Menu.Separator };
+
+function ThreadMenuDetails(
+  props: Omit<React.ComponentProps<typeof LazyDetails>, "Menu">,
+) {
+  const Loaded = loadedDetails?.default;
+  return Loaded === undefined ? (
+    <React.Suspense fallback={null}>
+      <LazyDetails Menu={menuParts} {...props} />
+    </React.Suspense>
+  ) : (
+    <Loaded Menu={menuParts} {...props} />
+  );
+}
 
 /** A Thread menu entry that opens a submenu of its own items. */
 export function ThreadMenuSubmenu({
@@ -128,6 +156,7 @@ export function ThreadMenu({
    */
   readonly showDetails?: boolean;
 }) {
+  useMountEffect(preloadDetailsWhenIdle);
   const archive = useOptionalThreadArchive();
   const editing = useOptionalThreadEditing();
   const snooze = useOptionalThreadSnooze();
@@ -140,6 +169,7 @@ export function ThreadMenu({
     readonly changesOpen: boolean;
     readonly dictation?: DictationRecord;
   }>();
+  const restartOrb = useRestartOrbMenu(thread);
   const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
   const download = (format: "markdown" | "json") => {
     const markdown = format === "markdown";
@@ -165,7 +195,6 @@ export function ThreadMenu({
     setAnnouncement(`${markdown ? "Markdown" : "JSON"} export downloaded.`);
   };
   const editable = own && editing !== undefined;
-  const orbControls = canUseOrb(thread);
   const pinnable = editable && thread.lifecycleState === "active";
   const snoozable =
     editable &&
@@ -176,6 +205,9 @@ export function ThreadMenu({
     <>
       <Menu.Root>
         <Menu.Trigger
+          onPointerEnter={preloadDetails}
+          onPointerDown={preloadDetails}
+          onFocus={preloadDetails}
           render={
             <Button
               className="thread-title-action"
@@ -261,22 +293,7 @@ export function ThreadMenu({
                   <span>JSON</span>
                 </Menu.Item>
               </ThreadMenuSubmenu>
-              {showDetails || (!orbControls && !own) ? null : (
-                <>
-                  {orbControls ? (
-                    <>
-                      <Menu.Separator className="thread-menu-separator" />
-                      <OrbMenuItem threadId={thread.id} />
-                    </>
-                  ) : null}
-                  {own ? (
-                    <>
-                      <Menu.Separator className="thread-menu-separator" />
-                      <ThreadCostMenuItems thread={thread} />
-                    </>
-                  ) : null}
-                </>
-              )}
+              {showDetails ? null : <ThreadMenuDetails thread={thread} />}
               {onOpenShare === undefined &&
               overflowItems === undefined &&
               !pinnable &&
@@ -349,9 +366,14 @@ export function ThreadMenu({
               {/* A phone lists what the Thread runs on, its Orb, Project,
                   and cost before Report Bug, which stays last. */}
               {showDetails ? (
-                <ThreadDetailItems thread={thread} project={project} />
+                <ThreadMenuDetails
+                  thread={thread}
+                  project={project}
+                  layout="phone"
+                />
               ) : null}
               <Menu.Separator className="thread-menu-separator" />
+              {restartOrb.item}
               <Menu.Item
                 className="thread-menu-item"
                 onClick={() => {
@@ -382,6 +404,7 @@ export function ThreadMenu({
           onClose={() => setReportingBug(undefined)}
         />
       )}
+      {restartOrb.dialog}
       <span className="sr-only" aria-live="polite">
         {announcement}
         {announcement ? <Check /> : null}
@@ -403,168 +426,6 @@ const useCommandKeycaps = (id: CommandId) => {
       ?.displayedKeycaps ?? []
   );
 };
-
-/**
- * What the Thread runs on, and its Project. The owner opens the Project from
- * here; members of a shared Thread cannot read the owner's Project.
- */
-function ThreadDetailItems({
-  thread,
-  project,
-}: {
-  readonly thread: ThreadDetailData;
-  readonly project?: Pick<ProjectData, "name">;
-}) {
-  const selection = threadSelectionSummary(
-    thread.agentInitialization.selection,
-  );
-  const own = thread.access === undefined || thread.access === "owner";
-  const projectName = project?.name ?? thread.projectName ?? "No project";
-  return (
-    <>
-      <Menu.Separator className="thread-menu-separator" />
-      <Menu.Item
-        className="thread-menu-item thread-menu-detail-item"
-        title={selection.title}
-      >
-        {selection.kind === "claude-code" ? (
-          <ClaudeIcon />
-        ) : selection.kind === "mode" ? (
-          <Gauge />
-        ) : (
-          <Sparkles />
-        )}
-        <span className="thread-menu-detail-label">{selection.label}</span>
-        {selection.detail === undefined ? null : (
-          <span className="thread-menu-detail-value">{selection.detail}</span>
-        )}
-      </Menu.Item>
-      {canUseOrb(thread) ? <OrbMenuItem threadId={thread.id} /> : null}
-      <Menu.Separator className="thread-menu-separator" />
-      <Menu.Item
-        className="thread-menu-item"
-        title={projectName}
-        render={
-          own ? (
-            <Link
-              to="/projects/$projectId"
-              params={{ projectId: thread.projectId }}
-            />
-          ) : undefined
-        }
-      >
-        <FolderGit2 />
-        <span>{projectName}</span>
-      </Menu.Item>
-      {own ? <ThreadCostMenuItems thread={thread} /> : null}
-    </>
-  );
-}
-
-/**
- * The Orb's state is for those who may open its Terminal: the owner and
- * contributors, while the Thread is active (archiving stops the Orb), once
- * its Orb was first prepared, as the Thread's views are.
- */
-const canUseOrb = (thread: ThreadDetailData) =>
-  (thread.access === undefined ||
-    thread.access === "owner" ||
-    thread.access === "contribute") &&
-  thread.lifecycleState === "active" &&
-  thread.executionWorkspace.ready;
-
-/** Orb memory answers `unavailable` when no daemon serves this Thread. */
-const ORB_STATE_LABELS = {
-  running: "Running",
-  paused: "Paused",
-  unavailable: "Not running",
-} as const;
-
-/**
- * The Orb's state, from the Orb memory read the Thread page already polls,
- * which never wakes it. The reference's Orb submenu (its size and
- * resources, Memory and CPU Usage, Copy Sync CLI Command, and Network
- * Routing) waits on backend support (#1155).
- */
-function OrbMenuItem({
-  threadId,
-}: {
-  readonly threadId: ThreadDetailData["id"];
-}) {
-  const orb = useQuery(threadOrbMemoryQueryOptions(threadId));
-  const workspace = orb.data?.workspace;
-  const state =
-    workspace !== undefined
-      ? ORB_STATE_LABELS[workspace]
-      : orb.isError
-        ? ORB_STATE_LABELS.unavailable
-        : "Checking…";
-  return (
-    <Menu.Item className="thread-menu-item thread-menu-detail-item">
-      <OrbIcon reducedMotion />
-      <span className="thread-menu-detail-label">Orb</span>
-      <span className="thread-menu-detail-value">{state}</span>
-    </Menu.Item>
-  );
-}
-
-/**
- * The Thread's estimated model cost, from the owner's usage, which opens
- * Usage settings. Claude Code runs on the person's own plan, outside dx's
- * usage, so a Claude Code Thread says its cost is not tracked.
- */
-function ThreadCostMenuItems({
-  thread,
-}: {
-  readonly thread: ThreadDetailData;
-}) {
-  const { identity } = useAuthenticatedIdentity();
-  const cost = useQuery(
-    threadCostQueryOptions(
-      identity.id,
-      thread.id,
-      DateTime.toEpochMillis(thread.createdAt),
-    ),
-  );
-  const claudeCode =
-    threadSelectionSummary(thread.agentInitialization.selection).kind ===
-    "claude-code";
-  const label =
-    cost.data !== undefined
-      ? formatCost(cost.data.amountMicros)
-      : cost.isError
-        ? "Cost unavailable"
-        : "Estimating cost…";
-  const title =
-    cost.data === undefined
-      ? undefined
-      : [
-          `Estimated model cost${cost.data.since === undefined ? "" : ` since ${cost.data.since}`}`,
-          cost.data.unknownEvents === 0
-            ? undefined
-            : `${cost.data.unknownEvents} model ${cost.data.unknownEvents === 1 ? "turn has" : "turns have"} no price`,
-        ]
-          .filter((part) => part !== undefined)
-          .join("; ");
-  return (
-    <>
-      <Menu.Item
-        className="thread-menu-item"
-        title={title}
-        render={<Link to="/settings/$section" params={{ section: "usage" }} />}
-      >
-        <DollarSign />
-        <span>{label}</span>
-      </Menu.Item>
-      {claudeCode ? (
-        <Menu.Item className="thread-menu-item" disabled>
-          <Info />
-          <span>Claude Code Costs Not Tracked</span>
-        </Menu.Item>
-      ) : null}
-    </>
-  );
-}
 
 /** Snooze, with its wake times, or Wake while the Thread is snoozed. */
 function SnoozeMenuItem({

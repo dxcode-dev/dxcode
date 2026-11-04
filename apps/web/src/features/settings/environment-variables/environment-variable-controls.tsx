@@ -454,10 +454,10 @@ export function EnvironmentVariableValues({
   ) => void;
 }) {
   const query = filter.trim().toUpperCase();
-  const visible =
-    query === "" ? items : items.filter(({ name }) => name.includes(query));
-  const visibleManaged =
-    query === "" ? managed : managed.filter(({ name }) => name.includes(query));
+  const matches = ({ name }: { readonly name: string }) =>
+    name.toUpperCase().includes(query);
+  const visible = query === "" ? items : items.filter(matches);
+  const visibleManaged = query === "" ? managed : managed.filter(matches);
   return (
     <SettingsCard
       title="Values"

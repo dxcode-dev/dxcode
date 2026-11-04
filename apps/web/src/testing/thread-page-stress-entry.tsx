@@ -642,10 +642,27 @@ const answer = (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.pathname === "/v1/sidebar-layout" && method === "GET")
     return json({ status: "success", data: { entries: [] } });
   const thread = threadPath.exec(url.pathname);
+  // Core's per-person Thread drafts, kept in this browser's storage so they
+  // outlive a reload the way D1 does.
+  if (thread !== null && thread[2] === "/draft") {
+    const drafts = JSON.parse(
+      localStorage.getItem("thread-page-stress:drafts") ?? "{}",
+    ) as Record<string, string>;
+    if (method === "PUT") {
+      drafts[thread[1]] = (
+        JSON.parse(String(init?.body)) as { text: string }
+      ).text;
+      localStorage.setItem("thread-page-stress:drafts", JSON.stringify(drafts));
+    }
+    return json({ status: "success", data: { text: drafts[thread[1]] ?? "" } });
+  }
   if (thread !== null && method === "GET") {
     const [, id, rest] = thread as unknown as [string, ThreadId, string?];
     if (rest === undefined && sidebarIndex(id) >= 0)
       return json(threadDetailJson(id));
+    // No saved panes: the page opens the default layout.
+    if (rest === "/layout")
+      return json({ status: "success", data: { layout: null } });
     // A realtime hint reads the changed Thread's row, not the whole list.
     if (rest === "/list-item" && sidebarIndex(id) >= 0)
       return json({
@@ -862,6 +879,14 @@ queryClient.setQueryData(personalAccountQueryOptions(userId).queryKey, {
   appearance: "dark",
   palette: "daydream",
   terminalTheme: "github",
+  textSize: "default",
+  threadWidth: "default",
+  terminalAppearance: "match",
+  codeFontFamily: null,
+  codeFontSize: null,
+  codeLineHeight: null,
+  logoAnimation: true,
+  uiSounds: false,
 } as never);
 
 const registry = new PerfRegistry(queryClient, userId);
@@ -878,10 +903,9 @@ const container = document.getElementById("root");
 if (container)
   createRoot(container).render(
     <ThemeProvider
-      appearance={params.get("appearance") === "light" ? "light" : "dark"}
-      palette="daydream"
-      onAppearanceChange={() => undefined}
-      onPaletteChange={() => undefined}
+      preferences={{
+        appearance: params.get("appearance") === "light" ? "light" : "dark",
+      }}
     >
       <QueryClientProvider client={queryClient}>
         <AuthGate>

@@ -30,6 +30,7 @@ import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import { useNewProjectSurface } from "../../shared/new-project-surface.js";
+import { useTheme } from "../../shared/theme/theme-provider.js";
 import { Button } from "../../shared/ui/button.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { MenuItemText } from "../../shared/ui/menu-item-text.js";
@@ -40,6 +41,7 @@ import {
 } from "../../shared/ui/mode-dial-geometry.js";
 import { ModeDialPlate } from "../../shared/ui/mode-dial-plate.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
+import { playUiSound } from "../../shared/ui/ui-sounds.js";
 import {
   ClaudeCodeDialControls,
   ClaudeCodeModeOption,
@@ -190,7 +192,10 @@ function ReasoningModeConsole({
     REASONING_MODES.find(({ id }) => id === profile) ?? REASONING_MODES[2];
   const modeIndex = DIAL_MODE_ORDER.indexOf(mode.id);
   const selectedAngle = DIAL_POSITION_BY_MODE[mode.id].angle;
+  const { uiSounds } = useTheme();
   const selectMode = (nextMode: ModeId) => {
+    // One tick per detent the dial moves to.
+    if (uiSounds && nextMode !== mode.id) playUiSound("tick");
     onProfileChange(nextMode);
     if (selectedModel !== undefined) onModelChange(undefined);
   };

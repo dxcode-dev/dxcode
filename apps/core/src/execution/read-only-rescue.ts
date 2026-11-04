@@ -133,6 +133,13 @@ export const restoreUnsavedWork = async (
   guest: ExecutionGuest,
   rescue: Extract<UnsavedWorkRescue, { kind: "archive" }>,
   now = new Date(),
+  /**
+   * Also keep it in Thread storage, which everyone who can read the Thread
+   * can list and read, and which outlives the Orb. Off for a copy that may
+   * hold untracked files such as a `.env`: the Orb alone keeps it, with the
+   * same audience as the files it copies.
+   */
+  threadStorage = true,
 ): Promise<RestoredWork> => {
   const name = `dx-recovered-${now.toISOString().slice(0, 19).replaceAll(":", "-")}.tar.gz`;
   const orbPath = `/home/user/dx-recovered/${name}`;
@@ -144,18 +151,20 @@ export const restoreUnsavedWork = async (
         rescue.bytes.byteOffset + rescue.bytes.byteLength,
       ) as ArrayBuffer,
     ),
-    putThreadStorageFile(bindings, {
-      threadId,
-      name,
-      mimeType: "application/gzip",
-      bytes: rescue.bytes,
-    }),
+    threadStorage
+      ? putThreadStorageFile(bindings, {
+          threadId,
+          name,
+          mimeType: "application/gzip",
+          bytes: rescue.bytes,
+        })
+      : Promise.reject(new Error("not kept in Thread storage")),
   ]);
   for (const [where, outcome] of [
     ["orb", inOrb],
     ["storage", inStorage],
   ] as const)
-    if (outcome.status === "rejected")
+    if (outcome.status === "rejected" && (threadStorage || where === "orb"))
       executionWorkspaceLogger.error("Rescued work could not be stored.", {
         event: "workspace_read_only_rescue",
         threadId,

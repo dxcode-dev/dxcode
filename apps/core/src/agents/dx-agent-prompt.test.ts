@@ -13,7 +13,7 @@ describe("dx agent prompt v1", () => {
     const composed = composeDxAgentPrompt(instruction);
     expect(composed.startsWith(dxAgentPrompt)).toBe(true);
     expect(composed.split(instruction)).toHaveLength(2);
-    expect(composed).toContain("<personal-agent-instructions>");
+    expect(composed).toContain("<personal_instructions>");
     expect(composed).toContain(
       "delegated agents, specialized agents, or system tasks",
     );

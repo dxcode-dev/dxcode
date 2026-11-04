@@ -10,6 +10,7 @@ import { userImageSql } from "../../avatars/storage.js";
 import { encodeBase64Url } from "../../encoding/base64.js";
 import type { Bindings } from "../../http/types.js";
 import { settingsAuditLogger } from "../../logging.js";
+import { pruneUnreadableThreadDrafts } from "../../threads/thread-draft-store.js";
 import {
   type ConfigValueEnvelope,
   decryptConfigValue,
@@ -247,13 +248,17 @@ const deleteMembership = async (
   workspaceId: string,
   userId: string,
 ) => {
-  const result = await db
-    .prepare(
-      "DELETE FROM member WHERE organizationId = ? AND userId = ? AND role != 'owner' RETURNING userId",
-    )
-    .bind(workspaceId, userId)
-    .all();
-  return result.results.length === 1;
+  // Shared Threads they can no longer read lose their drafts, and so do
+  // other members' drafts on Threads this person owns.
+  const [result] = await db.batch([
+    db
+      .prepare(
+        "DELETE FROM member WHERE organizationId = ? AND userId = ? AND role != 'owner' RETURNING userId",
+      )
+      .bind(workspaceId, userId),
+    pruneUnreadableThreadDrafts(db),
+  ]);
+  return result?.results.length === 1;
 };
 
 /**

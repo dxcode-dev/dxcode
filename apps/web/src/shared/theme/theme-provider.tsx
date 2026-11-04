@@ -1,30 +1,30 @@
 import * as React from "react";
 import {
-  type Appearance,
-  type Palette,
+  type AppearancePreferences,
+  appearancePreferencesOf,
+  codeFontFamilyCss,
+  codeFontSizeCss,
+  defaultAppearancePreferences,
   type ResolvedAppearance,
   rememberBootTheme,
   resolveAppearance,
-  type TerminalTheme,
   type ThemePreferences,
 } from "./theme-store.js";
 
+export type AppearanceChange = Partial<AppearancePreferences>;
+
 interface ThemeContextValue extends ThemePreferences {
-  readonly setAppearance: (appearance: Appearance) => void;
-  readonly setPalette: (palette: Palette) => void;
-  readonly setTerminalTheme: (terminalTheme: TerminalTheme) => void;
+  /** Saves and applies the given values; the rest stay as they are. */
+  readonly update: (change: AppearanceChange) => void;
 }
 
 const ignoreThemeChange = () => undefined;
 
 const ThemeContext = React.createContext<ThemeContextValue>({
-  appearance: "dark",
+  ...defaultAppearancePreferences,
   resolvedAppearance: "dark",
-  palette: "daydream",
-  terminalTheme: "github",
-  setAppearance: ignoreThemeChange,
-  setPalette: ignoreThemeChange,
-  setTerminalTheme: ignoreThemeChange,
+  terminalScheme: "dark",
+  update: ignoreThemeChange,
 });
 
 const useSystemPrefersDark = () => {
@@ -70,6 +70,29 @@ const useApplyTheme = (preferences: ThemePreferences) => {
     root.dataset.appearance = preferences.appearance;
     root.dataset.resolvedAppearance = preferences.resolvedAppearance;
     root.dataset.palette = preferences.palette;
+    root.dataset.textSize = preferences.textSize;
+    root.dataset.threadWidth = preferences.threadWidth;
+    root.dataset.terminalAppearance = preferences.terminalAppearance;
+    // Unset values fall back to the stylesheet and each surface's own size.
+    const codeFont = {
+      "--font-mono-family":
+        preferences.codeFontFamily === null
+          ? null
+          : codeFontFamilyCss(preferences.codeFontFamily),
+      // Surfaces with their own default font (transcript code) read this.
+      "--code-font-family":
+        preferences.codeFontFamily === null
+          ? null
+          : codeFontFamilyCss(preferences.codeFontFamily),
+      "--code-font-size":
+        preferences.codeFontSize === null
+          ? null
+          : codeFontSizeCss(preferences.codeFontSize),
+      "--code-line-height": preferences.codeLineHeight,
+    };
+    for (const [property, value] of Object.entries(codeFont))
+      if (value === null) root.style.removeProperty(property);
+      else root.style.setProperty(property, value);
     root.dataset.windowLayout = "full-window";
     const light = resolvedSurfaceColor("light");
     const dark = resolvedSurfaceColor("dark");
@@ -90,39 +113,31 @@ const useApplyTheme = (preferences: ThemePreferences) => {
 };
 
 export function ThemeProvider({
-  appearance,
-  palette,
-  terminalTheme = "github",
-  onAppearanceChange,
-  onPaletteChange,
-  onTerminalThemeChange = ignoreThemeChange,
+  preferences: given,
+  onChange = ignoreThemeChange,
   children,
 }: {
-  readonly appearance: Appearance;
-  readonly palette: Palette;
-  readonly terminalTheme?: TerminalTheme;
-  readonly onAppearanceChange: (appearance: Appearance) => void;
-  readonly onPaletteChange: (palette: Palette) => void;
-  readonly onTerminalThemeChange?: (terminalTheme: TerminalTheme) => void;
+  /** Values left out use the defaults. */
+  readonly preferences: Partial<AppearancePreferences>;
+  readonly onChange?: (change: AppearanceChange) => void;
   readonly children: React.ReactNode;
 }) {
   const systemPrefersDark = useSystemPrefersDark();
+  const stored = appearancePreferencesOf(given);
+  const resolvedAppearance = resolveAppearance(
+    stored.appearance,
+    systemPrefersDark,
+  );
   const preferences = {
-    appearance,
-    resolvedAppearance: resolveAppearance(appearance, systemPrefersDark),
-    palette,
-    terminalTheme,
+    ...stored,
+    resolvedAppearance,
+    terminalScheme:
+      stored.terminalAppearance === "match"
+        ? resolvedAppearance
+        : stored.terminalAppearance,
   };
   useApplyTheme(preferences);
-  const value = {
-    appearance,
-    resolvedAppearance: preferences.resolvedAppearance,
-    palette,
-    terminalTheme,
-    setAppearance: onAppearanceChange,
-    setPalette: onPaletteChange,
-    setTerminalTheme: onTerminalThemeChange,
-  };
+  const value = { ...preferences, update: onChange };
 
   return (
     <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>

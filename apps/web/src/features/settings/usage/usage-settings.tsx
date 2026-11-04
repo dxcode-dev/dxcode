@@ -1,12 +1,16 @@
 import { USAGE_EVENT_RETENTION_DAYS } from "@dx/domain";
 import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import { AlertTriangle, Download, Info, RotateCw } from "lucide-react";
+import { AlertTriangle, ChevronRight, Download, Info } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { modelDisplayName } from "../../../shared/model-display-name.js";
 import { Button } from "../../../shared/ui/button.js";
-import { Input } from "../../../shared/ui/input.js";
-import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
+import {
+  SettingsCard,
+  SettingsHeading,
+  SettingsRow,
+} from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   formatCost,
@@ -15,7 +19,6 @@ import {
   type UsageMode,
 } from "./usage-format.js";
 import {
-  applyPersonalUsageFilters,
   combinePersonalUsagePages,
   type PersonalUsageData,
   type PersonalUsageFilters,
@@ -24,17 +27,7 @@ import {
   type UsageThreadData,
 } from "./usage-queries.js";
 
-type UsageDetail = "threads" | "runners";
-
 const isoDate = (date: Date) => date.toISOString().slice(0, 10);
-
-const initialRange = () => {
-  const now = new Date();
-  const to = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
-  const from = new Date(to);
-  from.setUTCDate(from.getUTCDate() - 29);
-  return { from: isoDate(from), to: isoDate(to) };
-};
 
 const downloadCsv = (exported: {
   readonly content: string;
@@ -85,21 +78,6 @@ const metricLabel = (thread: UsageThreadData, mode: UsageMode) => {
   }
 };
 
-function UsageMeter({
-  value,
-  max,
-}: {
-  readonly value: number;
-  readonly max: number;
-}) {
-  const width = max === 0 ? 0 : Math.max(2, Math.round((value / max) * 100));
-  return (
-    <span className="usage-meter" aria-hidden="true">
-      <span style={{ width: `${width}%` }} />
-    </span>
-  );
-}
-
 export function UsageSummaryCards({
   data,
 }: {
@@ -147,6 +125,11 @@ export function UsageSummaryCards({
   );
 }
 
+/**
+ * The range's days as columns, each Thread a dot on the day and at the hour
+ * it started, sized by the selected metric, as the reference's activity
+ * strip lays them out.
+ */
 function ThreadDotChart({
   data,
   mode,
@@ -157,67 +140,78 @@ function ThreadDotChart({
   const from = Date.parse(`${data.range.from}T00:00:00.000Z`);
   const to = Date.parse(`${data.range.to}T23:59:59.999Z`);
   const span = Math.max(1, to - from);
+  const days = Math.max(1, Math.round(span / 86_400_000));
   const maximum = Math.max(
     1,
     ...data.threads.map((thread) => metricValue(thread, mode)),
   );
+  const columns = Array.from({ length: days }, (_, index) => {
+    const day = new Date(from + index * 86_400_000);
+    return {
+      key: day.toISOString().slice(0, 10),
+      weekday: day.toLocaleDateString(undefined, {
+        weekday: "short",
+        timeZone: "UTC",
+      }),
+      date: day.toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        timeZone: "UTC",
+      }),
+    };
+  });
   return (
     <figure
-      className="usage-chart"
-      aria-label="Threads by day and creation time"
+      className="usage-strip"
+      aria-label="Threads by the day and hour they started"
+      style={{ "--usage-days": days } as React.CSSProperties}
     >
-      <div className="usage-chart-grid" aria-hidden="true">
-        {[0, 6, 12, 18, 24].map((hour) => (
-          <span
-            key={hour}
-            data-label={`${String(hour).padStart(2, "0")}:00`}
-            style={{ top: `${(hour / 24) * 100}%` }}
-          >
-            {String(hour).padStart(2, "0")}:00
-          </span>
-        ))}
-      </div>
-      {data.threads.map((thread) => {
-        const createdAt = usageInstant(thread.createdAt);
-        const instant = Date.parse(createdAt);
-        const local = new Date(
-          instant + data.range.timezoneOffsetMinutes * 60_000,
-        );
-        const localInstant =
-          instant + data.range.timezoneOffsetMinutes * 60_000;
-        const x = Math.min(
-          98,
-          Math.max(2, ((localInstant - from) / span) * 100),
-        );
-        const y =
-          ((local.getUTCHours() * 60 + local.getUTCMinutes()) / 1_440) * 100;
-        const size = 9 + Math.sqrt(metricValue(thread, mode) / maximum) * 19;
-        return (
-          <a
-            key={thread.threadId}
-            href={`/threads/${encodeURIComponent(thread.threadId)}`}
-            className="usage-thread-dot"
-            style={{ left: `${x}%`, top: `${y}%`, width: size, height: size }}
-            aria-label={`${thread.projectName}, ${createdAt}, ${metricLabel(thread, mode)}`}
-          >
-            <span className="usage-tooltip">
-              <strong>{thread.projectName}</strong>
-              <span>{new Date(createdAt).toLocaleString()}</span>
-              <span>
-                {thread.providerId} · {thread.modelId}
-              </span>
-              <span>{metricLabel(thread, mode)}</span>
+      {days <= 14 ? (
+        <div className="usage-strip-days" aria-hidden="true">
+          {columns.map((column) => (
+            <span key={column.key}>
+              <small>{column.weekday}</small>
+              {column.date}
             </span>
-          </a>
-        );
-      })}
-      {data.threads.length === 0 ? (
-        <p className="usage-chart-empty">No matching Thread activity</p>
+          ))}
+        </div>
       ) : null}
-      <div className="usage-chart-axis">
-        <span>{data.range.from}</span>
-        <span>{data.range.to}</span>
+      <div className="usage-strip-plot">
+        {data.threads.map((thread) => {
+          const createdAt = usageInstant(thread.createdAt);
+          const instant = Date.parse(createdAt);
+          const x = Math.min(99, Math.max(1, ((instant - from) / span) * 100));
+          const minutes =
+            new Date(instant).getUTCHours() * 60 +
+            new Date(instant).getUTCMinutes();
+          const y = 8 + (minutes / 1_440) * 84;
+          const size = 7 + Math.sqrt(metricValue(thread, mode) / maximum) * 15;
+          return (
+            <a
+              key={thread.threadId}
+              href={`/threads/${encodeURIComponent(thread.threadId)}`}
+              className="usage-thread-dot"
+              style={{ left: `${x}%`, top: `${y}%`, width: size, height: size }}
+              aria-label={`${thread.title}, ${metricLabel(thread, mode)}`}
+            >
+              <span className="usage-tooltip">
+                <strong>{thread.title}</strong>
+                <span>{new Date(createdAt).toLocaleString()}</span>
+                <span>{metricLabel(thread, mode)}</span>
+              </span>
+            </a>
+          );
+        })}
+        {data.threads.length === 0 ? (
+          <p className="usage-chart-empty">No Thread activity</p>
+        ) : null}
       </div>
+      {days <= 14 ? null : (
+        <div className="usage-chart-axis">
+          <span>{columns[0]?.date}</span>
+          <span>{columns.at(-1)?.date}</span>
+        </div>
+      )}
     </figure>
   );
 }
@@ -252,64 +246,6 @@ export function DailyTrend({
           <small>{day.day.slice(5)}</small>
         </div>
       ))}
-    </div>
-  );
-}
-
-function ThreadTable({
-  data,
-  mode,
-}: {
-  readonly data: PersonalUsageData;
-  readonly mode: UsageMode;
-}) {
-  const maximum = Math.max(
-    1,
-    ...data.threads.map((thread) => metricValue(thread, mode)),
-  );
-  return (
-    <div className="usage-table-scroll">
-      <table className="usage-table">
-        <thead>
-          <tr>
-            <th>Thread</th>
-            <th>Provider / model</th>
-            <th>Profile</th>
-            <th>Usage</th>
-            <th>Latency</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.threads.map((thread) => (
-            <tr key={thread.threadId}>
-              <td>
-                <a href={`/threads/${encodeURIComponent(thread.threadId)}`}>
-                  {thread.projectName}
-                </a>
-                <small>
-                  {new Date(usageInstant(thread.createdAt)).toLocaleString()}
-                </small>
-              </td>
-              <td>
-                {thread.providerId}
-                <small>{thread.modelId}</small>
-              </td>
-              <td>
-                {thread.profileId}
-                <small>version {thread.profileVersion}</small>
-              </td>
-              <td>
-                <strong>{metricLabel(thread, mode)}</strong>
-                <UsageMeter value={metricValue(thread, mode)} max={maximum} />
-              </td>
-              <td>{formatDuration(thread.averageLatencyMs)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {data.threads.length === 0 ? (
-        <p className="usage-empty">No matching Threads.</p>
-      ) : null}
     </div>
   );
 }
@@ -375,76 +311,291 @@ export function RunnerTable({
   );
 }
 
+const USAGE_RANGES = [7, 14, 30, 90] as const;
+type UsageRange = (typeof USAGE_RANGES)[number];
+
+/** The last `days` UTC days, today included: day boundaries are UTC. */
+const utcRange = (days: UsageRange): PersonalUsageFilters => {
+  const to = new Date();
+  const from = new Date(to);
+  from.setUTCDate(from.getUTCDate() - (days - 1));
+  return {
+    from: isoDate(from),
+    to: isoDate(to),
+    timezoneOffsetMinutes: 0,
+    limit: 20,
+  };
+};
+
+const amountLabel = (
+  value: {
+    readonly totalTokens: number;
+    readonly estimatedCostMicros: number;
+    readonly unknownCostEvents: number;
+    readonly modelTurns: number;
+  },
+  mode: "tokens" | "cost",
+) =>
+  mode === "tokens"
+    ? `${formatTokens(value.totalTokens)} tokens`
+    : value.unknownCostEvents > 0 &&
+        value.unknownCostEvents === value.modelTurns
+      ? "Unknown"
+      : value.estimatedCostMicros === 0
+        ? "$0"
+        : formatCost(value.estimatedCostMicros);
+
+/** Model turns summed by the provider that answered them. */
+const byProvider = (models: PersonalUsageData["models"]) => {
+  const providers = new Map<
+    string,
+    {
+      providerId: string;
+      totalTokens: number;
+      estimatedCostMicros: number;
+      unknownCostEvents: number;
+      modelTurns: number;
+    }
+  >();
+  for (const model of models) {
+    const total = providers.get(model.providerId) ?? {
+      providerId: model.providerId,
+      totalTokens: 0,
+      estimatedCostMicros: 0,
+      unknownCostEvents: 0,
+      modelTurns: 0,
+    };
+    total.totalTokens += model.totalTokens;
+    total.estimatedCostMicros += model.estimatedCostMicros;
+    total.unknownCostEvents += model.unknownCostEvents;
+    total.modelTurns += model.modelTurns;
+    providers.set(model.providerId, total);
+  }
+  return [...providers.values()];
+};
+
+/** Every day of the range, newest first, with nothing on days without use. */
+const everyDay = (data: PersonalUsageData) => {
+  const used = new Map(data.daily.map((day) => [day.day, day]));
+  const days: Array<PersonalUsageData["daily"][number]> = [];
+  const first = Date.parse(`${data.range.from}T00:00:00.000Z`);
+  for (
+    let at = Date.parse(`${data.range.to}T00:00:00.000Z`);
+    at >= first;
+    at -= 86_400_000
+  ) {
+    const day = new Date(at).toISOString().slice(0, 10);
+    days.push(
+      used.get(day as PersonalUsageData["daily"][number]["day"]) ?? {
+        day: day as PersonalUsageData["daily"][number]["day"],
+        totalTokens: 0,
+        unknownTokenEvents: 0,
+        estimatedCostMicros: 0,
+        unknownCostEvents: 0,
+        averageLatencyMs: null,
+        runnerDurationMs: 0,
+        modelTurns: 0,
+      },
+    );
+  }
+  return days;
+};
+
+/** One day of Daily Spend, which opens to the Threads that spent it. */
+function DailySpendRow({
+  day,
+  mode,
+}: {
+  readonly day: PersonalUsageData["daily"][number];
+  readonly mode: "tokens" | "cost";
+}) {
+  const [open, setOpen] = React.useState(false);
+  const label = new Date(`${day.day}T00:00:00.000Z`).toLocaleDateString(
+    undefined,
+    { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" },
+  );
+  const spent = day.totalTokens > 0 || day.estimatedCostMicros > 0;
+  return (
+    <>
+      <SettingsRow
+        title={
+          spent ? (
+            <button
+              type="button"
+              className="usage-day-toggle"
+              aria-expanded={open}
+              onClick={() => setOpen(!open)}
+            >
+              <ChevronRight aria-hidden="true" />
+              {label}
+            </button>
+          ) : (
+            <span className="usage-day-toggle">{label}</span>
+          )
+        }
+        control={
+          <span className="usage-amount">
+            {amountLabel({ ...day, modelTurns: day.modelTurns }, mode)}
+          </span>
+        }
+      />
+      {open ? <DayThreads day={day.day} mode={mode} /> : null}
+    </>
+  );
+}
+
+/** The Threads that used the most on one UTC day. */
+function DayThreads({
+  day,
+  mode,
+}: {
+  readonly day: string;
+  readonly mode: "tokens" | "cost";
+}) {
+  const { identity } = useAuthenticatedIdentity();
+  const query = useInfiniteQuery(
+    personalUsageQueryOptions(identity.id, {
+      from: day,
+      to: day,
+      timezoneOffsetMinutes: 0,
+      limit: 10,
+    }),
+  );
+  const threads = query.data?.pages[0]?.threads;
+  return (
+    <div className="usage-day-threads">
+      {threads === undefined ? (
+        <p className="usage-empty">
+          {query.isError ? "Threads could not load." : "Loading Threads…"}
+        </p>
+      ) : (
+        threads.map((thread) => (
+          <SettingsRow
+            key={thread.threadId}
+            title={
+              <a href={`/threads/${encodeURIComponent(thread.threadId)}`}>
+                {thread.title}
+              </a>
+            }
+            control={
+              <span className="usage-amount">{amountLabel(thread, mode)}</span>
+            }
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
 export function UsageDashboard({
   data,
   mode,
-  detail,
-  onModeChange,
-  onDetailChange,
+  days,
 }: {
   readonly data: PersonalUsageData;
-  readonly mode: UsageMode;
-  readonly detail: UsageDetail;
-  readonly onModeChange: (mode: UsageMode) => void;
-  readonly onDetailChange: (detail: UsageDetail) => void;
+  readonly mode: "tokens" | "cost";
+  readonly days: number;
 }) {
+  const unknownCost = data.summary.estimatedCost.unknownEvents;
+  const total =
+    mode === "tokens"
+      ? `${formatTokens(data.summary.tokens.total)} Total Tokens`
+      : `${data.summary.estimatedCost.amountMicros === 0 ? "$0" : formatCost(data.summary.estimatedCost.amountMicros)} Total Cost`;
+  const breakdown = (
+    title: string,
+    rows: ReadonlyArray<{
+      readonly key: string;
+      readonly name: string;
+      readonly totalTokens: number;
+      readonly estimatedCostMicros: number;
+      readonly unknownCostEvents: number;
+      readonly modelTurns: number;
+    }>,
+  ) =>
+    rows.length === 0 ? null : (
+      <div className="usage-breakdown">
+        <h3>{title}</h3>
+        {rows.map((row) => (
+          <SettingsRow
+            key={row.key}
+            title={row.name}
+            control={
+              <span className="usage-amount">{amountLabel(row, mode)}</span>
+            }
+          />
+        ))}
+      </div>
+    );
   return (
     <>
-      <UsageSummaryCards data={data} />
       <SettingsCard>
-        <div className="usage-card-header">
-          <div>
-            <h2>Daily activity</h2>
-            <p>
-              Thread position shows creation time; dot size follows the selected
-              metric. Aggregated in {data.range.timezone}.
-            </p>
-          </div>
-          <div className="usage-tabs" role="tablist" aria-label="Usage metric">
-            {(["tokens", "cost", "latency", "runners"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                role="tab"
-                aria-selected={mode === item}
-                onClick={() => onModeChange(item)}
-              >
-                {item === "runners" ? "E2B" : item}
-              </button>
-            ))}
-          </div>
-        </div>
-        <DailyTrend data={data} mode={mode} />
         <ThreadDotChart data={data} mode={mode} />
       </SettingsCard>
-      <SettingsCard>
-        <div className="usage-card-header">
-          <div>
-            <h2>Details</h2>
-            <p>
-              Highest estimated-cost Threads and observed E2B lifecycle
-              activity.
-            </p>
-          </div>
-          <div className="usage-tabs" role="tablist" aria-label="Usage details">
-            {(["threads", "runners"] as const).map((item) => (
-              <button
-                key={item}
-                type="button"
-                role="tab"
-                aria-selected={detail === item}
-                onClick={() => onDetailChange(item)}
-              >
-                {item === "runners" ? "E2B runners" : "Threads"}
-              </button>
-            ))}
-          </div>
-        </div>
-        {detail === "threads" ? (
-          <ThreadTable data={data} mode={mode} />
-        ) : (
-          <RunnerTable data={data} />
+      <SettingsCard
+        title={total}
+        description={`in the last ${days} days${
+          mode === "cost" && unknownCost > 0
+            ? ` · ${unknownCost.toLocaleString()} model ${unknownCost === 1 ? "turn has" : "turns have"} no price`
+            : ""
+        }`}
+      >
+        {data.models.length === 0 ? (
+          <p className="usage-empty">No model usage in this range.</p>
+        ) : null}
+        {breakdown(
+          "From",
+          byProvider(data.models).map((provider) => ({
+            ...provider,
+            key: provider.providerId,
+            name: provider.providerId,
+          })),
         )}
+        {breakdown(
+          "Models",
+          data.models.map((model) => ({
+            ...model,
+            key: `${model.providerId}/${model.modelId}`,
+            name: modelDisplayName(model.modelId),
+          })),
+        )}
+      </SettingsCard>
+      <SettingsCard
+        title={mode === "tokens" ? "Daily Tokens" : "Daily Spend"}
+        description="Day boundaries are based on UTC."
+      >
+        {everyDay(data).map((day) => (
+          <DailySpendRow key={day.day} day={day} mode={mode} />
+        ))}
+      </SettingsCard>
+      <SettingsCard
+        title="Threads"
+        description={`Highest estimated cost first, in the last ${days} days.`}
+      >
+        {data.threads.map((thread) => (
+          <SettingsRow
+            key={thread.threadId}
+            title={
+              <a href={`/threads/${encodeURIComponent(thread.threadId)}`}>
+                {thread.title}
+              </a>
+            }
+            description={new Date(
+              usageInstant(thread.createdAt),
+            ).toLocaleString(undefined, {
+              weekday: "short",
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+            control={
+              <span className="usage-amount">{amountLabel(thread, mode)}</span>
+            }
+          />
+        ))}
+        {data.threads.length === 0 ? (
+          <p className="usage-empty">No Threads used models in this range.</p>
+        ) : null}
       </SettingsCard>
       <div className="usage-disclosure">
         <Info />
@@ -461,21 +612,9 @@ export function UsageDashboard({
 
 export function PersonalUsageSettings(_props: SettingsSectionProps) {
   const { identity } = useAuthenticatedIdentity();
-  const formId = React.useId();
-  const [initial] = React.useState(initialRange);
-  const [from, setFrom] = React.useState(initial.from);
-  const [to, setTo] = React.useState(initial.to);
-  const [projectId, setProjectId] = React.useState("");
-  const [threadId, setThreadId] = React.useState("");
-  const [providerId, setProviderId] = React.useState("");
-  const [modelId, setModelId] = React.useState("");
-  const [mode, setMode] = React.useState<UsageMode>("tokens");
-  const [detail, setDetail] = React.useState<UsageDetail>("threads");
-  const [filters, setFilters] = React.useState<PersonalUsageFilters>(() => ({
-    ...initial,
-    timezoneOffsetMinutes: -new Date().getTimezoneOffset(),
-    limit: 20,
-  }));
+  const [days, setDays] = React.useState<UsageRange>(7);
+  const [mode, setMode] = React.useState<"tokens" | "cost">("tokens");
+  const [filters, setFilters] = React.useState(() => utcRange(7));
   const query = useInfiniteQuery(
     personalUsageQueryOptions(identity.id, filters),
   );
@@ -483,113 +622,59 @@ export function PersonalUsageSettings(_props: SettingsSectionProps) {
   const exportUsage = useMutation(
     personalUsageExportMutationOptions(downloadCsv),
   );
-  const exportCsv = () =>
-    exportUsage.mutate(filters, { onSettled: () => exportUsage.reset() });
-
-  const appliedFilters = (): PersonalUsageFilters => ({
-    from,
-    to,
-    timezoneOffsetMinutes: -new Date().getTimezoneOffset(),
-    ...(projectId === "" ? {} : { projectId }),
-    ...(threadId === "" ? {} : { threadId }),
-    ...(providerId === "" ? {} : { providerId }),
-    ...(modelId === "" ? {} : { modelId }),
-    limit: 20,
-  });
-
+  const chooseRange = (next: UsageRange) => {
+    setDays(next);
+    setFilters(utcRange(next));
+  };
   return (
     <div className="personal-usage-settings">
       <SettingsHeading
-        title="Usage"
-        description="Content-free activity for your authorized Threads, shown in an explicit fixed-offset timezone."
-      />
-      <form
-        className="usage-filters"
-        onSubmit={(event) => {
-          event.preventDefault();
-          applyPersonalUsageFilters(
-            filters,
-            appliedFilters(),
-            setFilters,
-            () => {
-              void query.refetch();
-            },
-          );
-        }}
-      >
-        <label htmlFor={`${formId}-from`}>
-          From
-          <Input
-            id={`${formId}-from`}
-            type="date"
-            value={from}
-            onChange={(event) => setFrom(event.target.value)}
-          />
-        </label>
-        <label htmlFor={`${formId}-to`}>
-          To
-          <Input
-            id={`${formId}-to`}
-            type="date"
-            value={to}
-            onChange={(event) => setTo(event.target.value)}
-          />
-        </label>
-        <label htmlFor={`${formId}-provider`}>
-          Provider
-          <Input
-            id={`${formId}-provider`}
-            placeholder="All providers"
-            value={providerId}
-            onChange={(event) => setProviderId(event.target.value)}
-          />
-        </label>
-        <label htmlFor={`${formId}-model`}>
-          Model
-          <Input
-            id={`${formId}-model`}
-            placeholder="All models"
-            value={modelId}
-            onChange={(event) => setModelId(event.target.value)}
-          />
-        </label>
-        <details>
-          <summary>More filters</summary>
-          <div>
-            <label htmlFor={`${formId}-project`}>
-              Project ID
-              <Input
-                id={`${formId}-project`}
-                placeholder="All projects"
-                value={projectId}
-                onChange={(event) => setProjectId(event.target.value)}
-              />
-            </label>
-            <label htmlFor={`${formId}-thread`}>
-              Thread ID
-              <Input
-                id={`${formId}-thread`}
-                placeholder="All Threads"
-                value={threadId}
-                onChange={(event) => setThreadId(event.target.value)}
-              />
-            </label>
+        title="Model usage"
+        actions={
+          <div className="usage-toolbar">
+            <div className="usage-tabs" role="tablist" aria-label="Measure">
+              {(["tokens", "cost"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  aria-selected={mode === item}
+                  onClick={() => setMode(item)}
+                >
+                  {item === "tokens" ? "Tokens" : "Cost"}
+                </button>
+              ))}
+            </div>
+            <div className="usage-tabs" role="tablist" aria-label="Range">
+              {USAGE_RANGES.map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  aria-selected={days === item}
+                  onClick={() => chooseRange(item)}
+                >
+                  {item}d
+                </button>
+              ))}
+            </div>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={exportUsage.isPending || data === undefined}
+              onClick={() =>
+                exportUsage.mutate(filters, {
+                  onSettled: () => exportUsage.reset(),
+                })
+              }
+            >
+              <Download />
+              {exportUsage.isPending ? "Exporting…" : "CSV"}
+            </Button>
           </div>
-        </details>
-        <Button type="submit" size="sm" variant="outline">
-          <RotateCw /> Apply
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          disabled={exportUsage.isPending || data === undefined}
-          onClick={exportCsv}
-        >
-          <Download />
-          {exportUsage.isPending ? "Exporting…" : "Export CSV"}
-        </Button>
-      </form>
+        }
+      />
       {query.isPending ? (
         <div className="usage-state">
           <span className="tool-spinner" />
@@ -612,18 +697,11 @@ export function PersonalUsageSettings(_props: SettingsSectionProps) {
           </Button>
         </div>
       ) : data === undefined ? null : (
-        <UsageDashboard
-          data={data}
-          mode={mode}
-          detail={detail}
-          onModeChange={setMode}
-          onDetailChange={setDetail}
-        />
+        <UsageDashboard data={data} mode={mode} days={days} />
       )}
       {query.isFetchNextPageError ? (
         <p className="usage-state" role="alert">
-          <AlertTriangle aria-hidden="true" /> More usage records could not be
-          loaded.
+          <AlertTriangle aria-hidden="true" /> More Threads could not be loaded.
         </p>
       ) : null}
       {!query.hasNextPage ? null : (
@@ -638,19 +716,10 @@ export function PersonalUsageSettings(_props: SettingsSectionProps) {
               ? "Loading…"
               : query.isFetchNextPageError
                 ? "Retry"
-                : "More expensive Threads"}
+                : "More Threads"}
           </Button>
         </div>
       )}
-      <Button
-        type="button"
-        size="sm"
-        variant="ghost"
-        disabled
-        title="No consent and destination policy is configured"
-      >
-        Explain usage unavailable
-      </Button>
     </div>
   );
 }

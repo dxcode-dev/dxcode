@@ -77,6 +77,9 @@ const earlierDaemonReservedNames = new Set([
   "_",
 ]);
 
+/** Before `DXD_LOWERCASE_ENVIRONMENT_RELEASE`, dxd took only these names. */
+const uppercaseName = /^[A-Z_][A-Z0-9_]*$/;
+
 const acceptedByEarlierDaemon = (name: string) =>
   !earlierDaemonReservedNames.has(name) &&
   !name.startsWith("CF_") &&
@@ -93,8 +96,12 @@ export const environmentActivationOperation = (
       "https://dx.example.test/threads/thr_00000000-0000-4000-8000-000000000000",
     signingEnabled: false,
   },
-  /** Whether the daemon is at least `DXD_CURRENT_ENVIRONMENT_RELEASE`. */
-  daemon: { readonly current: boolean } = { current: true },
+  daemon: {
+    /** Whether the daemon is at least `DXD_CURRENT_ENVIRONMENT_RELEASE`. */
+    readonly current: boolean;
+    /** Whether it is at least `DXD_LOWERCASE_ENVIRONMENT_RELEASE`. */
+    readonly lowercaseNames?: boolean;
+  } = { current: true, lowercaseNames: true },
 ): DxdEnvironmentActivateOperation => {
   const encoder = new TextEncoder();
   let totalBytes = 0;
@@ -103,6 +110,7 @@ export const environmentActivationOperation = (
     .filter(
       ({ name, value }) =>
         !isReservedEnvironmentVariableName(name) &&
+        (daemon.lowercaseNames === true || uppercaseName.test(name)) &&
         (daemon.current ||
           (acceptedByEarlierDaemon(name) && Redacted.value(value) !== "")),
     )

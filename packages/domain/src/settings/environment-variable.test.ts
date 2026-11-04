@@ -31,7 +31,14 @@ describe("environment variable domain", () => {
       expect(isReservedEnvironmentVariableName(name), name).toBe(false);
       expect(environmentVariableNameProblem(name), name).toBeUndefined();
     }
-    for (const name of ["lowercase", "2_START", "WITH-DASH", "X".repeat(65)]) {
+    for (const name of [
+      "2_START",
+      "2start",
+      "WITH-DASH",
+      "with-dash",
+      "caf\u00e9",
+      "X".repeat(65),
+    ]) {
       expect(
         Option.isNone(
           Schema.decodeUnknownOption(EnvironmentVariableName)(name),
@@ -52,9 +59,10 @@ describe("environment variable domain", () => {
         `${name} is set by dx in Orbs. Choose a different name.`,
       );
     }
-    expect(environmentVariableNameProblem("1ABC")).toBe(
-      "Use uppercase letters, digits, and underscores, not starting with a digit (e.g. MY_VAR).",
-    );
+    for (const name of ["1ABC", "1abc", "my-token"])
+      expect(environmentVariableNameProblem(name), name).toBe(
+        "Use letters, digits, and underscores, not starting with a digit (e.g. MY_VAR).",
+      );
     expect(environmentVariableNameProblem("X".repeat(65))).toBe(
       "Name must be 64 characters or fewer.",
     );

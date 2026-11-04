@@ -90,6 +90,7 @@ import {
   decodeDxdSandboxChunkFrame,
   dxdAcceptsCoAuthor,
   dxdAcceptsCurrentEnvironment,
+  dxdAcceptsLowercaseEnvironmentNames,
   environmentActivationDigest,
   isDxdProxyFrame,
   isDxdSandboxChunkFrame,
@@ -114,6 +115,11 @@ import {
   OrbPressureMonitor,
   serveOrbMemory,
 } from "../orb-memory/execution-object.js";
+import {
+  restartedBy,
+  restartOrb,
+  takeOrbRestartNote,
+} from "../orb-restart/execution-object.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
   publishChangesInvalidation,
@@ -843,6 +849,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return this.#serveOrbMemory(request, path);
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
+    if (path === "/orb/restart") return this.#restartOrb(request);
+    if (path === "/orb/restart/note")
+      return request.method === "POST"
+        ? takeOrbRestartNote(this.ctx.storage).then((note) =>
+            Response.json(note ?? null),
+          )
+        : new Response(null, { status: 404 });
     if (path === "/storage/transfer") return this.#transferStorage(request);
     if (path === "/terminal/close") return this.#closeTerminal(request);
     if (path === "/diagnostics") return this.#diagnostics(request);
@@ -1246,6 +1259,36 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       changesObserved: this.#changesObserved,
       sockets,
     });
+  }
+
+  /** A person restarts the Thread's Orb (#1592); the route checked access. */
+  async #restartOrb(request: Request) {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (request.method !== "POST" || Option.isNone(threadId))
+      return new Response(null, { status: 404 });
+    const result = await restartOrb(threadId.value, {
+      storage: this.ctx.storage,
+      by: restartedBy(request.headers.get("x-dx-restarted-by")),
+      now: () => Date.now(),
+      // Only on the person's explicit second confirmation (#1614).
+      restart: () =>
+        ExecutionWorkspaces.restart(threadId.value, {
+          discardUnsaved:
+            request.headers.get("x-dx-restart-discard-unsaved") === "1",
+        }),
+      // The daemon went with the Orb's processes. Stop waiting on it, and
+      // start the Orb again so its Terminal comes back.
+      restarted: () =>
+        this.ctx.waitUntil(
+          (async () => {
+            await this.#expireCurrentDaemonConnection();
+            await this.#activateWithRetry(threadId.value);
+          })().catch(() => undefined),
+        ),
+    });
+    return Response.json(result);
   }
 
   #serveOrbDisk(request: Request, path: "/orb/disk" | "/orb/disk/delete") {
@@ -2240,97 +2283,58 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       "credential";
     const wakeStartedAt = Date.now();
     this.#prefetchEnvironmentReads(threadId);
+    let credential:
+      | Promise<{ id: string; key: Redacted.Redacted<string> }>
+      | undefined;
     try {
-      // The provider the Thread was created on, never a deployment default.
-      const runtimeProvider =
-        await ExecutionWorkspaces.pinnedProvider(threadId);
-      const providerResolvedAt = Date.now();
       const existing = this.#authority;
-      let credential:
-        | { id: string; key: Redacted.Redacted<string> }
-        | undefined;
-      let authority: DaemonAuthority;
-      if (existing?.threadId === threadId) {
-        // One generation per Thread for its whole life. Only Core's own
-        // expected versions are refreshed here.
-        authority = {
-          ...existing,
+      const known = existing?.threadId === threadId ? existing : undefined;
+      // The Orb may not hold this authority's key (#1584): an install
+      // failed after its key was minted, or the Orb's dxd presented another
+      // key. A nudge would only replay the stale one, so this activation
+      // delivers a new key.
+      const mints =
+        known === undefined ||
+        (this.#rekey && (await this.#rekeyAllowed(threadId)));
+      let providerResolvedAt = Date.now();
+      let keyPreparedAt = providerResolvedAt;
+      // A new key is prepared beside the install's own reads (the Thread's
+      // target and checks), and the install awaits it before it reaches the
+      // Orb, so a resumed dxd never sees an authority without it.
+      // Until an install with a new key succeeds, the Orb may not hold it,
+      // whatever ends this activation first.
+      if (mints) this.#rekey = true;
+      credential = mints
+        ? this.#prepareDaemonKey(threadId, known, epoch, signal, {
+            providerResolved: () => {
+              providerResolvedAt = Date.now();
+            },
+          }).finally(() => {
+            keyPreparedAt = Date.now();
+          })
+        : undefined;
+      credential?.catch(() => undefined);
+      if (!mints && known !== undefined) {
+        // One generation per Thread for its whole life, and the provider
+        // it was created on, which never changes. Only Core's own expected
+        // versions are refreshed here.
+        const authority: DaemonAuthority = {
+          ...known,
+          runtimeProvider: await this.#runtimeProvider(threadId, known, () => {
+            providerResolvedAt = Date.now();
+          }),
           release: DXD_RELEASE,
           protocolMajor: DXD_PROTOCOL_MAJOR,
           terminalVersion: DXD_TERMINAL_VERSION,
           workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
-          runtimeProvider,
-        };
-        // The Orb may not hold this authority's key (#1584): an install
-        // failed after its key was minted, or the Orb's dxd presented
-        // another key. A nudge would only replay the stale one, so this
-        // activation delivers a new key.
-        if (this.#rekey && (await this.#rekeyAllowed(threadId))) {
-          credential = await mintThreadDaemonApiKey(this.env, threadId);
-          if (signal.aborted || epoch !== this.#drainEpoch) {
-            await revokeThreadDaemonApiKey(this.env, credential.id);
-            throw new Error("activation deadline exceeded");
-          }
-          authority = {
-            ...authority,
-            apiKeyId: credential.id,
-            apiKeyHash: threadDaemonApiKeyHash(Redacted.value(credential.key)),
-          };
-          threadDaemonLogger.warn("Thread daemon key replaced.", {
-            event: "thread_daemon_rekey",
-            threadId,
-          });
-        }
-        if (authority !== existing) {
-          this.#authority = authority;
-          await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
-        }
-        if (credential !== undefined)
-          await revokeEarlierThreadDaemonApiKeys(
-            this.env,
-            threadId,
-            credential.id,
-          );
-      } else {
-        credential = await mintThreadDaemonApiKey(this.env, threadId);
-        if (signal.aborted || epoch !== this.#drainEpoch) {
-          await revokeThreadDaemonApiKey(this.env, credential.id);
-          throw new Error("activation deadline exceeded");
-        }
-        authority = {
-          threadId,
-          generation: Schema.decodeUnknownSync(DaemonGenerationSchema)(
-            randomBase64Url(24),
-          ),
-          apiKeyId: credential.id,
-          apiKeyHash: threadDaemonApiKeyHash(Redacted.value(credential.key)),
-          release: DXD_RELEASE,
-          protocolMajor: DXD_PROTOCOL_MAJOR,
-          terminalVersion: DXD_TERMINAL_VERSION,
-          workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
-          runtimeProvider,
-          runtimeAssurance: "dx_dxd_channel_v1",
         };
         this.#authority = authority;
         await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, authority);
-        this.#failAllPending();
-        // The superseded socket's close no longer matches this authority,
-        // so its proxy streams end here.
-        this.#proxyRelay.daemonUnavailable();
-        this.#fenceDaemonSockets();
-        // Only the newest key is ever valid.
-        await revokeEarlierThreadDaemonApiKeys(
-          this.env,
-          threadId,
-          credential.id,
-        );
       }
       if (signal.aborted || epoch !== this.#drainEpoch)
         throw new Error("activation deadline exceeded");
       stage = "install";
       const installStartedAt = Date.now();
-      // Until an install with this key succeeds, the Orb may not hold it.
-      if (credential !== undefined) this.#rekey = true;
       const installation = await ExecutionWorkspaces.ensureDaemon({
         threadId,
         endpoint,
@@ -2358,7 +2362,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         // guest command touches the installation.
         awaitRegistration: (timeoutMs) => this.#awaitTransport(timeoutMs),
       });
-      if (credential !== undefined) this.#rekey = false;
+      if (mints) this.#rekey = false;
       if (epoch !== this.#drainEpoch)
         throw new Error("activation cancelled by drain");
       this.#processesStartedAt = installation.processesStartedAt;
@@ -2394,7 +2398,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         event: "thread_daemon_wake_timing",
         threadId,
         providerMs: providerResolvedAt - wakeStartedAt,
-        credentialMs: installStartedAt - providerResolvedAt,
+        credentialMs: keyPreparedAt - wakeStartedAt,
         installMs: installedAt - installStartedAt,
         registrationMs: connectedAt - installedAt,
         repairMs: Date.now() - connectedAt,
@@ -2412,6 +2416,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
             };
       return this.#readyResponse(activationMilestones);
     } catch {
+      // A wake that ends before it used its new key ends only once the key
+      // is stored or revoked, so the next wake never mints beside it (each
+      // key's revocation of earlier keys would revoke the other).
+      await credential?.catch(() => undefined);
       threadDaemonLogger.error("Thread daemon activation failed.", {
         event: "thread_daemon_activation",
         threadId,
@@ -3275,7 +3283,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           : {}),
         ...(bitbucketGateway === undefined ? {} : { bitbucketGateway }),
       },
-      { current: dxdAcceptsCurrentEnvironment(authority.daemonRelease) },
+      {
+        current: dxdAcceptsCurrentEnvironment(authority.daemonRelease),
+        lowercaseNames: dxdAcceptsLowercaseEnvironmentNames(
+          authority.daemonRelease,
+        ),
+      },
     );
     // Digest first: a daemon that already holds this exact environment
     // answers a 4 KiB control frame instead of receiving up to 14 MiB again.
@@ -4060,6 +4073,101 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.ctx.waitUntil(confirmation);
     }
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  /**
+   * The provider the Thread was created on, never a deployment default. It
+   * never changes, so the Thread's authority names it; an authority stored
+   * by a release before it did is read from the Thread's pin.
+   */
+  async #runtimeProvider(
+    threadId: ThreadId,
+    known: DaemonAuthority | undefined,
+    resolved: () => void,
+  ): Promise<OrbProviderId> {
+    const stored: OrbProviderId | undefined = known?.runtimeProvider;
+    if (stored !== undefined) return stored;
+    try {
+      return await ExecutionWorkspaces.pinnedProvider(threadId);
+    } finally {
+      resolved();
+    }
+  }
+
+  /**
+   * Mints the Thread's daemon key and makes it the authority's only valid
+   * key: stored here, then every earlier key revoked. `known` is the
+   * Thread's current authority (a re-key); without one, the new authority
+   * starts a new generation on the Thread's pinned provider, read beside
+   * the mint. A drain or deadline meanwhile revokes the new key.
+   */
+  async #prepareDaemonKey(
+    threadId: ThreadId,
+    known: DaemonAuthority | undefined,
+    epoch: number,
+    signal: AbortSignal,
+    progress: { readonly providerResolved: () => void },
+  ): Promise<{ id: string; key: Redacted.Redacted<string> }> {
+    const cancelled = () => signal.aborted || epoch !== this.#drainEpoch;
+    // The provider the Thread was created on, never a deployment default.
+    const [provider, minted] = await Promise.allSettled([
+      this.#runtimeProvider(threadId, known, progress.providerResolved),
+      mintThreadDaemonApiKey(this.env, threadId),
+    ]);
+    if (minted.status === "rejected") throw minted.reason;
+    const credential = minted.value;
+    if (provider.status === "rejected" || cancelled()) {
+      await revokeThreadDaemonApiKey(this.env, credential.id);
+      if (provider.status === "rejected") throw provider.reason;
+      throw new Error("activation deadline exceeded");
+    }
+    const apiKeyHash = threadDaemonApiKeyHash(Redacted.value(credential.key));
+    // Read again: the authority may have changed while the key was minted.
+    const current = this.#authority;
+    if (known !== undefined && current?.threadId === threadId) {
+      // One generation per Thread for its whole life. Only Core's own
+      // expected versions are refreshed here.
+      this.#authority = {
+        ...current,
+        apiKeyId: credential.id,
+        apiKeyHash,
+        release: DXD_RELEASE,
+        protocolMajor: DXD_PROTOCOL_MAJOR,
+        terminalVersion: DXD_TERMINAL_VERSION,
+        workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
+        runtimeProvider: provider.value,
+      };
+      await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
+      threadDaemonLogger.warn("Thread daemon key replaced.", {
+        event: "thread_daemon_rekey",
+        threadId,
+      });
+    } else {
+      this.#authority = {
+        threadId,
+        generation: Schema.decodeUnknownSync(DaemonGenerationSchema)(
+          randomBase64Url(24),
+        ),
+        apiKeyId: credential.id,
+        apiKeyHash,
+        release: DXD_RELEASE,
+        protocolMajor: DXD_PROTOCOL_MAJOR,
+        terminalVersion: DXD_TERMINAL_VERSION,
+        workloadIdentityVersion: DXD_WORKLOAD_IDENTITY_VERSION,
+        runtimeProvider: provider.value,
+        runtimeAssurance: "dx_dxd_channel_v1",
+      };
+      await this.ctx.storage.put(AUTHORITY_STORAGE_KEY, this.#authority);
+      this.#failAllPending();
+      // The superseded socket's close no longer matches this authority,
+      // so its proxy streams end here.
+      this.#proxyRelay.daemonUnavailable();
+      this.#fenceDaemonSockets();
+    }
+    // Only the newest key is ever valid.
+    await revokeEarlierThreadDaemonApiKeys(this.env, threadId, credential.id);
+    if (cancelled()) throw new Error("activation deadline exceeded");
+    return credential;
   }
 
   /**

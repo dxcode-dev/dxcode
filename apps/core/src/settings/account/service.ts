@@ -6,6 +6,7 @@ import {
   type PersonalAccountUsernameUnavailable,
   type PersonalComposerDefaults,
   type Principal,
+  personalAppearanceFields,
   type UpdatePersonalAccountInput,
   type UpdatePersonalAppearanceInput,
   type UpdatePersonalComposerDefaultsInput,
@@ -117,20 +118,10 @@ export class PersonalAccountService extends Context.Service<
         updateAppearance: Effect.fn("PersonalAccountService.updateAppearance")(
           function* (principal, input, requestId) {
             const current = yield* accounts.findOwnedByUser(principal.userId);
-            const changedFields = [
-              ...(input.appearance === undefined ||
-              current.appearance === input.appearance
-                ? []
-                : (["appearance"] as const)),
-              ...(input.palette === undefined ||
-              current.palette === input.palette
-                ? []
-                : (["palette"] as const)),
-              ...(input.terminalTheme === undefined ||
-              current.terminalTheme === input.terminalTheme
-                ? []
-                : (["terminalTheme"] as const)),
-            ];
+            const changedFields = personalAppearanceFields.filter(
+              (field) =>
+                input[field] !== undefined && input[field] !== current[field],
+            );
             return yield* accounts
               .updateAppearanceOwnedByUser(principal.userId, input)
               .pipe(

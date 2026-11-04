@@ -4,9 +4,15 @@ import {
   PersonalAccountIdentityAuthority,
   PersonalAccountUsername,
   PersonalAppearance,
+  PersonalCodeFontFamily,
+  PersonalCodeFontSize,
+  PersonalCodeLineHeight,
   PersonalComposerDefaults,
   PersonalPalette,
+  PersonalTerminalAppearance,
   PersonalTerminalTheme,
+  PersonalTextSize,
+  PersonalThreadWidth,
   UpdatePersonalComposerDefaultsInput,
 } from "@dx/domain";
 import { Schema } from "effect";
@@ -22,6 +28,14 @@ export const PersonalAccountDataSchema = Schema.Struct({
   appearance: PersonalAppearance,
   palette: PersonalPalette,
   terminalTheme: PersonalTerminalTheme,
+  textSize: PersonalTextSize,
+  threadWidth: PersonalThreadWidth,
+  terminalAppearance: PersonalTerminalAppearance,
+  codeFontFamily: Schema.NullOr(PersonalCodeFontFamily),
+  codeFontSize: Schema.NullOr(PersonalCodeFontSize),
+  codeLineHeight: Schema.NullOr(PersonalCodeLineHeight),
+  logoAnimation: Schema.Boolean,
+  uiSounds: Schema.Boolean,
   /** The uploaded picture; absent shows initials. */
   avatarUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
 });
@@ -57,6 +71,14 @@ export const UpdatePersonalAppearanceRequestSchema = Schema.Struct({
   appearance: Schema.optional(PersonalAppearance),
   palette: Schema.optional(PersonalPalette),
   terminalTheme: Schema.optional(PersonalTerminalTheme),
+  textSize: Schema.optional(PersonalTextSize),
+  threadWidth: Schema.optional(PersonalThreadWidth),
+  terminalAppearance: Schema.optional(PersonalTerminalAppearance),
+  codeFontFamily: Schema.optional(Schema.NullOr(PersonalCodeFontFamily)),
+  codeFontSize: Schema.optional(Schema.NullOr(PersonalCodeFontSize)),
+  codeLineHeight: Schema.optional(Schema.NullOr(PersonalCodeLineHeight)),
+  logoAnimation: Schema.optional(Schema.Boolean),
+  uiSounds: Schema.optional(Schema.Boolean),
 });
 
 export const UpdatePersonalAppearanceResponseSchema = successResponse(

@@ -121,6 +121,14 @@ describe("settings routes in workerd with real D1", () => {
         appearance: "dark",
         palette: "daydream",
         terminalTheme: "github",
+        textSize: "default",
+        threadWidth: "default",
+        terminalAppearance: "match",
+        codeFontFamily: null,
+        codeFontSize: null,
+        codeLineHeight: null,
+        logoAnimation: true,
+        uiSounds: false,
       },
     });
 
@@ -159,6 +167,161 @@ describe("settings routes in workerd with real D1", () => {
       { status: "success", data: { threadCount: 1 } },
       { status: "success", data: { threadCount: 0 } },
     ]);
+  });
+
+  it("saves text size and thread width with the account's other appearance values", async () => {
+    const app = createSettingsApp(owner);
+    const patch = (body: unknown) =>
+      app.request(
+        "/settings/personal/account/appearance",
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            origin: "http://dx.test",
+          },
+          body: JSON.stringify(body),
+        },
+        { DB: env.DB },
+      );
+
+    const larger = await patch({ textSize: "larger" });
+    expect(larger.status).toBe(200);
+    await expect(larger.json()).resolves.toMatchObject({
+      data: {
+        appearance: "dark",
+        textSize: "larger",
+        threadWidth: "default",
+      },
+    });
+    const wide = await patch({ threadWidth: "full" });
+    await expect(wide.json()).resolves.toMatchObject({
+      data: { textSize: "larger", threadWidth: "full" },
+    });
+
+    const reread = await createSettingsApp(owner).request(
+      "/settings/personal/account",
+      {},
+      { DB: env.DB },
+    );
+    await expect(reread.json()).resolves.toMatchObject({
+      data: { textSize: "larger", threadWidth: "full" },
+    });
+    const other = await createSettingsApp(outsider).request(
+      "/settings/personal/account",
+      {},
+      { DB: env.DB },
+    );
+    await expect(other.json()).resolves.toMatchObject({
+      data: { textSize: "default", threadWidth: "default" },
+    });
+  });
+
+  it("saves the terminal's light or dark choice and a Code Font that blank fields clear", async () => {
+    const app = createSettingsApp(owner);
+    const patch = (body: unknown) =>
+      app.request(
+        "/settings/personal/account/appearance",
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            origin: "http://dx.test",
+          },
+          body: JSON.stringify(body),
+        },
+        { DB: env.DB },
+      );
+
+    const saved = await patch({
+      terminalAppearance: "dark",
+      codeFontFamily: '"JetBrains Mono", Menlo, monospace',
+      codeFontSize: "14px",
+      codeLineHeight: "150%",
+    });
+    expect(saved.status).toBe(200);
+    await expect(saved.json()).resolves.toMatchObject({
+      data: {
+        appearance: "dark",
+        terminalAppearance: "dark",
+        codeFontFamily: '"JetBrains Mono", Menlo, monospace',
+        codeFontSize: "14px",
+        codeLineHeight: "150%",
+      },
+    });
+    const sizeOnly = await patch({ codeFontSize: "0.9rem" });
+    await expect(sizeOnly.json()).resolves.toMatchObject({
+      data: {
+        codeFontFamily: '"JetBrains Mono", Menlo, monospace',
+        codeFontSize: "0.9rem",
+        codeLineHeight: "150%",
+      },
+    });
+    const cleared = await patch({
+      codeFontFamily: null,
+      codeFontSize: null,
+      codeLineHeight: null,
+    });
+    await expect(cleared.json()).resolves.toMatchObject({
+      data: {
+        terminalAppearance: "dark",
+        codeFontFamily: null,
+        codeFontSize: null,
+        codeLineHeight: null,
+      },
+    });
+    await expect(
+      env.DB.prepare(
+        "SELECT terminal_appearance, code_font_family, code_font_size, code_line_height FROM personal_account WHERE user_id = ?",
+      )
+        .bind(owner)
+        .first(),
+    ).resolves.toEqual({
+      terminal_appearance: "dark",
+      code_font_family: null,
+      code_font_size: null,
+      code_line_height: null,
+    });
+    const other = await createSettingsApp(outsider).request(
+      "/settings/personal/account",
+      {},
+      { DB: env.DB },
+    );
+    await expect(other.json()).resolves.toMatchObject({
+      data: { terminalAppearance: "match", codeFontSize: null },
+    });
+  });
+
+  it("saves Logo Animation and UI Sounds", async () => {
+    const patch = (body: unknown) =>
+      createSettingsApp(owner).request(
+        "/settings/personal/account/appearance",
+        {
+          method: "PATCH",
+          headers: {
+            "content-type": "application/json",
+            origin: "http://dx.test",
+          },
+          body: JSON.stringify(body),
+        },
+        { DB: env.DB },
+      );
+    const saved = await patch({ logoAnimation: false, uiSounds: true });
+    expect(saved.status).toBe(200);
+    await expect(saved.json()).resolves.toMatchObject({
+      data: { logoAnimation: false, uiSounds: true },
+    });
+    const back = await patch({ logoAnimation: true });
+    await expect(back.json()).resolves.toMatchObject({
+      data: { logoAnimation: true, uiSounds: true },
+    });
+    await expect(
+      env.DB.prepare(
+        "SELECT logo_animation, ui_sounds FROM personal_account WHERE user_id = ?",
+      )
+        .bind(owner)
+        .first(),
+    ).resolves.toEqual({ logo_animation: 1, ui_sounds: 1 });
   });
 
   it("normalizes and persists current-user profile updates", async () => {
@@ -355,6 +518,17 @@ describe("settings routes in workerd with real D1", () => {
     [JSON.stringify({ appearance: "sepia" }), "appearance"],
     [JSON.stringify({ palette: "neon" }), "palette"],
     [JSON.stringify({ terminalTheme: "unknown" }), "terminalTheme"],
+    [JSON.stringify({ textSize: "huge" }), "textSize"],
+    [JSON.stringify({ threadWidth: 900 }), "threadWidth"],
+    [JSON.stringify({ terminalAppearance: "sepia" }), "terminalAppearance"],
+    [JSON.stringify({ codeFontFamily: "Menlo; color: red" }), "codeFontFamily"],
+    [JSON.stringify({ codeFontFamily: "" }), "codeFontFamily"],
+    [JSON.stringify({ codeFontSize: "huge" }), "codeFontSize"],
+    [JSON.stringify({ codeFontSize: "200px" }), "codeFontSize"],
+    [JSON.stringify({ codeLineHeight: "10" }), "codeLineHeight"],
+    [JSON.stringify({ codeLineHeight: "1.5vh" }), "codeLineHeight"],
+    [JSON.stringify({ logoAnimation: "off" }), "logoAnimation"],
+    [JSON.stringify({ uiSounds: 1 }), "uiSounds"],
     [JSON.stringify({ contrast: "high" }), "request"],
     ["{", "request"],
   ])("audits rejected appearance payload %s", async (body, field) => {

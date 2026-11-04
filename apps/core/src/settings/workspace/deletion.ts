@@ -2,6 +2,7 @@ import type { DeleteWorkspaceData, DeleteWorkspaceRequest } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { settingsAuditLogger } from "../../logging.js";
 import { tombstoneStatements } from "../../thread-deletion/tombstone.js";
+import { pruneUnreadableThreadDrafts } from "../../threads/thread-draft-store.js";
 import {
   requireOwner,
   type WorkspaceAccess,
@@ -247,6 +248,12 @@ export const deleteWorkspace = async (
       'UPDATE "session" SET "activeOrganizationId" = NULL WHERE "activeOrganizationId" = ?1',
     ),
     statement('DELETE FROM "member" WHERE "organizationId" = ?1'),
+    // Unsent drafts in its Threads go, kept or not, and so do members'
+    // drafts in Threads that are no longer shared with them.
+    statement(
+      `DELETE FROM thread_draft WHERE thread_id IN (${workspaceThreads})`,
+    ),
+    pruneUnreadableThreadDrafts(db),
     // The short name is free again; the row stays for what points at it.
     db
       .prepare(

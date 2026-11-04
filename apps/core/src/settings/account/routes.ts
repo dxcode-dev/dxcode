@@ -21,11 +21,15 @@ import {
   PersonalAccountDisplayName,
   PersonalAccountNotFound,
   PersonalAccountUsername,
-  PersonalAppearance,
-  PersonalPalette,
-  PersonalTerminalTheme,
+  type PersonalAppearanceField,
+  PersonalAppearanceFields,
+  type PersonalTerminalAppearance,
+  type PersonalTerminalTheme,
+  type PersonalTextSize,
+  type PersonalThreadWidth,
   personalAccountDisplayNameProblem,
   personalAccountUsernameProblem,
+  personalAppearanceFields,
   type UpdatePersonalAccountInput,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
@@ -66,29 +70,24 @@ const invalidAppearanceRequest = (input?: unknown) => {
     });
 
   const record = input as Record<string, unknown>;
-  const fieldErrors = [
-    ...(Object.hasOwn(record, "appearance") &&
+  const fieldErrors = personalAppearanceFields.flatMap((field) =>
+    Object.hasOwn(record, field) &&
     Option.isNone(
-      Schema.decodeUnknownOption(PersonalAppearance)(record.appearance),
+      Schema.decodeUnknownOption(PersonalAppearanceFields[field])(
+        record[field],
+      ),
     )
-      ? [{ field: "appearance", message }]
-      : []),
-    ...(Object.hasOwn(record, "palette") &&
-    Option.isNone(Schema.decodeUnknownOption(PersonalPalette)(record.palette))
-      ? [{ field: "palette", message }]
-      : []),
-    ...(Object.hasOwn(record, "terminalTheme") &&
-    Option.isNone(
-      Schema.decodeUnknownOption(PersonalTerminalTheme)(record.terminalTheme),
-    )
-      ? [{ field: "terminalTheme", message }]
-      : []),
-  ];
+      ? [{ field, message }]
+      : [],
+  );
   return new InvalidPersonalAccountRequest({
     fieldErrors:
       fieldErrors.length > 0 ? fieldErrors : [{ field: "request", message }],
   });
 };
+
+const isAppearanceField = (field: string): field is PersonalAppearanceField =>
+  Object.hasOwn(PersonalAppearanceFields, field);
 
 const responseData = (account: {
   readonly displayName: string;
@@ -102,6 +101,14 @@ const responseData = (account: {
   readonly appearance: "system" | "light" | "dark";
   readonly palette: "daydream" | "deadpan";
   readonly terminalTheme: PersonalTerminalTheme;
+  readonly textSize: PersonalTextSize;
+  readonly threadWidth: PersonalThreadWidth;
+  readonly terminalAppearance: PersonalTerminalAppearance;
+  readonly codeFontFamily: string | null;
+  readonly codeFontSize: string | null;
+  readonly codeLineHeight: string | null;
+  readonly logoAnimation: boolean;
+  readonly uiSounds: boolean;
   readonly avatarKey?: string;
 }) => ({
   displayName: account.displayName,
@@ -112,6 +119,14 @@ const responseData = (account: {
   appearance: account.appearance,
   palette: account.palette,
   terminalTheme: account.terminalTheme,
+  textSize: account.textSize,
+  threadWidth: account.threadWidth,
+  terminalAppearance: account.terminalAppearance,
+  codeFontFamily: account.codeFontFamily,
+  codeFontSize: account.codeFontSize,
+  codeLineHeight: account.codeLineHeight,
+  logoAnimation: account.logoAnimation,
+  uiSounds: account.uiSounds,
   ...(account.avatarKey === undefined
     ? {}
     : { avatarUrl: avatarUrl(account.avatarKey) }),
@@ -192,11 +207,7 @@ const auditInvalidAppearanceUpdate = (
         requestId: context.get("requestId"),
         userId: context.get("principal").userId,
         fields: fieldErrors.flatMap(({ field }) =>
-          field === "appearance" ||
-          field === "palette" ||
-          field === "terminalTheme"
-            ? [field]
-            : [],
+          isAppearanceField(field) ? [field] : [],
         ),
       });
     }).pipe(Effect.provide(SettingsAudit.layer)),

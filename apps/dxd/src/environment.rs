@@ -747,15 +747,16 @@ fn valid_thread_url(value: &str) -> bool {
     value.len() <= 512 && host_ok(host) && port_ok && valid_thread_id
 }
 
-/// A shell variable name dxd may write: `[A-Z_][A-Z0-9_]*`, at most 64 bytes.
+/// A shell variable name dxd may write: `[A-Za-z_][A-Za-z0-9_]*`, at most
+/// 64 bytes, as Core's `EnvironmentVariableName`. Names are case-sensitive.
 fn valid_shape(name: &str) -> bool {
     let mut bytes = name.bytes();
     let Some(first) = bytes.next() else {
         return false;
     };
     name.len() <= 64
-        && (first == b'_' || first.is_ascii_uppercase())
-        && bytes.all(|byte| byte == b'_' || byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        && (first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 fn reserved(name: &str) -> bool {
@@ -1416,7 +1417,18 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(decode_entries(&entries(&[("lower", "x")])).is_err());
+        assert!(decode_entries(&entries(&[("1abc", "x")])).is_err());
+        assert!(decode_entries(&entries(&[("my-token", "x")])).is_err());
+        assert!(decode_entries(&entries(&[("caf\u{e9}", "x")])).is_err());
+        // Names are case-sensitive: an upper and a lower name are two
+        // variables, and byte order puts the uppercase one first.
+        assert_eq!(
+            decode_entries(&entries(&[("MY_TOKEN", "1"), ("my_token", "2")]))
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(decode_entries(&entries(&[("my_token", "1"), ("MY_TOKEN", "2")])).is_err());
         let mut padded = entries(&[("A", "ab")]);
         padded[0].value_base64_url.push('=');
         assert!(decode_entries(&padded).is_err());
@@ -1434,6 +1446,8 @@ mod tests {
         let values = BTreeMap::from([
             ("A".to_owned(), "it's".to_owned()),
             ("B".to_owned(), "line\nbreak $HOME `x`".to_owned()),
+            ("MY_TOKEN".to_owned(), "upper".to_owned()),
+            ("my_token".to_owned(), "lower".to_owned()),
         ]);
         let generated = generate_fragment(&values).unwrap();
         assert!(generated.starts_with(ENVIRONMENT_HEADER));
@@ -1441,7 +1455,7 @@ mod tests {
         {
             let output = Command::new("/bin/bash")
                 .arg("-c")
-                .arg("set -a; . /dev/stdin; printf '%s|%s' \"$A\" \"$B\"")
+                .arg("set -a; . /dev/stdin; printf '%s|%s|%s|%s' \"$A\" \"$B\" \"$MY_TOKEN\" \"$my_token\"")
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .spawn()
@@ -1452,7 +1466,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 String::from_utf8(output.stdout).unwrap(),
-                "it's|line\nbreak $HOME `x`"
+                "it's|line\nbreak $HOME `x`|upper|lower"
             );
         }
     }

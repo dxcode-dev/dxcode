@@ -37,6 +37,7 @@ function attachDxMark(
   canvas: HTMLCanvasElement,
   state: DxMarkState,
   interactive: boolean,
+  still: boolean,
 ) {
   let teardown: (() => void) | undefined;
   let disposed = false;
@@ -44,7 +45,8 @@ function attachDxMark(
     () => {
       void import("./dx-mark-renderer.js").then(
         ({ mountDxMark }) => {
-          if (!disposed) teardown = mountDxMark(canvas, state, interactive);
+          if (!disposed)
+            teardown = mountDxMark(canvas, state, interactive, still);
         },
         (error: unknown) => {
           canvas.dataset.failed = "true";
@@ -68,25 +70,31 @@ export function DxMark({
   label = "dx",
   className = "",
   interactive = false,
+  still = false,
 }: {
   readonly state?: DxMarkState;
   readonly label?: string;
   readonly className?: string;
   readonly interactive?: boolean;
+  /** Draws one static frame, as for reduced motion. */
+  readonly still?: boolean;
 }) {
   const ref = (canvas: HTMLCanvasElement | null) =>
-    canvas === null ? undefined : attachDxMark(canvas, state, interactive);
+    canvas === null
+      ? undefined
+      : attachDxMark(canvas, state, interactive, still);
   return (
     <span
       className={`dx-brand-mark ${className}`.trim()}
       data-state={state}
+      data-motion={still ? "still" : undefined}
       role="img"
       aria-label={label}
     >
       <span className="dx-brand-mark-fallback" aria-hidden="true">
         dx
       </span>
-      <canvas key={state} ref={ref} />
+      <canvas key={`${state}:${still}`} ref={ref} />
     </span>
   );
 }

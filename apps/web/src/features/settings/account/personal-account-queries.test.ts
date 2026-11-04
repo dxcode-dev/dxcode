@@ -19,6 +19,14 @@ const account = {
   appearance: "dark",
   palette: "daydream",
   terminalTheme: "github",
+  textSize: "default",
+  threadWidth: "default",
+  terminalAppearance: "match",
+  codeFontFamily: null,
+  codeFontSize: null,
+  codeLineHeight: null,
+  logoAnimation: true,
+  uiSounds: false,
 } as const;
 
 afterEach(() => vi.unstubAllGlobals());

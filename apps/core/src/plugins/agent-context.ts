@@ -3,6 +3,7 @@ import { Effect } from "effect";
 import { mayUseBugReportTools } from "../bug-reports/agent-tools.js";
 import type { Bindings } from "../http/types.js";
 import { resolveMcpAgentConnections } from "../settings/mcp-servers/execution.js";
+import { loadThreadWorkspaceAgentInstructions } from "../settings/workspace-agent-instructions/thread.js";
 import type { PluginHostContext } from "./host.js";
 import { resolveSubmissionPluginTools } from "./submission-tools.js";
 
@@ -52,3 +53,12 @@ export const resolveAgentBugReportReader = async (threadId: string) => {
     return false;
   }
 };
+
+/**
+ * The workspace's AGENTS.md for this submission, read from current settings
+ * so an admin's change reaches the next message in every member's Thread.
+ * Async, so a missing binding rejects with the other reads instead of
+ * throwing while they are already in flight.
+ */
+export const resolveAgentWorkspaceInstructions = async (threadId: string) =>
+  loadThreadWorkspaceAgentInstructions(agentPluginHostContext().db, threadId);

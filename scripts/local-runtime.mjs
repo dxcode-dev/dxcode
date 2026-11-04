@@ -315,7 +315,10 @@ const commandEnvironment = (paths, supplied = {}) => {
     TERM: "xterm-256color",
   };
   for (const [name, value] of Object.entries(supplied)) {
-    if (!/^[A-Z_][A-Z0-9_]{0,63}$/.test(name) || typeof value !== "string") {
+    if (
+      !/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(name) ||
+      typeof value !== "string"
+    ) {
       throw new Error("Invalid local workspace environment.");
     }
     environment[name] = value;

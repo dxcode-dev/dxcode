@@ -20,6 +20,8 @@ import type { NormalizedUsageQuery, UserId } from "@dx/domain";
  */
 
 const HOUR_MS = 3_600_000;
+/** More providers and models than a person uses in a range. */
+export const MODEL_BREAKDOWN_LIMIT = 50;
 const DAY_MS = 86_400_000;
 
 const floorTo = (ms: number, unit: number) => Math.floor(ms / unit) * unit;
@@ -504,6 +506,7 @@ const threadStatement = (
       SELECT
         totals.*,
         project.name AS project_name,
+        thread.title,
         thread.created_at
       FROM thread_totals AS totals
       INNER JOIN threads AS thread ON thread.id = totals.thread_id
@@ -533,10 +536,32 @@ const threadStatement = (
   };
 };
 
+/** Model turns by provider and model, highest estimated cost first. */
+const modelStatement = (filter: Filter, hours: Buckets): Part => {
+  const usage = hourlyUsage(filter, hours);
+  return {
+    sql: `WITH ${usage.sql}
+      SELECT
+        provider_id,
+        model_id,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(unknown_token_events), 0) AS unknown_token_events,
+        COALESCE(SUM(estimated_cost_micros), 0) AS estimated_cost_micros,
+        COALESCE(SUM(events - known_cost_events), 0) AS unknown_cost_events,
+        COALESCE(SUM(events), 0) AS model_turns
+      FROM usage
+      WHERE kind = 'model'
+      GROUP BY provider_id, model_id
+      ORDER BY estimated_cost_micros DESC, total_tokens DESC, provider_id, model_id
+      LIMIT ${MODEL_BREAKDOWN_LIMIT}`,
+    values: usage.values,
+  };
+};
+
 /**
- * The personal dashboard's five aggregates over the rollups, in the order
+ * The personal dashboard's six aggregates over the rollups, in the order
  * repository-d1.ts reads them: summary, per day, Threads, runners, price
- * sources.
+ * sources, models.
  */
 export const usageRollupStatements = (
   db: D1Database,
@@ -554,6 +579,7 @@ export const usageRollupStatements = (
     threadStatement(filter, dayBuckets(query), cursor, query.limit + 1),
     runnerStatement(filter, hours),
     priceSourcesStatement(filter, hours),
+    modelStatement(filter, hours),
   ].map(({ sql, values }) => db.prepare(sql).bind(...values));
 };
 

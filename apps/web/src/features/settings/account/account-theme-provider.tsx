@@ -29,14 +29,6 @@ export function AccountThemeProvider({
   );
   const account = accountQuery.data;
   const { mutate } = mutation;
-  const setAppearance = (
-    appearance: NonNullable<typeof account>["appearance"],
-  ) => mutate({ appearance });
-  const setPalette = (palette: NonNullable<typeof account>["palette"]) =>
-    mutate({ palette });
-  const setTerminalTheme = (
-    terminalTheme: NonNullable<typeof account>["terminalTheme"],
-  ) => mutate({ terminalTheme });
 
   if (accountQuery.isPending)
     return (
@@ -60,14 +52,7 @@ export function AccountThemeProvider({
     );
 
   return (
-    <ThemeProvider
-      appearance={account.appearance}
-      palette={account.palette}
-      terminalTheme={account.terminalTheme}
-      onAppearanceChange={setAppearance}
-      onPaletteChange={setPalette}
-      onTerminalThemeChange={setTerminalTheme}
-    >
+    <ThemeProvider preferences={account} onChange={mutate}>
       {children}
     </ThemeProvider>
   );

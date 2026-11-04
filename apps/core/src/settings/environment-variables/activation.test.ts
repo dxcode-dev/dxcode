@@ -5,6 +5,7 @@ import {
   DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
   DxdEnvironmentActivateOperation,
   dxdAcceptsCurrentEnvironment,
+  dxdAcceptsLowercaseEnvironmentNames,
 } from "../../execution/dxd/protocol.js";
 import { environmentActivationOperation } from "./activation.js";
 import type { ExecutionEnvironmentSnapshot } from "./execution.js";
@@ -97,6 +98,28 @@ describe("resident environment activation", () => {
       { name: "GIT_CONFIG_VALUE_0", valueBase64Url: "" },
       { name: "SAFE_VALUE", valueBase64Url: "a2VwdA" },
     ]);
+  });
+
+  it("sends lowercase names only to a daemon that accepts them (#1165)", () => {
+    const values = snapshot([
+      ["MY_TOKEN", "upper"],
+      ["http_proxy", "http://proxy.internal:3128"],
+      ["my_token", "lower"],
+    ]);
+    const entries = (release: string | undefined) =>
+      environmentActivationOperation(values, 10, undefined, {
+        current: dxdAcceptsCurrentEnvironment(release),
+        lowercaseNames: dxdAcceptsLowercaseEnvironmentNames(release),
+      }).entries.map(({ name }) => name);
+    // An earlier daemon fails the whole activation on a lowercase name.
+    for (const release of ["0.11.0", "0.14.0", "0.15.0-rc.1", undefined])
+      expect(entries(release), String(release)).toEqual(["MY_TOKEN"]);
+    for (const release of ["0.15.0", "0.15.2", "1.0.0"])
+      expect(entries(release), release).toEqual([
+        "MY_TOKEN",
+        "http_proxy",
+        "my_token",
+      ]);
   });
 
   it("supports 0 and 300 entries and rejects 301 or invalid generations", () => {

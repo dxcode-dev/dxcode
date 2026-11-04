@@ -25,6 +25,7 @@ import type { Sandbox } from "@flue/runtime";
 import { local } from "@flue/runtime/node";
 import { Redacted, Schema } from "effect";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { settingsInstructions } from "../agents/dx-agent-prompt.js";
 import { classifyRunFailure } from "../runtime/run-failure.js";
 import type { ExecutionEnvironmentSnapshot } from "../settings/environment-variables/execution.js";
 import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
@@ -536,11 +537,17 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
         messages: [user(text, timestamp)],
       });
     };
-    await turn("Hi", 80, "Reply in French.");
+    // The workspace's instructions, then the person's, as dx-agent.ts
+    // composes them for CLAUDE.md.
+    await turn(
+      "Hi",
+      80,
+      settingsInstructions("Run the linter first.", "Reply in French."),
+    );
     // Claude Code reads the repository's AGENTS.md itself.
     expect(guest.home("claude-prompt.txt")).toBe("dx's Claude Code prompt.");
     expect(await guest.sandbox.readFile(userInstructions)).toBe(
-      "Reply in French.",
+      "<workspace_instructions>\nRun the linter first.\n</workspace_instructions>\n\n<personal_instructions>\nReply in French.\n</personal_instructions>",
     );
     // Instructions cleared in Settings leave no stale file behind.
     await turn("Hi again", 81, "");
@@ -1569,6 +1576,7 @@ describe("Claude Code stream through secret redaction", {
 
   const environment = (
     secrets: ReadonlyArray<string>,
+    prefix = "Q9_",
   ): ExecutionEnvironmentSnapshot => ({
     revision: {
       personal: { targetId: "user", revision: 0 },
@@ -1579,7 +1587,9 @@ describe("Claude Code stream through secret redaction", {
       reference: configReferenceFor(
         Schema.decodeUnknownSync(EnvironmentVariableId)(`env_q9_${index}`),
       ),
-      name: Schema.decodeUnknownSync(EnvironmentVariableName)(`Q9_${index}`),
+      name: Schema.decodeUnknownSync(EnvironmentVariableName)(
+        `${prefix}${index}`,
+      ),
       kind: "secret" as const,
       value: Redacted.make(plaintext),
       source: "workspace" as const,
@@ -1642,12 +1652,13 @@ describe("Claude Code stream through secret redaction", {
     name: string,
     lines: ReadonlyArray<string>,
     secrets: ReadonlyArray<string>,
+    prefix?: string,
   ) => {
     const guest = await createGuest();
     await guest.script(lines);
     const sandbox = await withExecutionEnvironment(
       { createSandbox: async () => guest.sandbox },
-      async () => environment(secrets),
+      async () => environment(secrets, prefix),
     ).createSandbox({ id: "guest" });
     const claude = claudeCode(createClaudeCodeProvider, sandbox);
     const events = await claude.events({
@@ -1745,6 +1756,33 @@ describe("Claude Code stream through secret redaction", {
       },
     ]);
     expect(events).toContain("exactly");
+  });
+
+  it("reads a tool input where a lowercase-named secret matched outside a JSON string (#1165)", async () => {
+    // A numeric secret also matches a bare JSON number in a tool input; its
+    // marker must become `null` there whatever the case of the secret's name.
+    const NUMBER = "31415926";
+    const { content, events } = await record(
+      "lowercase-named secret outside a string",
+      fragmented([
+        {
+          id: "toolu_pin",
+          name: "Bash",
+          json: [`{"command": "true", "pin": ${NUMBER}}`],
+        },
+      ]),
+      [NUMBER],
+      "pin_",
+    );
+    expect(content).toEqual([
+      {
+        type: "toolCall",
+        id: "toolu_pin",
+        name: "Bash",
+        arguments: { command: "true", pin: null },
+      },
+    ]);
+    expect(events).not.toContain(NUMBER);
   });
 
   it("control: without secrets, and near a secret's prefix, the stream arrives as Claude sent it", async () => {

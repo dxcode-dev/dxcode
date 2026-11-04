@@ -280,6 +280,14 @@ describe("frontend dx request regression harness", () => {
       appearance: "dark",
       palette: "daydream",
       terminalTheme: "github",
+      textSize: "default",
+      threadWidth: "default",
+      terminalAppearance: "match",
+      codeFontFamily: null,
+      codeFontSize: null,
+      codeLineHeight: null,
+      logoAnimation: true,
+      uiSounds: false,
     };
     const updated = { ...initial, displayName: "Updated User" };
     const network = new FrontendNetworkHarness(({ method }) =>

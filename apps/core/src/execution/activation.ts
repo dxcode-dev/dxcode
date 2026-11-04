@@ -18,6 +18,7 @@ import {
   savedAtText,
   WORKSPACE_READ_ONLY_CODE,
 } from "../orb-disk/read-only.js";
+import { takeOrbRestartNoteFor } from "../orb-restart/execution-object.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import type {
   DaemonInstallation,
@@ -453,6 +454,20 @@ export const admitExecutionRun = (threadId: string): ExecutionRunAdmission =>
   );
 
 /**
+ * Starts a daemon activation's Thread check (`assertThreadActive`) beside
+ * its target resolution. It settles on its own, so an early start leaves no
+ * unhandled rejection; the activation awaits it before the Orb resumes.
+ */
+export const admitDaemonActivation = (threadId: string): Promise<void> => {
+  const active = assertThreadActive(
+    Effect.runSync(decodeD1Binding((env as Bindings).DB)),
+    threadId,
+  );
+  active.catch(() => undefined);
+  return active;
+};
+
+/**
  * A source preparation that failed in a way the person fixes, as the run's
  * error: Flue settles other activation failures as a generic internal error,
  * so the Thread could not say the disk is full or the project's pre-clone
@@ -635,7 +650,10 @@ export const atDaemonInstallationStage = async <Value>(
 export const makeExecutionActivation = (
   hooks: ExecutionActivationHooks = {},
 ): ExecutionActivationFactory =>
-  Object.assign(activationFor(hooks), { admit: admitExecutionRun });
+  Object.assign(activationFor(hooks), {
+    admit: admitExecutionRun,
+    admitDaemon: admitDaemonActivation,
+  });
 
 const activationFor =
   (hooks: ExecutionActivationHooks) =>
@@ -672,6 +690,11 @@ const activationFor =
       const githubConnected = githubCliConnected(db, id);
       githubConnected.catch(() => undefined);
       const additionalRepositories = readAdditionalRepositories(db, id);
+      // A person's Restart Orb since the last run, which this run's agent
+      // tells the Thread about (#1592).
+      const restartNote = existingOnly
+        ? Promise.resolve(undefined)
+        : takeOrbRestartNoteFor(bindings.THREAD_EXECUTION, id);
       const timing = stepTiming(
         executionWorkspaceLogger,
         "execution_activation_timing",
@@ -823,6 +846,21 @@ const activationFor =
           }),
         );
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
+        // Before preparation, so a restart this activation makes itself is
+        // the one the agent hears about.
+        const restarted = await restartNote;
+        if (restarted !== undefined)
+          rememberWorkspaceRecovery(threadId, {
+            files: restarted.files,
+            cause: "manual",
+            by: restarted.by,
+            ...(restarted.savedAt === undefined
+              ? {}
+              : { savedAt: restarted.savedAt }),
+            ...(restarted.restored === undefined
+              ? {}
+              : { restored: restarted.restored }),
+          });
         if (needsFirstReadiness) reportPreparation("Preparing source…");
         let prepared: Awaited<ReturnType<typeof prepareSource>>;
         try {
@@ -1069,6 +1107,7 @@ const activationFor =
     const ensureDaemon = async (
       context: ExecutionContext,
       input: EnsureDaemonInput,
+      admission?: Promise<void>,
     ): Promise<DaemonInstallation> => {
       const residentDaemon = provider.residentDaemon;
       if (residentDaemon === undefined)
@@ -1095,19 +1134,41 @@ const activationFor =
           ...timing,
         });
       const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
-      await assertThreadActive(db, input.threadId);
-      mark("prepare");
+      // The Thread's checks, started beside its target (the Thread is active,
+      // and the workspace policy admits it), gate the Orb's resume through
+      // `authorize`: a provider that declares `connectAuthorizes` runs it
+      // beside its own record read and before it resumes an Orb; any other
+      // is called only after them. A provider that retries checks the
+      // Thread again.
+      const admitted = admission ?? assertThreadActive(db, input.threadId);
+      admitted.catch(() => undefined);
+      let authorized = false;
+      const authorize = () => {
+        if (authorized) return assertThreadActive(db, input.threadId);
+        authorized = true;
+        return admitted;
+      };
       let stage: DaemonInstallationStage = "workspace";
       try {
+        // A key minted for this activation is stored before the Orb is
+        // reached, so a resumed dxd never meets an authority without it.
+        const credential = await input.credential;
+        // A provider that doesn't run `authorize` itself gets the checks
+        // finished before it is called.
+        if (provider.workspace.connectAuthorizes !== true) await authorize();
+        mark("prepare");
         throwIfAborted(input.signal);
         const handle = await atDaemonInstallationStage(
           "workspace",
           provider.workspace.connect(
             context,
             { threadId: input.threadId },
-            { authorize: () => assertThreadActive(db, input.threadId) },
+            { authorize },
           ),
         );
+        // A provider that never ran `authorize` still installs nothing
+        // before the checks pass.
+        await atDaemonInstallationStage("workspace", admitted);
         throwIfAborted(input.signal);
         mark("workspace");
         const processes =
@@ -1125,7 +1186,7 @@ const activationFor =
         // verified), so a wake runs no guest command at all. A key minted
         // for this activation cannot be in any guest yet: skip the wait.
         const registered =
-          input.credential === undefined &&
+          credential === undefined &&
           (await input.awaitRegistration(DAEMON_SELF_REGISTRATION_WAIT_MS));
         mark("registrationWait");
         if (registered) {
@@ -1168,7 +1229,7 @@ const activationFor =
           outcome = await residentDaemon.install(context, handle, {
             threadId: input.threadId,
             endpoint: input.endpoint,
-            credential: input.credential,
+            credential,
             mintCredential: input.mintCredential,
             ...(input.signal === undefined ? {} : { signal: input.signal }),
           });

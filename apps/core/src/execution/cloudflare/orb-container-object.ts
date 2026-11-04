@@ -128,6 +128,14 @@ export class OrbContainerObject extends DurableObject {
     return this.#controller.pause();
   }
 
+  readRescue(index: number) {
+    return this.#controller.readRescue(index);
+  }
+
+  clearRescue() {
+    return this.#controller.clearRescue();
+  }
+
   recover(options?: { readonly discardUnsaved?: boolean }) {
     return this.#controller.recover(options);
   }

@@ -27,7 +27,9 @@ var ACCOUNT_ORB_METHODS = [
 	"rm",
 	"pause",
 	"destroy",
-	"recover"
+	"recover",
+	"readRescue",
+	"clearRescue"
 ];
 var isAccountOrbMethod = (value) => typeof value === "string" && ACCOUNT_ORB_METHODS.includes(value);
 var toBase64 = (bytes) => {
@@ -2291,6 +2293,11 @@ getLogger([
 ]);
 getLogger([
 	"dx",
+	"threads",
+	"draft"
+]);
+getLogger([
+	"dx",
 	"agent",
 	"lifecycle"
 ]);
@@ -2322,6 +2329,86 @@ getLogger([
 	"audit"
 ]);
 getLogger(["dx", "automations"]);
+var UNSAVED_WORK_SCRIPT = `set -u
+root=/home/user/workspace
+[ -d "$root" ] || { echo none; exit 0; }
+t=$(mktemp -d /dev/shm/dx-rescue.XXXXXX) || { echo failed; exit 0; }
+build() {
+  with_untracked=$1
+  rm -rf "$t/tree" "$t/archive.tar" "$t/archive.tar.gz"
+  mkdir -p "$t/tree"
+  : > "$t/archive.tar"
+  changes=0; commits=0; checkouts=0
+  for git in $(find "$root" -mindepth 2 -maxdepth 4 -name .git -not -path '*/node_modules/*' 2>/dev/null | sort); do
+    d=\${git%/.git}
+    rel=\${d#"$root"/}
+    git -C "$d" rev-parse --git-dir >/dev/null 2>&1 || continue
+    out="$t/tree/$rel/.dx-recovered"
+    mkdir -p "$out"
+    git -C "$d" -c core.quotepath=off status --porcelain=v1 > "$out/status.txt" 2>/dev/null
+    git -C "$d" diff HEAD --binary > "$out/uncommitted.patch" 2>/dev/null || git -C "$d" diff --binary > "$out/uncommitted.patch" 2>/dev/null
+    git -C "$d" format-patch --stdout --branches --not --remotes > "$out/unpushed.patch" 2>/dev/null || :
+    c=$(wc -l < "$out/status.txt")
+    k=$(grep -c '^From [0-9a-f]\\{40\\} ' "$out/unpushed.patch" 2>/dev/null) || k=0
+    if [ "$c" -eq 0 ] && [ "$k" -eq 0 ]; then rm -rf "$t/tree/$rel"; continue; fi
+    changes=$((changes + c)); commits=$((commits + k)); checkouts=$((checkouts + 1))
+    if [ "$with_untracked" = 1 ]; then
+      git -C "$d" ls-files -z -o --exclude-standard > "$t/untracked" 2>/dev/null
+      if [ -s "$t/untracked" ]; then
+        tar rf "$t/archive.tar" -C "$d" --null -T "$t/untracked" --transform "s,^,$rel/," 2>/dev/null || :
+      fi
+    fi
+  done
+  [ "$checkouts" -gt 0 ] || return 1
+  tar rf "$t/archive.tar" -C "$t/tree" . 2>/dev/null
+  gzip -c "$t/archive.tar" > "$t/archive.tar.gz" && rm -f "$t/archive.tar"
+}
+if ! build 1; then rm -rf "$t"; echo none; exit 0; fi
+untracked=1
+size=$(stat -c %s "$t/archive.tar.gz" 2>/dev/null || echo 0)
+full=$size
+if [ "$size" -gt 50331648 ] || [ "$size" -eq 0 ]; then
+  untracked=0
+  build 0 || :
+  size=$(stat -c %s "$t/archive.tar.gz" 2>/dev/null || echo 0)
+fi
+echo "archive $t $size $changes $commits $checkouts $untracked $full"
+`;
+/** The script's last line, read. */
+var parseUnsavedWork = (stdout) => {
+	const line = stdout.trim().split("\n").at(-1)?.trim() ?? "";
+	if (line === "none") return { kind: "none" };
+	const parts = line.split(/\s+/);
+	if (parts[0] !== "archive" || parts.length !== 8) return {
+		kind: "failed",
+		reason: "the copy did not finish"
+	};
+	const [, directory = "", size, changes, commits, checkouts, untracked, full] = parts;
+	if (!/^\/dev\/shm\/dx-rescue\.[A-Za-z0-9]+$/.test(directory)) return {
+		kind: "failed",
+		reason: "the copy did not finish"
+	};
+	const bytes = Number(size);
+	if (!Number.isSafeInteger(bytes) || bytes <= 0) return {
+		kind: "failed",
+		reason: "the copy did not finish"
+	};
+	if (bytes > 50331648) return {
+		kind: "failed",
+		reason: `the unsaved work is ${String(Math.ceil(bytes / 1024 / 1024))} MB compressed even without untracked files, more than dx can keep`
+	};
+	return {
+		kind: "archive",
+		directory,
+		size: bytes,
+		changes: Number(changes) || 0,
+		commits: Number(commits) || 0,
+		checkouts: Number(checkouts) || 0,
+		untracked: untracked === "1",
+		/** With the untracked files, when they did not fit. */
+		...untracked === "1" ? {} : { fullBytes: Number(full) || 0 }
+	};
+};
 //#endregion
 //#region apps/core/src/execution/cloudflare/orb-container.ts
 var STATE_KEY = "workspace";
@@ -2339,6 +2426,19 @@ var ORB_SNAPSHOT_REFRESH_MS = 216e7;
 var ORB_SNAPSHOT_RETRY_MS = 3e4;
 /** Failed idle-pause snapshots back off, doubling, up to this. */
 var ORB_SNAPSHOT_RETRY_MAX_MS = 36e5;
+/** One stored piece of a rescue archive (a SQLite value holds 2 MB). */
+var RESCUE_CHUNK_BYTES = 1048576;
+/** Raw bytes read back per command: about 5.3 MB of base64 output. */
+var RESCUE_READ_MIB = 4;
+var RESCUE_TIMEOUT_MS = 12e4;
+var rescueKey = (index) => `rescue:${String(index)}`;
+var quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
+var decodeBase64 = (text) => {
+	const binary = atob(text.trim());
+	const bytes = new Uint8Array(binary.length);
+	for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+	return bytes;
+};
 /** Cloudflare stops a container this long after its object goes quiet. */
 var MAX_CONTAINER_INACTIVITY_MS = 216e5;
 var CONTAINER_INACTIVITY_MARGIN_MS = 9e5;
@@ -2730,7 +2830,8 @@ var OrbContainerController = class {
 					kind: "ready",
 					sandboxId: this.#sandboxId,
 					residency: "running",
-					...state.startedAt === void 0 ? {} : { processesStartedAt: state.startedAt }
+					...state.startedAt === void 0 ? {} : { processesStartedAt: state.startedAt },
+					...await this.#tellUnsavedStop(input.allowReset === true)
 				};
 			}
 			if (!fresh && input.allowReset === false) this.#refuseReset(state, "open");
@@ -2740,8 +2841,158 @@ var OrbContainerController = class {
 				kind: "ready",
 				sandboxId: this.#sandboxId,
 				residency,
-				...started?.startedAt === void 0 ? {} : { processesStartedAt: started.startedAt }
+				...started?.startedAt === void 0 ? {} : { processesStartedAt: started.startedAt },
+				...await this.#tellUnsavedStop(input.allowReset === true)
 			};
+		});
+	}
+	/**
+	* The unsaved stop, for an activation to tell its agent and person, and
+	* cleared; a Terminal reconnect leaves it for the next activation.
+	*/
+	async #tellUnsavedStop(activation) {
+		if (!activation) return {};
+		const state = await this.#load();
+		const unsavedStop = state?.unsavedStop;
+		if (state === void 0 || unsavedStop === void 0) return {};
+		if ((state.rescueChunks ?? 0) === 0) {
+			const { unsavedStop: _told, ...rest } = state;
+			await this.#save(rest);
+		}
+		return { unsavedStop };
+	}
+	/**
+	* Stops the container without a snapshot of its latest files, keeping its
+	* last good save, once snapshots keep failing. Never without a save: that
+	* would lose every file. Under the lifecycle lock.
+	*/
+	async #stopUnsaved(state, failures, cause) {
+		const snapshot = state.snapshot;
+		if (snapshot === void 0) return false;
+		const rescued = await this.#rescueUnsavedWork();
+		await this.#destroyContainer();
+		const { snapshotFailures: _failures, ...rest } = await this.#load() ?? state;
+		const unsavedStop = {
+			stoppedAt: this.#now(),
+			failures,
+			...snapshot.takenAt === void 0 ? {} : { savedAt: snapshot.takenAt },
+			...rescued.kind === "archive" ? { rescue: rescued.rescue } : rescued.kind === "failed" ? { rescueFailed: rescued.reason } : {}
+		};
+		await this.#save({
+			...rest,
+			status: "paused",
+			unsavedStop
+		});
+		orbContainerLogger.error("Orb container stopped without saving its latest files.", {
+			event: "orb_container_stopped_unsaved",
+			sandboxId: this.#sandboxId,
+			failures,
+			savedAt: snapshot.takenAt,
+			rescue: rescued.kind,
+			...rescued.kind === "archive" ? {
+				rescueBytes: rescued.rescue.size,
+				rescueCheckouts: rescued.rescue.checkouts
+			} : rescued.kind === "failed" ? { rescueError: rescued.reason } : {},
+			error: cause instanceof Error ? cause.message : String(cause)
+		});
+		await this.#schedule(Math.max(this.#now() + ORB_HEARTBEAT_MS, snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS));
+		return true;
+	}
+	/**
+	* Copies every checkout's unsaved work under ~/workspace into this
+	* object's storage, through /dev/shm, before a stop that drops it.
+	* Never throws: a failure is reported, and the stop goes ahead.
+	*/
+	async #rescueUnsavedWork() {
+		let directory;
+		try {
+			const built = await this.#run([
+				"bash",
+				"-c",
+				UNSAVED_WORK_SCRIPT
+			], {
+				cwd: "/home/user",
+				timeoutMs: RESCUE_TIMEOUT_MS
+			});
+			const parsed = parseUnsavedWork(textDecoder().decode(built.stdout));
+			if (parsed.kind !== "archive") return parsed;
+			directory = parsed.directory;
+			const bytes = new Uint8Array(parsed.size);
+			let offset = 0;
+			for (let read = 0; offset < parsed.size; read += 1) {
+				const part = await this.#run([
+					"sh",
+					"-c",
+					`dd if=${quote(`${parsed.directory}/archive.tar.gz`)} bs=1M skip=${String(read * RESCUE_READ_MIB)} count=${String(RESCUE_READ_MIB)} status=none | base64 -w0`
+				], { timeoutMs: RESCUE_TIMEOUT_MS });
+				const piece = decodeBase64(textDecoder().decode(part.stdout));
+				if (piece.byteLength === 0 || offset + piece.byteLength > parsed.size) return {
+					kind: "failed",
+					reason: "the copy came back incomplete"
+				};
+				bytes.set(piece, offset);
+				offset += piece.byteLength;
+			}
+			await this.#clearRescueChunks();
+			const chunks = Math.ceil(bytes.byteLength / RESCUE_CHUNK_BYTES);
+			for (let index = 0; index < chunks; index += 1) await this.#storage.put(rescueKey(index), bytes.slice(index * RESCUE_CHUNK_BYTES, (index + 1) * RESCUE_CHUNK_BYTES));
+			const current = await this.#load();
+			if (current !== void 0) await this.#save({
+				...current,
+				rescueChunks: chunks
+			});
+			return {
+				kind: "archive",
+				rescue: {
+					size: bytes.byteLength,
+					chunks,
+					changes: parsed.changes,
+					commits: parsed.commits,
+					checkouts: parsed.checkouts,
+					untracked: parsed.untracked,
+					...parsed.fullBytes === void 0 ? {} : { fullBytes: parsed.fullBytes }
+				}
+			};
+		} catch (cause) {
+			return {
+				kind: "failed",
+				reason: `copying it failed (${cause instanceof Error ? cause.message.slice(0, 200) : "unknown error"})`
+			};
+		} finally {
+			if (directory !== void 0) await this.#run([
+				"rm",
+				"-rf",
+				"--",
+				directory
+			], { timeoutMs: 1e4 }).catch(() => void 0);
+		}
+	}
+	async #clearRescueChunks() {
+		const state = await this.#load();
+		const chunks = state?.rescueChunks ?? 0;
+		for (let index = 0; index < chunks; index += 1) await this.#storage.delete(rescueKey(index));
+		if (state !== void 0 && state.rescueChunks !== void 0) {
+			const { rescueChunks: _chunks, ...rest } = state;
+			await this.#save(rest);
+		}
+	}
+	/** One piece of the rescue archive an unsaved stop kept, for Core. */
+	async readRescue(index) {
+		if (!Number.isSafeInteger(index) || index < 0) return void 0;
+		return this.#storage.get(rescueKey(index));
+	}
+	/**
+	* Core stored the rescue archive in the Thread: drop this copy, and the
+	* stop it belongs to, which the activation has already told.
+	*/
+	clearRescue() {
+		return this.#exclusive(async () => {
+			await this.#clearRescueChunks();
+			const state = await this.#load();
+			if (state?.unsavedStop !== void 0) {
+				const { unsavedStop: _told, ...rest } = state;
+				await this.#save(rest);
+			}
 		});
 	}
 	/** Whether the container runs now; lets Core report a wake before it. */
@@ -2968,6 +3219,7 @@ var OrbContainerController = class {
 			const count = (failures?.count ?? 0) + 1;
 			const delayMs = Math.min(ORB_SNAPSHOT_RETRY_MS * 2 ** (count - 1), ORB_SNAPSHOT_RETRY_MAX_MS);
 			const current = await this.#load() ?? state;
+			if (count >= 8 && await this.#stopUnsaved(current, count, cause)) return "paused";
 			await this.#save({
 				...current,
 				snapshotFailures: {
@@ -2998,7 +3250,14 @@ var OrbContainerController = class {
 				});
 				return "stopped";
 			}
-			await this.#pause(state, false);
+			try {
+				await this.#pause(state, false);
+			} catch (cause) {
+				const current = await this.#load() ?? state;
+				const failures = (current.snapshotFailures?.count ?? 0) + 1;
+				if (!await this.#stopUnsaved(current, failures, cause)) throw cause;
+				return "stopped";
+			}
 			return "paused";
 		});
 	}
@@ -3053,7 +3312,10 @@ var OrbContainerController = class {
 							sandboxId: this.#sandboxId,
 							files: "unsaved"
 						});
-						return { files: "unsaved" };
+						return current.snapshot?.takenAt === void 0 ? { files: "unsaved" } : {
+							files: "unsaved",
+							savedAt: current.snapshot.takenAt
+						};
 					}
 					files = current.snapshot === void 0 ? "lost" : "earlier";
 				}
@@ -3325,6 +3587,12 @@ var OrbContainerObject = class extends DurableObject {
 	}
 	pause() {
 		return this.#controller.pause();
+	}
+	readRescue(index) {
+		return this.#controller.readRescue(index);
+	}
+	clearRescue() {
+		return this.#controller.clearRescue();
 	}
 	recover(options) {
 		return this.#controller.recover(options);

@@ -303,8 +303,8 @@
   display: block;
   min-height: 100%;
   --diffs-font-family: var(--font-mono);
-  --diffs-font-size: 13px;
-  --diffs-line-height: 22px;
+  --diffs-font-size: var(--code-font-size, 13px);
+  --diffs-line-height: var(--code-line-height, 22px);
 }
 
 .thread-file-toolbar button:disabled {

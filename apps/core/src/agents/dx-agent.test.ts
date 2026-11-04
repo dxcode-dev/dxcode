@@ -27,6 +27,7 @@ const pluginHost = vi.hoisted(() => ({
   }),
   resolveAgentPluginTools: vi.fn(),
   resolveAgentBugReportReader: vi.fn(async () => false),
+  resolveAgentWorkspaceInstructions: vi.fn(async () => ""),
 }));
 
 const mcp = vi.hoisted(() => ({

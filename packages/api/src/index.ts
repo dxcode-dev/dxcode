@@ -76,6 +76,7 @@ export * from "./settings/plugins.js";
 export * from "./settings/project-defaults.js";
 export * from "./settings/signing-keys.js";
 export * from "./settings/skills.js";
+export * from "./settings/workspace-agent-instructions.js";
 export * from "./settings/workspace-members.js";
 export * from "./settings/workspace-policy.js";
 export * from "./settings/workspace-profile.js";
@@ -101,6 +102,7 @@ export * from "./threads/mark-thread-seen.js";
 export * from "./threads/message-author.js";
 export * from "./threads/orb-disk.js";
 export * from "./threads/orb-memory.js";
+export * from "./threads/orb-restart.js";
 export * from "./threads/pane-layout.js";
 export * from "./threads/pin-thread.js";
 export * from "./threads/portals.js";
@@ -109,6 +111,7 @@ export * from "./threads/snooze-thread.js";
 export * from "./threads/terminal.js";
 export * from "./threads/thread-chat.js";
 export * from "./threads/thread-data.js";
+export * from "./threads/thread-draft.js";
 export {
   type ThreadNotFoundResponse,
   ThreadNotFoundResponseSchema,

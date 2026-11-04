@@ -33,6 +33,7 @@ import {
 } from "./plugin-usage-d1.js";
 import {
   backfillUsageRollups,
+  MODEL_BREAKDOWN_LIMIT,
   usageRollupServes,
   usageRollupStatements,
 } from "./rollup-d1.js";
@@ -74,6 +75,7 @@ const DailyRow = Schema.Struct({
 
 const ThreadAggregateRow = Schema.Struct({
   thread_id: ThreadId,
+  title: Schema.String,
   project_id: ProjectId,
   project_name: Schema.String,
   created_at: Schema.DateTimeUtcFromString,
@@ -89,6 +91,16 @@ const ThreadAggregateRow = Schema.Struct({
   runner_duration_ms: Schema.Number,
   model_turns: Schema.Number,
   error_events: Schema.Number,
+});
+
+const ModelAggregateRow = Schema.Struct({
+  provider_id: ModelProviderId,
+  model_id: UsageModelId,
+  total_tokens: Schema.Number,
+  unknown_token_events: Schema.Number,
+  estimated_cost_micros: Schema.Number,
+  unknown_cost_events: Schema.Number,
+  model_turns: Schema.Number,
 });
 
 const UserAggregateRow = Schema.Struct({
@@ -430,6 +442,21 @@ const summarySql = (where: string) => `${costedCte(where)}
     COALESCE(SUM(CASE WHEN outcome = 'unknown' THEN 1 ELSE 0 END), 0) AS unknown_outcomes
   FROM costed`;
 
+const modelSql = (where: string) => `${costedCte(where)}
+  SELECT
+    COALESCE(observed_provider_id, provider_id) AS provider_id,
+    COALESCE(observed_model_id, model_id) AS model_id,
+    COALESCE(SUM(total_tokens), 0) AS total_tokens,
+    COALESCE(SUM(CASE WHEN total_tokens IS NULL THEN 1 ELSE 0 END), 0) AS unknown_token_events,
+    COALESCE(SUM(estimated_cost_micros), 0) AS estimated_cost_micros,
+    COALESCE(SUM(CASE WHEN estimated_cost_micros IS NULL THEN 1 ELSE 0 END), 0) AS unknown_cost_events,
+    COUNT(*) AS model_turns
+  FROM costed
+  WHERE kind = 'model'
+  GROUP BY 1, 2
+  ORDER BY estimated_cost_micros DESC, total_tokens DESC, provider_id, model_id
+  LIMIT ${MODEL_BREAKDOWN_LIMIT}`;
+
 const dailySql = (where: string) => `${costedCte(where)}
   SELECT
     date(occurred_at, ?) AS day,
@@ -467,6 +494,7 @@ const threadSql = (where: string, hasCursor: boolean) => `${costedCte(where)},
   SELECT
     totals.*,
     project.name AS project_name,
+    thread.title,
     thread.created_at
   FROM thread_totals AS totals
   INNER JOIN threads AS thread ON thread.id = totals.thread_id
@@ -677,6 +705,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 ),
               db.prepare(runnerSql(where)).bind(...values),
               db.prepare(priceSourcesSql(where)).bind(...values),
+              db.prepare(modelSql(where)).bind(...values),
             ];
             const plugins = pluginUsageStatement(
               db,
@@ -719,8 +748,12 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               PriceSourceRow,
               results[4]?.results ?? [],
             );
-            const pluginUsage = yield* decodePluginUsage(
+            const modelRows = yield* decodeRows(
+              ModelAggregateRow,
               results[5]?.results ?? [],
+            );
+            const pluginUsage = yield* decodePluginUsage(
+              results[6]?.results ?? [],
             );
             const summary = summaryRows[0];
             if (summary === undefined) {
@@ -772,6 +805,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               })),
               threads: visibleThreads.map((row) => ({
                 threadId: row.thread_id,
+                title: row.title,
                 projectId: row.project_id,
                 projectName: row.project_name,
                 createdAt: row.created_at,
@@ -787,6 +821,15 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 runnerDurationMs: row.runner_duration_ms,
                 modelTurns: row.model_turns,
                 errorEvents: row.error_events,
+              })),
+              models: modelRows.map((row) => ({
+                providerId: row.provider_id,
+                modelId: row.model_id,
+                totalTokens: row.total_tokens,
+                unknownTokenEvents: row.unknown_token_events,
+                estimatedCostMicros: row.estimated_cost_micros,
+                unknownCostEvents: row.unknown_cost_events,
+                modelTurns: row.model_turns,
               })),
               runners: runnerRows.map((row) => ({
                 provider: row.provider,

@@ -1,3 +1,4 @@
+import { codeFontSizePixels } from "@dx/domain";
 import { FitAddon, Ghostty, type ITheme, Terminal } from "ghostty-web";
 import ghosttyWasmUrl from "ghostty-web/ghostty-vt.wasm?url";
 
@@ -63,7 +64,10 @@ export async function mountBrowserTerminal(
   const terminal = new Terminal({
     cursorBlink: false,
     fontFamily,
-    fontSize: 13,
+    // The Code Font size, when one is set.
+    fontSize:
+      codeFontSizePixels(styles.getPropertyValue("--code-font-size").trim()) ??
+      13,
     ghostty,
     scrollback: 10_000,
     theme,

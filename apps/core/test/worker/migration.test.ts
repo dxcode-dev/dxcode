@@ -746,6 +746,85 @@ describe("D1 migration", () => {
         .bind("unknown", "migration-profile-user")
         .run(),
     ).rejects.toBeDefined();
+
+    await expect(
+      env.DB.prepare(
+        "SELECT text_size, thread_width FROM personal_account WHERE user_id = ?",
+      )
+        .bind("migration-profile-user")
+        .first(),
+    ).resolves.toEqual({ text_size: "default", thread_width: "default" });
+    for (const [column, value] of [
+      ["text_size", "small"],
+      ["text_size", "larger"],
+      ["thread_width", "narrow"],
+      ["thread_width", "full"],
+    ] as const) {
+      await expect(
+        env.DB.prepare(
+          `UPDATE personal_account SET ${column} = ? WHERE user_id = ?`,
+        )
+          .bind(value, "migration-profile-user")
+          .run(),
+      ).resolves.toMatchObject({ meta: { changes: 1 } });
+    }
+    await expect(
+      env.DB.prepare(
+        "SELECT terminal_appearance, code_font_family, code_font_size, code_line_height FROM personal_account WHERE user_id = ?",
+      )
+        .bind("migration-profile-user")
+        .first(),
+    ).resolves.toEqual({
+      terminal_appearance: "match",
+      code_font_family: null,
+      code_font_size: null,
+      code_line_height: null,
+    });
+    await expect(
+      env.DB.prepare(
+        "SELECT logo_animation, ui_sounds FROM personal_account WHERE user_id = ?",
+      )
+        .bind("migration-profile-user")
+        .first(),
+    ).resolves.toEqual({ logo_animation: 1, ui_sounds: 0 });
+    for (const column of ["logo_animation", "ui_sounds"])
+      await expect(
+        env.DB.prepare(
+          `UPDATE personal_account SET ${column} = 2 WHERE user_id = ?`,
+        )
+          .bind("migration-profile-user")
+          .run(),
+      ).rejects.toBeDefined();
+    for (const value of ["match", "light", "dark"])
+      await expect(
+        env.DB.prepare(
+          "UPDATE personal_account SET terminal_appearance = ? WHERE user_id = ?",
+        )
+          .bind(value, "migration-profile-user")
+          .run(),
+      ).resolves.toMatchObject({ meta: { changes: 1 } });
+    for (const [column, value] of [
+      ["terminal_appearance", "huge"],
+      ["code_font_family", "x".repeat(201)],
+      ["code_font_size", "x".repeat(17)],
+      ["code_line_height", "x".repeat(17)],
+    ] as const)
+      await expect(
+        env.DB.prepare(
+          `UPDATE personal_account SET ${column} = ? WHERE user_id = ?`,
+        )
+          .bind(value, "migration-profile-user")
+          .run(),
+      ).rejects.toBeDefined();
+    for (const column of ["text_size", "thread_width"]) {
+      await expect(
+        env.DB.prepare(
+          `UPDATE personal_account SET ${column} = ? WHERE user_id = ?`,
+        )
+          .bind("huge", "migration-profile-user")
+          .run(),
+      ).rejects.toBeDefined();
+    }
   });
 
   it("derives a new person's username from their email address", async () => {

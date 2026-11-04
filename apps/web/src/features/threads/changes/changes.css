@@ -442,8 +442,8 @@
 .changes-pierre-diff {
   display: block;
   --diffs-font-family: var(--font-mono-family);
-  --diffs-font-size: 11px;
-  --diffs-line-height: 18px;
+  --diffs-font-size: var(--code-font-size, 11px);
+  --diffs-line-height: var(--code-line-height, 18px);
   --diffs-dark-bg: color-mix(in srgb, var(--surface) 90%, #222);
   --diffs-bg-buffer-override: var(--diffs-dark-bg);
   --diffs-bg-context-override: var(--diffs-dark-bg);
