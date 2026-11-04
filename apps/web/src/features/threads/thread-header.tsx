@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
-import { useNavigate } from "@tanstack/react-router";
+import { lazyRouteComponent, useNavigate } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
   AlarmClock,
@@ -33,7 +33,6 @@ import {
 import { ThreadAutomationsButton } from "./automations/thread-automations-button.js";
 import { ThreadAutomationsSheet } from "./automations/thread-automations-sheet.js";
 import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
-import { ShareDialog } from "./sharing/share-dialog.js";
 import { participantsLabel } from "./sharing/sharing-format.js";
 import { useSetThreadFollowing } from "./sharing/sharing-mutations.js";
 import {
@@ -45,6 +44,13 @@ import { threadSelectionSummary } from "./thread-selection-summary.js";
 import { TitleBarItemSlot } from "./title-bar-item.js";
 import { useTitleBarOverflow } from "./title-bar-overflow.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
+
+// The Share dialog opens on a click, so it loads then, not with the Thread
+// page.
+const ShareDialog = lazyRouteComponent(
+  () => import("./sharing/share-dialog.js"),
+  "ShareDialog",
+);
 
 /** While the Thread sleeps: when it wakes, and Wake to bring it back now. */
 function ThreadSnoozeBadge({
@@ -353,12 +359,14 @@ export function ThreadHeader({
         {compact ? <span className="thread-title-menu">{menu}</span> : null}
       </div>
       {shareOpen && own && !archived ? (
-        <ShareDialog
-          thread={thread}
-          ownerName={ownerName}
-          open
-          onOpenChange={setShareOpen}
-        />
+        <React.Suspense fallback={null}>
+          <ShareDialog
+            thread={thread}
+            ownerName={ownerName}
+            open
+            onOpenChange={setShareOpen}
+          />
+        </React.Suspense>
       ) : null}
       {sheet === undefined ? null : (
         <ThreadAutomationsSheet

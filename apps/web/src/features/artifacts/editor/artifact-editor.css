@@ -1,0 +1,992 @@
+/* The artifact block editor. */
+.artifact-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.artifact-save[data-tone="warning"] {
+  color: var(--warning);
+}
+.artifact-save > svg {
+  width: 12px;
+  height: 12px;
+}
+.artifact-spin {
+  animation: artifact-spin 1s linear infinite;
+}
+@keyframes artifact-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.artifact-icon-button,
+.artifact-tool,
+.artifact-handle-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 6px;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.artifact-icon-button {
+  width: 26px;
+  padding: 0;
+}
+.artifact-icon-button:hover,
+.artifact-tool:hover,
+.artifact-tool[data-popup-open],
+.artifact-tool[aria-pressed="true"],
+.artifact-handle-button:hover,
+.artifact-handle-button[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.artifact-icon-button > svg,
+.artifact-tool > svg,
+.artifact-handle-button > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+
+/* The toolbar: one row under the header; scrolls sideways when narrow. */
+.artifact-toolbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  min-width: 0;
+  height: 36px;
+  margin: 0;
+  padding: 0 6px;
+  overflow-x: auto;
+  border: 0;
+  border-bottom: 1px solid var(--divider);
+  scrollbar-width: none;
+}
+.artifact-tool-end {
+  margin-left: auto;
+}
+
+.artifact-notice {
+  display: flex;
+  align-items: center;
+  flex: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 12px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+  line-height: 16px;
+}
+.artifact-notice[data-tone="warning"] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--warning) 12%, transparent);
+}
+.artifact-notice > span {
+  flex: 1 1 100%;
+}
+.artifact-notice-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+.artifact-notice button {
+  height: 26px;
+  padding: 0 10px;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.artifact-notice button:hover {
+  background: var(--secondary);
+}
+
+.artifact-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.artifact-page {
+  position: relative;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 28px 40px 0 52px;
+}
+.artifact-view[data-wide] .artifact-page {
+  max-width: none;
+}
+
+/* The size sits on the wrapper: a touch screen keeps every field at
+   max(16px, 1em), and 1em is the parent's size, so the title keeps its own. */
+.artifact-title-field {
+  margin: 0 0 12px;
+  font-size: 26px;
+  line-height: 34px;
+}
+.artifact-title {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  color: var(--foreground);
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 1em;
+  font-weight: 700;
+  line-height: inherit;
+}
+
+/* Document typography, close to the transcript's Markdown. */
+.artifact-prose {
+  min-height: 160px;
+  color: var(--foreground);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 22px;
+  overflow-wrap: anywhere;
+  outline: none;
+}
+.artifact-prose > * {
+  margin: 0 0 10px;
+}
+.artifact-prose p {
+  margin: 0 0 10px;
+}
+.artifact-prose li > p,
+.artifact-prose td p,
+.artifact-prose th p,
+.artifact-prose .artifact-task-body > p {
+  margin: 0;
+}
+.artifact-prose h1,
+.artifact-prose h2,
+.artifact-prose h3,
+.artifact-prose h4,
+.artifact-prose h5,
+.artifact-prose h6 {
+  margin: 22px 0 8px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+.artifact-prose h1 {
+  font-size: 1.75em;
+}
+.artifact-prose h2 {
+  font-size: 1.4em;
+}
+.artifact-prose h3 {
+  font-size: 1.2em;
+}
+.artifact-prose h4,
+.artifact-prose h5,
+.artifact-prose h6 {
+  font-size: 1em;
+}
+.artifact-prose > :first-child {
+  margin-top: 0;
+}
+.artifact-prose ul,
+.artifact-prose ol {
+  padding-left: 24px;
+}
+.artifact-prose li {
+  margin: 2px 0;
+}
+.artifact-prose blockquote {
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  border-left: 3px solid var(--divider);
+}
+.artifact-prose hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--divider);
+}
+.artifact-prose code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--secondary);
+  font: 0.9em var(--font-mono-family);
+}
+.artifact-prose pre {
+  padding: 10px 12px;
+  overflow-x: auto;
+  border-radius: 6px;
+  background: var(--secondary);
+  font: 12.5px / 1.5 var(--font-mono-family);
+  white-space: pre;
+}
+.artifact-prose pre code {
+  padding: 0;
+  background: none;
+  font: inherit;
+}
+.artifact-prose pre[data-language]::before {
+  content: attr(data-language);
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.artifact-prose .artifact-markdown-source {
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px dashed var(--divider);
+}
+.artifact-prose a {
+  color: var(--link, #3b82f6);
+  text-decoration: underline;
+}
+.artifact-prose img {
+  max-width: 100%;
+}
+.artifact-placeholder::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+/* Checklist items: a checkbox, struck through when ticked. */
+.artifact-prose li.artifact-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  list-style: none;
+  margin-left: -20px;
+}
+.artifact-task-box {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  flex: none;
+}
+.artifact-task-box > input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.artifact-task-body {
+  flex: 1;
+  min-width: 0;
+}
+.artifact-task[data-checked="true"] > .artifact-task-body > p {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+}
+
+/* Tables scroll sideways inside their box. */
+.artifact-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.artifact-prose table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 13px;
+}
+.artifact-prose th,
+.artifact-prose td {
+  min-width: 80px;
+  padding: 6px 10px;
+  border: 1px solid var(--divider);
+  vertical-align: top;
+}
+.artifact-prose th {
+  font-weight: 600;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.artifact-prose .selectedCell::after {
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+/* Blocks a merge kept in both versions. */
+.artifact-prose .artifact-block-conflict {
+  outline: 2px solid color-mix(in srgb, var(--warning) 70%, transparent);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+
+/* The block handle: Insert Below and Block Options, left of the block. */
+.artifact-block-handle {
+  position: absolute;
+  left: 4px;
+  display: flex;
+  gap: 0;
+  transform: translateY(-1px);
+}
+.artifact-handle-button {
+  width: 22px;
+  height: 24px;
+  padding: 0;
+}
+
+@media (max-width: 1023px), (pointer: coarse) {
+  .artifact-page {
+    padding: 20px 16px 0 48px;
+  }
+  .artifact-title-field {
+    font-size: 22px;
+    line-height: 30px;
+  }
+  .artifact-icon-button,
+  .artifact-tool {
+    height: 44px;
+    min-width: 44px;
+  }
+  .artifact-icon-button {
+    width: 44px;
+  }
+  .artifact-toolbar {
+    height: 48px;
+  }
+  .artifact-notice button {
+    height: 44px;
+  }
+  /* Side by side in the 48px gutter, each a full-height tap target, level
+     with the block's first line. */
+  .artifact-block-handle {
+    left: 0;
+    transform: translateY(-11px);
+  }
+  .artifact-handle-button {
+    width: 24px;
+    height: 44px;
+  }
+  .artifact-task-box > input {
+    width: 20px;
+    height: 20px;
+  }
+}
+
+/* Chips: one inline pill each; a dropdown takes its option's color. */
+.artifact-chip {
+  --chip-color: var(--muted-foreground);
+  display: inline-flex;
+  align-items: center;
+  margin: 0 1px;
+  padding: 0 6px;
+  color: var(--foreground);
+  border: 1px solid color-mix(in srgb, var(--chip-color) 40%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--chip-color) 14%, transparent);
+  font-size: 0.92em;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: baseline;
+  cursor: pointer;
+  user-select: none;
+}
+.artifact-chip[data-kind="mention"],
+.artifact-chip[data-kind="agent"] {
+  --chip-color: var(--primary);
+  cursor: default;
+}
+.artifact-chip[data-kind="toggle"] {
+  border-radius: 5px;
+}
+.artifact-chip[data-kind="toggle"][aria-pressed="true"] {
+  --chip-color: var(--primary);
+  color: var(--primary-foreground);
+  background: color-mix(in srgb, var(--primary) 85%, transparent);
+}
+.artifact-chip.ProseMirror-selectednode {
+  outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent);
+  outline-offset: 1px;
+}
+.artifact-chip-hidden {
+  display: none;
+}
+[data-color="gray"] {
+  --chip-color: #8b949e;
+}
+[data-color="blue"] {
+  --chip-color: #3b82f6;
+}
+[data-color="green"] {
+  --chip-color: #22c55e;
+}
+[data-color="yellow"] {
+  --chip-color: #eab308;
+}
+[data-color="red"] {
+  --chip-color: #ef4444;
+}
+[data-color="purple"] {
+  --chip-color: #a855f7;
+}
+
+/* A chip's picker: a date or time field, or a dropdown's options. */
+.artifact-chip-picker {
+  width: max-content;
+  min-width: 200px;
+  padding: 8px;
+}
+.artifact-chip-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.artifact-chip-field > input {
+  height: 32px;
+  padding: 0 8px;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  color-scheme: light dark;
+}
+.artifact-chip-options {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.artifact-chip-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  color: var(--foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-chip-option:hover {
+  background: var(--accent);
+}
+.artifact-chip-option > svg {
+  width: 13px;
+  height: 13px;
+  margin-left: auto;
+}
+.artifact-chip-swatch {
+  width: 10px;
+  height: 10px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--chip-color, var(--muted-foreground));
+}
+
+/* A dx-view block: its view, with the source under Edit Source. */
+.artifact-view-block {
+  margin: 0 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+}
+.artifact-view-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 8px 0 12px;
+  color: var(--muted-foreground);
+  border-bottom: 1px solid var(--divider);
+  font-size: 11px;
+  font-weight: 600;
+}
+.artifact-view-toggle {
+  height: 22px;
+  padding: 0 8px;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.artifact-view-preview {
+  min-height: 40px;
+}
+.artifact-prose .artifact-view-source {
+  display: none;
+  margin: 0;
+  border-radius: 0;
+}
+.artifact-view-block[data-editing="true"] .artifact-view-source {
+  display: block;
+}
+.artifact-view-block[data-editing="true"] .artifact-view-preview {
+  display: none;
+}
+.artifact-view-fallback {
+  margin: 0;
+  padding: 10px 12px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1023px), (pointer: coarse) {
+  .artifact-chip {
+    padding: 2px 8px;
+  }
+  .artifact-chip-option,
+  .artifact-chip-field > input {
+    height: 44px;
+  }
+  .artifact-view-bar {
+    height: 44px;
+  }
+  .artifact-view-toggle {
+    height: 36px;
+  }
+}
+
+/* The artifact beside its comments. */
+.artifact-main {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.artifact-main > .artifact-scroll {
+  flex: 1;
+  min-width: 0;
+}
+.artifact-comments-toggle {
+  width: auto;
+  min-width: 26px;
+  gap: 4px;
+  padding: 0 6px;
+}
+.artifact-comments-toggle > span {
+  font-size: 11px;
+}
+.artifact-comments-toggle[aria-pressed="true"] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+}
+
+/* Text a comment sits on; the chosen one stronger. */
+.artifact-prose .artifact-comment-anchor {
+  background: color-mix(in srgb, var(--warning) 18%, transparent);
+  border-bottom: 2px solid color-mix(in srgb, var(--warning) 60%, transparent);
+  cursor: pointer;
+}
+.artifact-prose .artifact-comment-anchor-active {
+  background: color-mix(in srgb, var(--warning) 34%, transparent);
+}
+
+.artifact-comments {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: 300px;
+  min-height: 0;
+  border-left: 1px solid var(--divider);
+  background: var(--surface);
+}
+.artifact-comments-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--divider);
+  font-size: 12px;
+}
+.artifact-comments-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px;
+  font-size: 13px;
+}
+.artifact-comments-sheet {
+  width: min(480px, 100%);
+}
+/* Room at the bottom for the app's floating button, over the last actions. */
+.artifact-comments-sheet .artifact-comments-body {
+  max-height: 70vh;
+  padding-bottom: 88px;
+}
+@media (max-width: 600px) {
+  .modal-surface-viewport:has(> .artifact-comments-sheet) {
+    place-items: end center;
+    padding: 0;
+  }
+  .artifact-comments-sheet {
+    width: 100%;
+    margin-top: 0;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 18px 18px 0 0;
+  }
+}
+.artifact-comments-empty {
+  margin: 16px 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.artifact-comments-heading {
+  margin: 14px 4px 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+.artifact-comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.artifact-comment-thread,
+.artifact-comment-new {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+}
+.artifact-comment-new {
+  margin-bottom: 8px;
+}
+.artifact-comment-thread[data-active] {
+  border-color: color-mix(in srgb, var(--warning) 60%, transparent);
+}
+.artifact-comment-quote {
+  display: block;
+  margin: 0;
+  padding: 2px 0 2px 8px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-left: 2px solid color-mix(in srgb, var(--warning) 60%, transparent);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.artifact-comment-quote:disabled {
+  cursor: default;
+  text-decoration: line-through;
+}
+.artifact-comment-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.artifact-comment-meta > strong {
+  color: var(--foreground);
+  font-size: 12px;
+}
+.artifact-comment-body {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.artifact-comment-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.artifact-comment-composer > textarea {
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 8px;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  font: inherit;
+  resize: vertical;
+}
+.artifact-comment-error {
+  margin: 0;
+  color: var(--warning);
+  font-size: 12px;
+}
+.artifact-comment-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.artifact-comment-actions > button,
+.artifact-comment-resolve {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  color: var(--foreground);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.artifact-comment-actions > .artifact-comment-mention {
+  margin-right: auto;
+  color: var(--muted-foreground);
+}
+.artifact-comment-actions > .artifact-comment-submit {
+  color: var(--primary-foreground);
+  border-color: transparent;
+  background: var(--primary);
+}
+.artifact-comment-actions > button:disabled,
+.artifact-comment-resolve:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.artifact-comment-resolve {
+  align-self: flex-start;
+}
+.artifact-comment-resolve > svg {
+  width: 13px;
+  height: 13px;
+}
+
+@media (max-width: 1023px), (pointer: coarse) {
+  .artifact-comments-toggle {
+    min-width: 44px;
+  }
+  .artifact-comment-actions > button,
+  .artifact-comment-resolve {
+    height: 44px;
+    padding: 0 14px;
+  }
+  .artifact-comment-quote {
+    min-height: 44px;
+  }
+}
+
+/* The space below the document, which starts a paragraph at the end. */
+.artifact-append {
+  display: block;
+  width: 100%;
+  min-height: 160px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: text;
+}
+.artifact-append:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--primary) 50%, transparent);
+  outline-offset: -2px;
+  border-radius: 6px;
+}
+
+/* The `/` and `@` menu, under what was typed (or over it near the bottom):
+   the thread actions menu's popup, rows, and highlight, with the artifact
+   switcher's group headings. */
+.artifact-suggest {
+  position: absolute;
+  z-index: 20;
+  width: min(260px, 100%);
+  min-width: 0;
+  max-width: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.artifact-suggest[data-above] {
+  transform: translateY(-100%);
+}
+.artifact-suggest .artifact-suggest-option {
+  flex: none;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-suggest .artifact-suggest-option[data-highlighted] {
+  background: var(--accent);
+}
+.artifact-suggest.thread-actions-menu .artifact-suggest-option > .dx-avatar {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  font-size: 8px;
+}
+.artifact-suggest-label {
+  color: var(--foreground);
+}
+.artifact-suggest-hint {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+}
+.artifact-suggest-empty {
+  margin: 6px 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+@media (pointer: coarse) {
+  .artifact-suggest.thread-actions-menu .artifact-suggest-option {
+    height: 40px;
+    min-height: 40px;
+  }
+}
+
+/* Images: as wide as the page at most. Selected, Open and Alt text show
+   under it. */
+.artifact-prose .artifact-image {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: bottom;
+}
+.artifact-prose .artifact-image > img {
+  display: block;
+  /* Room to tap an image still loading, or one that failed. */
+  min-width: 48px;
+  min-height: 48px;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.artifact-prose .artifact-image.ProseMirror-selectednode > img {
+  outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent);
+  outline-offset: 2px;
+}
+.artifact-image-tools {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  display: none;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--popover);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+.artifact-image.ProseMirror-selectednode > .artifact-image-tools,
+.artifact-image-tools:focus-within {
+  display: inline-flex;
+}
+.artifact-image-tools > a.artifact-tool {
+  color: var(--foreground);
+  text-decoration: none;
+}
+.artifact-image-alt {
+  width: 180px;
+  height: 26px;
+  padding: 0 6px;
+  color: var(--foreground);
+  border: 1px solid var(--outline);
+  border-radius: 4px;
+  background: var(--background);
+  font: inherit;
+  font-size: 12px;
+}
+
+/* An image on its way: its progress, or why it failed with Retry and
+   Remove. */
+.artifact-image-upload {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin: 6px 0;
+  padding: 10px 12px;
+  color: var(--muted-foreground);
+  border: 1px dashed var(--outline);
+  border-radius: 8px;
+  font-size: 12px;
+  user-select: none;
+}
+span.artifact-image-upload {
+  display: inline-flex;
+}
+.artifact-image-upload[data-state="failed"] {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--destructive) 60%, transparent);
+}
+.artifact-image-upload-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.artifact-image-upload-bar {
+  position: relative;
+  flex: 1 0 100%;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.artifact-image-upload-bar::after {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--share, 0%);
+  content: "";
+  border-radius: inherit;
+  background: var(--primary);
+  transition: width 120ms linear;
+}
+.artifact-image-upload-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+/* Dragging a block by its grip: where it will land. */
+.artifact-grip {
+  cursor: grab;
+  touch-action: none;
+}
+.artifact-grip:active {
+  cursor: grabbing;
+}
+.artifact-drop-line {
+  position: absolute;
+  z-index: 15;
+  right: 40px;
+  left: 52px;
+  height: 3px;
+  margin-top: -1px;
+  pointer-events: none;
+  border-radius: 999px;
+  background: var(--primary);
+}
+@media (max-width: 1023px), (pointer: coarse) {
+  .artifact-drop-line {
+    right: 16px;
+    left: 48px;
+  }
+}

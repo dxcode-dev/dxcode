@@ -30,7 +30,7 @@ import { ownerRequest } from "../threads/owner-request.js";
 export interface WakeTarget {
   readonly bindings: Bindings;
   readonly ownerUserId: string;
-  readonly automation: "schedule" | "github";
+  readonly automation: "schedule" | "github" | "artifact";
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }
 

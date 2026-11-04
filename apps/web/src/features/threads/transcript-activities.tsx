@@ -1,6 +1,12 @@
 import { ChevronRight, FileSymlink, Sparkles } from "lucide-react";
 import * as React from "react";
 import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
+import { ArtifactToolCard } from "./artifact-tool-card.js";
+import { ArtifactToolLabel } from "./artifact-tool-label.js";
+import {
+  ARTIFACT_TOOL_NAME,
+  isArtifactCardPart,
+} from "./artifact-tool-part.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
   parseShellResult,
@@ -201,6 +207,8 @@ function ToolLabel({
   const failed =
     (part.state === "output-error" && !stopped(part)) ||
     (parseShellResult(textualOutputFor(part) ?? "").exitCode ?? 0) !== 0;
+  if (part.toolName === ARTIFACT_TOOL_NAME)
+    return <ArtifactToolLabel part={part} />;
   if (category === "explore") return <ExploreOperationLabel part={part} />;
   if (category === "thread") return <ThreadToolLabel part={part} />;
   if (category === "command") {
@@ -515,6 +523,7 @@ function ToolPartRow({
     return (
       <SkillActivationRow activation={skillActivation(part)} part={part} />
     );
+  if (isArtifactCardPart(part)) return <ArtifactToolCard part={part} />;
   return <GenericToolPartRow category={category} part={part} />;
 }
 
@@ -644,6 +653,8 @@ export function TranscriptActivityList({
             view={activity.view}
             renderStep={renderSubagentStep}
           />
+        ) : activity.kind === "artifact" ? (
+          <ArtifactToolCard key={activity.row.id} part={activity.part} />
         ) : activity.kind === "skill" ? (
           <SkillActivationRow
             activation={activity.activation}

@@ -14,7 +14,7 @@ import { SqlClient } from "effect/sql/SqlClient";
 
 const PersonalDefaultsRow = Schema.Struct({
   user_id: Schema.String,
-  ship_action: Schema.NullOr(Schema.String),
+  ship_behavior: Schema.NullOr(Schema.String),
   commit_author_preference: Schema.NullOr(Schema.String),
   signing_preference: Schema.NullOr(Schema.String),
   runner_profile_id: Schema.NullOr(Schema.String),
@@ -25,7 +25,7 @@ const PersonalDefaultsRow = Schema.Struct({
 
 const WorkspaceDefaultsRow = Schema.Struct({
   workspace_id: Schema.String,
-  ship_action: Schema.NullOr(Schema.String),
+  ship_behavior: Schema.NullOr(Schema.String),
   commit_author_preference: Schema.NullOr(Schema.String),
   signing_preference: Schema.NullOr(Schema.String),
   runner_profile_id: Schema.NullOr(Schema.String),
@@ -55,7 +55,7 @@ const decodePersonal = (row: typeof PersonalDefaultsRow.Type) =>
   Schema.decodeUnknownEffect(PersonalProjectDefaults)({
     userId: row.user_id,
     overrides: {
-      shipAction: row.ship_action,
+      shipAction: row.ship_behavior,
       commitAuthor: row.commit_author_preference,
       signingPreference: row.signing_preference,
       runnerProfileId: row.runner_profile_id,
@@ -78,7 +78,7 @@ const decodeWorkspace = Effect.fn("decodeWorkspaceProjectDefaults")(function* (
   return yield* Schema.decodeUnknownEffect(WorkspaceProjectDefaults)({
     workspaceId: row.workspace_id,
     overrides: {
-      shipAction: row.ship_action,
+      shipAction: row.ship_behavior,
       commitAuthor: row.commit_author_preference,
       signingPreference: row.signing_preference,
       runnerProfileId: row.runner_profile_id,
@@ -106,7 +106,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
     const getPersonal = Effect.fn("ProjectDefaultsRepository.getPersonal")(
       function* (userId: UserId) {
         const rows = yield* sql`
-          SELECT user_id, ship_action, commit_author_preference,
+          SELECT user_id, ship_behavior, commit_author_preference,
             signing_preference, runner_profile_id, dx_co_author, revision,
             updated_at
           FROM personal_project_defaults
@@ -134,7 +134,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
     const getWorkspace = Effect.fn("ProjectDefaultsRepository.getWorkspace")(
       function* (workspaceId: WorkspaceId) {
         const rows = yield* sql`
-          SELECT workspace_id, ship_action, commit_author_preference,
+          SELECT workspace_id, ship_behavior, commit_author_preference,
             signing_preference, runner_profile_id, dx_co_author,
             allow_member_project_creation, allow_public_code_access,
             allowed_runner_profile_ids, revision, updated_at
@@ -174,7 +174,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
           );
           const rows = yield* sql`
             INSERT INTO personal_project_defaults (
-              user_id, ship_action, commit_author_preference,
+              user_id, ship_behavior, commit_author_preference,
               signing_preference, runner_profile_id, dx_co_author, revision,
             updated_at
             )
@@ -188,7 +188,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
                 WHERE user_id = ${userId} AND revision = ${expectedRevision}
               )
             ON CONFLICT(user_id) DO UPDATE SET
-              ship_action = excluded.ship_action,
+              ship_behavior = excluded.ship_behavior,
               commit_author_preference = excluded.commit_author_preference,
               signing_preference = excluded.signing_preference,
               runner_profile_id = excluded.runner_profile_id,
@@ -196,7 +196,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
               revision = personal_project_defaults.revision + 1,
               updated_at = excluded.updated_at
             WHERE personal_project_defaults.revision = ${expectedRevision}
-            RETURNING user_id, ship_action, commit_author_preference,
+            RETURNING user_id, ship_behavior, commit_author_preference,
               signing_preference, runner_profile_id, dx_co_author, revision,
             updated_at
           `.pipe(
@@ -227,7 +227,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
                 )(policy.allowedRunnerProfileIds);
           const rows = yield* sql`
             INSERT INTO workspace_project_defaults (
-              workspace_id, ship_action, commit_author_preference,
+              workspace_id, ship_behavior, commit_author_preference,
               signing_preference, runner_profile_id, dx_co_author,
               allow_member_project_creation, allow_public_code_access,
               allowed_runner_profile_ids, revision, updated_at
@@ -246,7 +246,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
                   AND revision = ${expectedRevision}
               )
             ON CONFLICT(workspace_id) DO UPDATE SET
-              ship_action = excluded.ship_action,
+              ship_behavior = excluded.ship_behavior,
               commit_author_preference = excluded.commit_author_preference,
               signing_preference = excluded.signing_preference,
               runner_profile_id = excluded.runner_profile_id,
@@ -257,7 +257,7 @@ export const ProjectDefaultsRepositoryD1 = Layer.effect(
               revision = workspace_project_defaults.revision + 1,
               updated_at = excluded.updated_at
             WHERE workspace_project_defaults.revision = ${expectedRevision}
-            RETURNING workspace_id, ship_action, commit_author_preference,
+            RETURNING workspace_id, ship_behavior, commit_author_preference,
               signing_preference, runner_profile_id, dx_co_author,
               allow_member_project_creation, allow_public_code_access,
               allowed_runner_profile_ids, revision, updated_at

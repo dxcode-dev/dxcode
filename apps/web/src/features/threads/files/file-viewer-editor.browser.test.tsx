@@ -105,6 +105,7 @@ const click = async (container: Element, name: string) => {
 };
 
 const mountViewer = async ({
+  autosave = false,
   initial = file("A", version("a")),
   onDirtyChange = vi.fn(),
   onPreserveLocal = vi.fn(async () => initial),
@@ -120,6 +121,7 @@ const mountViewer = async ({
     content: string;
     expectedVersion: ThreadFileVersion;
   }) => Promise<{ contentVersion: ThreadFileVersion }>;
+  autosave?: boolean;
 } = {}) => {
   const container = document.body.appendChild(document.createElement("div"));
   const root = createRoot(container);
@@ -127,6 +129,7 @@ const mountViewer = async ({
     await React.act(() =>
       root.render(
         <ThreadFileViewer
+          autosave={autosave}
           conflict={false}
           file={currentFile}
           key={`${currentFile.path}:${generation}`}
@@ -148,6 +151,66 @@ const mountViewer = async ({
   await render();
   return { container, onDirtyChange, render, root };
 };
+
+describe("Autosave Files", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("saves the latest edit 5 seconds after typing stops", async () => {
+    vi.useFakeTimers();
+    const onSave = vi
+      .fn()
+      .mockResolvedValueOnce({ contentVersion: version("c") })
+      .mockResolvedValue({ contentVersion: version("d") });
+    const mounted = await mountViewer({ autosave: true, onSave });
+    const editor = editorIn(mounted.container);
+
+    await input(editor, "B");
+    await React.act(() => vi.advanceTimersByTimeAsync(4_000));
+    await input(editor, "C");
+    await React.act(() => vi.advanceTimersByTimeAsync(4_999));
+    expect(onSave).not.toHaveBeenCalled();
+    await React.act(() => vi.advanceTimersByTimeAsync(1));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenLastCalledWith({
+      path,
+      content: "C",
+      expectedVersion: version("a"),
+    });
+    await React.act(() => vi.advanceTimersByTimeAsync(0));
+    expect(mounted.container.textContent).not.toContain("Unsaved changes");
+
+    // The next pause saves against the version the first save returned.
+    await input(editor, "D");
+    await React.act(() => vi.advanceTimersByTimeAsync(5_000));
+    expect(onSave).toHaveBeenLastCalledWith({
+      path,
+      content: "D",
+      expectedVersion: version("c"),
+    });
+  });
+
+  it("keeps edits as a draft until Save when autosave is off", async () => {
+    vi.useFakeTimers();
+    const onSave = vi.fn(async () => ({ contentVersion: version("b") }));
+    const mounted = await mountViewer({ onSave });
+    const editor = editorIn(mounted.container);
+
+    await input(editor, "B");
+    await React.act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(onSave).not.toHaveBeenCalled();
+    expect(mounted.container.textContent).toContain("Unsaved changes");
+  });
+
+  it("does not save a pending edit after the tab closes", async () => {
+    vi.useFakeTimers();
+    const onSave = vi.fn(async () => ({ contentVersion: version("b") }));
+    const mounted = await mountViewer({ autosave: true, onSave });
+    await input(editorIn(mounted.container), "B");
+    await React.act(() => mounted.root.unmount());
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(onSave).not.toHaveBeenCalled();
+  });
+});
 
 describe("Thread file viewer save lifecycle", () => {
   it("keeps C dirty when save B resolves after C is typed", async () => {

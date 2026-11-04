@@ -1,4 +1,4 @@
-import { ThreadId } from "@dx/domain";
+import { ProjectShipAction, ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
@@ -200,6 +200,26 @@ export const PushThreadChangesResponseSchema = successResponse(
     sha: Schema.optional(ThreadChangesCommitSha),
   }),
 );
+
+/**
+ * What the Changes pane's main action sends: the project's Ship Behavior,
+ * read when the pane asks, so a changed setting reaches open Threads. The
+ * prompt is sent as the person's message after they confirm.
+ */
+export const ThreadShipPlanSchema = Schema.Struct({
+  action: ProjectShipAction,
+  /** The branch the Thread's checkout started from, when it has one. */
+  baseBranch: Schema.optional(Schema.String),
+  prompt: Schema.String,
+});
+
+export type ThreadShipPlan = typeof ThreadShipPlanSchema.Type;
+
+export const GetThreadShipPlanResponseSchema =
+  successResponse(ThreadShipPlanSchema);
+
+export type GetThreadShipPlanResponse =
+  typeof GetThreadShipPlanResponseSchema.Encoded;
 
 export const ThreadChangesInvalidRequestResponseSchema = errorResponse(
   "THREAD_CHANGES_INVALID_REQUEST",

@@ -1,0 +1,153 @@
+/* The Artifacts view shell: header, switcher, empty and loading states. The
+   editor's own styles load with its chunk (editor/artifact-editor.css). */
+.artifact-view {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* Matches the file toolbar: 36px, one row, a muted 12px label. */
+.artifact-header {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+.artifact-switcher {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 6px;
+  min-width: 0;
+  max-width: max-content;
+  height: 26px;
+  padding: 4px 8px;
+  color: var(--foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.artifact-switcher:hover,
+.artifact-switcher[data-popup-open] {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.artifact-switcher > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-switcher > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.artifact-switcher-menu {
+  max-height: min(420px, calc(100vh - 120px));
+  overflow-y: auto;
+}
+.artifact-switcher-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.artifact-folder-label {
+  padding: 6px 8px 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 600;
+}
+.artifact-switcher-menu .thread-menu-item[data-folder] {
+  padding-left: 18px;
+}
+
+.artifacts-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  padding: 18px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-align: center;
+}
+
+.artifacts-empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-align: center;
+}
+.artifacts-empty > svg {
+  width: 22px;
+  height: 22px;
+}
+.artifacts-empty > p {
+  max-width: 320px;
+  margin: 0;
+  line-height: 20px;
+}
+.artifacts-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  color: var(--primary-foreground);
+  border: 0;
+  border-radius: 6px;
+  background: var(--primary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+.artifacts-new:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.artifacts-new:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.artifacts-new > svg {
+  width: 14px;
+  height: 14px;
+}
+.artifacts-error {
+  color: var(--warning);
+}
+
+@media (max-width: 1023px), (pointer: coarse) {
+  .artifact-header {
+    min-height: 44px;
+  }
+  .artifact-switcher {
+    height: 36px;
+  }
+  .artifacts-new {
+    height: 44px;
+  }
+}

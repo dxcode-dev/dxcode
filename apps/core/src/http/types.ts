@@ -155,7 +155,7 @@ export interface Variables {
    * Set only in-process by the automation sweep: the schedule or GitHub
    * subscription that delivers this request's message.
    */
-  readonly messageAutomation?: "schedule" | "github";
+  readonly messageAutomation?: "schedule" | "github" | "artifact";
 }
 
 export interface AppEnv {

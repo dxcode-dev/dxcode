@@ -39,7 +39,6 @@ const authority: RuntimeSourceAuthority = {
   installationEpoch: 1,
   policyRevision: 0,
   defaultBranch: "main",
-  shipAction: "ship",
   repositorySelection: "selected",
   fingerprint: "stable-authority",
 };

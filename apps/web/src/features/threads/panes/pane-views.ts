@@ -1,5 +1,6 @@
 import {
   AppWindow,
+  FileText,
   FolderTree,
   GitCompareArrows,
   type LucideIcon,
@@ -34,6 +35,11 @@ export const PANE_VIEWS: Readonly<
     command: "thread.open-terminal",
   },
   desktop: { label: "Desktop", Icon: Monitor, command: "thread.open-desktop" },
+  artifacts: {
+    label: "Artifacts",
+    Icon: FileText,
+    command: "thread.open-artifacts",
+  },
 };
 
 /** A tab's content: a node, or a function of whether the tab is shown. */

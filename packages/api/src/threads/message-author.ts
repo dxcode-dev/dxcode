@@ -44,13 +44,14 @@ export interface MessageAuthorTag {
   readonly messageId?: string;
   /**
    * What delivered this message on the owner's behalf after a turn ended:
-   * the Thread's schedule, or a GitHub subscription. Only the server sets it.
+   * the Thread's schedule, a GitHub subscription, or a person ticking or
+   * answering an ask in one of its artifacts. Only the server sets it.
    */
   readonly automation?: MessageAutomation;
 }
 
 /** Senders that wake a Thread on the owner's behalf. */
-export type MessageAutomation = "schedule" | "github";
+export type MessageAutomation = "schedule" | "github" | "artifact";
 
 /** Tagging the agent sends a message to it, even beside member tags. */
 export const AGENT_MENTION = "dx";
@@ -169,7 +170,8 @@ export const parseMessageAuthor = (
       ? { messageId: fields.get("message_id") }
       : {}),
     ...(fields.get("automation") === "schedule" ||
-    fields.get("automation") === "github"
+    fields.get("automation") === "github" ||
+    fields.get("automation") === "artifact"
       ? { automation: fields.get("automation") as MessageAutomation }
       : {}),
     text: rest,

@@ -869,6 +869,7 @@ queryClient.setQueryData(composerDefaultsQueryOptions(userId).queryKey, {
   mode: null,
   model: null,
   runnerProfileId: null,
+  autosaveFiles: false,
 });
 queryClient.setQueryData(personalAccountQueryOptions(userId).queryKey, {
   displayName: "Perf User",

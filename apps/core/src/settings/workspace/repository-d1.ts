@@ -124,6 +124,17 @@ export const WorkspaceRepositoryD1 = (db: D1Database) =>
 
       return WorkspaceRepository.of({
         findByUser,
+        hasShortNameAlias: (workspaceId, shortName) =>
+          Effect.tryPromise({
+            try: () =>
+              db
+                .prepare(
+                  "SELECT 1 AS found FROM workspace_short_name_alias WHERE workspace_id = ? AND short_name = ?",
+                )
+                .bind(workspaceId, shortName)
+                .first(),
+            catch: unavailable("settings.workspace.hasShortNameAlias"),
+          }).pipe(Effect.map((row) => row !== null)),
         createOwnedByUser: Effect.fn("WorkspaceRepository.createOwnedByUser")(
           function* (userId, input) {
             if (Option.isSome(yield* findByUser(userId))) {

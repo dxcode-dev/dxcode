@@ -29,6 +29,7 @@ import {
   SettingsRow,
   SettingsSelect,
   type SettingsSelectOption,
+  SettingsToggle,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
@@ -57,7 +58,7 @@ export function ComposerSettings({ onDirtyChange }: SettingsSectionProps) {
     <div className="composer-settings">
       <SettingsHeading
         title="Composer"
-        description="What a New Thread starts with and how dictation works."
+        description="What a New Thread starts with, how dictation works, and how file edits save."
       />
       {defaults.isError ? (
         <SettingsBackgroundError onRetry={() => void defaults.refetch()}>
@@ -93,6 +94,27 @@ export function ComposerSettings({ onDirtyChange }: SettingsSectionProps) {
         description="Names, technical terms, and other words that dictation should recognize. Enter one term per line, or separate terms with commas. Your workspace's terms are used after yours."
         onDirtyChange={onDirtyChange}
       />
+      {defaults.data === undefined ? null : (
+        <SettingsCard>
+          <SettingsRow
+            title="Autosave Files"
+            description="Write edits in file tabs to disk 5 seconds after you stop typing. When off, edits stay a draft until you press Ctrl+S."
+            control={
+              <SettingsToggle
+                label="Autosave Files"
+                checked={defaults.data.autosaveFiles}
+                pending={
+                  update.isPending &&
+                  update.variables?.autosaveFiles !== undefined
+                }
+                onCheckedChange={(autosaveFiles) =>
+                  update.mutate({ autosaveFiles })
+                }
+              />
+            }
+          />
+        </SettingsCard>
+      )}
     </div>
   );
 }

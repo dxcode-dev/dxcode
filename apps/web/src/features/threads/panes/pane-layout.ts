@@ -18,13 +18,15 @@ export type PaneViewKind =
   | "changes"
   | "portal"
   | "terminal"
-  | "desktop";
+  | "desktop"
+  | "artifacts";
 export const PANE_VIEW_KINDS: ReadonlyArray<PaneViewKind> = [
   "files",
   "changes",
   "portal",
   "terminal",
   "desktop",
+  "artifacts",
 ];
 
 export type PaneSide = "left" | "right" | "top" | "bottom";
@@ -116,6 +118,8 @@ export const tabLabel = (tab: ThreadPaneTab): string => {
       return "Portal";
     case "desktop":
       return "Desktop";
+    case "artifacts":
+      return "Artifacts";
     case "terminal":
       return tab.ordinal === 1 ? "Terminal" : `Terminal ${tab.ordinal}`;
     case "file":

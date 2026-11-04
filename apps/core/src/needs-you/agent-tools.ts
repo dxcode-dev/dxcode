@@ -2,6 +2,7 @@ import type { UserId } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import { publishUserInvalidation } from "../realtime/publication.js";
+import { readArtifact } from "../thread-artifacts/store.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
 import { readCallingThread } from "../threads/calling-thread.js";
 import { requestAttention } from "./repository.js";
@@ -48,14 +49,35 @@ export const createNeedsYouTools = (
           ),
         ),
       ),
+      artifact_id: v.optional(
+        v.pipe(
+          v.string(),
+          v.regex(/^art_[0-9a-f]{32}$/),
+          v.description(
+            "Optional: the artifact in this Thread holding the ask as an unchecked checklist item that mentions the owner, such as `- [ ] @[Name](user:USER_ID) Approve merging #1240`. The owner can tick it from their Needs-you page, which wakes this Thread.",
+          ),
+        ),
+      ),
     }),
     run: async ({ data }) => {
       const context = getContext();
       const owner = await readCallingThread(context.db, callingThreadId);
+      if (
+        data.artifact_id !== undefined &&
+        (await readArtifact(
+          context.bindings,
+          callingThreadId,
+          data.artifact_id,
+        )) === undefined
+      )
+        throw new Error(
+          `Artifact ${data.artifact_id} is not in this Thread. List this Thread's artifacts with the artifact tool.`,
+        );
       await requestAttention(context.db, callingThreadId, {
         kind: data.kind,
         summary: data.summary,
         url: data.url,
+        artifactId: data.artifact_id,
         requestedAt: new Date().toISOString(),
       });
       // A hint only: publication failures are logged, never thrown.

@@ -591,7 +591,7 @@ export const readBitbucketThreadAuthority = async (
 ) => {
   const row = await db
     .prepare(`SELECT t.project_id, s.repository_full_name, s.default_branch, s.binding_revision,
-    a.owner_grant_id, a.provider_repository_id, a.provider_workspace_id, a.authorization_epoch, p.ship_action, c.provider_account_id
+    a.owner_grant_id, a.provider_repository_id, a.provider_workspace_id, a.authorization_epoch, c.provider_account_id
     FROM threads t JOIN projects p ON p.id = t.project_id JOIN thread_source_snapshot s ON s.thread_id = t.id
     JOIN thread_source_authority a ON a.thread_id = t.id JOIN project_repository r ON r.project_id = p.id
     JOIN project_source_authority b ON b.project_id = p.id JOIN bitbucket_connection c ON c.id = a.owner_grant_id
@@ -625,7 +625,6 @@ export const readBitbucketThreadAuthority = async (
       provider_repository_id: string;
       provider_workspace_id: string;
       authorization_epoch: number;
-      ship_action: "ship" | "commit";
       provider_account_id: string;
     }>();
   if (!row) throw sourceAccessDenied("stale-snapshot", "rebind");
@@ -640,7 +639,6 @@ export const readBitbucketThreadAuthority = async (
     providerRepositoryId: row.provider_repository_id,
     providerWorkspaceId: row.provider_workspace_id,
     authorizationEpoch: row.authorization_epoch,
-    shipAction: row.ship_action,
     providerAccountId: row.provider_account_id,
   };
 };

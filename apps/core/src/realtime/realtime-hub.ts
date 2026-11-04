@@ -114,6 +114,7 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
       "changes.invalidated",
       "memory.invalidated",
       "disk.invalidated",
+      "artifacts.invalidated",
       "workspace.status",
     ].includes(String(value.type)) ||
     Option.isNone(threadId) ||

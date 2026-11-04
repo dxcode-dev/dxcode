@@ -420,12 +420,15 @@ function SandboxTextView({
 /** Render one open center tab by where the file lives and what it contains. */
 export function CenterFilePane({
   active,
+  autosave = false,
   file,
   threadId,
   onDirtyChange,
   onShowInFiles,
 }: {
   readonly active: boolean;
+  /** Autosave Files: write edits once typing pauses. */
+  readonly autosave?: boolean;
   readonly file: CenterFileTab;
   readonly threadId: ThreadId;
   readonly onDirtyChange: (dirty: boolean) => void;
@@ -458,6 +461,7 @@ export function CenterFilePane({
   return (
     <ThreadFilePane
       active={active}
+      autosave={autosave}
       path={file.path}
       threadId={threadId}
       worktree={file.worktree}

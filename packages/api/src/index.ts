@@ -86,6 +86,7 @@ export * from "./source-control/errors.js";
 export * from "./source-control/github.js";
 export * from "./thread-storage/index.js";
 export * from "./threads/archive-thread.js";
+export * from "./threads/artifacts.js";
 export * from "./threads/automations.js";
 export * from "./threads/changes.js";
 export * from "./threads/create-thread.js";

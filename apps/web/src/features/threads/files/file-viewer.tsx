@@ -35,6 +35,7 @@ import type { FileEditorHandle } from "./file-editor.js";
 import { ThreadFileEditor } from "./file-editor.js";
 import { FilePreview } from "./file-preview.js";
 import { filePreviewKind } from "./file-preview-model.js";
+import { useAutosave } from "./use-autosave.js";
 
 type AcceptedEdit = {
   readonly content: string;
@@ -62,6 +63,7 @@ const readonlyMessage = (
 };
 
 export const ThreadFileViewer = ({
+  autosave = false,
   file,
   saving,
   conflict,
@@ -77,6 +79,8 @@ export const ThreadFileViewer = ({
   revealSequence,
   references,
 }: {
+  /** Write edits to disk 5 seconds after typing pauses. */
+  readonly autosave?: boolean;
   readonly file: ThreadFileData;
   /** Where the file lives, so a rendered document's references resolve. */
   readonly references?: {
@@ -152,26 +156,6 @@ export const ThreadFileViewer = ({
   // A highlighted range is only visible in source; show it there by default.
   const viewMode =
     mode ?? (previewable && revealLines === undefined ? "preview" : "source");
-  const change = (next: string) => {
-    const currentAccepted =
-      accepted ?? (file.editable ? acceptedEdit(file) : null);
-    if (currentAccepted === null) return;
-    liveContent.current = next;
-    const nextDirty = next !== currentAccepted.content;
-    if (
-      !nextDirty &&
-      !inFlight.current &&
-      file.editable &&
-      file.contentVersion === currentAccepted.contentVersion
-    ) {
-      setAccepted(null);
-      setContent("");
-    } else {
-      setAccepted(currentAccepted);
-      setContent(next);
-    }
-    onDirtyChange(nextDirty);
-  };
   const save = () => {
     if (
       accepted === null ||
@@ -204,6 +188,29 @@ export const ThreadFileViewer = ({
         },
       },
     );
+  };
+  const autosaveTimer = useAutosave(save, () => saving || inFlight.current);
+  const change = (next: string) => {
+    const currentAccepted =
+      accepted ?? (file.editable ? acceptedEdit(file) : null);
+    if (currentAccepted === null) return;
+    liveContent.current = next;
+    const nextDirty = next !== currentAccepted.content;
+    if (
+      !nextDirty &&
+      !inFlight.current &&
+      file.editable &&
+      file.contentVersion === currentAccepted.contentVersion
+    ) {
+      setAccepted(null);
+      setContent("");
+    } else {
+      setAccepted(currentAccepted);
+      setContent(next);
+    }
+    onDirtyChange(nextDirty);
+    if (autosave && nextDirty) autosaveTimer.schedule();
+    else autosaveTimer.cancel();
   };
   const preserveLocal = () => {
     if (saving || inFlight.current) return;

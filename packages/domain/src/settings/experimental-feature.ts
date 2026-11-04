@@ -280,6 +280,30 @@ export const productionExperimentalFeatureRegistry =
         },
       },
       {
+        id: "artifact-asks",
+        title: "Asks in artifacts",
+        description:
+          "Lists unchecked artifact checklist items that mention you on the Needs-you page; ticking one there wakes its Thread.",
+        owner: { team: "dx/artifacts" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "interface",
+        risk: "low",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-01-31",
+        lifecyclePlan: {
+          migration:
+            "Asks stay indexed in thread_artifact_ask; turning the flag off hides them from the Needs-you page.",
+          graduation:
+            "Drop the flag check from the asks routes and the Needs-you page, and retire thread_attention_request rows.",
+          removal:
+            "Delete the asks routes, the page's asks list, and the thread_artifact_ask table.",
+        },
+      },
+      {
         id: "orb-restart",
         title: "Restart Orb",
         description:

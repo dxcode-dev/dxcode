@@ -15,6 +15,7 @@ describe("settings navigation", () => {
   it("shows only the settings features currently exposed in each menu", () => {
     expect(menu("personal")).toEqual([
       [null, ["Account", "Integrations & MCP", "Experimental Features"]],
+      ["Usage", ["Model", "Plugin usage"]],
       ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
       ["Library", ["Secrets & Env Vars", "Skills", "Plugins"]],
       ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],
@@ -26,7 +27,10 @@ describe("settings navigation", () => {
     ]);
 
     expect(menu("workspace", "admin")).toEqual([
-      [null, ["Workspace", "Members", "Integrations & MCP"]],
+      [
+        null,
+        ["Workspace", "Members", "Integrations & MCP", "Usage", "Plugin usage"],
+      ],
       ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
       [
         "Library",

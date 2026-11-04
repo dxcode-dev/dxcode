@@ -1,0 +1,53 @@
+/* An artifact full screen over the Thread (a phone). */
+.artifact-sheet {
+  position: fixed;
+  inset: 0;
+  /* Under the app's dialogs (110 and up), so comments open over it. */
+  z-index: 105;
+  display: flex;
+  flex-direction: column;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  background: var(--surface);
+  outline: none;
+}
+.artifact-sheet-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  min-height: 48px;
+  padding: 0 4px 0 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.artifact-sheet-title {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+.artifact-sheet-close {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 44px;
+  height: 44px;
+  padding: 0 12px;
+  color: var(--foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.artifact-sheet-close > svg {
+  width: 18px;
+  height: 18px;
+}
+.artifact-sheet-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}

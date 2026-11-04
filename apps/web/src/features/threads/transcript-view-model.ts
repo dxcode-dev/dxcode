@@ -14,6 +14,7 @@ import type {
   FlueConversationPart,
   FlueConversationSettlement,
 } from "@flue/react";
+import { isArtifactCardPart } from "./artifact-tool-part.js";
 import { presentableToolPart } from "./claude-code-tools.js";
 import { isSkillActivationTool } from "./skill-activation.js";
 import { terminalToolActivityRowIds } from "./transcript-activity-projection.js";
@@ -97,7 +98,10 @@ export interface TranscriptTurn {
     readonly kind: "elapsed" | "stopped" | "show";
     readonly collapsedRowIds: ReadonlyArray<TranscriptRowId>;
     readonly retainedRowIds: ReadonlyArray<TranscriptRowId>;
-    /** Skill activations, shown above the disclosure in every outcome. */
+    /**
+     * Skill activations and artifact cards, shown above the disclosure in
+     * every outcome.
+     */
     readonly pinnedRowIds: ReadonlyArray<TranscriptRowId>;
   };
 }
@@ -416,7 +420,8 @@ const deriveTurn = (id: TranscriptTurnId, inputs: TurnInputs): DerivedTurn => {
       ? []
       : terminalToolActivityRowIds(rows);
   const pinnedRowIds = toolRows.flatMap((row) =>
-    row.part.type === "dynamic-tool" && isSkillActivationTool(row.part.toolName)
+    row.part.type === "dynamic-tool" &&
+    (isSkillActivationTool(row.part.toolName) || isArtifactCardPart(row.part))
       ? [row.id]
       : [],
   );

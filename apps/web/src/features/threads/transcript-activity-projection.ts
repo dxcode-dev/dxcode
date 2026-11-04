@@ -1,4 +1,8 @@
 import type { FlueConversationPart } from "@flue/react";
+import {
+  ARTIFACT_TOOL_NAME,
+  isArtifactCardPart,
+} from "./artifact-tool-part.js";
 import { shellCommandOperations } from "./shell-command-operation.js";
 import {
   isSkillActivationTool,
@@ -60,6 +64,12 @@ export type TranscriptActivity =
       readonly row: WorkRow;
       readonly view: SubagentView;
     }
+  /** So is each artifact the agent creates, updates, or asks to delete. */
+  | {
+      readonly kind: "artifact";
+      readonly row: WorkRow;
+      readonly part: ToolPart;
+    }
   /** So is each skill activation, named and with its outcome. */
   | {
       readonly kind: "skill";
@@ -92,6 +102,7 @@ export const categoryForTool = (
   const name = toolName.toLowerCase();
   if (THREAD_TOOL_NAMES.has(name)) return "thread";
   if (name === "code_exec") return "generic";
+  if (name === ARTIFACT_TOOL_NAME) return "explore";
   if (
     name === "web_search" ||
     name === "read_web_page" ||
@@ -175,6 +186,10 @@ export const projectTranscriptActivities = (
     const view = part === undefined ? undefined : subagentView(part);
     if (view !== undefined) {
       activities.push({ kind: "subagent", row: work, view });
+      continue;
+    }
+    if (part !== undefined && isArtifactCardPart(part)) {
+      activities.push({ kind: "artifact", row: work, part });
       continue;
     }
     if (part !== undefined && isSkillActivationTool(part.toolName)) {

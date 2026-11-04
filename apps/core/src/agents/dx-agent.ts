@@ -68,6 +68,11 @@ import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
 import type { McpAgentConnectionData } from "../settings/mcp-servers/execution.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
+import {
+  ARTIFACTS_EDITED_SIGNAL,
+  artifactsEditedByPeopleNote,
+  createArtifactTools,
+} from "../thread-artifacts/agent-tools.js";
 import { createThreadStorageTools } from "../thread-storage/agent-tools.js";
 import { createThreadTools } from "../threads/agent-tools.js";
 import { readCallingThread } from "../threads/calling-thread.js";
@@ -160,6 +165,13 @@ const dxTools = (
   for (const tool of createThreadStorageTools(
     threadId,
     agentThreadToolsContext,
+  ))
+    tools.push(withToolFailureMessage(tool));
+  // artifact: documents people and the agent edit together.
+  for (const tool of createArtifactTools(
+    threadId,
+    agentThreadToolsContext,
+    promptData?.plugins?.submissionId,
   ))
     tools.push(withToolFailureMessage(tool));
   // Schedules, GitHub subscriptions, and notify_user: work after the turn.
@@ -419,6 +431,19 @@ const usePluginLifecycle = (
         kind: "signal",
         type: WORKSPACE_DISK_SIGNAL,
         body: note,
+      });
+    // People's artifact edits since the agent's last save, so it reads them
+    // before writing. Best effort: a failed read never fails the turn.
+    const edited = await (async () =>
+      artifactsEditedByPeopleNote(
+        agentThreadToolsContext().db,
+        threadId,
+      ))().catch(() => undefined);
+    if (edited !== undefined)
+      context.append({
+        kind: "signal",
+        type: ARTIFACTS_EDITED_SIGNAL,
+        body: edited,
       });
     const unsavedStop = takeUnsavedStop(threadId);
     if (unsavedStop !== undefined)

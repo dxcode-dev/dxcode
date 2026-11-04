@@ -22,18 +22,21 @@ export const requestAttention = (
     readonly kind: Exclude<NeedsYouKind, "failed">;
     readonly summary: string;
     readonly url?: string | undefined;
+    readonly artifactId?: string | undefined;
     readonly requestedAt: string;
   },
 ) =>
   db
     .prepare(
       `INSERT INTO thread_attention_request (
-         thread_id, owner_user_id, kind, summary, url, requested_at
+         thread_id, owner_user_id, kind, summary, url, requested_at,
+         artifact_id
        )
-       SELECT id, owner_user_id, ?2, ?3, ?4, ?5 FROM threads WHERE id = ?1
+       SELECT id, owner_user_id, ?2, ?3, ?4, ?5, ?6 FROM threads WHERE id = ?1
        ON CONFLICT (thread_id) DO UPDATE SET
          kind = excluded.kind, summary = excluded.summary,
-         url = excluded.url, requested_at = excluded.requested_at`,
+         url = excluded.url, requested_at = excluded.requested_at,
+         artifact_id = excluded.artifact_id`,
     )
     .bind(
       threadId,
@@ -41,6 +44,7 @@ export const requestAttention = (
       request.summary,
       request.url ?? null,
       request.requestedAt,
+      request.artifactId ?? null,
     )
     .run();
 
@@ -56,7 +60,8 @@ export const listNeedsYou = async (
   const rows = await db
     .prepare(
       `SELECT request.thread_id, thread.title, project.name AS project_name,
-              request.kind, request.summary, request.url, request.requested_at
+              request.kind, request.summary, request.url, request.requested_at,
+              request.artifact_id
          FROM thread_attention_request AS request
          -- The person's asks, newest first from their index; CROSS JOIN
          -- keeps the planner from walking every Thread they own instead.
@@ -79,6 +84,7 @@ export const listNeedsYou = async (
       summary: string | null;
       url: string | null;
       requested_at: string;
+      artifact_id: string | null;
     }>();
   const links = await threadLinksOf(
     db,
@@ -96,6 +102,7 @@ export const listNeedsYou = async (
     ...(row.url === null ? {} : { url: row.url }),
     requestedAt: row.requested_at,
     ...(links.has(row.thread_id) ? { links: links.get(row.thread_id) } : {}),
+    ...(row.artifact_id === null ? {} : { artifactId: row.artifact_id }),
   }));
 };
 

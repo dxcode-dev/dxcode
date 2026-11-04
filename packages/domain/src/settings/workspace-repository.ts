@@ -15,6 +15,7 @@ import type {
   WorkspaceMembership,
   WorkspaceProfile,
   WorkspaceProfileRevision,
+  WorkspaceShortName,
 } from "./workspace.js";
 
 export interface WorkspaceRepositoryShape {
@@ -26,6 +27,14 @@ export interface WorkspaceRepositoryShape {
     | PersistenceUnavailable
     | SettingsMembershipInvariantViolation
   >;
+  /**
+   * Whether `shortName` is one of the workspace's former short names that no
+   * other workspace has taken since (#1382).
+   */
+  readonly hasShortNameAlias: (
+    workspaceId: WorkspaceId,
+    shortName: WorkspaceShortName,
+  ) => Effect.Effect<boolean, PersistenceUnavailable>;
   readonly createOwnedByUser: (
     userId: UserId,
     input: CreateWorkspaceInput,

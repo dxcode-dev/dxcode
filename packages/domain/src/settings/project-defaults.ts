@@ -7,9 +7,30 @@ import { WorkspaceId } from "./workspace.js";
 
 const Revision = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
-export const ProjectShipAction = Schema.Literals(["ship", "commit"]);
+/**
+ * A project's Ship Behavior, the main action in a Thread's Changes pane:
+ * `ship` lands the work on the base branch, `push` pushes a feature branch,
+ * and `custom` sends the project's own prompt.
+ */
+export const ProjectShipAction = Schema.Literals(["ship", "push", "custom"]);
 
 export type ProjectShipAction = typeof ProjectShipAction.Type;
+
+/** The Ship Behaviors a project default can choose; Custom Ship is #1131. */
+export const ProjectDefaultShipAction = Schema.Literals(["ship", "push"]);
+
+export type ProjectDefaultShipAction = typeof ProjectDefaultShipAction.Type;
+
+/** The longest custom Ship prompt. */
+export const MAX_SHIP_PROMPT_LENGTH = 10_000;
+
+/** A custom Ship prompt: sent as written, never blank. */
+export const ShipPrompt = Schema.String.check(
+  Schema.isMaxLength(MAX_SHIP_PROMPT_LENGTH),
+  Schema.isPattern(/\S/),
+);
+
+export type ShipPrompt = typeof ShipPrompt.Type;
 
 export const CommitAuthorPreference = Schema.Literals(["dx", "user"]);
 
@@ -53,6 +74,11 @@ export type ProjectCommitAuthor = typeof ProjectCommitAuthor.Type;
 
 export const ProjectConfiguration = Schema.Struct({
   shipAction: ProjectShipAction,
+  /**
+   * The custom Ship prompt. Custom Ship requires it; another behavior keeps
+   * it for the next time the project chooses Custom Ship.
+   */
+  shipPrompt: Schema.optional(ShipPrompt),
   commitAuthor: ProjectCommitAuthor,
   signingPreference: CommitSigningPreference,
   runnerProfileId: RunnerProfileId,
@@ -64,7 +90,7 @@ export const ProjectConfiguration = Schema.Struct({
 export type ProjectConfiguration = typeof ProjectConfiguration.Type;
 
 export const ProjectDefaultOverrides = Schema.Struct({
-  shipAction: Schema.NullOr(ProjectShipAction),
+  shipAction: Schema.NullOr(ProjectDefaultShipAction),
   commitAuthor: Schema.NullOr(CommitAuthorPreference),
   signingPreference: Schema.NullOr(CommitSigningPreference),
   runnerProfileId: Schema.NullOr(RunnerProfileId),
@@ -102,7 +128,7 @@ export type WorkspaceProjectDefaults = typeof WorkspaceProjectDefaults.Type;
 
 export const ResolvedProjectDefaults = Schema.Struct({
   shipAction: Schema.Struct({
-    value: ProjectShipAction,
+    value: ProjectDefaultShipAction,
     source: ProjectDefaultSource,
   }),
   commitAuthor: Schema.Struct({

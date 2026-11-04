@@ -62,7 +62,7 @@ export interface CommandRuntime {
   readonly addThreadImages: () => void;
   /** Opens a workspace view in the open Thread, or brings it forward. */
   readonly openThreadView: (
-    view: "files" | "changes" | "portal" | "terminal" | "desktop",
+    view: "files" | "changes" | "portal" | "terminal" | "desktop" | "artifacts",
   ) => void;
 }
 
@@ -360,6 +360,15 @@ const commandDefinitions = Object.freeze([
     scope: "thread",
     defaults: everyPlatform("Control+Shift+X"),
     execute: (runtime) => runtime.openThreadView("desktop"),
+  },
+  {
+    id: "thread.open-artifacts",
+    label: "Open Artifacts",
+    description: "Open the Artifacts view in the thread, or bring it forward.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Control+Shift+D"),
+    execute: (runtime) => runtime.openThreadView("artifacts"),
   },
   {
     id: "shortcuts.focus-search",

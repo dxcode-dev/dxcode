@@ -108,9 +108,9 @@ describe("Settings routes", routeLoading, () => {
     });
   });
 
-  // The server answers 403 for a workspace that does not exist, an old short
-  // name after a rename, and one the user is not in, so it does not reveal
-  // which workspaces exist.
+  // The server answers 403 for a workspace that does not exist, a former
+  // short name another workspace has taken, and one the user is not in, so
+  // it does not reveal which workspaces exist.
   const workspaceResponse =
     (status: number, code: string) => (request: { readonly url: string }) =>
       request.url.startsWith("/v1/settings/workspaces/")
@@ -155,6 +155,42 @@ describe("Settings routes", routeLoading, () => {
       });
     },
   );
+
+  // A member's former short name answers with the workspace's current one.
+  it.each([
+    ["/workspaces/old-ws", "/workspaces/new-ws"],
+    [
+      "/workspaces/old-ws/members?invite=1&view=all#pending",
+      "/workspaces/new-ws/members?invite=1&view=all#pending",
+    ],
+  ])("redirects the former short name %s to %s", async (path, expected) => {
+    const requested: Array<string> = [];
+    const router = await loadWorkspaceAt(path, (request) => {
+      requested.push(request.url);
+      return request.url.startsWith("/v1/settings/workspaces/")
+        ? Response.json({
+            status: "success",
+            data: {
+              id: "workspace-1",
+              displayName: "Renamed",
+              shortName: "new-ws",
+              lifecycleState: "active",
+              revision: 1,
+              role: "member",
+            },
+          })
+        : Response.json({ status: "success", data: {} });
+    });
+
+    expect(router.state.location.href).toBe(expected);
+    expect(
+      router.state.matches.every(({ status }) => status !== "notFound"),
+    ).toBe(true);
+    // The redirect reuses the profile the former name answered with.
+    expect(
+      requested.filter((url) => url.startsWith("/v1/settings/workspaces/")),
+    ).toEqual(["/v1/settings/workspaces/old-ws"]);
+  });
 
   it("leaves another load failure to the settings page's retry state", async () => {
     const router = await loadWorkspaceAt(

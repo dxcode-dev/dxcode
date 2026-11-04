@@ -75,9 +75,15 @@ export class SettingsService extends Context.Service<
               });
             }
             const workspace = yield* workspaces.findByUser(principal.userId);
+            if (Option.isNone(workspace)) {
+              return yield* new SettingsScopeForbidden({ scope: "workspace" });
+            }
+            // A former short name of the member's own workspace opens it
+            // (#1382); a name of any workspace they don't belong to does not.
+            const { id, shortName } = workspace.value.workspace;
             if (
-              Option.isNone(workspace) ||
-              workspace.value.workspace.shortName !== workspaceSlug
+              shortName !== workspaceSlug &&
+              !(yield* workspaces.hasShortNameAlias(id, workspaceSlug))
             ) {
               return yield* new SettingsScopeForbidden({ scope: "workspace" });
             }

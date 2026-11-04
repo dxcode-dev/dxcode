@@ -17,7 +17,12 @@ import {
   useFlueAgent,
 } from "@flue/react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import {
+  lazyRouteComponent,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "@tanstack/react-router";
 import { Schema } from "effect";
 import { Eye } from "lucide-react";
 import * as React from "react";
@@ -35,6 +40,7 @@ import {
   listedProject,
   projectQueryOptions,
 } from "../projects/project-queries.js";
+import { composerDefaultsQueryOptions } from "../settings/composer/composer-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { ThreadScheduleHint } from "./automations/thread-schedule-hint.js";
@@ -62,6 +68,7 @@ import {
   usePaneLayoutReader,
 } from "./panes/pane-layout-queries.js";
 import type { PaneContents } from "./panes/pane-views.js";
+import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
 import { ThreadPageLayout } from "./panes/thread-page-layout.js";
 import { ThreadPortalsPane } from "./portals/portals-pane.js";
 import {
@@ -113,6 +120,22 @@ import {
 } from "./transcript-file-link.js";
 import { useFrameCoalescedAgentSource } from "./use-frame-coalesced-agent-session.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
+
+// The Artifacts view and its editor load when the view first opens, so the
+// Thread page's first load stays the same size.
+const ArtifactsView = lazyRouteComponent(
+  () => import("../artifacts/artifacts-view.js"),
+  "ArtifactsView",
+);
+const ArtifactSheet = lazyRouteComponent(
+  () => import("../artifacts/artifact-sheet.js"),
+  "ArtifactSheet",
+);
+const loadingArtifacts = (
+  <div className="thread-files-state" role="status">
+    <span className="sr-only">Loading artifacts…</span>
+  </div>
+);
 
 const filesPath = (path: ThreadChangesPath) => {
   try {
@@ -202,6 +225,8 @@ export function ThreadWorkspace({
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const navigate = useNavigate();
+  // A card's Open on a phone shows the artifact full screen over the Thread.
+  const artifactSheet = useArtifactSheet();
   const returnTo = useLocation({ select: (location) => location.href });
   // A notification opens the Thread at a message; the URL keeps it only
   // until the transcript has scrolled there.
@@ -344,39 +369,52 @@ export function ThreadWorkspace({
       );
     return <DxLoading label="Loading thread…" variant="pane" />;
   }
+  const thread = threadQuery.data;
   return (
-    <ThreadSession
-      key={threadQuery.data.id}
-      retained={retained.entry}
-      thread={threadQuery.data}
-      project={project}
-      refreshError={
-        error === null
-          ? undefined
-          : error instanceof Error
-            ? error.message
-            : "Thread metadata could not be refreshed."
-      }
-      onRefreshRetry={retry}
-      optimisticCreation={optimisticCreation}
-      onInitialSubmissionObserved={(submissionId) =>
-        registry?.completeCreation(id, submissionId)
-      }
-      workspaceStatus={
-        workspaceStatus === "waking"
-          ? wakingExecutionEnvironmentMessage
-          : undefined
-      }
-      onOpenModelRouting={(destination) =>
-        void navigate({
-          href: destination,
-          state: settingsNavigationState(returnTo),
-        })
-      }
-      {...(focus === undefined ? {} : { focus, onFocusHandled })}
-      Terminal={Terminal}
-      Desktop={Desktop}
-    />
+    <>
+      <ThreadSession
+        key={threadQuery.data.id}
+        retained={retained.entry}
+        thread={threadQuery.data}
+        project={project}
+        refreshError={
+          error === null
+            ? undefined
+            : error instanceof Error
+              ? error.message
+              : "Thread metadata could not be refreshed."
+        }
+        onRefreshRetry={retry}
+        optimisticCreation={optimisticCreation}
+        onInitialSubmissionObserved={(submissionId) =>
+          registry?.completeCreation(id, submissionId)
+        }
+        workspaceStatus={
+          workspaceStatus === "waking"
+            ? wakingExecutionEnvironmentMessage
+            : undefined
+        }
+        onOpenModelRouting={(destination) =>
+          void navigate({
+            href: destination,
+            state: settingsNavigationState(returnTo),
+          })
+        }
+        {...(focus === undefined ? {} : { focus, onFocusHandled })}
+        Terminal={Terminal}
+        Desktop={Desktop}
+      />
+      {artifactSheet ? (
+        <React.Suspense fallback={null}>
+          <ArtifactSheet
+            threadId={thread.id}
+            readOnly={
+              thread.access === "view" || thread.lifecycleState === "archived"
+            }
+          />
+        </React.Suspense>
+      ) : null}
+    </>
   );
 }
 
@@ -411,6 +449,8 @@ function OpenThreadFilePane({
   readonly onDirtyChange: (dirty: boolean) => void;
   readonly onShowInFiles: () => void;
 }) {
+  const { identity } = useAuthenticatedIdentity();
+  const composer = useQuery(composerDefaultsQueryOptions(identity.id));
   return (
     <section
       className="thread-file-center-panel"
@@ -418,6 +458,7 @@ function OpenThreadFilePane({
     >
       <CenterFilePane
         active={active}
+        autosave={composer.data?.autosaveFiles === true}
         file={file}
         threadId={threadId}
         onDirtyChange={onDirtyChange}
@@ -826,6 +867,39 @@ function FilesView({
 }
 
 /** Each view's content, shared by the stacked and pane layouts. */
+/** Whether a card asked for the artifact full screen, on a stacked page. */
+const useArtifactSheet = () => {
+  const requested = useLocation({
+    select: (location) => location.search?.sheet === "artifact",
+  });
+  const { stacked } = useThreadLayoutMode();
+  return requested && stacked;
+};
+
+/** The Artifacts tab; while the sheet shows the artifact, only a note. */
+function ArtifactsTab({
+  threadId,
+  active,
+  readOnly,
+}: {
+  readonly threadId: ThreadId;
+  readonly active: boolean;
+  readonly readOnly: boolean;
+}) {
+  // One editor per artifact on a page.
+  if (useArtifactSheet())
+    return (
+      <div className="thread-files-state" role="note">
+        The artifact is open full screen.
+      </div>
+    );
+  return (
+    <React.Suspense fallback={loadingArtifacts}>
+      <ArtifactsView threadId={threadId} active={active} readOnly={readOnly} />
+    </React.Suspense>
+  );
+}
+
 function usePaneViewContents({
   thread,
   project,
@@ -901,9 +975,19 @@ function usePaneViewContents({
       canWrite={thread.access !== "view"}
     />
   );
+  const artifacts = (active: boolean) => (
+    <ArtifactsTab
+      threadId={thread.id}
+      active={active}
+      readOnly={
+        thread.access === "view" || thread.lifecycleState === "archived"
+      }
+    />
+  );
   return {
     changes,
     files,
+    artifacts,
     ...(terminal === undefined ? {} : { terminal }),
     ...(portal === undefined ? {} : { portal }),
     ...(desktop === undefined ? {} : { desktop }),
@@ -983,6 +1067,7 @@ function ThreadSessionContent({
 }) {
   const { identity } = useAuthenticatedIdentity();
   const archived = thread.lifecycleState === "archived";
+  // A card's Open on a phone shows the artifact full screen over the Thread.
   const queryClient = useQueryClient();
   const [shareOpen, setShareOpen] = React.useState(false);
   const openShare = () => setShareOpen(true);
@@ -1099,7 +1184,13 @@ function ThreadSessionContent({
   );
   const contents: PaneContents = {
     agent,
-    views: toolsAvailable ? views : NO_VIEWS,
+    // Artifacts are stored with the Thread, not in its Orb: they stay open
+    // while the Orb prepares, and read-only once the Thread is archived.
+    views: toolsAvailable
+      ? views
+      : views.artifacts === undefined
+        ? NO_VIEWS
+        : { artifacts: views.artifacts },
     // A file with unsaved edits stays open so its text can still be copied.
     file: archived
       ? (target, active) =>
@@ -1123,7 +1214,7 @@ function ThreadSessionContent({
             shareOpen={shareOpen}
             onShareOpenChange={setShareOpen}
             transcript={transcriptAccess.current}
-            views={toolsAvailable ? viewsButton : null}
+            views={viewsButton}
           />
         </>
       )}

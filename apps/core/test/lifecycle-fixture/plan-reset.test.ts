@@ -40,6 +40,8 @@ const tick = async () => {
   ).resumed;
 };
 
+const tickSweep = () => tick();
+
 const writeProof = (name: string, proof: unknown) => {
   const directory = process.env.DX_PLAN_RESET_ARTIFACTS;
   if (directory === undefined) return;
@@ -142,4 +144,80 @@ describe("a wake while the Thread's Claude plan is used up", () => {
       answers: await answers(),
     });
   });
+
+  it("does the same for a person's tick and @dx comment in an artifact (#1606)", async () => {
+    const project = await fixtureRequest(
+      "/v1/projects",
+      json({ name: "plan-reset-artifacts" }),
+    );
+    const projectId = (await project.json<{ data: { id: string } }>()).data.id;
+    const created = await fixtureRequest(
+      "/v1/threads",
+      json({ projectId, title: "Plan reset, artifacts" }),
+    );
+    const threadId = (await created.json<{ data: { id: string } }>()).data.id;
+    const client = createFlueClient({
+      url: new URL(`/v1/agents/plan/${threadId}`, BASE_URL).toString(),
+      fetch: fetch.bind(globalThis),
+      headers: authorization,
+    });
+    const answers = async () =>
+      (await client.history()).messages.flatMap((message) =>
+        message.role === "assistant"
+          ? message.parts.flatMap((part) =>
+              part.type === "text" ? [part.text] : [],
+            )
+          : [],
+      );
+    // Two wakes and their failed reads run before the reset; under a full
+    // verify's load they took over 8 seconds.
+    const resetsAt = Math.floor(Date.now() / 1000) + 20;
+    await fixtureRequest(
+      `/__fixture/plan/report-limit/${threadId}`,
+      json({ resetsAt }),
+    );
+    const wake = async (kind: "tick" | "comment", now: number) => {
+      const response = await fixtureRequest(
+        `/__fixture/plan/artifact-wake/${threadId}`,
+        { method: "POST", body: JSON.stringify({ kind, now }) },
+      );
+      expect(response.status).toBe(200);
+      const { delivered } = await response.json<{ delivered: string[] }>();
+      expect(delivered).toHaveLength(1);
+      return delivered[0] ?? "";
+    };
+
+    // The tick's wake fails on the limit; so does the comment's, which comes
+    // after the per-Thread wake interval.
+    const tick = await wake("tick", Date.now());
+    await expect(client.read(tick)).rejects.toThrow(
+      /Claude plan limit reached/,
+    );
+    const comment = await wake("comment", Date.now() + 31_000);
+    await expect(client.read(comment)).rejects.toThrow(
+      /Claude plan limit reached/,
+    );
+
+    // Nothing runs before the reset; then one tick runs the Thread once,
+    // and its turn answers both wakes in order.
+    expect(await tickSweep()).toEqual([]);
+    expect(await answers()).toEqual([]);
+    while (Date.now() / 1000 < resetsAt)
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    const resumed = await tickSweep();
+    expect(resumed).toEqual([expect.objectContaining({ threadId })]);
+    await client.read(resumed[0]?.submissionId ?? "");
+    const [answer, ...more] = await answers();
+    expect(more).toEqual([]);
+    expect(answer).toMatch(
+      /^Answered: A person ticked an ask in artifact art_0{31}1 \(revision 2\)[\s\S]* \| A person mentioned you in a comment \(cmt_0{31}1\)/,
+    );
+    expect(await tickSweep()).toEqual([]);
+    writeProof("plan-reset-artifacts", {
+      threadId,
+      resetsAt: new Date(resetsAt * 1000).toISOString(),
+      resumed,
+      answer,
+    });
+  }, 60_000);
 });

@@ -54,6 +54,11 @@ const storageTools = vi.hoisted(() => ({
 const bugReportTools = vi.hoisted(() => ({
   createBugReportTools: vi.fn((): unknown[] => []),
 }));
+const artifactTools = vi.hoisted(() => ({
+  ARTIFACTS_EDITED_SIGNAL: "artifacts_edited",
+  artifactsEditedByPeopleNote: vi.fn(async () => undefined),
+  createArtifactTools: vi.fn((): unknown[] => []),
+}));
 const needsYouTools = vi.hoisted(() => ({
   createNeedsYouTools: vi.fn((): unknown[] => []),
 }));
@@ -87,6 +92,7 @@ vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../automations/agent-tools.js", () => automationTools);
 vi.mock("../thread-storage/agent-tools.js", () => storageTools);
 vi.mock("../needs-you/agent-tools.js", () => needsYouTools);
+vi.mock("../thread-artifacts/agent-tools.js", () => artifactTools);
 vi.mock("../bug-reports/agent-tools.js", () => bugReportTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
@@ -218,10 +224,18 @@ describe("DxAgent", () => {
     needsYouTools.createNeedsYouTools.mockReturnValueOnce([
       { name: "request_attention", run: vi.fn() },
     ]);
+    artifactTools.createArtifactTools.mockReturnValueOnce([
+      { name: "artifact", run: vi.fn() },
+    ]);
     hooks.usePromptData.mockReturnValueOnce({
       plugins: { submissionId: "sub_1", tools: [] },
     } as never);
     const prompt = DxAgent({ id: "thr_existing" });
+    expect(artifactTools.createArtifactTools).toHaveBeenCalledWith(
+      "thr_existing",
+      pluginHost.agentThreadToolsContext,
+      "sub_1",
+    );
     expect(storageTools.createThreadStorageTools).toHaveBeenCalledWith(
       "thr_existing",
       pluginHost.agentThreadToolsContext,
@@ -243,6 +257,7 @@ describe("DxAgent", () => {
       "create_thread",
       "send_thread_message",
       "download_thread_file",
+      "artifact",
       "set_schedule",
       "request_attention",
     ]);

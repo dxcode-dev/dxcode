@@ -79,6 +79,7 @@ export const memberMutationOptions = (
       mutationFn: (input: {
         readonly title: string;
         readonly expiresAt?: string;
+        readonly maxUses?: number;
       }) => createWorkspaceInviteLink(workspaceSlug, input),
       onSettled: refreshLinks,
     },
@@ -105,6 +106,7 @@ export const acceptInviteMutationOptions = (token: string) => ({
 export interface InviteLinkFieldErrors {
   readonly title?: string;
   readonly expiresAt?: string;
+  readonly maxUses?: string;
 }
 
 /** The server's per-field messages, when it rejected only the dialog's fields. */
@@ -115,7 +117,9 @@ export const inviteLinkFieldErrors = (
   if (
     errors === undefined ||
     errors.length === 0 ||
-    !errors.every(({ field }) => field === "title" || field === "expiresAt")
+    !errors.every(({ field }) =>
+      ["title", "expiresAt", "maxUses"].includes(field),
+    )
   )
     return undefined;
   return Object.fromEntries(

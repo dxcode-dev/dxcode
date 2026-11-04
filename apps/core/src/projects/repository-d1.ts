@@ -31,7 +31,8 @@ const ProjectRow = Schema.Struct({
   repository_full_name: Schema.NullOr(Schema.String),
   repository_web_url: Schema.NullOr(Schema.String),
   repository_clone_url: Schema.NullOr(Schema.String),
-  ship_action: Schema.String,
+  ship_behavior: Schema.String,
+  ship_prompt: Schema.NullOr(Schema.String),
   commit_author_preference: Schema.String,
   commit_author_name: Schema.String,
   commit_author_email: Schema.String,
@@ -89,7 +90,10 @@ const decodeProjectRows = (rows: ReadonlyArray<unknown>) =>
             ) as unknown,
             revision: row.revision,
             configuration: {
-              shipAction: row.ship_action,
+              shipAction: row.ship_behavior,
+              ...(row.ship_prompt === null
+                ? {}
+                : { shipPrompt: row.ship_prompt }),
               commitAuthor: {
                 preference: row.commit_author_preference,
                 name: row.commit_author_name,
@@ -223,7 +227,7 @@ export const ProjectRepositoryD1 = Layer.effect(
             yield* sql`
               INSERT OR IGNORE INTO projects (
                 id, owner_user_id, workspace_id, name,
-                ship_action, commit_author_preference,
+                ship_behavior, ship_prompt, commit_author_preference,
                 commit_author_name, commit_author_email,
                 signing_preference, runner_profile_id, public_code_enabled,
                 dx_co_author, created_at, updated_at
@@ -231,6 +235,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                 ${id}, ${ownerUserId}, ${snapshot.workspaceId ?? null},
                 ${PROJECTLESS_PROJECT_NAME},
                 ${configuration.shipAction},
+                ${configuration.shipPrompt ?? null},
                 ${configuration.commitAuthor.preference},
                 ${configuration.commitAuthor.name},
                 ${configuration.commitAuthor.email},
@@ -281,7 +286,7 @@ export const ProjectRepositoryD1 = Layer.effect(
               const projectInsert = sql`
                 INSERT INTO projects (
                   id, owner_user_id, workspace_id, name, description, icon_key, revision,
-                  ship_action, commit_author_preference,
+                  ship_behavior, ship_prompt, commit_author_preference,
                   commit_author_name, commit_author_email,
                   signing_preference, runner_profile_id, public_code_enabled,
                   dx_co_author, created_at, updated_at
@@ -291,6 +296,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                   ${encoded.workspaceId ?? null}, ${encoded.name}, ${encoded.description ?? null},
                   ${encoded.iconKey ?? null}, ${encoded.revision},
                   ${encoded.configuration.shipAction},
+                  ${encoded.configuration.shipPrompt ?? null},
                   ${encoded.configuration.commitAuthor.preference},
                   ${encoded.configuration.commitAuthor.name},
                   ${encoded.configuration.commitAuthor.email},
@@ -577,7 +583,8 @@ export const ProjectRepositoryD1 = Layer.effect(
               UPDATE projects SET
                 name = ${encoded.name}, description = ${encoded.description ?? null},
                 icon_key = ${encoded.iconKey ?? null}, revision = ${encoded.revision},
-                ship_action = ${encoded.configuration.shipAction},
+                ship_behavior = ${encoded.configuration.shipAction},
+                ship_prompt = ${encoded.configuration.shipPrompt ?? null},
                 commit_author_preference = ${encoded.configuration.commitAuthor.preference},
                 commit_author_name = ${encoded.configuration.commitAuthor.name},
                 commit_author_email = ${encoded.configuration.commitAuthor.email},

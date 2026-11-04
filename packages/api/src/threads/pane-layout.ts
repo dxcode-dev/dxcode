@@ -43,6 +43,7 @@ export const ThreadPaneTabSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("changes") }),
   Schema.Struct({ kind: Schema.Literal("portal") }),
   Schema.Struct({ kind: Schema.Literal("desktop") }),
+  Schema.Struct({ kind: Schema.Literal("artifacts") }),
   Schema.Struct({
     kind: Schema.Literal("terminal"),
     ordinal: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 1_000 })),

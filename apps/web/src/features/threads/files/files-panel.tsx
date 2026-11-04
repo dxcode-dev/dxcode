@@ -511,6 +511,7 @@ export const ThreadFilesPanel = ({
 
 export const ThreadFilePane = ({
   active = true,
+  autosave = false,
   threadId,
   worktree = PRIMARY_WORKTREE,
   path,
@@ -521,6 +522,8 @@ export const ThreadFilePane = ({
   transport = api,
 }: {
   readonly active?: boolean;
+  /** Autosave Files: write edits once typing pauses. */
+  readonly autosave?: boolean;
   readonly threadId: ThreadId;
   readonly worktree?: ThreadFilesWorktreeId;
   readonly path: ThreadFilesPath;
@@ -570,6 +573,7 @@ export const ThreadFilePane = ({
       }
     >
       <ThreadFileViewer
+        autosave={autosave}
         conflict={conflict}
         connectionError={query.error !== null}
         connectionMessage={

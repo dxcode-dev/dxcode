@@ -1,6 +1,7 @@
 import {
   GetThreadChangesDiffResponseSchema,
   GetThreadChangesResponseSchema,
+  GetThreadShipPlanResponseSchema,
   PushThreadChangesRequestSchema,
   PushThreadChangesResponseSchema,
   THREAD_CHANGES_SUBPROTOCOL,
@@ -14,7 +15,12 @@ import {
   ThreadChangesUnavailableResponseSchema,
   ThreadChangesWorktreeId,
 } from "@dx/api";
-import { ThreadId } from "@dx/domain";
+import {
+  ProjectShipAction,
+  ShipPrompt,
+  shipPromptFor,
+  ThreadId,
+} from "@dx/domain";
 import { Effect, Schema } from "effect";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -368,6 +374,52 @@ threadChangesRoutes.get("/:threadId/changes/diff", async (context) => {
       context,
       cause instanceof InvalidChangesRequest ? "invalid" : "unavailable",
     );
+  }
+});
+
+const ShipPlanRow = Schema.Struct({
+  ship_behavior: ProjectShipAction,
+  ship_prompt: Schema.NullOr(ShipPrompt),
+  default_branch: Schema.NullOr(Schema.String),
+});
+
+/**
+ * The main action's prompt, from the project's Ship Behavior as it is now,
+ * so a changed setting reaches Threads that are already open. Reading it
+ * wakes nothing; the person sends the prompt as their own message.
+ */
+threadChangesRoutes.get("/:threadId/changes/ship", async (context) => {
+  try {
+    const threadId = Schema.decodeUnknownSync(ThreadId)(
+      context.req.param("threadId"),
+    );
+    const db = await Effect.runPromise(decodeD1Binding(context.env.DB));
+    const row = Schema.decodeUnknownSync(ShipPlanRow)(
+      await db
+        .prepare(
+          `SELECT project.ship_behavior, project.ship_prompt,
+             snapshot.default_branch
+           FROM threads AS thread
+           INNER JOIN projects AS project ON project.id = thread.project_id
+           LEFT JOIN thread_source_snapshot AS snapshot
+             ON snapshot.thread_id = thread.id
+           WHERE thread.id = ?`,
+        )
+        .bind(threadId)
+        .first(),
+    );
+    const configuration = {
+      shipAction: row.ship_behavior,
+      ...(row.ship_prompt === null ? {} : { shipPrompt: row.ship_prompt }),
+    };
+    const baseBranch = row.default_branch ?? undefined;
+    return success(context, GetThreadShipPlanResponseSchema, {
+      action: row.ship_behavior,
+      ...(baseBranch === undefined ? {} : { baseBranch }),
+      prompt: shipPromptFor(configuration, baseBranch),
+    });
+  } catch {
+    return error(context, "unavailable");
   }
 });
 

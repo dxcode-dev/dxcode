@@ -1,4 +1,5 @@
 import type {
+  NeedsYouAsk,
   NeedsYouItem,
   NeedsYouLink,
   NeedsYouRankedItem,
@@ -7,7 +8,7 @@ import type {
 import type { UserId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ExternalLink, ListOrdered, X } from "lucide-react";
+import { Check, ExternalLink, FileText, ListOrdered, X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -16,6 +17,10 @@ import { Button } from "../../shared/ui/button.js";
 import { issueIcon, pullIcon } from "../../shared/ui/github-status.js";
 import { SettingsSelect } from "../../shared/ui/settings.js";
 import { TimeText } from "../../shared/ui/time-text.js";
+import {
+  needsYouAsksQueryOptions,
+  tickNeedsYouAskMutationOptions,
+} from "../notifications/needs-you-asks-queries.js";
 import {
   dismissNeedsYouMutationOptions,
   needsYouQueryOptions,
@@ -213,15 +218,16 @@ function PrioritySection({
   );
 }
 
-const prioritizeEnabled = (
+const featureEnabled = (
   flags: ReadonlyArray<{
     readonly registration: { readonly id: string };
     readonly effectiveEnabled: boolean;
   }>,
+  id: "needs-you-prioritize" | "artifact-asks",
 ) =>
   flags.some(
     ({ registration, effectiveEnabled }) =>
-      registration.id === "needs-you-prioritize" && effectiveEnabled,
+      registration.id === id && effectiveEnabled,
   );
 
 /** Prioritize's state: the flag, the saved ranking, and Re-rank. */
@@ -229,7 +235,8 @@ function usePrioritize(userId: UserId) {
   const queryClient = useQueryClient();
   const features = useQuery(personalExperimentalFeaturesQueryOptions(userId));
   const enabled =
-    features.data !== undefined && prioritizeEnabled(features.data.flags);
+    features.data !== undefined &&
+    featureEnabled(features.data.flags, "needs-you-prioritize");
   const ranking = useQuery(needsYouRankingQueryOptions(userId, enabled));
   const rank = useMutation(rankNeedsYouMutationOptions(queryClient, userId));
   const [picked, setPicked] = React.useState<string | undefined>(undefined);
@@ -251,6 +258,78 @@ function usePrioritize(userId: UserId) {
           : undefined,
     run: () => rank.mutate(model),
   };
+}
+
+/** Asks in artifacts: the flag, the person's open asks, and Tick. */
+function useArtifactAsks(userId: UserId) {
+  const queryClient = useQueryClient();
+  const features = useQuery(personalExperimentalFeaturesQueryOptions(userId));
+  const enabled =
+    features.data !== undefined &&
+    featureEnabled(features.data.flags, "artifact-asks");
+  const asks = useQuery(needsYouAsksQueryOptions(userId, enabled));
+  const tick = useMutation(tickNeedsYouAskMutationOptions(queryClient, userId));
+  return {
+    enabled,
+    asks: asks.data ?? [],
+    tick: (ask: NeedsYouAsk) => tick.mutate(ask),
+    error: tick.error instanceof Error ? tick.error.message : undefined,
+  };
+}
+
+/** An ask's text with each mention chip read as `@Name`. */
+const askText = (text: string) =>
+  text.replace(/@\[([^\]\n]+)\]\((?:user:[A-Za-z0-9_-]+|agent)\)/g, "@$1");
+
+/** One ask in an artifact: its item, Thread and artifact, age, and Tick. */
+function ArtifactAskRow({
+  ask,
+  onTick,
+}: {
+  readonly ask: NeedsYouAsk;
+  readonly onTick: (ask: NeedsYouAsk) => void;
+}) {
+  const since = new Date(ask.waitingSince).toISOString();
+  return (
+    <li className="needs-you-page-row" data-kind="ask">
+      <span className="needs-you-kind" title="Ask in an artifact">
+        <FileText aria-hidden />
+      </span>
+      <div className="needs-you-page-body">
+        <div className="needs-you-page-heading">
+          <Link
+            to="/threads/$threadId"
+            params={{ threadId: ask.threadId }}
+            search={{ artifact: ask.artifactId }}
+            className="needs-you-page-title"
+          >
+            {ask.artifactTitle}
+          </Link>
+          <time
+            dateTime={since}
+            title={`Waiting since ${exactTime.format(new Date(since))}`}
+          >
+            <TimeText text={(now) => age(since, now)} />
+          </time>
+        </div>
+        <p className="needs-you-page-ask">{askText(ask.text)}</p>
+        <div className="needs-you-page-meta">
+          <span>{ask.threadTitle}</span>
+        </div>
+      </div>
+      {ask.canTick ? (
+        <button
+          type="button"
+          className="needs-you-action"
+          aria-label={`Tick ${askText(ask.text)}`}
+          title="Tick"
+          onClick={() => onTick(ask)}
+        >
+          <Check />
+        </button>
+      ) : null}
+    </li>
+  );
 }
 
 /** One waiting ask: the Thread, its ask, and what it links to. */
@@ -341,7 +420,28 @@ export function NeedsYouPage() {
   );
   const items = list.data?.items ?? [];
   const prioritize = usePrioritize(identity.id);
+  const asks = useArtifactAsks(identity.id);
   const ranked = prioritize.data?.ranking !== undefined;
+  const asksSection =
+    asks.enabled && asks.asks.length > 0 ? (
+      <>
+        <h2 className="needs-you-page-all">Asks in artifacts</h2>
+        {asks.error === undefined ? null : (
+          <p className="needs-you-page-error" role="alert">
+            {asks.error}
+          </p>
+        )}
+        <ul className="bug-reports-list" aria-label="Asks in artifacts">
+          {asks.asks.map((ask) => (
+            <ArtifactAskRow
+              key={`${ask.artifactId}:${ask.itemKey}`}
+              ask={ask}
+              onTick={asks.tick}
+            />
+          ))}
+        </ul>
+      </>
+    ) : null;
   return (
     <PageShell
       actions={
@@ -365,7 +465,9 @@ export function NeedsYouPage() {
         <strong className="needs-you-page-heading-title">
           Needs you
           {list.isSuccess ? (
-            <span className="notification-count">{items.length}</span>
+            <span className="notification-count">
+              {items.length + (asks.enabled ? asks.asks.length : 0)}
+            </span>
           ) : null}
         </strong>
       }
@@ -377,6 +479,8 @@ export function NeedsYouPage() {
         <div className="empty-state bug-reports-empty" role="alert">
           <strong>Needs you could not be loaded.</strong>
         </div>
+      ) : items.length === 0 && asksSection !== null ? (
+        asksSection
       ) : items.length === 0 ? (
         <div className="empty-state bug-reports-empty">
           <strong>Nothing waits on you</strong>
@@ -387,6 +491,7 @@ export function NeedsYouPage() {
         </div>
       ) : (
         <>
+          {asksSection}
           {prioritize.enabled ? (
             <PrioritySection
               data={prioritize.data}
@@ -397,7 +502,7 @@ export function NeedsYouPage() {
               error={prioritize.error}
             />
           ) : null}
-          {prioritize.enabled ? (
+          {prioritize.enabled || asksSection !== null ? (
             <h2 className="needs-you-page-all">All asks</h2>
           ) : null}
           <ul className="bug-reports-list" aria-label="Needs you">

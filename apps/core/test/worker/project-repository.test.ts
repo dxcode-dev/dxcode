@@ -12,7 +12,7 @@ const otherOwner = Schema.decodeUnknownSync(UserId)("owner-b");
 describe("ProjectRepository D1", () => {
   it("persists scoped defaults and rejects mutation of the projectless backing row", async () => {
     const configuration = {
-      shipAction: "commit" as const,
+      shipAction: "push" as const,
       commitAuthor: {
         preference: "user" as const,
         name: "Project Owner",

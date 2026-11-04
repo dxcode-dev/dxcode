@@ -1,6 +1,7 @@
 import {
   GetThreadChangesDiffResponseSchema,
   GetThreadChangesResponseSchema,
+  GetThreadShipPlanResponseSchema,
   type PushThreadChangesResponse,
   PushThreadChangesResponseSchema,
   type ThreadChangesCaptureId,
@@ -9,6 +10,7 @@ import {
   type ThreadChangesPath,
   type ThreadChangesRange,
   type ThreadChangesWorktreeId,
+  type ThreadShipPlan,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Effect, Schema } from "effect";
@@ -56,6 +58,16 @@ export interface ChangesTransport {
     },
     signal?: AbortSignal,
   ) => Promise<PushThreadChangesResponse["data"]>;
+  /** The project's Ship Behavior for the main action; absent hides it. */
+  readonly getShipPlan?: (
+    threadId: ThreadId,
+    signal?: AbortSignal,
+  ) => Promise<ThreadShipPlan>;
+  /** Sends the Ship prompt as the person's own message to the agent. */
+  readonly ship?: (
+    threadId: ThreadId,
+    input: { readonly prompt: string; readonly idempotencyKey: string },
+  ) => Promise<void>;
 }
 
 export const serializeChangesRange = (range: ThreadChangesRange) =>
@@ -223,6 +235,39 @@ export const createChangesTransport = (
         body: JSON.stringify({ ...input, confirmation: "push" }),
       },
     ).then((response) => response.data),
+  getShipPlan: (threadId, signal) =>
+    request(
+      fetchImpl,
+      `${endpoint(threadId)}/ship`,
+      GetThreadShipPlanResponseSchema,
+      { signal },
+    ).then((response) => response.data),
+  // The same message the composer sends, so it runs as a typed one would.
+  ship: async (threadId, { prompt, idempotencyKey }) => {
+    const response = await fetchImpl(
+      `/v1/agents/dx/${encodeURIComponent(threadId)}`,
+      {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ idempotencyKey, kind: "user", body: prompt }),
+      },
+    );
+    if (response.ok) return;
+    const body = (await response.json().catch(() => undefined)) as
+      | { data?: { message?: unknown }; error?: { message?: unknown } }
+      | undefined;
+    const message = body?.data?.message ?? body?.error?.message;
+    throw new ChangesApiError(
+      response.status,
+      typeof message === "string" && message !== ""
+        ? message
+        : "The Ship message was not sent.",
+    );
+  },
   subscribe: (threadId, onChangesUpdated) =>
     subscribeToChanges(
       threadId,

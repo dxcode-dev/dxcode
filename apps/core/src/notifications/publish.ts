@@ -30,6 +30,8 @@ export interface NotificationEvent {
   /** The message to open the Thread at. */
   readonly messageId?: string;
   readonly actorUserId?: UserId;
+  /** Who acted when no person did, such as the agent: "dx". */
+  readonly actorName?: string;
   /** What was said, as plain text. */
   readonly excerpt: string;
   /** A headline the sender chose (the agent's `notify_user` title). */
@@ -109,7 +111,7 @@ export const publishNotification = async (
     recipientContacts(db, userIds),
     threadTitle(db, event.threadId),
     event.actorUserId === undefined
-      ? Promise.resolve({ name: "Someone" })
+      ? Promise.resolve({ name: event.actorName ?? "Someone" })
       : userIdentity(db, event.actorUserId),
   ]);
   const content = topic.content({

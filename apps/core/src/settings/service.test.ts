@@ -34,6 +34,7 @@ const layer = SettingsService.layer.pipe(
           Effect.succeed(
             userId === rowan.userId ? Option.some(workspace) : Option.none(),
           ),
+        hasShortNameAlias: () => Effect.succeed(false),
         createOwnedByUser: () => Effect.die("not used"),
         updateProfile: () => Effect.die("not used"),
       }),

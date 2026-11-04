@@ -12,6 +12,8 @@ import {
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
 import { scheduleUsageRetention } from "./settings/usage/retention.js";
+import { threadArtifactLogger } from "./thread-artifacts/logger.js";
+import { sweepDeletedArtifacts } from "./thread-artifacts/store.js";
 import { sweepThreadDeletions } from "./thread-deletion/cleanup.js";
 import { deployedThreadCleanup } from "./thread-deletion/routes.js";
 import { sweepThreadStorage } from "./thread-storage/store.js";
@@ -109,6 +111,16 @@ export const scheduled = (
   );
   if (controller.cron === THREAD_SWEEP_CRON) return;
   scheduleUsageRetention(controller, bindings, context);
+  // Bodies of deleted artifacts still stored: a deleted account's Threads'
+  // artifacts, or a delete whose purge failed.
+  context.waitUntil(
+    sweepDeletedArtifacts(bindings).catch((cause) =>
+      threadArtifactLogger.error("Deleted artifact sweep failed.", {
+        event: "thread_artifact_sweep_failed",
+        cause,
+      }),
+    ),
+  );
   const transfer = attachmentTransfer(bindings);
   if (transfer === undefined) return;
   context.waitUntil(

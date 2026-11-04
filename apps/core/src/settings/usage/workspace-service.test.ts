@@ -85,6 +85,7 @@ const layerFor = (options: LayerOptions = {}) => {
     WorkspaceRepository,
     WorkspaceRepository.of({
       findByUser: () => Effect.succeed(Option.some(membership)),
+      hasShortNameAlias: () => Effect.succeed(false),
       createOwnedByUser: () => Effect.die("not used"),
       updateProfile: () => Effect.die("not used"),
     }),

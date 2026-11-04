@@ -4,6 +4,7 @@ import type {
   ProjectDefaultsData,
 } from "@dx/api";
 import type { ProjectId, RunnerProfileId, UserId } from "@dx/domain";
+import { builtInShipPrompt } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import * as React from "react";
@@ -95,7 +96,7 @@ const defaults = {
     dxCoAuthor: null,
   },
   resolved: {
-    shipAction: { value: "commit", source: "deployment" },
+    shipAction: { value: "push", source: "deployment" },
     commitAuthor: { value: "dx", source: "deployment" },
     signingPreference: { value: "disabled", source: "deployment" },
     runnerProfileId: {
@@ -128,7 +129,18 @@ const project = (
     name: "Project one",
     description: "Initial description",
     revision,
-    configuration: { runnerProfileId: "standard" as RunnerProfileId },
+    configuration: {
+      shipAction: "ship",
+      commitAuthor: {
+        preference: "dx",
+        name: "dxcodeagent",
+        email: "agent@dxcode.dev",
+      },
+      signingPreference: "disabled",
+      runnerProfileId: "standard" as RunnerProfileId,
+      publicCodeEnabled: false,
+      dxCoAuthor: true,
+    },
     ...overrides,
   }) as ProjectData;
 
@@ -728,6 +740,145 @@ describe("project settings workspace state", () => {
       // The saved local size: no known price, and no account pays for it.
       "local2 CPU4GB memory20GB disk",
     ]);
+    await React.act(() => root.unmount());
+  });
+});
+
+describe("project General: Ship Behavior, Commit Author, and dx co-author", () => {
+  const dialog = () =>
+    document.querySelector<HTMLElement>('[aria-label="Customize Ship Prompt"]');
+  const promptInput = () =>
+    dialog()?.querySelector<HTMLTextAreaElement>("textarea") ?? null;
+  const buttonNamed = (root: ParentNode, name: string) =>
+    [...root.querySelectorAll("button")].find(
+      (button) => button.textContent?.trim() === name,
+    ) ?? null;
+  const choose = (select: HTMLSelectElement | null, value: string) =>
+    React.act(() => {
+      if (select === null) throw new Error("Missing select.");
+      select.value = value;
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  const type = (input: HTMLTextAreaElement | null, value: string) =>
+    React.act(() => {
+      const setter = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(input, value);
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+
+  it("drafts all three with the other General edits and saves them with one Save", async () => {
+    const fetch = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetch);
+    const { container, root } = await renderSettings("general", project());
+    const shipSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Ship Behavior"]',
+    );
+    const authorSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Commit Author"]',
+    );
+    const coAuthor = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add dx as co-author"]',
+    );
+    expect(shipSelect?.value).toBe("ship");
+    expect(authorSelect?.value).toBe("dx");
+    expect(container.textContent).toContain("dxcodeagent <agent@dxcode.dev>");
+    // dx is never the co-author of its own commits.
+    expect(coAuthor?.disabled).toBe(true);
+
+    await choose(authorSelect, "user");
+    expect(container.textContent).toContain("Test User <test@example.com>");
+    expect(coAuthor?.disabled).toBe(false);
+    expect(coAuthor?.getAttribute("aria-pressed")).toBe("true");
+    await React.act(() => coAuthor?.click());
+    expect(coAuthor?.getAttribute("aria-pressed")).toBe("false");
+
+    // Custom Ship starts from the default prompt and changes only the form.
+    await choose(shipSelect, "custom");
+    expect(promptInput()?.value).toBe(builtInShipPrompt("ship"));
+    await type(promptInput(), "Open a PR with our template. Do not merge.");
+    await React.act(() =>
+      buttonNamed(dialog() ?? document, "Use Custom Ship")?.click(),
+    );
+    expect(dialog()).toBeNull();
+    expect(shipSelect?.value).toBe("custom");
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringContaining("/v1/projects/"),
+      expect.objectContaining({ method: "PATCH" }),
+    );
+
+    await React.act(() => buttonNamed(container, "Save")?.click());
+    const patch = fetch.mock.calls
+      .map((call) => call as unknown as [string, RequestInit])
+      .find(([, init]) => init?.method === "PATCH");
+    expect(JSON.parse(String(patch?.[1].body))).toEqual({
+      revision: 1,
+      description: "Initial description",
+      shipAction: "custom",
+      shipPrompt: "Open a PR with our template. Do not merge.",
+      commitAuthor: "user",
+      dxCoAuthor: false,
+    });
+    await React.act(() => root.unmount());
+  });
+
+  it("keeps the saved choice when the prompt editor is cancelled, and refuses a blank or oversized prompt", async () => {
+    const { container, root } = await renderSettings("general", project());
+    const shipSelect = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Ship Behavior"]',
+    );
+    await choose(shipSelect, "custom");
+    await React.act(() => buttonNamed(dialog() ?? document, "Cancel")?.click());
+    expect(dialog()).toBeNull();
+    expect(shipSelect?.value).toBe("ship");
+
+    await choose(shipSelect, "custom");
+    await type(promptInput(), "   ");
+    expect(buttonNamed(dialog() ?? document, "Use Custom Ship")?.disabled).toBe(
+      true,
+    );
+    await type(promptInput(), "x".repeat(10_001));
+    expect(buttonNamed(dialog() ?? document, "Use Custom Ship")?.disabled).toBe(
+      true,
+    );
+    expect(dialog()?.textContent).toContain("10,001 / 10,000");
+    await React.act(() => buttonNamed(dialog() ?? document, "Cancel")?.click());
+    await React.act(() => root.unmount());
+  });
+
+  it("opens a saved custom prompt for editing, and a switch back to Ship keeps it", async () => {
+    const fetch = vi.fn(() => new Promise<Response>(() => undefined));
+    vi.stubGlobal("fetch", fetch);
+    const saved = project(3, {
+      configuration: {
+        ...project().configuration,
+        shipAction: "custom",
+        shipPrompt: "Our release script.",
+      } as ProjectData["configuration"],
+    });
+    const { container, root } = await renderSettings("general", saved);
+    await React.act(() => buttonNamed(container, "Edit Prompt")?.click());
+    expect(promptInput()?.value).toBe("Our release script.");
+    await React.act(() => buttonNamed(dialog() ?? document, "Cancel")?.click());
+
+    await choose(
+      container.querySelector<HTMLSelectElement>(
+        'select[aria-label="Ship Behavior"]',
+      ),
+      "push",
+    );
+    expect(buttonNamed(container, "Edit Prompt")).toBeNull();
+    await React.act(() => buttonNamed(container, "Save")?.click());
+    const patch = fetch.mock.calls
+      .map((call) => call as unknown as [string, RequestInit])
+      .find(([, init]) => init?.method === "PATCH");
+    expect(JSON.parse(String(patch?.[1].body))).toEqual({
+      revision: 3,
+      description: "Initial description",
+      shipAction: "push",
+    });
     await React.act(() => root.unmount());
   });
 });

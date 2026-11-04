@@ -1,16 +1,21 @@
+import { Dialog } from "@base-ui/react/dialog";
 import type {
   OrbResolvedProvider,
   ProjectData,
   SettingsContextData,
 } from "@dx/api";
-import type {
-  PluginScope,
-  ProjectId,
-  ProviderRepositoryId,
-  RunnerProfile,
-  RunnerProfileCatalog,
-  RunnerProfileId,
-  UserId,
+import {
+  builtInShipPrompt,
+  type CommitAuthorPreference,
+  MAX_SHIP_PROMPT_LENGTH,
+  type PluginScope,
+  type ProjectId,
+  type ProjectShipAction,
+  type ProviderRepositoryId,
+  type RunnerProfile,
+  type RunnerProfileCatalog,
+  type RunnerProfileId,
+  type UserId,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -29,6 +34,11 @@ import { settle } from "../../shared/settle.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { Input } from "../../shared/ui/input.js";
+import {
+  ModalSurface,
+  ModalSurfaceClose,
+  ModalSurfaceHeader,
+} from "../../shared/ui/modal-surface.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { OrbSizePicker } from "../../shared/ui/orb-size-grid.js";
 import {
@@ -38,7 +48,9 @@ import {
   SettingsRow,
   SettingsSelect,
   type SettingsSelectOption,
+  SettingsToggle,
 } from "../../shared/ui/settings.js";
+import { Textarea } from "../../shared/ui/textarea.js";
 import { UnsavedChangesGuard } from "../../shared/ui/unsaved-changes-guard.js";
 import {
   bitbucketConnectionQueryOptions,
@@ -174,6 +186,7 @@ export function ProjectSettingsPage({
                 project={project}
                 ownerName={ownerName}
                 userId={identity.id}
+                viewer={identity}
               />
             ) : null}
             {canManage && section === "orb" ? (
@@ -223,6 +236,11 @@ type GeneralDraft = {
   readonly baseline: ProjectData;
   readonly name: string;
   readonly description: string;
+  readonly shipAction: ProjectShipAction;
+  /** The custom Ship prompt, kept when another behavior is chosen. */
+  readonly shipPrompt?: string;
+  readonly commitAuthor: CommitAuthorPreference;
+  readonly dxCoAuthor: boolean;
   /** "" keeps the bound repository. */
   readonly repositoryKey: string;
   /** Undefined keeps the saved list. */
@@ -236,7 +254,14 @@ type GeneralAction =
       readonly edit: Partial<
         Pick<
           GeneralDraft,
-          "name" | "description" | "repositoryKey" | "additional"
+          | "name"
+          | "description"
+          | "repositoryKey"
+          | "additional"
+          | "shipAction"
+          | "shipPrompt"
+          | "commitAuthor"
+          | "dxCoAuthor"
         >
       >;
     }
@@ -256,7 +281,37 @@ const generalDraft = (project: ProjectData): GeneralDraft => ({
   name: project.name,
   description: project.description ?? "",
   repositoryKey: "",
+  ...savedCommitsAndShip(project),
 });
+
+/** The Ship Behavior and commit settings as `project` saved them. */
+const savedCommitsAndShip = (project: ProjectData) => ({
+  shipAction: project.configuration.shipAction,
+  ...(project.configuration.shipPrompt === undefined
+    ? {}
+    : { shipPrompt: project.configuration.shipPrompt }),
+  commitAuthor: project.configuration.commitAuthor.preference,
+  dxCoAuthor: project.configuration.dxCoAuthor,
+});
+
+/** The Ship and commit fields `draft` changes, as the update request names them. */
+const commitsAndShipChanges = (draft: GeneralDraft) => {
+  const saved = savedCommitsAndShip(draft.baseline);
+  return {
+    ...(draft.shipAction === saved.shipAction
+      ? {}
+      : { shipAction: draft.shipAction }),
+    ...(draft.shipPrompt === undefined || draft.shipPrompt === saved.shipPrompt
+      ? {}
+      : { shipPrompt: draft.shipPrompt }),
+    ...(draft.commitAuthor === saved.commitAuthor
+      ? {}
+      : { commitAuthor: draft.commitAuthor }),
+    ...(draft.dxCoAuthor === saved.dxCoAuthor
+      ? {}
+      : { dxCoAuthor: draft.dxCoAuthor }),
+  };
+};
 
 const reduceGeneral = (
   draft: GeneralDraft,
@@ -296,10 +351,13 @@ function GeneralProjectSettings({
   project,
   ownerName,
   userId,
+  viewer,
 }: {
   readonly project: ProjectData;
   readonly ownerName: string;
   readonly userId: UserId;
+  /** The signed-in person, who authors commits when the project asks for them. */
+  readonly viewer: { readonly name: string; readonly email: string };
 }) {
   const queryClient = useQueryClient();
   const updateMutation = useMutation(
@@ -350,11 +408,13 @@ function GeneralProjectSettings({
     updateMutation.isPending ||
     rebindMutation.isPending ||
     iconMutation.isPending;
+  const shipAndCommits = commitsAndShipChanges(draft);
   const dirty =
     draft.name !== baseline.name ||
     draft.description !== (baseline.description ?? "") ||
     rebindTo !== undefined ||
-    additionalChanged;
+    additionalChanged ||
+    Object.keys(shipAndCommits).length > 0;
   if (baseline.revision < project.revision && !dirty && !saving)
     dispatch({ type: "reset", project });
   const edit = (next: Extract<GeneralAction, { type: "edit" }>["edit"]) =>
@@ -397,6 +457,7 @@ function GeneralProjectSettings({
       updateMutation.mutateAsync({
         revision: rebound.value.revision,
         ...metadata.changes,
+        ...shipAndCommits,
         ...(additionalChanged
           ? { additionalRepositories: additional.map(({ webUrl }) => webUrl) }
           : {}),
@@ -461,6 +522,27 @@ function GeneralProjectSettings({
           onRetry={repositories.retry}
           onValueChange={(repositoryKey) => edit({ repositoryKey })}
         />
+        <ShipBehaviorRow
+          action={draft.shipAction}
+          prompt={draft.shipPrompt}
+          disabled={saving}
+          onChange={(shipAction, shipPrompt) =>
+            edit({
+              shipAction,
+              ...(shipPrompt === undefined ? {} : { shipPrompt }),
+            })
+          }
+        />
+        <CommitAuthorRows
+          author={draft.commitAuthor}
+          dxCoAuthor={draft.dxCoAuthor}
+          saved={baseline.configuration.commitAuthor}
+          viewer={viewer}
+          workspace={baseline.workspaceId !== undefined}
+          disabled={saving}
+          onAuthorChange={(commitAuthor) => edit({ commitAuthor })}
+          onCoAuthorChange={(dxCoAuthor) => edit({ dxCoAuthor })}
+        />
         <AdditionalRepositoriesSection
           value={additional}
           options={additionalOptions}
@@ -485,6 +567,217 @@ function GeneralProjectSettings({
         onDiscard={() => dispatch({ type: "reset", project })}
       />
     </div>
+  );
+}
+
+const shipActionLabels = [
+  ["ship", "Ship"],
+  ["push", "Push to Branch"],
+  ["custom", "Custom Ship"],
+] as const satisfies ReadonlyArray<SettingsSelectOption>;
+
+/**
+ * The main action in each Thread's Changes pane. Custom Ship opens the prompt
+ * editor, which changes only the form: nothing is stored until Save.
+ */
+function ShipBehaviorRow({
+  action,
+  prompt,
+  disabled,
+  onChange,
+}: {
+  readonly action: ProjectShipAction;
+  readonly prompt: string | undefined;
+  readonly disabled: boolean;
+  readonly onChange: (action: ProjectShipAction, prompt?: string) => void;
+}) {
+  const [editing, setEditing] = React.useState(false);
+  return (
+    <SettingsRow
+      title="Ship Behavior"
+      description="Choose the main action in the Changes pane of every Thread in this project."
+      control={
+        <div className="project-ship-control">
+          {action === "custom" ? (
+            <Button
+              size="xs"
+              variant="outline"
+              disabled={disabled}
+              onClick={() => setEditing(true)}
+            >
+              Edit Prompt
+            </Button>
+          ) : null}
+          <SettingsSelect
+            label="Ship Behavior"
+            value={action}
+            disabled={disabled}
+            options={shipActionLabels}
+            onValueChange={(next) => {
+              if (next === "custom") setEditing(true);
+              else onChange(next as ProjectShipAction);
+            }}
+          />
+          {editing ? (
+            <ShipPromptDialog
+              initial={prompt ?? builtInShipPrompt("ship")}
+              onCancel={() => setEditing(false)}
+              onUse={(text) => {
+                setEditing(false);
+                onChange("custom", text);
+              }}
+            />
+          ) : null}
+        </div>
+      }
+    />
+  );
+}
+
+/** Edits the custom Ship prompt; Use Custom Ship returns it to the form. */
+function ShipPromptDialog({
+  initial,
+  onCancel,
+  onUse,
+}: {
+  readonly initial: string;
+  readonly onCancel: () => void;
+  readonly onUse: (prompt: string) => void;
+}) {
+  const [text, setText] = React.useState(initial);
+  const input = React.useRef<HTMLTextAreaElement>(null);
+  const tooLong = text.length > MAX_SHIP_PROMPT_LENGTH;
+  const blank = text.trim() === "";
+  return (
+    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onCancel())}>
+      <ModalSurface
+        className="ship-prompt-dialog"
+        ariaLabel="Customize Ship Prompt"
+        initialFocus={input}
+      >
+        <ModalSurfaceHeader>
+          <Dialog.Title className="ship-prompt-dialog-title">
+            Customize Ship Prompt
+          </Dialog.Title>
+          <ModalSurfaceClose />
+        </ModalSurfaceHeader>
+        <form
+          className="ship-prompt-dialog-body"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!blank && !tooLong) onUse(text);
+          }}
+        >
+          <Dialog.Description>
+            Ship sends this as your message to the agent, exactly as written.
+          </Dialog.Description>
+          <Textarea
+            ref={input}
+            aria-label="Custom Ship prompt"
+            aria-invalid={tooLong || blank || undefined}
+            value={text}
+            rows={12}
+            onChange={(event) => setText(event.target.value)}
+          />
+          <span
+            className="ship-prompt-dialog-count"
+            data-invalid={tooLong || undefined}
+          >
+            {text.length.toLocaleString("en-US")} /{" "}
+            {MAX_SHIP_PROMPT_LENGTH.toLocaleString("en-US")}
+          </span>
+          <footer>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={onCancel}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" size="xs" disabled={blank || tooLong}>
+              Use Custom Ship
+            </Button>
+          </footer>
+        </form>
+      </ModalSurface>
+    </Dialog.Root>
+  );
+}
+
+const DX_COMMIT_IDENTITY = "dxcodeagent <agent@dxcode.dev>";
+
+/**
+ * Who authors commits in this project's Orbs, and whether dx is credited as
+ * co-author of the person's commits. dx as the author is never its own
+ * co-author, so the switch applies only to the person's commits.
+ */
+function CommitAuthorRows({
+  author,
+  dxCoAuthor,
+  saved,
+  viewer,
+  workspace,
+  disabled,
+  onAuthorChange,
+  onCoAuthorChange,
+}: {
+  readonly author: CommitAuthorPreference;
+  readonly dxCoAuthor: boolean;
+  readonly saved: ProjectData["configuration"]["commitAuthor"];
+  readonly viewer: { readonly name: string; readonly email: string };
+  readonly workspace: boolean;
+  readonly disabled: boolean;
+  readonly onAuthorChange: (author: CommitAuthorPreference) => void;
+  readonly onCoAuthorChange: (dxCoAuthor: boolean) => void;
+}) {
+  const person =
+    saved.preference === "user"
+      ? `${saved.name} <${saved.email}>`
+      : `${viewer.name} <${viewer.email}>`;
+  const description =
+    author === "dx"
+      ? `Commits made in this project's Orbs are authored by ${DX_COMMIT_IDENTITY}.`
+      : workspace
+        ? `Each member authors the commits made in their Threads; the project owner's are authored by ${person}.`
+        : `Commits made in this project's Orbs are authored by you as ${person}.`;
+  return (
+    <>
+      <SettingsRow
+        title="Commit Author"
+        description={description}
+        control={
+          <SettingsSelect
+            label="Commit Author"
+            value={author}
+            disabled={disabled}
+            options={[
+              ["dx", "dx"],
+              ["user", workspace ? "Each member" : "You"],
+            ]}
+            onValueChange={(next) =>
+              onAuthorChange(next as CommitAuthorPreference)
+            }
+          />
+        }
+      />
+      <SettingsRow
+        title="Add dx as co-author"
+        description={
+          author === "dx"
+            ? "dx authors this project's commits, so it is not also their co-author."
+            : `Adds Co-authored-by: ${DX_COMMIT_IDENTITY} to commits a person authors in this project.`
+        }
+        control={
+          <SettingsToggle
+            label="Add dx as co-author"
+            checked={author === "user" && dxCoAuthor}
+            disabled={disabled || author === "dx"}
+            onCheckedChange={onCoAuthorChange}
+          />
+        }
+      />
+    </>
   );
 }
 

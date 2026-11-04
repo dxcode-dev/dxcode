@@ -6,6 +6,7 @@ import type {
   ThreadChangesRange,
   ThreadChangesWorktree,
   ThreadChangesWorktreeId,
+  ThreadShipPlan,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { WorkerPoolContextProvider } from "@pierre/diffs/react";
@@ -24,6 +25,7 @@ import {
   LoaderCircle,
   MoreHorizontal,
   RefreshCw,
+  Rocket,
   SquareArrowOutUpRight,
   Upload,
   WrapText,
@@ -46,6 +48,8 @@ import {
   changesQueryOptions,
   invalidateChangesRanges,
   pushChangesMutationOptions,
+  shipChangesMutationOptions,
+  shipPlanQueryOptions,
 } from "./changes-queries.js";
 import "./changes.css";
 
@@ -223,6 +227,18 @@ export function ChangesPaneContent({
       <ChangesToolbar
         changes={changes}
         hasFiles={hasFiles}
+        shipAction={
+          transport.getShipPlan === undefined ? null : (
+            <ShipAction
+              threadId={threadId}
+              transport={transport}
+              shippable={
+                changes !== undefined &&
+                (changes.files.length > 0 || changes.ahead > 0)
+              }
+            />
+          )
+        }
         canPush={canPush}
         pushPending={pushMutation.isPending}
         onPush={() => {
@@ -393,6 +409,115 @@ function ChangesRangeMenu({
         </RangeOption>
       ))}
     </div>
+  );
+}
+
+/**
+ * The main action: the project's Ship Behavior, read again when pressed, then
+ * confirmed and sent as the person's message.
+ */
+function ShipAction({
+  threadId,
+  transport,
+  shippable,
+}: {
+  readonly threadId: ThreadId;
+  readonly transport: ChangesTransport;
+  readonly shippable: boolean;
+}) {
+  const [open, setOpen] = React.useState(false);
+  const planQuery = useQuery(shipPlanQueryOptions(transport, threadId));
+  const mutation = useMutation(shipChangesMutationOptions(transport, threadId));
+  const plan = planQuery.data;
+  const confirm = () => {
+    if (plan === undefined || planQuery.isFetching) return;
+    void mutation
+      .mutateAsync({ prompt: plan.prompt })
+      .then(() => setOpen(false))
+      .catch(() => undefined);
+  };
+  return (
+    <>
+      <button
+        type="button"
+        className="changes-action"
+        disabled={plan === undefined || !shippable || mutation.isPending}
+        onClick={() => {
+          mutation.reset();
+          void planQuery.refetch();
+          setOpen(true);
+        }}
+      >
+        <Rocket aria-hidden="true" />
+        {plan?.action === "push" ? "Push to Branch" : "Ship"}
+      </button>
+      {open && plan !== undefined ? (
+        <ShipConfirmation
+          plan={plan}
+          pending={mutation.isPending || planQuery.isFetching}
+          error={mutation.error}
+          onCancel={() => setOpen(false)}
+          onConfirm={confirm}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** Names where the work goes before the project's Ship prompt is sent. */
+function ShipConfirmation({
+  plan,
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  readonly plan: ThreadShipPlan;
+  readonly pending: boolean;
+  readonly error: unknown;
+  readonly onCancel: () => void;
+  readonly onConfirm: () => void;
+}) {
+  const base = plan.baseBranch;
+  const copy =
+    plan.action === "push"
+      ? {
+          title: "Push to a branch?",
+          body: `The agent commits the changes and pushes a feature branch, not to ${base ?? "the base branch"}.`,
+          confirm: "Confirm Push",
+        }
+      : plan.action === "custom"
+        ? {
+            title: "Ship with the project's prompt?",
+            body: "This project's custom Ship prompt will be sent to the agent as your message.",
+            confirm: "Confirm Ship",
+          }
+        : {
+            title:
+              base === undefined
+                ? "Ship to the base branch?"
+                : `Ship to ${base}?`,
+            body: `The agent commits the changes, rebases onto ${base === undefined ? "the base branch" : `origin/${base}`}, runs the tests, and pushes to ${base ?? "it"}.`,
+            confirm: "Confirm Ship",
+          };
+  return (
+    <dialog
+      className="changes-push-confirmation"
+      aria-labelledby="changes-ship-confirmation-title"
+      open
+    >
+      <strong id="changes-ship-confirmation-title">{copy.title}</strong>
+      <p>{copy.body}</p>
+      {error ? <div role="alert">{errorMessage(error)}</div> : null}
+      <div>
+        <button type="button" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="button" onClick={onConfirm} disabled={pending}>
+          {copy.confirm}
+        </button>
+      </div>
+    </dialog>
   );
 }
 
@@ -599,6 +724,7 @@ function WorktreeChanges({
 function ChangesToolbar({
   changes,
   hasFiles,
+  shipAction,
   canPush,
   pushPending,
   onPush,
@@ -618,6 +744,8 @@ function ChangesToolbar({
 }: {
   readonly changes: ThreadChangesData | undefined;
   readonly hasFiles: boolean;
+  /** The project's Ship Behavior action, when the pane has one. */
+  readonly shipAction: React.ReactNode;
   readonly canPush: boolean;
   readonly pushPending: boolean;
   readonly onPush: () => void;
@@ -637,6 +765,7 @@ function ChangesToolbar({
 }) {
   return (
     <div className="changes-toolbar">
+      {shipAction}
       <button
         type="button"
         className="changes-action"

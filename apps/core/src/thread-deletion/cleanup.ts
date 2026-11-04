@@ -1,6 +1,7 @@
 import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { threadDeletionLogger } from "../logging.js";
+import { deleteThreadArtifacts } from "../thread-artifacts/store.js";
 import { ownerSearchIndex } from "../thread-search/index-client.js";
 import { deleteThreadStorage } from "../thread-storage/store.js";
 import { drainThreadDaemon } from "../threads/daemon-client.js";
@@ -13,7 +14,8 @@ export type ThreadCleanupStep =
   | "search-index"
   | "changes"
   | "attachments"
-  | "storage";
+  | "storage"
+  | "artifacts";
 
 /**
  * How each piece outside D1 is removed. Every step is idempotent: a retry
@@ -117,6 +119,7 @@ export const purgeDeletedThread = async (
     ],
     ["attachments", () => deleteAttachments(bindings, threadId)],
     ["storage", () => deleteThreadStorage(bindings, threadId)],
+    ["artifacts", () => deleteThreadArtifacts(bindings, threadId)],
   ];
   const failedSteps: ThreadCleanupStep[] = [];
   for (const [step, run] of steps) {

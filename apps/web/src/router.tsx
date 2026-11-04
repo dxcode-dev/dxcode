@@ -7,6 +7,7 @@ import {
   lazyRouteComponent,
   notFound,
   Outlet,
+  type ParsedLocation,
   type RouterHistory,
   redirect,
 } from "@tanstack/react-router";
@@ -306,14 +307,26 @@ const seeOpenedThread = ({
 const threadRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/threads/$threadId",
-  // `message` opens the Thread at a message, for example a mention.
+  // `message` opens the Thread at a message, for example a mention;
+  // `artifact` is the artifact its Artifacts view shows; `sheet=artifact`
+  // shows it full screen over the Thread (a phone).
   validateSearch: (
     search: Record<string, unknown>,
-  ): { readonly message?: string } =>
-    typeof search.message === "string" &&
+  ): {
+    readonly message?: string;
+    readonly artifact?: string;
+    readonly sheet?: "artifact";
+  } => ({
+    ...(typeof search.message === "string" &&
     /^msg_[0-9a-f]{24}$/.test(search.message)
       ? { message: search.message }
-      : {},
+      : {}),
+    ...(typeof search.artifact === "string" &&
+    /^art_[0-9a-f]{32}$/.test(search.artifact)
+      ? { artifact: search.artifact }
+      : {}),
+    ...(search.sheet === "artifact" ? { sheet: "artifact" as const } : {}),
+  }),
   // Opening a Thread is seeing it: entering the route, or moving within it
   // from one Thread to the next. Not loading it: hovering a link preloads
   // the route, and the click that follows reuses that match unloaded.
@@ -373,15 +386,19 @@ const workspaceSlug = (input: string) => {
 
 /**
  * Loads the workspace a settings URL names. The server answers 403 or 404 for
- * a workspace the user cannot open (missing, renamed away, or not theirs);
- * that renders the route's not-found state. Other failures reach the settings
- * page, which keeps its retry state for them.
+ * a workspace the user cannot open (missing, not theirs, or a former name
+ * another workspace has since taken); that renders the route's not-found
+ * state. A former short name of the member's own workspace answers with the
+ * current one (#1382): redirect there, keeping the rest of the path, the
+ * query, and the hash. Other failures reach the settings page, which keeps
+ * its retry state for them.
  */
 const ensureWorkspaceRouteData = async (
   { queryClient, userId }: RouterContext,
   slug: WorkspaceSlug,
+  location: ParsedLocation,
 ) => {
-  await queryClient
+  const data = await queryClient
     .ensureQueryData(
       settingsContextQueryOptions(userId, {
         scope: "workspace",
@@ -393,7 +410,27 @@ const ensureWorkspaceRouteData = async (
         throw notFound({
           data: { code: "WORKSPACE_NOT_FOUND", workspaceSlug: slug },
         });
+      return undefined;
     });
+  const current = data?.workspace?.shortName;
+  const prefix = `/workspaces/${slug}`;
+  if (
+    current !== undefined &&
+    current !== slug &&
+    location.href.startsWith(prefix)
+  ) {
+    queryClient.setQueryData(
+      settingsContextQueryOptions(userId, {
+        scope: "workspace",
+        workspaceSlug: current,
+      }).queryKey,
+      data,
+    );
+    throw redirect({
+      href: `/workspaces/${current}${location.href.slice(prefix.length)}`,
+      replace: true,
+    });
+  }
   return slug;
 };
 
@@ -431,13 +468,14 @@ const workspaceSettingsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug",
   // An unknown section takes precedence over a malformed slug.
-  loader: async ({ context, params }) => {
+  loader: async ({ context, location, params }) => {
     const registration = await registeredSettingsSection("workspace");
     return {
       registration,
       workspaceSlug: await ensureWorkspaceRouteData(
         context,
         workspaceSlug(params.workspaceSlug),
+        location,
       ),
     };
   },
@@ -457,7 +495,7 @@ const workspaceSettingsEmptyRoute = createRoute({
 const workspaceSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug/$section",
-  loader: async ({ context, params }) => {
+  loader: async ({ context, location, params }) => {
     const registration = await registeredSettingsSection(
       "workspace",
       params.section,
@@ -467,6 +505,7 @@ const workspaceSettingsSectionRoute = createRoute({
       workspaceSlug: await ensureWorkspaceRouteData(
         context,
         workspaceSlug(params.workspaceSlug),
+        location,
       ),
     };
   },

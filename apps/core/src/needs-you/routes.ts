@@ -1,9 +1,13 @@
 import {
+  NeedsYouAskErrorResponseSchema,
+  NeedsYouAsksResponseSchema,
   NeedsYouErrorResponseSchema,
   NeedsYouRankingErrorResponseSchema,
   NeedsYouRankingResponseSchema,
   NeedsYouRankRequestSchema,
   NeedsYouResponseSchema,
+  TickNeedsYouAskRequestSchema,
+  TickNeedsYouAskResponseSchema,
 } from "@dx/api";
 import { type ExperimentalFeatureId, ThreadId, type UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
@@ -12,6 +16,8 @@ import type { AppEnv } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { scheduleUserInvalidation } from "../realtime/publication.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
+import type { DeliverArtifactWake } from "../thread-artifacts/ask-effects.js";
+import { listArtifactAsks, tickArtifactAsk } from "./asks.js";
 import {
   defaultRankingModel,
   loadRanking,
@@ -166,6 +172,59 @@ const rankingResponse = async (
   );
 };
 
+const ASKS_FEATURE = "artifact-asks" as ExperimentalFeatureId;
+
+type AskFailure = (typeof NeedsYouAskErrorResponseSchema.Type)["data"]["code"];
+
+const ASK_FAILURES = {
+  INVALID_REQUEST: [400, "Request validation failed."],
+  ASKS_DISABLED: [
+    404,
+    "Asks in artifacts are off. Turn them on in Settings, Experimental Features.",
+  ],
+  ASK_NOT_FOUND: [404, "That ask is not open anymore."],
+  THREAD_READ_ONLY: [
+    403,
+    "You can view this Thread. Ask its owner for Contribute access.",
+  ],
+  PERSISTENCE_UNAVAILABLE: [503, "Persistence is temporarily unavailable."],
+} as const satisfies Record<AskFailure, readonly [number, string]>;
+
+const askFailure = (context: Context<AppEnv>, code: AskFailure) => {
+  const [status, message] = ASK_FAILURES[code];
+  return context.json(
+    Schema.encodeUnknownSync(NeedsYouAskErrorResponseSchema)({
+      status: "error",
+      data: { code, message, requestId: context.get("requestId") },
+    }),
+    status,
+  );
+};
+
+/** The asks routes run only with the `artifact-asks` flag on, as the person. */
+const handleAsks = async (
+  context: Context<AppEnv>,
+  run: (db: D1Database, userId: UserId) => Promise<Response>,
+) => {
+  const db = context.env.DB;
+  if (db === undefined) return askFailure(context, "PERSISTENCE_UNAVAILABLE");
+  const principal = context.get("principal");
+  try {
+    if (
+      !(await experimentalFeatureEnabled(context.env, principal, ASKS_FEATURE))
+    )
+      return askFailure(context, "ASKS_DISABLED");
+    return await run(db, principal.userId as UserId);
+  } catch (cause) {
+    notificationLogger.error("Needs-you asks request failed.", {
+      event: "needs_you_asks_request_failed",
+      requestId: context.get("requestId"),
+      cause,
+    });
+    return askFailure(context, "PERSISTENCE_UNAVAILABLE");
+  }
+};
+
 /**
  * Mounted at `/v1/needs-you`: the signed-in person's Threads that wait on
  * them, across every Project they reach, and behind the
@@ -174,10 +233,55 @@ const rankingResponse = async (
  */
 export const createNeedsYouRoutes = (
   callRanking: RankingCaller = workersAiRanking,
+  deliverWake?: DeliverArtifactWake,
 ) =>
   new Hono<AppEnv>()
     .get("/", (context) =>
       handle(context, (db, userId) => listResponse(context, db, userId)),
+    )
+    .get("/asks", (context) =>
+      handleAsks(context, async (db, userId) =>
+        context.json(
+          Schema.encodeUnknownSync(NeedsYouAsksResponseSchema)({
+            status: "success",
+            data: { asks: [...(await listArtifactAsks(db, userId))] },
+          }),
+          200,
+        ),
+      ),
+    )
+    .post("/asks/tick", (context) =>
+      handleAsks(context, async (_db, userId) => {
+        const body = Schema.decodeUnknownOption(TickNeedsYouAskRequestSchema)(
+          await context.req.json().catch(() => undefined),
+        );
+        if (Option.isNone(body)) return askFailure(context, "INVALID_REQUEST");
+        const result = await tickArtifactAsk(
+          context.env,
+          { userId, ...body.value },
+          {
+            ...(deliverWake === undefined ? {} : { deliver: deliverWake }),
+            waitUntil: (promise) => {
+              try {
+                context.executionCtx.waitUntil(promise);
+              } catch {
+                // No ExecutionContext in tests: the work still runs.
+              }
+            },
+          },
+        );
+        if (result.kind === "not-found")
+          return askFailure(context, "ASK_NOT_FOUND");
+        if (result.kind === "read-only")
+          return askFailure(context, "THREAD_READ_ONLY");
+        return context.json(
+          Schema.encodeUnknownSync(TickNeedsYouAskResponseSchema)({
+            status: "success",
+            data: { ticked: true, revision: result.revision },
+          }),
+          200,
+        );
+      }),
     )
     .get("/ranking", (context) =>
       handleRanking(context, (db, userId) =>

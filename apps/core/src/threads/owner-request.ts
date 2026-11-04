@@ -31,7 +31,7 @@ export interface OwnerRequestContext {
   /** The Thread whose agent sends any message this request delivers. */
   readonly sourceThreadId?: string;
   /** The schedule or GitHub subscription delivering this request's message. */
-  readonly automation?: "schedule" | "github";
+  readonly automation?: "schedule" | "github" | "artifact";
   /** Keeps work a route starts, such as title generation, running. */
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }

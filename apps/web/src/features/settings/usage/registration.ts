@@ -12,8 +12,8 @@ export const personalUsageSettingsSection = {
   scope: "personal",
   slug: "usage",
   group: "usage",
-  label: "Usage",
-  title: "Usage",
+  label: "Model",
+  title: "Model usage",
   description:
     "Inspect content-free model, tool, and runner activity attributed to your Threads.",
   icon: ChartSpline,
@@ -34,8 +34,7 @@ export const workspaceUsageSettingsSection = {
   component: WorkspaceUsageSettings,
 } satisfies SettingsSectionRegistration;
 
-// Plugin usage: reachable by URL only (hidden in settings-navigation.ts)
-// until the owner decides how usage is presented.
+// Plugin usage: under Usage for a person, beside Usage for a workspace.
 const pluginUsage = {
   slug: "plugin-usage",
   label: "Plugin usage",

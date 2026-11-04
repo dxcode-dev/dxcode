@@ -191,6 +191,7 @@ const NO_COMPOSER_DEFAULTS: PersonalComposerDefaultsData = {
   mode: null,
   model: null,
   runnerProfileId: null,
+  autosaveFiles: false,
 };
 
 const useNewThreadDraft = (

@@ -50,6 +50,7 @@ import {
   canonicalGitHubRepositoryLocator,
   canonicalPublicGitRepositoryLocator,
   PersistenceUnavailable,
+  PersonalAccountRepository,
   type Project,
   type ProjectAdditionalRepository,
   projectAdditionalRepositoryFromUrl,
@@ -75,7 +76,9 @@ import type { AppEnv } from "../http/types.js";
 import { projectPersistenceLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { PersonalAccountRepositoryD1 } from "../settings/account/repository-d1.js";
 import { SettingsAudit } from "../settings/audit.js";
+import { refreshActiveThreadEnvironments } from "../settings/environment-variables/refresh.js";
 import { signingBackendCapabilities } from "../settings/keys/backend.js";
 import { projectDefaultsLayersFor } from "../settings/project-defaults/routes.js";
 import { ProjectDefaultsService } from "../settings/project-defaults/service.js";
@@ -964,6 +967,52 @@ projectRoutes.patch("/:projectId", async (context) => {
           runnerProfileId: input.runnerProfileId,
         };
       }
+      // Custom Ship sends the prompt sent with it or the one already saved;
+      // another behavior keeps the saved prompt for the next Custom Ship.
+      const shipPrompt = input.shipPrompt ?? configuration.shipPrompt;
+      const shipAction = input.shipAction ?? configuration.shipAction;
+      if (shipAction === "custom" && shipPrompt === undefined)
+        return yield* new InvalidProjectRequest();
+      configuration = {
+        ...configuration,
+        shipAction,
+        ...(shipPrompt === undefined ? {} : { shipPrompt }),
+        ...(input.dxCoAuthor === undefined
+          ? {}
+          : { dxCoAuthor: input.dxCoAuthor }),
+      };
+      // The person who authors commits is the project's owner, as when the
+      // project was created; another member's Thread uses that member.
+      if (
+        input.commitAuthor !== undefined &&
+        input.commitAuthor !== configuration.commitAuthor.preference
+      ) {
+        const commitAuthor =
+          input.commitAuthor === "dx"
+            ? {
+                preference: "dx" as const,
+                name: "dxcodeagent",
+                email: "agent@dxcode.dev",
+              }
+            : yield* Effect.gen(function* () {
+                const accounts = yield* PersonalAccountRepository;
+                const account = yield* accounts.findOwnedByUser(
+                  current.ownerUserId,
+                );
+                return {
+                  preference: "user" as const,
+                  name: account.displayName,
+                  email: account.email,
+                };
+              }).pipe(
+                Effect.provide(
+                  PersonalAccountRepositoryD1.pipe(
+                    Layer.provide(D1Client.layer({ db })),
+                  ),
+                ),
+              );
+        configuration = { ...configuration, commitAuthor };
+      }
       return yield* service.update(
         context.get("principal"),
         params.projectId,
@@ -987,6 +1036,17 @@ projectRoutes.patch("/:projectId", async (context) => {
     }).pipe(
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
+    // Running Orbs take a new commit identity now, not at their next wake.
+    if (
+      (input.commitAuthor !== undefined || input.dxCoAuthor !== undefined) &&
+      context.env.THREAD_EXECUTION !== undefined
+    )
+      context.executionCtx.waitUntil(
+        refreshActiveThreadEnvironments(context.env, db, {
+          scope: "project",
+          id: project.id,
+        }).catch(() => undefined),
+      );
     return yield* Schema.encodeUnknownEffect(UpdateProjectResponseSchema)({
       status: "success",
       data: projectData(project),
@@ -1072,6 +1132,21 @@ projectRoutes.patch("/:projectId", async (context) => {
             },
           }),
           403,
+        ),
+      // Every user has a personal account; a missing one is a store fault.
+      PersonalAccountNotFound: () =>
+        context.json(
+          Schema.encodeUnknownSync(
+            UpdateProjectPersistenceUnavailableResponseSchema,
+          )({
+            status: "error",
+            data: {
+              code: "PERSISTENCE_UNAVAILABLE",
+              message: "Persistence is temporarily unavailable.",
+              requestId,
+            },
+          }),
+          503,
         ),
       SettingsMembershipInvariantViolation: () =>
         context.json(

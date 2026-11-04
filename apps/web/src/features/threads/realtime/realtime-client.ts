@@ -7,6 +7,10 @@ import {
   reportSessionEnded,
 } from "../../../shared/auth/session-ended.js";
 import { recordConnectionEvent } from "../../../shared/diagnostics/client-diagnostics.js";
+import {
+  invalidateAllArtifacts,
+  invalidateArtifacts,
+} from "../../artifacts/artifacts-queries.js";
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNeedsYou } from "../../notifications/needs-you-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
@@ -55,6 +59,7 @@ const invalidateAllRealtimeState = (
   void invalidateAllOrbMemory(queryClient);
   void invalidateAllOrbDisk(queryClient);
   void invalidateAllThreadAutomations(queryClient);
+  void invalidateAllArtifacts(queryClient);
   void invalidateNotifications(queryClient, userId);
   void invalidateNeedsYou(queryClient, userId);
   void invalidateSidebarLayout(queryClient, userId);
@@ -285,6 +290,8 @@ export class RealtimeClient {
       this.#rows.changesChanged(event.threadId, event.summaryChanged === true);
     } else if (event.type === "memory.invalidated") {
       void invalidateOrbMemory(this.#queryClient, event.threadId);
+    } else if (event.type === "artifacts.invalidated") {
+      void invalidateArtifacts(this.#queryClient, event.threadId);
     } else if (event.type === "disk.invalidated") {
       void invalidateOrbDisk(this.#queryClient, event.threadId);
     } else if (event.type === "notifications.invalidated") {

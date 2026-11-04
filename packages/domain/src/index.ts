@@ -602,16 +602,19 @@ export {
   CommitSigningPreference,
   GitAuthorEmail,
   GitAuthorName,
+  MAX_SHIP_PROMPT_LENGTH,
   PersonalProjectDefaults,
   ProjectCommitAuthor,
   ProjectConfiguration,
   ProjectDefaultOverrides,
+  ProjectDefaultShipAction,
   ProjectDefaultSource,
   ProjectDefaultsConflict,
   ProjectDefaultsRepository,
   type ProjectDefaultsRepositoryShape,
   ProjectShipAction,
   ResolvedProjectDefaults,
+  ShipPrompt,
   WorkspaceProjectDefaults,
   WorkspaceProjectPolicy,
 } from "./settings/project-defaults.js";
@@ -658,6 +661,7 @@ export {
   SettingsWorkspaceRole,
   WorkspaceSlug,
 } from "./settings/scope.js";
+export { builtInShipPrompt, shipPromptFor } from "./settings/ship-prompt.js";
 export {
   GitCommitExecutionResult,
   GitCommitSigningAttribution,

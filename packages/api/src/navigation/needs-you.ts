@@ -42,9 +42,64 @@ export const NeedsYouItemSchema = Schema.Struct({
   requestedAt: Schema.String,
   /** The Thread's linked issues and pull requests, newest first. */
   links: Schema.optional(Schema.Array(NeedsYouLinkSchema)),
+  /** The artifact holding the ask, when the agent wrote it in one. */
+  artifactId: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
 });
 
 export type NeedsYouItem = typeof NeedsYouItemSchema.Type;
+
+/**
+ * An ask in an artifact: an unchecked checklist item that mentions the
+ * person, in a Thread they can open. Behind the `artifact-asks` flag.
+ */
+export const NeedsYouAskSchema = Schema.Struct({
+  threadId: ThreadId,
+  threadTitle: Schema.String.check(Schema.isMaxLength(256)),
+  artifactId: Schema.String.check(Schema.isMaxLength(64)),
+  artifactTitle: Schema.String.check(Schema.isMaxLength(200)),
+  /** Names the item across revisions; ticking sends it back. */
+  itemKey: Schema.String.check(Schema.isMaxLength(64)),
+  /** The item's text after its checkbox, as Markdown with mention chips. */
+  text: Schema.String.check(Schema.isMaxLength(500)),
+  revision: Schema.Int,
+  /** When the ask was first seen open, in milliseconds. */
+  waitingSince: Schema.Number,
+  /** Whether the person may tick it: the owner or a Contribute member. */
+  canTick: Schema.Boolean,
+});
+
+export type NeedsYouAsk = typeof NeedsYouAskSchema.Type;
+
+/** `GET /v1/needs-you/asks`: the person's open asks, oldest first. */
+export const NeedsYouAsksResponseSchema = successResponse(
+  Schema.Struct({ asks: Schema.Array(NeedsYouAskSchema) }),
+);
+
+/** `POST /v1/needs-you/asks/tick`: ticks the ask, as the person. */
+export const TickNeedsYouAskRequestSchema = Schema.Struct({
+  threadId: ThreadId,
+  artifactId: Schema.String.check(Schema.isMaxLength(64)),
+  itemKey: Schema.String.check(Schema.isMaxLength(64)),
+});
+
+export const TickNeedsYouAskResponseSchema = successResponse(
+  Schema.Struct({ ticked: Schema.Literal(true), revision: Schema.Int }),
+);
+
+export const NeedsYouAskErrorResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literals([
+      "INVALID_REQUEST",
+      "ASKS_DISABLED",
+      "ASK_NOT_FOUND",
+      "THREAD_READ_ONLY",
+      "PERSISTENCE_UNAVAILABLE",
+    ]),
+    message: Schema.String,
+    requestId: Schema.String,
+  }),
+});
 
 /**
  * `GET /v1/needs-you` and `DELETE /v1/needs-you/:threadId`: the signed-in

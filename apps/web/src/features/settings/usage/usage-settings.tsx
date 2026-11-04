@@ -92,7 +92,7 @@ export function UsageSummaryCards({
         <strong>{formatTokens(data.summary.tokens.total)}</strong>
         <small>
           {data.summary.tokens.unknownEvents === 0
-            ? `${data.summary.modelTurns.toLocaleString()} model turns`
+            ? `${data.summary.modelTurns.toLocaleString()} model ${data.summary.modelTurns === 1 ? "turn" : "turns"}`
             : `${data.summary.tokens.unknownEvents} turns unknown`}
         </small>
       </article>
@@ -105,7 +105,7 @@ export function UsageSummaryCards({
         </strong>
         <small>
           {unknownCost === 0
-            ? `${knownCost.toLocaleString()} priced turns · USD`
+            ? `${knownCost.toLocaleString()} priced ${knownCost === 1 ? "turn" : "turns"} · USD`
             : `${knownCost.toLocaleString()} priced · ${unknownCost.toLocaleString()} unknown`}
         </small>
       </article>

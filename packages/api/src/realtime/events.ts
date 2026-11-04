@@ -51,6 +51,15 @@ export const RealtimeInvalidationEvent = Schema.Union([
     threadId: ThreadId,
     revision: Revision,
   }),
+  /**
+   * A Thread's artifacts changed: one was created, saved, or deleted.
+   * Content-free; refetch the list and any open artifact.
+   */
+  Schema.Struct({
+    type: Schema.Literal("artifacts.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
   /** The Thread's Orb disk is filling up; refetch its disk. */
   Schema.Struct({
     type: Schema.Literal("disk.invalidated"),

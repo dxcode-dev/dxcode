@@ -13,7 +13,7 @@ export const personalComposerSettingsSection: SettingsSectionRegistration = {
   label: "Composer",
   title: "Composer",
   description:
-    "What a New Thread starts with, Dictation, Audio Input, and dictation vocabulary.",
+    "What a New Thread starts with, Dictation, Audio Input, dictation vocabulary, and Autosave Files.",
   icon: TextCursorInput,
   component: ComposerSettings,
 };

@@ -29,6 +29,7 @@ type Dispatch = (action: PaneLayoutAction) => void;
 
 /** The phone order: the conversation, what it changed, then the views. */
 const STACKED_VIEW_ORDER: ReadonlyArray<PaneViewKind> = [
+  "artifacts",
   "changes",
   "portal",
   "files",

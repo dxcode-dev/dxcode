@@ -389,7 +389,7 @@ polished mockup:
    script errors. It needs agent-browser; install it first as the using-agent-browser skill says.
 
    ```bash
-   node scripts/preview.mjs /tmp/view.html ~/artifacts/views/<name>
+   node scripts/preview.mjs /tmp/view.html ~/.dx/work/views/<name>
    ```
 
 2. Look at every screenshot. Fix errors, overflow, clipped or overlapping text, and anything

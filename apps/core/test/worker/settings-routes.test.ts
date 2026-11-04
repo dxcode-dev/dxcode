@@ -455,13 +455,20 @@ describe("settings routes in workerd with real D1", () => {
     expect(initial.status).toBe(200);
     await expect(initial.json()).resolves.toEqual({
       status: "success",
-      data: { project: null, mode: null, model: null, runnerProfileId: null },
+      data: {
+        project: null,
+        mode: null,
+        model: null,
+        runnerProfileId: null,
+        autosaveFiles: false,
+      },
     });
 
     expect(
       (await patch({ mode: "high", model: "openai/gpt-6-astra" })).status,
     ).toBe(200);
     expect((await patch({ runnerProfileId: "e2b-large" })).status).toBe(200);
+    expect((await patch({ autosaveFiles: true })).status).toBe(200);
     const cleared = await patch({ project: "none", model: null });
     expect(cleared.status).toBe(200);
     await expect(cleared.json()).resolves.toEqual({
@@ -471,8 +478,14 @@ describe("settings routes in workerd with real D1", () => {
         mode: "high",
         model: null,
         runnerProfileId: "e2b-large",
+        autosaveFiles: true,
       },
     });
+    const autosaveOff = await patch({ autosaveFiles: false });
+    await expect(autosaveOff.json()).resolves.toMatchObject({
+      data: { autosaveFiles: false },
+    });
+    expect((await patch({ autosaveFiles: true })).status).toBe(200);
 
     const reread = await createSettingsApp(owner).request(
       "/settings/personal/account/composer",
@@ -480,7 +493,12 @@ describe("settings routes in workerd with real D1", () => {
       { DB: env.DB },
     );
     await expect(reread.json()).resolves.toMatchObject({
-      data: { project: "none", mode: "high", runnerProfileId: "e2b-large" },
+      data: {
+        project: "none",
+        mode: "high",
+        runnerProfileId: "e2b-large",
+        autosaveFiles: true,
+      },
     });
     const other = await createSettingsApp(outsider).request(
       "/settings/personal/account/composer",
@@ -488,7 +506,13 @@ describe("settings routes in workerd with real D1", () => {
       { DB: env.DB },
     );
     await expect(other.json()).resolves.toMatchObject({
-      data: { project: null, mode: null, model: null, runnerProfileId: null },
+      data: {
+        project: null,
+        mode: null,
+        model: null,
+        runnerProfileId: null,
+        autosaveFiles: false,
+      },
     });
   });
 
@@ -497,6 +521,8 @@ describe("settings routes in workerd with real D1", () => {
     { project: "not-a-project" },
     { model: "no-slash" },
     { runnerProfileId: "Bad Orb" },
+    { autosaveFiles: "yes" },
+    { autosaveFiles: 1 },
   ])("rejects invalid composer defaults %j", async (body) => {
     const response = await createSettingsApp(owner).request(
       "/settings/personal/account/composer",
@@ -877,7 +903,7 @@ describe("settings routes in workerd with real D1", () => {
     });
   });
 
-  it("keeps the stable ID across owner rename and makes only the new slug canonical", async () => {
+  it("keeps the stable ID across owner rename and makes the new slug canonical", async () => {
     const ownerApp = createSettingsApp(owner);
     const updated = await ownerApp.request(
       "/settings/workspaces/dx-team",
@@ -906,12 +932,17 @@ describe("settings routes in workerd with real D1", () => {
     });
     expect(JSON.stringify(updatedBody)).not.toContain("Other Team");
 
+    // The old slug stays an alias for members (#1382) and answers with the
+    // new one.
     const oldSlug = await ownerApp.request(
       "/settings/workspaces/dx-team",
       {},
       { DB: env.DB },
     );
-    expect(oldSlug.status).toBe(403);
+    expect(oldSlug.status).toBe(200);
+    await expect(oldSlug.json()).resolves.toMatchObject({
+      data: { id: "workspace-id", shortName: "renamed-dx" },
+    });
     const canonical = await ownerApp.request(
       "/settings/workspaces/renamed-dx",
       {},

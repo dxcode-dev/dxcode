@@ -80,6 +80,7 @@ export const WorkspaceInviteLinkStatusSchema = Schema.Literals([
   "active",
   "expired",
   "revoked",
+  "used-up",
 ]);
 
 export const WorkspaceInviteLinkDataSchema = Schema.Struct({
@@ -89,6 +90,8 @@ export const WorkspaceInviteLinkDataSchema = Schema.Struct({
   status: WorkspaceInviteLinkStatusSchema,
   expiresAt: Schema.optional(Schema.String),
   useCount: Schema.Int,
+  /** How many people can join through the link. Absent when unlimited. */
+  maxUses: Schema.optional(Schema.Int),
   createdAt: Schema.String,
   createdBy: Schema.Struct({ userId: Schema.String, name: Schema.String }),
 });
@@ -102,6 +105,8 @@ export const ListWorkspaceInviteLinksResponseSchema = successResponse(
 export const CreateWorkspaceInviteLinkRequestSchema = Schema.Struct({
   title: Schema.String,
   expiresAt: Schema.optional(Schema.String),
+  /** From 1 to 1000; omit for unlimited. */
+  maxUses: Schema.optional(Schema.Int),
 });
 
 export type CreateWorkspaceInviteLinkRequest =
@@ -119,6 +124,7 @@ export const WorkspaceInviteStatusSchema = Schema.Literals([
   "valid",
   "expired",
   "revoked",
+  "used-up",
   "not-found",
 ]);
 

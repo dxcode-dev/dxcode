@@ -197,7 +197,9 @@ describe("D1 migration", () => {
     expect(sqlByName.get("workspace_invite_link")).toContain(
       "token_hash TEXT NOT NULL",
     );
-    expect(sqlByName.get("workspace_invite_link")).not.toContain("max_uses");
+    expect(sqlByName.get("workspace_invite_link")).toContain(
+      "max_uses INTEGER",
+    );
     expect(sqlByName.get("workspace_invite_link_token_hash_uidx")).toContain(
       "(token_hash)",
     );

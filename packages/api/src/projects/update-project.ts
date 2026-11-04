@@ -1,10 +1,13 @@
 import {
+  CommitAuthorPreference,
   MAX_PROJECT_ADDITIONAL_REPOSITORIES,
   ProjectDescription,
   ProjectId,
   ProjectNameInput,
+  ProjectShipAction,
   PublicGitRepositoryUrl,
   RunnerProfileId,
+  ShipPrompt,
   WorkspacePolicyDenialReason,
 } from "@dx/domain";
 import { Schema } from "effect";
@@ -19,6 +22,11 @@ export const UpdateProjectRequestSchema = Schema.Struct({
   name: Schema.optional(ProjectNameInput),
   description: Schema.optional(ProjectDescription),
   runnerProfileId: Schema.optional(RunnerProfileId),
+  /** Custom Ship needs a prompt, sent with it or already saved. */
+  shipAction: Schema.optional(ProjectShipAction),
+  shipPrompt: Schema.optional(ShipPrompt),
+  commitAuthor: Schema.optional(CommitAuthorPreference),
+  dxCoAuthor: Schema.optional(Schema.Boolean),
   additionalRepositories: Schema.optional(
     Schema.Array(PublicGitRepositoryUrl).check(
       Schema.isMaxLength(MAX_PROJECT_ADDITIONAL_REPOSITORIES),

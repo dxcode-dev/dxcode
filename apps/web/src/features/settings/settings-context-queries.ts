@@ -34,8 +34,9 @@ export const settingsContextQueryOptions = (
 
 /**
  * The server answered that the user cannot open this workspace: it does not
- * exist, was renamed away, or the user is not a member. It answers all three
- * alike, so it does not reveal which workspaces exist.
+ * exist, its former name was taken by another workspace, or the user is not a
+ * member. It answers all three alike, so it does not reveal which workspaces
+ * exist.
  */
 export const isMissingWorkspaceError = (error: unknown) =>
   error instanceof ApiError && (error.status === 403 || error.status === 404);

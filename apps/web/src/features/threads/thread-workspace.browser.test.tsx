@@ -295,6 +295,18 @@ const click = async (element: Element | null) => {
   );
 };
 
+/** The views the title bar's Views menu offers, by `data-view`. */
+const viewsMenuItems = async (container: Element) => {
+  await click(container.querySelector('[aria-label="Views"]'));
+  const items = [
+    ...document.querySelectorAll<HTMLElement>(".pane-view-menu [data-view]"),
+  ].map((item) => item.dataset.view);
+  await React.act(async () => {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+  });
+  return items;
+};
+
 const press = async (element: Element | null, key: string) => {
   await React.act(() =>
     element?.dispatchEvent(
@@ -401,7 +413,7 @@ describe("ThreadSession panes", () => {
     await React.act(() => root.unmount());
   });
 
-  it("hides Views until the workspace is ready", async () => {
+  it("offers only Artifacts in Views until the workspace is ready", async () => {
     viewport.mobile = false;
     const Terminal = vi.fn(() => <div className="thread-terminal" />);
     const { container, root } = await renderSession(
@@ -415,8 +427,8 @@ describe("ThreadSession panes", () => {
       Terminal,
     );
 
-    expect(container.querySelector('[aria-label="Views"]')).toBeNull();
-    expect(container.querySelector('[aria-label="Open Tab"]')).toBeNull();
+    // Artifacts are stored with the Thread, not in its Orb.
+    expect(await viewsMenuItems(container)).toEqual(["artifacts"]);
     expect(container.querySelectorAll(".thread-pane")).toHaveLength(1);
     expect(container.querySelector('[role="status"]')?.textContent).toBe(
       "Cloning repository…",
@@ -692,7 +704,7 @@ describe("ThreadSession panes", () => {
       [...(row?.querySelectorAll('[role="tab"]') ?? [])].map(
         (tab) => tab.textContent,
       ),
-    ).toEqual(["Agent", "Changes", "Files", "Terminal"]);
+    ).toEqual(["Agent", "Artifacts", "Changes", "Files", "Terminal"]);
     expect(
       container.querySelector('[aria-label="Thread composer"]'),
     ).not.toBeNull();
@@ -717,7 +729,7 @@ describe("ThreadSession panes", () => {
     await React.act(() => root.unmount());
   });
 
-  it("keeps archived desktop chat visible while omitting the composer, Terminal, and Views", async () => {
+  it("keeps archived desktop chat visible while omitting the composer, Terminal, and every view but Artifacts", async () => {
     viewport.mobile = false;
     const renderTerminal = vi.fn(() => <div className="thread-terminal" />);
     const { container, root } = await renderSession(
@@ -732,8 +744,8 @@ describe("ThreadSession panes", () => {
     expect(
       container.querySelector('[aria-label="Thread composer"]'),
     ).toBeNull();
-    expect(container.querySelector('[aria-label="Views"]')).toBeNull();
-    expect(container.querySelector('[aria-label="Open Tab"]')).toBeNull();
+    // An archived Thread's artifacts stay readable.
+    expect(await viewsMenuItems(container)).toEqual(["artifacts"]);
     expect(container.querySelector(".thread-terminal")).toBeNull();
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Archived thread");

@@ -29,7 +29,6 @@ export interface RuntimeSourceAuthority {
   readonly installationEpoch: number;
   readonly policyRevision: number;
   readonly defaultBranch: string;
-  readonly shipAction: "ship" | "commit";
   readonly repositorySelection: "all" | "selected";
   readonly fingerprint: string;
 }
@@ -76,7 +75,7 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                 const row = await db
                   .prepare(`
                 SELECT thread.project_id, project.owner_user_id,
-                       project.workspace_id, project.ship_action,
+                       project.workspace_id,
                        snapshot.provider AS snapshot_provider,
                        snapshot.binding_revision AS snapshot_binding_revision,
                        snapshot.repository_full_name AS snapshot_repository_name,
@@ -304,13 +303,11 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                     ? row.thread_repository_selection
                     : row.repository_selection,
                 );
-                const shipAction = string(row.ship_action);
                 if (
                   defaultBranch === undefined ||
                   providerAccountId === undefined ||
                   (repositorySelection !== "all" &&
-                    repositorySelection !== "selected") ||
-                  (shipAction !== "ship" && shipAction !== "commit")
+                    repositorySelection !== "selected")
                 )
                   throw sourceAccessDenied("stale-binding", "rebind");
                 const fingerprint = JSON.stringify([
@@ -345,7 +342,6 @@ export const SourceAuthorityRepositoryD1 = (db: D1Database) =>
                   installationEpoch,
                   policyRevision,
                   defaultBranch,
-                  shipAction,
                   repositorySelection,
                   fingerprint,
                 };

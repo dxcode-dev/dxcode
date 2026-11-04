@@ -238,6 +238,8 @@ export const PersonalComposerDefaults = Schema.Struct({
   mode: Schema.NullOr(ModeId),
   model: Schema.NullOr(ModelId),
   runnerProfileId: Schema.NullOr(RunnerProfileId),
+  /** File tabs write edits to disk 5 seconds after typing stops. */
+  autosaveFiles: Schema.Boolean,
 });
 
 export type PersonalComposerDefaults = typeof PersonalComposerDefaults.Type;
@@ -248,6 +250,7 @@ export const UpdatePersonalComposerDefaultsInput = Schema.Struct({
   mode: Schema.optional(ModeId),
   model: Schema.optional(Schema.NullOr(ModelId)),
   runnerProfileId: Schema.optional(RunnerProfileId),
+  autosaveFiles: Schema.optional(Schema.Boolean),
 });
 
 export type UpdatePersonalComposerDefaultsInput =

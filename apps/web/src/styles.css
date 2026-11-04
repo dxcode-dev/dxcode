@@ -1911,6 +1911,32 @@ a {
   gap: 6px;
   color: var(--chat-foreground);
 }
+.transcript-artifact-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  color: var(--chat-foreground);
+}
+.transcript-artifact-card small {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+}
+.transcript-artifact-icon {
+  width: 13px;
+  height: 13px;
+  flex: 0 0 auto;
+  color: var(--muted-foreground);
+}
+.transcript-artifact-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.transcript-artifact-card[data-artifact-state="failed"],
+.transcript-artifact-card .transcript-artifact-error {
+  color: var(--destructive);
+}
 .transcript-skill-icon {
   width: 13px;
   height: 13px;
@@ -14027,6 +14053,71 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
 .project-repository-control > .settings-select {
   width: 320px;
   min-width: 0;
+}
+/* Ship Behavior: Edit Prompt beside the choice while Custom Ship is on. */
+.project-ship-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+}
+/* Ship Behavior and Commit Author choices share one width. */
+@media (min-width: 640px) {
+  .project-general-card .settings-row-control > .settings-select,
+  .project-ship-control > .settings-select {
+    width: 180px;
+  }
+}
+/* The custom Ship prompt editor, laid out like the delete-scope dialog. */
+.ship-prompt-dialog {
+  width: min(600px, 100%);
+}
+.ship-prompt-dialog .modal-surface-header {
+  height: auto;
+  padding: 18px 14px 0 22px;
+}
+.ship-prompt-dialog-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 22px;
+}
+.ship-prompt-dialog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 22px 22px;
+}
+.ship-prompt-dialog-body > p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 19px;
+}
+.ship-prompt-dialog-body > textarea {
+  min-height: 240px;
+  max-height: 50vh;
+  resize: vertical;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 18px;
+}
+.ship-prompt-dialog-count {
+  margin-top: -6px;
+  align-self: flex-end;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.ship-prompt-dialog-count[data-invalid] {
+  color: var(--destructive);
+}
+.ship-prompt-dialog-body > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
 }
 .project-additional-repositories {
   display: grid;

@@ -246,11 +246,17 @@ const linkDescription = (link: WorkspaceInviteLinkData) =>
   [
     link.status === "expired"
       ? "Expired"
-      : link.expiresAt === undefined
-        ? "Never expires"
-        : `Expires ${dateLabel(link.expiresAt)}`,
-    `${link.useCount} joined`,
+      : link.status === "used-up"
+        ? "Used up"
+        : link.expiresAt === undefined
+          ? "Never expires"
+          : `Expires ${dateLabel(link.expiresAt)}`,
+    link.maxUses === undefined
+      ? `${link.useCount} joined`
+      : `${link.useCount} of ${link.maxUses} joined`,
   ].join(" · ");
+
+const USE_LIMITS = [1, 5, 10, 25] as const;
 
 const ACTIVE_WINDOW_MS = 72 * 60 * 60 * 1000;
 
@@ -274,10 +280,12 @@ function InviteLinkDialog({
   readonly onCreate: (input: {
     readonly title: string;
     readonly expiresAt?: string;
+    readonly maxUses?: number;
   }) => Promise<WorkspaceInviteLinkData>;
 }) {
   const [title, setTitle] = React.useState("Invite link");
   const [expiresAt, setExpiresAt] = React.useState("");
+  const [maxUses, setMaxUses] = React.useState("");
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<string>();
   const [fieldErrors, setFieldErrors] = React.useState<InviteLinkFieldErrors>(
@@ -295,6 +303,7 @@ function InviteLinkDialog({
         ...(expiresAt === ""
           ? {}
           : { expiresAt: new Date(expiresAt).toISOString() }),
+        ...(maxUses === "" ? {} : { maxUses: Number(maxUses) }),
       }),
     );
     if (outcome.ok) {
@@ -379,6 +388,38 @@ function InviteLinkDialog({
               ) : (
                 <span id={`${formId}-expires-error`} className="members-error">
                   {fieldErrors.expiresAt}
+                </span>
+              )}
+            </div>
+            <div className="members-link-field">
+              <label htmlFor={`${formId}-uses`}>Use limit</label>
+              <select
+                id={`${formId}-uses`}
+                className="settings-select"
+                value={maxUses}
+                aria-invalid={
+                  fieldErrors.maxUses === undefined ? undefined : true
+                }
+                aria-describedby={
+                  fieldErrors.maxUses === undefined
+                    ? undefined
+                    : `${formId}-uses-error`
+                }
+                onChange={(event) => {
+                  setMaxUses(event.target.value);
+                  setFieldErrors({ ...fieldErrors, maxUses: undefined });
+                }}
+              >
+                <option value="">Unlimited</option>
+                {USE_LIMITS.map((limit) => (
+                  <option key={limit} value={limit}>
+                    {limit === 1 ? "1 person" : `${limit} people`}
+                  </option>
+                ))}
+              </select>
+              {fieldErrors.maxUses === undefined ? null : (
+                <span id={`${formId}-uses-error`} className="members-error">
+                  {fieldErrors.maxUses}
                 </span>
               )}
             </div>

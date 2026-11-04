@@ -2,7 +2,7 @@ import type { MessageAutomation } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, Clock } from "lucide-react";
+import { ChevronDown, Clock, FileText } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
@@ -81,9 +81,10 @@ export function ThreadSourceMessage({
 }
 
 /**
- * A message the Thread's schedule or a GitHub subscription delivered after
- * a turn ended. A schedule wake-up is one collapsed clock line opening to
- * the fixed wake-up text; GitHub events show one row each.
+ * A message the Thread's schedule, a GitHub subscription, or a person's tick
+ * or answer in an artifact delivered after a turn ended. A schedule wake-up
+ * or an artifact wake is one collapsed line opening to its text; GitHub
+ * events show one row each.
  */
 export function AutomationMessage({
   automation,
@@ -97,6 +98,7 @@ export function AutomationMessage({
   const [open, setOpen] = React.useState(false);
   if (automation === "github")
     return <GitHubEventRows text={text} pending={pending} />;
+  const artifact = automation === "artifact";
   return (
     <div className="thread-source-message" data-open={open ? "" : undefined}>
       <button
@@ -105,8 +107,10 @@ export function AutomationMessage({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        <Clock strokeWidth={2} />
-        <span>Scheduled wake-up</span>
+        {artifact ? <FileText strokeWidth={2} /> : <Clock strokeWidth={2} />}
+        <span>
+          {artifact ? "Artifact ask ticked or answered" : "Scheduled wake-up"}
+        </span>
         {pending ? <small>Steering</small> : null}
         <ChevronDown className="thread-source-chevron" aria-hidden />
       </button>

@@ -143,6 +143,7 @@ const harness = () => {
           }),
         ),
       ),
+    hasShortNameAlias: () => Effect.succeed(false),
     createOwnedByUser: () => Effect.die("not used"),
     updateProfile: () => Effect.die("not used"),
   });

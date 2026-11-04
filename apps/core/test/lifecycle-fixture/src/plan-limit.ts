@@ -2,6 +2,11 @@ import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 import { sweepClaudePlanWaits } from "../../../src/claude-code/plan-wait.js";
 import type { AppEnv } from "../../../src/http/types.js";
+import {
+  artifactCommented,
+  artifactSaved,
+  type DeliverArtifactWake,
+} from "../../../src/thread-artifacts/ask-effects.js";
 import { FixturePlanAgent } from "./agents/fixture-plan-agent.js";
 import { reportPlanLimit } from "./plan-state.js";
 
@@ -37,4 +42,68 @@ planLimitRoutes.post("/tick", async (context) => {
     resumed.push({ threadId: wait.threadId, submissionId: body.submissionId });
   });
   return context.json({ resumed });
+});
+
+/**
+ * A person's tick, or their comment that mentions the agent, through the
+ * real artifact after-save effects. Each wake reaches the plan agent the way
+ * a production wake reaches its agent: one user message, keyed so a repeat
+ * admits nothing new. `now` spaces the two wakes past the per-Thread interval.
+ */
+planLimitRoutes.post("/artifact-wake/:threadId", async (context) => {
+  const threadId = context.req.param("threadId");
+  const { kind, now } = await context.req.json<{
+    kind: "tick" | "comment";
+    now: number;
+  }>();
+  const deliver: DeliverArtifactWake = async (wake) => {
+    const response = await agentRoutes.request(
+      `/${encodeURIComponent(wake.threadId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "user",
+          body: wake.body,
+          idempotencyKey: wake.key,
+        }),
+      },
+      context.env,
+    );
+    if (response.status !== 202)
+      throw new Error(`Wake delivery failed: ${response.status}`);
+    delivered.push(
+      (await response.json<{ submissionId: string }>()).submissionId,
+    );
+  };
+  const delivered: string[] = [];
+  const person = { kind: "user" as const, userId: "plan-fixture-person" };
+  if (kind === "tick")
+    await artifactSaved(
+      context.env,
+      {
+        threadId,
+        artifactId: "art_00000000000000000000000000000001",
+        title: "Plan",
+        revision: 2,
+        before: "- [ ] @[Owner](user:plan-fixture-owner) Approve the release\n",
+        after: "- [x] @[Owner](user:plan-fixture-owner) Approve the release\n",
+        writer: person,
+      },
+      { deliver, now },
+    );
+  else
+    await artifactCommented(
+      context.env,
+      {
+        threadId,
+        artifactId: "art_00000000000000000000000000000001",
+        commentId: "cmt_00000000000000000000000000000001",
+        quote: "Approve the release",
+        body: "@[dx](agent) add the changelog link",
+        writer: person,
+      },
+      { deliver, now },
+    );
+  return context.json({ delivered });
 });

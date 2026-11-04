@@ -9,17 +9,11 @@ const hiddenNavigationIds: Readonly<
   Record<SettingsScope, ReadonlySet<string>>
 > = {
   personal: new Set([
-    "personal-usage",
-    "personal-plugin-usage",
     "personal-custom-plugins",
     "personal-triggers",
     "personal-signing-keys",
   ]),
-  workspace: new Set([
-    "workspace-usage",
-    "workspace-plugin-usage",
-    "workspace-custom-plugins",
-  ]),
+  workspace: new Set(["workspace-custom-plugins"]),
 };
 
 export const isWorkspaceAdmin = (role: WorkspaceRole | undefined) =>

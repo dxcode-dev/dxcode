@@ -910,3 +910,129 @@ describe("Changes pane", () => {
     await React.act(() => root.unmount());
   });
 });
+
+describe("Changes pane Ship Behavior (#1196)", () => {
+  const plans = {
+    ship: {
+      action: "ship",
+      baseBranch: "main",
+      prompt: "Ship this Thread's changes to `main`.",
+    },
+    push: {
+      action: "push",
+      baseBranch: "main",
+      prompt: "Push this Thread's changes to a feature branch.",
+    },
+    custom: {
+      action: "custom",
+      baseBranch: "main",
+      prompt: "Open a PR with our template. Do not merge.",
+    },
+  } as const;
+
+  const renderPane = async (
+    plan: (typeof plans)[keyof typeof plans],
+    ship: NonNullable<ChangesTransport["ship"]> = vi.fn(async () => undefined),
+  ) => {
+    const transport: ChangesTransport = {
+      getChanges: vi.fn<ChangesTransport["getChanges"]>(async (_id, range) =>
+        dataFor(range),
+      ),
+      getDiff: vi.fn<ChangesTransport["getDiff"]>(),
+      push: vi.fn<ChangesTransport["push"]>(),
+      getShipPlan: vi.fn(async () => plan),
+      ship,
+    };
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await React.act(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ChangesPane
+            threadId={threadId}
+            transport={transport}
+            onReviewPrompt={() => undefined}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await settle();
+    return { container, root, transport };
+  };
+
+  it("names the base branch before Ship sends the project's prompt as the person's message", async () => {
+    const { container, root, transport } = await renderPane(plans.ship);
+    const ship = buttonNamed(container, "Ship");
+    expect(ship?.hasAttribute("disabled")).toBe(false);
+    await click(ship);
+    const dialog = container.querySelector(
+      'dialog[aria-labelledby="changes-ship-confirmation-title"]',
+    );
+    expect(dialog?.textContent).toContain("Ship to main?");
+    expect(transport.ship).not.toHaveBeenCalled();
+
+    await click(buttonNamed(container, "Confirm Ship"));
+    await settle();
+    expect(transport.ship).toHaveBeenCalledWith(threadId, {
+      prompt: plans.ship.prompt,
+      idempotencyKey: expect.stringMatching(/^ship-/),
+    });
+    expect(
+      container.querySelector(
+        'dialog[aria-labelledby="changes-ship-confirmation-title"]',
+      ),
+    ).toBeNull();
+    await React.act(() => root.unmount());
+  });
+
+  it("labels Push to Branch and Custom Ship and says what each sends", async () => {
+    const push = await renderPane(plans.push);
+    await click(buttonNamed(push.container, "Push to Branch"));
+    expect(push.container.textContent).toContain("Push to a branch?");
+    expect(push.container.textContent).toContain("not to main");
+    await click(buttonNamed(push.container, "Confirm Push"));
+    await settle();
+    expect(push.transport.ship).toHaveBeenCalledWith(threadId, {
+      prompt: plans.push.prompt,
+      idempotencyKey: expect.any(String),
+    });
+    await React.act(() => push.root.unmount());
+
+    const custom = await renderPane(plans.custom);
+    await click(buttonNamed(custom.container, "Ship"));
+    expect(custom.container.textContent).toContain(
+      "This project's custom Ship prompt will be sent",
+    );
+    await click(buttonNamed(custom.container, "Confirm Ship"));
+    await settle();
+    expect(custom.transport.ship).toHaveBeenCalledWith(threadId, {
+      prompt: plans.custom.prompt,
+      idempotencyKey: expect.any(String),
+    });
+    await React.act(() => custom.root.unmount());
+  });
+
+  it("keeps the confirmation open with the reason when the message is refused", async () => {
+    const { container, root } = await renderPane(
+      plans.ship,
+      vi.fn(async () => {
+        throw new Error("Only contributors can send messages.");
+      }),
+    );
+    await click(buttonNamed(container, "Ship"));
+    await click(buttonNamed(container, "Confirm Ship"));
+    await settle();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Only contributors can send messages.",
+    );
+    expect(buttonNamed(container, "Cancel")).not.toBeNull();
+    await React.act(() => root.unmount());
+  });
+});

@@ -46,6 +46,7 @@ const ComposerDefaultsRow = Schema.Struct({
   composer_mode: Schema.NullOr(Schema.String),
   composer_model: Schema.NullOr(Schema.String),
   composer_runner_profile_id: Schema.NullOr(Schema.String),
+  files_autosave: Schema.Literals([0, 1]),
 });
 
 export const PersonalAccountRepositoryD1 = Layer.effect(
@@ -140,6 +141,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
         mode: row.composer_mode,
         model: row.composer_model,
         runnerProfileId: row.composer_runner_profile_id,
+        autosaveFiles: row.files_autosave === 1,
       });
     });
 
@@ -171,7 +173,8 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             composer_project,
             composer_mode,
             composer_model,
-            composer_runner_profile_id
+            composer_runner_profile_id,
+            files_autosave
           FROM personal_account
           WHERE user_id = ${userId}
         `.pipe(
@@ -202,13 +205,18 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
               ${input.runnerProfileId ?? null},
               composer_runner_profile_id
             ),
+            files_autosave = COALESCE(
+              ${input.autosaveFiles === undefined ? null : input.autosaveFiles ? 1 : 0},
+              files_autosave
+            ),
             updated_at = datetime('now')
           WHERE user_id = ${userId}
           RETURNING
             composer_project,
             composer_mode,
             composer_model,
-            composer_runner_profile_id
+            composer_runner_profile_id,
+            files_autosave
         `.pipe(
           Effect.catchTag("SqlError", (cause) =>
             Effect.fail(

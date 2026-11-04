@@ -51,6 +51,7 @@ import {
   githubControlPlaneRoutes,
   githubWebhookRoutes,
 } from "./source-control/github/routes.js";
+import { threadArtifactRoutes } from "./thread-artifacts/routes.js";
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadDeletionRoutes } from "./thread-deletion/routes.js";
 import { threadDesktopRoutes } from "./thread-desktop/routes.js";
@@ -139,6 +140,9 @@ app.route("/v1/threads", threadSandboxFileRoutes);
 // while the Thread is archived. `/storage/*` also matches `/storage`.
 app.use("/v1/threads/:threadId/storage/*", authorizeThread);
 app.route("/v1/threads", threadStorageRoutes);
+// Artifacts outlive the Orb too. `/artifacts/*` also matches `/artifacts`.
+app.use("/v1/threads/:threadId/artifacts/*", authorizeThread);
+app.route("/v1/threads", threadArtifactRoutes);
 // `/terminal/*` also matches `/terminal`: the attach and its warm-up.
 app.use("/v1/threads/:threadId/terminal/*", authorizeThread);
 app.use("/v1/threads/:threadId/terminal/*", enforceThreadActive);

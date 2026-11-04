@@ -17,6 +17,12 @@ import {
   encryptConfigValue,
   loadConfigEncryptionKeyring,
 } from "../config-encryption.js";
+import {
+  inviteLinkHasUsesSql,
+  inviteLinkMaxUsesError,
+  inviteRefusalMessage,
+  isInviteLinkUsedUp,
+} from "./invite-link-uses.js";
 
 export class WorkspaceMembersError extends Error {
   constructor(
@@ -73,7 +79,11 @@ export const workspaceAccess = async (
               organization.slug AS short_name, member.role
          FROM member
          JOIN organization ON organization.id = member.organizationId
-        WHERE member.userId = ? AND organization.slug = ? COLLATE NOCASE
+        WHERE member.userId = ?1
+          AND (organization.slug = ?2 COLLATE NOCASE OR EXISTS (
+            SELECT 1 FROM workspace_short_name_alias AS alias
+             WHERE alias.workspace_id = organization.id
+               AND alias.short_name = ?2))
           AND organization.lifecycleState = 'active'`,
     )
     .bind(principal.userId, slug)
@@ -428,6 +438,7 @@ interface InviteLinkRow {
   readonly token_envelope_json: string;
   readonly expires_at: string | null;
   readonly use_count: number;
+  readonly max_uses: number | null;
   readonly created_at: string;
   readonly revoked_at: string | null;
   readonly created_by_user_id: string;
@@ -435,14 +446,19 @@ interface InviteLinkRow {
 }
 
 const linkStatus = (
-  row: Pick<InviteLinkRow, "expires_at" | "revoked_at">,
+  row: Pick<
+    InviteLinkRow,
+    "expires_at" | "revoked_at" | "use_count" | "max_uses"
+  >,
   now: Date,
 ) =>
   row.revoked_at !== null
     ? ("revoked" as const)
     : row.expires_at !== null && Date.parse(row.expires_at) <= now.getTime()
       ? ("expired" as const)
-      : ("active" as const);
+      : isInviteLinkUsedUp(row)
+        ? ("used-up" as const)
+        : ("active" as const);
 
 export const listInviteLinks = async (
   db: D1Database,
@@ -455,7 +471,7 @@ export const listInviteLinks = async (
     .prepare(
       `SELECT link.id, link.organization_id, link.title,
               link.token_envelope_json, link.expires_at, link.use_count,
-              link.created_at, link.revoked_at, link.created_by_user_id,
+              link.max_uses, link.created_at, link.revoked_at, link.created_by_user_id,
               "user".name AS created_by_name
          FROM workspace_invite_link AS link
          LEFT JOIN "user" ON "user".id = link.created_by_user_id
@@ -495,6 +511,7 @@ export const listInviteLinks = async (
         status: linkStatus(row, now),
         ...(row.expires_at === null ? {} : { expiresAt: row.expires_at }),
         useCount: row.use_count,
+        ...(row.max_uses === null ? {} : { maxUses: row.max_uses }),
         createdAt: row.created_at,
         createdBy: {
           userId: row.created_by_user_id,
@@ -510,7 +527,11 @@ export const createInviteLink = async (
   db: D1Database,
   bindings: Bindings,
   access: WorkspaceAccess,
-  input: { readonly title: string; readonly expiresAt?: string },
+  input: {
+    readonly title: string;
+    readonly expiresAt?: string;
+    readonly maxUses?: number;
+  },
   origin: string,
 ): Promise<WorkspaceInviteLinkData> => {
   requireAdmin(access);
@@ -532,6 +553,8 @@ export const createInviteLink = async (
       });
     else expiresAt = parsed.toISOString();
   }
+  const maxUsesError = inviteLinkMaxUsesError(input.maxUses);
+  if (maxUsesError !== undefined) fieldErrors.push(maxUsesError);
   if (fieldErrors.length > 0)
     throw new WorkspaceMembersError(
       "INVALID_WORKSPACE_MEMBERS_REQUEST",
@@ -550,8 +573,8 @@ export const createInviteLink = async (
     .prepare(
       `INSERT INTO workspace_invite_link (
          id, organization_id, title, token_hash, token_envelope_json,
-         expires_at, created_by_user_id, created_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         expires_at, max_uses, created_by_user_id, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
@@ -560,6 +583,7 @@ export const createInviteLink = async (
       await sha256Hex(token),
       JSON.stringify(envelope),
       expiresAt ?? null,
+      input.maxUses ?? null,
       access.userId,
       createdAt,
     )
@@ -581,6 +605,7 @@ export const createInviteLink = async (
     status: "active",
     ...(expiresAt === undefined ? {} : { expiresAt }),
     useCount: 0,
+    ...(input.maxUses === undefined ? {} : { maxUses: input.maxUses }),
     createdAt,
     createdBy: { userId: access.userId, name: creator?.name ?? "" },
   };
@@ -631,8 +656,8 @@ export const lookupInvite = async (
   if (!INVITE_TOKEN_PATTERN.test(token)) return { status: "not-found" };
   const row = await db
     .prepare(
-      `SELECT link.id, link.expires_at, link.revoked_at,
-              organization.id AS workspace_id, organization.name AS display_name,
+      `SELECT link.id, link.expires_at, link.revoked_at, link.use_count,
+              link.max_uses, organization.id AS workspace_id, organization.name AS display_name,
               organization.slug AS short_name,
               organization.lifecycleState AS lifecycle_state
          FROM workspace_invite_link AS link
@@ -644,6 +669,8 @@ export const lookupInvite = async (
       id: string;
       expires_at: string | null;
       revoked_at: string | null;
+      use_count: number;
+      max_uses: number | null;
       workspace_id: string;
       display_name: string;
       short_name: string;
@@ -699,11 +726,9 @@ export const acceptInvite = async (
     throw new WorkspaceMembersError(
       "WORKSPACE_INVITE_INVALID",
       404,
-      invite.status === "expired"
-        ? "This invite link has expired."
-        : invite.status === "revoked"
-          ? "This invite link was revoked."
-          : "This invite link is not valid.",
+      inviteRefusalMessage(
+        invite.status === "valid" ? "not-found" : invite.status,
+      ),
     );
   const workspace = invite.workspace;
   const current = await db
@@ -746,7 +771,8 @@ export const acceptInvite = async (
             WHERE EXISTS (
               SELECT 1 FROM workspace_invite_link
                WHERE id = ? AND revoked_at IS NULL
-                 AND (expires_at IS NULL OR expires_at > ?))`,
+                 AND (expires_at IS NULL OR expires_at > ?)
+                 AND ${inviteLinkHasUsesSql})`,
         )
         .bind(
           crypto.randomUUID(),
@@ -782,12 +808,16 @@ export const acceptInvite = async (
       "You already belong to a workspace.",
     );
   }
-  if (!(await isMemberOf(db, workspace.id, userId)))
+  if (!(await isMemberOf(db, workspace.id, userId))) {
+    // The link changed after the lookup above, usually its last use going
+    // to someone joining at the same time.
+    const { status } = await lookupInvite(db, token);
     throw new WorkspaceMembersError(
       "WORKSPACE_INVITE_INVALID",
       404,
-      "This invite link is not valid.",
+      inviteRefusalMessage(status === "valid" ? "not-found" : status),
     );
+  }
   // Joining approves the account past the waitlist, so later sign-ins keep
   // working after they leave the workspace.
   await db

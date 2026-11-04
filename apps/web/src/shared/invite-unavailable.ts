@@ -3,6 +3,8 @@ import type { WorkspaceInviteStatus } from "@dx/api";
 const unavailableMessage = {
   expired: "This invite link has expired. Ask a workspace admin for a new one.",
   revoked: "This invite link was revoked. Ask a workspace admin for a new one.",
+  "used-up":
+    "This invite link has been used up. Ask a workspace admin for a new one.",
   "not-found": "This invite link is not valid.",
 } as const;
 

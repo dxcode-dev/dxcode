@@ -155,6 +155,41 @@ export const pushChangesMutationOptions = (
   });
 
 /**
+ * The project's Ship Behavior as the main action sends it. A project's
+ * setting can change while a Thread is open, so pressing the action reads
+ * it again before anything is sent.
+ */
+export const shipPlanQueryOptions = (
+  transport: ChangesTransport,
+  threadId: ThreadId,
+) =>
+  queryOptions({
+    queryKey: [...changesKeys.all(threadId), "ship"] as const,
+    queryFn: ({ signal }) => {
+      if (transport.getShipPlan === undefined)
+        throw new Error("Ship is unavailable.");
+      return transport.getShipPlan(threadId, signal);
+    },
+    enabled: transport.getShipPlan !== undefined,
+    staleTime: 30_000,
+  });
+
+export const shipChangesMutationOptions = (
+  transport: ChangesTransport,
+  threadId: ThreadId,
+) =>
+  mutationOptions({
+    mutationKey: [...changesKeys.all(threadId), "ship-send"] as const,
+    mutationFn: (input: { readonly prompt: string }) => {
+      if (transport.ship === undefined) throw new Error("Ship is unavailable.");
+      return transport.ship(threadId, {
+        prompt: input.prompt,
+        idempotencyKey: `ship-${crypto.randomUUID()}`,
+      });
+    },
+  });
+
+/**
  * The Changes queries loaded for a Thread, for a bug report's Diff
  * Diagnostics: each key and its data, any that would pass `budget`
  * characters replaced by its size.

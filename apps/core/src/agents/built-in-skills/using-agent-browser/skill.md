@@ -44,7 +44,7 @@ browser-use skill instead.
   session, `close` it and reopen with the flag.
 - `--args` splits on every comma, so a comma-valued Chromium flag cannot go through it; use an
   `--executable-path` wrapper instead (see Hover-gated UI).
-- Save every screenshot and recording the user should see under `~/artifacts/<topic>/` by
+- Save every screenshot and recording the user should see under `~/.dx/work/<topic>/` by
   absolute path, outside the repository so it never shows up in `git status`. Pass an absolute
   path: a path starting with `.` is read as a CSS selector. Store each one with
   `dxd files put <path>...` and show it in your reply with a Markdown image of the printed URL,
@@ -179,7 +179,7 @@ a session that reports `(hover: none)`. Start from a settled state and route eve
 ```bash
 REC="node ~/.local/share/dx/skills/using-agent-browser/scripts/action-video.mjs"
 export AGENT_BROWSER_CDP=9333 ACTION_VIDEO_SESSION=app
-mkdir -p ~/artifacts/comment-flow
+mkdir -p ~/.dx/work/comment-flow
 $REC start "$HOME/artifacts/comment-flow/flow-raw.mp4"
 $REC mouse move 760 236
 $REC mouse move 760 308
@@ -232,7 +232,7 @@ const context = await browser.newContext({ ...devices['iPhone 14'], ignoreHTTPSE
 const page = await context.newPage()
 await page.goto(url)
 if (!(await page.evaluate(() => matchMedia('(pointer: coarse)').matches))) throw new Error('no touch')
-await page.screenshot({ path: '/home/user/artifacts/mobile/mobile.png' })
+await page.screenshot({ path: '/home/user/.dx/work/mobile/mobile.png' })
 ```
 
 - The full device descriptor (`hasTouch`) is what makes `(pointer: coarse)` match; use `.tap()`.
