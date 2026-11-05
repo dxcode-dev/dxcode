@@ -160,7 +160,7 @@ const eventColumns = `
   model_profile_id, model_profile_version, model_configuration_revision,
   observed_provider_id, observed_provider_name, observed_model_id,
   input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-  reasoning_tokens, total_tokens,
+  cache_write_1h_tokens, reasoning_tokens, total_tokens,
   tool_call_id, tool_name, tool_origin, tool_runtime,
   runner_provider, runner_decision, runner_id, runner_template,
   runner_active_timeout_ms, runner_profile_id, runner_profile_version,
@@ -191,6 +191,7 @@ const costSnapshot = (
           output: event.outputTokens,
           cacheRead: event.cacheReadTokens,
           cacheWrite: event.cacheWriteTokens,
+          cacheWrite1h: event.cacheWrite1hTokens,
         },
         price,
       )
@@ -237,6 +238,7 @@ const eventValues = (
     model?.outputTokens ?? null,
     model?.cacheReadTokens ?? null,
     model?.cacheWriteTokens ?? null,
+    model?.cacheWrite1hTokens ?? null,
     model?.reasoningTokens ?? null,
     model?.totalTokens ?? null,
     tool?.toolCallId ?? null,
@@ -281,7 +283,7 @@ const eventInsert = (
               ELSE 'model' END,
          1,
          0,
-         ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
          ?, ?, ?, ?, ?, ?
        FROM threads AS thread

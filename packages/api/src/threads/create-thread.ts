@@ -5,6 +5,7 @@ import {
   ThreadId,
   ThreadModelSelection,
   ThreadTitle,
+  ThreadVisibility,
   WorkspacePolicyDenialReason,
 } from "@dx/domain";
 import { Schema } from "effect";
@@ -78,7 +79,7 @@ export const InitialThreadMessageSchema = Schema.Struct({
   }),
 );
 
-export const CreateThreadRequestSchema = Schema.Struct({
+export const CreateThreadRequestSchema = /* @__PURE__ */ Schema.Struct({
   projectId: Schema.optional(ProjectId),
   runnerProfileId: Schema.optional(RunnerProfileId),
   title: Schema.optional(ThreadTitle),
@@ -97,22 +98,39 @@ export const CreateThreadRequestSchema = Schema.Struct({
    * Required when the owner has more than one enabled plan.
    */
   claudeConnectionId: Schema.optional(ModelConnectionId),
-}).check(
-  Schema.makeFilter((request) =>
-    request.initialMessage === undefined && request.threadId === undefined
-      ? undefined
-      : request.initialMessage !== undefined && request.threadId !== undefined
+  /**
+   * Who can see the Thread from its start. `workspace` shares it with the
+   * owner's workspace as View, as the Share dialog does; left out, it is
+   * `private`. A child takes its family's sharing, so it sets none.
+   */
+  visibility: Schema.optional(ThreadVisibility),
+})
+  .check(
+    Schema.makeFilter((request) =>
+      request.visibility !== undefined && request.parentThreadId !== undefined
+        ? {
+            path: ["visibility"],
+            issue: "A child Thread shares with its family.",
+          }
+        : undefined,
+    ),
+  )
+  .check(
+    Schema.makeFilter((request) =>
+      request.initialMessage === undefined && request.threadId === undefined
         ? undefined
-        : {
-            path:
-              request.initialMessage === undefined
-                ? ["initialMessage"]
-                : ["threadId"],
-            issue:
-              "Initial message admission requires a stable Thread identifier.",
-          },
-  ),
-);
+        : request.initialMessage !== undefined && request.threadId !== undefined
+          ? undefined
+          : {
+              path:
+                request.initialMessage === undefined
+                  ? ["initialMessage"]
+                  : ["threadId"],
+              issue:
+                "Initial message admission requires a stable Thread identifier.",
+            },
+    ),
+  );
 
 export const CreateThreadResponseSchema = Schema.Struct({
   status: Schema.Literal("success"),
@@ -169,6 +187,20 @@ export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
     ]),
   }),
 });
+
+/** Workspace visibility needs the owner in an active workspace. */
+export const CreateThreadSharingUnavailableResponseSchema =
+  /* @__PURE__ */ errorResponse(
+    "THREAD_SHARING_UNAVAILABLE",
+    "Join or create a workspace to share Threads.",
+  );
+
+/** An External API App acts for its own Threads only and cannot share. */
+export const CreateThreadSharingForbiddenResponseSchema =
+  /* @__PURE__ */ errorResponse(
+    "THREAD_SHARING_FORBIDDEN",
+    "Only a signed-in person can share a Thread.",
+  );
 
 export const CreateThreadPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",

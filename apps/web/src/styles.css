@@ -7639,6 +7639,24 @@ span.usage-day-toggle {
   background: var(--muted);
   opacity: 1;
 }
+/* Create Thread options: ⋮, or the people icon once it is shared. */
+.new-thread-options {
+  flex: none;
+  border-radius: 50%;
+  color: var(--muted-foreground);
+}
+.new-thread-options[data-visibility="workspace"] {
+  color: var(--primary);
+}
+/* The people `@` can tag, under the new-Thread prompt. */
+.new-thread-composer-body .composer-mention-card {
+  margin: 4px 0 0;
+}
+.new-thread-options-row .new-thread-options-value {
+  margin-left: auto;
+  padding-left: 16px;
+  color: var(--muted-foreground);
+}
 .reasoning-positioner,
 .thread-context-positioner {
   z-index: 130;

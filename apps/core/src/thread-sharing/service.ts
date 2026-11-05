@@ -262,7 +262,7 @@ export const skipsMultiplayerConfirmation = async (
   )?.skip_multiplayer_confirmation === 1;
 
 /** The owner's workspace, which a shared Thread is shared with. */
-const ownerWorkspaceId = async (db: D1Database, userId: UserId) =>
+export const ownerWorkspaceId = async (db: D1Database, userId: UserId) =>
   (
     await db
       .prepare(

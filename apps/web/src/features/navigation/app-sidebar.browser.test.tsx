@@ -65,11 +65,6 @@ vi.mock("./notification-inbox.js", async (importOriginal) => ({
   NotificationInbox: () => null,
 }));
 
-vi.mock("./needs-you-inbox.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./needs-you-inbox.js")>()),
-  NeedsYouInbox: () => null,
-}));
-
 vi.mock("../../shared/new-thread-surface.js", async (importOriginal) => ({
   ...(await importOriginal<
     typeof import("../../shared/new-thread-surface.js")

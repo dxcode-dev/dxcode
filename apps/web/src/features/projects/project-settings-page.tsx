@@ -62,6 +62,7 @@ import {
   projectDefaultsQueryOptions,
 } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
+import { ChangeOwnerCard } from "./change-owner-card.js";
 import { DeleteProjectCard } from "./delete-project-card.js";
 import { AdditionalRepositoriesPicker } from "./new-project-dialog.js";
 import { buildProjectMetadataChanges } from "./project-metadata.js";
@@ -187,6 +188,7 @@ export function ProjectSettingsPage({
                 ownerName={ownerName}
                 userId={identity.id}
                 viewer={identity}
+                workspace={settingsQuery.data?.workspace}
               />
             ) : null}
             {canManage && section === "orb" ? (
@@ -352,12 +354,14 @@ function GeneralProjectSettings({
   ownerName,
   userId,
   viewer,
+  workspace,
 }: {
   readonly project: ProjectData;
   readonly ownerName: string;
   readonly userId: UserId;
   /** The signed-in person, who authors commits when the project asks for them. */
   readonly viewer: { readonly name: string; readonly email: string };
+  readonly workspace: SettingsContextData["workspace"];
 }) {
   const queryClient = useQueryClient();
   const updateMutation = useMutation(
@@ -561,6 +565,11 @@ function GeneralProjectSettings({
           onReset={() => undefined}
         />
       </SettingsCard>
+      <ChangeOwnerCard
+        project={project}
+        userId={userId}
+        workspace={workspace}
+      />
       <DeleteProjectCard project={project} userId={userId} />
       <UnsavedChangesGuard
         dirty={dirty}

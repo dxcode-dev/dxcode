@@ -9,7 +9,7 @@ import {
   workspaceDiskGuard,
 } from "../orb-disk/guard.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
-import { environmentSecretsOf } from "../settings/environment-variables/sandbox.js";
+import { environmentMaskerOf } from "../settings/environment-variables/sandbox.js";
 import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 
@@ -788,7 +788,7 @@ export class ClaudeCodeRun {
     for (;;) {
       const bytes = await this.#read(`${this.dir}/${chunkName(this.#chunk)}`);
       if (bytes === undefined) break;
-      this.stream.secrets = await environmentSecretsOf(this.#sandbox);
+      this.stream.masker = await environmentMaskerOf(this.#sandbox);
       // Reads are redacted: a secret becomes one byte, so positions are
       // counted in lines, which redaction never adds or removes.
       const lines = new TextDecoder().decode(bytes).split("\n");

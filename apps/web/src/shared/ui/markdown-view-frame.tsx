@@ -2,11 +2,12 @@ import icons from "@dx/api/views/kit/icons.svg?raw";
 import css from "@dx/api/views/kit/kit.css?raw";
 import js from "@dx/api/views/kit/kit.js?raw";
 import {
-  frameView,
   VIEW_FRAME_MESSAGE,
+  VIEW_FRAME_PATH,
   VIEW_HOST_MESSAGE,
   VIEW_MAX_HEIGHT,
   type ViewKit,
+  viewDocument,
 } from "@dx/api/views/view-frame.mjs";
 import { Maximize2 } from "lucide-react";
 import * as React from "react";
@@ -101,6 +102,17 @@ const sendScheme = (frame: HTMLIFrameElement) => {
     );
 };
 
+/**
+ * The shell at `VIEW_FRAME_PATH` has its own CSP; a srcdoc frame would take
+ * the app's. It gets the view's document once it loads, and again if it ever
+ * loads afresh.
+ */
+const sendDocument = (frame: HTMLIFrameElement, document: string) =>
+  frame.contentWindow?.postMessage(
+    { source: VIEW_HOST_MESSAGE, type: "document", document },
+    "*",
+  );
+
 const takeFrame = (document: string, title: string) => {
   const waiting = parked.get(document);
   const frame = waiting?.pop();
@@ -114,9 +126,12 @@ const takeFrame = (document: string, title: string) => {
   created.title = title;
   created.sandbox.add("allow-scripts");
   created.referrerPolicy = "no-referrer";
-  created.srcdoc = document;
+  created.src = VIEW_FRAME_PATH;
   // For the frame's lifetime: the shell only loads again when it is new.
-  created.addEventListener("load", () => sendScheme(created));
+  created.addEventListener("load", () => {
+    sendDocument(created, document);
+    sendScheme(created);
+  });
   return created;
 };
 
@@ -180,7 +195,7 @@ function ViewDocument({
 }) {
   const [height, setHeight] = React.useState(() => heights.get(source));
   // Built once per source and palette: a theme switch only messages the view.
-  const document = frameView(source, { kit, palette });
+  const document = viewDocument(source, { kit, palette });
   // The slot holds the frame, a parked one when its document matches. Runs
   // again when the scheme changes, which re-themes the loaded view.
   const attach = (slot: HTMLDivElement | null) => {

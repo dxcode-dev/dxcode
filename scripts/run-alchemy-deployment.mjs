@@ -540,6 +540,11 @@ prepareDeploymentPackage({
         dxdChecksum,
         "--dxd-binary",
         dxdBinary,
+        // The app's CSP frames this deployment's Portals and reaches its
+        // R2 bucket, where attachments and stored files transfer.
+        ...(portals === undefined ? [] : ["--portal-domain", portals.domain]),
+        "--storage-origin",
+        `https://${accountId}.r2.cloudflarestorage.com`,
       ],
       {
         cwd: workspaceRoot,

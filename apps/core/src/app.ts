@@ -19,7 +19,6 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
-import { needsYouRoutes } from "./needs-you/routes.js";
 import {
   notificationRoutes,
   notificationUnsubscribeRoutes,
@@ -38,6 +37,8 @@ import { projectRoutes } from "./projects/routes.js";
 import { threadQuickActionsRoutes } from "./quick-actions/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
+import { contentSecurityPolicy } from "./security/headers.js";
+import { cspReportRoutes } from "./security/reports.js";
 import {
   inviteAcceptRoutes,
   publicInviteRoutes,
@@ -82,6 +83,7 @@ app.use("*", portalHostRouting);
 app.use("*", requestId);
 app.use("*", requestLogging);
 app.use("*", d1Session);
+app.use("*", contentSecurityPolicy);
 
 app.get("/healthz", healthHandler);
 app.get("/readyz", readinessHandler);
@@ -89,6 +91,7 @@ app.get("/readyz", readinessHandler);
 app.route(`/${LOCAL_R2_BUCKET}`, localR2Routes);
 
 app.route("/api/auth", authRoutes);
+app.route("/api/csp-reports", cspReportRoutes);
 app.route("/api/workload-identity", workloadIdentityRoutes);
 app.route("/api/triggers", pluginTriggerIngressRoutes);
 app.route("/api/invites", publicInviteRoutes);
@@ -105,7 +108,6 @@ app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);
 app.route("/v1/dictation", dictationRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
-app.route("/v1/needs-you", needsYouRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
 app.route("/v1/integrations/github", githubControlPlaneRoutes);

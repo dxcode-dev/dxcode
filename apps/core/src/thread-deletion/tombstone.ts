@@ -22,7 +22,7 @@ const tombstoneOf = (column: string) => `${column} IN (
  * transaction. Each row stays, so its ID can never be issued again. Titles,
  * instructions, and snapshots are scrubbed. Their child Threads become
  * top-level Threads. Their notifications, sidebar placement, sharing
- * records, who saw them, Needs-you asks, schedules, GitHub subscriptions, and GitHub issue links are removed,
+ * records, who saw them, attention rows, schedules, GitHub subscriptions, and GitHub issue links are removed,
  * and each deletion is recorded for cleanup. With `ownerUserId`, only that
  * owner's Threads change. The first statement returns the Threads it
  * tombstoned.

@@ -1,11 +1,48 @@
 import { resolve } from "node:path";
+import {
+  VIEW_FRAME_CONTENT_SECURITY_POLICY,
+  VIEW_FRAME_PATH,
+  viewFrameShell,
+} from "@dx/api/views/view-frame.mjs";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { localAllowedHosts, localTranscriptCapture } from "./vite-local.js";
 
+/**
+ * The dx-view shell at `VIEW_FRAME_PATH`: generated from the view contract,
+ * served with its own CSP by the dev and test servers, and emitted beside
+ * `index.html`, where the production package's `_headers` gives it the same
+ * policy.
+ */
+const viewFrame: Plugin = {
+  name: "dx:view-frame",
+  configureServer(server) {
+    server.middlewares.use((request, response, next) => {
+      if (request.url?.split("?")[0] !== VIEW_FRAME_PATH) return next();
+      response.setHeader("content-type", "text/html; charset=utf-8");
+      response.setHeader(
+        "content-security-policy",
+        VIEW_FRAME_CONTENT_SECURITY_POLICY,
+      );
+      response.end(viewFrameShell());
+    });
+  },
+  generateBundle() {
+    this.emitFile({
+      type: "asset",
+      fileName: `${VIEW_FRAME_PATH.slice(1)}.html`,
+      source: viewFrameShell(),
+    });
+  },
+};
+
 // The browser test project compiles components with these same plugins.
-export const appPlugins = () => [tailwindcss(), react({ compiler: true })];
+export const appPlugins = () => [
+  tailwindcss(),
+  react({ compiler: true }),
+  viewFrame,
+];
 
 /**
  * Vite bundles each `new Worker(new URL(...))` module as an asset but leaves

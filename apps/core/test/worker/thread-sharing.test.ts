@@ -489,6 +489,103 @@ describe("Thread sharing in workerd with real D1", () => {
   });
 });
 
+describe("Visibility chosen when a Thread is created", () => {
+  const create = (userId: UserId, body: Record<string, unknown>, app = false) =>
+    createApp(userId, app).request(
+      "/threads",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: "dx-test=1" },
+        body: JSON.stringify({
+          projectId: personalProject.id,
+          title: "Made for the team",
+          ...body,
+        }),
+      },
+      bindings,
+    );
+  const countThreads = (userId: UserId) =>
+    env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM threads WHERE owner_user_id = ?",
+    )
+      .bind(userId)
+      .first<number>("count");
+
+  it("shares a Workspace Thread with members the moment it exists", async () => {
+    const response = await create(owner, { visibility: "workspace" });
+    expect(response.status).toBe(201);
+    const created = await response.json<{
+      data: { id: string; visibility: string; sharing?: unknown };
+    }>();
+    expect(created.data.visibility).toBe("workspace");
+
+    // A member of the owner's workspace reads it at once, as a viewer.
+    const seen = await send(member, `/threads/${created.data.id}`);
+    expect(seen.status).toBe(200);
+    await expect(seen.json()).resolves.toMatchObject({
+      data: { access: "view", sharing: { workspaceAccess: "view" } },
+    });
+    const prompt = await send(member, `/agents/${created.data.id}`, "POST", {
+      message: "hi",
+    });
+    expect(prompt.status).toBe(403);
+    // Someone outside the workspace does not.
+    expect((await send(outsider, `/threads/${created.data.id}`)).status).toBe(
+      404,
+    );
+  });
+
+  it("keeps a Thread private when visibility is Private or left out", async () => {
+    for (const body of [{ visibility: "private" }, {}]) {
+      const response = await create(owner, body);
+      expect(response.status).toBe(201);
+      const created = await response.json<{
+        data: { id: string; visibility: string; sharing?: unknown };
+      }>();
+      expect(created.data.visibility).toBe("private");
+      expect(created.data.sharing).toBeUndefined();
+      expect((await send(member, `/threads/${created.data.id}`)).status).toBe(
+        404,
+      );
+    }
+  });
+
+  it("refuses Workspace visibility without a workspace, and creates nothing", async () => {
+    const before = await countThreads(loner);
+    const response = await create(loner, {
+      projectId: lonerProject.id,
+      visibility: "workspace",
+    });
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { code: "THREAD_SHARING_UNAVAILABLE" },
+    });
+    expect(await countThreads(loner)).toBe(before);
+  });
+
+  it("refuses Workspace visibility from an External API App", async () => {
+    const before = await countThreads(owner);
+    const response = await create(owner, { visibility: "workspace" }, true);
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { code: "THREAD_SHARING_FORBIDDEN" },
+    });
+    expect(await countThreads(owner)).toBe(before);
+  });
+
+  it("rejects an unknown visibility, and visibility on a child", async () => {
+    expect((await create(owner, { visibility: "public" })).status).toBe(400);
+    expect(
+      (
+        await create(owner, {
+          visibility: "workspace",
+          parentThreadId: sharedThread.id,
+        })
+      ).status,
+    ).toBe(400);
+  });
+});
+
 describe("Thread families share as one unit", () => {
   const childA = thread(
     "thr_00000000-0000-4000-8000-000000000ca1",

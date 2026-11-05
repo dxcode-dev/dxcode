@@ -59,8 +59,8 @@ const artifactTools = vi.hoisted(() => ({
   artifactsEditedByPeopleNote: vi.fn(async () => undefined),
   createArtifactTools: vi.fn((): unknown[] => []),
 }));
-const needsYouTools = vi.hoisted(() => ({
-  createNeedsYouTools: vi.fn((): unknown[] => []),
+const ownerAskTools = vi.hoisted(() => ({
+  createOwnerAskTools: vi.fn((): unknown[] => []),
 }));
 const runtime = vi.hoisted(() => ({
   capabilities: "workspace" as "model-only" | "workspace",
@@ -91,7 +91,7 @@ vi.mock("../plugins/agent-context.js", () => pluginHost);
 vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../automations/agent-tools.js", () => automationTools);
 vi.mock("../thread-storage/agent-tools.js", () => storageTools);
-vi.mock("../needs-you/agent-tools.js", () => needsYouTools);
+vi.mock("../owner-asks/agent-tools.js", () => ownerAskTools);
 vi.mock("../thread-artifacts/agent-tools.js", () => artifactTools);
 vi.mock("../bug-reports/agent-tools.js", () => bugReportTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
@@ -221,7 +221,7 @@ describe("DxAgent", () => {
     storageTools.createThreadStorageTools.mockReturnValueOnce([
       { name: "download_thread_file", run: vi.fn() },
     ]);
-    needsYouTools.createNeedsYouTools.mockReturnValueOnce([
+    ownerAskTools.createOwnerAskTools.mockReturnValueOnce([
       { name: "request_attention", run: vi.fn() },
     ]);
     artifactTools.createArtifactTools.mockReturnValueOnce([
@@ -263,9 +263,10 @@ describe("DxAgent", () => {
     ]);
     // Only a report reader's submission gets the bug report tools.
     expect(bugReportTools.createBugReportTools).not.toHaveBeenCalled();
-    expect(needsYouTools.createNeedsYouTools).toHaveBeenCalledWith(
+    expect(ownerAskTools.createOwnerAskTools).toHaveBeenCalledWith(
       "thr_existing",
       pluginHost.agentThreadToolsContext,
+      "sub_1",
     );
     expect(pluginHost.agentThreadToolsContext).not.toHaveBeenCalled();
     expect(prompt).toMatch(/create_thread/);

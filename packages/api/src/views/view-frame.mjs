@@ -145,23 +145,69 @@ const bridge = `(() => {
  * embeds the frame before it sends any request, so the view is embedded here,
  * under `default-src 'none'`. The shell relays messages between the view
  * and the transcript, and reports when the view's frame loads anything else.
+ *
+ * In the transcript the shell loads from `VIEW_FRAME_PATH` and takes the
+ * view's document in its first `document` message; a preview embeds the view
+ * already. A srcdoc frame takes the CSP of the page that embeds it, so only a
+ * shell with its own URL keeps the app's policy out of the view.
  */
 const shell = `(() => {
-  const view = document.querySelector("iframe");
+  let view = document.querySelector("iframe");
+  let scheme;
   let loads = 0;
-  view.addEventListener("load", () => {
+  const watch = (frame) => frame.addEventListener("load", () => {
     if (++loads > 1) parent.postMessage({ source: "${VIEW_FRAME_MESSAGE}", type: "escaped" }, "*");
+    else if (scheme) frame.contentWindow?.postMessage({ source: "${VIEW_HOST_MESSAGE}", type: "scheme", scheme }, "*");
   });
+  if (view) watch(view);
   addEventListener("message", (event) => {
-    if (event.source === view.contentWindow && event.data?.source === "${VIEW_FRAME_MESSAGE}")
-      parent.postMessage(event.data, "*");
-    else if (event.source === parent && event.data?.source === "${VIEW_HOST_MESSAGE}") {
-      if (event.data.type === "scheme" && (event.data.scheme === "light" || event.data.scheme === "dark"))
-        document.documentElement.style.colorScheme = "only " + event.data.scheme;
-      view.contentWindow?.postMessage(event.data, "*");
+    const data = event.data;
+    if (view && event.source === view.contentWindow && data?.source === "${VIEW_FRAME_MESSAGE}")
+      parent.postMessage(data, "*");
+    else if (event.source === parent && data?.source === "${VIEW_HOST_MESSAGE}") {
+      if (data.type === "document") {
+        if (view || typeof data.document !== "string") return;
+        view = document.createElement("iframe");
+        view.setAttribute("sandbox", "allow-scripts");
+        view.srcdoc = data.document;
+        watch(view);
+        document.body.append(view);
+        return;
+      }
+      if (data.type === "scheme" && (data.scheme === "light" || data.scheme === "dark")) {
+        scheme = data.scheme;
+        document.documentElement.style.colorScheme = "only " + scheme;
+      }
+      view?.contentWindow?.postMessage(data, "*");
     }
   });
 })();`;
+
+/**
+ * Where the transcript loads the view shell, same origin as the app. The
+ * file is `view-frame.html`; static assets serve it at this path without a
+ * redirect, and `_headers` rules match it here.
+ */
+export const VIEW_FRAME_PATH = "/view-frame";
+
+/**
+ * The shell's response policy: the view's own, which its srcdoc frame
+ * inherits, plus who may embed it. `sandbox` keeps the shell in an opaque
+ * origin even when opened on its own.
+ */
+export const VIEW_FRAME_CONTENT_SECURITY_POLICY = [
+  contentSecurityPolicy,
+  "frame-ancestors 'self'",
+  "sandbox allow-scripts",
+].join("; ");
+
+const shellHead =
+  `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy}">` +
+  "<style>:root{color-scheme:light dark}html,body{height:100%;margin:0;background:transparent}iframe{display:block;width:100%;height:100%;border:0;background:transparent}</style>";
+
+/** The page at `VIEW_FRAME_PATH`: the shell, waiting for its view. */
+export const viewFrameShell = () =>
+  `${shellHead}<body><script>${shell}</script></body>\n`;
 
 const leadingDoctype = /^(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
 
@@ -201,14 +247,14 @@ export const viewDocument = (source, { kit, palette = "daydream", scheme }) => {
 };
 
 /**
- * The document the transcript's frame loads: the shell, with the view's
- * document in a sandboxed frame that fills it.
+ * A view framed in one self-contained document: the shell, with the view's
+ * document in a sandboxed frame that fills it. The creating-views preview
+ * opens it as a file; the transcript loads `viewFrameShell` instead.
  *
  * @param {string} source
  * @param {{ kit: { css: string; js: string; icons: string }; palette?: string }} options
  */
 export const frameView = (source, options) =>
-  `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy}">` +
-  "<style>:root{color-scheme:light dark}html,body{height:100%;margin:0;background:transparent}iframe{display:block;width:100%;height:100%;border:0;background:transparent}</style>" +
+  shellHead +
   `<iframe sandbox="allow-scripts" srcdoc="${escapeAttribute(viewDocument(source, { ...options, scheme: undefined }))}"></iframe>` +
   `<script>${shell}</script>`;

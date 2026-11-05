@@ -99,6 +99,8 @@ export const ModelUsageEventInput = Schema.Struct({
   outputTokens: Schema.NullOr(NonNegativeInteger),
   cacheReadTokens: Schema.NullOr(NonNegativeInteger),
   cacheWriteTokens: Schema.NullOr(NonNegativeInteger),
+  /** Of `cacheWriteTokens`, those written with a 1-hour TTL, when reported. */
+  cacheWrite1hTokens: Schema.optional(Schema.NullOr(NonNegativeInteger)),
   reasoningTokens: Schema.NullOr(NonNegativeInteger),
   totalTokens: Schema.NullOr(NonNegativeInteger),
 });
@@ -272,6 +274,8 @@ export interface UsageTokenCounts {
   readonly output: number | null;
   readonly cacheRead: number | null;
   readonly cacheWrite: number | null;
+  /** Of `cacheWrite`, the tokens written with a 1-hour TTL, when reported. */
+  readonly cacheWrite1h?: number | null;
 }
 
 export interface UsagePriceRates {
@@ -294,11 +298,15 @@ export const estimateUsageCostMicros = (
   ) {
     return null;
   }
+  // Anthropic bills a 1-hour cache write at 2x input; the catalog's cache-write
+  // rate is the 5-minute one.
+  const longWrite = Math.min(tokens.cacheWrite1h ?? 0, tokens.cacheWrite);
   const millionths =
     tokens.input * price.inputMicrosPerMillion +
     tokens.output * price.outputMicrosPerMillion +
     tokens.cacheRead * price.cacheReadMicrosPerMillion +
-    tokens.cacheWrite * price.cacheWriteMicrosPerMillion;
+    (tokens.cacheWrite - longWrite) * price.cacheWriteMicrosPerMillion +
+    longWrite * 2 * price.inputMicrosPerMillion;
   return Math.round(millionths / 1_000_000);
 };
 

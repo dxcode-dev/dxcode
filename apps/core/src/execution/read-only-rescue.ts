@@ -2,21 +2,27 @@ import type { Bindings } from "../http/types.js";
 import { executionWorkspaceLogger } from "../logging.js";
 import type { RestoredWork } from "../orb-disk/read-only.js";
 import type { ExecutionGuest } from "../plugins/execution/provider.js";
-import { SOURCE_WORKSPACE_CWD } from "../source-control/source-workspace.js";
 import { putThreadStorageFile } from "../thread-storage/store.js";
+import {
+  parseUnsavedWork,
+  UNSAVED_WORK_MAX_BYTES,
+  unsavedWorkScript,
+} from "./unsaved-work-script.js";
 
 /**
- * Before dx restarts an Orb whose disk turned read-only, it copies the
- * person's unsaved work out of the checkout, which a read-only disk still
- * lets it read: the repository's untracked files, `uncommitted.patch`
- * (`git diff HEAD`) and `unpushed.patch` (commits on no remote), with
- * `git status`. The archive is built in `/dev/shm`, the one writable place
+ * Before dx restarts an Orb whose disk turned read-only, or a Restart Orb
+ * that cannot keep its files, it copies the person's unsaved work out, which
+ * a read-only disk still lets it read: for every git checkout under
+ * ~/workspace (the repository, its worktrees, additional repositories,
+ * #1658), its untracked files, `uncommitted.patch` (`git diff HEAD`),
+ * `unpushed.patch` (commits on no remote), and `git status`, at the
+ * checkout's path in the archive (unsaved-work-script.ts). The archive is built in `/dev/shm`, the one writable place
  * left, and read back in base64 chunks. A restart that cannot keep the
  * Orb's files restores this archive into the new Orb and Thread storage.
  */
 
 /** `/dev/shm` holds 64 MB on a Cloudflare Orb; leave it room. */
-export const RESCUE_MAX_BYTES = 48 * 1024 * 1024;
+export const RESCUE_MAX_BYTES = UNSAVED_WORK_MAX_BYTES;
 /** Raw bytes per read: about 5.3 MB of base64, under the 8 MB exec output. */
 const CHUNK_MIB = 4;
 const COMMAND_TIMEOUT_MS = 60_000;
@@ -28,26 +34,14 @@ export type UnsavedWorkRescue =
       readonly bytes: Uint8Array;
       readonly changes: number;
       readonly commits: number;
+      /** Checkouts with unsaved work; unset from a caller before #1658. */
+      readonly checkouts?: number;
+      /** False when untracked files did not fit and were left out. */
+      readonly untracked?: boolean;
     }
   | { readonly kind: "failed"; readonly reason: string };
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-
-const BUILD = `set -eu
-cd ${quote(SOURCE_WORKSPACE_CWD)} 2>/dev/null || { echo none; exit 0; }
-git rev-parse --git-dir >/dev/null 2>&1 || { echo none; exit 0; }
-t=$(mktemp -d /dev/shm/dx-rescue.XXXXXX)
-mkdir "$t/.dx-recovered"
-git -c core.quotepath=off status --porcelain=v1 > "$t/.dx-recovered/status.txt"
-git diff HEAD --binary > "$t/.dx-recovered/uncommitted.patch" 2>/dev/null || git diff --binary > "$t/.dx-recovered/uncommitted.patch"
-git format-patch --stdout --branches --not --remotes > "$t/.dx-recovered/unpushed.patch" 2>/dev/null || :
-git ls-files -z -o --exclude-standard > "$t/untracked"
-changes=$(wc -l < "$t/.dx-recovered/status.txt")
-commits=$(grep -c '^From [0-9a-f]\\{40\\} ' "$t/.dx-recovered/unpushed.patch" || :)
-if [ "$changes" -eq 0 ] && [ "\${commits:-0}" -eq 0 ]; then rm -rf "$t"; echo none; exit 0; fi
-tar czf "$t/archive.tar.gz" --null -T "$t/untracked" -C "$t" .dx-recovered
-echo "archive $t $(stat -c %s "$t/archive.tar.gz") $changes \${commits:-0}"
-`;
 
 const decodeBase64 = (text: string) => {
   const binary = atob(text.trim());
@@ -72,24 +66,15 @@ const run = async (guest: ExecutionGuest, command: string) => {
 /** Copies the checkout's unsaved work out of a read-only Orb. */
 export const rescueUnsavedWork = async (
   guest: ExecutionGuest,
+  /** The workspace root; tests pass a temporary one. */
+  root = "/home/user/workspace",
 ): Promise<UnsavedWorkRescue> => {
   let directory: string | undefined;
   try {
-    const built = (await run(guest, BUILD)).trim().split(/\s+/);
-    if (built[0] === "none") return { kind: "none" };
-    if (built[0] !== "archive" || built.length !== 5)
-      return { kind: "failed", reason: "the copy did not finish" };
-    directory = built[1] ?? "";
-    if (!/^\/dev\/shm\/dx-rescue\.[A-Za-z0-9]+$/.test(directory))
-      return { kind: "failed", reason: "the copy did not finish" };
-    const size = Number(built[2]);
-    if (!Number.isSafeInteger(size) || size <= 0)
-      return { kind: "failed", reason: "the copy did not finish" };
-    if (size > RESCUE_MAX_BYTES)
-      return {
-        kind: "failed",
-        reason: `the unsaved work is ${Math.ceil(size / 1024 / 1024)} MB compressed, more than dx can copy`,
-      };
+    const built = parseUnsavedWork(await run(guest, unsavedWorkScript(root)));
+    if (built.kind !== "archive") return built;
+    directory = built.directory;
+    const size = built.size;
     const bytes = new Uint8Array(size);
     let offset = 0;
     for (let chunk = 0; offset < size; chunk += 1) {
@@ -107,8 +92,10 @@ export const rescueUnsavedWork = async (
     return {
       kind: "archive",
       bytes,
-      changes: Number(built[3]) || 0,
-      commits: Number(built[4]) || 0,
+      changes: built.changes,
+      commits: built.commits,
+      checkouts: built.checkouts,
+      untracked: built.untracked,
     };
   } catch (cause) {
     return {

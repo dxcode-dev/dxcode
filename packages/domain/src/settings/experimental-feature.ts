@@ -255,55 +255,6 @@ export const productionExperimentalFeatureRegistry =
     version: 1,
     features: [
       {
-        id: "needs-you-prioritize",
-        title: "Needs-you Prioritize",
-        description:
-          "Adds Prioritize to the Needs-you page: Cloudflare's Clef model on Workers AI ranks what waits on you.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/navigation" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "low",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-01-15",
-        lifecyclePlan: {
-          migration:
-            "Saved rankings stay in needs_you_ranking; turning the flag off hides them.",
-          graduation:
-            "Drop the flag check from the ranking routes and the Needs-you page.",
-          removal:
-            "Delete the ranking routes, the page's Prioritize panel, and the needs_you_ranking table.",
-        },
-      },
-      {
-        id: "artifact-asks",
-        title: "Asks in artifacts",
-        description:
-          "Lists unchecked artifact checklist items that mention you on the Needs-you page; ticking one there wakes its Thread.",
-        owner: { team: "dx/artifacts" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "interface",
-        risk: "low",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-01-31",
-        lifecyclePlan: {
-          migration:
-            "Asks stay indexed in thread_artifact_ask; turning the flag off hides them from the Needs-you page.",
-          graduation:
-            "Drop the flag check from the asks routes and the Needs-you page, and retire thread_attention_request rows.",
-          removal:
-            "Delete the asks routes, the page's asks list, and the thread_artifact_ask table.",
-        },
-      },
-      {
         id: "orb-restart",
         title: "Restart Orb",
         description:
@@ -354,7 +305,10 @@ export const productionExperimentalFeatureRegistry =
         },
       },
     ],
-    migrations: [],
+    migrations: [
+      { kind: "retire", id: "needs-you-prioritize", outcome: "removed" },
+      { kind: "retire", id: "artifact-asks", outcome: "removed" },
+    ],
   });
 
 export const normalizeExperimentalFeaturePreferences = (

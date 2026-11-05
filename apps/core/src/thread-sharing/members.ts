@@ -86,6 +86,22 @@ export const classifyMessage = (
   };
 };
 
+/**
+ * dx's name for a message that tags someone, so a notification can open the
+ * Thread at it. It derives from the delivery's idempotency key, which a
+ * client reuses on retry, so a retried message carries an identical tag.
+ */
+export const messageIdFor = async (threadId: ThreadId, deliveryKey: string) => {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`dx-message\n${threadId}\n${deliveryKey}`),
+  );
+  return `msg_${[...new Uint8Array(digest)]
+    .slice(0, 12)
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}`;
+};
+
 /** The Thread's mode; see ThreadConversationModeSchema. */
 export const conversationMode = async (
   db: D1Database,

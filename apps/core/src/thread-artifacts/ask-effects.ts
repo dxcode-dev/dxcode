@@ -2,20 +2,14 @@ import type { ThreadId, UserId } from "@dx/domain";
 import { deliverMessage } from "../automations/wake.js";
 import type { Bindings } from "../http/types.js";
 import { publishNotification } from "../notifications/publish.js";
-import { publishUserInvalidation } from "../realtime/publication.js";
 import { threadMembers } from "../thread-sharing/members.js";
-import {
-  type ArtifactChecklistItem,
-  askChanges,
-  checklistItems,
-} from "./asks.js";
+import { type ArtifactChecklistItem, askChanges } from "./asks.js";
 import { threadArtifactLogger } from "./logger.js";
 import { wrapPeopleText } from "./people-text.js";
 import type { ArtifactWriter } from "./store.js";
 
 /**
  * What happens after an artifact is saved, besides the save itself:
- * - its open asks are indexed for the Needs-you page;
  * - people newly mentioned are notified, if they can open the Thread;
  * - a person ticking an ask, or writing under one, wakes the Thread, at most
  *   once per `WAKE_INTERVAL_MS`. A wake that is skipped is not lost: the
@@ -25,107 +19,6 @@ import type { ArtifactWriter } from "./store.js";
 
 /** The shortest gap between two wakes of one Thread by artifact edits. */
 export const ARTIFACT_WAKE_INTERVAL_MS = 30_000;
-
-const sha256Hex = async (text: string) =>
-  [
-    ...new Uint8Array(
-      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
-    ),
-  ]
-    .map((value) => value.toString(16).padStart(2, "0"))
-    .join("");
-
-export const askItemKey = (item: ArtifactChecklistItem) =>
-  sha256Hex(`${item.occurrence}\u0000${item.text}`);
-
-/**
- * Rebuilds the artifact's ask index from `markdown`, its revision
- * `revision`. Only while that revision is still current, so a slower save of
- * an older revision cannot replace a newer index. An ask still open keeps
- * the time it was first seen.
- */
-export const indexArtifactAsks = async (
-  db: D1Database,
-  input: {
-    readonly threadId: string;
-    readonly artifactId: string;
-    readonly revision: number;
-    readonly markdown: string;
-    readonly now?: number;
-  },
-) => {
-  const now = input.now ?? Date.now();
-  const { results: existing } = await db
-    .prepare(
-      `SELECT item_key, mentioned_user_id, waiting_since
-         FROM thread_artifact_ask WHERE artifact_id = ?`,
-    )
-    .bind(input.artifactId)
-    .all<{
-      item_key: string;
-      mentioned_user_id: string;
-      waiting_since: number;
-    }>();
-  const since = new Map(
-    existing.map((row) => [
-      `${row.item_key}:${row.mentioned_user_id}`,
-      row.waiting_since,
-    ]),
-  );
-  const rows: Array<{
-    key: string;
-    user: string;
-    text: string;
-    line: number;
-    since: number;
-  }> = [];
-  for (const item of checklistItems(input.markdown)) {
-    if (item.checked || item.mentions.length === 0) continue;
-    const key = await askItemKey(item);
-    for (const user of item.mentions.slice(0, 20))
-      rows.push({
-        key,
-        user,
-        text: item.text,
-        line: item.line,
-        since: since.get(`${key}:${user}`) ?? now,
-      });
-  }
-  const current = `(SELECT current_revision FROM thread_artifact
-                     WHERE id = ?1 AND deleted_at IS NULL) = ?2`;
-  await db.batch([
-    db
-      .prepare(
-        `DELETE FROM thread_artifact_ask WHERE artifact_id = ?1 AND ${current}`,
-      )
-      .bind(input.artifactId, input.revision),
-    ...(rows.length === 0
-      ? []
-      : [
-          db
-            .prepare(
-              `INSERT INTO thread_artifact_ask
-                 (artifact_id, item_key, mentioned_user_id, thread_id, text,
-                  line, revision, waiting_since)
-               SELECT ?1, json_extract(value, '$.key'),
-                      json_extract(value, '$.user'), ?3,
-                      json_extract(value, '$.text'),
-                      json_extract(value, '$.line'), ?2,
-                      json_extract(value, '$.since')
-                 FROM json_each(?4)
-                WHERE ${current}
-               ON CONFLICT DO NOTHING`,
-            )
-            .bind(
-              input.artifactId,
-              input.revision,
-              input.threadId,
-              JSON.stringify(rows.slice(0, 500)),
-            ),
-        ]),
-  ]);
-  return rows.length;
-};
 
 /** Who can open the Thread: its owner, and its members while it is shared. */
 const threadReaders = async (db: D1Database, threadId: string) => {
@@ -270,46 +163,6 @@ export const artifactSaved = async (
   const changes = askChanges(event.before, event.after);
   const { owner, readers } = await threadReaders(db, event.threadId);
   if (owner === undefined) return;
-  await step("index", async () => {
-    const before = new Set(
-      (
-        await db
-          .prepare(
-            "SELECT DISTINCT mentioned_user_id FROM thread_artifact_ask WHERE artifact_id = ?",
-          )
-          .bind(event.artifactId)
-          .all<{ mentioned_user_id: string }>()
-      ).results.map((row) => row.mentioned_user_id),
-    );
-    await indexArtifactAsks(db, {
-      threadId: event.threadId,
-      artifactId: event.artifactId,
-      revision: event.revision,
-      markdown: event.after,
-      now,
-    });
-    const after = (
-      await db
-        .prepare(
-          "SELECT DISTINCT mentioned_user_id FROM thread_artifact_ask WHERE artifact_id = ?",
-        )
-        .bind(event.artifactId)
-        .all<{ mentioned_user_id: string }>()
-    ).results.map((row) => row.mentioned_user_id);
-    // Whoever gained or lost an ask refreshes their Needs-you page.
-    const touched = new Set([...before, ...after]);
-    await Promise.all(
-      [...touched]
-        .filter((userId) => readers.has(userId))
-        .map((userId) =>
-          publishUserInvalidation(
-            bindings,
-            userId as UserId,
-            "needs-you.invalidated",
-          ),
-        ),
-    );
-  });
   const writerId =
     event.writer.kind === "user" ? event.writer.userId : undefined;
   const recipients = changes.newMentions.filter(

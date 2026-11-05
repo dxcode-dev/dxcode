@@ -4,6 +4,7 @@ import type {
   ProjectId,
   RunnerProfileId,
   ThreadId,
+  ThreadVisibility,
   UserId,
   WorkspaceId,
 } from "@dx/domain";
@@ -44,6 +45,7 @@ export interface InitialThreadCreationAttempt {
   readonly effort?: ClaudeCodeEffort;
   readonly claudeConnectionId?: string;
   readonly runnerProfileId?: RunnerProfileId;
+  readonly visibility?: ThreadVisibility;
   readonly body: string;
   readonly attachmentIds: ReadonlyArray<string>;
 }

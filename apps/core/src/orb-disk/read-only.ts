@@ -80,7 +80,7 @@ const restoredText = (restored: RestoredWork) =>
     restored.storageFileId === undefined
       ? ""
       : `${restored.orbPath === undefined ? "" : " and"} in the Thread's storage`
-  }. It holds the untracked files, .dx-recovered/unpushed.patch (\`git am\`), .dx-recovered/uncommitted.patch (\`git apply --3way\`), and .dx-recovered/status.txt. Restore it into ~/workspace/repo before other work: check out the branch it was on, extract the archive there, apply the unpushed commits, then the uncommitted changes, and resolve any conflict.`;
+  }. Each checkout under ~/workspace that had unsaved work sits in it at its path there (repo/, a worktree's folder, repos/<name>/), with its untracked files, .dx-recovered/unpushed.patch (\`git am\`), .dx-recovered/uncommitted.patch (\`git apply --3way\`), and .dx-recovered/status.txt. Restore it before other work: extract it in ~/workspace, then in each checkout it holds, check out the branch it was on, apply the unpushed commits, then the uncommitted changes, and resolve any conflict.`;
 
 export const WORKSPACE_RECOVERY_SIGNAL = "workspace_recovered";
 

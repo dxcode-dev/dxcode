@@ -23,6 +23,14 @@ import {
   ListProjectsPersistenceUnavailableResponseSchema,
   ListProjectsQuerySchema,
   ListProjectsResponseSchema,
+  MoveProjectForbiddenResponseSchema,
+  MoveProjectInvalidRequestResponseSchema,
+  MoveProjectNameConflictResponseSchema,
+  MoveProjectNotFoundResponseSchema,
+  MoveProjectParamsSchema,
+  MoveProjectPersistenceUnavailableResponseSchema,
+  MoveProjectRequestSchema,
+  MoveProjectResponseSchema,
   ProjectIconNotImageResponseSchema,
   ProjectIconTooLargeResponseSchema,
   type ProjectViewerAccess,
@@ -51,8 +59,10 @@ import {
   canonicalPublicGitRepositoryLocator,
   PersistenceUnavailable,
   PersonalAccountRepository,
+  PROJECTLESS_PROJECT_NAME,
   type Project,
   type ProjectAdditionalRepository,
+  ProjectNotFound,
   projectAdditionalRepositoryFromUrl,
   SourceControlAccessDenied,
   SourceControlProviderFailure,
@@ -96,6 +106,12 @@ import {
   ProjectDeletionNameMismatch,
   ProjectDeletionNotFound,
 } from "./deletion.js";
+import {
+  moveProject,
+  type ProjectMove,
+  ProjectMoveNameConflict,
+  ProjectMoveNotFound,
+} from "./move.js";
 import { projectOrbScriptRoutes } from "./orb-scripts.js";
 import { ProjectRepositoryD1 } from "./repository-d1.js";
 import { ProjectService } from "./service.js";
@@ -1462,6 +1478,242 @@ projectRoutes.put("/:projectId/icon", async (context) => {
 });
 
 projectRoutes.route("/", projectOrbScriptRoutes);
+
+/**
+ * `POST /v1/projects/:projectId/move` (Change Owner, #1198): the creator of
+ * a personal project moves it into their workspace, for good. The move
+ * follows the rules for creating a project there: the person must be
+ * allowed to create one and the name must be free. The project keeps its
+ * Orb size when the workspace allows it, else takes the workspace default,
+ * and loses public code access the workspace forbids. After the response,
+ * Orbs running on the owner's personal Orb keys stop when the workspace
+ * does not allow them, and open apps refresh the project's Threads.
+ */
+projectRoutes.post("/:projectId/move", async (context) => {
+  const requestId = context.get("requestId");
+  const principal = context.get("principal");
+  const failure = (
+    schema:
+      | typeof MoveProjectInvalidRequestResponseSchema
+      | typeof MoveProjectNotFoundResponseSchema
+      | typeof MoveProjectNameConflictResponseSchema
+      | typeof MoveProjectForbiddenResponseSchema
+      | typeof MoveProjectPersistenceUnavailableResponseSchema,
+    status: 400 | 403 | 404 | 409 | 503,
+  ) => {
+    const [code, message] = {
+      400: ["INVALID_REQUEST", "Request validation failed."],
+      403: [
+        "PROJECT_MOVE_FORBIDDEN",
+        "You cannot move projects into this workspace.",
+      ],
+      404: ["PROJECT_NOT_FOUND", "Project not found."],
+      409: [
+        "PROJECT_NAME_CONFLICT",
+        "A project with this name already exists.",
+      ],
+      503: [
+        "PERSISTENCE_UNAVAILABLE",
+        "Persistence is temporarily unavailable.",
+      ],
+    }[status];
+    return context.json(
+      Schema.encodeUnknownSync(schema)({
+        status: "error",
+        data: { code, message, requestId },
+      } as never),
+      status,
+    );
+  };
+  const notFound = () => failure(MoveProjectNotFoundResponseSchema, 404);
+  const forbidden = () => failure(MoveProjectForbiddenResponseSchema, 403);
+  const unavailable = () =>
+    failure(MoveProjectPersistenceUnavailableResponseSchema, 503);
+  const params = Schema.decodeUnknownOption(MoveProjectParamsSchema)({
+    projectId: context.req.param("projectId"),
+  });
+  const body = Schema.decodeUnknownOption(MoveProjectRequestSchema)(
+    await context.req.json().catch(() => undefined),
+  );
+  if (Option.isNone(params) || Option.isNone(body))
+    return failure(MoveProjectInvalidRequestResponseSchema, 400);
+  const db = context.env.DB;
+  if (db === undefined) return unavailable();
+  const projectId = params.value.projectId;
+  const repositoryLayer = ProjectRepositoryD1.pipe(
+    Layer.provide(D1Client.layer({ db })),
+  );
+  const projectService = ProjectService.layer.pipe(
+    Layer.provide(repositoryLayer),
+  );
+
+  const prepared = await Effect.runPromise(
+    Effect.result(
+      Effect.gen(function* () {
+        const current = yield* Effect.gen(function* () {
+          return yield* (yield* ProjectService).get(principal, projectId);
+        }).pipe(Effect.provide(projectService));
+        if (
+          current.workspaceId !== undefined ||
+          current.ownerUserId !== principal.userId ||
+          current.name === PROJECTLESS_PROJECT_NAME
+        )
+          return yield* new ProjectNotFound({ projectId });
+        const catalog = yield* loadRunnerProfileCatalog(context.env);
+        const signingCapabilities = yield* signingBackendCapabilities(
+          context.env,
+        );
+        const { workspace, snapshot } = yield* Effect.gen(function* () {
+          const defaults = yield* ProjectDefaultsService;
+          const workspace = yield* defaults.getWorkspace(
+            principal,
+            body.value.workspaceSlug,
+            catalog,
+          );
+          // Creating a project there must be allowed; this also yields the
+          // workspace's default Orb size.
+          const snapshot = yield* defaults.snapshotForProject(
+            principal,
+            catalog,
+            {
+              workspaceSlug: body.value.workspaceSlug,
+              publicCodeEnabled: false,
+              deploymentSigningAvailable: signingCapabilities.some(
+                ({ source, state }) =>
+                  source === "deployment" && state === "available",
+              ),
+            },
+          );
+          return { workspace, snapshot };
+        }).pipe(Effect.provide(projectDefaultsLayersFor(db)));
+        const currentSize = current.configuration.runnerProfileId;
+        const allowed = workspace.restrictions.allowedRunnerProfileIds;
+        const profile = yield* selectRunnerProfile(catalog, currentSize).pipe(
+          Effect.option,
+        );
+        const keepsSize =
+          Option.isSome(profile) &&
+          (allowed === null || allowed.includes(profile.value.id)) &&
+          (yield* Effect.gen(function* () {
+            const policy = yield* WorkspacePolicyService;
+            return yield* policy
+              .evaluateForUser(principal.userId, {
+                kind: "project.create",
+                runnerProfileId: profile.value.id,
+                runnerAdapter: profile.value.adapter,
+              })
+              .pipe(
+                Effect.as(true),
+                Effect.catchTag("WorkspacePolicyDenied", () =>
+                  Effect.succeed(false),
+                ),
+              );
+          }).pipe(Effect.provide(workspacePolicyLayerFor(db))));
+        return {
+          workspaceId: workspace.settings.workspaceId,
+          runnerProfileId: keepsSize
+            ? currentSize
+            : snapshot.configuration.runnerProfileId,
+          publicCodeEnabled:
+            current.configuration.publicCodeEnabled &&
+            workspace.restrictions.allowPublicCodeAccess,
+        };
+      }),
+    ),
+  );
+  if (Result.isFailure(prepared)) {
+    const notReady = (reason: string) => {
+      projectPersistenceLogger.warn("Project move could not be prepared.", {
+        event: "project_move_prepare_failed",
+        requestId,
+        projectId,
+        reason,
+      });
+      return unavailable();
+    };
+    return Match.value(prepared.failure).pipe(
+      Match.tags({
+        ProjectNotFound: notFound,
+        SettingsScopeForbidden: forbidden,
+        ProjectPolicyForbidden: forbidden,
+        WorkspacePolicyDenied: forbidden,
+        PersistenceUnavailable: () => notReady("persistence"),
+        RunnerProfileConfigurationUnavailable: () =>
+          notReady("runner-profile-configuration"),
+        RunnerProfileUnavailable: () => notReady("runner-profile"),
+      }),
+      Match.orElse((error) => {
+        throw error;
+      }),
+    );
+  }
+
+  let move: ProjectMove;
+  try {
+    move = await moveProject(db, {
+      projectId,
+      userId: principal.userId,
+      workspaceId: prepared.success.workspaceId,
+      revision: body.value.revision,
+      runnerProfileId: prepared.success.runnerProfileId,
+      publicCodeEnabled: prepared.success.publicCodeEnabled,
+    });
+  } catch (cause) {
+    if (cause instanceof ProjectMoveNotFound) return notFound();
+    if (cause instanceof ProjectMoveNameConflict)
+      return failure(MoveProjectNameConflictResponseSchema, 409);
+    projectPersistenceLogger.error("Project move failed.", {
+      event: "project_move_failed",
+      requestId,
+      projectId,
+      cause,
+    });
+    return unavailable();
+  }
+
+  const background = (task: () => Promise<unknown>) =>
+    context.executionCtx.waitUntil(task().catch(() => undefined));
+  for (const threadId of move.personalOrbThreadIds)
+    background(() =>
+      ExecutionWorkspaces.archive(threadId).catch((cause) => {
+        projectPersistenceLogger.warn("Moved project Orb stop failed.", {
+          event: "project_move_orb_stop_failed",
+          requestId,
+          threadId,
+          cause,
+        });
+      }),
+    );
+  // Open apps show the Threads under the workspace.
+  if (move.threadIds.length > 0)
+    background(async () => {
+      for (const threadId of move.threadIds)
+        await publishRealtimeInvalidation(
+          context.env,
+          threadId,
+          "thread.invalidated",
+        ).catch(() => undefined);
+    });
+
+  const moved = await Effect.runPromise(
+    Effect.result(
+      Effect.gen(function* () {
+        return yield* (yield* ProjectService).get(principal, projectId);
+      }).pipe(Effect.provide(projectService)),
+    ),
+  );
+  if (Result.isFailure(moved)) return unavailable();
+  return context.json(
+    Schema.encodeUnknownSync(MoveProjectResponseSchema)({
+      status: "success",
+      data: {
+        project: projectData(moved.success),
+        stoppedOrbCount: move.personalOrbThreadIds.length,
+      },
+    }),
+    200,
+  );
+});
 /**
  * `POST /v1/projects/:projectId/delete`: the project's creator, or a
  * workspace admin for a workspace project, deletes it for good (#1128).

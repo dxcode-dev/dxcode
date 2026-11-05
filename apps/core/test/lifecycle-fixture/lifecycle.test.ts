@@ -1029,4 +1029,54 @@ describe("generated Flue Worker lifecycle", () => {
       assistantMessages: textsOf(history, "assistant"),
     });
   }, 240_000);
+  // #1770: a reply whose tool calls shared one ID ran both calls, the
+  // conversation stream rejected the batch, and every later message failed.
+  it("retries a reply whose tool calls share an ID without running them, and takes the next message", async () => {
+    const threadId = await startScenarioThread(
+      "duplicate-tool-calls",
+      "Run the duplicate tool-call scenario.",
+    );
+    const client = threadClient(threadId);
+    const commandRuns = async () =>
+      (await fixtureRequest(`/__fixture/command-runs/${threadId}`)).json<
+        Record<string, number>
+      >();
+    await waitUntil(
+      async () => (await client.history()).settlements.length > 0,
+      "the first turn to settle",
+      30_000,
+    );
+    const first = await threadClient(threadId).history();
+    // Before the fix this turn failed with the conversation stream contract.
+    expect(first.settlements.map(({ outcome }) => outcome)).toEqual([
+      "completed",
+    ]);
+    expect(textsOf(first, "assistant")).toEqual(["duplicate-retry-complete"]);
+    // Neither duplicate call ran; the retried reply's one call ran once.
+    expect(await commandRuns()).toEqual({ retried: 1 });
+
+    const after = await client.send({
+      message: { kind: "user", body: "Continue after the retry." },
+      idempotencyKey: "duplicate-tool-calls-after",
+    });
+    await client.wait(after);
+    const continued = await threadClient(threadId).history();
+    expect(textsOf(continued, "assistant")).toEqual([
+      "duplicate-retry-complete",
+      "after-duplicate-complete",
+    ]);
+    expect(await commandRuns()).toEqual({ retried: 1 });
+    writeProof("duplicate-tool-calls", {
+      threadId,
+      firstTurn: {
+        settlements: first.settlements,
+        assistantMessages: textsOf(first, "assistant"),
+      },
+      nextMessage: {
+        userMessages: textsOf(continued, "user"),
+        assistantMessages: textsOf(continued, "assistant"),
+      },
+      commandRuns: await commandRuns(),
+    });
+  });
 });

@@ -472,7 +472,7 @@ describe("workspace policy routes in workerd with real D1", () => {
           order.push(`${name}: ${command.split("\n")[0]?.slice(0, 24)}`);
           if (command.includes("/dev/shm/dx-rescue.XXXXXX"))
             return {
-              stdout: "archive /dev/shm/dx-rescue.Ab12Cd 5 2 1\n",
+              stdout: "archive /dev/shm/dx-rescue.Ab12Cd 5 2 1 1 1 5\n",
               stderr: "",
               exitCode: 0,
             };

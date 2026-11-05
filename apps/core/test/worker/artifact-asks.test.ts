@@ -1,5 +1,5 @@
 import { env } from "cloudflare:test";
-import type { NeedsYouAsk, ThreadArtifactResponse } from "@dx/api";
+import type { ThreadArtifactResponse } from "@dx/api";
 import {
   Principal,
   ProjectRepository,
@@ -10,13 +10,16 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
+import * as v from "valibot";
 import { beforeEach, describe, expect, it } from "vitest";
 import { authorizeThread } from "../../src/auth/authorize-thread.js";
+import {
+  claudeCodeDxTools,
+  runClaudeCodeSubagentDxCall,
+} from "../../src/claude-code/dx-tools.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
-import { createNeedsYouTools } from "../../src/needs-you/agent-tools.js";
-import { listNeedsYou } from "../../src/needs-you/repository.js";
-import { createNeedsYouRoutes } from "../../src/needs-you/routes.js";
+import { createOwnerAskTools } from "../../src/owner-asks/agent-tools.js";
 import {
   artifactsEditedByPeopleNote,
   createArtifactTools,
@@ -32,30 +35,25 @@ import { threadArtifactRoutes } from "../../src/thread-artifacts/routes.js";
 import {
   createArtifact,
   saveArtifact,
-  sweepDeletedArtifacts,
 } from "../../src/thread-artifacts/store.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
 
 /**
- * Asks in artifacts (#1606 step 7) in workerd with real D1 and R2: checklist
- * items that mention people, the Needs-you page reading them, ticks that
- * wake the Thread, and mention notifications. The wake's delivery is
- * replaced; it records what it was sent.
+ * Asks in artifacts (#1606) in workerd with real D1 and R2: checklist items
+ * that mention people, request_attention writing the agent's ask for the
+ * owner, ticks and answers that wake the Thread, and mention notifications.
+ * The wake's delivery is replaced; it records what it was sent.
  *
  * Ways it could fail, each covered below:
- * - an open ask is not indexed, or a ticked item, one with no mention, or
- *   one inside a code fence is; an ask's waiting time restarts on an
- *   unrelated edit; a deleted artifact's or deleted account's asks stay;
- * - someone sees asks in a Thread they cannot open, or a View member is
- *   offered Tick; the routes answer with the flag off;
- * - a tick from the page changes more than its checkbox, saves over a newer
- *   revision, or works for a View member;
  * - a person's tick or answer does not wake the Thread, the wake does not
  *   say who, or carries their text as instructions; wakes are not limited
  *   per Thread; the agent's own edit wakes it;
  * - a mention notifies someone who cannot open the Thread, or the writer;
- * - request_attention points at another Thread's artifact;
+ * - request_attention points at another Thread's artifact; writes an
+ *   attention row instead of an ask; loses the ask in a Thread with no
+ *   Plan artifact or in another Project; adds it twice; splits a list; or
+ *   takes a summary that breaks the item;
  * - a person's comment that mentions the agent does not wake the Thread,
  *   or, when rate-limited, never reaches the agent; a comment's people
  *   mentions notify outsiders.
@@ -95,7 +93,6 @@ const app = (userId: UserId) => {
     context.set("principal", principal(userId));
     await next();
   });
-  routes.route("/v1/needs-you", createNeedsYouRoutes(undefined, deliver));
   routes.use("/v1/threads/:threadId/artifacts/*", authorizeThread);
   routes.route("/v1/threads", threadArtifactRoutes);
   return (path: string, method = "GET", body?: unknown) =>
@@ -113,20 +110,6 @@ const app = (userId: UserId) => {
       bindings,
     );
 };
-
-const enableAsks = (userId: UserId, enabled = true) =>
-  env.DB.prepare(
-    `INSERT INTO personal_experimental_feature_preferences (
-       user_id, preferences, revision, updated_at
-     ) VALUES (?1, ?2, 1, ?3)
-     ON CONFLICT (user_id) DO UPDATE SET preferences = excluded.preferences`,
-  )
-    .bind(
-      userId,
-      JSON.stringify(enabled ? [{ id: "artifact-asks", enabled }] : []),
-      new Date().toISOString(),
-    )
-    .run();
 
 const newThread = async () => {
   sequence += 1;
@@ -209,12 +192,41 @@ const personSaves = async (
   return result.value;
 };
 
-const asksOf = async (userId: UserId) => {
-  const response = await app(userId)("/v1/needs-you/asks");
-  expect(response.status).toBe(200);
-  return ((await response.json()) as { data: { asks: NeedsYouAsk[] } }).data
-    .asks;
+/** request_attention as the agent calls it: Flue validates the input first. */
+const requestAttention = async (
+  threadId: string,
+  data: Record<string, unknown>,
+) => {
+  const [tool] = createOwnerAskTools(threadId, () => ({
+    db: env.DB,
+    bindings,
+  }));
+  if (tool === undefined) throw new Error("Expected request_attention.");
+  const parsed = v.parse(tool.input as v.GenericSchema, data);
+  return (
+    (await tool.run({
+      data: parsed,
+      toolCallId: "call",
+      log: { info() {}, warn() {}, error() {}, debug() {} },
+    } as never)) as { output: Record<string, unknown> }
+  ).output;
 };
+
+const markdownOf = async (threadId: string, artifactId: string) =>
+  (
+    (await (
+      await app(owner)(`/v1/threads/${threadId}/artifacts/${artifactId}`)
+    ).json()) as ThreadArtifactResponse
+  ).data.markdown;
+
+const attentionRows = async (threadId: string) =>
+  Number(
+    await env.DB.prepare(
+      "SELECT count(*) AS n FROM thread_attention_request WHERE thread_id = ?",
+    )
+      .bind(threadId)
+      .first("n"),
+  );
 
 const notifications = (recipient: string) =>
   env.DB.prepare(
@@ -267,7 +279,6 @@ beforeEach(async () => {
     ).bind(workspaceId, owner, member),
     env.DB.prepare("DELETE FROM thread_artifact_wake"),
   ]);
-  for (const userId of [owner, member, outsider]) await enableAsks(userId);
   if (
     (await env.DB.prepare("SELECT 1 AS found FROM projects WHERE id = ?")
       .bind(workspaceProject.id)
@@ -281,98 +292,17 @@ beforeEach(async () => {
 });
 
 describe("asks in artifacts", () => {
-  it("lists each person's open asks, keeps how long they waited, and drops deleted ones", async () => {
-    const threadId = await newThread();
-    const artifactId = await agentWrites(threadId, PLAN);
-    const [ownerAsk, ...rest] = await asksOf(owner);
-    expect(rest).toEqual([]);
-    expect(ownerAsk).toMatchObject({
-      threadId,
-      artifactId,
-      artifactTitle: "Plan",
-      text: "@[Olive](user:asks-owner) Approve merging #1240",
-      revision: 1,
-      canTick: true,
-    });
-    // The member's ask is in a Thread they cannot open yet.
-    expect(await asksOf(member)).toEqual([]);
-    await share(threadId, "view");
-    expect(await asksOf(member)).toEqual([
-      expect.objectContaining({
-        text: "@[Maya](user:asks-member) Review the copy",
-        canTick: false,
-      }),
-    ]);
-    expect(await asksOf(outsider)).toEqual([]);
-
-    // An unrelated edit keeps the ask's waiting time.
-    await personSaves(
-      threadId,
-      artifactId,
-      owner,
-      (text) => `${text}More notes.\n`,
-      Date.now() + 60_000,
-    );
-    const [later] = await asksOf(owner);
-    expect(later?.waitingSince).toBe(ownerAsk?.waitingSince);
-    expect(later?.revision).toBe(2);
-
-    await app(owner)(
-      `/v1/threads/${threadId}/artifacts/${artifactId}`,
-      "DELETE",
-    );
-    expect(await asksOf(owner)).toEqual([]);
-  });
-
-  it("answers only with the flag on", async () => {
-    await enableAsks(owner, false);
-    for (const [path, method] of [
-      ["/v1/needs-you/asks", "GET"],
-      ["/v1/needs-you/asks/tick", "POST"],
-    ] as const) {
-      const response = await app(owner)(
-        path,
-        method,
-        method === "GET"
-          ? undefined
-          : {
-              threadId: "thr_00000000-0000-4000-8000-000000000000",
-              artifactId: "art_00000000000000000000000000000000",
-              itemKey: "x",
-            },
-      );
-      expect(response.status).toBe(404);
-      expect(await response.text()).toContain("ASKS_DISABLED");
-    }
-  });
-
-  it("ticks from Needs-you as the person, changing only the checkbox, and wakes the Thread once per interval", async () => {
+  it("wakes the Thread once per interval when a person ticks an ask in the artifact", async () => {
     const threadId = await newThread();
     const artifactId = await agentWrites(threadId, PLAN);
     expect(wakes).toEqual([]);
-    const [ask] = await asksOf(owner);
-    if (ask === undefined) throw new Error("Expected an ask.");
 
-    const ticked = await app(owner)("/v1/needs-you/asks/tick", "POST", {
-      threadId,
-      artifactId,
-      itemKey: ask.itemKey,
-    });
-    expect(ticked.status).toBe(200);
-    const after = (await (
-      await app(owner)(`/v1/threads/${threadId}/artifacts/${artifactId}`)
-    ).json()) as ThreadArtifactResponse;
-    expect(after.data.markdown).toBe(
-      PLAN.replace(
+    await personSaves(threadId, artifactId, owner, (text) =>
+      text.replace(
         "- [ ] @[Olive](user:asks-owner) Approve merging #1240",
         "- [x] @[Olive](user:asks-owner) Approve merging #1240",
       ),
     );
-    expect(after.data.artifact.updatedBy).toMatchObject({
-      kind: "user",
-      userId: owner,
-    });
-    expect(await asksOf(owner)).toEqual([]);
     expect(wakes).toHaveLength(1);
     expect(wakes[0]).toMatchObject({
       ownerUserId: owner,
@@ -426,46 +356,10 @@ describe("asks in artifacts", () => {
     expect(wakes[0]?.body).toContain(
       "Not yet: the migration needs a renumber first.",
     );
-    // Still open, so it stays on the page.
-    expect(await asksOf(owner)).toHaveLength(1);
-  });
-
-  it("refuses a View member's tick, and a tick of an ask that is gone", async () => {
-    const threadId = await newThread();
-    const artifactId = await agentWrites(threadId, PLAN);
-    await share(threadId, "view");
-    const [memberAsk] = await asksOf(member);
-    if (memberAsk === undefined) throw new Error("Expected an ask.");
-    const refused = await app(member)("/v1/needs-you/asks/tick", "POST", {
-      threadId,
-      artifactId,
-      itemKey: memberAsk.itemKey,
-    });
-    expect(refused.status).toBe(403);
-    expect(await refused.text()).toContain("THREAD_READ_ONLY");
-    const outsiderTick = await app(outsider)(
-      "/v1/needs-you/asks/tick",
-      "POST",
-      {
-        threadId,
-        artifactId,
-        itemKey: memberAsk.itemKey,
-      },
+    // Still open in the artifact.
+    expect(await markdownOf(threadId, artifactId)).toContain(
+      "- [ ] @[Olive](user:asks-owner) Approve merging #1240",
     );
-    expect(outsiderTick.status).toBe(404);
-    expect(wakes).toEqual([]);
-
-    const [ownerAsk] = await asksOf(owner);
-    await personSaves(threadId, artifactId, owner, (text) =>
-      text.replace("- [ ] @[Olive]", "- [x] @[Olive]"),
-    );
-    const stale = await app(owner)("/v1/needs-you/asks/tick", "POST", {
-      threadId,
-      artifactId,
-      itemKey: ownerAsk?.itemKey,
-    });
-    expect(stale.status).toBe(404);
-    expect(await stale.text()).toContain("ASK_NOT_FOUND");
   });
 
   it("notifies newly mentioned people who can open the Thread, never the writer or outsiders", async () => {
@@ -495,22 +389,7 @@ describe("asks in artifacts", () => {
     expect(await notifications(member)).toEqual([]);
   });
 
-  it("forgets a deleted account's asks", async () => {
-    const threadId = await newThread();
-    await share(threadId, "view");
-    await agentWrites(threadId, PLAN);
-    await env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(member).run();
-    expect(
-      await env.DB.prepare(
-        "SELECT count(*) AS n FROM thread_artifact_ask WHERE mentioned_user_id = ?",
-      )
-        .bind(member)
-        .first("n"),
-    ).toBe(0);
-    await sweepDeletedArtifacts(bindings);
-  });
-
-  it("lets request_attention point only at this Thread's artifact", async () => {
+  it("lets request_attention point only at this Thread's artifact, and adds nothing where the owner's ask already is", async () => {
     const threadId = await newThread();
     const other = await newThread();
     const created = await createArtifact(bindings, {
@@ -521,27 +400,170 @@ describe("asks in artifacts", () => {
     });
     if (created.kind !== "saved") throw new Error("Expected an artifact.");
     const artifactId = await agentWrites(threadId, PLAN);
-    const [tool] = createNeedsYouTools(threadId, () => ({
-      db: env.DB,
-      bindings,
-    }));
-    if (tool === undefined) throw new Error("Expected request_attention.");
-    const run = (artifact: string) =>
-      tool.run({
-        data: {
-          kind: "approval",
-          summary: "Approve merging #1240",
-          artifact_id: artifact,
-        },
-        toolCallId: "call",
-        log: { info() {}, warn() {}, error() {}, debug() {} },
-      } as never);
-    await expect(run(created.value.artifact.id)).rejects.toThrow(
-      /not in this Thread/,
+    await expect(
+      requestAttention(threadId, {
+        kind: "approval",
+        summary: "Approve merging #1240",
+        artifact_id: created.value.artifact.id,
+      }),
+    ).rejects.toThrow(/not in this Thread/);
+    expect(
+      await requestAttention(threadId, {
+        kind: "approval",
+        summary: "Approve merging #1240",
+        artifact_id: artifactId,
+      }),
+    ).toMatchObject({ listed: true, artifact_id: artifactId, revision: 1 });
+    expect(await markdownOf(threadId, artifactId)).toBe(PLAN);
+    expect(await attentionRows(threadId)).toBe(0);
+  });
+
+  it("puts the ask of a Claude Code Thread's mcp__dx__request_attention call in its Plan artifact, through the same tool", async () => {
+    const threadId = await newThread();
+    // Claude Code mode registers dx's tools under the MCP server's prefix.
+    claudeCodeDxTools(
+      threadId,
+      createOwnerAskTools(threadId, () => ({ db: env.DB, bindings })),
     );
-    await run(artifactId);
-    const [item] = await listNeedsYou(env.DB, owner, new Date().toISOString());
-    expect(item).toMatchObject({ threadId, artifactId });
+    const results = new Map<string, string>();
+    await runClaudeCodeSubagentDxCall(
+      threadId,
+      {
+        id: "toolu_ask",
+        name: "mcp__dx__request_attention",
+        input: { kind: "approval", summary: "Approve the release notes" },
+      },
+      {
+        log: { info() {}, warn() {}, error() {}, debug() {} },
+        harness: {
+          sandbox: {
+            writeFile: async (path: string, content: string) => {
+              results.set(path, content);
+            },
+          },
+        },
+      } as never,
+    );
+    // Claude reads the tool's result from the file the MCP server waits on.
+    const [result] = [...results.values()];
+    expect(JSON.parse(result ?? "{}")).toMatchObject({ isError: false });
+    const { artifact_id: planId } = JSON.parse(
+      JSON.parse(result ?? "{}").content[0].text,
+    ) as { artifact_id: string };
+    expect(await markdownOf(threadId, planId)).toBe(
+      "- [ ] @[Olive Owner](user:asks-owner) Approve the release notes\n",
+    );
+    expect((await notifications(owner)).at(-1)).toMatchObject({
+      topic: "mention",
+    });
+    expect(await attentionRows(threadId)).toBe(0);
+  });
+
+  it("puts request_attention's ask in the Thread's Plan artifact, in any Project, notifying the owner, and a tick there wakes the Thread", async () => {
+    // A Thread in the owner's own Project, with no artifact yet.
+    const personal = project(
+      "prj_00000000-0000-4000-8000-00000000a902",
+      owner,
+      "Personal",
+    );
+    if (
+      (await env.DB.prepare("SELECT 1 AS found FROM projects WHERE id = ?")
+        .bind(personal.id)
+        .first("found")) === null
+    )
+      await runRepositories(
+        Effect.gen(function* () {
+          yield* (yield* ProjectRepository).insert(personal);
+        }),
+      );
+    sequence += 1;
+    const entity = thread(
+      `thr_00000000-0000-4000-8000-${(0xa90000 + sequence).toString(16).padStart(12, "0")}`,
+      personal.id,
+      owner,
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        yield* (yield* ThreadRepository).insert(entity);
+      }),
+    );
+    const threadId = entity.id as ThreadId;
+    const workspaceThread = await newThread();
+
+    const first = await requestAttention(threadId, {
+      kind: "approval",
+      summary: "  Approve merging PR #12  ",
+      url: "https://github.com/acme/app/pull/12",
+    });
+    expect(first).toMatchObject({ listed: true, title: "Plan", revision: 1 });
+    const planId = String(first.artifact_id);
+    expect(await markdownOf(threadId, planId)).toBe(
+      "- [ ] @[Olive Owner](user:asks-owner) Approve merging PR #12 ([link](https://github.com/acme/app/pull/12))\n",
+    );
+    // No attention row: the ask lives in the artifact.
+    expect(await attentionRows(threadId)).toBe(0);
+    // The owner's mention notifies them.
+    expect((await notifications(owner)).at(-1)).toMatchObject({
+      topic: "mention",
+    });
+
+    // The same ask again adds nothing; another joins the same list.
+    expect(
+      await requestAttention(threadId, {
+        kind: "approval",
+        summary: "Approve merging PR #12",
+        url: "https://github.com/acme/app/pull/12",
+      }),
+    ).toMatchObject({ artifact_id: planId, revision: 1 });
+    await requestAttention(threadId, {
+      kind: "question",
+      summary: "Which region should the bucket live in?",
+    });
+    expect(await markdownOf(threadId, planId)).toBe(
+      [
+        "- [ ] @[Olive Owner](user:asks-owner) Approve merging PR #12 ([link](https://github.com/acme/app/pull/12))",
+        "- [ ] @[Olive Owner](user:asks-owner) Which region should the bucket live in?",
+        "",
+      ].join("\n"),
+    );
+
+    // A Plan a person already wrote takes the ask at its end.
+    const written = await agentWrites(workspaceThread, "# Plan\n\nShip it.\n");
+    expect(
+      await requestAttention(workspaceThread, {
+        kind: "question",
+        summary: "Ship today?",
+      }),
+    ).toMatchObject({ artifact_id: written, revision: 2 });
+    expect(await markdownOf(workspaceThread, written)).toBe(
+      "# Plan\n\nShip it.\n\n- [ ] @[Olive Owner](user:asks-owner) Ship today?\n",
+    );
+
+    // The owner ticks one in the Plan: the Thread wakes.
+    await personSaves(threadId, planId, owner, (text) =>
+      text.replace(
+        "- [ ] @[Olive Owner](user:asks-owner) Which region",
+        "- [x] @[Olive Owner](user:asks-owner) Which region",
+      ),
+    );
+    expect(wakes.map(({ threadId: id }) => id)).toEqual([threadId]);
+
+    // Bad input is refused before anything is written.
+    for (const bad of [
+      { kind: "question", summary: "" },
+      { kind: "question", summary: "Two\nlines" },
+      { kind: "question", summary: "Look", url: "javascript:alert(1)" },
+      { kind: "question", summary: "Look", url: "https://x.test/a b" },
+    ])
+      await expect(requestAttention(threadId, bad)).rejects.toThrow();
+    // Only the tick changed the Plan since.
+    expect(await markdownOf(threadId, planId)).toBe(
+      [
+        "- [ ] @[Olive Owner](user:asks-owner) Approve merging PR #12 ([link](https://github.com/acme/app/pull/12))",
+        "- [x] @[Olive Owner](user:asks-owner) Which region should the bucket live in?",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("wakes the Thread for a comment that mentions the agent, and keeps it in the next turn's note until the agent replies", async () => {

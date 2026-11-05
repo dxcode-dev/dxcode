@@ -253,6 +253,7 @@ export const ThreadRepositoryD1 = Layer.effect(
         executionPin,
         claudeConnectionId,
         initialDispatch,
+        sharedWorkspaceId,
       ) =>
         observe(
           "thread.insert",
@@ -300,8 +301,10 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${JSON.stringify(encoded.skills)},
                   COALESCE((${parentSharing("visibility")}),
                            ${encoded.visibility ?? "private"}),
-                  COALESCE((${parentSharing("workspace_access")}), 'none'),
-                  (${parentSharing("shared_workspace_id")}),
+                  COALESCE((${parentSharing("workspace_access")}),
+                           ${sharedWorkspaceId === undefined ? "none" : "view"}),
+                  COALESCE((${parentSharing("shared_workspace_id")}),
+                           ${sharedWorkspaceId ?? null}),
                   (${parentSharing("contribute_until")}),
                   ${encoded.lifecycleState},
                   ${encoded.titlePendingUntil ?? null},

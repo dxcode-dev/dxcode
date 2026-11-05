@@ -100,10 +100,6 @@ const page = {
     () => import("./features/threads/bug-reports/all-bug-reports-page.js"),
     "AllBugReportRoute",
   ),
-  needsYou: lazyRouteComponent(
-    () => import("./features/navigation/needs-you-page.js"),
-    "NeedsYouPage",
-  ),
   joinWorkspace: lazyRouteComponent(
     () => import("./features/settings/members/join-workspace-page.js"),
     "JoinWorkspacePage",
@@ -260,12 +256,6 @@ const allBugReportRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/bug-reports/all/$reportId",
   component: page.allBugReport,
-});
-
-const needsYouRoute = createRoute({
-  getParentRoute: () => productRoute,
-  path: "/needs-you",
-  component: page.needsYou,
 });
 
 const projectSettingsRoute = createRoute({
@@ -583,7 +573,6 @@ const routeTree = rootRoute.addChildren([
     bugReportRoute,
     allBugReportsRoute,
     allBugReportRoute,
-    needsYouRoute,
   ]),
   personalSettingsRoute,
   personalAdvancedSettingsRedirectRoute,

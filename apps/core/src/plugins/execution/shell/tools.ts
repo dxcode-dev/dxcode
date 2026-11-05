@@ -1,6 +1,8 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { Sandbox, SandboxToolFactory } from "@flue/runtime";
 import { getLogger } from "@logtape/logtape";
+import { READ_CONTEXT_BYTES } from "../../../settings/environment-variables/masking.js";
+import { environmentMaskerOf } from "../../../settings/environment-variables/sandbox.js";
 import { shellDefinitions } from "./definitions.js";
 
 type AgentTool = ReturnType<SandboxToolFactory>[number];
@@ -22,6 +24,11 @@ const WAIT_SLACK_MS = 5_000;
 
 // Each read keeps at most the last 51,200 bytes and 2,000 lines. The cursor
 // advances past discarded bytes too. Guest log files themselves are retained.
+// The read sends, in hex, the bytes just before what it keeps, so Core masks
+// a secret that began there and shows what the read before held back, and
+// what it keeps, so Core sees the bytes as written. A space parts each byte,
+// so no form of a secret matches the hex itself. Whether a read before
+// already reported the command's end says nothing is held back any more.
 const readScript = (wait: number) => `
 deadline=$(( $(date +%s%3N) + ${wait} ))
 while [[ ! -f "$state/exit" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.1; done
@@ -45,9 +52,16 @@ dd if="$state/output" bs=1 skip="$start" count="$((size-start))" status=none | t
 kept=$(stat -c %s "$state/read")
 truncated=0
 (( kept < size - cursor )) && truncated=1
+from=$((size - kept)); before=$(( from < ${READ_CONTEXT_BYTES} ? from : ${READ_CONTEXT_BYTES} ))
+flushed=0
+[[ -f "$state/flushed" ]] && flushed=1
+[[ $running == false ]] && : > "$state/flushed"
 printf '%s' "$size" > "$state/cursor"
-printf '%s\\n%s\\n%s\\n%s\\n' "$pid" "$running" "$code" "$truncated"
-cat "$state/read"
+printf '%s\\n%s\\n%s\\n%s\\n%s\\n' "$pid" "$running" "$code" "$truncated" "$flushed"
+(( before > 0 )) && tail -c +"$((from - before + 1))" "$state/output" | head -c "$before" | od -An -v -tx1 | tr '\\n' ' '
+printf '\\n'
+od -An -v -tx1 "$state/read" | tr '\\n' ' '
+printf '\\n'
 `;
 
 // A Stop that wrote `$state/stop` before this check finds no pid, or finds
@@ -87,6 +101,9 @@ while [[ ! -f "$state/pid" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.05; do
 [[ -f "$state/pid" ]] || exit 0
 pid=$(cat "$state/pid")
 ${killGroup}`;
+
+/** Output a read sent as hex, a space before each byte. */
+const bytesOfHex = (hex: string) => Buffer.from(hex.replaceAll(" ", ""), "hex");
 
 const stoppedError = (signal: AbortSignal) => {
   const error = new DOMException(
@@ -313,16 +330,25 @@ ${readScript(index === 2 ? 1000 : wait)}`,
         throw new Error(
           result.stderr || result.stdout || "Shell process operation failed",
         );
-      const [, runningText, codeText, truncated, ...outputLines] =
+      const [, runningText, codeText, truncated, flushed, beforeHex, keptHex] =
         result.stdout.split("\n");
       const running = runningText === "true";
       const exitCode = running ? undefined : Number(codeText);
-      // Keep output plaintext so the sandbox's secret-redaction wrapper can
-      // redact admitted environment values before they reach the model.
+      // A secret may have begun before this read, or this read may cut one
+      // off: the read shows what the one before held back and holds back
+      // what could begin a secret, until the command ends.
       const output =
         (truncated === "1"
           ? "[Output truncated to last 50 KB / 2,000 lines]\n"
-          : "") + outputLines.join("\n");
+          : "") +
+        // After the read, so the environment its command checked is reused.
+        (await environmentMaskerOf(sandbox)).maskRead(
+          bytesOfHex(beforeHex ?? ""),
+          bytesOfHex(keptHex ?? ""),
+          // A truncated read starts after what was held back; once a read
+          // reported the end, it showed everything.
+          { heldBefore: truncated !== "1" && flushed !== "1", final: !running },
+        );
       const lines: string[] = [];
       if (output || !running) lines.push(`<output>${output}</output>`);
       if (!running) lines.push(`<exitCode>${exitCode}</exitCode>`);

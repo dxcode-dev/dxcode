@@ -138,8 +138,6 @@ import {
   type McpServerData,
   McpServersErrorResponseSchema,
   ModelRoutingErrorResponseSchema,
-  NeedsYouRankingErrorResponseSchema,
-  NeedsYouResponseSchema,
   NotificationPreferencesResponseSchema,
   OrbProviderErrorResponseSchema,
   type OrbProviderId,
@@ -478,7 +476,6 @@ export const request = async <
         ThreadOrbRestartErrorResponseSchema,
         SearchThreadsInvalidRequestResponseSchema,
         SearchThreadsUnavailableResponseSchema,
-        NeedsYouRankingErrorResponseSchema,
       ]),
     )(body).catch(() => undefined);
     if (settingsError !== undefined) {
@@ -3094,20 +3091,6 @@ export const markNotificationsRead = async (ids: ReadonlyArray<string>) =>
         method: "POST",
         body: JSON.stringify({ ids }),
       },
-    )
-  ).data;
-
-/** The signed-in person's Threads that wait on them, newest first. */
-export const listNeedsYou = async (signal?: AbortSignal) =>
-  (await request("/v1/needs-you", NeedsYouResponseSchema, { signal })).data;
-
-/** Dismisses what one Thread asks and returns the rest of the list. */
-export const dismissNeedsYou = async (threadId: ThreadId) =>
-  (
-    await request(
-      `/v1/needs-you/${encodeURIComponent(threadId)}`,
-      NeedsYouResponseSchema,
-      { method: "DELETE" },
     )
   ).data;
 

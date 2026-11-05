@@ -9,6 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
+import { staticHeaders } from "../apps/core/src/security/content-security-policy.mjs";
 import { loadMigrationManifest } from "./migration-manifest.mjs";
 
 export const productionManifestFilename = "production-manifest.json";
@@ -52,6 +53,28 @@ const docsRedirectsPath = "assets/_redirects";
 const docsRedirects = `/docs ${HOSTED_DOCS_ORIGIN}/docs 302
 /docs/* ${HOSTED_DOCS_ORIGIN}/docs/:splat 302
 `;
+/**
+ * Workers static assets answer documents before Core runs, so their
+ * Content Security Policy is a `_headers` file built from the package's own
+ * HTML (inline script hashes) and the deployment's Portal domain.
+ */
+const staticHeadersPath = "assets/_headers";
+const STORAGE_ORIGIN = /^https:\/\/[0-9a-f]{32}\.r2\.cloudflarestorage\.com$/;
+const PORTAL_DOMAIN =
+  /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+const packageStaticHeaders = (
+  root,
+  docsOutputs,
+  { portalDomain, storageOrigin },
+) =>
+  staticHeaders({
+    indexHtml: readFileSync(resolve(root, "assets/index.html"), "utf8"),
+    docsHtml: docsOutputs
+      ?.filter((path) => path.endsWith(".html"))
+      .map((path) => readFileSync(resolve(root, "assets/docs", path), "utf8")),
+    portalDomain,
+    storageOrigin,
+  });
 const forbiddenPath =
   /(^|\/)(?:__fixtures__?|fixtures?|recordings?|certification|testing|tests?|private)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|(?:^|\/)\.dev\.vars(?:\.|$)|\.har$|\.map$/i;
 const forbiddenSignatures = [
@@ -551,8 +574,14 @@ export const createProductionPackage = async ({
   stage,
   target,
   deploymentLabel = `Branch preview · ${stage} · ${revision.slice(0, 12)}`,
+  portalDomain,
+  storageOrigin,
   webBuildRoot,
 }) => {
+  if (portalDomain !== undefined && !PORTAL_DOMAIN.test(portalDomain))
+    throw new Error("Production package Portal domain is invalid.");
+  if (storageOrigin !== undefined && !STORAGE_ORIGIN.test(storageOrigin))
+    throw new Error("Production package storage origin is invalid.");
   if (!/^[a-f0-9]{40}$/.test(revision))
     throw new Error("Production package revision must be a full Git SHA.");
   if (!/^[a-f0-9]{64}$/.test(dxdSha256))
@@ -592,6 +621,8 @@ export const createProductionPackage = async ({
     // The push service worker: served from the origin root, so the browser
     // can scope it to the whole app.
     "sw.js",
+    // The dx-view shell, served with its own policy.
+    "view-frame.html",
   ];
   const web = readGraph(webBuildRoot, {
     source: "index.html",
@@ -675,6 +706,14 @@ export const createProductionPackage = async ({
     resolve(outputRoot, "assets/deployment-bootstrap.json"),
     `${JSON.stringify({ label: deploymentLabel })}\n`,
   );
+  writeFileSync(
+    resolve(outputRoot, staticHeadersPath),
+    packageStaticHeaders(outputRoot, docs?.outputs, {
+      portalDomain,
+      storageOrigin,
+    }),
+    { mode: 0o644 },
+  );
 
   const files = packageFiles(outputRoot);
   const manifest = {
@@ -687,6 +726,11 @@ export const createProductionPackage = async ({
       generatedNames: generatedEnvironmentNames,
     },
     entrypoints,
+    contentSecurityPolicy: {
+      path: staticHeadersPath,
+      ...(portalDomain === undefined ? {} : { portalDomain }),
+      ...(storageOrigin === undefined ? {} : { storageOrigin }),
+    },
     graph: {
       docs: docs?.outputs ?? [],
       worker: worker.graph,
@@ -835,6 +879,23 @@ export const validateProductionPackage = async (root) => {
   )
     throw new Error("Public deployment identity does not match its manifest.");
 
+  const portalDomain = manifest.contentSecurityPolicy?.portalDomain;
+  const storageOrigin = manifest.contentSecurityPolicy?.storageOrigin;
+  if (
+    manifest.contentSecurityPolicy?.path !== staticHeadersPath ||
+    (portalDomain !== undefined && !PORTAL_DOMAIN.test(portalDomain)) ||
+    (storageOrigin !== undefined && !STORAGE_ORIGIN.test(storageOrigin)) ||
+    readFileSync(resolve(root, staticHeadersPath), "utf8") !==
+      packageStaticHeaders(
+        root,
+        servesDocs ? manifest.graph?.docs : undefined,
+        { portalDomain, storageOrigin },
+      )
+  )
+    throw new Error(
+      "Production package _headers do not match its documents and policy.",
+    );
+
   const files = packageFiles(root);
   if (JSON.stringify(files) !== JSON.stringify(manifest.files))
     throw new Error(
@@ -925,6 +986,7 @@ export const validateProductionPackage = async (root) => {
     ...validateGraph(manifest.graph?.web, "index.html", "assets"),
     ...(manifest.graph?.docs ?? []).map((path) => `assets/docs/${path}`),
     ...(servesDocs ? [] : [docsRedirectsPath]),
+    staticHeadersPath,
     "assets/apple-touch-icon.png",
     "assets/deployment-bootstrap.json",
     "assets/favicon.svg",
@@ -935,6 +997,7 @@ export const validateProductionPackage = async (root) => {
     "assets/robots.txt",
     "assets/social-card.png",
     "assets/sw.js",
+    "assets/view-frame.html",
     "assets/dxd",
   ]);
   const docsFiles = (manifest.graph?.docs ?? []).map((path) => {

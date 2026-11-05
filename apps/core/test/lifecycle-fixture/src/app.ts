@@ -29,6 +29,7 @@ import {
   failNextActivation,
   hangNextActivation,
   isHoldingTurn,
+  commandRuns,
   settleDelayedCommand,
 } from "./sandbox.js";
 
@@ -94,6 +95,31 @@ const scenarioResponses = {
       stopReason: "toolUse",
     }),
     fauxAssistantMessage("after-deaf-stop-complete"),
+  ],
+  // #1770: one reply calls two tools under the same ID. Neither may run;
+  // the retry's single call runs once, and the Thread takes its next message.
+  "duplicate-tool-calls": () => [
+    fauxAssistantMessage(
+      [
+        fauxToolCall(
+          "bash",
+          { command: "fixture-count duplicate" },
+          { id: "call_duplicate" },
+        ),
+        fauxToolCall(
+          "bash",
+          { command: "fixture-count duplicate" },
+          { id: "call_duplicate" },
+        ),
+      ],
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage(
+      [fauxToolCall("bash", { command: "fixture-count retried" })],
+      { stopReason: "toolUse" },
+    ),
+    fauxAssistantMessage("duplicate-retry-complete"),
+    fauxAssistantMessage("after-duplicate-complete"),
   ],
   unready: () => [
     fauxAssistantMessage("unready-first-complete"),
@@ -286,6 +312,9 @@ app.post("/__fixture/scenario/:name", (context) => {
   );
   return context.body(null, 204);
 });
+app.get("/__fixture/command-runs/:threadId", (context) =>
+  context.json(commandRuns(context.req.param("threadId"))),
+);
 app.get("/__fixture/holding/:threadId", (context) =>
   context.json({ holding: isHoldingTurn(context.req.param("threadId")) }),
 );

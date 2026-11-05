@@ -15,6 +15,7 @@ import {
   type RunnerProfile,
   type RunnerProfileId,
   type RunnerProviderPresentation,
+  type ThreadVisibility,
 } from "@dx/domain";
 import {
   ArrowRight,
@@ -53,6 +54,7 @@ import {
 } from "./claude-code-mode-options.js";
 import { ServingBadge } from "./model-picker-presentation.js";
 import { REASONING_MODES } from "./new-thread-modal-utils.js";
+import { NewThreadOptionsMenu } from "./new-thread-options-menu.js";
 
 const shortcutSnapshot = () => 0;
 
@@ -1012,6 +1014,8 @@ export function NewThreadConfigurationStrip({
   dictationControls,
   dictationActive = false,
   dictationHideSubmit = false,
+  visibility = "private",
+  onVisibilityChange,
 }: {
   readonly projects: ReadonlyArray<ProjectData>;
   readonly projectId: ProjectId | "";
@@ -1051,6 +1055,9 @@ export function NewThreadConfigurationStrip({
   readonly dictationControls?: ReactNode;
   readonly dictationActive?: boolean;
   readonly dictationHideSubmit?: boolean;
+  readonly visibility?: ThreadVisibility;
+  /** Absent outside a workspace: the options menu has nothing to offer. */
+  readonly onVisibilityChange?: (visibility: ThreadVisibility) => void;
 }) {
   const [modePickerOpen, setModePickerOpen] = React.useState(false);
   const projectTriggerRef = React.useRef<HTMLButtonElement>(null);
@@ -1210,6 +1217,13 @@ export function NewThreadConfigurationStrip({
           onPlanChange={onClaudePlanChange}
         />
       ) : null}
+      {onVisibilityChange === undefined ? null : (
+        <NewThreadOptionsMenu
+          visibility={visibility}
+          locked={locked}
+          onVisibilityChange={onVisibilityChange}
+        />
+      )}
       <span className="new-thread-config-spacer" />
       {dictationControls}
       {dictationHideSubmit ? null : (

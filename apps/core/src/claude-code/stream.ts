@@ -1,8 +1,8 @@
 import type { ClaudePlanReading } from "@dx/domain";
 import {
-  type EnvironmentSecret,
-  redactFragment,
-} from "../settings/environment-variables/sandbox.js";
+  type SecretMasker,
+  secretMasker,
+} from "../settings/environment-variables/masking.js";
 import { claudePlanReadingFromEvent } from "./plan.js";
 
 /**
@@ -207,11 +207,11 @@ export class ClaudeCodeStream {
   /** When dx read `planReading` (epoch seconds). */
   planReadingAt = 0;
   /**
-   * The values workspace reads redact. Each line is redacted on its own, so
-   * a secret Claude streamed across two fragments is redacted here, once
-   * the fragments are joined and before a block shows the text.
+   * What workspace reads mask. Each line is masked on its own, so a secret
+   * Claude streamed across two fragments is masked here, once the fragments
+   * are joined and before a block shows the text.
    */
-  secrets: ReadonlyArray<EnvironmentSecret> = [];
+  masker: SecretMasker = secretMasker([]);
   /** Each streamed block's text that could still begin a secret. */
   #held = new Map<ClaudeCodeBlock, string>();
   /** Blocks of the response being streamed, by Anthropic block index. */
@@ -458,10 +458,9 @@ export class ClaudeCodeStream {
    * text held back before it; `final` releases what is still held.
    */
   #append(block: ClaudeCodeBlock, fragment: string, final = false) {
-    const { released, held } = redactFragment(
+    const { released, held } = this.masker.maskFragment(
       this.#held.get(block) ?? "",
       fragment,
-      this.secrets,
       final,
     );
     if (held === "") this.#held.delete(block);

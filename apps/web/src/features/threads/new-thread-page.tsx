@@ -13,6 +13,7 @@ import {
   type ProjectId,
   type RunnerProfileId,
   type ThreadId,
+  type ThreadVisibility,
   type UserId,
   type WorkspaceId,
 } from "@dx/domain";
@@ -61,6 +62,7 @@ import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { attachmentsUploading } from "./image-attachments.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
+import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { useDraftImages } from "./new-thread-draft-images.js";
 import { getBrowserNewThreadDraftStore } from "./new-thread-draft-store.js";
 import { submitNewThread } from "./new-thread-submission.js";
@@ -494,6 +496,11 @@ function ScopedNewThreadModal({
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
   >();
+  // Only a workspace member can share; elsewhere the Thread stays private.
+  const [chosenVisibility, setVisibility] =
+    React.useState<ThreadVisibility>("private");
+  const visibility = workspace === undefined ? "private" : chosenVisibility;
+  const mentionMembers = useWorkspaceMentionMembers(identity.id, workspace);
   // A send outlives this composer when the user leaves the page mid-create.
   const composerOpen = React.useRef(true);
   useMountEffect(() => {
@@ -563,6 +570,7 @@ function ScopedNewThreadModal({
         effort,
         claudePlan,
         runnerProfileId: effectiveRunnerProfileId,
+        visibility,
         projects,
         imageCollection,
         setImages,
@@ -669,6 +677,11 @@ function ScopedNewThreadModal({
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}
+          visibility={visibility}
+          onVisibilityChange={
+            workspace === undefined ? undefined : setVisibility
+          }
+          mentionMembers={mentionMembers}
         />
         <NewThreadToasts
           warning={draft.warning}

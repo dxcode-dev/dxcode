@@ -132,6 +132,8 @@ try {
     dxdBinary: values.get("dxd-binary"),
     dxdSha256: required("dxd-sha256"),
     outputRoot,
+    portalDomain: values.get("portal-domain"),
+    storageOrigin: values.get("storage-origin"),
     revision: required("revision"),
     stage: required("stage"),
     target: required("target"),

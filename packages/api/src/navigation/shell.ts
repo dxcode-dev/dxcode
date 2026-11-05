@@ -12,7 +12,6 @@ export const SHELL_PARTS = {
   projects: "/v1/projects?limit=100",
   threads: "/v1/threads?limit=100&lifecycleState=active&roots=true",
   sharedThreads: "/v1/shared-threads",
-  needsYou: "/v1/needs-you",
   notifications: "/v1/notifications",
   composer: "/v1/settings/personal/account/composer",
   personalProjects: "/v1/settings/personal/projects",

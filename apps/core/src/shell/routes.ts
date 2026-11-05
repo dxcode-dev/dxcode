@@ -9,7 +9,6 @@ import { Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { errorHandler, notFoundHandler } from "../http/http-errors.js";
 import type { AppEnv } from "../http/types.js";
-import { needsYouRoutes } from "../needs-you/routes.js";
 import { notificationRoutes } from "../notifications/routes.js";
 import { projectRoutes } from "../projects/routes.js";
 import { settingsRoutes } from "../settings/routes.js";
@@ -44,7 +43,6 @@ parts.use(async (context, next) => {
   if (session !== undefined) context.set("authoritativeSession", session);
   await next();
 });
-parts.route("/v1/needs-you", needsYouRoutes);
 parts.route("/v1/notifications", notificationRoutes);
 parts.route("/v1/projects", projectRoutes);
 parts.route("/v1/settings", settingsRoutes);

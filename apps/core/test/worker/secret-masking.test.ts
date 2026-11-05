@@ -402,6 +402,51 @@ describe("Q10: secret masking floor, in workerd with real D1", () => {
     expect.soft(JSON.stringify(streamed)).not.toContain(LONG);
   });
 
+  it("#1663: base64, URL-encoded, and dx credential forms are masked in workerd too", async () => {
+    const guest = memoryGuest();
+    const sandbox = await guest.decorated();
+    // Built at run time so no credential-shaped literal sits in the repository.
+    const github = `gh${"s_"}${"A1b2C3d4".repeat(4)}Z9y8`;
+    const dxd = `dx${"d_"}${"QwErTyUiOp".repeat(6)}AsDf`;
+    const lines = [
+      `Authorization: Basic ${btoa(`x-access-token:${LONG}`)}`,
+      `encoded=${btoa(`ab:${LONG}`).replaceAll("+", "-").replaceAll("/", "_")}`,
+      `url=https://u:${encodeURIComponent(`${LONG}/+@`)}@host`,
+      `token=${github} key=${dxd}`,
+      "fixture=dxd_test-api-key-value ghs_short",
+    ];
+    guest.write(`${REPO}/creds.txt`, `${lines.join("\n")}\n`);
+    const reads = [
+      (await sandbox.exec(`cat ${REPO}/creds.txt`)).stdout,
+      await sandbox.readFile(`${REPO}/creds.txt`),
+      new TextDecoder().decode(
+        await sandbox.readFileBuffer(`${REPO}/creds.txt`),
+      ),
+    ];
+    for (const read of reads) {
+      const [basic, encoded, url, credentials, fixture] = read.split("\n");
+      expect
+        .soft(basic)
+        .toMatch(
+          /^Authorization: Basic [A-Za-z0-9+/]{0,24}\[REDACTED:DEPLOY_TOKEN\][A-Za-z0-9+/=]{0,4}$/,
+        );
+      expect
+        .soft(encoded)
+        .toMatch(
+          /^encoded=[A-Za-z0-9_-]{0,4}\[REDACTED:DEPLOY_TOKEN\][A-Za-z0-9_=-]{0,4}$/,
+        );
+      expect
+        .soft(url)
+        .toMatch(/^url=https:\/\/u:\[REDACTED:DEPLOY_TOKEN\]%2F%2B%40@host$/);
+      expect
+        .soft(credentials)
+        .toBe("token=[REDACTED:GITHUB_TOKEN] key=[REDACTED:DXD_API_KEY]");
+      expect.soft(fixture).toBe("fixture=dxd_test-api-key-value ghs_short");
+      expect.soft(read).not.toContain(github);
+      expect.soft(read).not.toContain(dxd);
+    }
+  });
+
   it("refuses to write the marker of a hidden secret back into a file", async () => {
     const guest = memoryGuest();
     const call = tools(await guest.decorated());

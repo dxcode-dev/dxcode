@@ -31,3 +31,7 @@ export declare const frameView: (
     readonly palette?: string;
   },
 ) => string;
+
+export declare const VIEW_FRAME_PATH: "/view-frame";
+export declare const VIEW_FRAME_CONTENT_SECURITY_POLICY: string;
+export declare const viewFrameShell: () => string;

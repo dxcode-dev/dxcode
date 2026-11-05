@@ -2470,8 +2470,13 @@ var parseDiskRelief = (stdout) => {
 		default: return;
 	}
 };
-var UNSAVED_WORK_SCRIPT = `set -u
-root=/home/user/workspace
+//#endregion
+//#region apps/core/src/execution/unsaved-work-script.ts
+/** `/dev/shm` holds 64 MB on a Cloudflare Orb; leave it room. */
+var UNSAVED_WORK_MAX_BYTES = 50331648;
+/** The script for a workspace root; tests pass a temporary one. */
+var unsavedWorkScript = (root = "/home/user/workspace") => `set -u
+root='${root.replaceAll("'", "'\\''")}'
 [ -d "$root" ] || { echo none; exit 0; }
 t=$(mktemp -d /dev/shm/dx-rescue.XXXXXX) || { echo failed; exit 0; }
 build() {
@@ -2508,13 +2513,14 @@ if ! build 1; then rm -rf "$t"; echo none; exit 0; fi
 untracked=1
 size=$(stat -c %s "$t/archive.tar.gz" 2>/dev/null || echo 0)
 full=$size
-if [ "$size" -gt 50331648 ] || [ "$size" -eq 0 ]; then
+if [ "$size" -gt ${UNSAVED_WORK_MAX_BYTES} ] || [ "$size" -eq 0 ]; then
   untracked=0
   build 0 || :
   size=$(stat -c %s "$t/archive.tar.gz" 2>/dev/null || echo 0)
 fi
 echo "archive $t $size $changes $commits $checkouts $untracked $full"
 `;
+var UNSAVED_WORK_SCRIPT = unsavedWorkScript();
 /** The script's last line, read. */
 var parseUnsavedWork = (stdout) => {
 	const line = stdout.trim().split("\n").at(-1)?.trim() ?? "";

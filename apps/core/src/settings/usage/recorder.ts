@@ -73,6 +73,7 @@ export const usageEventFromFlue = (
           outputTokens: usage?.output ?? null,
           cacheReadTokens: usage?.cacheRead ?? null,
           cacheWriteTokens: usage?.cacheWrite ?? null,
+          cacheWrite1hTokens: usage?.cacheWrite1h ?? null,
           reasoningTokens: null,
           totalTokens: usage?.totalTokens ?? null,
         }),

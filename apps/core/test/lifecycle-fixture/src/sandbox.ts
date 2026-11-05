@@ -19,6 +19,8 @@ interface InstanceState {
   readonly orphanWaiters: Set<() => void>;
   settleDelayedExec?: () => void;
   sandbox?: Sandbox;
+  /** How often each `fixture-count <name>` command ran. */
+  commandRuns: Map<string, number>;
 }
 
 const instances = new Map<string, InstanceState>();
@@ -36,6 +38,7 @@ const stateFor = (id: string): InstanceState => {
     orphanSettled: false,
     holding: false,
     orphanWaiters: new Set(),
+    commandRuns: new Map(),
   };
   instances.set(id, created);
   return created;
@@ -104,6 +107,12 @@ class FixtureSandboxDriver implements SandboxDriver {
     if (command === "deaf-hold") {
       this.state.holding = true;
       return new Promise<never>(() => undefined);
+    }
+    const counted = /^fixture-count (\S+)$/.exec(command);
+    if (counted?.[1] !== undefined) {
+      const runs = this.state.commandRuns;
+      runs.set(counted[1], (runs.get(counted[1]) ?? 0) + 1);
+      return { stdout: "counted", stderr: "", exitCode: 0 };
     }
     const output = /^fixture-output (\d+) (\d+)$/.exec(command);
     if (output !== null)
@@ -176,6 +185,10 @@ export const settleDelayedCommand = (id: string) => {
 };
 
 export const isHoldingTurn = (id: string) => stateFor(id).holding;
+
+/** How often each `fixture-count <name>` command ran in the instance. */
+export const commandRuns = (id: string) =>
+  Object.fromEntries(stateFor(id).commandRuns);
 
 /** Fails the instance's next workspace activation, before any model call. */
 export const failNextActivation = (id: string) => {

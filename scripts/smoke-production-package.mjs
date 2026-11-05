@@ -4,6 +4,14 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { relative, resolve } from "node:path";
 import {
+  apiPolicy,
+  appPolicy,
+  CSP_ENFORCED,
+  docsPolicy,
+  inlineScriptHashes,
+} from "../apps/core/src/security/content-security-policy.mjs";
+import { VIEW_FRAME_CONTENT_SECURITY_POLICY } from "../packages/api/src/views/view-frame.mjs";
+import {
   loadMigrationManifest,
   sourceControlSchemaVersion,
 } from "./migration-manifest.mjs";
@@ -61,6 +69,74 @@ export const stopSmokeChild = (child, timeoutMs = 5_000) =>
     child.once("exit", cleanup);
     child.kill("SIGTERM");
   });
+
+/** A response's enforced and Report-Only policies, as the browser reads them. */
+const policiesOf = (response) => ({
+  enforced: response.headers.get("content-security-policy"),
+  reportOnly: response.headers.get("content-security-policy-report-only"),
+});
+
+/**
+ * Every document and asset carries the app policy; the view shell and the
+ * docs carry only their own.
+ */
+const verifyContentSecurityPolicy = async (origin, packageRoot, manifest) => {
+  const scriptHashes = inlineScriptHashes(
+    readFileSync(resolve(packageRoot, "assets/index.html"), "utf8"),
+  );
+  if (scriptHashes.length !== 1)
+    throw new Error("Packaged index.html should carry one inline script.");
+  const { portalDomain, storageOrigin } = manifest.contentSecurityPolicy ?? {};
+  const app = appPolicy({ scriptHashes, portalDomain, storageOrigin });
+  const expected = (policy) =>
+    JSON.stringify(
+      CSP_ENFORCED
+        ? { enforced: policy, reportOnly: null }
+        : { enforced: null, reportOnly: policy },
+    );
+  const script = manifest.files.find(
+    ({ path }) => path.startsWith("assets/assets/") && path.endsWith(".js"),
+  )?.path;
+  const checks = [
+    ["/", expected(app)],
+    ["/w/acme/threads/thr_00000000-0000-4000-8000-000000000000", expected(app)],
+    [`/${script?.replace(/^assets\//, "")}`, expected(app)],
+    [
+      "/view-frame",
+      JSON.stringify({
+        enforced: VIEW_FRAME_CONTENT_SECURITY_POLICY,
+        reportOnly: null,
+      }),
+    ],
+    ["/v1/projects", expected(apiPolicy)],
+  ];
+  if (manifest.graph.docs.length > 0) {
+    const docsHashes = [
+      ...new Set(
+        manifest.graph.docs
+          .filter((path) => path.endsWith(".html"))
+          .flatMap((path) =>
+            inlineScriptHashes(
+              readFileSync(resolve(packageRoot, "assets/docs", path), "utf8"),
+            ),
+          ),
+      ),
+    ].sort();
+    checks.push(["/docs/", expected(docsPolicy({ scriptHashes: docsHashes }))]);
+  }
+  for (const [path, want] of checks) {
+    const response = await fetch(`${origin}${path}`, { redirect: "manual" });
+    const got = JSON.stringify(policiesOf(response));
+    if (response.status !== (path === "/v1/projects" ? 401 : 200))
+      throw new Error(
+        `Packaged Worker answered ${path} with ${response.status}.`,
+      );
+    if (got !== want)
+      throw new Error(
+        `Packaged Worker served ${path} with an unexpected CSP: ${got}`,
+      );
+  }
+};
 
 export const smokeProductionPackage = async (packageRoot) => {
   const manifest = await validateProductionPackage(packageRoot);
@@ -301,6 +377,7 @@ export const smokeProductionPackage = async (packageRoot) => {
       throw new Error(
         "Packaged Worker did not serve the packaged application.",
       );
+    await verifyContentSecurityPolicy(origin, packageRoot, manifest);
     if (manifest.graph.docs.length === 0) {
       // A package without the docs site sends every docs path to the hosted
       // docs, keeping the rest of the path.

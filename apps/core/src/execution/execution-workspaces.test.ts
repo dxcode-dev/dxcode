@@ -537,7 +537,7 @@ describe("read-only Orb recovery", () => {
       run: vi.fn(async (command: string) => {
         if (rescue && command.includes("/dev/shm/dx-rescue.XXXXXX"))
           return {
-            stdout: "archive /dev/shm/dx-rescue.Ab12Cd 5 2 1\n",
+            stdout: "archive /dev/shm/dx-rescue.Ab12Cd 5 2 1 1 1 5\n",
             stderr: "",
             exitCode: 0,
           };

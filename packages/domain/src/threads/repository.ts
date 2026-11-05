@@ -66,6 +66,11 @@ export interface ThreadRepositoryShape {
     /** The Claude plan a Claude Code Thread is bound to for its life. */
     claudeConnectionId?: string,
     initialDispatch?: ThreadInitialDispatchDraft,
+    /**
+     * The owner's workspace a Thread created with `workspace` visibility is
+     * shared with, as View. A child takes its family's sharing instead.
+     */
+    sharedWorkspaceId?: string,
   ) => Effect.Effect<void, Schema.SchemaError | PersistenceUnavailable>;
   readonly findOwnedById: (
     threadId: ThreadId,

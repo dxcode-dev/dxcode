@@ -18,8 +18,9 @@
 /** `/dev/shm` holds 64 MB on a Cloudflare Orb; leave it room. */
 export const UNSAVED_WORK_MAX_BYTES = 48 * 1024 * 1024;
 
-export const UNSAVED_WORK_SCRIPT = `set -u
-root=/home/user/workspace
+/** The script for a workspace root; tests pass a temporary one. */
+export const unsavedWorkScript = (root = "/home/user/workspace") => `set -u
+root='${root.replaceAll("'", "'\\''")}'
 [ -d "$root" ] || { echo none; exit 0; }
 t=$(mktemp -d /dev/shm/dx-rescue.XXXXXX) || { echo failed; exit 0; }
 build() {
@@ -63,6 +64,8 @@ if [ "$size" -gt ${UNSAVED_WORK_MAX_BYTES} ] || [ "$size" -eq 0 ]; then
 fi
 echo "archive $t $size $changes $commits $checkouts $untracked $full"
 `;
+
+export const UNSAVED_WORK_SCRIPT = unsavedWorkScript();
 
 /** The script's last line, read. */
 export const parseUnsavedWork = (stdout: string) => {

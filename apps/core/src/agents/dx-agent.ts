@@ -36,7 +36,7 @@ import {
 } from "../execution/additional-repository-note.js";
 import { takeDxFilesSandbox } from "../execution/dx-files-sandbox.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
-import { createNeedsYouTools } from "../needs-you/agent-tools.js";
+import { createOwnerAskTools } from "../owner-asks/agent-tools.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
   takeWorkspaceDisk,
@@ -74,6 +74,10 @@ import {
   type DxPromptData,
 } from "../runtime/agent-composition.js";
 import { AGENT_RUN_LIMIT_MS } from "../runtime/agent-run-limit.js";
+import {
+  threadEnvironmentMasker,
+  withMaskedToolResults,
+} from "../settings/environment-variables/sandbox.js";
 import type { McpAgentConnectionData } from "../settings/mcp-servers/execution.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
@@ -195,8 +199,13 @@ const dxTools = (
   if (promptData?.bugReportReader === true)
     for (const tool of createBugReportTools(threadId, agentThreadToolsContext))
       tools.push(withToolFailureMessage(tool));
-  // request_attention: the owner's Needs-you inbox.
-  for (const tool of createNeedsYouTools(threadId, agentThreadToolsContext))
+  // request_attention: an ask for the owner in the Thread's Plan artifact,
+  // which notifies them.
+  for (const tool of createOwnerAskTools(
+    threadId,
+    agentThreadToolsContext,
+    promptData?.plugins?.submissionId,
+  ))
     tools.push(withToolFailureMessage(tool));
   const pluginTools = promptData?.plugins;
   if (pluginTools !== undefined)
@@ -221,7 +230,11 @@ const dxTools = (
           }),
         ),
       );
-  return tools;
+  // A tool outside the Orb can still return a secret, so each result and
+  // failure is masked as the Thread's sandbox masks its reads.
+  return tools.map((tool) =>
+    withMaskedToolResults(tool, () => threadEnvironmentMasker(threadId)),
+  );
 };
 
 type AgentSandbox = Awaited<ReturnType<SandboxFactory["createSandbox"]>>;

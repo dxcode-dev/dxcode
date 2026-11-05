@@ -23,6 +23,8 @@ import {
   CreateThreadRequestSchema,
   CreateThreadResponseSchema,
   CreateThreadRunnerUnavailableResponseSchema,
+  CreateThreadSharingForbiddenResponseSchema,
+  CreateThreadSharingUnavailableResponseSchema,
   GetThreadInvalidRequestResponseSchema,
   GetThreadListItemInvalidRequestResponseSchema,
   GetThreadListItemNotFoundResponseSchema,
@@ -181,10 +183,15 @@ import {
   findSharedThreadGrant,
 } from "../thread-sharing/access.js";
 import {
+  ownerWorkspaceId,
   threadSharingDecorations,
   threadSharingDetail,
   userIdentity,
 } from "../thread-sharing/service.js";
+import {
+  announceInitialMentions,
+  resolveInitialMentions,
+} from "../thread-sharing/initial-mentions.js";
 import { childActivityField, markThreadOpened } from "./attention-d1.js";
 import {
   type DxTitleAgentRunner,
@@ -275,6 +282,18 @@ class InitialSubmissionConflict extends Schema.TaggedError<InitialSubmissionConf
 
 class ThreadAlreadyStarted extends Schema.TaggedError<ThreadAlreadyStarted>()(
   "ThreadAlreadyStarted",
+  {},
+) {}
+
+/** Workspace visibility was asked for, but the owner has no workspace. */
+class CreationSharingUnavailable extends Schema.TaggedError<CreationSharingUnavailable>()(
+  "CreationSharingUnavailable",
+  {},
+) {}
+
+/** Workspace visibility was asked for by an External API App. */
+class CreationSharingForbidden extends Schema.TaggedError<CreationSharingForbidden>()(
+  "CreationSharingForbidden",
   {},
 ) {}
 
@@ -784,11 +803,33 @@ export const createThreadRoutes = (
       );
       requestAdmittedAt = Date.now();
       const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
+      // A Thread shared from its start passes the Share dialog's checks
+      // before anything is read or written: a signed-in person, in an
+      // active workspace, which the Thread is then shared with.
+      const sharedWorkspaceId =
+        input.visibility !== "workspace"
+          ? undefined
+          : !canUseSharedThreads(principal)
+            ? yield* new CreationSharingForbidden()
+            : yield* Effect.tryPromise({
+                try: () => ownerWorkspaceId(db, principal.userId),
+                catch: (cause) =>
+                  PersistenceUnavailable.new(
+                    { operation: "thread.resolveSharedWorkspace" },
+                    cause,
+                  ),
+              }).pipe(
+                Effect.flatMap((workspaceId) =>
+                  workspaceId === undefined
+                    ? Effect.fail(new CreationSharingUnavailable())
+                    : Effect.succeed(workspaceId),
+                ),
+              );
       const workspace = WorkspaceRepositoryD1(db).pipe(
         Layer.provide(D1Client.layer({ db })),
       );
       const serviceLayer = threadServiceLayer(db);
-      const principal = context.get("principal");
       const requestedThreadId = input.threadId;
       const initialMessage = input.initialMessage;
       // These reads are independent: the first message's files, checked
@@ -1052,6 +1093,9 @@ export const createThreadRoutes = (
                         requestedRunnerProfileId,
                         titlePending,
                         input.parentThreadId,
+                        sharedWorkspaceId === undefined
+                          ? undefined
+                          : "workspace",
                       )
                       .pipe(
                         // Only the parent lookup reports a missing Thread here.
@@ -1132,6 +1176,42 @@ export const createThreadRoutes = (
               context.req.url,
             );
       const messageSourceThreadId = context.get("messageSourceThreadId");
+      // A Workspace Thread's first message tags workspace members (#1636),
+      // as a shared Thread's later messages do. Only a person's own message
+      // does: an agent's or an automation's never notifies anyone.
+      const initialMentions =
+        sharedWorkspaceId === undefined ||
+        requestedThreadId === undefined ||
+        initialAttachments === undefined ||
+        messageSourceThreadId !== undefined ||
+        context.get("messageAutomation") !== undefined
+          ? undefined
+          : yield* Effect.tryPromise({
+              try: () =>
+                resolveInitialMentions(db, {
+                  threadId: requestedThreadId,
+                  ownerUserId: principal.userId,
+                  sharedWorkspaceId,
+                  text: initialAttachments.text,
+                }),
+              catch: () => new ThreadInitialAdmissionUnavailable(),
+            }).pipe(createPhase("mentions"));
+      /** Tells the tagged members, once, for the request that made it. */
+      const announceMentions = () =>
+        initialMentions === undefined || !insertedThread
+          ? Effect.void
+          : Effect.promise(() =>
+              announceInitialMentions(
+                () => context.executionCtx,
+                context.env,
+                db,
+                {
+                  threadId: thread.id,
+                  ownerUserId: principal.userId,
+                  mentions: initialMentions,
+                },
+              ),
+            ).pipe(createPhase("mentions-announce"));
       /** Flue's request for the first message, delivered to `forThread`. */
       const initialRequest = (
         forThread: Thread,
@@ -1169,6 +1249,12 @@ export const createThreadRoutes = (
                     ...(context.get("messageAutomation") === undefined
                       ? {}
                       : { automation: context.get("messageAutomation") }),
+                    ...(initialMentions === undefined
+                      ? {}
+                      : {
+                          mentions: initialMentions.mentions,
+                          messageId: initialMentions.messageId,
+                        }),
                   },
                   admitted.body,
                 ),
@@ -1219,6 +1305,7 @@ export const createThreadRoutes = (
                   insert.pin,
                   insert.claudeConnectionId,
                   deferred?.draft,
+                  sharedWorkspaceId,
                 )
                 .pipe(
                   Effect.tap(() =>
@@ -1337,6 +1424,8 @@ export const createThreadRoutes = (
         // Without an execution context nothing outlives the response.
         if (execution === undefined) yield* Effect.promise(() => delivery);
         else execution.waitUntil(delivery);
+        // Stored with its first message, the Thread exists for them now.
+        yield* announceMentions();
         const body = yield* Schema.encodeUnknownEffect(
           CreateThreadResponseSchema,
         )({
@@ -1394,6 +1483,7 @@ export const createThreadRoutes = (
       );
       settleTitlePersisted?.(insertedThread);
       initialMessageAdmittedAt = Date.now();
+      yield* announceMentions();
       if (initialAttachments !== undefined)
         yield* Effect.promise(() =>
           linkMessageAttachments(context.env.DB as D1Database, {
@@ -1713,6 +1803,34 @@ export const createThreadRoutes = (
               },
             }),
             409,
+          ),
+        CreationSharingUnavailable: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadSharingUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "THREAD_SHARING_UNAVAILABLE",
+                message: "Join or create a workspace to share Threads.",
+                requestId,
+              },
+            }),
+            409,
+          ),
+        CreationSharingForbidden: () =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadSharingForbiddenResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "THREAD_SHARING_FORBIDDEN",
+                message: "Only a signed-in person can share a Thread.",
+                requestId,
+              },
+            }),
+            403,
           ),
         RunnerProfileUnavailable: () =>
           context.json(

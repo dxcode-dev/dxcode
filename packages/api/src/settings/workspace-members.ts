@@ -23,6 +23,8 @@ export const WorkspaceMemberDataSchema = Schema.Struct({
   joinedAt: Schema.String,
   lastActiveAt: Schema.optional(Schema.String),
   image: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
+  /** Their username, which `@` tags them by. */
+  handle: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
 });
 
 export type WorkspaceMemberData = typeof WorkspaceMemberDataSchema.Type;

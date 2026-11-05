@@ -147,12 +147,14 @@ interface MemberRow {
   readonly session_at: unknown;
   readonly thread_at: string | null;
   readonly image: string | null;
+  readonly handle: string | null;
 }
 
 const memberSelect = `
   SELECT member.userId AS user_id, "user".email, "user".name, member.role,
          member.createdAt AS joined_at,
          ${userImageSql('"user"', "account")} AS image,
+         account.username AS handle,
          (SELECT MAX(session.updatedAt) FROM session
            WHERE session.userId = member.userId) AS session_at,
          (SELECT MAX(threads.last_activity_at) FROM threads
@@ -176,6 +178,9 @@ const memberData = (row: MemberRow): WorkspaceMemberData => {
     ...(row.image === null || row.image.length > 2_048
       ? {}
       : { image: row.image }),
+    ...(row.handle === null || row.handle === ""
+      ? {}
+      : { handle: row.handle.slice(0, 64) }),
   };
 };
 

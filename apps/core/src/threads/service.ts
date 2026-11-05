@@ -26,6 +26,7 @@ import {
   ThreadSourceIntent,
   ThreadSourceSnapshot,
   type ThreadTitle,
+  type ThreadVisibility,
   type ThreadUpdate,
   type WorkspacePolicyDenied,
 } from "@dx/domain";
@@ -73,6 +74,8 @@ interface ThreadServiceShape {
     runnerProfileId?: RunnerProfileId,
     titlePending?: boolean,
     parentThreadId?: ThreadId,
+    /** `workspace` for a Thread shared from its start; not with a parent. */
+    visibility?: ThreadVisibility,
   ) => Effect.Effect<
     PreparedThread,
     | Schema.SchemaError
@@ -88,6 +91,8 @@ interface ThreadServiceShape {
     executionPin?: ThreadExecutionPin,
     claudeConnectionId?: string,
     initialDispatch?: ThreadInitialDispatchDraft,
+    /** The workspace a `workspace` Thread is shared with. */
+    sharedWorkspaceId?: string,
   ) => Effect.Effect<Thread, Schema.SchemaError | PersistenceUnavailable>;
   readonly get: (
     principal: Principal,
@@ -173,6 +178,7 @@ export class ThreadService extends Context.Service<
             runnerProfileId,
             titlePending,
             parentThreadId,
+            visibility,
           ) {
             // A family has one root: a child's child keeps the root as its
             // parent and records the child as the Thread that started it.
@@ -237,6 +243,7 @@ export class ThreadService extends Context.Service<
               selection: selection ?? defaultThreadModelSelection(),
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
               ...(titlePending === true ? { titlePending } : {}),
+              ...(visibility === undefined ? {} : { visibility }),
               ...(parentThread === undefined
                 ? {}
                 : {
@@ -264,6 +271,7 @@ export class ThreadService extends Context.Service<
             executionPin,
             claudeConnectionId,
             initialDispatch,
+            sharedWorkspaceId,
           ) {
             let admission: ThreadSourceAdmission | undefined;
             if (source?.kind === "pending") {
@@ -298,6 +306,7 @@ export class ThreadService extends Context.Service<
               executionPin,
               claudeConnectionId,
               initialDispatch,
+              sharedWorkspaceId,
             );
             return thread;
           },

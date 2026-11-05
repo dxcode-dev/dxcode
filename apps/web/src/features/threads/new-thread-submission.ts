@@ -9,6 +9,7 @@ import {
   type ProjectId,
   type RunnerProfileId,
   type ThreadId,
+  type ThreadVisibility,
 } from "@dx/domain";
 import type { useNavigate } from "@tanstack/react-router";
 import {
@@ -38,6 +39,7 @@ const sameRequest = (
   previous.effort === next.effort &&
   previous.claudeConnectionId === next.claudeConnectionId &&
   previous.runnerProfileId === next.runnerProfileId &&
+  previous.visibility === next.visibility &&
   previous.body === next.body &&
   previous.attachmentIds.length === next.attachmentIds.length &&
   previous.attachmentIds.every((id, index) => id === next.attachmentIds[index]);
@@ -59,6 +61,7 @@ export async function submitNewThread({
   effort,
   claudePlan,
   runnerProfileId,
+  visibility,
   projects,
   imageCollection,
   setImages,
@@ -79,6 +82,8 @@ export async function submitNewThread({
   /** The Claude plan, sent only with a Claude Code model. */
   readonly claudePlan?: string;
   readonly runnerProfileId?: RunnerProfileId;
+  /** `workspace` shares the Thread with the workspace from its start. */
+  readonly visibility?: ThreadVisibility;
   readonly projects: ReadonlyArray<ProjectData>;
   readonly imageCollection: PendingAttachmentCollection;
   readonly setImages: (images: ReadonlyArray<PendingAttachment>) => void;
@@ -136,6 +141,7 @@ export async function submitNewThread({
       ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       runnerProfileId,
+      ...(visibility === "workspace" ? { visibility } : {}),
       body,
       attachmentIds,
     };
@@ -175,6 +181,7 @@ export async function submitNewThread({
             },
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
+      ...(visibility === "workspace" ? { visibility } : {}),
       threadId,
       initialMessage: {
         body: sentBody,

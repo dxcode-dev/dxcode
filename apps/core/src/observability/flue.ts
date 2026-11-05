@@ -327,6 +327,27 @@ export const observeFlueEvent = (
       else agentModelLogger.info("Flue compaction completed.", fields);
       return persistence;
     }
+    case "log": {
+      // Flue reports a canonical record the conversation reducer rejected
+      // (#1770): Pi keeps only the error's message, so this line is the one
+      // place that names the record and the broken rule. IDs, types, and the
+      // rule only; record content can hold prompt text or tool output.
+      const attributes = event.attributes ?? {};
+      if (attributes.errorType !== "conversation_record_invariant")
+        return persistence;
+      const text = (value: unknown) =>
+        typeof value === "string" ? bounded(value) : undefined;
+      agentModelLogger.error("Canonical conversation record rejected.", {
+        event: "conversation_record_invariant",
+        ...correlations(event),
+        ...(event.turnId === undefined ? {} : { turnId: event.turnId }),
+        recordId: text(attributes.recordId),
+        recordType: text(attributes.recordType),
+        reason: text(attributes.reason),
+        agentEvent: text(attributes.agentEvent),
+      });
+      return persistence;
+    }
     case "tool_start":
       agentToolLogger.info("Flue tool execution started.", {
         event: event.type,

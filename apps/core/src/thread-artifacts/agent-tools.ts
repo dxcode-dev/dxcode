@@ -21,6 +21,7 @@ import {
   listArtifactComments,
   resolveArtifactComment,
 } from "./comments.js";
+import { personMention } from "./owner-ask.js";
 import { UNTRUSTED_NOTE, wrapPeopleText } from "./people-text.js";
 import {
   type ArtifactWithMarkdown,
@@ -347,7 +348,7 @@ const DESCRIPTION = [
   "People edit artifacts while you work, so read an artifact before updating it. update names the revision you read in base_revision. When someone saved a newer revision, nothing is saved and the result returns the current Markdown: merge your change into it and update again with its revision. Keep people's wording unless they asked you to change it. Set force only when the user explicitly asks you to overwrite their newer changes. For small changes pass edits instead of the whole markdown: each old_str must appear exactly once in the whole artifact, and the edits apply together or not at all, so reading the part you change is enough.",
   "Comments sit on text and are never part of the Markdown; they stay on their text when you rewrite around it. Add, reply to, and resolve comments with comments on create or update. When a comment asks for a change, make it and reply saying what you changed. Resolving hides the comment and its replies, so resolve only when someone asks.",
   "A new artifact is visible to everyone who can open this Thread. delete never deletes by itself: it shows the user a card to confirm. Delete only when the user asks.",
-  "When you need the owner's answer or approval, write the ask as an unchecked checklist item that mentions them in the Thread's plan artifact, such as `- [ ] @[Name](user:USER_ID) Approve merging #1240`, then call request_attention with its artifact_id. list returns `people`: who can open this Thread, each with the exact mention to copy. A mention notifies that person. When someone ticks the item or writes under it, this Thread wakes with a message saying so; read the artifact and carry on.",
+  "When you need the owner's answer or approval, call request_attention: it adds the ask to the Thread's Plan artifact as an unchecked checklist item that mentions them, which notifies them. To ask someone else in the Thread, write the item yourself, such as `- [ ] @[Name](user:USER_ID) Review the pricing table`; list returns `people`: who can open this Thread, each with the exact mention to copy. A mention notifies that person. When someone ticks an ask or writes under it, this Thread wakes with a message saying so; read the artifact and carry on. When the owner answers an ask in the conversation instead, tick it yourself.",
   UNTRUSTED_NOTE,
 ].join("\n\n");
 
@@ -374,17 +375,10 @@ const mentionablePeople = async (db: D1Database, threadId: string) => {
       .filter(({ userId }) => userId !== owner?.id)
       .map(({ userId, name }) => ({ id: userId, name, owner: false })),
   ].slice(0, 50);
-  return people.map((person) => {
-    const name =
-      person.name
-        .replace(/[[\]()\n\r]/g, " ")
-        .trim()
-        .slice(0, 60) || "Member";
-    return {
-      mention: `@[${name}](user:${person.id})`,
-      ...(person.owner ? { owner: true } : {}),
-    };
-  });
+  return people.map((person) => ({
+    mention: personMention(person.id, person.name),
+    ...(person.owner ? { owner: true } : {}),
+  }));
 };
 
 /** The `artifact` tool for one Thread's agent. */

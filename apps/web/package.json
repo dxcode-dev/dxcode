@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.67",
+  "version": "0.2.68",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -19,8 +19,8 @@
     "@better-auth/utils": "0.4.2",
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
-    "@flue/react": "file:../../third-party/flue/react-0cb65fd1ec17341c4d6aba5c95b3d65094e84735.tgz",
-    "@flue/sdk": "file:../../third-party/flue/sdk-0cb65fd1ec17341c4d6aba5c95b3d65094e84735.tgz",
+    "@flue/react": "file:../../third-party/flue/react-b71922a26e496c818745af6d19fe249fbc276cfa.tgz",
+    "@flue/sdk": "file:../../third-party/flue/sdk-b71922a26e496c818745af6d19fe249fbc276cfa.tgz",
     "@fontsource/dm-mono": "5.3.0",
     "@fontsource/dm-sans": "5.3.0",
     "@fontsource/ibm-plex-mono": "5.3.0",

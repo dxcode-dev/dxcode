@@ -3,6 +3,7 @@ import type {
   GraphData,
   OrbResolvedProvider,
   ProjectData,
+  ThreadMemberData,
 } from "@dx/api";
 import type {
   ClaudeCodeEffort,
@@ -11,12 +12,15 @@ import type {
   RunnerProfile,
   RunnerProfileId,
   RunnerProviderPresentation,
+  ThreadVisibility,
 } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import type * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { newThreadOrbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
+import { newThreadSetupGaps } from "./composer-readiness.js";
+import { NewThreadSetupNotice } from "./composer-setup-notice.js";
 import { type PendingAttachment, pastedFiles } from "./image-attachments.js";
 import {
   AttachmentMenu,
@@ -25,6 +29,7 @@ import {
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
 import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js";
+import { useNewThreadMentions } from "./new-thread-mentions.js";
 
 export function NewThreadComposer({
   prompt,
@@ -64,6 +69,9 @@ export function NewThreadComposer({
   dictationControls,
   dictationActive,
   dictationHideSubmit,
+  visibility,
+  onVisibilityChange,
+  mentionMembers,
 }: {
   readonly prompt: string;
   readonly images: ReadonlyArray<PendingAttachment>;
@@ -102,6 +110,14 @@ export function NewThreadComposer({
   readonly dictationControls?: React.ReactNode;
   readonly dictationActive: boolean;
   readonly dictationHideSubmit: boolean;
+  readonly visibility?: ThreadVisibility;
+  /** Absent outside a workspace, where a Thread is always private. */
+  readonly onVisibilityChange?: (visibility: ThreadVisibility) => void;
+  /**
+   * The workspace's members `@` can tag. Tagging one shares the Thread with
+   * the workspace, so they can open it; outside a workspace `@` is text.
+   */
+  readonly mentionMembers?: ReadonlyArray<ThreadMemberData>;
 }) {
   const uploading = useAttachmentsUploading(images);
   // The provider list the page reads runnerOrbs from (the same query), for
@@ -117,16 +133,35 @@ export function NewThreadComposer({
   // list moves it to one they can. A failed list lets the send through.
   const runnerOrbsPending = runnerOrbs === undefined && !runnerOrbsFailed;
   const enterKey = useComposerEnterKey();
+  const mentions = useNewThreadMentions({
+    members: onVisibilityChange === undefined ? undefined : mentionMembers,
+    viewerId: identity.id,
+    prompt,
+    setPrompt: onPromptChange,
+    textareaRef,
+    onMention: () => onVisibilityChange?.("workspace"),
+  });
   const dropTarget = useImageDropTarget({
     disabled: submitting || uploading,
     onFiles,
+  });
+  // Core refuses a Thread with no Orb that can start or no served model;
+  // Send stays off until both are set up.
+  const setupGaps = newThreadSetupGaps({
+    runnerOrbs,
+    localRuntime: orbProvidersQuery.data?.localRuntime,
+    runnerProfiles,
+    runnerProfileId,
+    choices,
+    profile,
+    model,
   });
   return (
     <form
       className="new-thread-composer"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!runnerOrbsPending) onSubmit();
+        if (!runnerOrbsPending && setupGaps.length === 0) onSubmit();
       }}
       {...dropTarget}
     >
@@ -135,7 +170,12 @@ export function NewThreadComposer({
           ref={textareaRef}
           value={prompt}
           readOnly={submitting}
-          onChange={(event) => onPromptChange(event.target.value)}
+          {...mentions.textareaProps}
+          onChange={(event) => {
+            onPromptChange(event.target.value);
+            mentions.onInput(event);
+          }}
+          onSelect={mentions.trackCaret}
           onPaste={(event) => {
             const files = pastedFiles(event);
             if (files.length === 0 || submitting || uploading) return;
@@ -143,6 +183,13 @@ export function NewThreadComposer({
             onFiles(files);
           }}
           onKeyDown={(event) => {
+            // A key the @ list used is not the dialog's: Escape closes
+            // the list, not the composer.
+            if (mentions.onKeyDown(event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             if (enterKey.sends(event)) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
@@ -152,6 +199,7 @@ export function NewThreadComposer({
           aria-label="Prompt"
           enterKeyHint={enterKey.enterKeyHint}
         />
+        {mentions.list}
         <div className="new-thread-attachment-row">
           <AttachmentMenu
             disabled={submitting || uploading}
@@ -165,6 +213,7 @@ export function NewThreadComposer({
           />
         </div>
       </div>
+      <NewThreadSetupNotice gaps={setupGaps} />
       <NewThreadConfigurationStrip
         projects={projects}
         hasMoreProjects={hasMoreProjects}
@@ -181,6 +230,7 @@ export function NewThreadComposer({
         ready={
           !uploading &&
           !runnerOrbsPending &&
+          setupGaps.length === 0 &&
           Boolean(prompt.trim() || images.length > 0)
         }
         retrying={false}
@@ -204,6 +254,8 @@ export function NewThreadComposer({
         dictationControls={dictationControls}
         dictationActive={dictationActive}
         dictationHideSubmit={dictationHideSubmit}
+        visibility={visibility}
+        onVisibilityChange={onVisibilityChange}
       />
     </form>
   );

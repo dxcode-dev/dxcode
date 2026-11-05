@@ -423,6 +423,25 @@ const streamViaCoordinator = (
   return events;
 };
 
+/**
+ * Anthropic's 1-hour prompt cache, for calls to the Anthropic API itself
+ * (#1757). pi sets the same `cache_control` breakpoints either way (system
+ * prompt, last tool, last user message); "long" adds `ttl: "1h"` to each. A
+ * 1-hour write costs 2× input instead of 1.25× and a read 0.1× either way, so
+ * every write costs 0.75× more and every call 5 to 60 minutes after the last
+ * one saves 1.15× (a read instead of a full rewrite). It comes out ahead when
+ * the tokens rewritten after such pauses exceed about two thirds of all tokens
+ * written; production Threads do (about 5% less input cost), a Thread that
+ * never pauses pays more. Copilot and custom endpoints serving Claude over the
+ * same wire keep their default.
+ */
+const promptCacheRetention = (model: Model<Api>) =>
+  model.provider === "anthropic" &&
+  model.api === "anthropic-messages" &&
+  /^https:\/\/api\.anthropic\.com(\/|$)/.test(model.baseUrl)
+    ? { cacheRetention: "long" }
+    : {};
+
 const streamViaAdapter = (
   loadAdapter: () => Promise<ProxyAdapter>,
   method: "stream" | "streamSimple",
@@ -440,6 +459,7 @@ const streamViaAdapter = (
       const adapter = await loadAdapter();
       let done: AssistantMessageEvent | undefined;
       for await (const raw of adapter[method](model, context, {
+        ...promptCacheRetention(model),
         ...options,
         maxRetries: 0,
         // Flue's submission deadline bounds the call; SDK defaults must not

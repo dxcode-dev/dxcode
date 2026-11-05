@@ -184,14 +184,21 @@ the screen does not change.
 
 Pinned inputs: Waymote 0.1.6 server release (MIT), and labwc 0.9.7 with
 wlroots 0.19.3, libxml2-16 2.14.6, libsfdo0 0.1.4, and libdisplay-info3 0.3.0
-from snapshot.debian.org. wlroots must be 0.19.3 or later: earlier 0.19
+(build 0.3.0-1+b1), each a Debian build pinned by SHA-256. The build fetches
+each one from a list of sources and keeps the first whose checksum matches:
+dx's own copy on the
+[`orb-desktop-debs-1`](https://github.com/dxcode-dev/dxcode/releases/tag/orb-desktop-debs-1)
+release, which also carries their Debian source packages, then
+deb.debian.org while Debian still carries that build, then
+snapshot.debian.org, which keeps every build but is rate-limited and can
+serve 503 for one file for hours. wlroots must be 0.19.3 or later: earlier 0.19
 releases give a virtual pointer's axis source to one axis only, so a diagonal
 (trackpad) scroll from the viewer aborts labwc and the session restarts.
 Chromium runs with `--enable-unsafe-swiftshader`: without a GPU it otherwise
 blocklists WebGL instead of using its software renderer. Debian 13's labwc 0.8.3 uses wlroots 0.18, which lacks
 `ext-data-control-v1`, Waymote's clipboard protocol. These builds upgrade no
 Debian 13 package and receive no Debian security updates; their sources are on
-snapshot.debian.org (labwc is GPL-2.0, wlroots MIT). Everything else comes
+that release and on snapshot.debian.org (labwc is GPL-2.0, wlroots MIT). Everything else comes
 from Debian 13. Measurements and the verification procedure:
 [`artifacts/desktop-image-verification`](../../artifacts/desktop-image-verification/README.md).
 

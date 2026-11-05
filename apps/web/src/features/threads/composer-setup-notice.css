@@ -1,0 +1,17 @@
+.new-thread-setup-notice {
+  display: grid;
+  gap: 2px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 18px;
+}
+.new-thread-setup-notice p {
+  margin: 0;
+}
+.new-thread-setup-notice a {
+  color: var(--foreground);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
