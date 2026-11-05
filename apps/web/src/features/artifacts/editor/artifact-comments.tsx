@@ -4,6 +4,8 @@ import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
 import * as React from "react";
+import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
+import { Avatar } from "../../../shared/ui/avatar.js";
 import {
   ModalSurface,
   ModalSurfaceClose,
@@ -17,6 +19,11 @@ import {
 } from "../artifact-comments-queries.js";
 import { ArtifactApiError } from "../artifacts-api.js";
 import type { ArtifactSessionSnapshot } from "./artifact-session.js";
+import {
+  asksAgent,
+  toggleAgent,
+  withAgentMention,
+} from "./comment-mentions.js";
 import { CommentText } from "./comment-text.js";
 
 /** A comment being written on a quote in the current revision. */
@@ -70,10 +77,12 @@ function CommentComposer({
   const [own, setOwn] = React.useState("");
   const body = text?.value ?? own;
   const setBody = text?.set ?? setOwn;
+  // The box shows `@dx` as people read it; it posts as the mention.
+  const asking = asksAgent(body);
   const submit = () => {
     const value = body.trim();
     if (value === "" || pending) return;
-    onSubmit(value, () => setBody(""));
+    onSubmit(withAgentMention(value), () => setBody(""));
   };
   return (
     <form
@@ -103,15 +112,17 @@ function CommentComposer({
           {error}
         </p>
       )}
+      {asking ? (
+        <p className="artifact-comment-asking">
+          <DxWordmark size="small" /> will reply
+        </p>
+      ) : null}
       <div className="artifact-comment-actions">
         <button
           type="button"
-          className="artifact-comment-mention"
-          onClick={() =>
-            setBody(
-              body.includes("@[dx](agent)") ? body : `@[dx](agent) ${body}`,
-            )
-          }
+          className="artifact-comment-ask"
+          aria-pressed={asking}
+          onClick={() => setBody(toggleAgent(body))}
         >
           Ask @dx
         </button>
@@ -132,12 +143,46 @@ function CommentComposer({
   );
 }
 
+/** Who can be named in this Thread, by user ID, with their picture. */
+export type CommentPeople = ReadonlyMap<
+  string,
+  { readonly name: string; readonly image?: string | undefined }
+>;
+
+/** dx's mark for the agent; a person's picture, or their initials. */
+function CommentAvatar({
+  author,
+  people,
+}: {
+  readonly author: ThreadArtifactComment["author"];
+  readonly people: CommentPeople;
+}) {
+  if (author.kind === "agent")
+    return (
+      <span className="artifact-comment-avatar" aria-hidden="true">
+        <DxWordmark size="small" />
+      </span>
+    );
+  const person = author.userId === null ? undefined : people.get(author.userId);
+  const name = author.name ?? person?.name ?? "Someone";
+  return (
+    <span className="artifact-comment-avatar" aria-hidden="true">
+      <Avatar
+        name={name}
+        seed={author.userId ?? name}
+        {...(person?.image === undefined ? {} : { image: person.image })}
+      />
+    </span>
+  );
+}
+
 function CommentThread({
   comment,
   replies,
   active,
   anchored,
   readOnly,
+  people,
   threadId,
   artifactId,
   onSelect,
@@ -147,6 +192,7 @@ function CommentThread({
   readonly active: boolean;
   readonly anchored: boolean;
   readonly readOnly: boolean;
+  readonly people: CommentPeople;
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly onSelect: (id: string) => void;
@@ -176,6 +222,7 @@ function CommentThread({
       {[comment, ...replies].map((entry) => (
         <div key={entry.id} className="artifact-comment">
           <div className="artifact-comment-meta">
+            <CommentAvatar author={entry.author} people={people} />
             <strong>{authorName(entry.author)}</strong>
             <TimeText
               text={(now) =>
@@ -184,7 +231,7 @@ function CommentThread({
             />
           </div>
           <p className="artifact-comment-body">
-            <CommentText text={entry.body} />
+            <CommentText text={entry.body} people={people} />
           </p>
         </div>
       ))}
@@ -225,6 +272,7 @@ function CommentsList({
   draft,
   draftText,
   readOnly,
+  people,
   threadId,
   artifactId,
   onSelect,
@@ -240,6 +288,8 @@ function CommentsList({
     readonly set: (value: string) => void;
   };
   readonly readOnly: boolean;
+  /** Pictures for comment authors, from the Thread's members. */
+  readonly people: CommentPeople;
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly onSelect: (id: string) => void;
@@ -269,6 +319,7 @@ function CommentsList({
       active={snapshot.activeComment === comment.id}
       anchored={isAnchored}
       readOnly={readOnly}
+      people={people}
       threadId={threadId}
       artifactId={artifactId}
       onSelect={onSelect}

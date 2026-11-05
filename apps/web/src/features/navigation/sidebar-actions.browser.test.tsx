@@ -153,11 +153,14 @@ const failure = () =>
 const fakeServer = (threads: ServerThread[]) => {
   const state = {
     threads,
-    fail: new Set<"list" | "pin">(),
+    fail: new Set<"list" | "pin" | "archive-offline">(),
     held: [] as Array<() => void>,
-    hold: new Set<"pin" | "detail">(),
+    hold: new Set<"pin" | "detail" | "archive">(),
   };
-  const later = (route: "pin" | "detail", respond: () => Response) =>
+  const later = (
+    route: "pin" | "detail" | "archive",
+    respond: () => Response,
+  ) =>
     state.hold.has(route)
       ? new Promise<Response>((resolve) =>
           state.held.push(() => resolve(respond())),
@@ -221,6 +224,20 @@ const fakeServer = (threads: ServerThread[]) => {
       action?.[2] === "archive" &&
       method === "PATCH"
     ) {
+      // The connection dropped: the browser's own TypeError.
+      if (state.fail.has("archive-offline"))
+        throw new TypeError("Failed to fetch");
+      return later("archive", () => archiveOne(thread, init));
+    }
+    if (thread !== undefined && action?.[2] === undefined && method === "GET")
+      return later("detail", () =>
+        Response.json({ status: "success", data: detail(thread) }),
+      );
+    // Account, inboxes, previews, and the rest stay loading.
+    return new Promise<Response>(() => {});
+  });
+  const archiveOne = (thread: ServerThread, init?: RequestInit) => {
+    {
       const body = JSON.parse(String(init?.body)) as {
         archived: boolean;
         includeChildren?: boolean;
@@ -244,13 +261,7 @@ const fakeServer = (threads: ServerThread[]) => {
           : {}),
       });
     }
-    if (thread !== undefined && action?.[2] === undefined && method === "GET")
-      return later("detail", () =>
-        Response.json({ status: "success", data: detail(thread) }),
-      );
-    // Account, inboxes, previews, and the rest stay loading.
-    return new Promise<Response>(() => {});
-  });
+  };
   return {
     ...state,
     release: () => {
@@ -470,6 +481,62 @@ it("#1140: moves a pinned row at once, and puts it back with a toast when the pi
     toasts().some((text) => text.includes("could not be pinned")),
   );
   expect(rowTitles()).toEqual(["Gamma", "Alpha", "Beta"]);
+});
+
+it("#1771: archive and unarchive move the row to its new section at once, and a dropped archive says so plainly", async () => {
+  const { server } = await mount(
+    [
+      { id: ALPHA, title: "Alpha", lifecycleState: "active", age: 1 },
+      { id: BETA, title: "Beta", lifecycleState: "active", age: 2 },
+      { id: GAMMA, title: "Gamma", lifecycleState: "archived", age: 3 },
+    ],
+    `/threads/${ALPHA}`,
+  );
+  await userEvent.click(
+    menuItem(".product-sidebar .thread-group-heading", "Archived"),
+  );
+  await until(() => sectionTitles("archived").includes("Gamma"));
+
+  // The server holds the archive: the row is already in Archived.
+  server.hold.add("archive");
+  const beta = row("Beta").closest<HTMLElement>(".thread-row-shell");
+  if (beta === null) throw new Error("Expected Beta's row.");
+  await hover(beta);
+  await React.act(() =>
+    beta.querySelector<HTMLElement>('[aria-label="Archive thread"]')?.click(),
+  );
+  await settle();
+  expect(sectionTitles(projectId)).not.toContain("Beta");
+  expect(sectionTitles("archived")).toContain("Beta");
+  server.release();
+  await settle(300);
+  expect(sectionTitles("archived")).toContain("Beta");
+
+  // Unarchive moves it back at once too.
+  await openContextMenu(row("Beta"));
+  await userEvent.click(menuItem(".thread-context-item", "Unarchive"));
+  await settle();
+  expect(sectionTitles("archived")).not.toContain("Beta");
+  expect(sectionTitles(projectId)).toContain("Beta");
+  server.release();
+  await settle(300);
+
+  // A dropped connection puts the row back with a readable error, not the
+  // browser's "Failed to fetch".
+  server.hold.delete("archive");
+  server.fail.add("archive-offline");
+  const alpha = row("Alpha").closest<HTMLElement>(".thread-row-shell");
+  if (alpha === null) throw new Error("Expected Alpha's row.");
+  await hover(alpha);
+  await React.act(() =>
+    alpha.querySelector<HTMLElement>('[aria-label="Archive thread"]')?.click(),
+  );
+  await until(() =>
+    toasts().some((text) => text.includes("could not be archived")),
+  );
+  expect(toasts().join(" ")).not.toContain("Failed to fetch");
+  expect(sectionTitles(projectId)).toContain("Alpha");
+  expect(sectionTitles("archived")).not.toContain("Alpha");
 });
 
 it("#1143: Ctrl+B reopens the sidebar on the open Thread's row", async () => {

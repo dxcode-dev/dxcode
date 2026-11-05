@@ -7,6 +7,8 @@ import type {
 import {
   builtInShipPrompt,
   type CommitAuthorPreference,
+  canonicalGitRemoteAlias,
+  MAX_PROJECT_REMOTE_ALIASES,
   MAX_SHIP_PROMPT_LENGTH,
   type PluginScope,
   type ProjectId,
@@ -24,8 +26,9 @@ import {
   useNavigate,
   useParams,
 } from "@tanstack/react-router";
-import { FolderCog, KeyRound, Upload, X } from "lucide-react";
+import { Copy, FolderCog, KeyRound, Plus, Upload, X } from "lucide-react";
 import * as React from "react";
+import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useCloseSettingsOnEscape } from "../../shared/navigation/close-settings-on-escape.js";
@@ -83,12 +86,8 @@ import {
   connectedRepositoryOptions,
   type RepositoryOption,
 } from "./repository-options.js";
+import { RepositoryPicker } from "./repository-picker.js";
 import { sourceGrantsQueryOptions } from "./source-grant-queries.js";
-
-const isBitbucketUuid = (value: string) =>
-  /^\{?[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\}?$/i.test(
-    value,
-  );
 
 const sections = [
   { id: "general", label: "General", icon: FolderCog },
@@ -216,16 +215,6 @@ export function ProjectSettingsPage({
   );
 }
 
-/** The repository a Project can be bound to through the person's connections. */
-type AuthorizedRepository = {
-  readonly key: string;
-  readonly provider: "github" | "bitbucket";
-  readonly grantId: string;
-  readonly workspaceId?: string;
-  readonly repositoryId: string;
-  readonly fullName: string;
-};
-
 const sameUrls = (
   left: ReadonlyArray<RepositoryOption>,
   right: ReadonlyArray<RepositoryOption>,
@@ -243,10 +232,15 @@ type GeneralDraft = {
   readonly shipPrompt?: string;
   readonly commitAuthor: CommitAuthorPreference;
   readonly dxCoAuthor: boolean;
-  /** "" keeps the bound repository. */
-  readonly repositoryKey: string;
+  /**
+   * Undefined keeps the bound repository; null is text that names none, which
+   * Save refuses.
+   */
+  readonly repository?: RepositoryOption | null;
   /** Undefined keeps the saved list. */
   readonly additional?: ReadonlyArray<RepositoryOption>;
+  /** Undefined keeps the saved list. */
+  readonly aliases?: ReadonlyArray<string>;
   readonly error?: string;
 };
 
@@ -258,8 +252,9 @@ type GeneralAction =
           GeneralDraft,
           | "name"
           | "description"
-          | "repositoryKey"
+          | "repository"
           | "additional"
+          | "aliases"
           | "shipAction"
           | "shipPrompt"
           | "commitAuthor"
@@ -282,7 +277,6 @@ const generalDraft = (project: ProjectData): GeneralDraft => ({
   baseline: project,
   name: project.name,
   description: project.description ?? "",
-  repositoryKey: "",
   ...savedCommitsAndShip(project),
 });
 
@@ -320,16 +314,19 @@ const reduceGeneral = (
   action: GeneralAction,
 ): GeneralDraft => {
   switch (action.type) {
-    case "edit":
-      return { ...draft, ...action.edit };
+    case "edit": {
+      // A save error describes the draft it refused; editing starts over.
+      const { error: _stale, ...rest } = draft;
+      return { ...rest, ...action.edit };
+    }
     case "reset":
       return generalDraft(action.project);
     case "rebased": {
-      const { error: _cleared, ...rest } = draft;
+      const { error: _cleared, repository, ...rest } = draft;
       return {
         ...rest,
         baseline: action.project,
-        ...(action.rebound ? { repositoryKey: "" } : {}),
+        ...(action.rebound || repository === undefined ? {} : { repository }),
         ...(action.error === undefined ? {} : { error: action.error }),
       };
     }
@@ -400,14 +397,12 @@ function GeneralProjectSettings({
   );
   const additional = draft.additional ?? savedAdditional;
   const additionalChanged = !sameUrls(additional, savedAdditional);
-  const rebindChoices = repositories.authorized.filter(
-    (repository) =>
-      baseline.repository === undefined ||
-      repository.provider !== baseline.repository.provider ||
-      repository.fullName.toLowerCase() !==
-        baseline.repository.fullName.toLowerCase(),
-  );
-  const rebindTo = rebindChoices.find(({ key }) => key === draft.repositoryKey);
+  const bound = boundOption(baseline.repository, repositories.options);
+  const repositoryChanged =
+    draft.repository !== undefined && draft.repository?.value !== bound?.value;
+  const savedAliases = baseline.remoteAliases ?? [];
+  const aliases = draft.aliases ?? savedAliases;
+  const aliasesChanged = aliases.join("\n") !== savedAliases.join("\n");
   const saving =
     updateMutation.isPending ||
     rebindMutation.isPending ||
@@ -416,8 +411,9 @@ function GeneralProjectSettings({
   const dirty =
     draft.name !== baseline.name ||
     draft.description !== (baseline.description ?? "") ||
-    rebindTo !== undefined ||
+    repositoryChanged ||
     additionalChanged ||
+    aliasesChanged ||
     Object.keys(shipAndCommits).length > 0;
   if (baseline.revision < project.revision && !dirty && !saving)
     dispatch({ type: "reset", project });
@@ -433,22 +429,31 @@ function GeneralProjectSettings({
       dispatch({ type: "error", error: metadata.error });
       return;
     }
+    if (repositoryChanged && draft.repository == null) {
+      dispatch({ type: "error", error: REPOSITORY_URL_HELP });
+      return;
+    }
     dispatch({ type: "error" });
+    const rebindTo = repositoryChanged ? draft.repository : undefined;
     // Rebind first: when it is refused, nothing else has changed.
     const rebound =
-      rebindTo === undefined
+      rebindTo == null
         ? { ok: true as const, value: baseline }
         : await settle(() =>
-            rebindMutation.mutateAsync({
-              revision: baseline.revision,
-              grantId: rebindTo.grantId,
-              provider: rebindTo.provider,
-              ...(rebindTo.workspaceId === undefined
-                ? {}
-                : { workspaceId: rebindTo.workspaceId }),
-              providerRepositoryId:
-                rebindTo.repositoryId as ProviderRepositoryId,
-            }),
+            rebindMutation.mutateAsync(
+              rebindTo.connected === undefined
+                ? { revision: baseline.revision, url: rebindTo.webUrl }
+                : {
+                    revision: baseline.revision,
+                    grantId: rebindTo.connected.grantId,
+                    provider: rebindTo.connected.provider,
+                    ...(rebindTo.connected.workspaceId === undefined
+                      ? {}
+                      : { workspaceId: rebindTo.connected.workspaceId }),
+                    providerRepositoryId: rebindTo.connected
+                      .repositoryId as ProviderRepositoryId,
+                  },
+            ),
           );
     if (!rebound.ok) {
       dispatch({
@@ -465,6 +470,7 @@ function GeneralProjectSettings({
         ...(additionalChanged
           ? { additionalRepositories: additional.map(({ webUrl }) => webUrl) }
           : {}),
+        ...(aliasesChanged ? { remoteAliases: aliases } : {}),
       }),
     );
     if (saved.ok) dispatch({ type: "reset", project: saved.value });
@@ -516,15 +522,24 @@ function GeneralProjectSettings({
           }
         />
         <GitRepositoryRow
+          key={`${baseline.repository?.bindingRevision ?? 0}`}
           bound={baseline.repository}
-          choices={rebindChoices}
-          value={rebindTo === undefined ? "" : draft.repositoryKey}
+          options={repositories.options}
+          value={draft.repository === undefined ? bound : draft.repository}
+          loading={repositories.loading}
           hint={repositories.hint}
           disabled={saving}
           connect={repositories.connect}
           retrying={repositories.fetching}
           onRetry={repositories.retry}
-          onValueChange={(repositoryKey) => edit({ repositoryKey })}
+          onValueChange={(repository) =>
+            edit({ repository: repository ?? null })
+          }
+        />
+        <GitRemoteAliasesSection
+          value={aliases}
+          disabled={saving}
+          onValueChange={(next) => edit({ aliases: next })}
         />
         <ShipBehaviorRow
           action={draft.shipAction}
@@ -867,11 +882,36 @@ function ProjectIdentityRow({
   );
 }
 
-/** The bound repository, and the authorized ones it can be rebound to. */
+const REPOSITORY_URL_HELP =
+  "Enter an HTTPS Git URL without credentials, such as https://github.com/owner/repo.";
+
+/** The bound repository as a picker option: its connection's, or its URL. */
+const boundOption = (
+  repository: ProjectData["repository"],
+  options: ReadonlyArray<RepositoryOption>,
+): RepositoryOption | undefined =>
+  repository === undefined
+    ? undefined
+    : (options.find(
+        (option) =>
+          option.connected?.provider === repository.provider &&
+          option.webUrl.toLowerCase() === repository.webUrl.toLowerCase(),
+      ) ?? {
+        value: `url:${repository.webUrl.toLowerCase()}`,
+        label: repository.webUrl,
+        fullName: repository.fullName,
+        webUrl: repository.webUrl,
+      });
+
+/**
+ * The repository URL, edited in place or picked from the person's
+ * connections, with Clone to copy a `git clone` command for the saved one.
+ */
 function GitRepositoryRow({
   bound,
-  choices,
+  options,
   value,
+  loading,
   hint,
   connect,
   disabled,
@@ -880,15 +920,17 @@ function GitRepositoryRow({
   onValueChange,
 }: {
   readonly bound: ProjectData["repository"];
-  readonly choices: ReadonlyArray<AuthorizedRepository>;
-  readonly value: string;
+  readonly options: ReadonlyArray<RepositoryOption>;
+  /** Null: the field names no repository; Save says why. */
+  readonly value: RepositoryOption | null | undefined;
+  readonly loading: boolean;
   readonly hint?: string;
   /** No connection reaches a repository: link to the integrations that add one. */
   readonly connect: boolean;
   readonly disabled: boolean;
   readonly retrying: boolean;
   readonly onRetry?: () => void;
-  readonly onValueChange: (repositoryKey: string) => void;
+  readonly onValueChange: (repository: RepositoryOption | undefined) => void;
 }) {
   return (
     <SettingsRow
@@ -896,32 +938,41 @@ function GitRepositoryRow({
       description={hint}
       control={
         <div className="project-repository-control">
-          <SettingsSelect
-            label="Authorized repository"
-            value={value}
-            disabled={disabled || choices.length === 0}
+          <RepositoryPicker
+            inPlace
+            options={options}
+            value={value ?? undefined}
+            loading={loading ? "Loading repositories…" : undefined}
+            disabled={disabled}
             onValueChange={onValueChange}
-            options={[
-              ["", bound?.fullName ?? "No repository"],
-              ...choices.map(
-                (repository): SettingsSelectOption => [
-                  repository.key,
-                  `${repository.provider === "github" ? "GitHub" : "Bitbucket"} · ${repository.fullName}`,
-                ],
-              ),
-            ]}
           />
           {bound === undefined ? null : (
-            <a
-              className={buttonVariants({ size: "icon-xs", variant: "ghost" })}
-              href={bound.webUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open repository"
-              title="Open repository"
-            >
-              <ProjectRepositoryIcon provider={bound.provider} />
-            </a>
+            <>
+              <a
+                className={buttonVariants({
+                  size: "icon-xs",
+                  variant: "ghost",
+                })}
+                href={bound.webUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Open repository"
+                title="Open repository"
+              >
+                <ProjectRepositoryIcon provider={bound.provider} />
+              </a>
+              <Button
+                size="xs"
+                variant="outline"
+                title="Copy a git clone command"
+                onClick={() =>
+                  copyCloneCommand(bound.cloneUrl ?? `${bound.webUrl}.git`)
+                }
+              >
+                <Copy aria-hidden="true" />
+                Clone
+              </Button>
+            </>
           )}
           {connect ? <ConnectRepositoryLink /> : null}
           {onRetry === undefined ? null : (
@@ -937,6 +988,113 @@ function GitRepositoryRow({
         </div>
       }
     />
+  );
+}
+
+const copyCloneCommand = (cloneUrl: string) => {
+  const command = `git clone ${cloneUrl}`;
+  if (navigator.clipboard === undefined) {
+    toast(command, { description: "Copy this command to clone." });
+    return;
+  }
+  void navigator.clipboard
+    .writeText(command)
+    .then(() => toast.success("Copied git clone command"))
+    .catch(() =>
+      toast(command, { description: "Copy this command to clone." }),
+    );
+};
+
+/**
+ * Other URLs of the same repository, such as a mirror or an SSH remote. dx
+ * recognizes the project by them; nothing clones them.
+ */
+function GitRemoteAliasesSection({
+  value,
+  disabled,
+  onValueChange,
+}: {
+  readonly value: ReadonlyArray<string>;
+  readonly disabled: boolean;
+  readonly onValueChange: (value: ReadonlyArray<string>) => void;
+}) {
+  const [text, setText] = React.useState("");
+  const [invalid, setInvalid] = React.useState(false);
+  const full = value.length >= MAX_PROJECT_REMOTE_ALIASES;
+  const add = () => {
+    const alias = canonicalGitRemoteAlias(text);
+    if (alias === undefined) {
+      setInvalid(true);
+      return;
+    }
+    if (!value.some((saved) => saved.toLowerCase() === alias.url.toLowerCase()))
+      onValueChange([...value, alias.url]);
+    setText("");
+    setInvalid(false);
+  };
+  return (
+    <div className="project-additional-repositories project-remote-aliases">
+      <div className="settings-row-copy">
+        <div className="settings-row-title">
+          <strong>Git Remote Aliases</strong>
+        </div>
+        <p>
+          {invalid
+            ? "Enter an HTTPS or SSH Git URL without credentials."
+            : "Other URLs of this repository, such as a mirror or an SSH remote."}
+        </p>
+      </div>
+      {value.length === 0 ? null : (
+        <ul aria-label="Git remote aliases">
+          {value.map((alias) => (
+            <li key={alias} title={alias}>
+              <span>{alias}</span>
+              <Button
+                size="icon-xs"
+                variant="ghost"
+                aria-label={`Remove ${alias}`}
+                disabled={disabled}
+                onClick={() =>
+                  onValueChange(value.filter((saved) => saved !== alias))
+                }
+              >
+                <X />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="project-remote-alias-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          add();
+        }}
+      >
+        <Input
+          className="project-remote-alias-input"
+          aria-label="Git remote alias"
+          aria-invalid={invalid || undefined}
+          placeholder="git@github.com:owner/repo.git"
+          value={text}
+          disabled={disabled || full}
+          onChange={(event) => {
+            setText(event.target.value);
+            setInvalid(false);
+          }}
+        />
+        <Button
+          type="submit"
+          size="xs"
+          variant="outline"
+          aria-label="Add alias"
+          disabled={disabled || full || text.trim() === ""}
+        >
+          <Plus aria-hidden="true" />
+          Add
+        </Button>
+      </form>
+    </div>
   );
 }
 
@@ -1043,40 +1201,6 @@ function useAuthorizedRepositories(userId: UserId) {
     bitbucketRepositoriesQuery.data?.connectionId === bitbucketConnection.id
       ? bitbucketRepositoriesQuery.data.repositories
       : [];
-  // Private and workspace Projects bind repositories the current user reaches
-  // through their own connections.
-  const authorized: ReadonlyArray<AuthorizedRepository> = [
-    ...(grantsQuery.data ?? []).flatMap((grant) =>
-      grant.ownerScope === "personal" &&
-      grant.status === "active" &&
-      grant.installationStatus === "active"
-        ? grant.repositories.map((repository) => ({
-            key: `github:${grant.id}:${repository.id}`,
-            provider: "github" as const,
-            grantId: grant.id,
-            repositoryId: repository.id,
-            fullName: repository.fullName,
-          }))
-        : [],
-    ),
-    ...(bitbucketConnection === undefined
-      ? []
-      : bitbucketRepositories.flatMap((repository) =>
-          isBitbucketUuid(repository.id) &&
-          isBitbucketUuid(repository.workspaceId)
-            ? [
-                {
-                  key: `bitbucket:${bitbucketConnection.id}:${repository.id}`,
-                  provider: "bitbucket" as const,
-                  grantId: bitbucketConnection.id,
-                  workspaceId: repository.workspaceId,
-                  repositoryId: repository.id,
-                  fullName: repository.fullName,
-                },
-              ]
-            : [],
-        )),
-  ];
   const loading =
     grantsQuery.isPending ||
     bitbucketConnectionQuery.isPending ||
@@ -1085,22 +1209,24 @@ function useAuthorizedRepositories(userId: UserId) {
     grantsQuery.error !== null ||
     bitbucketConnectionQuery.error !== null ||
     bitbucketRepositoriesQuery.error !== null;
+  // Private and workspace Projects bind repositories the current user reaches
+  // through their own connections.
+  const options = connectedRepositoryOptions(
+    grantsQuery.data ?? [],
+    bitbucketConnection?.id,
+    bitbucketRepositories,
+  );
   return {
-    authorized,
-    options: connectedRepositoryOptions(
-      grantsQuery.data ?? [],
-      bitbucketConnection?.id,
-      bitbucketRepositories,
-    ),
+    options,
     loading,
     hint: loading
       ? "Loading authorized repositories…"
       : failed
         ? "Your repositories could not be loaded."
-        : authorized.length === 0
+        : options.length === 0
           ? "Connect GitHub or Bitbucket to choose a repository."
           : undefined,
-    connect: !loading && !failed && authorized.length === 0,
+    connect: !loading && !failed && options.length === 0,
     fetching:
       grantsQuery.isFetching ||
       bitbucketConnectionQuery.isFetching ||

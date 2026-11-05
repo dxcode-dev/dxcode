@@ -261,13 +261,14 @@ export interface ExecutionWorkspaceProvider<
    * Core has drained the resident daemon. `archive`: release what the
    * workspace holds; a provider claiming `execution.pause-resume` pauses it
    * so the next activation resumes it. `destroy`: remove the workspace for
-   * good.
+   * good. An archive answers `stopping` when the provider still owes the
+   * stop and will finish it on its own (#1740).
    */
   release(
     context: ExecutionContext,
     owner: ExecutionWorkspaceOwner,
     mode: "archive" | "destroy",
-  ): Promise<void>;
+  ): Promise<void | "stopping">;
   /**
    * The workspace's filesystem turned read-only: stop it and leave it to
    * start again on the next `create`, keeping its files where the provider
@@ -510,8 +511,11 @@ export interface ExecutionWorkspaces {
   readonly providers: ReadonlyArray<ResolvedExecutionProvider>;
   readonly sandboxFactory: SandboxFactory;
   readonly existingSandboxFactory: SandboxFactory;
-  /** Thread archived: drain dxd, then release the workspace. */
-  readonly archive: (threadId: ThreadId) => Promise<void>;
+  /**
+   * Thread archived: drain dxd, then release the workspace. `stopping`: the
+   * provider still owes the stop and finishes it on its own.
+   */
+  readonly archive: (threadId: ThreadId) => Promise<void | "stopping">;
   /** Thread deleted: drain dxd, then destroy the workspace. */
   readonly destroy: (threadId: ThreadId) => Promise<void>;
   /**
@@ -840,7 +844,10 @@ export const composeExecutionWorkspaces = (
         capability: "execution.resident-daemon",
       }),
     );
-  const release = async (threadId: ThreadId, mode: "archive" | "destroy") => {
+  const release = async (
+    threadId: ThreadId,
+    mode: "archive" | "destroy",
+  ): Promise<void | "stopping"> => {
     const { entry, target } = await resolve(threadId, false);
     // Only a provider that hosts dxd can have a resident daemon to drain.
     // Draining is core (the Thread's execution object), so it runs even when
@@ -857,7 +864,7 @@ export const composeExecutionWorkspaces = (
       skippedRelease(threadId, entry, mode, target.credential.reason);
       return;
     }
-    await entry.implementation.workspace.release(
+    return await entry.implementation.workspace.release(
       contextFor(entry, target),
       { threadId },
       mode,
@@ -989,7 +996,9 @@ export const composeExecutionWorkspaces = (
         ...(restored === undefined ? {} : { restored }),
       };
     },
-    destroy: (threadId) => release(threadId, "destroy"),
+    destroy: async (threadId) => {
+      await release(threadId, "destroy");
+    },
     prestart: async (threadId) => {
       const { context: resolvedContext, entry } = await context(threadId, true);
       if (entry.pipeline.prestart === undefined) return false;

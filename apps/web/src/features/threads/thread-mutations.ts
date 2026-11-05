@@ -19,10 +19,12 @@ import type {
 import {
   type InfiniteData,
   mutationOptions,
+  notifyManager,
   type QueryClient,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import {
+  ApiError,
   type ArchivedThread,
   deleteThread,
   request,
@@ -34,6 +36,7 @@ import {
   updateThread,
 } from "../../shared/api/client.js";
 import { seedProjectDetail } from "../projects/project-mutations.js";
+import { belongsInLoadedList, listOrder } from "./thread-list-order-queries.js";
 import { invalidateThreadQueries, threadKeys } from "./thread-queries.js";
 
 type ThreadListData = InfiniteData<ThreadPage, unknown>;
@@ -528,39 +531,92 @@ const showArchived = async (
             },
     );
   const changing = new Set<ThreadId>(threadIds);
-  for (const query of queryClient.getQueryCache().findAll({
-    queryKey: threadKeys.lists(userId),
-  })) {
-    queryClient.setQueryData<ThreadListData>(query.queryKey, (current) =>
-      current === undefined
-        ? current
-        : {
-            ...current,
-            pages: current.pages.map((page) =>
-              flatMapListedThreads(page, (thread) => {
-                if (!changing.has(thread.id)) return [thread];
-                const scope = query.queryKey[3] as
-                  | { readonly lifecycleState?: string | null }
-                  | undefined;
-                if (
-                  scope?.lifecycleState != null &&
-                  scope.lifecycleState !== lifecycleState
-                )
-                  return [];
-                return [
-                  {
-                    ...thread,
-                    lifecycleState,
-                    ...(archived ? { pinnedAt: undefined } : {}),
-                  },
-                ];
-              }),
-            ),
-          },
-    );
-  }
+  // Each Thread's row as it will read, from whichever list holds it, so the
+  // row joins its new section at once instead of after the refetch (#1771).
+  const moved = new Map<ThreadId, ListedThread>();
+  for (const [, data] of previousLists)
+    for (const page of data?.pages ?? [])
+      for (const thread of [...page.items, ...(page.children ?? [])])
+        if (changing.has(thread.id) && !moved.has(thread.id))
+          moved.set(thread.id, {
+            ...thread,
+            lifecycleState,
+            ...(archived ? { pinnedAt: undefined } : {}),
+          });
+  // One render for every list: the row never shows in neither section.
+  notifyManager.batch(() => {
+    for (const query of queryClient.getQueryCache().findAll({
+      queryKey: threadKeys.lists(userId),
+    })) {
+      queryClient.setQueryData<ThreadListData>(query.queryKey, (current) => {
+        if (current === undefined) return current;
+        const listed = new Set<ThreadId>();
+        let next: ThreadListData = {
+          ...current,
+          pages: current.pages.map((page) =>
+            flatMapListedThreads(page, (thread) => {
+              if (!changing.has(thread.id)) return [thread];
+              const scope = query.queryKey[3] as
+                | { readonly lifecycleState?: string | null }
+                | undefined;
+              if (
+                scope?.lifecycleState != null &&
+                scope.lifecycleState !== lifecycleState
+              )
+                return [];
+              listed.add(thread.id);
+              return [
+                {
+                  ...thread,
+                  lifecycleState,
+                  ...(archived ? { pinnedAt: undefined } : {}),
+                },
+              ];
+            }),
+          ),
+        };
+        for (const row of moved.values())
+          if (
+            !listed.has(row.id) &&
+            belongsInLoadedList(query.queryKey, next, row)
+          )
+            next = insertListed(next, row);
+        return next;
+      });
+    }
+  });
   return { previousDetails, previousLists };
 };
+
+type ListedThread = ThreadPage["items"][number];
+
+/** Puts a row in its place by list order among the list's loaded items. */
+const insertListed = (
+  data: ThreadListData,
+  row: ListedThread,
+): ThreadListData => {
+  const pages = [...data.pages];
+  for (const [index, page] of pages.entries()) {
+    const at = page.items.findIndex((other) => listOrder(row, other) < 0);
+    if (at === -1) continue;
+    pages[index] = {
+      ...page,
+      items: [...page.items.slice(0, at), row, ...page.items.slice(at)],
+    };
+    return { ...data, pages };
+  }
+  const last = pages.at(-1);
+  if (last === undefined) return data;
+  pages[pages.length - 1] = { ...last, items: [...last.items, row] };
+  return { ...data, pages };
+};
+
+/**
+ * The server's own reason an archive or restore failed, when it gave one;
+ * a lost connection's browser text ("Failed to fetch") is not one (#1771).
+ */
+export const archiveFailureReason = (cause: unknown) =>
+  cause instanceof ApiError && cause.message !== "" ? cause.message : undefined;
 
 /** How many archive requests a bulk archive keeps in flight. */
 const BULK_ARCHIVE_CONCURRENCY = 4;

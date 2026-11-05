@@ -644,15 +644,25 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
         const record = await readRecord(records, threadId);
         if (record.state === "uninitialized") return;
         if (record.provider !== CLOUDFLARE) throw unavailable("other provider");
-        if (mode === "destroy" && record.state === "lost") return;
+        // The provider no longer has the container: nothing runs.
+        if (record.state === "lost") return;
+        if (mode === "archive") {
+          // Archived while the first activation still starts the Orb: the
+          // object stops it once the start ends, without holding the
+          // archive for it (#1740).
+          if (record.state !== "initialized" && record.state !== "provisioning")
+            throw unavailable(record.state);
+          await assertThreadLifecycleState(db, threadId, "archived");
+          const { stub } = orbContainer(context, bindings, threadId);
+          const stopped = await stub.pause({
+            threadId,
+            ...(record.state === "provisioning" ? { defer: true } : {}),
+          });
+          return stopped === "stopping" ? "stopping" : undefined;
+        }
         // Provisioning or conflict fails closed, as on E2B.
         if (record.state !== "initialized") throw unavailable(record.state);
         const { stub } = orbContainer(context, bindings, threadId);
-        if (mode === "archive") {
-          await assertThreadLifecycleState(db, threadId, "archived");
-          await stub.pause();
-          return;
-        }
         await stub.destroy();
         await records.markLost(threadId);
       },

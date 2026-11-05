@@ -9,6 +9,7 @@ import { enforceThreadActive } from "./auth/enforce-thread-active.js";
 import { authRoutes } from "./auth/routes.js";
 import { threadAutomationRoutes } from "./automations/routes.js";
 import { avatarRoutes } from "./avatars/routes.js";
+import { bugReportIntakeRoutes } from "./bug-reports/intake.js";
 import {
   bugReportRoutes,
   threadBugReportRoutes,
@@ -28,7 +29,7 @@ import { installRuntimeTracing } from "./observability/platform-tracing.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
 import { threadOrbRestartRoutes } from "./orb-restart/routes.js";
-import { d1Session } from "./persistence/d1-session.js";
+import { confirmMissesAtPrimary, d1Session } from "./persistence/d1-session.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
 import { threadPortalRoutes } from "./portals/routes.js";
@@ -95,6 +96,8 @@ app.route("/api/csp-reports", cspReportRoutes);
 app.route("/api/workload-identity", workloadIdentityRoutes);
 app.route("/api/triggers", pluginTriggerIngressRoutes);
 app.route("/api/invites", publicInviteRoutes);
+// Other deployments forward bug reports here with an intake key, not a session.
+app.route("/api/bug-reports", bugReportIntakeRoutes);
 app.route("/api/notifications/unsubscribe", notificationUnsubscribeRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
@@ -178,5 +181,7 @@ app.route("/v1/agents/dx", dxAgentRoutes);
 
 app.notFound(notFoundHandler);
 app.onError(errorHandler);
+// A read a D1 replica answered "not found" is answered again at the primary.
+app.fetch = confirmMissesAtPrimary(app.fetch) as typeof app.fetch;
 
 export default app;

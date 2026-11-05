@@ -25,6 +25,7 @@ vi.mock("./thread-mutations.js", async (importOriginal) => ({
   }),
 }));
 
+import { ApiError } from "../../shared/api/client.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Toaster } from "../../shared/ui/sonner.js";
 import { ThreadArchiveProvider } from "./thread-archive.js";
@@ -157,6 +158,27 @@ describe("Thread archive notices", () => {
     await React.act(() => root.unmount());
   });
 
+  it("says the Orb is still stopping when the archive worked but its Orb couldn't stop yet (#1740)", async () => {
+    archiveMutation.execute.mockResolvedValueOnce({
+      thread: { id: threadId, lifecycleState: "archived" } as ThreadData,
+      orbStopping: true,
+    });
+    const { container, root } = await render();
+
+    await click(buttonIn(container, "Archive from touchpoint"));
+    await vi.waitFor(() =>
+      expect(onlyToast().querySelector("[data-description]")?.textContent).toBe(
+        "Its Orb is still stopping.",
+      ),
+    );
+    // Still the archive's notice, with its Undo: nothing failed.
+    expect(titleOf(onlyToast())).toBe("Archived thread");
+    expect(buttonIn(onlyToast(), "Undo")).toBeDefined();
+    expect(onlyToast().getAttribute("data-type")).not.toBe("error");
+
+    await React.act(() => root.unmount());
+  });
+
   it("Undo restores the children the archive changed", async () => {
     archiveMutation.execute
       .mockResolvedValueOnce({
@@ -192,8 +214,9 @@ describe("Thread archive notices", () => {
   });
 
   it("reports a failed request and dismisses on request", async () => {
+    // The server's own reason, as the API client throws it.
     archiveMutation.execute.mockRejectedValueOnce(
-      new Error("Thread is already archived."),
+      new ApiError(409, "Thread is already archived.", "THREAD_ARCHIVED"),
     );
     const { container, root } = await render();
 

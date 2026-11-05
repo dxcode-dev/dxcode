@@ -109,6 +109,7 @@ import {
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
 import type { TranscriptFocus } from "./thread-transcript.js";
+import { ShipOutcomeActions } from "./ship-outcome.js";
 import { createTranscriptAccess } from "./transcript-access.js";
 import {
   absolutePathFor,
@@ -118,7 +119,10 @@ import {
   type ThreadFileTarget,
   transcriptMediaSource,
 } from "./transcript-file-link.js";
-import { useFrameCoalescedAgentSource } from "./use-frame-coalesced-agent-session.js";
+import {
+  type AgentSource,
+  useFrameCoalescedAgentSource,
+} from "./use-frame-coalesced-agent-session.js";
 import { useThreadPresentation } from "./use-thread-presentation.js";
 
 // The Artifacts view and its editor load when the view first opens, so the
@@ -470,7 +474,7 @@ function OpenThreadFilePane({
 
 /** What a Thread page needs of its Project. */
 type ThreadProject = Pick<ProjectData, "name"> &
-  Partial<Pick<ProjectData, "workspaceId">>;
+  Partial<Pick<ProjectData, "workspaceId" | "repository">>;
 
 /** The Thread's remote desktop viewer, composed by the router. */
 type ThreadDesktopComponent = React.ComponentType<{
@@ -1004,36 +1008,39 @@ function OrbNotices({
 
 /**
  * Process names, commands, and folders are Terminal-level detail:
- * contributors only.
+ * contributors only. So are a Ship or Push to Branch run's outcomes.
  */
 function orbComposerNotice(
   thread: ThreadSessionProps["thread"],
+  project: ThreadProject,
   onOpenTerminal: (() => void) | undefined,
 ) {
-  if (
-    thread.lifecycleState === "archived" ||
-    !thread.executionWorkspace.ready ||
-    thread.access === "view"
-  )
+  if (thread.lifecycleState === "archived" || thread.access === "view")
     return undefined;
-  return (send: (message: string) => void) => (
-    <OrbNotices
-      key={thread.id}
-      threadId={thread.id}
-      onAskAgent={send}
-      onOpenTerminal={onOpenTerminal}
-    />
+  const ready = thread.executionWorkspace.ready;
+  return (
+    send: (message: string) => void,
+    source: AgentSource<UseFlueAgentResult>,
+  ) => (
+    <React.Fragment key={thread.id}>
+      {ready ? (
+        <OrbNotices
+          threadId={thread.id}
+          onAskAgent={send}
+          onOpenTerminal={onOpenTerminal}
+        />
+      ) : null}
+      <ShipOutcomeActions
+        threadId={thread.id}
+        source={source}
+        canArchive={thread.access === undefined || thread.access === "owner"}
+        repositoryUrl={project.repository?.webUrl}
+      />
+    </React.Fragment>
   );
 }
 
 const NO_VIEWS: PaneContents["views"] = {};
-
-/** An archived Thread's Orb is stopped: its views and files wait for unarchive. */
-const archivedPaneNotice = (
-  <div className="archived-pane-notice" role="note">
-    Archived. This Thread's Orb is stopped. Unarchive to resume it.
-  </div>
-);
 
 function ThreadSessionContent({
   thread,
@@ -1140,7 +1147,7 @@ function ThreadSessionContent({
     Terminal === undefined
       ? undefined
       : () => dispatch({ type: "open-view", view: "terminal" });
-  const composerNotice = orbComposerNotice(thread, openTerminal);
+  const composerNotice = orbComposerNotice(thread, project, openTerminal);
   // Archived or still-preparing Threads have no workspace to show.
   const toolsAvailable = !archived && thread.executionWorkspace.ready;
   const views = usePaneViewContents({
@@ -1187,19 +1194,15 @@ function ThreadSessionContent({
       : views.artifacts === undefined
         ? NO_VIEWS
         : { artifacts: views.artifacts },
-    // A file with unsaved edits stays open so its text can still be copied.
-    file: archived
-      ? (target, active) =>
-          dirtyTabs.has(`file:${fileTargetKey(target)}`)
-            ? renderFile(target, active)
-            : archivedPaneNotice
-      : renderFile,
-    ...(archived ? { unavailableView: archivedPaneNotice } : {}),
+    // An archived Thread keeps a file tab only while it has unsaved edits,
+    // so its text can still be copied.
+    file: renderFile,
     dirtyTabs,
   };
   const page = (
     <ThreadPageLayout
       threadId={thread.id}
+      archived={archived}
       contents={contents}
       renderTitleBar={({ views: viewsButton }) => (
         <>

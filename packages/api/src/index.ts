@@ -23,6 +23,7 @@ export {
   UnauthenticatedResponseSchema,
 } from "./auth/unauthenticated-response.js";
 export * from "./bug-reports/bug-reports.js";
+export * from "./bug-reports/intake.js";
 export * from "./dictation/index.js";
 export {
   type HealthResponse,
@@ -49,6 +50,7 @@ export * from "./projects/project-orb-scripts.js";
 export * from "./projects/project-repository-browse.js";
 export * from "./projects/rebind-project-source.js";
 export * from "./projects/update-project.js";
+export * from "./projects/update-project-request.js";
 export {
   type ReadinessResponse,
   ReadinessResponseSchema,

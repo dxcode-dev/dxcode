@@ -2,6 +2,7 @@ import {
   type CreateThreadArtifactCommentRequest,
   type CreateThreadArtifactRequest,
   DeleteThreadArtifactResponseSchema,
+  NotifyArtifactAgentResponseSchema,
   type SaveThreadArtifactRequest,
   type ThreadArtifact,
   ThreadArtifactCommentListResponseSchema,
@@ -176,6 +177,22 @@ export const deleteArtifact = async (threadId: ThreadId, artifactId: string) =>
       artifactsUrl(threadId, artifactId),
       DeleteThreadArtifactResponseSchema,
       { method: "DELETE" },
+    )
+  ).data;
+
+/**
+ * Notify agent (#1765): wakes the Thread's agent once with what people
+ * changed since it last saved the artifact.
+ */
+export const notifyArtifactAgent = async (
+  threadId: ThreadId,
+  artifactId: string,
+) =>
+  (
+    await send(
+      `${artifactsUrl(threadId, artifactId)}/notify`,
+      NotifyArtifactAgentResponseSchema,
+      { method: "POST" },
     )
   ).data;
 

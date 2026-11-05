@@ -903,6 +903,8 @@ export const runDxDeploy = async ({
         sarvam: "SARVAM_API_KEY",
         exa: "EXA_API_KEY",
         boat: "BOAT_API_KEY",
+        bugReportForwarding: "DX_BUG_REPORT_DESTINATION_KEY",
+        bugReportIntake: "DX_BUG_REPORT_INTAKE_SECRET",
       }[integration];
       if (await yes(`Rotate ${integration}`))
         environment[variable] = await secret(`New ${integration} secret`);

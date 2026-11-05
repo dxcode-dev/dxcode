@@ -89,6 +89,8 @@ export interface UpdateProjectInput {
   readonly description?: string;
   readonly runnerProfileId?: RunnerProfileId;
   readonly additionalRepositories?: ReadonlyArray<string>;
+  /** Replaces the whole list. */
+  readonly remoteAliases?: ReadonlyArray<string>;
 }
 
 export const updateProjectMutationOptions = (

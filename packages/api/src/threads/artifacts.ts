@@ -270,6 +270,7 @@ export const ThreadArtifactErrorCodeSchema = Schema.Literals([
   "ARTIFACT_TOO_LARGE",
   "ARTIFACT_STORAGE_FULL",
   "ARTIFACTS_UNAVAILABLE",
+  "ARTIFACT_NOTIFY_DISABLED",
 ]);
 export type ThreadArtifactErrorCode = typeof ThreadArtifactErrorCodeSchema.Type;
 
@@ -293,3 +294,21 @@ export const ThreadArtifactErrorResponseSchema = Schema.Struct({
 });
 export type ThreadArtifactErrorResponse =
   typeof ThreadArtifactErrorResponseSchema.Type;
+
+/** The experimental flag for Notify agent (#1765). */
+export const ARTIFACT_NOTIFY_AGENT_FEATURE = "artifact-notify-agent";
+
+/**
+ * `POST /v1/threads/:threadId/artifacts/:artifactId/notify`: wakes the
+ * Thread's agent once with what people changed since it last saved the
+ * artifact. Only with the `artifact-notify-agent` flag on.
+ */
+export const NotifyArtifactAgentResponseSchema = successResponse(
+  Schema.Struct({
+    notified: Schema.Literal(true),
+    /** The revision the agent was told about. */
+    revision: Revision,
+  }),
+);
+export type NotifyArtifactAgentResponse =
+  typeof NotifyArtifactAgentResponseSchema.Type;

@@ -9,6 +9,7 @@ import {
   type ThreadArchiveController,
 } from "../../shared/thread-archive.js";
 import {
+  archiveFailureReason,
   setThreadArchivedMutationOptions,
   setThreadsArchivedMutationOptions,
 } from "./thread-mutations.js";
@@ -77,54 +78,66 @@ export function ThreadArchiveProvider({
     );
     // Every call names each option, because a toast updated in place
     // keeps any option the new one leaves out.
-    toast(
-      archived
-        ? includeChildren
-          ? "Archived threads"
-          : "Archived thread"
-        : "Unarchived thread",
-      {
-        id: ARCHIVE_TOAST_ID,
-        duration: ARCHIVE_TOAST_DURATION,
-        icon: archived ? <Archive /> : <ArchiveRestore />,
-        action: archived
-          ? {
-              label: "Undo",
-              onClick: (event) => {
-                // Undo's result replaces this toast.
-                event.preventDefault();
-                undone = true;
-                changeArchived(
-                  threadId,
-                  false,
-                  includeChildren
-                    ? request.then(
-                        ({ changedChildThreadIds }) =>
-                          changedChildThreadIds?.length
-                            ? changedChildThreadIds
-                            : undefined,
-                        () => undefined,
-                      )
-                    : undefined,
-                );
-              },
-            }
-          : undefined,
+    const notify = (description: string | undefined) =>
+      toast(
+        archived
+          ? includeChildren
+            ? "Archived threads"
+            : "Archived thread"
+          : "Unarchived thread",
+        {
+          id: ARCHIVE_TOAST_ID,
+          duration: ARCHIVE_TOAST_DURATION,
+          icon: archived ? <Archive /> : <ArchiveRestore />,
+          description,
+          action: archived
+            ? {
+                label: "Undo",
+                onClick: (event) => {
+                  // Undo's result replaces this toast.
+                  event.preventDefault();
+                  undone = true;
+                  changeArchived(
+                    threadId,
+                    false,
+                    includeChildren
+                      ? request.then(
+                          ({ changedChildThreadIds }) =>
+                            changedChildThreadIds?.length
+                              ? changedChildThreadIds
+                              : undefined,
+                          () => undefined,
+                        )
+                      : undefined,
+                  );
+                },
+              }
+            : undefined,
+        },
+      );
+    notify(undefined);
+    // Archived, but the Orb couldn't be stopped yet without losing unsaved
+    // work; the server finishes the stop on its own (#1740).
+    void request.then(
+      ({ orbStopping }) => {
+        if (orbStopping === true && !undone)
+          notify("Its Orb is still stopping.");
       },
+      () => undefined,
     );
     request.catch((cause: unknown) => {
       // An Undo already put the Thread back; its own result reports.
       if (undone) return;
       toast.error(
-        cause instanceof Error && cause.message
-          ? cause.message
-          : archived
-            ? "Thread could not be archived."
-            : "Thread could not be unarchived.",
+        archiveFailureReason(cause) ??
+          (archived
+            ? "The thread could not be archived."
+            : "The thread could not be unarchived."),
         {
           id: ARCHIVE_TOAST_ID,
           duration: ARCHIVE_TOAST_DURATION,
           icon: undefined,
+          description: undefined,
           action: undefined,
         },
       );

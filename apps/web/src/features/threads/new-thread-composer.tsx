@@ -104,7 +104,7 @@ export function NewThreadComposer({
   readonly effort?: ClaudeCodeEffort;
   readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
   readonly claudePlan?: string;
-  readonly onClaudePlanChange?: (connectionId: string) => void;
+  readonly onClaudePlanChange?: (connectionId: string | undefined) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly dictationControls?: React.ReactNode;

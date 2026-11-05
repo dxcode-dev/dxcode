@@ -19,7 +19,7 @@ import { moveQuote } from "./anchors.js";
  * compare-and-swap, the size limits, and the retention rule hold for both.
  */
 
-type ArtifactBindings = Pick<Bindings, "DB" | "DX_STORAGE">;
+export type ArtifactBindings = Pick<Bindings, "DB" | "DX_STORAGE">;
 
 /** Who is saving: a person (the real actor, not the owner they act as), or the agent. */
 export type ArtifactWriter =

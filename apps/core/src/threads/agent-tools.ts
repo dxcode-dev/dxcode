@@ -8,6 +8,7 @@ import {
   claudePlanWindowName,
   isClaudeCodeModel,
   ModeId,
+  pickClaudePlan,
   type RunnerProfileCatalog,
   THREAD_COLORS,
   type ThreadId,
@@ -207,6 +208,7 @@ const claudePlanListing = (
     readonly enabled: boolean;
     readonly allowExtraUsage: boolean;
     readonly usage?: ClaudePlanUsage;
+    readonly load?: number;
   },
   model: string,
 ) => {
@@ -236,6 +238,41 @@ const claudePlanListing = (
     ...(plan.usage === undefined
       ? {}
       : { reportedAt: isoSeconds(plan.usage.observedAt) }),
+    runningThreads: plan.load ?? 0,
+  };
+};
+
+/**
+ * The plan dx would bind a Claude Code child to now when create_thread names
+ * none: the same pick Core makes at creation. With one enabled plan the
+ * child simply takes it.
+ */
+const claudeAutoPlanListing = (
+  plans: ReadonlyArray<{
+    readonly connectionId: string;
+    readonly name: string;
+    readonly enabled: boolean;
+    readonly allowExtraUsage: boolean;
+    readonly usage?: ClaudePlanUsage;
+    readonly load?: number;
+  }>,
+  model: string,
+) => {
+  const now = Math.floor(Date.now() / 1000);
+  const auto = pickClaudePlan(
+    plans.filter(({ enabled }) => enabled),
+    model.slice(model.indexOf("/") + 1),
+    now,
+  );
+  if (auto === undefined) return {};
+  return {
+    claudeAutoPlan:
+      auto.kind === "picked"
+        ? { plan: auto.connectionId, name: auto.name, why: auto.reason }
+        : {
+            usedUpUntil: isoSeconds(auto.resetsAt),
+            why: `Every plan is used up; ${auto.name} resets first. A new Claude Code child is refused until then.`,
+          },
   };
 };
 
@@ -563,7 +600,7 @@ export const createThreadTools = (
             v.string(),
             v.maxLength(128),
             v.description(
-              "For a Claude Code child: the plan ID from list_agent_modes' claudePlans that it runs on for its whole life. Required when the owner has more than one enabled plan. A plan that is used up is refused with its reset time.",
+              "For a Claude Code child: the plan ID from list_agent_modes' claudePlans that it runs on for its whole life. Required when the owner has more than one enabled plan, unless list_agent_modes returns claudeAutoPlan: then omit it to let dx pick the plan (claudeAutoPlan shows which and why), and name one only when the user asks for it. A plan that is used up is refused with its reset time.",
             ),
           ),
         ),
@@ -1033,8 +1070,8 @@ export const createThreadTools = (
     defineTool({
       name: "list_agent_modes",
       description: description([
-        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. Also returns this Thread's mode, which a child gets by default.",
-        "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode, and for Claude Code the plan's ID as claude_plan. A child stays on its plan; it never moves to another.",
+        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. When the owner has turned on the automatic plan pick, each plan also shows its running Threads, and claudeAutoPlan names the plan dx picks for a Claude Code child that names none, and why. Also returns this Thread's mode, which a child gets by default.",
+        "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode. For Claude Code, pass a plan's ID as claude_plan; when claudeAutoPlan is listed, omit claude_plan to take it unless the user names a plan. A child stays on its plan; it never moves to another.",
       ]),
       input: v.object({}),
       run: async () =>
@@ -1068,7 +1105,9 @@ export const createThreadTools = (
                   readonly enabled: boolean;
                   readonly allowExtraUsage: boolean;
                   readonly usage?: ClaudePlanUsage;
+                  readonly load?: number;
                 }>;
+                readonly claudeAutoPick?: boolean;
               }
             | undefined;
           const claudeCaller =
@@ -1111,12 +1150,23 @@ export const createThreadTools = (
               ...((choices?.claudePlans ?? []).length === 0
                 ? {}
                 : {
-                    claudePlans: (choices?.claudePlans ?? []).map((plan) =>
-                      claudePlanListing(
+                    // With the owner's automatic plan pick off, the
+                    // listing is as before: no running Threads, no pick.
+                    claudePlans: (choices?.claudePlans ?? []).map((plan) => {
+                      const listing = claudePlanListing(
                         plan,
                         claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL,
-                      ),
-                    ),
+                      );
+                      if (choices?.claudeAutoPick === true) return listing;
+                      const { runningThreads: _, ...asBefore } = listing;
+                      return asBefore;
+                    }),
+                    ...(choices?.claudeAutoPick === true
+                      ? claudeAutoPlanListing(
+                          choices.claudePlans ?? [],
+                          claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL,
+                        )
+                      : {}),
                   }),
             },
           };

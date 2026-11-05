@@ -64,6 +64,17 @@ export const projectAdditionalRepositoryFromUrl = (
   return { provider, ...locator };
 };
 
+export const MAX_PROJECT_REMOTE_ALIASES = 10;
+
+/**
+ * Other URLs of the primary repository, such as a mirror or an SSH remote,
+ * in canonical form (`canonicalGitRemoteAlias`). dx matches the Project by
+ * them; nothing clones them.
+ */
+export const ProjectRemoteAliases = Schema.Array(
+  Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(600)),
+).check(Schema.isMaxLength(MAX_PROJECT_REMOTE_ALIASES));
+
 export const PROJECT_NAME_PATTERN = /^[A-Za-z0-9._-]+$/;
 export const PROJECTLESS_PROJECT_NAME = "No Project";
 export const PROJECT_NAME_HELP =
@@ -103,6 +114,9 @@ export const Project = Schema.Struct({
   additionalRepositories: ProjectAdditionalRepositories.pipe(
     Schema.withDecodingDefaultKey(Effect.succeed([])),
   ),
+  remoteAliases: ProjectRemoteAliases.pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(0)),
   ),
@@ -137,6 +151,7 @@ export const createProject = Effect.fn("createProject")(function* (
     id,
     ...input,
     additionalRepositories: input.additionalRepositories ?? [],
+    remoteAliases: [],
     revision: 0,
     createdAt: now,
     updatedAt: now,

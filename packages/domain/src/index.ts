@@ -108,6 +108,7 @@ export {
   createProject,
   isValidProjectName,
   MAX_PROJECT_ADDITIONAL_REPOSITORIES,
+  MAX_PROJECT_REMOTE_ALIASES,
   normalizeProjectName,
   PROJECT_NAME_HELP,
   PROJECT_NAME_PATTERN,
@@ -119,6 +120,7 @@ export {
   ProjectIconKey,
   ProjectName,
   ProjectNameInput,
+  ProjectRemoteAliases,
   ProjectRepositoryIdentity,
   projectAdditionalRepositoryFromUrl,
 } from "./projects/project.js";
@@ -168,6 +170,14 @@ export {
   mergeClaudePlanUsage,
   parseClaudePlanLimit,
 } from "./settings/claude-code.js";
+export {
+  CLAUDE_PLAN_AUTO_PICK_FEATURE,
+  CLAUDE_PLAN_MAX_LOAD,
+  CLAUDE_PLAN_THREAD_HOURLY_USE,
+  type ClaudeAutoPlan,
+  type ClaudePlanCandidate,
+  pickClaudePlan,
+} from "./settings/claude-plan-pick.js";
 export {
   ConfigReference,
   configReferenceFor,
@@ -661,7 +671,11 @@ export {
   SettingsWorkspaceRole,
   WorkspaceSlug,
 } from "./settings/scope.js";
-export { builtInShipPrompt, shipPromptFor } from "./settings/ship-prompt.js";
+export {
+  builtInShipPrompt,
+  shipPromptFor,
+  shipWorkflowOf,
+} from "./settings/ship-prompt.js";
 export {
   GitCommitExecutionResult,
   GitCommitSigningAttribution,
@@ -775,6 +789,11 @@ export {
   type CanonicalBitbucketRepositoryLocator,
   canonicalBitbucketRepositoryLocator,
 } from "./source-control/bitbucket-repository-locator.js";
+export {
+  type CanonicalGitRemoteAlias,
+  canonicalGitRemoteAlias,
+  GitRemoteAliasInput,
+} from "./source-control/git-remote-alias.js";
 export {
   decodeGitHubAppDeploymentConfiguration,
   GITHUB_APP_EVENTS,

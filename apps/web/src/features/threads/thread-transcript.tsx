@@ -83,6 +83,8 @@ const measuredTurnSizes = (
 interface TranscriptRowShellProps {
   readonly measureElement: (element: HTMLElement | null) => void;
   readonly row: TranscriptRow;
+  /** A prompt waiting for the agent, which is still on earlier work. */
+  readonly steering?: boolean;
 }
 
 /** Unchanged rows of a re-rendering turn skip render (and Markdown parsing). */
@@ -90,6 +92,7 @@ export const TranscriptRowShell = React.memo(
   TranscriptRowShellContent,
   (previous: TranscriptRowShellProps, next: TranscriptRowShellProps) =>
     previous.measureElement === next.measureElement &&
+    previous.steering === next.steering &&
     sameTranscriptRow(previous.row, next.row),
 );
 
@@ -99,10 +102,60 @@ const measureNothing = () => {};
 const renderTranscriptRow = (row: TranscriptRow) => (
   <TranscriptRowShell key={row.id} row={row} measureElement={measureNothing} />
 );
+const renderSteeringRow = (row: TranscriptRow) => (
+  <TranscriptRowShell
+    key={row.id}
+    row={row}
+    measureElement={measureNothing}
+    steering
+  />
+);
+
+/**
+ * A prompt not in Flue's history yet, so it has no server time: the local
+ * echo of a send, or a message another Thread sent.
+ */
+const waitingPrompt = (row: TranscriptRow) =>
+  row.kind === "user-prompt" && row.sentAt === undefined;
+
+/**
+ * Where the agent is. The dot sits on the latest running turn that is more
+ * than prompts waiting for the agent: prompts sent while it works wait below
+ * it, marked Steering, until the agent takes them. A message another Thread
+ * sent is its own turn with its own mark, so it never holds the dot.
+ */
+const transcriptProgress = (
+  model: TranscriptViewModel,
+  rowsByTurn: ReturnType<typeof transcriptRowsByTurn>,
+) => {
+  const running = model.turns.filter((turn) => {
+    if (turn.status !== "active") return false;
+    const rows = rowsByTurn.get(turn.id) ?? [];
+    return !(
+      rows.length > 0 &&
+      rows.every((row) => row.messageId.startsWith(INBOUND_MESSAGE_PREFIX))
+    );
+  });
+  const waiting = (turn: TranscriptViewModel["turns"][number]) => {
+    const rows = rowsByTurn.get(turn.id) ?? [];
+    return rows.length > 0 && rows.every(waitingPrompt);
+  };
+  const working = running.findLast((turn) => !waiting(turn));
+  const steeringTurnIds = new Set<string>();
+  if (working !== undefined)
+    for (const turn of running.slice(running.indexOf(working) + 1))
+      steeringTurnIds.add(turn.id);
+  // Nothing else runs: a new prompt is what the agent starts on.
+  return {
+    processingTurnId: (working ?? running.at(-1))?.id,
+    steeringTurnIds,
+  };
+};
 
 function TranscriptRowShellContent({
   measureElement,
   row,
+  steering = false,
 }: TranscriptRowShellProps) {
   const user = row.kind === "user-prompt";
   const fromThread = user ? row.sourceThreadId : undefined;
@@ -168,6 +221,9 @@ function TranscriptRowShellContent({
       <div className="message-content">
         <TranscriptRowContent row={row} />
       </div>
+      {user && steering ? (
+        <small className="message-steering">Steering</small>
+      ) : null}
     </article>
   );
 }
@@ -960,17 +1016,11 @@ export function TranscriptViewport(
     loadOlder,
     onHandled: onFocusHandled,
   });
-  // A message another Thread sent that has not joined yet is its own
-  // turn; the work in progress is the turn before it.
   const rowsByTurn = transcriptRowsByTurn(model);
-  const processingTurnId = model.turns.findLast((turn) => {
-    if (turn.status !== "active") return false;
-    const rows = rowsByTurn.get(turn.id) ?? [];
-    return !(
-      rows.length > 0 &&
-      rows.every((row) => row.messageId.startsWith(INBOUND_MESSAGE_PREFIX))
-    );
-  })?.id;
+  const { processingTurnId, steeringTurnIds } = transcriptProgress(
+    model,
+    rowsByTurn,
+  );
   return (
     <>
       <section
@@ -1031,7 +1081,11 @@ export function TranscriptViewport(
                       processing={
                         showProcessingIndicator && turn.id === processingTurnId
                       }
-                      renderRow={renderTranscriptRow}
+                      renderRow={
+                        steeringTurnIds.has(turn.id)
+                          ? renderSteeringRow
+                          : renderTranscriptRow
+                      }
                     />
                   </div>
                 </div>

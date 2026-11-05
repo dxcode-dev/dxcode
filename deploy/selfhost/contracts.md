@@ -104,7 +104,12 @@ shows no settings, tools, composer affordance, or readiness requirement for it.
 
 The `boat` integration adds `BOAT_API_KEY`: Boat Orbs on the deployment's own
 Boat account, held across deploys like the other integration keys. Without it
-a self-host binds no Boat key, whatever the environment holds.
+a self-host binds no Boat key, whatever the environment holds. The
+`bugReportForwarding` integration shares each bug report with the `https`
+origin in `bugReportDestination` (required with it, dropped without it) and
+holds `DX_BUG_REPORT_DESTINATION_KEY`; `bugReportIntake` holds
+`DX_BUG_REPORT_INTAKE_SECRET` and takes reports other deployments share.
+Without them a self-host binds neither, whatever the environment holds.
 `configuredSettings` lists the settings in `deploy/selfhost/settings.mjs` that
 `pnpm dx:configure` has asked this deployment about, so a later release's new
 settings are asked once. `bugReportReaders` lists the emails that read every in-app bug report and

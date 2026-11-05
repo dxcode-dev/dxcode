@@ -260,7 +260,8 @@ const OPENER_WINDOW_MS = 10 * 60_000;
 
 /**
  * The Thread that opened a PR: the one active Thread of the dx person whose
- * GitHub login authored it, in a Project bound to its repository, working
+ * GitHub login authored it, in a Project bound to its repository or naming it
+ * by a Git remote alias, working
  * now or active within the window. A Thread's `gh` runs as its owner, so
  * nothing else names it. Ambiguous or none: no Thread.
  */
@@ -275,13 +276,17 @@ const openingThread = async (
       .prepare(
         `SELECT t.id, t.owner_user_id, t.project_id, t.activity_status
            FROM threads AS t
-           JOIN project_repository AS r
-             ON r.project_id = t.project_id AND r.provider = 'github'
-            AND r.full_name = ?1 COLLATE NOCASE
            JOIN github_user_authorization AS g
              ON g.user_id = t.owner_user_id
             AND g.provider_account_login = ?2 COLLATE NOCASE AND g.status = 'active'
           WHERE t.lifecycle_state = 'active'
+            AND (EXISTS (SELECT 1 FROM project_repository AS r
+                   WHERE r.project_id = t.project_id AND r.provider = 'github'
+                     AND r.full_name = ?1 COLLATE NOCASE)
+              -- A Git remote alias names the repository by another URL.
+              OR EXISTS (SELECT 1 FROM project_remote_alias AS a
+                   WHERE a.project_id = t.project_id
+                     AND a.web_url = 'https://github.com/' || ?1 COLLATE NOCASE))
             AND (t.activity_status = 'working' OR t.last_activity_at >= ?3)
           LIMIT 10`,
       )

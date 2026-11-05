@@ -292,6 +292,12 @@ const deploymentResourceTypes = ({
           ...(integrations.includes("boat")
             ? [["BoatApiKey", "Dx.HeldSecret"]]
             : []),
+          ...(integrations.includes("bugReportForwarding")
+            ? [["BugReportDestinationKey", "Dx.HeldSecret"]]
+            : []),
+          ...(integrations.includes("bugReportIntake")
+            ? [["BugReportIntakeSecret", "Dx.HeldSecret"]]
+            : []),
         ]
       : []),
   ]);
@@ -2804,7 +2810,9 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     id === "E2BApiKey" ||
     id === "GitHubAppSecret" ||
     id === "SarvamApiKey" ||
-    id === "BoatApiKey"
+    id === "BoatApiKey" ||
+    id === "BugReportDestinationKey" ||
+    id === "BugReportIntakeSecret"
   )
     assertExactHeldSecretIdentity(node, operation, id);
   if (id === "E2BProfiles")
@@ -2979,6 +2987,10 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "BOAT_API_KEY",
           // The runner forwards the validated reader list itself.
           "DX_BUG_REPORT_READERS",
+          // And bug report forwarding's settings, for the target.
+          "DX_BUG_REPORT_DESTINATION",
+          "DX_BUG_REPORT_DESTINATION_KEY",
+          "DX_BUG_REPORT_INTAKE_SECRET",
           "USERPROFILE",
           "XDG_CONFIG_HOME",
         ]).has(name),

@@ -10,6 +10,7 @@ import { BUG_REPORT_IMAGE_MAX_BYTES, BUG_REPORT_MAX_IMAGES } from "@dx/api";
 import {
   type QueryClient,
   useMutation,
+  useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -31,7 +32,10 @@ import type { DictationRecord } from "../dictation/dictation-session.js";
 import { serializeThreadJson } from "../thread-export.js";
 import type { TranscriptViewModel } from "../transcript-view-model.js";
 import { reportDestination } from "./bug-report-format.js";
-import { sendBugReportMutationOptions } from "./bug-report-queries.js";
+import {
+  bugReportAccessQueryOptions,
+  sendBugReportMutationOptions,
+} from "./bug-report-queries.js";
 import "./bug-reports.css";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
@@ -295,6 +299,10 @@ export function BugReportDialog({
 }) {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
+  // The central deployment this one shares reports with, named before
+  // sending.
+  const sharedWith = useQuery(bugReportAccessQueryOptions(identity.id)).data
+    ?.sharedWith;
   const send = useMutation(
     sendBugReportMutationOptions(queryClient, identity.id),
   );
@@ -395,7 +403,9 @@ export function BugReportDialog({
           <div className="bug-report-sent">
             <DialogTitle>Bug Report Sent</DialogTitle>
             <DialogDescription>
-              {reportDestination()} keeps it, and Your Reports lists it.
+              {reportDestination()} keeps it
+              {sharedWith && ` and shares it with ${sharedWith}`}, and Your
+              Reports lists it.
             </DialogDescription>
             <footer className="bug-report-footer">
               <YourReportsLink />
@@ -506,7 +516,8 @@ export function BugReportDialog({
               setDictated={setDictated}
             />
             <p className="bug-report-destination">
-              Reports stay in {reportDestination()} and are never posted
+              Reports stay in {reportDestination()}
+              {sharedWith && ` and ${sharedWith}`} and are never posted
               publicly.
             </p>
             {send.isError ? (

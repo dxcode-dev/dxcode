@@ -10,12 +10,10 @@ import {
   ArrowUpRight,
   Building2,
   Check,
-  ChevronDown,
   ChevronRight,
   ChevronsUpDown,
   FolderGit,
   FolderGit2,
-  GitBranch,
   Globe,
   Plus,
   UserRound,
@@ -41,6 +39,7 @@ import {
   sourceFor,
   urlOption,
 } from "./repository-options.js";
+import { RepositoryPicker } from "./repository-picker.js";
 
 export type { ProjectSource, RepositoryOption } from "./repository-options.js";
 
@@ -51,78 +50,6 @@ export interface NewProjectInput {
   readonly owner: ProjectOwner;
   readonly source: ProjectSource;
   readonly additionalRepositories?: ReadonlyArray<string>;
-}
-
-function RepositoryPicker({
-  options,
-  value,
-  loading,
-  onValueChange,
-}: {
-  readonly options: ReadonlyArray<RepositoryOption>;
-  readonly value?: RepositoryOption;
-  readonly loading?: string;
-  readonly onValueChange: (value: RepositoryOption | undefined) => void;
-}) {
-  const [query, setQuery] = React.useState(value?.label ?? "");
-  const items = optionsWithTypedUrl(options, query);
-  return (
-    <Combobox.Root
-      items={items}
-      value={value ?? null}
-      inputValue={query}
-      onInputValueChange={(next) => {
-        setQuery(next);
-        if (value !== undefined && next !== value.label)
-          onValueChange(undefined);
-      }}
-      onValueChange={(option) => onValueChange(option ?? undefined)}
-      isItemEqualToValue={(option, selected) => option.value === selected.value}
-      filter={matchesQuery}
-      autoHighlight
-    >
-      <Combobox.InputGroup className="repository-combobox-control">
-        <Combobox.Input
-          id="project-repository"
-          placeholder="Search repositories or paste a URL"
-          autoComplete="off"
-          autoFocus
-          aria-busy={loading !== undefined}
-        />
-        <Combobox.Trigger aria-label="Open repository list">
-          <ChevronDown aria-hidden="true" />
-        </Combobox.Trigger>
-      </Combobox.InputGroup>
-      <Combobox.Portal>
-        <Combobox.Positioner
-          className="repository-combobox-positioner"
-          sideOffset={4}
-          align="start"
-        >
-          <Combobox.Popup className="repository-combobox-popup">
-            <Combobox.Empty className="repository-combobox-empty">
-              {loading ?? "No repositories found. Paste a Git URL."}
-            </Combobox.Empty>
-            <Combobox.List className="repository-combobox-list">
-              {(option: RepositoryOption) => (
-                <Combobox.Item
-                  key={option.value}
-                  value={option}
-                  className="repository-combobox-item repository-option"
-                >
-                  <GitBranch aria-hidden="true" />
-                  <span>{option.label}</span>
-                  <Combobox.ItemIndicator className="repository-combobox-indicator">
-                    <Check aria-hidden="true" />
-                  </Combobox.ItemIndicator>
-                </Combobox.Item>
-              )}
-            </Combobox.List>
-          </Combobox.Popup>
-        </Combobox.Positioner>
-      </Combobox.Portal>
-    </Combobox.Root>
-  );
 }
 
 /**
@@ -207,7 +134,7 @@ export function AdditionalRepositoriesPicker({
         <Combobox.Positioner
           className="repository-combobox-positioner"
           sideOffset={4}
-          align="end"
+          align={addTrigger ? "start" : "end"}
         >
           <Combobox.Popup
             className="repository-combobox-popup additional-repositories-popup"

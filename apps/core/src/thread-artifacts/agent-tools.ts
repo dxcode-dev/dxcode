@@ -10,7 +10,6 @@ import {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
-import { createTwoFilesPatch } from "diff";
 import * as v from "valibot";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { threadMembers } from "../thread-sharing/members.js";
@@ -22,6 +21,7 @@ import {
   resolveArtifactComment,
 } from "./comments.js";
 import { personMention } from "./owner-ask.js";
+import { editedByPeopleSince } from "./people-edits.js";
 import { UNTRUSTED_NOTE, wrapPeopleText } from "./people-text.js";
 import {
   type ArtifactWithMarkdown,
@@ -29,7 +29,6 @@ import {
   createArtifact,
   listArtifacts,
   readArtifact,
-  readArtifactRevision,
   saveArtifact,
 } from "./store.js";
 
@@ -44,7 +43,6 @@ import {
 /** Lines one `read` returns. */
 export const ARTIFACT_READ_LINES = 500;
 /** The most characters of people's diff, comments, or a conflict's Markdown in one result. */
-const PEOPLE_DIFF_CHARS = 12_000;
 const COMMENT_TEXT_CHARS = 2_000;
 const COMMENTS_SHOWN = 100;
 const OUTLINE_ENTRIES = 200;
@@ -173,56 +171,6 @@ const commentView = (
     ...(open.length > COMMENTS_SHOWN
       ? { comments_not_shown: open.length - COMMENTS_SHOWN }
       : {}),
-  };
-};
-
-/**
- * What people changed since the agent's newest kept revision, as a unified
- * diff; undefined when no person saved after it or the agent never saved.
- */
-export const editedByPeopleSince = async (
-  context: ThreadToolsContext,
-  threadId: string,
-  current: ArtifactWithMarkdown,
-) => {
-  const row = await context.db
-    .prepare(
-      `SELECT MAX(revision) AS agent_revision,
-              (SELECT MAX(revision) FROM thread_artifact_revision
-                WHERE artifact_id = ?1 AND author_kind = 'user') AS person_revision
-         FROM thread_artifact_revision
-        WHERE artifact_id = ?1 AND author_kind = 'agent'`,
-    )
-    .bind(current.artifact.id)
-    .first<{ agent_revision: number | null; person_revision: number | null }>();
-  const agentRevision = row?.agent_revision ?? null;
-  if (
-    agentRevision === null ||
-    row?.person_revision === null ||
-    row?.person_revision === undefined ||
-    row.person_revision <= agentRevision
-  )
-    return undefined;
-  const before = await readArtifactRevision(
-    context.bindings,
-    threadId,
-    current.artifact.id,
-    agentRevision,
-  );
-  if (before === undefined) return undefined;
-  const patch = createTwoFilesPatch(
-    `revision ${agentRevision} (your last save)`,
-    `revision ${current.artifact.revision} (current)`,
-    before.markdown,
-    current.markdown,
-    undefined,
-    undefined,
-    { context: 2 },
-  );
-  return {
-    from_revision: agentRevision,
-    to_revision: current.artifact.revision,
-    diff: wrapPeopleText(patch, PEOPLE_DIFF_CHARS),
   };
 };
 

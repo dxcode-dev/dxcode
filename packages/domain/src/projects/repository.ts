@@ -8,6 +8,7 @@ import type {
 } from "../persistence/errors.js";
 import type { ProjectConfiguration } from "../settings/project-defaults.js";
 import type { WorkspaceId } from "../settings/workspace.js";
+import type { CanonicalGitRemoteAlias } from "../source-control/git-remote-alias.js";
 import type { ProjectSourceAuthority } from "../source-control/source-control.js";
 import type { UserId } from "../users/user-id.js";
 import type { Project, ProjectRepositoryIdentity } from "./project.js";
@@ -20,6 +21,7 @@ export interface ProjectUpdate {
   readonly iconKey?: Project["iconKey"];
   readonly configuration?: Project["configuration"];
   readonly additionalRepositories?: Project["additionalRepositories"];
+  readonly remoteAliases?: ReadonlyArray<CanonicalGitRemoteAlias>;
 }
 
 export interface ProjectRepositoryShape {
@@ -68,7 +70,8 @@ export interface ProjectRepositoryShape {
     ownerUserId: UserId,
     revision: number,
     repository: ProjectRepositoryIdentity,
-    authority: ProjectSourceAuthority,
+    /** Absent for a URL: the old authority goes with the old repository. */
+    authority?: ProjectSourceAuthority,
   ) => Effect.Effect<
     Project,
     Schema.SchemaError | PersistenceUnavailable | ProjectNotFound

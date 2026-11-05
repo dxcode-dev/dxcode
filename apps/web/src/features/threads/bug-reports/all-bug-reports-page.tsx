@@ -26,15 +26,16 @@ export function AllBugReportsPage({
   const access = useQuery(bugReportAccessQueryOptions(identity.id));
   const reports = useInfiniteQuery({
     ...allBugReportsQueryOptions(identity.id),
-    enabled: access.data === true,
+    enabled: access.data?.reader === true,
   });
   const navigate = useNavigate();
   const items = reports.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <PageShell title="All Bug Reports" contentClassName="bug-reports-content">
-      {access.isPending || (access.data === true && reports.isPending) ? (
+      {access.isPending ||
+      (access.data?.reader === true && reports.isPending) ? (
         <DxLoading label="Loading bug reports…" />
-      ) : access.data !== true ? (
+      ) : access.data?.reader !== true ? (
         <div className="empty-state bug-reports-empty">
           <strong>
             Only this deployment's report readers see every report.
@@ -68,7 +69,10 @@ export function AllBugReportsPage({
                     </small>
                   </span>
                   <span className="bug-report-status">
-                    {reportSource(report)}
+                    {/* Forwarded reports exist only here, never in Your Reports. */}
+                    {report.source === undefined
+                      ? reportSource(report)
+                      : "Forwarded"}
                   </span>
                 </Link>
               </li>

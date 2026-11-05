@@ -280,6 +280,31 @@ export const productionExperimentalFeatureRegistry =
         },
       },
       {
+        id: "artifact-notify-agent",
+        title: "Notify agent from artifacts",
+        description:
+          "Saving, ticking, or changing an artifact no longer wakes the agent. Notify agent in the artifact toolbar wakes it once with what changed, and a comment that mentions @dx wakes it right away.",
+        // Tracked in #1765.
+        owner: { team: "dx/artifacts" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "interface",
+        risk: "low",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration:
+            "Nothing is stored for the flag; turning it off brings back waking on ticks and answers, and hides Notify agent.",
+          graduation:
+            "Drop the flag check from artifact saves, comments, the notify route, and the toolbar.",
+          removal:
+            "Delete the notify route, the toolbar button, and the flag checks; ticks and answers wake as before.",
+        },
+      },
+      {
         id: "composer-quick-actions",
         title: "Composer quick actions",
         description:
@@ -302,6 +327,28 @@ export const productionExperimentalFeatureRegistry =
             "Drop the flag check from the quick-actions route and the Thread page.",
           removal:
             "Delete the quick-actions route, the composer row, and the offer_replies tool.",
+        },
+      },
+      {
+        id: "claude-plan-auto-pick",
+        title: "Pick my Claude plan automatically",
+        description:
+          "A new Claude Code Thread that names no plan gets one of your Claude Pro/Max plans picked by their limits and running Threads. Off, you pick the plan.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/model-routing" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "new-thread",
+        reviewDate: "2027-01-15",
+        lifecyclePlan: {
+          migration: "Nothing is stored; bound Threads keep their plan.",
+          graduation: "Drop the flag checks.",
+          removal: "Delete the automatic pick and the composer's Auto.",
         },
       },
     ],

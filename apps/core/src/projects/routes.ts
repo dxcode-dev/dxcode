@@ -54,8 +54,10 @@ import {
   UpdateProjectRunnerUnavailableResponseSchema,
 } from "@dx/api";
 import {
+  type CanonicalGitRemoteAlias,
   canonicalBitbucketRepositoryLocator,
   canonicalGitHubRepositoryLocator,
+  canonicalGitRemoteAlias,
   canonicalPublicGitRepositoryLocator,
   PersistenceUnavailable,
   PersonalAccountRepository,
@@ -156,6 +158,7 @@ const projectData = (project: Project) => ({
     ? {}
     : { repository: project.repository }),
   additionalRepositories: project.additionalRepositories,
+  remoteAliases: project.remoteAliases,
   revision: project.revision,
   ...(project.workspaceId === undefined
     ? {}
@@ -188,6 +191,27 @@ const additionalRepositoriesFrom = (
     if (seen.has(key)) return [];
     seen.add(key);
     return [repository];
+  });
+};
+
+/**
+ * Canonical remote aliases in request order, without duplicates or the
+ * primary repository's own HTTPS URL. Request validation proved each one.
+ */
+const remoteAliasesFrom = (
+  urls: ReadonlyArray<string>,
+  primaryWebUrl: string | undefined,
+): Array<CanonicalGitRemoteAlias> => {
+  const seen = new Set(
+    primaryWebUrl === undefined ? [] : [primaryWebUrl.toLowerCase()],
+  );
+  return urls.flatMap((url) => {
+    const alias = canonicalGitRemoteAlias(url);
+    if (alias === undefined) throw new InvalidProjectRequest();
+    const key = alias.url.toLowerCase();
+    if (seen.has(key)) return [];
+    seen.add(key);
+    return [alias];
   });
 };
 
@@ -781,6 +805,28 @@ projectRoutes.put("/:projectId/source", async (context) => {
       if (membership === null || membership.lifecycle_state !== "active")
         return yield* new ProjectSourceRebindForbidden();
     }
+    const bindingRevision = (current.repository?.bindingRevision ?? 0) + 1;
+    if ("url" in input) {
+      // Cloned as is, like a Project created from a URL. Existing Threads
+      // keep the source they snapshotted; new ones clone this URL.
+      const locator = canonicalPublicGitRepositoryLocator(input.url);
+      if (locator === undefined) return yield* new InvalidProjectRequest();
+      const project = yield* Effect.gen(function* () {
+        return yield* (yield* ProjectService).rebindRepository(
+          context.get("principal"),
+          params.projectId,
+          input.revision,
+          { provider: "git", bindingRevision, ...locator },
+        );
+      }).pipe(
+        Effect.provide(
+          ProjectService.layer.pipe(Layer.provide(repositoryLayer)),
+        ),
+      );
+      return yield* Schema.encodeUnknownEffect(
+        RebindProjectSourceResponseSchema,
+      )({ status: "success", data: projectData(project) });
+    }
     const authorized = yield* Effect.tryPromise({
       try: () =>
         authorizeSource({
@@ -811,7 +857,7 @@ projectRoutes.put("/:projectId/source", async (context) => {
         input.revision,
         {
           provider: authorized.provider,
-          bindingRevision: (current.repository?.bindingRevision ?? 0) + 1,
+          bindingRevision,
           fullName: authorized.fullName,
           webUrl: authorized.webUrl,
           cloneUrl: authorized.cloneUrl,
@@ -824,7 +870,7 @@ projectRoutes.put("/:projectId/source", async (context) => {
           installationId: authorized.installationId,
           providerWorkspaceId: authorized.providerWorkspaceId,
           providerRepositoryId: authorized.providerRepositoryId,
-          bindingRevision: (current.repository?.bindingRevision ?? 0) + 1,
+          bindingRevision,
           provenance: "live-grant",
           defaultBranch: authorized.defaultBranch,
           health: { state: "available" },
@@ -1044,6 +1090,14 @@ projectRoutes.patch("/:projectId", async (context) => {
                 additionalRepositories: additionalRepositoriesFrom(
                   input.additionalRepositories,
                   current.repository?.cloneUrl,
+                ),
+              }),
+          ...(input.remoteAliases === undefined
+            ? {}
+            : {
+                remoteAliases: remoteAliasesFrom(
+                  input.remoteAliases,
+                  current.repository?.webUrl,
                 ),
               }),
           configuration,

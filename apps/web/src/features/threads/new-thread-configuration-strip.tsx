@@ -1049,9 +1049,9 @@ export function NewThreadConfigurationStrip({
   readonly onConnectOrbProvider?: () => void;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly onModelChange: (model: string | undefined) => void;
-  /** The Claude plan a Claude Code Thread is bound to; picked when several. */
+  /** The Claude plan a Claude Code Thread is bound to; unset, dx picks one. */
   readonly claudePlan?: string;
-  readonly onClaudePlanChange?: (connectionId: string) => void;
+  readonly onClaudePlanChange?: (connectionId: string | undefined) => void;
   readonly dictationControls?: ReactNode;
   readonly dictationActive?: boolean;
   readonly dictationHideSubmit?: boolean;

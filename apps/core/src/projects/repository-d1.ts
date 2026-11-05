@@ -43,6 +43,7 @@ const ProjectRow = Schema.Struct({
   created_at: Schema.String,
   updated_at: Schema.String,
   additional_repositories_json: Schema.optional(Schema.NullOr(Schema.String)),
+  remote_aliases_json: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 type ProjectRow = typeof ProjectRow.Type;
@@ -87,6 +88,9 @@ const decodeProjectRows = (rows: ReadonlyArray<unknown>) =>
                 }),
             additionalRepositories: JSON.parse(
               row.additional_repositories_json ?? "[]",
+            ) as unknown,
+            remoteAliases: JSON.parse(
+              row.remote_aliases_json ?? "[]",
             ) as unknown,
             revision: row.revision,
             configuration: {
@@ -522,17 +526,24 @@ export const ProjectRepositoryD1 = Layer.effect(
               return yield* new ProjectNotFound({ projectId });
             }
             const now = yield* DateTime.now;
+            const { remoteAliases: aliases, ...fields } = update;
             const next = yield* Schema.decodeUnknownEffect(
               Schema.toType(Project),
             )({
               ...current,
-              ...update,
+              ...fields,
+              ...(aliases === undefined
+                ? {}
+                : { remoteAliases: aliases.map(({ url }) => url) }),
               revision: revision + 1,
               updatedAt: now,
             });
             const encoded = yield* Schema.encodeEffect(Project)(next);
             let expectedRevision = revision;
-            if (update.additionalRepositories !== undefined) {
+            if (
+              update.additionalRepositories !== undefined ||
+              aliases !== undefined
+            ) {
               // One batch: the guarded statements apply only after this
               // revision's compare-and-set update has committed.
               const applied = sql`
@@ -551,22 +562,44 @@ export const ProjectRepositoryD1 = Layer.effect(
                       AND name != ${PROJECTLESS_PROJECT_NAME}
                     RETURNING id
                   `,
-                  sql`
-                    DELETE FROM project_additional_repository
-                    WHERE project_id = ${projectId} AND ${applied}
-                  `,
-                  ...next.additionalRepositories.map(
-                    (repository, position) => sql`
-                      INSERT INTO project_additional_repository (
-                        project_id, position, provider, full_name, web_url,
-                        clone_url, created_at
-                      ) SELECT
-                        ${projectId}, ${position}, ${repository.provider},
-                        ${repository.fullName}, ${repository.webUrl},
-                        ${repository.cloneUrl}, ${encoded.updatedAt}
-                      WHERE ${applied}
-                    `,
-                  ),
+                  ...(update.additionalRepositories === undefined
+                    ? []
+                    : [
+                        sql`
+                          DELETE FROM project_additional_repository
+                          WHERE project_id = ${projectId} AND ${applied}
+                        `,
+                        ...next.additionalRepositories.map(
+                          (repository, position) => sql`
+                            INSERT INTO project_additional_repository (
+                              project_id, position, provider, full_name, web_url,
+                              clone_url, created_at
+                            ) SELECT
+                              ${projectId}, ${position}, ${repository.provider},
+                              ${repository.fullName}, ${repository.webUrl},
+                              ${repository.cloneUrl}, ${encoded.updatedAt}
+                            WHERE ${applied}
+                          `,
+                        ),
+                      ]),
+                  ...(aliases === undefined
+                    ? []
+                    : [
+                        sql`
+                          DELETE FROM project_remote_alias
+                          WHERE project_id = ${projectId} AND ${applied}
+                        `,
+                        ...aliases.map(
+                          (alias, position) => sql`
+                            INSERT INTO project_remote_alias (
+                              project_id, position, url, web_url, created_at
+                            ) SELECT
+                              ${projectId}, ${position}, ${alias.url},
+                              ${alias.webUrl}, ${encoded.updatedAt}
+                            WHERE ${applied}
+                          `,
+                        ),
+                      ]),
                 ])
                 .pipe(
                   Effect.catchTag("SqlError", (cause) =>
@@ -640,6 +673,69 @@ export const ProjectRepositoryD1 = Layer.effect(
             const updatedAt = Schema.encodeSync(Schema.DateTimeUtcFromString)(
               now,
             );
+            const readBack = Effect.gen(function* () {
+              const rows = yield* sql<ProjectRow>`
+                SELECT * FROM project_read_model
+                WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
+              `.pipe(
+                Effect.catchTag("SqlError", (cause) =>
+                  Effect.fail(
+                    unavailable("project.rebindRepositoryOwned.read")(cause),
+                  ),
+                ),
+              );
+              const projects = yield* decodeProjectRows(rows);
+              return yield* projects[0] === undefined
+                ? new ProjectNotFound({ projectId })
+                : Effect.succeed(projects[0]);
+            });
+            // A URL carries no authority: the old repository's goes with it.
+            // Threads keep the source they snapshotted when they started.
+            if (unsafeAuthority === undefined) {
+              const written = yield* d1
+                .batch([
+                  sql`
+                    UPDATE projects SET revision = ${revision + 1}, updated_at = ${updatedAt}
+                    WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
+                      AND revision = ${revision}
+                      AND name != ${PROJECTLESS_PROJECT_NAME}
+                    RETURNING id
+                  `,
+                  sql`
+                    DELETE FROM project_source_authority
+                    WHERE project_id = ${projectId} AND EXISTS (
+                      SELECT 1 FROM projects WHERE id = ${projectId}
+                        AND revision = ${revision + 1} AND updated_at = ${updatedAt})
+                  `,
+                  sql`
+                    INSERT INTO project_repository (
+                      project_id, provider, binding_revision, full_name, web_url,
+                      clone_url, created_at, updated_at
+                    ) SELECT
+                      ${projectId}, ${repository.provider}, ${repository.bindingRevision},
+                      ${repository.fullName},
+                      ${repository.webUrl}, ${repository.cloneUrl ?? null},
+                      ${updatedAt}, ${updatedAt}
+                    WHERE EXISTS (SELECT 1 FROM projects WHERE id = ${projectId}
+                      AND revision = ${revision + 1} AND updated_at = ${updatedAt})
+                    ON CONFLICT(project_id) DO UPDATE SET
+                      provider = excluded.provider,
+                      binding_revision = excluded.binding_revision,
+                      full_name = excluded.full_name, web_url = excluded.web_url,
+                      clone_url = excluded.clone_url, updated_at = excluded.updated_at
+                  `,
+                ] as const)
+                .pipe(
+                  Effect.catchTag("SqlError", (cause) =>
+                    Effect.fail(
+                      unavailable("project.rebindRepositoryOwned.write")(cause),
+                    ),
+                  ),
+                );
+              return (written[0] as ReadonlyArray<unknown>).length === 1
+                ? yield* readBack
+                : yield* new ProjectNotFound({ projectId });
+            }
             const authority = yield* Schema.encodeEffect(
               ProjectSourceAuthority,
             )(unsafeAuthority);
@@ -762,20 +858,7 @@ export const ProjectRepositoryD1 = Layer.effect(
                   ),
                 ),
               );
-            const rows = yield* sql<ProjectRow>`
-              SELECT * FROM project_read_model
-              WHERE id = ${projectId} AND ${manageableBy(ownerUserId)}
-            `.pipe(
-              Effect.catchTag("SqlError", (cause) =>
-                Effect.fail(
-                  unavailable("project.rebindRepositoryOwned.read")(cause),
-                ),
-              ),
-            );
-            const projects = yield* decodeProjectRows(rows);
-            return yield* projects[0] === undefined
-              ? new ProjectNotFound({ projectId })
-              : Effect.succeed(projects[0]);
+            return yield* readBack;
           }),
         ),
     });

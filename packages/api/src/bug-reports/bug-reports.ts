@@ -180,6 +180,13 @@ export const BugReportDataSchema = Schema.Struct({
   createdAt: Schema.String,
   imageCount: Count,
   diagnostics: Schema.Array(BugReportDiagnosticKindSchema),
+  /**
+   * Present on a report another deployment forwarded here: the sender its
+   * intake key names, and the origin the sender gave.
+   */
+  source: Schema.optional(
+    Schema.Struct({ sender: Text(64), origin: Text(256) }),
+  ),
 });
 export type BugReportData = typeof BugReportDataSchema.Type;
 
@@ -195,9 +202,16 @@ export const ListBugReportsResponseSchema = successResponse(
   Schema.Struct({ items: Schema.Array(BugReportDataSchema) }),
 );
 
-/** `GET /v1/bug-reports/access`: whether this person reads every report. */
+/**
+ * `GET /v1/bug-reports/access`: whether this person reads every report, and
+ * the host of the central deployment this one shares each report with, when
+ * it shares them.
+ */
 export const BugReportAccessResponseSchema = successResponse(
-  Schema.Struct({ reader: Schema.Boolean }),
+  Schema.Struct({
+    reader: Schema.Boolean,
+    sharedWith: Schema.optional(Text(256)),
+  }),
 );
 
 /** A report in All Bug Reports, with who sent it. */

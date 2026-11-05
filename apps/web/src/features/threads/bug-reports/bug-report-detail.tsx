@@ -63,7 +63,9 @@ export function BugReportDialog({
               </dd>
               <dt>From</dt>
               <dd>
-                {detail.data.report.threadId === undefined ? (
+                {detail.data.report.source !== undefined ? (
+                  `${detail.data.report.source.origin} (${detail.data.report.source.sender})`
+                ) : detail.data.report.threadId === undefined ? (
                   "Settings"
                 ) : (
                   <Link

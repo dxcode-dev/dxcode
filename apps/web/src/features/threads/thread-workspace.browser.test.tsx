@@ -753,7 +753,7 @@ describe("ThreadSession panes", () => {
     await React.act(() => root.unmount());
   });
 
-  it("tells open view and file tabs that an archived Thread's Orb is stopped", async () => {
+  it("shows an archived Thread only its Agent pane, asks its Orb for nothing, and brings the saved layout back on unarchive", async () => {
     viewport.mobile = false;
     vi.stubGlobal(
       "ResizeObserver",
@@ -763,35 +763,57 @@ describe("ThreadSession panes", () => {
         disconnect() {}
       },
     );
-    // The archived Orb answers no file reads.
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("Orb stopped", { status: 503 })),
+    // The archived Orb answers no reads.
+    const fetch = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response("Orb stopped", { status: 503 }),
     );
+    vi.stubGlobal("fetch", fetch);
     const Terminal = vi.fn(() => <div className="thread-terminal" />);
     const { container, root, render } = await renderSession(thread, Terminal);
     await openView(container, "Terminal");
+    await openView(container, "Files");
     await click(
       [...container.querySelectorAll("button")].find(
         (candidate) => candidate.textContent === "Link src/linked.ts:4",
       ) ?? null,
     );
-    expect(container.querySelector(".thread-terminal")).not.toBeNull();
+    const tabs = () =>
+      [...container.querySelectorAll<HTMLElement>('[role="tab"]')].map(
+        (tab) => tab.getAttribute("aria-label") ?? tab.textContent,
+      );
+    expect(tabs()).toEqual(
+      expect.arrayContaining(["Agent", "Terminal", "Files", "linked.ts"]),
+    );
 
+    fetch.mockClear();
     await React.act(() =>
       root.render(render({ ...thread, lifecycleState: "archived" }, project)),
     );
-    await React.act(async () => {});
+    await React.act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
 
-    const panel = (label: string) =>
-      container.querySelector(`[role="tabpanel"][aria-label="${label}"]`);
-    for (const label of ["Terminal", "linked.ts"]) {
-      expect(panel(label)?.textContent).toBe(
-        "Archived. This Thread's Orb is stopped. Unarchive to resume it.",
-      );
-    }
-    expect(container.textContent).not.toContain("reconnect automatically");
+    expect(tabs()).toEqual(["Agent"]);
+    expect(container.textContent).not.toContain("Orb is stopped");
     expect(container.querySelector(".thread-terminal")).toBeNull();
+    expect(container.querySelector(".pane-divider")).toBeNull();
+    const orbReads = fetch.mock.calls
+      .map(([input]) => String(input))
+      .filter((url) =>
+        /\/v1\/threads\/[^/]+\/(files|disk|memory|terminal|desktop|portals)/.test(
+          url,
+        ),
+      );
+    expect(orbReads).toEqual([]);
+    // Artifacts are stored with the Thread, so they still open.
+    expect(await viewsMenuItems(container)).toEqual(["artifacts"]);
+
+    await React.act(() => root.render(render(thread, project)));
+    await React.act(async () => {});
+    expect(tabs()).toEqual(
+      expect.arrayContaining(["Agent", "Terminal", "Files", "linked.ts"]),
+    );
     await React.act(() => root.unmount());
   });
 

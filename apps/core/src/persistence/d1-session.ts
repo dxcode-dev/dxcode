@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { getCookie, setCookie } from "hono/cookie";
 import type { AppEnv } from "../http/types.js";
+import { requestLogger } from "../logging.js";
 
 /**
  * One D1 session per request (#1386). With read replication on, D1 serves a
@@ -26,7 +27,9 @@ import type { AppEnv } from "../http/types.js";
  * or revoked API token stops the next request from any client at once.
  * Other authorization reads, such as workspace membership and Thread
  * sharing, follow the request's session: a client without a bookmark can see
- * a removal up to the replica lag late (#1386).
+ * a removal up to the replica lag late (#1386). The reverse never stands: a
+ * read a replica answered "not found" is answered again at the primary
+ * (`confirmMissesAtPrimary`, #1784).
  */
 
 export const D1_BOOKMARK_COOKIE = "dx-d1-bookmark";
@@ -75,6 +78,81 @@ const primaries = new WeakMap<object, D1Database>();
 export const primaryDatabase = <T extends D1Database | undefined>(db: T): T =>
   db === undefined ? db : ((primaries.get(db) as T | undefined) ?? db);
 
+/** Read requests whose session may have started at a replica. */
+const replicaReads = new WeakSet<Request>();
+/** Retries of a replica's "not found", which read the primary. */
+const primaryRetries = new WeakSet<Request>();
+
+/**
+ * The answers that say a Thread, Project, or artifact does not exist for the
+ * requester. Each comes from a D1 lookup of something another request may
+ * have just written: a Thread an agent or schedule started, a share another
+ * person granted, an artifact the agent saved.
+ */
+const MISS_CODES = new Set([
+  "THREAD_NOT_FOUND",
+  "PROJECT_NOT_FOUND",
+  "ARTIFACT_NOT_FOUND",
+  "ARTIFACT_REVISION_NOT_FOUND",
+]);
+
+const answeredMiss = async (response: Response) => {
+  if (response.status !== 404) return undefined;
+  if (!response.headers.get("content-type")?.includes("application/json"))
+    return undefined;
+  const body = (await response
+    .clone()
+    .json()
+    .catch(() => undefined)) as { data?: { code?: unknown } } | undefined;
+  const code = body?.data?.code;
+  return typeof code === "string" && MISS_CODES.has(code) ? code : undefined;
+};
+
+type Fetch<Env> = (
+  request: Request,
+  env?: Env,
+  executionCtx?: ExecutionContext,
+) => Response | Promise<Response>;
+
+/**
+ * A replica may not have applied a row another request just wrote, and a
+ * read without a bookmark, or with one older than that write, can be served
+ * by it. So a read that a replica answered "not found" is answered again at
+ * the primary, whose answer stands (#1784): no ownership or access decision
+ * concludes "not found" from a replica that may be behind. A replica that
+ * has the row costs nothing extra; a real miss reads the primary once more.
+ * GET and HEAD change nothing, so running one again is safe.
+ */
+export const confirmMissesAtPrimary =
+  <Env>(fetch: Fetch<Env>): Fetch<Env> =>
+  async (request, env, executionCtx) => {
+    const response = await fetch(request, env, executionCtx);
+    if (!replicaReads.has(request)) return response;
+    const code = await answeredMiss(response);
+    if (code === undefined) return response;
+    await response.body?.cancel().catch(() => undefined);
+    const retry = new Request(request);
+    // The retry logs under the same request ID as the replica's answer.
+    const id = response.headers.get("x-request-id");
+    if (id !== null) retry.headers.set("x-request-id", id);
+    primaryRetries.add(retry);
+    const confirmed = await fetch(retry, env, executionCtx);
+    const stillMissing = (await answeredMiss(confirmed)) !== undefined;
+    requestLogger.info(
+      stillMissing
+        ? "A replica's not-found was confirmed at the primary."
+        : "A replica missed what the primary has.",
+      {
+        event: "d1_replica_miss",
+        code,
+        outcome: stillMissing ? "absent" : "found_at_primary",
+        status: confirmed.status,
+        ...(id === null ? {} : { requestId: id }),
+      },
+    );
+    return confirmed;
+  };
+
 const hasSessions = (db: unknown): db is D1Database =>
   typeof db === "object" &&
   db !== null &&
@@ -88,16 +166,19 @@ export const d1Session: MiddlewareHandler<AppEnv> = async (context, next) => {
     context.req.header(D1_BOOKMARK_HEADER),
     getCookie(context, D1_BOOKMARK_COOKIE),
   ].find((value) => value !== undefined && BOOKMARK.test(value));
+  const retry = primaryRetries.has(context.req.raw);
   const anyReplica = read && context.req.header("cookie") !== undefined;
-  const session = db.withSession(
-    read && bookmark !== undefined
+  const constraint = retry
+    ? "first-primary"
+    : read && bookmark !== undefined
       ? bookmark
       : anyReplica
         ? "first-unconstrained"
-        : "first-primary",
-  );
+        : "first-primary";
+  if (read && constraint !== "first-primary") replicaReads.add(context.req.raw);
+  const session = db.withSession(constraint);
   const sessioned = sessionDatabase(db, session);
-  primaries.set(sessioned, read ? db : sessioned);
+  primaries.set(sessioned, read && !retry ? db : sessioned);
   context.env = { ...context.env, DB: sessioned };
   await next();
   if (context.res.status === 101) return;

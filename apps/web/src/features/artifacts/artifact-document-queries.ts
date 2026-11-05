@@ -9,6 +9,7 @@ import {
   type ArtifactDocument,
   artifactsApi,
   deleteArtifact,
+  notifyArtifactAgent,
 } from "./artifacts-api.js";
 import { artifactKeys, invalidateArtifacts } from "./artifacts-queries.js";
 
@@ -78,4 +79,13 @@ export const deleteArtifactMutation = (
   mutationOptions({
     mutationFn: () => deleteArtifact(threadId, artifactId),
     onSettled: () => invalidateArtifacts(client, threadId),
+  });
+
+/** Notify agent: one wake for the artifact's Thread, with what changed. */
+export const notifyArtifactAgentMutation = (
+  threadId: ThreadId,
+  artifactId: string,
+) =>
+  mutationOptions({
+    mutationFn: () => notifyArtifactAgent(threadId, artifactId),
   });

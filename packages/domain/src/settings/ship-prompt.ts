@@ -1,5 +1,10 @@
 import type { ProjectConfiguration } from "./project-defaults.js";
 
+// The built-in prompts' opening words. A person may edit the rest before
+// sending, so these alone say which workflow a message started.
+const SHIP_OPENING = "Ship this Thread's changes to ";
+const PUSH_OPENING = "Push this Thread's changes to a feature branch";
+
 /**
  * The prompt the Changes pane's main action sends, as if the person typed
  * it. `baseBranch` is the branch the Thread's checkout started from; without
@@ -17,17 +22,17 @@ export const builtInShipPrompt = (
       : `\`origin/${baseBranch}\``;
   if (action === "push")
     return [
-      "Push this Thread's changes to a feature branch:",
+      `${PUSH_OPENING}:`,
       "",
       "1. Commit any uncommitted changes.",
       `2. If the current branch is ${base}, first create a branch with a short descriptive name.`,
       "3. Push the branch to origin.",
-      "4. If the repository is on GitHub, report the URL that opens a pull request for the branch.",
+      "4. Report the URL of the branch's open pull request if there is one; otherwise the URL `git push` printed for opening one.",
       "",
       `Do not push to ${base} and do not merge.`,
     ].join("\n");
   return [
-    `Ship this Thread's changes to ${base}:`,
+    `${SHIP_OPENING}${base}:`,
     "",
     "1. Commit any uncommitted changes.",
     `2. Fetch origin and rebase onto ${upstream}.`,
@@ -51,3 +56,14 @@ export const shipPromptFor = (
         configuration.shipAction === "push" ? "push" : "ship",
         baseBranch,
       );
+
+/**
+ * Which built-in workflow a message's text starts, from its opening words;
+ * `undefined` for anything else, a project's custom prompt included.
+ */
+export const shipWorkflowOf = (text: string): "ship" | "push" | undefined => {
+  const opening = text.trimStart();
+  if (opening.startsWith(SHIP_OPENING)) return "ship";
+  if (opening.startsWith(PUSH_OPENING)) return "push";
+  return undefined;
+};

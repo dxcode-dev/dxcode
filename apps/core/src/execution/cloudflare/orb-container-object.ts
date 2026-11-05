@@ -124,8 +124,8 @@ export class OrbContainerObject extends DurableObject {
     return this.#controller.rm(path, options);
   }
 
-  pause() {
-    return this.#controller.pause();
+  pause(options?: { readonly threadId?: string; readonly defer?: boolean }) {
+    return this.#controller.pause(options);
   }
 
   readRescue(index: number) {

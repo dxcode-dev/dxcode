@@ -1443,6 +1443,19 @@ a {
   margin-bottom: 8px;
   padding: 4px 0;
 }
+/* A prompt waiting while the agent finishes earlier work; the chip matches
+   a waiting message from another Thread. */
+.user-message > .message-steering {
+  display: block;
+  width: fit-content;
+  margin: 4px 0 0 auto;
+  padding: 0 5px;
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  font-size: 11px;
+  line-height: 16px;
+}
 .agent-message .message-content {
   padding: 4px 0;
 }
@@ -13242,8 +13255,10 @@ body:has(.dx-app-shell) {
   height: 14px;
   color: var(--muted-foreground);
 }
-.additional-repositories-popup {
-  width: max(var(--anchor-width), 260px);
+/* Wider than an Add Repository button, so a pasted URL reads in full; it
+   outranks .repository-combobox-popup's anchor width, defined later. */
+.repository-combobox-popup.additional-repositories-popup {
+  width: max(var(--anchor-width), 320px);
 }
 .additional-repositories-search {
   width: 100%;
@@ -14010,7 +14025,11 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
   gap: 16px;
 }
 .project-settings-content
-  :where(input.project-name-input, input.project-description-input) {
+  :where(
+    input.project-name-input,
+    input.project-description-input,
+    input.project-remote-alias-input
+  ) {
   height: 26px;
   padding: 4px 8px;
   border-radius: 6px;
@@ -14099,9 +14118,23 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
   gap: 6px;
   min-width: 0;
 }
-.project-repository-control > .settings-select {
+.project-repository-control > .repository-combobox-control {
+  grid-template-columns: minmax(0, 1fr) 24px;
   width: 320px;
-  min-width: 0;
+  height: 26px;
+  background: var(--background);
+}
+.project-repository-control > .repository-combobox-control input {
+  padding: 4px 0 4px 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.project-remote-alias-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-self: stretch;
+  max-width: 32rem;
 }
 /* Ship Behavior: Edit Prompt beside the choice while Custom Ship is on. */
 .project-ship-control {
@@ -14471,8 +14504,11 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
     padding-top: 0;
     border-left: 0;
   }
-  .project-repository-control > .settings-select {
-    flex: 1;
+  .project-repository-control {
+    flex-wrap: wrap;
+  }
+  .project-repository-control > .repository-combobox-control {
+    flex: 1 1 100%;
     width: auto;
   }
   .project-settings-content .settings-card-header {

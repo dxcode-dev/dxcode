@@ -2573,6 +2573,14 @@ var ORB_SNAPSHOT_REFRESH_MS = 216e7;
 var ORB_SNAPSHOT_RETRY_MS = 3e4;
 /** Failed idle-pause snapshots back off, doubling, up to this. */
 var ORB_SNAPSHOT_RETRY_MAX_MS = 36e5;
+/** An archive's stop that failed is tried again this often (#1740). */
+var ORB_STOP_RETRY_MS = 3e5;
+var neverStarted = (cause) => cause instanceof Error && cause.message.trim() === "The container has not been started";
+/** The state without an archive's pending stop: the stop happened. */
+var stopDone = (state) => {
+	const { pendingStop: _done, ...rest } = state;
+	return rest;
+};
 var DISK_RELIEF_TIMEOUT_MS = 12e4;
 /** One stored piece of a rescue archive (a SQLite value holds 2 MB). */
 var RESCUE_CHUNK_BYTES = 1048576;
@@ -2932,7 +2940,7 @@ var OrbContainerController = class {
 		await this.#armInactivity(idleMs);
 		await this.#watchForStop();
 		await this.#save({
-			...state,
+			...await this.#load() ?? state,
 			status: "active",
 			idleDeadline: Math.max(state.idleDeadline, this.#now() + idleMs),
 			startedAt: now,
@@ -2969,6 +2977,10 @@ var OrbContainerController = class {
 				await this.#save(state);
 			}
 			if (state.status === "destroyed") return { kind: "destroyed" };
+			if (state.pendingStop !== void 0 && requestedAt > state.pendingStop.since) {
+				state = stopDone(state);
+				await this.#save(state);
+			}
 			if (this.#container.running) {
 				const deadline = Math.max(state.idleDeadline, this.#now() + input.idleMs);
 				if (deadline !== state.idleDeadline || state.status !== "active") await this.#save({
@@ -3098,7 +3110,7 @@ var OrbContainerController = class {
 		if (snapshot === void 0) return false;
 		const rescued = await this.#rescueUnsavedWork();
 		await this.#destroyContainer();
-		const { snapshotFailures: _failures, ...rest } = await this.#load() ?? state;
+		const { snapshotFailures: _failures, ...rest } = stopDone(await this.#load() ?? state);
 		const unsavedStop = {
 			stoppedAt: this.#now(),
 			failures,
@@ -3420,7 +3432,7 @@ var OrbContainerController = class {
 		}
 		await this.#destroyContainer();
 		await this.#save({
-			...next,
+			...stopDone(next),
 			status: "paused"
 		});
 		orbContainerLogger.info("Orb container paused.", {
@@ -3443,6 +3455,10 @@ var OrbContainerController = class {
 		try {
 			return await this.#pause(state, true);
 		} catch (cause) {
+			if (neverStarted(cause)) {
+				await this.#stopUnstarted(state, cause);
+				return "paused";
+			}
 			const count = (failures?.count ?? 0) + 1;
 			const delayMs = Math.min(ORB_SNAPSHOT_RETRY_MS * 2 ** (count - 1), ORB_SNAPSHOT_RETRY_MAX_MS);
 			const current = await this.#load() ?? state;
@@ -3465,28 +3481,154 @@ var OrbContainerController = class {
 			return "failed";
 		}
 	}
-	/** Archive: snapshot and stop now, whatever the idle deadline says. */
-	pause() {
-		return this.#exclusive(async () => {
+	/**
+	* Archive: snapshot and stop now, whatever the idle deadline says.
+	*
+	* - `paused`: snapshotted and stopped.
+	* - `stopped`: it was not running; or Cloudflare says it never started,
+	*   so it holds nothing to save; or it could not be saved and stopped on
+	*   its last good save (#1620).
+	* - `stopping`: it could not be stopped without losing files, so it keeps
+	*   running, its idle deadline is now, and the alarm tries again, snapshot
+	*   first (`pendingStop`). With `defer`, Core's record says a start may
+	*   still be running: the stop is left to the alarm, which waits for it,
+	*   instead of holding the archive.
+	*/
+	async pause(options = {}) {
+		if (options.defer === true) return await this.#deferStop(options.threadId);
+		return await this.#exclusive(async () => {
 			const state = await this.#load();
 			if (state === void 0 || state.status === "destroyed") return "stopped";
-			if (!this.#container.running) {
-				if (state.status === "active") await this.#save({
-					...state,
-					status: "paused"
-				});
-				return "stopped";
+			const stop = await this.#archiveStop(state);
+			if (stop.kind !== "failed") return stop.kind;
+			await this.#owePendingStop(state, 1, options.threadId, stop.cause);
+			return "stopping";
+		});
+	}
+	/** One try at an archive's stop, under the lifecycle lock. */
+	async #archiveStop(state) {
+		if (!this.#container.running) {
+			if (state.status === "active" || state.pendingStop !== void 0) await this.#save({
+				...stopDone(state),
+				status: "paused"
+			});
+			return { kind: "stopped" };
+		}
+		try {
+			await this.#pause(state, false);
+			return { kind: "paused" };
+		} catch (cause) {
+			if (neverStarted(cause)) {
+				await this.#stopUnstarted(state, cause);
+				return { kind: "stopped" };
 			}
 			try {
-				await this.#pause(state, false);
-			} catch (cause) {
 				const current = await this.#load() ?? state;
 				const failures = (current.snapshotFailures?.count ?? 0) + 1;
-				if (!await this.#stopUnsaved(current, failures, cause)) throw cause;
-				return "stopped";
+				if (await this.#stopUnsaved(current, failures, cause)) return { kind: "stopped" };
+			} catch (stopCause) {
+				return {
+					kind: "failed",
+					cause: stopCause
+				};
 			}
-			return "paused";
+			return {
+				kind: "failed",
+				cause
+			};
+		}
+	}
+	/**
+	* Stops a container Cloudflare says never started, without a snapshot:
+	* nothing ran in it, so it holds nothing newer than its last snapshot (or
+	* the image). Under the lifecycle lock.
+	*/
+	async #stopUnstarted(state, cause) {
+		await within(this.#destroyContainer().catch(() => void 0), ABANDON_START_MS);
+		const { snapshotFailures: _failures, ...rest } = stopDone(await this.#load() ?? state);
+		await this.#save({
+			...rest,
+			status: "paused"
 		});
+		orbContainerLogger.warn("Orb container stopped without a snapshot: it never started.", {
+			event: "orb_container_stopped_unstarted",
+			sandboxId: this.#sandboxId,
+			snapshot: rest.snapshot !== void 0,
+			error: cause instanceof Error ? cause.message : String(cause)
+		});
+		if (rest.snapshot !== void 0) await this.#schedule(Math.max(this.#now() + ORB_HEARTBEAT_MS, rest.snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS));
+	}
+	/**
+	* Records an archive's stop for the alarm to try again, with the idle
+	* deadline now, so nothing keeps the container for its idle time.
+	*/
+	async #owePendingStop(state, tries, threadId, cause) {
+		const now = this.#now();
+		const current = await this.#load() ?? state;
+		const pendingStop = {
+			since: current.pendingStop?.since ?? now,
+			tries,
+			retryAt: tries === 0 ? now : now + ORB_STOP_RETRY_MS,
+			...(threadId ?? current.pendingStop?.threadId) === void 0 ? {} : { threadId: threadId ?? current.pendingStop?.threadId }
+		};
+		await this.#save({
+			...current,
+			idleDeadline: now,
+			pendingStop
+		});
+		await this.#schedule(tries === 0 ? now : Math.min(pendingStop.retryAt, now + ORB_HEARTBEAT_MS));
+		orbContainerLogger.warn("Orb container stop is pending.", {
+			event: "orb_container_stop_pending",
+			sandboxId: this.#sandboxId,
+			...pendingStop.threadId === void 0 ? {} : { threadId: pendingStop.threadId },
+			tries,
+			retryAt: pendingStop.retryAt,
+			...cause === void 0 ? {} : { error: cause instanceof Error ? cause.message : String(cause) }
+		});
+	}
+	/**
+	* Archive while Core's record says a start may still run: record the
+	* stop without waiting on the lifecycle lock, and let the alarm, which
+	* runs under it, do it.
+	*/
+	async #deferStop(threadId) {
+		await this.#afterRestart();
+		const state = await this.#load();
+		if (state === void 0 || state.status === "destroyed") return "stopped";
+		if (!this.#container.running && state.status !== "active" && this.#busy === 0) return "stopped";
+		await this.#owePendingStop(state, 0, threadId, void 0);
+		return "stopping";
+	}
+	/**
+	* The alarm's turn at an archive's pending stop, under the lifecycle lock
+	* with the container running. After the last try the stop is abandoned,
+	* at error level, and the idle pause's own retries and logs carry on.
+	*/
+	async #retryPendingStop(state, pending) {
+		const now = this.#now();
+		if (now < pending.retryAt) {
+			await this.#schedule(Math.min(pending.retryAt, this.#now() + ORB_HEARTBEAT_MS));
+			return;
+		}
+		const stop = await this.#archiveStop(state);
+		if (stop.kind !== "failed") return;
+		const tries = pending.tries + 1;
+		if (tries < 3 && now - pending.since < 9e5) {
+			await this.#owePendingStop(state, tries, pending.threadId, stop.cause);
+			return;
+		}
+		const current = await this.#load() ?? state;
+		await this.#save(stopDone(current));
+		orbContainerLogger.error("Orb container could not be stopped.", {
+			event: "orb_stop_abandoned",
+			sandboxId: this.#sandboxId,
+			...pending.threadId === void 0 ? {} : { threadId: pending.threadId },
+			tries,
+			pendingMs: now - pending.since,
+			hadSnapshot: current.snapshot !== void 0,
+			error: stop.cause instanceof Error ? stop.cause.message : String(stop.cause)
+		});
+		await this.#schedule(this.#now() + ORB_HEARTBEAT_MS);
 	}
 	/**
 	* Core found the container's filesystem read-only (a btrfs root forced
@@ -3677,6 +3819,10 @@ var OrbContainerController = class {
 			if (state === void 0 || state.status === "destroyed") return;
 			const now = this.#now();
 			if (this.#container.running) {
+				if (state.pendingStop !== void 0) {
+					await this.#retryPendingStop(state, state.pendingStop);
+					return;
+				}
 				if (state.status === "active" && now >= state.idleDeadline && this.#inflight === 0) {
 					if (await this.#idlePause(state, now) === "paused") return;
 				}
@@ -3691,10 +3837,10 @@ var OrbContainerController = class {
 					snapshot: state.snapshot !== void 0
 				});
 				await this.#save({
-					...state,
+					...stopDone(state),
 					status: "paused"
 				});
-			}
+			} else if (state.pendingStop !== void 0) await this.#save(stopDone(state));
 			const current = await this.#load() ?? state;
 			if (current.snapshot === void 0) return;
 			const due = current.snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS;
@@ -3815,8 +3961,8 @@ var OrbContainerObject = class extends DurableObject {
 	rm(path, options) {
 		return this.#controller.rm(path, options);
 	}
-	pause() {
-		return this.#controller.pause();
+	pause(options) {
+		return this.#controller.pause(options);
 	}
 	readRescue(index) {
 		return this.#controller.readRescue(index);

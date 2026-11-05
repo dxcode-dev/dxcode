@@ -1,9 +1,11 @@
 import {
   ARTIFACT_IMAGE_MAX_BYTES,
   ARTIFACT_MAX_BYTES,
+  ARTIFACT_NOTIFY_AGENT_FEATURE,
   CreateThreadArtifactCommentRequestSchema,
   CreateThreadArtifactRequestSchema,
   type DeleteThreadArtifactResponseSchema,
+  NotifyArtifactAgentResponseSchema,
   SaveThreadArtifactRequestSchema,
   sanitizeAttachmentFilename,
   type ThreadArtifactCommentListResponse,
@@ -15,18 +17,23 @@ import {
   type ThreadArtifactResponse,
   type ThreadArtifactRevisionResponse,
 } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
+import type { ExperimentalFeatureId, ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { attachmentOrigin, sniffAttachmentType } from "../attachments/store.js";
 import type { AppEnv } from "../http/types.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
+import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import {
   findThreadStorageFile,
   putThreadStorageFile,
   threadStorageFileData,
 } from "../thread-storage/store.js";
-import { artifactCommented, artifactSaved } from "./ask-effects.js";
+import {
+  artifactCommented,
+  artifactSaved,
+  notifyArtifactAgent,
+} from "./ask-effects.js";
 import {
   type ArtifactCommentResult,
   addArtifactComment,
@@ -66,6 +73,8 @@ const MESSAGES: Record<ThreadArtifactErrorCode, string> = {
   ARTIFACT_STORAGE_FULL:
     "This Thread's artifacts are full. Delete an artifact to save more.",
   ARTIFACTS_UNAVAILABLE: "Artifacts are temporarily unavailable.",
+  ARTIFACT_NOTIFY_DISABLED:
+    "Notify agent is an experimental feature. Turn it on in Settings, Experimental Features.",
 };
 
 const STATUS = {
@@ -81,6 +90,7 @@ const STATUS = {
   ARTIFACT_TOO_LARGE: 413,
   ARTIFACT_STORAGE_FULL: 413,
   ARTIFACTS_UNAVAILABLE: 503,
+  ARTIFACT_NOTIFY_DISABLED: 404,
 } as const satisfies Record<ThreadArtifactErrorCode, number>;
 
 const refuse = (
@@ -492,6 +502,38 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
           ),
         );
       return answerComment(context, added, 201);
+    }),
+  )
+  .post(
+    "/:threadId/artifacts/:artifactId/notify",
+    // Notify agent (#1765): one wake, now, with what people changed. A View
+    // member's POST never gets here (`viewerMayRequest`).
+    handle("notify", async (context) => {
+      const principal = context.get("principal");
+      const enabled = await experimentalFeatureEnabled(
+        context.env,
+        principal,
+        ARTIFACT_NOTIFY_AGENT_FEATURE as ExperimentalFeatureId,
+      ).catch(() => false);
+      if (!enabled) return refuse(context, "ARTIFACT_NOTIFY_DISABLED");
+      const notified = await notifyArtifactAgent(
+        context.env,
+        {
+          threadId: param(context, "threadId"),
+          artifactId: param(context, "artifactId"),
+          userId: principal.userId,
+        },
+        { waitUntil: (promise) => afterResponse(context, promise) },
+      );
+      if (notified === undefined) return refuse(context, "ARTIFACT_NOT_FOUND");
+      context.header("Cache-Control", "no-store");
+      return context.json(
+        Schema.encodeUnknownSync(NotifyArtifactAgentResponseSchema)({
+          status: "success",
+          data: { notified: true, revision: notified.revision },
+        }),
+        200,
+      );
     }),
   )
   .post(

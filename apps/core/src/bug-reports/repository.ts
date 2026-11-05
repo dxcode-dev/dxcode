@@ -15,10 +15,12 @@ interface BugReportRow {
   readonly image_count: number;
   readonly diagnostics: string;
   readonly created_at: string;
+  readonly source_sender: string | null;
+  readonly source_origin: string | null;
 }
 
 const COLUMNS = `id, reporter_user_id, thread_id, message, image_count,
-                 diagnostics, created_at`;
+                 diagnostics, created_at, source_sender, source_origin`;
 
 const decode = Schema.decodeUnknownOption(BugReportDataSchema);
 
@@ -36,6 +38,14 @@ const reportData = (row: BugReportRow) =>
         return [];
       }
     })(),
+    ...(row.source_sender === null
+      ? {}
+      : {
+          source: {
+            sender: row.source_sender,
+            origin: row.source_origin ?? "",
+          },
+        }),
   });
 
 /** A report and who sent it, as dx user ID. */
@@ -86,6 +96,80 @@ export const insertBugReport = async (
     )
     .run();
 };
+
+/**
+ * The reporter of a report another deployment forwarded: no person's ID, so
+ * only report readers open it.
+ */
+export const intakeReporter = (sender: string) => `intake:${sender}`;
+
+/**
+ * Keeps a report another deployment forwarded, once: a retry of the same
+ * sender's report returns the ID it was kept under, with `created` false.
+ */
+export const insertReceivedBugReport = async (
+  db: D1Database,
+  report: {
+    readonly id: BugReportId;
+    readonly sender: string;
+    readonly origin: string;
+    readonly sourceReportId: string;
+    readonly sourceThreadId?: string;
+    readonly message: string;
+    readonly imageCount: number;
+    readonly diagnostics: ReadonlyArray<BugReportDiagnosticKind>;
+  },
+  now = new Date(),
+): Promise<{ readonly id: BugReportId; readonly created: boolean }> => {
+  const inserted = await db
+    .prepare(
+      `INSERT INTO bug_report
+         (id, reporter_user_id, thread_id, message, image_count, diagnostics,
+          created_at, source_sender, source_origin, source_report_id,
+          source_thread_id)
+       VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+       ON CONFLICT (source_sender, source_report_id)
+         WHERE source_sender IS NOT NULL DO NOTHING`,
+    )
+    .bind(
+      report.id,
+      intakeReporter(report.sender),
+      report.message,
+      report.imageCount,
+      JSON.stringify(report.diagnostics),
+      now.toISOString(),
+      report.sender,
+      report.origin,
+      report.sourceReportId,
+      report.sourceThreadId ?? null,
+    )
+    .run();
+  if (inserted.meta.changes > 0) return { id: report.id, created: true };
+  const existing = await db
+    .prepare(
+      `SELECT id FROM bug_report
+        WHERE source_sender = ?1 AND source_report_id = ?2`,
+    )
+    .bind(report.sender, report.sourceReportId)
+    .first<{ id: BugReportId }>();
+  return { id: existing?.id ?? report.id, created: false };
+};
+
+/** How many reports this sender forwarded since `since`. */
+export const countReceivedSince = async (
+  db: D1Database,
+  sender: string,
+  since: Date,
+) =>
+  (
+    await db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM bug_report
+          WHERE source_sender = ?1 AND created_at >= ?2`,
+      )
+      .bind(sender, since.toISOString())
+      .first<{ count: number }>()
+  )?.count ?? 0;
 
 export const readBugReport = async (
   db: D1Database,

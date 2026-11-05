@@ -1,7 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { Sandbox, SandboxToolFactory } from "@flue/runtime";
 import { getLogger } from "@logtape/logtape";
-import { READ_CONTEXT_BYTES } from "../../../settings/environment-variables/masking.js";
 import { environmentMaskerOf } from "../../../settings/environment-variables/sandbox.js";
 import { shellDefinitions } from "./definitions.js";
 
@@ -24,12 +23,13 @@ const WAIT_SLACK_MS = 5_000;
 
 // Each read keeps at most the last 51,200 bytes and 2,000 lines. The cursor
 // advances past discarded bytes too. Guest log files themselves are retained.
-// The read sends, in hex, the bytes just before what it keeps, so Core masks
-// a secret that began there and shows what the read before held back, and
-// what it keeps, so Core sees the bytes as written. A space parts each byte,
-// so no form of a secret matches the hex itself. Whether a read before
-// already reported the command's end says nothing is held back any more.
-const readScript = (wait: number) => `
+// The read sends, in hex, the `context` bytes just before what it keeps, so
+// Core masks a secret that began there and shows what the read before held
+// back, and what it keeps, so Core sees the bytes as written. A space parts
+// each byte, so no form of a secret matches the hex itself. Whether a read
+// before already reported the command's end says nothing is held back any
+// more.
+const readScript = (wait: number, context: number) => `
 deadline=$(( $(date +%s%3N) + ${wait} ))
 while [[ ! -f "$state/exit" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.1; done
 # Serialize readers so concurrent calls cannot return the same bytes. A
@@ -52,7 +52,7 @@ dd if="$state/output" bs=1 skip="$start" count="$((size-start))" status=none | t
 kept=$(stat -c %s "$state/read")
 truncated=0
 (( kept < size - cursor )) && truncated=1
-from=$((size - kept)); before=$(( from < ${READ_CONTEXT_BYTES} ? from : ${READ_CONTEXT_BYTES} ))
+from=$((size - kept)); before=$(( from < ${context} ? from : ${context} ))
 flushed=0
 [[ -f "$state/flushed" ]] && flushed=1
 [[ $running == false ]] && : > "$state/flushed"
@@ -67,7 +67,8 @@ printf '\\n'
 // A Stop that wrote `$state/stop` before this check finds no pid, or finds
 // this pid and kills its group; either way the command never outlives it.
 const runner = `state="$1"
-printf '%s' "$$" > "$state/pid"
+# Written whole, so a start that sees the file never reads it empty.
+printf '%s' "$$" > "$state/pid.tmp"; mv "$state/pid.tmp" "$state/pid"
 finish() { printf '%s' "$1" > "$state/exit.tmp"; mv "$state/exit.tmp" "$state/exit"; }
 trap 'finish 143; exit 143' TERM
 trap 'finish 129; exit 129' HUP
@@ -233,6 +234,7 @@ export const createShellTools = (
           );
       };
       let pid: number;
+      let context: number;
       let result: Awaited<ReturnType<Sandbox["exec"]>> | undefined;
       try {
         if (index === 0) {
@@ -288,6 +290,10 @@ printf '%s' "$pid"`,
           }
           pid = params.pid;
         }
+        // As much output before the read as the longest saved secret's
+        // forms can span, so one split between reads is masked whole.
+        context = (await environmentMaskerOf(sandbox)).readContextBytes;
+        signal?.throwIfAborted();
         // The wait has its own budget; when even that runs out on a slow
         // Orb, the command is still running under its pid.
         result = await guestExec(
@@ -296,7 +302,7 @@ pid=${pid}
 state="$root/$pid"
 [[ -d "$state" ]] || { echo "Unknown shell process pid: $pid" >&2; exit 1; }
 ${index === 2 ? killGroup : ""}
-${readScript(index === 2 ? 1000 : wait)}`,
+${readScript(index === 2 ? 1000 : wait, context)}`,
           wait + WAIT_SLACK_MS,
         ).catch((cause: unknown) => {
           if (index === 2 || signal?.aborted === true) throw cause;
@@ -347,7 +353,14 @@ ${readScript(index === 2 ? 1000 : wait)}`,
           bytesOfHex(keptHex ?? ""),
           // A truncated read starts after what was held back; once a read
           // reported the end, it showed everything.
-          { heldBefore: truncated !== "1" && flushed !== "1", final: !running },
+          {
+            heldBefore: truncated !== "1" && flushed !== "1",
+            final: !running,
+            // The context this read asked for is its hold window, even if
+            // the secrets changed since, so the next read, asking for its
+            // own, finds the same tail when they did not.
+            context,
+          },
         );
       const lines: string[] = [];
       if (output || !running) lines.push(`<output>${output}</output>`);

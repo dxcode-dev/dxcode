@@ -1,5 +1,4 @@
 import {
-  ArchiveThreadExecutionUnavailableResponseSchema,
   ArchiveThreadInvalidRequestResponseSchema,
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadParamsSchema,
@@ -238,11 +237,6 @@ class InvalidThreadRequest extends Schema.TaggedError<InvalidThreadRequest>()(
 
 class ThreadProjectDeleted extends Schema.TaggedError<ThreadProjectDeleted>()(
   "ThreadProjectDeleted",
-  {},
-) {}
-
-class ThreadArchiveExecutionUnavailable extends Schema.TaggedError<ThreadArchiveExecutionUnavailable>()(
-  "ThreadArchiveExecutionUnavailable",
   {},
 ) {}
 
@@ -2600,6 +2594,7 @@ export const createThreadRoutes = (
             "thread.invalidated",
           ),
         );
+      let orbStopping = false;
       if (body.archived) {
         // The agent stops before its Orb: a turn left running would fail
         // once the Orb is gone, and every message queued behind it with it
@@ -2624,39 +2619,48 @@ export const createThreadRoutes = (
             ),
           ),
         );
-        yield* Effect.tryPromise({
-          try: () =>
-            Promise.all(
-              [thread, ...children].map(({ id }) =>
-                ExecutionWorkspaces.archive(id),
+        // The Thread is archived either way. An Orb that can't be stopped
+        // now is never stopped by dropping unsaved work: its provider
+        // finishes the stop on its own, and the answer says it is still
+        // stopping instead of failing an archive that worked (#1740).
+        orbStopping = (yield* Effect.promise(() =>
+          Promise.all(
+            [thread, ...children].map(({ id }) =>
+              ExecutionWorkspaces.archive(id).then(
+                (stopped) => stopped === "stopping",
+                (cause: unknown) => {
+                  // Which Orb, and the provider's own reason: a snapshot
+                  // Cloudflare cannot take reads differently from a
+                  // provider outage, and neither is D1.
+                  threadPersistenceLogger.error(
+                    "Archived Thread's Orb could not be stopped.",
+                    {
+                      event: "thread_archive_stop_failed",
+                      requestId,
+                      threadId: id,
+                      parentThreadId: thread.id,
+                      errorName:
+                        cause instanceof Error
+                          ? (((cause as { readonly _tag?: unknown })._tag as
+                              | string
+                              | undefined) ?? cause.name)
+                          : typeof cause,
+                      error: (cause instanceof Error
+                        ? cause.message ||
+                          String(
+                            (cause as { readonly reason?: unknown }).reason ??
+                              "",
+                          )
+                        : String(cause)
+                      ).slice(0, 500),
+                    },
+                  );
+                  return true;
+                },
               ),
             ),
-          catch: (cause) => {
-            // Which Orb failed to stop, and the provider's own reason: a
-            // snapshot Cloudflare cannot take (full btrfs metadata) reads
-            // differently from a provider outage, and neither is D1.
-            threadPersistenceLogger.error(
-              "Archived Thread's Orb could not be stopped.",
-              {
-                event: "thread_archive_stop_failed",
-                requestId,
-                threadId: thread.id,
-                children: children.length,
-                errorName:
-                  cause instanceof Error
-                    ? (((cause as { readonly _tag?: unknown })._tag as
-                        | string
-                        | undefined) ?? cause.name)
-                    : typeof cause,
-                error:
-                  cause instanceof Error
-                    ? cause.message.slice(0, 500)
-                    : String(cause).slice(0, 500),
-              },
-            );
-            return new ThreadArchiveExecutionUnavailable();
-          },
-        });
+          ),
+        )).some(Boolean);
       }
       // Whatever changed is published and stopped; then a child that could
       // not be written reports the outage.
@@ -2671,6 +2675,7 @@ export const createThreadRoutes = (
         ...(body.includeChildren === true
           ? { changedChildThreadIds: children.map(({ id }) => id) }
           : {}),
+        ...(orbStopping ? { orbStopping: true } : {}),
       });
     });
     const result = await Effect.runPromise(Effect.result(operation));
@@ -2717,21 +2722,6 @@ export const createThreadRoutes = (
               },
             ),
             409,
-          ),
-        ThreadArchiveExecutionUnavailable: () =>
-          context.json(
-            Schema.encodeUnknownSync(
-              ArchiveThreadExecutionUnavailableResponseSchema,
-            )({
-              status: "error",
-              data: {
-                code: "THREAD_ARCHIVE_UNAVAILABLE",
-                message:
-                  "The Thread was archived, but its sandbox could not be stopped.",
-                requestId,
-              },
-            }),
-            503,
           ),
         PersistenceUnavailable: (error) => {
           threadPersistenceLogger.error("Archive failed: persistence.", {

@@ -619,6 +619,21 @@ const closeTabs = (
   return withRoot({ ...layout, root }, root);
 };
 
+/**
+ * The layout with only the tabs `keep` accepts, and the Agent tab; panes
+ * left empty close.
+ */
+export const keepPaneTabs = (
+  layout: ThreadPaneLayout,
+  keep: (tab: ThreadPaneTab) => boolean,
+): ThreadPaneLayout =>
+  listPanes(layout).reduce((next, { id }) => {
+    const pane = paneOf(next, id);
+    return pane === undefined
+      ? next
+      : closeTabs(next, pane, (tab) => tab.kind === "agent" || keep(tab));
+  }, layout);
+
 const moveTab = (
   layout: ThreadPaneLayout,
   id: string,

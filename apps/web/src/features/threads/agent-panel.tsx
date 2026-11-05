@@ -1226,11 +1226,14 @@ export interface AgentPanelOptions {
   /**
    * Shown above the error card, such as the Orb memory and disk notices.
    * As a function it gets `send`, which sends a message as the composer
-   * would.
+   * would, and the panel's agent to select from.
    */
   readonly composerNotice?:
     | React.ReactNode
-    | ((send: (message: string) => void) => React.ReactNode);
+    | ((
+        send: (message: string) => void,
+        source: AgentSource<UseFlueAgentResult>,
+      ) => React.ReactNode);
   /** The transcript's last line while no run is active. */
   readonly transcriptEnd?: React.ReactNode;
   /**
@@ -1786,7 +1789,7 @@ export function AgentPanel({
   const errorCard = (
     <>
       {typeof composerNotice === "function"
-        ? composerNotice((message) => void submit(message))
+        ? composerNotice((message) => void submit(message), source)
         : composerNotice}
       <InitialDispatchFailureCard
         source={source}

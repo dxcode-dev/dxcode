@@ -4,6 +4,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowDown,
   ArrowUp,
+  BetweenHorizontalEnd,
+  BetweenVerticalEnd,
   Check,
   ChevronDown,
   ChevronRight,
@@ -20,6 +22,7 @@ import {
   Pencil,
   Plus,
   Table,
+  TableProperties,
   Trash2,
 } from "lucide-react";
 import type { EditorState, Transaction } from "prosemirror-state";
@@ -28,7 +31,6 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { useMobile } from "../../../shared/use-mobile.js";
-import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
 import { artifactsApi } from "../artifacts-api.js";
@@ -61,6 +63,8 @@ import {
   turnBlockInto,
 } from "./block-commands.js";
 import { ChipInsertItems, ChipPicker, ViewFrames } from "./chip-picker.js";
+import { useCommentPeople } from "./comment-people.js";
+import { NotifyAgentButton } from "./notify-agent-button.js";
 import { SuggestMenu } from "./suggest-menu.js";
 import "prosemirror-view/style/prosemirror.css";
 import "prosemirror-tables/style/tables.css";
@@ -378,21 +382,39 @@ function TableTools({
       <button
         type="button"
         className="artifact-tool"
+        title="Add Row"
         onClick={() => onAction("add-row")}
       >
-        Add Row
+        <BetweenHorizontalEnd
+          aria-hidden="true"
+          className="artifact-tool-phone-icon"
+        />
+        <span>Add Row</span>
       </button>
       <button
         type="button"
         className="artifact-tool"
+        title="Add Column"
         onClick={() => onAction("add-column")}
       >
-        Add Column
+        <BetweenVerticalEnd
+          aria-hidden="true"
+          className="artifact-tool-phone-icon"
+        />
+        <span>Add Column</span>
       </button>
       <Menu.Root>
-        <Menu.Trigger className="artifact-tool" aria-label="Row Options">
-          Row Options
-          <ChevronDown aria-hidden="true" />
+        <Menu.Trigger
+          className="artifact-tool"
+          aria-label="Row Options"
+          title="Row Options"
+        >
+          <TableProperties
+            aria-hidden="true"
+            className="artifact-tool-phone-icon"
+          />
+          <span>Row Options</span>
+          <ChevronDown aria-hidden="true" className="artifact-tool-caret" />
         </Menu.Trigger>
         <MenuPopup label="Row Options">
           <Menu.Item
@@ -551,6 +573,7 @@ const downloadMarkdown = (title: string, markdown: string) => {
 /** Insert blocks and chips, comment on the selection, and table tools. */
 function ArtifactToolbar({
   threadId,
+  artifactId,
   snapshot,
   wide,
   run,
@@ -559,6 +582,7 @@ function ArtifactToolbar({
   onWide,
 }: {
   readonly threadId: ThreadId;
+  readonly artifactId: string;
   readonly snapshot: ArtifactSessionSnapshot;
   readonly wide: boolean;
   readonly run: (
@@ -573,6 +597,7 @@ function ArtifactToolbar({
       <button
         type="button"
         className="artifact-tool"
+        title="Table"
         onClick={() => run((state) => insertBlock(state, "table"))}
       >
         <Table aria-hidden="true" />
@@ -581,13 +606,18 @@ function ArtifactToolbar({
       <button
         type="button"
         className="artifact-tool"
+        title="Checklist"
         onClick={() => run((state) => insertBlock(state, "checklist"))}
       >
         <ListChecks aria-hidden="true" />
         <span>Checklist</span>
       </button>
       <Menu.Root>
-        <Menu.Trigger className="artifact-tool" aria-label="Insert">
+        <Menu.Trigger
+          className="artifact-tool"
+          aria-label="Insert"
+          title="Insert"
+        >
           <Plus aria-hidden="true" />
           <span>Insert</span>
         </Menu.Trigger>
@@ -608,12 +638,18 @@ function ArtifactToolbar({
       <button
         type="button"
         className="artifact-tool"
+        title="Comment"
         disabled={!snapshot.selection.ranged}
         onClick={onComment}
       >
         <MessageSquarePlus aria-hidden="true" />
         <span>Comment</span>
       </button>
+      <NotifyAgentButton
+        threadId={threadId}
+        artifactId={artifactId}
+        revision={snapshot.revision}
+      />
       {snapshot.selection.inTable ? (
         <TableTools
           onAction={(action) => run((state) => tableAction(state, action))}
@@ -717,9 +753,9 @@ export function ArtifactEditor({
   const [draft, setDraft] = React.useState<CommentDraft>();
   const [quoteError, setQuoteError] = React.useState<string>();
   const [draftBody, setDraftBody] = React.useState("");
-  // `@` lists the Thread's people from the members query.
+  // `@` lists the Thread's people; comments show their pictures.
   const { identity } = useAuthenticatedIdentity();
-  useQuery(threadMembersQueryOptions(identity.id, threadId));
+  const people = useCommentPeople(identity, threadId);
   const comments = useQuery(
     artifactCommentsOptions(threadId, initial.artifact.id),
   );
@@ -862,6 +898,7 @@ export function ArtifactEditor({
       {readOnly ? null : (
         <ArtifactToolbar
           threadId={threadId}
+          artifactId={initial.artifact.id}
           snapshot={snapshot}
           wide={wide}
           run={run}
@@ -958,6 +995,7 @@ export function ArtifactEditor({
             draft={draft}
             draftText={{ value: draftBody, set: setDraftBody }}
             readOnly={readOnly}
+            people={people}
             threadId={threadId}
             artifactId={initial.artifact.id}
             onSelect={session.selectComment}

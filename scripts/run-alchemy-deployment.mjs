@@ -209,6 +209,26 @@ const boatApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("boat")
     ? operatorEnvironment.BOAT_API_KEY?.trim()
     : undefined;
+// Bug report forwarding (#1661). Hosted targets read the environment: the
+// central deployment and its intake key, and the intake secret that makes
+// this one central. A self-host opts in with the `bugReportForwarding` and
+// `bugReportIntake` integrations; its destination is in the config, and the
+// deployment holds both secrets across deploys, so they are needed only the
+// first time or to rotate them.
+const bugReportDestination =
+  target === "selfhost"
+    ? selfhostConfig.bugReportDestination
+    : process.env.DX_BUG_REPORT_DESTINATION?.trim();
+const bugReportDestinationKey =
+  target !== "selfhost" ||
+  selfhostConfig.integrations.includes("bugReportForwarding")
+    ? operatorEnvironment.DX_BUG_REPORT_DESTINATION_KEY?.trim()
+    : undefined;
+const bugReportIntakeSecret =
+  target !== "selfhost" ||
+  selfhostConfig.integrations.includes("bugReportIntake")
+    ? operatorEnvironment.DX_BUG_REPORT_INTAKE_SECRET?.trim()
+    : undefined;
 // Who reads every in-app bug report. Self-host records the list in its
 // config (DX_BUG_REPORT_READERS overrides it); hosted targets read the
 // environment. None unless set.
@@ -691,6 +711,15 @@ const environment = {
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
   ...(boatApiKey ? { BOAT_API_KEY: boatApiKey } : {}),
   ...(bugReportReaders ? { DX_BUG_REPORT_READERS: bugReportReaders } : {}),
+  ...(bugReportDestination
+    ? { DX_BUG_REPORT_DESTINATION: bugReportDestination }
+    : {}),
+  ...(bugReportDestinationKey
+    ? { DX_BUG_REPORT_DESTINATION_KEY: bugReportDestinationKey }
+    : {}),
+  ...(bugReportIntakeSecret
+    ? { DX_BUG_REPORT_INTAKE_SECRET: bugReportIntakeSecret }
+    : {}),
   ...(attachmentR2Credentials === undefined
     ? {}
     : { DX_ATTACHMENT_R2_CREDENTIALS: attachmentR2Credentials }),

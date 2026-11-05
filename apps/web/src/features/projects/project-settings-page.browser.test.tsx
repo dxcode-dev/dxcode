@@ -294,10 +294,18 @@ describe("project settings workspace state", () => {
     expect(mounted.container.textContent).toContain(
       "Loading authorized repositories…",
     );
-    expect(mounted.container.textContent).toContain("GitHub · octocat/dx");
-    expect(
-      mounted.container.querySelector('[aria-label="Authorized repository"]'),
-    ).not.toBeNull();
+    await React.act(async () =>
+      mounted.container
+        .querySelector<HTMLElement>('[aria-label="Open repository list"]')
+        ?.click(),
+    );
+    await expect
+      .poll(() =>
+        [...document.querySelectorAll('[role="option"]')].map(
+          (option) => option.textContent,
+        ),
+      )
+      .toContain("https://github.com/octocat/dx");
     await React.act(() => mounted.root.unmount());
   });
 
@@ -986,6 +994,180 @@ describe("project settings keyboard and repositories", () => {
         (option) => option.textContent,
       ),
     ).toEqual(["https://github.com/octocat/Spoon-Knife"]);
+    await React.act(() => root.unmount());
+  });
+});
+
+describe("a URL-bound project's Git Repository", () => {
+  const urlBound = () =>
+    project(3, {
+      repository: {
+        provider: "git",
+        bindingRevision: 1,
+        fullName: "octocat/Hello-World",
+        webUrl: "https://github.com/octocat/Hello-World",
+        cloneUrl: "https://github.com/octocat/Hello-World.git",
+      },
+      remoteAliases: [],
+    } as Partial<ProjectData>);
+  const noConnections = (queryClient: QueryClient) => {
+    queryClient.setQueryData(sourceGrantKeys.personal(userId), []);
+    queryClient.setQueryData(bitbucketKeys.connection(userId), {
+      configured: true,
+      connection: null,
+    });
+  };
+  const type = async (input: HTMLInputElement | null, value: string) => {
+    await React.act(() => {
+      Object.getOwnPropertyDescriptor(
+        HTMLInputElement.prototype,
+        "value",
+      )?.set?.call(input, value);
+      input?.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  };
+  const button = (container: HTMLElement, name: string) =>
+    [...container.querySelectorAll("button")].find(
+      (candidate) =>
+        candidate.textContent === name ||
+        candidate.getAttribute("aria-label") === name,
+    );
+  const click = async (element: HTMLElement | undefined) => {
+    expect(element).toBeDefined();
+    await React.act(async () => element?.click());
+  };
+  const requests = (fetch: ReturnType<typeof vi.fn>) =>
+    fetch.mock.calls.map((call) => {
+      const [url, init] = call as [string, RequestInit | undefined];
+      return {
+        url: String(url),
+        method: init?.method ?? "GET",
+        body:
+          init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+      };
+    });
+
+  it("edits the URL in place and saves it as the project's repository", async () => {
+    const fetch = vi.fn(async () => new Response(undefined, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    const { container, root } = await renderSettings(
+      "general",
+      urlBound(),
+      {},
+      noConnections,
+    );
+    const url = container.querySelector<HTMLInputElement>(
+      '[aria-label="Repository URL"]',
+    );
+    expect(url?.value).toBe("https://github.com/octocat/Hello-World");
+    expect(url?.disabled).toBe(false);
+
+    await type(url, "https://github.com/octocat/Spoon-Knife");
+    await click(button(container, "Save"));
+
+    expect(requests(fetch).filter(({ method }) => method !== "GET")).toEqual([
+      {
+        url: expect.stringContaining("/v1/projects/project-1/source"),
+        method: "PUT",
+        body: { revision: 3, url: "https://github.com/octocat/Spoon-Knife" },
+      },
+    ]);
+    await React.act(() => root.unmount());
+  });
+
+  it("says why a URL is refused and sends nothing", async () => {
+    const fetch = vi.fn(async () => new Response(undefined, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    const { container, root } = await renderSettings(
+      "general",
+      urlBound(),
+      {},
+      noConnections,
+    );
+    await type(
+      container.querySelector<HTMLInputElement>(
+        '[aria-label="Repository URL"]',
+      ),
+      "git@github.com:octocat/Spoon-Knife.git",
+    );
+    await click(button(container, "Save"));
+    expect(container.textContent).toContain(
+      "Enter an HTTPS Git URL without credentials",
+    );
+    expect(requests(fetch).filter(({ method }) => method !== "GET")).toEqual(
+      [],
+    );
+    await React.act(() => root.unmount());
+  });
+
+  it("copies a git clone command for the saved URL", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => undefined)),
+    );
+    const writeText = vi.fn(async () => undefined);
+    vi.spyOn(navigator, "clipboard", "get").mockReturnValue({
+      writeText,
+    } as unknown as Clipboard);
+    const { container, root } = await renderSettings(
+      "general",
+      urlBound(),
+      {},
+      noConnections,
+    );
+    await click(button(container, "Clone"));
+    expect(writeText).toHaveBeenCalledWith(
+      "git clone https://github.com/octocat/Hello-World.git",
+    );
+    await React.act(() => root.unmount());
+  });
+
+  it("adds and removes Git remote aliases and saves the list", async () => {
+    const fetch = vi.fn(async () => new Response(undefined, { status: 503 }));
+    vi.stubGlobal("fetch", fetch);
+    const { container, root } = await renderSettings(
+      "general",
+      project(3, {
+        ...urlBound(),
+        remoteAliases: ["https://mirror.example.test/octocat/hello-world"],
+      } as Partial<ProjectData>),
+      {},
+      noConnections,
+    );
+    const alias = container.querySelector<HTMLInputElement>(
+      '[aria-label="Git remote alias"]',
+    );
+    await type(alias, "not a remote");
+    await click(button(container, "Add alias"));
+    expect(container.textContent).toContain(
+      "Enter an HTTPS or SSH Git URL without credentials",
+    );
+    await type(alias, "git@github.com:octocat/Hello-World.git");
+    await click(button(container, "Add alias"));
+    await click(
+      button(
+        container,
+        "Remove https://mirror.example.test/octocat/hello-world",
+      ),
+    );
+    expect(
+      [
+        ...container.querySelectorAll('[aria-label="Git remote aliases"] li'),
+      ].map((item) => item.textContent),
+    ).toEqual(["git@github.com:octocat/Hello-World.git"]);
+    await click(button(container, "Save"));
+
+    expect(requests(fetch).filter(({ method }) => method !== "GET")).toEqual([
+      {
+        url: expect.stringContaining("/v1/projects/project-1"),
+        method: "PATCH",
+        body: {
+          revision: 3,
+          description: "Initial description",
+          remoteAliases: ["git@github.com:octocat/Hello-World.git"],
+        },
+      },
+    ]);
     await React.act(() => root.unmount());
   });
 });

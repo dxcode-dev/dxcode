@@ -40,6 +40,7 @@ import { changesKeys } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
 import { deriveTranscriptViewModel } from "../transcript-view-model.js";
 import { BugReportDialog } from "./bug-report-dialog.js";
+import { bugReportAccessQueryOptions } from "./bug-report-queries.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -85,6 +86,13 @@ const render = (
     kind: "changes",
     files: [{ path: "src/app.ts" }],
   });
+  // A deployment that shares reports with no central one, as the app has
+  // already loaded it for the account menu.
+  queryClient.setQueryData(
+    bugReportAccessQueryOptions("usr_00000000000000000000000000000001")
+      .queryKey,
+    { reader: false },
+  );
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);

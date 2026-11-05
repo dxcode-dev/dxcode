@@ -1,9 +1,11 @@
 import { purgeUnsentAttachments } from "./attachments/store.js";
 import { attachmentTransfer } from "./attachments/transfer.js";
 import { sweepAutomations } from "./automations/sweep.js";
+import { sweepBugReportForwards } from "./bug-reports/forwarding.js";
 import type { Bindings } from "./http/types.js";
 import {
   attachmentLogger,
+  bugReportLogger,
   notificationLogger,
   threadDeletionLogger,
   threadPersistenceLogger,
@@ -12,6 +14,7 @@ import {
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
 import { scheduleUsageRetention } from "./settings/usage/retention.js";
+import { sweepArtifactAgentWakes } from "./thread-artifacts/ask-effects.js";
 import { threadArtifactLogger } from "./thread-artifacts/logger.js";
 import { sweepDeletedArtifacts } from "./thread-artifacts/store.js";
 import { sweepThreadDeletions } from "./thread-deletion/cleanup.js";
@@ -21,7 +24,8 @@ import { sweepThreadStorage } from "./thread-storage/store.js";
 /**
  * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
  * unfinished Thread deletions and undelivered first messages, deletes expired Thread storage files, fires
- * due schedules, and polls GitHub subscriptions; the daily tick also runs
+ * due schedules, polls GitHub subscriptions, and retries bug reports still
+ * to forward to the central deployment; the daily tick also runs
  * usage and attachment retention.
  */
 export const scheduled = (
@@ -107,6 +111,30 @@ export const scheduled = (
   context.waitUntil(
     sweepAutomations(bindings, new Date(controller.scheduledTime), (promise) =>
       context.waitUntil(promise),
+    ),
+  );
+  // A bug report the central deployment did not take yet is retried while
+  // it may still arrive (bug-reports/forwarding.ts).
+  context.waitUntil(
+    sweepBugReportForwards(bindings, new Date(controller.scheduledTime)).catch(
+      (cause) =>
+        bugReportLogger.error("Bug report forward sweep failed.", {
+          event: "bug_report_forward_sweep_failed",
+          cause,
+        }),
+    ),
+  );
+  // Notify agent's trailing wakes: each closed window others joined gets
+  // one, built now (thread-artifacts/agent-wake-window.ts).
+  context.waitUntil(
+    sweepArtifactAgentWakes(bindings, {
+      now: controller.scheduledTime,
+      waitUntil: (promise) => context.waitUntil(promise),
+    }).catch((cause) =>
+      threadArtifactLogger.error("Artifact trailing wake sweep failed.", {
+        event: "thread_artifact_trailing_sweep_failed",
+        cause,
+      }),
     ),
   );
   if (controller.cron === THREAD_SWEEP_CRON) return;

@@ -17,6 +17,7 @@ export function SidebarAccountMenuSlot({
   readonly settingsContext?: SettingsContextData;
   readonly onNavigate: () => void;
 }) {
-  const reader = useQuery(bugReportAccessQueryOptions(userId)).data === true;
+  const reader =
+    useQuery(bugReportAccessQueryOptions(userId)).data?.reader === true;
   return <SidebarAccountMenu {...props} bugReportReader={reader} />;
 }

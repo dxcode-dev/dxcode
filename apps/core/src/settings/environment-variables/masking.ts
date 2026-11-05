@@ -83,12 +83,28 @@ const CREDENTIAL_SPAN = 420;
 const TOKEN_TAIL = /[A-Za-z0-9_-]+$/;
 
 /**
- * The output a shell read sends before what it keeps, and the most a read
- * holds back. A read decides what to hold from only its last this many
- * bytes, so the next read, given the same bytes as its context, finds the
- * same held tail and shows it.
+ * The least output a shell read sends before what it keeps, and the least
+ * it may hold back. A masker with a longer secret uses its
+ * `readContextBytes`, the most text any form of its secrets can span.
  */
 export const READ_CONTEXT_BYTES = 4_096;
+
+/**
+ * The most context a read sends: 128 KiB, about 384 KB as hex and about
+ * 540 KB with the 50 KB the read keeps. It covers every form of a secret
+ * up to the 32 KiB a variable holds (base64 wrapped with `\r\n` after every
+ * character spans 131,068 bytes) except JSON-escaped ones of a value made
+ * mostly of control characters, which are masked within one read.
+ */
+const MAX_READ_CONTEXT_BYTES = 131_072;
+
+/**
+ * How much of a form the matcher's regular expression holds. A match of
+ * these characters is checked against the rest of the form with string
+ * comparison, so a secret of any length (a 32 KiB key) costs no more to
+ * build or run than a short one.
+ */
+const ANCHOR = 64;
 
 const escapeRegExp = (value: string) =>
   value.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
@@ -139,47 +155,271 @@ const asLatin1: Alphabet = (text) => Buffer.from(text).toString("latin1");
 const hexDigit = (digit: string) =>
   /[A-F]/.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit;
 
+const UNRESERVED = /^[A-Za-z0-9._~-]*$/;
+
 /**
- * The secret with each character as itself or percent-encoded, in either
- * case, and a space also as `+`: what any URL encoder prints, whichever
- * characters it leaves alone.
+ * One character of a secret as any URL encoder prints it: as itself, or
+ * percent-encoded in either case, and a space also as `+`. Unreserved
+ * characters only as themselves.
  */
-const urlSource = (secret: string, alphabet: Alphabet) =>
-  [...secret]
-    .map((character) => {
-      if (/[A-Za-z0-9._~-]/.test(character)) return escapeRegExp(character);
-      const encoded = [...new TextEncoder().encode(character)]
-        .map(
-          (byte) =>
-            `%${[...byte.toString(16).toUpperCase().padStart(2, "0")].map(hexDigit).join("")}`,
-        )
-        .join("");
-      return `(?:${escapeRegExp(alphabet(character))}|${encoded}${character === " " ? "|\\+" : ""})`;
-    })
+interface UrlCharacter {
+  readonly plain: string;
+  /** Its UTF-8 bytes in uppercase hex, two digits each. */
+  readonly encoded?: string;
+  readonly plus: boolean;
+}
+
+const urlCharacters = (secret: string, alphabet: Alphabet) =>
+  [...secret].map((character): UrlCharacter => {
+    if (UNRESERVED.test(character)) return { plain: character, plus: false };
+    return {
+      plain: alphabet(character),
+      encoded: [...new TextEncoder().encode(character)]
+        .map((byte) => byte.toString(16).toUpperCase().padStart(2, "0"))
+        .join(""),
+      plus: character === " ",
+    };
+  });
+
+/** A regular expression for these characters, whichever an encoder left. */
+const urlSource = (characters: ReadonlyArray<UrlCharacter>) =>
+  characters
+    .map(({ plain, encoded, plus }) =>
+      encoded === undefined
+        ? escapeRegExp(plain)
+        : `(?:${escapeRegExp(plain)}|${(encoded.match(/../g) ?? [])
+            .map((byte) => `%${[...byte].map(hexDigit).join("")}`)
+            .join("")}${plus ? "|\\+" : ""})`,
+    )
     .join("");
 
-/** Base64 as `base64` and `openssl` print it, wrapped at any column. */
-const wrappedSource = (core: string) =>
-  [...core].map(escapeRegExp).join("(?:\\r?\\n)?");
-
-/** Each regular expression that matches a form of the secret. */
-const secretSources = (secret: string, alphabet: Alphabet) => {
-  const once = JSON.stringify(secret).slice(1, -1);
-  const sources = [
-    escapeRegExp(alphabet(secret)),
-    escapeRegExp(alphabet(once)),
-    escapeRegExp(alphabet(JSON.stringify(once).slice(1, -1))),
-    ...(/^[A-Za-z0-9._~-]*$/.test(secret) ? [] : [urlSource(secret, alphabet)]),
-    ...base64Cores(new TextEncoder().encode(secret)).map(wrappedSource),
-  ];
-  return [...new Set(sources)];
+/**
+ * Where the URL form of these characters that starts at `start` ends, or
+ * -1; the same language as urlSource, without a regular expression.
+ */
+const urlEnd = (
+  characters: ReadonlyArray<UrlCharacter>,
+  text: string,
+  start: number,
+) => {
+  // A literal `%` and an encoded character both begin with `%`, so a
+  // position can be reached more than one way; keep each.
+  let positions = [start];
+  for (const { plain, encoded, plus } of characters) {
+    const next = new Set<number>();
+    for (const at of positions) {
+      if (text.startsWith(plain, at)) next.add(at + plain.length);
+      if (plus && text.charCodeAt(at) === 0x2b) next.add(at + 1);
+      if (encoded !== undefined) {
+        let offset = at;
+        for (let digit = 0; digit < encoded.length; digit += 2) {
+          if (
+            text.charCodeAt(offset) !== 0x25 ||
+            text.slice(offset + 1, offset + 3).toUpperCase() !==
+              encoded.slice(digit, digit + 2)
+          ) {
+            offset = -1;
+            break;
+          }
+          offset += 3;
+        }
+        if (offset >= 0) next.add(offset);
+      }
+    }
+    if (next.size === 0) return -1;
+    positions = [...next];
+  }
+  return Math.max(...positions);
 };
+
+/**
+ * One form of a secret: what the scan's regular expression holds of it,
+ * where a match that starts at an offset ends (-1 when none does), and the
+ * most text it can span.
+ */
+interface Alternative {
+  readonly source: string;
+  readonly marker: string;
+  /** The secret's size, so a longer secret is tried first. */
+  readonly size: number;
+  readonly endAt: (text: string, start: number) => number;
+  readonly span: number;
+  /** A base64 form, which the text may also hold wrapped across lines. */
+  readonly base64?: boolean;
+}
+
+const literalAlternative = (
+  form: string,
+  marker: string,
+  size: number,
+): Alternative => ({
+  source: escapeRegExp(form.slice(0, ANCHOR)),
+  marker,
+  size,
+  endAt: (text, start) =>
+    text.startsWith(form, start) ? start + form.length : -1,
+  span: form.length,
+});
+
+/**
+ * A line break that base64 output wraps at: one `\n` or `\r\n` that another
+ * does not follow. Two in a row leave one behind, so base64 matches across
+ * at most one break, as a wrapped form prints it.
+ */
+const WRAP = /\r?\n(?![\r\n])/g;
+
+/**
+ * Text without the line breaks base64 wraps at, and where each of its
+ * characters is in the text.
+ */
+const unwrap = (text: string) => {
+  // Without `\r` or a blank line every `\n` is such a break, and removing
+  // them all, or finding the next, is several times faster.
+  const everyNewline = !text.includes("\r") && !text.includes("\n\n");
+  const unwrapped = everyNewline
+    ? text.replaceAll("\n", "")
+    : text.replace(WRAP, "");
+  const wrap = new RegExp(WRAP);
+  /** Where the next break at or after `from` is, and its length. */
+  const nextBreak = (from: number): readonly [number, number] | undefined => {
+    if (everyNewline) {
+      const at = text.indexOf("\n", from);
+      return at < 0 ? undefined : [at, 1];
+    }
+    wrap.lastIndex = from;
+    const found = wrap.exec(text);
+    return found === null ? undefined : [found.index, found[0].length];
+  };
+  // Each removed break's offset in `unwrapped` and how many characters were
+  // removed up to it, found only as far as a match needs.
+  const offsets: number[] = [];
+  const removed: number[] = [];
+  let cursor = 0;
+  let total = 0;
+  let done = unwrapped.length === text.length;
+  const offsetOf = (index: number) => {
+    while (!done && (offsets.at(-1) ?? -1) <= index) {
+      const found = nextBreak(cursor);
+      if (found === undefined) {
+        done = true;
+        break;
+      }
+      total += found[1];
+      cursor = found[0] + found[1];
+      offsets.push(cursor - total);
+      removed.push(total);
+    }
+    let low = 0;
+    let high = offsets.length;
+    while (low < high) {
+      const middle = (low + high) >> 1;
+      if ((offsets[middle] ?? 0) <= index) low = middle + 1;
+      else high = middle;
+    }
+    return index + (low === 0 ? 0 : (removed[low - 1] ?? 0));
+  };
+  return { unwrapped, offsetOf };
+};
+
+/**
+ * A read's tail without its base64 line breaks: a cut between `\r` and
+ * `\n` leaves a `\r` that the next read's `\n` completes.
+ */
+const unwrapTail = (text: string) =>
+  unwrap(text.endsWith("\r") ? text.slice(0, -1) : text);
 
 interface Match {
   readonly start: number;
   readonly end: number;
   readonly marker: string;
 }
+
+interface ScanMatch extends Match {
+  readonly base64: boolean;
+}
+
+/**
+ * Finds every form of the given alternatives in a text: one regular
+ * expression scans for each form's first ANCHOR characters, longest secret
+ * first, and string comparison checks the rest.
+ */
+const scannerFor = (alternatives: ReadonlyArray<Alternative>) => {
+  const sorted = [...alternatives].sort(
+    (left, right) => right.size - left.size,
+  );
+  const sources = [...new Set(sorted.map(({ source }) => source))];
+  const pattern =
+    sources.length === 0 ? undefined : new RegExp(sources.join("|"), "g");
+  return (text: string): ScanMatch[] => {
+    const found: ScanMatch[] = [];
+    if (pattern === undefined) return found;
+    pattern.lastIndex = 0;
+    for (
+      let match = pattern.exec(text);
+      match !== null;
+      match = pattern.exec(text)
+    ) {
+      const start = match.index;
+      for (const alternative of sorted) {
+        const end = alternative.endAt(text, start);
+        if (end < 0) continue;
+        found.push({
+          start,
+          end,
+          marker: alternative.marker,
+          base64: alternative.base64 === true,
+        });
+        break;
+      }
+      // Another secret may begin inside this one: look again from its
+      // next character, so the two are masked together.
+      pattern.lastIndex = start + 1;
+    }
+    return found;
+  };
+};
+
+/**
+ * Where the tail of a text, at or after `from`, could still begin one of
+ * `forms` that more text would complete: the earliest offset whose rest is
+ * a shorter start of a form; the text's length when none is. A rest longer
+ * than ANCHOR must begin with a form's first ANCHOR characters, so one
+ * regular expression finds those offsets.
+ */
+const tailPrefixFinder = (forms: ReadonlyArray<string>) => {
+  const longest = Math.max(0, ...forms.map(({ length }) => length));
+  const long = forms.filter(({ length }) => length > ANCHOR);
+  const anchors =
+    long.length === 0
+      ? undefined
+      : new RegExp(
+          [
+            ...new Set(long.map((form) => escapeRegExp(form.slice(0, ANCHOR)))),
+          ].join("|"),
+          "g",
+        );
+  const starts = new Set(forms.map((form) => form[0]));
+  const begins = (rest: string) =>
+    forms.some((form) => form.length > rest.length && form.startsWith(rest));
+  return (text: string, from: number) => {
+    const lowest = Math.max(from, text.length - longest + 1);
+    const near = Math.max(lowest, text.length - ANCHOR + 1);
+    if (anchors !== undefined && lowest < near) {
+      anchors.lastIndex = lowest;
+      for (
+        let match = anchors.exec(text);
+        match !== null && match.index < near;
+        match = anchors.exec(text)
+      ) {
+        if (begins(text.slice(match.index))) return match.index;
+        anchors.lastIndex = match.index + 1;
+      }
+    }
+    for (let offset = near; offset < text.length; offset += 1)
+      if (starts.has(text[offset]) && begins(text.slice(offset))) return offset;
+    return text.length;
+  };
+};
 
 /**
  * One alphabet's matcher. `values` are the hidden secrets, first name first;
@@ -191,35 +431,46 @@ const matcherFor = (
   alphabet: Alphabet,
 ) => {
   const seen = new Set<string>();
-  const alternatives: Array<{ source: string; marker: string; size: number }> =
-    [];
-  for (const { name, value } of values)
-    for (const source of secretSources(value, alphabet)) {
-      if (seen.has(source)) continue;
-      seen.add(source);
-      alternatives.push({
-        source,
-        marker: environmentSecretMarker(name),
-        // The longest text it can match, so a longer secret is tried first.
-        size: Buffer.byteLength(value) * 6,
+  const plain: Alternative[] = [];
+  const wrapped: Alternative[] = [];
+  for (const { name, value } of values) {
+    const marker = environmentSecretMarker(name);
+    const size = Buffer.byteLength(value) * 6;
+    const once = JSON.stringify(value).slice(1, -1);
+    for (const form of [value, once, JSON.stringify(once).slice(1, -1)]) {
+      const literal = alphabet(form);
+      if (seen.has(literal)) continue;
+      seen.add(literal);
+      plain.push(literalAlternative(literal, marker, size));
+    }
+    if (!UNRESERVED.test(value)) {
+      const characters = urlCharacters(value, alphabet);
+      plain.push({
+        source: urlSource(characters.slice(0, ANCHOR)),
+        marker,
+        size,
+        endAt: (text, start) => urlEnd(characters, text, start),
+        span: characters.reduce(
+          (total, { plain: text, encoded }) =>
+            total + Math.max(text.length, (encoded?.length ?? 0) * 1.5),
+          0,
+        ),
       });
     }
-  alternatives.sort((left, right) => right.size - left.size);
-  // Two passes: V8 matches the secrets' forms and the credential shapes
-  // several times faster apart than in one alternation.
-  const secretPattern =
-    alternatives.length === 0
-      ? undefined
-      : new RegExp(alternatives.map(({ source }) => source).join("|"), "g");
-  /** Each form's own anchored pattern, to name the secret a match is. */
-  let anchored: ReadonlyArray<RegExp> | undefined;
-  const markerOf = (matched: string) => {
-    anchored ??= alternatives.map(
-      ({ source }) => new RegExp(`^(?:${source})$`),
-    );
-    const index = anchored.findIndex((pattern) => pattern.test(matched));
-    return alternatives[index]?.marker ?? environmentSecretMarker("SECRET");
-  };
+    // Base64 is matched in the text without its line breaks, so it may
+    // wrap at any column.
+    for (const core of new Set(base64Cores(new TextEncoder().encode(value)))) {
+      const alternative = {
+        ...literalAlternative(core, marker, size),
+        base64: true,
+      };
+      plain.push(alternative);
+      // With `\r\n` after every character.
+      wrapped.push({ ...alternative, span: 3 * core.length - 2 });
+    }
+  }
+  const scanPlain = scannerFor(plain);
+  const scanWrapped = scannerFor(wrapped);
   const credentialPattern = new RegExp(
     CREDENTIALS.map(
       ({ prefixes, body, min, max }) =>
@@ -227,30 +478,58 @@ const matcherFor = (
     ).join("|"),
     "g",
   );
-  const literals = forms.map((form) => ({
-    ...form,
-    value: alphabet(form.value),
-  }));
-  const longest = Math.max(0, ...literals.map(({ value }) => value.length));
+  const literals = forms.map(({ value }) => alphabet(value));
+  const cores = [
+    ...new Set(
+      values.flatMap(({ value }) =>
+        base64Cores(new TextEncoder().encode(value)).filter(
+          (core) => core.length >= 8,
+        ),
+      ),
+    ),
+  ];
+  const longestCore = Math.max(0, ...cores.map(({ length }) => length));
+  const literalTail = tailPrefixFinder(literals);
+  const coreTail = tailPrefixFinder(cores);
+  /** The most text any form of a secret, or a credential, can span. */
+  const span = Math.max(
+    CREDENTIAL_SPAN,
+    ...plain.map(({ span }) => span),
+    ...wrapped.map(({ span }) => span),
+  );
   const find = (text: string): Match[] => {
     const found: Array<Match & { readonly credential: boolean }> = [];
-    if (secretPattern !== undefined) {
-      secretPattern.lastIndex = 0;
-      for (
-        let match = secretPattern.exec(text);
-        match !== null;
-        match = secretPattern.exec(text)
-      ) {
-        found.push({
-          start: match.index,
-          end: match.index + match[0].length,
-          marker: markerOf(match[0]),
-          credential: false,
-        });
-        // Another secret may begin inside this one: look again from its
-        // next character, so the two are masked together.
-        secretPattern.lastIndex = match.index + 1;
-      }
+    const plainMatches = scanPlain(text);
+    for (const { start, end, marker } of plainMatches)
+      found.push({ start, end, marker, credential: false });
+    if (wrapped.length > 0 && text.includes("\n")) {
+      const { unwrapped, offsetOf } = unwrap(text);
+      const unwrappedMatches = scanWrapped(unwrapped);
+      // Base64 on one line is a match above as well; only when the text
+      // without line breaks holds a match those do not are any wrapped.
+      // Removing breaks never splits a match above, so each is also found
+      // here, at its own place and in the same order. With as many matches
+      // here, of the same lengths and markers in turn, each match here is
+      // one of those, on one line, and none is wrapped. Anything else, even
+      // a match above that another form won here, maps them all back.
+      const inLine = plainMatches.filter(({ base64 }) => base64);
+      const same =
+        inLine.length === unwrappedMatches.length &&
+        inLine.every(
+          ({ start, end, marker }, index) =>
+            end - start ===
+              (unwrappedMatches[index]?.end ?? 0) -
+                (unwrappedMatches[index]?.start ?? 0) &&
+            marker === unwrappedMatches[index]?.marker,
+        );
+      if (!same)
+        for (const { start, end, marker } of unwrappedMatches)
+          found.push({
+            start: offsetOf(start),
+            end: offsetOf(end - 1) + 1,
+            marker,
+            credential: false,
+          });
     }
     for (const match of text.matchAll(credentialPattern)) {
       const group = match.findIndex(
@@ -302,31 +581,39 @@ const matcherFor = (
     }));
   };
   /** Whether `text` is the start of a longer literal form. */
-  const beginsLonger = (text: string) =>
-    literals.some(
-      ({ value }) => value.length > text.length && value.startsWith(text),
+  const beginsLonger = (text: string) => {
+    if (
+      literals.some(
+        (value) => value.length > text.length && value.startsWith(text),
+      )
+    )
+      return true;
+    const { unwrapped } = unwrapTail(text);
+    return cores.some(
+      (core) => core.length > unwrapped.length && core.startsWith(unwrapped),
     );
+  };
+  /**
+   * Where the tail of `text` from `from` on, without its base64 line
+   * breaks, could still begin a base64 form; `limit` when it cannot before.
+   */
+  const wrappedPartialStart = (text: string, from: number, limit: number) => {
+    // With `\r\n` after every character, the most a base64 form spans.
+    const offset = Math.max(from, text.length - (3 * longestCore - 2));
+    if (longestCore === 0 || offset >= limit) return limit;
+    const { unwrapped, offsetOf } = unwrapTail(text.slice(offset));
+    const index = coreTail(unwrapped, 0);
+    return index === unwrapped.length
+      ? limit
+      : Math.min(limit, offset + offsetOf(index));
+  };
   /**
    * Where a text's tail could still begin a secret that more text would
    * complete, at or after `from`; the text's length when it cannot.
    */
   const partialStart = (text: string, from: number) => {
-    let found = text.length;
-    for (
-      let offset = Math.max(from, text.length - longest + 1);
-      offset < text.length;
-      offset += 1
-    ) {
-      const rest = text.slice(offset);
-      if (
-        literals.some(
-          ({ value }) => value.length > rest.length && value.startsWith(rest),
-        )
-      ) {
-        found = offset;
-        break;
-      }
-    }
+    let found = literalTail(text, from);
+    found = wrappedPartialStart(text, from, found);
     const tail = TOKEN_TAIL.exec(
       text.slice(Math.max(from, text.length - CREDENTIAL_SPAN)),
     );
@@ -365,7 +652,7 @@ const matcherFor = (
       settled !== undefined && partial < settled.end ? settled.start : partial;
     return open ? Math.min(last.start, start) : start;
   };
-  return { find, openStart };
+  return { find, openStart, span };
 };
 
 /** Bytes as Latin-1, one character each. */
@@ -419,9 +706,18 @@ export interface SecretMasker {
   mask(text: string): string;
   maskBytes(bytes: Uint8Array): Uint8Array;
   /**
+   * How much output a shell read sends before what it keeps, and the most
+   * it holds back: READ_CONTEXT_BYTES, or the most bytes any form of a
+   * saved secret spans when that is more, up to MAX_READ_CONTEXT_BYTES, so
+   * a secret split between reads is masked whole.
+   */
+  readonly readContextBytes: number;
+  /**
    * Masks one shell read of a running command's output. `before` is up to
-   * READ_CONTEXT_BYTES of output just before `text`, read again so a secret
-   * that began there is masked here too. With `heldBefore`, the read shows
+   * readContextBytes of output just before `text`, read again so a secret
+   * that began there is masked here too. `context` is how many bytes the
+   * read asked for, its readContextBytes when it was sent, and the window it
+   * decides what to hold from. With `heldBefore`, the read shows
    * the tail of `before` that the read before it held back. Unless `final`,
    * the read holds back its own tail where that could begin a secret or
    * ends inside a UTF-8 character, for the next read to show.
@@ -429,7 +725,11 @@ export interface SecretMasker {
   maskRead(
     before: Uint8Array,
     text: Uint8Array,
-    options: { readonly heldBefore: boolean; readonly final: boolean },
+    options: {
+      readonly heldBefore: boolean;
+      readonly final: boolean;
+      readonly context: number;
+    },
   ): string;
   /**
    * Masks text that arrives in fragments, such as a streamed message. `held`
@@ -464,6 +764,15 @@ export const secretMasker = (
     .sort((left, right) => right.value.length - left.value.length);
   const text = matcherFor(values, secrets, asText);
   let bytes: ReturnType<typeof matcherFor> | undefined;
+  const bytesMatcher = () => {
+    bytes ??= matcherFor(values, secrets, asLatin1);
+    return bytes;
+  };
+  const readContextBytes = () =>
+    Math.min(
+      MAX_READ_CONTEXT_BYTES,
+      Math.max(READ_CONTEXT_BYTES, bytesMatcher().span),
+    );
   const mask = (value: string) => replaceMatches(value, text.find(value));
   return {
     secrets,
@@ -480,8 +789,11 @@ export const secretMasker = (
       ).values(),
     ],
     mask,
+    get readContextBytes() {
+      return readContextBytes();
+    },
     maskBytes: (input) => {
-      bytes ??= matcherFor(values, secrets, asLatin1);
+      const bytes = bytesMatcher();
       const latin1 = Buffer.from(
         input.buffer,
         input.byteOffset,
@@ -493,16 +805,15 @@ export const secretMasker = (
         Buffer.from(replaceMatches(latin1, matches), "latin1"),
       );
     },
-    maskRead: (before, text, { heldBefore, final }) => {
-      bytes ??= matcherFor(values, secrets, asLatin1);
-      const matcher = bytes;
+    maskRead: (before, text, { heldBefore, final, context: windowSize }) => {
+      const matcher = bytesMatcher();
       /**
        * How many bytes at the end of `output` a running read holds back.
-       * It reads only the last READ_CONTEXT_BYTES, the bytes the next read
+       * It reads only the last `context` bytes, the bytes the next read
        * gets as its context, so both find the same tail.
        */
       const held = (output: string) => {
-        const window = output.slice(-READ_CONTEXT_BYTES);
+        const window = output.slice(-windowSize);
         const start = Math.min(
           matcher.openStart(window, matcher.find(window)),
           utf8Cut(window),
@@ -516,6 +827,9 @@ export const secretMasker = (
         start,
         final ? joined.length : joined.length - held(joined),
       );
+      // A read that skipped output may hold back from before what it kept,
+      // a secret longer than a read among it: the next read shows it all.
+      if (end === start) return "";
       let shown = "";
       let offset = start;
       for (const match of matcher.find(joined)) {

@@ -54,8 +54,6 @@ export const renderPaneContent = (content: PaneTabContent, active: boolean) =>
 export interface PaneContents {
   readonly agent: PaneTabContent;
   readonly views: Partial<Record<PaneViewKind, PaneTabContent>>;
-  /** What an open view tab shows while its view is absent. */
-  readonly unavailableView?: PaneTabContent;
   readonly file: (
     target: import("@dx/api").ThreadPaneFileTarget,
     active: boolean,

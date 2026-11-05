@@ -370,6 +370,19 @@ export default Alchemy.Stack(
       bugReportReaders: Config.option(
         Config.NonEmptyString("DX_BUG_REPORT_READERS"),
       ),
+      // Optional: the central dx deployment this one shares each bug report
+      // with, and the intake key it issued; both, or nothing is shared.
+      bugReportDestination: Config.option(
+        Config.NonEmptyString("DX_BUG_REPORT_DESTINATION"),
+      ),
+      bugReportDestinationKey: Config.option(
+        Config.Redacted("DX_BUG_REPORT_DESTINATION_KEY"),
+      ),
+      // Optional: makes this the central deployment, whose intake takes
+      // reports from senders holding a key this secret derives.
+      bugReportIntakeSecret: Config.option(
+        Config.Redacted("DX_BUG_REPORT_INTAKE_SECRET"),
+      ),
       modelDeploymentProviders: Config.option(
         Config.NonEmptyString("DX_MODEL_DEPLOYMENT_PROVIDERS"),
       ),
@@ -516,6 +529,24 @@ export default Alchemy.Stack(
           })).value
         : undefined
       : Option.getOrUndefined(configuration.boatApiKey);
+    // Bug report forwarding (#1661). Hosted targets take both settings from
+    // the deploy environment on every deploy. A self-host's
+    // `bugReportForwarding` and `bugReportIntake` integrations hold them across
+    // deploys, as the other integration keys are held.
+    const bugReportDestinationKey = selfhost
+      ? integrations.has("bugReportForwarding")
+        ? (yield* HeldSecret("BugReportDestinationKey", {
+            value: Option.getOrUndefined(configuration.bugReportDestinationKey),
+          })).value
+        : undefined
+      : Option.getOrUndefined(configuration.bugReportDestinationKey);
+    const bugReportIntakeSecret = selfhost
+      ? integrations.has("bugReportIntake")
+        ? (yield* HeldSecret("BugReportIntakeSecret", {
+            value: Option.getOrUndefined(configuration.bugReportIntakeSecret),
+          })).value
+        : undefined
+      : Option.getOrUndefined(configuration.bugReportIntakeSecret);
     // Every deployment that installs E2B builds its Orb templates from the
     // recipe at deploy time and rebuilds them when the recipe changes, as
     // OrbContainers does for Cloudflare. Staging and branch previews share
@@ -889,6 +920,13 @@ export default Alchemy.Stack(
         ...(Option.isSome(configuration.bugReportReaders)
           ? { DX_BUG_REPORT_READERS: configuration.bugReportReaders.value }
           : {}),
+        ...(Option.isSome(configuration.bugReportDestination) &&
+        bugReportDestinationKey !== undefined
+          ? {
+              DX_BUG_REPORT_DESTINATION:
+                configuration.bugReportDestination.value,
+            }
+          : {}),
         ...(Option.isSome(configuration.modelDeploymentProviders)
           ? {
               DX_MODEL_DEPLOYMENT_PROVIDERS:
@@ -935,6 +973,13 @@ export default Alchemy.Stack(
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),
         ...(sarvamApiKey !== undefined ? { SARVAM_API_KEY: sarvamApiKey } : {}),
         ...(exaApiKey !== undefined ? { EXA_API_KEY: exaApiKey } : {}),
+        ...(Option.isSome(configuration.bugReportDestination) &&
+        bugReportDestinationKey !== undefined
+          ? { DX_BUG_REPORT_DESTINATION_KEY: bugReportDestinationKey }
+          : {}),
+        ...(bugReportIntakeSecret !== undefined
+          ? { DX_BUG_REPORT_INTAKE_SECRET: bugReportIntakeSecret }
+          : {}),
         ...(boatApiKey !== undefined ? { BOAT_API_KEY: boatApiKey } : {}),
         ...(googleClientSecret !== undefined
           ? { DX_GOOGLE_CLIENT_SECRET: googleClientSecret }

@@ -73,6 +73,18 @@ export interface Bindings {
    */
   readonly DX_BUG_REPORT_READERS?: string;
   /**
+   * The central dx deployment's origin that this deployment shares each bug
+   * report with, and the intake key it issued this deployment. Both, or
+   * nothing is shared.
+   */
+  readonly DX_BUG_REPORT_DESTINATION?: string;
+  readonly DX_BUG_REPORT_DESTINATION_KEY?: string;
+  /**
+   * On the central deployment: the secret its senders' intake keys derive
+   * from. Without it, `/api/bug-reports/intake` answers 404.
+   */
+  readonly DX_BUG_REPORT_INTAKE_SECRET?: string;
+  /**
    * `{ accountId, token }`: the read-only Workers Observability token the
    * deploy mints, which bug reports read the Thread's Worker logs with.
    * Absent marks Worker logs unavailable.

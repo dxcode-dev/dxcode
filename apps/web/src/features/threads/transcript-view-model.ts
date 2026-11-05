@@ -677,7 +677,17 @@ const deriveFrom = (
       turnId = `turn:chat:${message.id}`;
       if (currentTurnId !== undefined) chatAfterTurn = message.id;
     } else {
-      const next = turnIdFor(message, currentTurnId);
+      const named = turnIdFor(message, currentTurnId);
+      // Flue stamps a prompt the agent took mid-run with the step that was
+      // running. A turn shows its prompts above its work, so that prompt
+      // starts its own turn, below the work it followed.
+      const next =
+        message.role === "user" &&
+        (turnRows.get(segmentOf(named)) ?? []).some(
+          (row) => row.kind !== "user-prompt",
+        )
+          ? (`turn:${message.id}` as const)
+          : named;
       if (chatAfterTurn !== undefined && next === currentTurnId) {
         continued = segmentOf(next);
         if (base.turnIds.has(continued)) return undefined;

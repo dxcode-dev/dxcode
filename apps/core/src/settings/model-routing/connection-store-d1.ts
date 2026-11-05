@@ -421,6 +421,31 @@ export const bindThreadClaudeConnection = async (
     : loadThreadClaudePlan(db, threadId);
 };
 
+/** A Thread bound this recently counts as running before its turn starts. */
+const JUST_BOUND_MS = 10 * 60_000;
+
+/**
+ * The running Threads on each Claude plan: active ones working now, and
+ * ones bound in the last few minutes, whose first turn may not have started.
+ */
+export const loadClaudePlanLoads = async (
+  db: D1Database,
+  connectionIds: ReadonlyArray<string>,
+): Promise<ReadonlyMap<string, number>> => {
+  if (connectionIds.length === 0) return new Map();
+  const { results } = await db
+    .prepare(
+      `SELECT claude_connection_id AS id, COUNT(*) AS load FROM threads
+       WHERE claude_connection_id IN (${connectionIds.map(() => "?").join(", ")})
+         AND lifecycle_state = 'active'
+         AND (activity_status = 'working' OR claude_connection_bound_at >= ?)
+       GROUP BY claude_connection_id`,
+    )
+    .bind(...connectionIds, new Date(Date.now() - JUST_BOUND_MS).toISOString())
+    .all<{ id: string; load: number }>();
+  return new Map(results.map(({ id, load }) => [id, load]));
+};
+
 export const updateConnectionHealth = async (
   db: D1Database,
   connection: StoredModelConnection,

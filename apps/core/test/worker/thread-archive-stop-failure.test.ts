@@ -8,11 +8,10 @@ import {
 } from "./product-route-fixture.js";
 
 /**
- * An archive whose Orb cannot be stopped answers 503 THREAD_ARCHIVE_UNAVAILABLE.
- * Before, the route dropped the cause, so staging's three 503s on 2026-11-04
- * (Orbs whose btrfs metadata was exhausted, which Cloudflare could not
- * snapshot) could not be told apart from a D1 outage. The 503 now logs
- * which failure it was, with the Thread and the provider's error.
+ * An archive whose Orb cannot be stopped still archives the Thread: it
+ * answers 200 with `orbStopping` (#1740), and logs at error level which
+ * failure it was, with the Thread and the provider's error, so a provider
+ * outage reads differently from a snapshot Cloudflare cannot take.
  */
 
 const logged: Array<string> = [];
@@ -43,9 +42,10 @@ it("logs why an archive could not stop the Thread's Orb", async () => {
     bindings,
   );
 
-  expect(archive.status).toBe(503);
+  expect(archive.status).toBe(200);
   await expect(archive.json()).resolves.toMatchObject({
-    data: { code: "THREAD_ARCHIVE_UNAVAILABLE" },
+    data: { lifecycleState: "archived" },
+    orbStopping: true,
   });
   const line = logged.find((entry) =>
     entry.includes("thread_archive_stop_failed"),

@@ -20,6 +20,12 @@ export const ArchiveThreadResponseSchema = Schema.Struct({
   ...successResponse(ThreadDataSchema).fields,
   /** With `includeChildren`: the children this request changed. */
   changedChildThreadIds: Schema.optional(Schema.Array(ThreadId)),
+  /**
+   * The Thread is archived, but its Orb (or a child's) is still stopping:
+   * it couldn't be stopped yet without losing unsaved work, and its
+   * provider finishes the stop on its own.
+   */
+  orbStopping: Schema.optional(Schema.Literal(true)),
 });
 export const ArchiveThreadInvalidRequestResponseSchema = errorResponse(
   "INVALID_REQUEST",
@@ -32,10 +38,6 @@ export const ArchiveThreadNotFoundResponseSchema = errorResponse(
 export const ArchiveThreadPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Persistence is temporarily unavailable.",
-);
-export const ArchiveThreadExecutionUnavailableResponseSchema = errorResponse(
-  "THREAD_ARCHIVE_UNAVAILABLE",
-  "The Thread was archived, but its sandbox could not be stopped.",
 );
 /** Unarchiving a Thread whose Project, or its workspace, was deleted. */
 export const ArchiveThreadProjectDeletedResponseSchema = errorResponse(
@@ -54,6 +56,4 @@ export type ArchiveThreadNotFoundResponse =
   typeof ArchiveThreadNotFoundResponseSchema.Type;
 export type ArchiveThreadPersistenceUnavailableResponse =
   typeof ArchiveThreadPersistenceUnavailableResponseSchema.Type;
-export type ArchiveThreadExecutionUnavailableResponse =
-  typeof ArchiveThreadExecutionUnavailableResponseSchema.Type;
 export type ThreadArchivedResponse = typeof ThreadArchivedResponseSchema.Type;

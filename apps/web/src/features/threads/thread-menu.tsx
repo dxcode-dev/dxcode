@@ -45,7 +45,6 @@ import { Button } from "../../shared/ui/button.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
-import { BugReportDialog } from "./bug-reports/bug-report-dialog.js";
 import type { DictationRecord } from "./dictation/dictation-session.js";
 import { useRestartOrbMenu } from "./orb-restart/restart-orb-menu.js";
 import {
@@ -81,6 +80,13 @@ const preloadDetailsWhenIdle = () => {
   return () => window.clearTimeout(timer);
 };
 const menuParts = { Item: Menu.Item, Separator: Menu.Separator };
+
+/** Report Bug, loaded when it first opens, as Settings loads it. */
+const BugReportDialog = React.lazy(() =>
+  import("./bug-reports/bug-report-dialog.js").then((module) => ({
+    default: module.BugReportDialog,
+  })),
+);
 
 function ThreadMenuDetails(
   props: Omit<React.ComponentProps<typeof LazyDetails>, "Menu">,
@@ -395,14 +401,16 @@ export function ThreadMenu({
         </Menu.Portal>
       </Menu.Root>
       {reportingBug === undefined ? null : (
-        <BugReportDialog
-          thread={thread}
-          project={project}
-          transcript={transcript}
-          changesOpen={reportingBug.changesOpen}
-          dictation={reportingBug.dictation}
-          onClose={() => setReportingBug(undefined)}
-        />
+        <React.Suspense fallback={null}>
+          <BugReportDialog
+            thread={thread}
+            project={project}
+            transcript={transcript}
+            changesOpen={reportingBug.changesOpen}
+            dictation={reportingBug.dictation}
+            onClose={() => setReportingBug(undefined)}
+          />
+        </React.Suspense>
       )}
       {restartOrb.dialog}
       <span className="sr-only" aria-live="polite">

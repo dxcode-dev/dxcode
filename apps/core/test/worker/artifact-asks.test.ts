@@ -29,6 +29,8 @@ import {
   artifactCommented,
   artifactSaved,
   type DeliverArtifactWake,
+  notifyArtifactAgent,
+  sweepArtifactAgentWakes,
 } from "../../src/thread-artifacts/ask-effects.js";
 import { addArtifactComment } from "../../src/thread-artifacts/comments.js";
 import { threadArtifactRoutes } from "../../src/thread-artifacts/routes.js";
@@ -56,7 +58,11 @@ import { runRepositories } from "./runtime.js";
  *   takes a summary that breaks the item;
  * - a person's comment that mentions the agent does not wake the Thread,
  *   or, when rate-limited, never reaches the agent; a comment's people
- *   mentions notify outsiders.
+ *   mentions notify outsiders;
+ * - with a person's Notify agent flag on (#1765): their tick or answer still
+ *   wakes the Thread; a comment mentioning the agent waits for the wake
+ *   interval; Notify agent does not wake it once with what changed (the tick
+ *   included), or works with the flag off.
  */
 
 const owner = Schema.decodeSync(UserId)("asks-owner");
@@ -191,6 +197,21 @@ const personSaves = async (
   );
   return result.value;
 };
+
+/** A person's personal experimental flags. */
+const setFlags = (userId: UserId, flags: ReadonlyArray<string>) =>
+  env.DB.prepare(
+    `INSERT INTO personal_experimental_feature_preferences (
+       user_id, preferences, revision, updated_at
+     ) VALUES (?1, ?2, 1, ?3)
+     ON CONFLICT (user_id) DO UPDATE SET preferences = excluded.preferences`,
+  )
+    .bind(
+      userId,
+      JSON.stringify(flags.map((id) => ({ id, enabled: true }))),
+      new Date().toISOString(),
+    )
+    .run();
 
 /** request_attention as the agent calls it: Flue validates the input first. */
 const requestAttention = async (
@@ -630,5 +651,243 @@ describe("asks in artifacts", () => {
       log: { info() {}, warn() {}, error() {}, debug() {} },
     } as never);
     expect(await artifactsEditedByPeopleNote(env.DB, threadId)).toBeUndefined();
+  });
+
+  describe("with Notify agent on (#1765)", () => {
+    it("wakes nothing for a person's tick or answer, then Notify agent wakes once with the tick", async () => {
+      const threadId = await newThread();
+      const artifactId = await agentWrites(threadId, PLAN);
+      await setFlags(owner, ["artifact-notify-agent"]);
+      await personSaves(threadId, artifactId, owner, (text) =>
+        text.replace(
+          "- [ ] @[Olive](user:asks-owner) Approve merging #1240",
+          "- [x] @[Olive](user:asks-owner) Approve merging #1240",
+        ),
+      );
+      await personSaves(threadId, artifactId, owner, (text) =>
+        text.replace(
+          "Review the copy\n",
+          "Review the copy\n  The headline is too long.\n",
+        ),
+      );
+      expect(wakes).toEqual([]);
+
+      const notified = await notifyArtifactAgent(
+        bindings,
+        { threadId, artifactId, userId: owner },
+        { deliver },
+      );
+      expect(notified).toEqual({ revision: 3 });
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]).toMatchObject({ ownerUserId: owner, threadId });
+      expect(wakes[0]?.key).toMatch(
+        new RegExp(`^artifact-notify:${artifactId}:3:`),
+      );
+      const body = wakes[0]?.body ?? "";
+      expect(body).toMatch(
+        new RegExp(
+          `^A person asked you to look at artifact ${artifactId} \\(revision 3\\)`,
+        ),
+      );
+      expect(body).toContain("Who: Olive Owner");
+      expect(body).toContain("revision 1 to 3");
+      expect(body).toContain(
+        "+- [x] @[Olive](user:asks-owner) Approve merging #1240",
+      );
+      expect(body).toContain("+  The headline is too long.");
+      expect(body).toContain("untrusted data");
+    });
+
+    it("on an artifact the agent never saved, Notify agent carries what people changed since it was created, and says so", async () => {
+      const threadId = await newThread();
+      const created = await createArtifact(bindings, {
+        threadId,
+        title: "Release",
+        markdown: PLAN,
+        writer: { kind: "user", userId: owner },
+      });
+      if (created.kind !== "saved") throw new Error("Expected an artifact.");
+      const artifactId = created.value.artifact.id;
+      await setFlags(owner, ["artifact-notify-agent"]);
+      const t0 = Date.now();
+
+      // Only the first revision: nothing to compare, so the agent reads it.
+      await notifyArtifactAgent(
+        bindings,
+        { threadId, artifactId, userId: owner },
+        { deliver, now: t0 },
+      );
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]?.body).toContain(
+        "You have not saved this artifact; read it whole.",
+      );
+      expect(wakes[0]?.body).not.toContain("your last save");
+
+      await personSaves(threadId, artifactId, owner, (text) =>
+        text.replace(
+          "- [ ] @[Olive](user:asks-owner) Approve merging #1240",
+          "- [x] @[Olive](user:asks-owner) Approve merging #1240",
+        ),
+      );
+      expect(wakes).toHaveLength(1);
+      // Past the first one's window, so it wakes on its own.
+      await notifyArtifactAgent(
+        bindings,
+        { threadId, artifactId, userId: owner },
+        { deliver, now: t0 + 20_000 },
+      );
+      expect(wakes).toHaveLength(2);
+      const body = wakes[1]?.body ?? "";
+      expect(body).toContain(
+        "You have not saved this artifact. What people changed since it was created (revision 1 to 2):",
+      );
+      expect(body).toContain(
+        "+- [x] @[Olive](user:asks-owner) Approve merging #1240",
+      );
+      expect(body).not.toContain("No person saved it");
+    });
+
+    it("wakes right away for a @dx mention; one 3 s later joins a single trailing wake, which a sweep run twice sends once", async () => {
+      const threadId = await newThread();
+      const artifactId = await agentWrites(threadId, PLAN);
+      await setFlags(owner, ["artifact-notify-agent"]);
+      const t0 = Date.now();
+      const mention = async (body: string, now: number) => {
+        const commented = await addArtifactComment(bindings, {
+          threadId,
+          artifactId,
+          quote: "Review the copy",
+          body,
+          writer: { kind: "user", userId: owner },
+        });
+        if (commented.kind !== "saved") throw new Error("Expected a comment.");
+        await artifactCommented(
+          bindings,
+          {
+            threadId,
+            artifactId,
+            commentId: commented.comment.id,
+            quote: commented.comment.quote,
+            body: commented.comment.body,
+            writer: { kind: "user", userId: owner },
+          },
+          { deliver, now },
+        );
+        return commented.comment.id;
+      };
+      const first = await mention("@[dx](agent) shorten this", t0);
+      expect(wakes).toHaveLength(1);
+      expect(wakes[0]?.key).toBe(`artifact-comment-wake:${first}`);
+      expect(wakes[0]?.body).toContain("shorten this");
+
+      const second = await mention("@[dx](agent) and that", t0 + 3_000);
+      expect(wakes).toHaveLength(1);
+      // The window is still open: nothing is sent yet.
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 10_000 });
+      expect(wakes).toHaveLength(1);
+
+      // Closed: one trailing wake carries the comment that joined.
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 16_000 });
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 16_000 });
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 80_000 });
+      expect(wakes).toHaveLength(2);
+      expect(wakes[1]?.key).toBe(`artifact-agent-trailing:${threadId}:${t0}`);
+      const trailing = wakes[1]?.body ?? "";
+      expect(trailing).toContain(second);
+      expect(trailing).toContain("<people_content>");
+      expect(trailing).toMatch(
+        /<people_content>[\s\S]*and that[\s\S]*<\/people_content>/,
+      );
+      expect(trailing).not.toContain("shorten this");
+
+      // After the window, the next mention wakes right away again.
+      const third = await mention("@[dx](agent) one more", t0 + 20_000);
+      expect(wakes).toHaveLength(3);
+      expect(wakes[2]?.key).toBe(`artifact-comment-wake:${third}`);
+    });
+
+    it("gives at most two wakes for 10 rapid Notify agent clicks, the trailing one with the current diff", async () => {
+      const threadId = await newThread();
+      const artifactId = await agentWrites(threadId, PLAN);
+      await setFlags(owner, ["artifact-notify-agent"]);
+      await personSaves(threadId, artifactId, owner, (text) =>
+        text.replace(
+          "- [ ] @[Olive](user:asks-owner) Approve merging #1240",
+          "- [x] @[Olive](user:asks-owner) Approve merging #1240",
+        ),
+      );
+      const t0 = Date.now();
+      for (let click = 0; click < 10; click++)
+        await notifyArtifactAgent(
+          bindings,
+          { threadId, artifactId, userId: owner },
+          { deliver, now: t0 + click * 200 },
+        );
+      expect(wakes).toHaveLength(1);
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 20_000 });
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 20_000 });
+      expect(wakes).toHaveLength(2);
+      expect(wakes[1]?.key).toBe(`artifact-agent-trailing:${threadId}:${t0}`);
+      expect(wakes[1]?.body).toContain(
+        `A person asked you to look at artifact ${artifactId}`,
+      );
+      expect(wakes[1]?.body).toContain(
+        "+- [x] @[Olive](user:asks-owner) Approve merging #1240",
+      );
+    });
+
+    it("leaves a flag-off person's mentions on the interval, outside any window", async () => {
+      const threadId = await newThread();
+      const artifactId = await agentWrites(threadId, PLAN);
+      const t0 = Date.now();
+      for (const [body, now] of [
+        ["@[dx](agent) shorten this", t0],
+        ["@[dx](agent) and that", t0 + 3_000],
+      ] as const) {
+        const commented = await addArtifactComment(bindings, {
+          threadId,
+          artifactId,
+          quote: "Review the copy",
+          body,
+          writer: { kind: "user", userId: owner },
+        });
+        if (commented.kind !== "saved") throw new Error("Expected a comment.");
+        await artifactCommented(
+          bindings,
+          {
+            threadId,
+            artifactId,
+            commentId: commented.comment.id,
+            quote: commented.comment.quote,
+            body: commented.comment.body,
+            writer: { kind: "user", userId: owner },
+          },
+          { deliver, now },
+        );
+      }
+      await sweepArtifactAgentWakes(bindings, { deliver, now: t0 + 60_000 });
+      // The interval allows the first; the second waits for the next turn's
+      // note, as before, and the sweep sends nothing.
+      expect(wakes).toHaveLength(1);
+    });
+
+    it("refuses Notify agent with the flag off, and to a View member", async () => {
+      const threadId = await newThread();
+      const artifactId = await agentWrites(threadId, PLAN);
+      const off = await app(owner)(
+        `/v1/threads/${threadId}/artifacts/${artifactId}/notify`,
+        "POST",
+      );
+      expect(off.status).toBe(404);
+      expect(await off.text()).toContain("ARTIFACT_NOTIFY_DISABLED");
+      await share(threadId, "view");
+      await setFlags(member, ["artifact-notify-agent"]);
+      const viewer = await app(member)(
+        `/v1/threads/${threadId}/artifacts/${artifactId}/notify`,
+        "POST",
+      );
+      expect(viewer.status).toBe(403);
+      expect(wakes).toEqual([]);
+    });
   });
 });

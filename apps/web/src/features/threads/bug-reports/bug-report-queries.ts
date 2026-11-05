@@ -256,7 +256,10 @@ export const startBugReportInvestigationMutationOptions = (
       }),
   });
 
-/** Whether this person is one of the deployment's report readers. */
+/**
+ * Whether this person is one of the deployment's report readers, and the
+ * central deployment this one shares each report with, if any.
+ */
 export const bugReportAccessQueryOptions = (userId: string) =>
   queryOptions({
     queryKey: ["bug-report-access", userId] as const,
@@ -269,7 +272,7 @@ export const bugReportAccessQueryOptions = (userId: string) =>
           }),
           BugReportAccessResponseSchema,
         )
-      ).data.reader,
+      ).data,
     staleTime: 5 * 60_000,
   });
 

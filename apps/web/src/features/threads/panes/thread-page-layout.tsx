@@ -1,3 +1,4 @@
+import type { ThreadPaneLayout, ThreadPaneTab } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
@@ -6,8 +7,12 @@ import { THREAD_OPEN_VIEW_EVENT } from "../../../shared/commands/command-provide
 import { threadQueryOptions } from "../thread-queries.js";
 import {
   defaultPaneLayout,
+  keepPaneTabs,
   PANE_VIEW_KINDS,
+  type PaneLayoutAction,
   type PaneViewKind,
+  reducePaneLayout,
+  tabId,
 } from "./pane-layout.js";
 import { usePaneLayout } from "./pane-layout-queries.js";
 import { ViewsMenuButton } from "./pane-menus.js";
@@ -36,6 +41,36 @@ const useOpenViewCommands = (open: (view: PaneViewKind) => void) => {
   React.useSyncExternalStore(subscribe, eventSnapshot, eventSnapshot);
 };
 
+/** Whether the page can draw the tab: the Agent, a view it has, or a file. */
+const servable = (contents: PaneContents) => (tab: ThreadPaneTab) =>
+  tab.kind === "file"
+    ? contents.dirtyTabs.has(tabId(tab))
+    : tab.kind === "agent" || contents.views[tab.kind] !== undefined;
+
+/**
+ * The layout an archived Thread shows. Its Orb is stopped, so the saved
+ * layout keeps only the Agent, Artifacts, and files with unsaved edits.
+ * Changes made meanwhile stay on this page and are never saved, so
+ * unarchiving brings back the saved layout.
+ */
+const useArchivedLayout = (
+  archived: boolean,
+  saved: ThreadPaneLayout,
+  contents: PaneContents,
+) => {
+  const [edited, setEdited] = React.useState<{
+    readonly from: ThreadPaneLayout;
+    readonly layout: ThreadPaneLayout;
+  }>();
+  // Unarchiving forgets them, so archiving again starts from the saved one.
+  if (!archived && edited !== undefined) setEdited(undefined);
+  const base = edited?.from === saved ? edited.layout : saved;
+  const layout = keepPaneTabs(base, servable(contents));
+  const dispatch = (action: PaneLayoutAction) =>
+    setEdited({ from: saved, layout: reducePaneLayout(layout, action) });
+  return { layout, dispatch };
+};
+
 /**
  * The Thread page below its refresh notice: the title bar, then the pane tree
  * (1024px and up) or the stacked view row and one view (narrower). Both read
@@ -43,10 +78,13 @@ const useOpenViewCommands = (open: (view: PaneViewKind) => void) => {
  */
 export function ThreadPageLayout({
   threadId,
+  archived,
   contents,
   renderTitleBar,
 }: {
   readonly threadId: ThreadId;
+  /** An archived Thread shows only the tabs it can serve (`useArchivedLayout`). */
+  readonly archived: boolean;
   readonly contents: PaneContents;
   /** The title bar, given the Views button when the layout has panes. */
   readonly renderTitleBar: (slots: {
@@ -54,8 +92,12 @@ export function ThreadPageLayout({
     readonly stacked: boolean;
   }) => React.ReactNode;
 }) {
-  const { layout: loaded, dispatch } = usePaneLayout(threadId);
-  const layout = loaded ?? defaultPaneLayout();
+  const { layout: loaded, dispatch: saveLayout } = usePaneLayout(threadId);
+  const saved = loaded ?? defaultPaneLayout();
+  const archivedLayout = useArchivedLayout(archived, saved, contents);
+  const { layout, dispatch } = archived
+    ? archivedLayout
+    : { layout: saved, dispatch: saveLayout };
   const mode = useThreadLayoutMode();
   // Pointing at Terminal may wake the Orb only for people who may open it.
   const { identity } = useAuthenticatedIdentity();

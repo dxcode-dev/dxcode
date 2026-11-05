@@ -50,6 +50,7 @@ import {
   isClaudePlanToken,
 } from "./claude-code-token.js";
 import {
+  loadClaudePlanLoads,
   loadConnectionsForTarget,
   loadModeOverrideSources,
   loadRoutableConnections,
@@ -1143,23 +1144,30 @@ export class ModelRoutingService {
         return match === undefined ? [] : [[canonical, match] as const];
       }),
     );
-    // Each plan's last-known limits, as Claude Code runs reported them.
+    // Each plan's last-known limits, as Claude Code runs reported them, and
+    // its running Threads, for the automatic pick.
+    const claudeConnections = connections.filter(
+      ({ providerId }) => providerId === CLAUDE_CODE_PROVIDER_ID,
+    );
+    const claudeLoads = await loadClaudePlanLoads(
+      this.db,
+      claudeConnections.map(({ id }) => id),
+    );
     const claudePlans = await Promise.all(
-      connections
-        .filter(({ providerId }) => providerId === CLAUDE_CODE_PROVIDER_ID)
-        .map(async (connection) => {
-          const { usage, allowExtraUsage } = await loadClaudePlan(
-            this.db,
-            connection.id,
-          );
-          return {
-            connectionId: connection.id,
-            name: connection.name,
-            enabled: connection.enabled,
-            allowExtraUsage,
-            ...(usage === undefined ? {} : { usage }),
-          };
-        }),
+      claudeConnections.map(async (connection) => {
+        const { usage, allowExtraUsage } = await loadClaudePlan(
+          this.db,
+          connection.id,
+        );
+        return {
+          connectionId: connection.id,
+          name: connection.name,
+          enabled: connection.enabled,
+          allowExtraUsage,
+          ...(usage === undefined ? {} : { usage }),
+          load: claudeLoads.get(connection.id) ?? 0,
+        };
+      }),
     );
     return {
       claudePlans,

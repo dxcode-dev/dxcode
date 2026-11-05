@@ -814,6 +814,62 @@ describe("GitHub subscriptions", () => {
     ).toEqual([]);
   });
 
+  it("follows a PR its Thread opened when the Project names the repository by a Git remote alias", async () => {
+    const now = new Date().toISOString();
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO project_repository (project_id, provider,
+           binding_revision, full_name, web_url, clone_url, created_at, updated_at)
+         VALUES (?, 'git', 1, 'mirrors/widgets', 'https://git.example.test/mirrors/widgets',
+           'https://git.example.test/mirrors/widgets.git', ?, ?)`,
+      ).bind(ownerProject.id, now, now),
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO project_remote_alias (project_id, position, url,
+           web_url, created_at)
+         VALUES (?, 0, 'git@github.com:Acme/Widgets.git', 'https://github.com/Acme/Widgets', ?)`,
+      ).bind(ownerProject.id, now),
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO github_user_authorization (id, user_id,
+           provider_account_id, provider_account_login, status, created_at, updated_at)
+         VALUES ('gua_owner', ?, '41', 'Octo-Owner', 'active', ?, ?)`,
+      ).bind(owner, now, now),
+      env.DB.prepare(
+        "UPDATE threads SET activity_status = 'working', last_activity_at = ? WHERE id = ?",
+      ).bind(now, main.id),
+    ]);
+    github[`/repos/${REPO}/commits/${SHA}/status`] = { statuses: [] };
+    github[`/repos/${REPO}/commits/${SHA}/check-runs`] = {
+      check_runs: [checkRun(1, "build", null)],
+    };
+    await webhook("pull_request", {
+      action: "opened",
+      pull_request: {
+        number: 21,
+        user: { login: "octo-owner" },
+        head: { sha: SHA, ref: "feat/alias" },
+        html_url: `https://github.com/${REPO}/pull/21`,
+        title: "Widget fix 21",
+        body: "",
+        state: "open",
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    });
+    const { subscriptions } = (await call(
+      main.id,
+      "list_github_subscriptions",
+      { scope: "this-thread" },
+    )) as { subscriptions: Array<Record<string, unknown>> };
+    expect(subscriptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          filterKind: "pr-comments",
+          filter: { prNumber: 21 },
+          automatic: true,
+        }),
+      ]),
+    );
+  });
+
   it("quotes comment text as untrusted data, ignores forged and repeated deliveries, and stops when the PR merges", async () => {
     const created = await call(main.id, "create_github_subscription", {
       title: "PR 12",

@@ -1,0 +1,20 @@
+/* Ship and Push to Branch outcomes above the composer, in the error row's frame. */
+.ship-outcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+  max-width: var(--composer-width);
+  margin: 0 auto 8px;
+  padding-right: 64px;
+}
+.ship-outcome-actions > a,
+.ship-outcome-actions > button {
+  pointer-events: auto;
+  color: var(--foreground);
+  text-decoration: none;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--background) 96%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+}

@@ -66,7 +66,7 @@ interface ProjectServiceShape {
     projectId: ProjectId,
     revision: number,
     repository: ProjectRepositoryIdentity,
-    authority: ProjectSourceAuthority,
+    authority?: ProjectSourceAuthority,
   ) => Effect.Effect<
     Project,
     Schema.SchemaError | PersistenceUnavailable | ProjectNotFound

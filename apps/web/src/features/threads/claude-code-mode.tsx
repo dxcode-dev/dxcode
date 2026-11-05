@@ -1,7 +1,7 @@
 import type { ChoicesData } from "@dx/api";
 import { CLAUDE_CODE_EFFORTS, type ClaudeCodeEffort } from "@dx/domain";
 import { Check, ChevronDown } from "lucide-react";
-import type { KeyboardEvent } from "react";
+import * as React from "react";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import {
@@ -15,7 +15,7 @@ import {
  * Keeps the picker's typeahead and list navigation out of a native select;
  * Escape still closes the picker.
  */
-const keepKeysInSelect = (event: KeyboardEvent<HTMLSelectElement>) => {
+const keepKeysInSelect = (event: React.KeyboardEvent<HTMLSelectElement>) => {
   if (event.key !== "Escape") event.stopPropagation();
 };
 
@@ -183,6 +183,9 @@ export function ClaudeCodeModeOption({
  * shown when more than one plan is enabled. Each option carries the limits
  * Claude Code last reported on that plan.
  */
+/** The picker's value for Auto; plan IDs never take it. */
+const AUTO_PLAN = "auto";
+
 export function ClaudePlanPicker({
   choices,
   model,
@@ -194,19 +197,96 @@ export function ClaudePlanPicker({
   readonly model: string;
   readonly plan: string | undefined;
   readonly locked: boolean;
-  readonly onPlanChange: (connectionId: string) => void;
+  /** Undefined picks Auto: dx picks the plan when the Thread is created. */
+  readonly onPlanChange: (connectionId: string | undefined) => void;
 }) {
   const nowSeconds = Math.floor(useNowMinute() / 1000);
-  const { plans, current } = claudePlanPick(choices, plan);
-  if (plans.length < 2 || current === undefined) return null;
+  const { plans, auto, current } = claudePlanPick(choices, plan);
+  if (plans.length < 2 || (!auto && current === undefined)) return null;
+  const select = {
+    plans,
+    model,
+    nowSeconds,
+    current,
+    locked,
+    onPlanChange,
+  };
+  // Auto is offered only with the person's automatic plan pick on; its
+  // label loads with the pick's policy, showing plain "Auto" until then.
+  return auto ? (
+    <React.Suspense fallback={<ClaudePlanSelect {...select} auto={{}} />}>
+      <ClaudeAutoPlanSelect {...select} />
+    </React.Suspense>
+  ) : (
+    <ClaudePlanSelect {...select} />
+  );
+}
+
+type ClaudePlanSelectProps = {
+  readonly plans: ReturnType<typeof claudePlanPick>["plans"];
+  readonly model: string;
+  readonly nowSeconds: number;
+  readonly current: ReturnType<typeof claudePlanPick>["current"];
+  readonly locked: boolean;
+  readonly onPlanChange: (connectionId: string | undefined) => void;
+};
+
+let autoPlanModule:
+  | Promise<Pick<typeof import("./claude-auto-plan.js"), "claudeAutoPlanLabel">>
+  | undefined;
+
+/**
+ * The Auto label's module, loaded once. A chunk that cannot load leaves
+ * Auto unlabeled.
+ */
+const loadAutoPlan = () => {
+  autoPlanModule ??= import("./claude-auto-plan.js").catch(() => ({
+    claudeAutoPlanLabel: () => ({ label: "Auto" }),
+  }));
+  return autoPlanModule;
+};
+
+/** The select with Auto labeled by the plan dx would pick now, and why. */
+function ClaudeAutoPlanSelect(props: ClaudePlanSelectProps) {
+  const { claudeAutoPlanLabel } = React.use(loadAutoPlan());
   return (
-    <span className="new-thread-config-pill new-thread-claude-plan">
+    <ClaudePlanSelect
+      {...props}
+      auto={claudeAutoPlanLabel(props.plans, props.model, props.nowSeconds)}
+    />
+  );
+}
+
+function ClaudePlanSelect({
+  plans,
+  model,
+  nowSeconds,
+  current,
+  locked,
+  onPlanChange,
+  auto,
+}: ClaudePlanSelectProps & {
+  /** Present when Auto is offered: its label and why, once known. */
+  readonly auto?: { readonly label?: string; readonly reason?: string };
+}) {
+  return (
+    <span
+      className="new-thread-config-pill new-thread-claude-plan"
+      title={current === undefined ? auto?.reason : undefined}
+    >
       <select
         aria-label="Claude plan"
-        value={current.connectionId}
+        value={current?.connectionId ?? AUTO_PLAN}
         disabled={locked}
-        onChange={(event) => onPlanChange(event.target.value)}
+        onChange={(event) =>
+          onPlanChange(
+            event.target.value === AUTO_PLAN ? undefined : event.target.value,
+          )
+        }
       >
+        {auto === undefined ? null : (
+          <option value={AUTO_PLAN}>{auto.label ?? "Auto"}</option>
+        )}
         {plans.map((option) => (
           <option key={option.connectionId} value={option.connectionId}>
             {claudePlanLabel(option, model, nowSeconds)}

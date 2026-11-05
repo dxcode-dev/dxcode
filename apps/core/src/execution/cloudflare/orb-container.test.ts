@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyRunFailure } from "../../runtime/run-failure.js";
 import {
   ORB_DISK_CHECK_MS,
@@ -135,6 +135,18 @@ const setup = (handler?: ExecHandler) => {
   };
 };
 
+/** The structured log lines this test's code writes, as LogTape emits them. */
+const captureLogs = () => {
+  const lines: Array<Record<string, unknown>> = [];
+  for (const level of ["info", "warn", "error"] as const)
+    vi.spyOn(console, level).mockImplementation((...values: unknown[]) => {
+      const [line] = values;
+      if (typeof line === "object" && line !== null)
+        lines.push(line as Record<string, unknown>);
+    });
+  return lines;
+};
+
 // dx-orb-init sets the short host name for the prompt, and posts the stop
 // notice to the address the object intercepts.
 const ORB_START_ENVIRONMENT = {
@@ -147,6 +159,10 @@ const create = {
   instance: "standard-2",
   idleMs: 300_000,
 } as const;
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("Orb container object", () => {
   it("creates a workspace from the image once and pins its instance type", async () => {
@@ -435,8 +451,174 @@ describe("Orb container object", () => {
     const orb = setup();
     await orb.controller.open(create);
     orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
-    await expect(orb.controller.pause()).rejects.toThrow();
+    // Archive answers that the stop is still under way, not a failure.
+    await expect(orb.controller.pause()).resolves.toBe("stopping");
     expect(orb.container.running).toBe(true);
+    expect(orb.container.destroy).not.toHaveBeenCalled();
+  });
+
+  it("archives a container whose start never finished as already stopped, without a snapshot (#1777)", async () => {
+    // thr_5b6834e0 on staging: the fresh start's readiness probe hung for
+    // 90 s, the container still read as running, an open queued behind the
+    // start answered "running", and archive's snapshot then failed with
+    // Cloudflare's own answer. Nothing ran in it, so nothing can be lost.
+    vi.useFakeTimers();
+    try {
+      const logged = captureLogs();
+      const orb = setup();
+      orb.container.exec.mockImplementation(() => new Promise(() => {}));
+      // The abandoned start's stop never lands: it still reads as running.
+      orb.container.destroy.mockImplementation(() => new Promise(() => {}));
+      const first = orb.controller.open(create).then(
+        () => "ready",
+        () => "failed",
+      );
+      const queued = orb.controller.open(create);
+      await vi.advanceTimersByTimeAsync(100_000);
+      await expect(first).resolves.toBe("failed");
+      await expect(queued).resolves.toMatchObject({ residency: "running" });
+      orb.container.snapshotContainer.mockRejectedValue(
+        new Error("The container has not been started"),
+      );
+      orb.container.destroy.mockImplementation(async () => {
+        orb.container.running = false;
+      });
+
+      await expect(orb.controller.pause()).resolves.toBe("stopped");
+      expect(orb.container.running).toBe(false);
+      await expect(orb.controller.status()).resolves.toEqual({
+        running: false,
+        status: "paused",
+      });
+      expect(
+        logged.some(
+          (line) =>
+            line.event === "orb_container_stopped_unstarted" &&
+            line.level === "warning",
+        ),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never skips the snapshot of a started container for any other snapshot error (#1777, #1642)", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    // A different error, even one that mentions starting, is not proof.
+    for (const message of [
+      "The container snapshot could not be completed due to an internal error; try again (reference ID: 0f1e2d3c)",
+      "Container is starting; try again",
+    ]) {
+      orb.container.snapshotContainer.mockRejectedValueOnce(new Error(message));
+      await expect(orb.controller.pause()).resolves.toBe("stopping");
+      expect(orb.container.running).toBe(true);
+    }
+    expect(orb.container.destroy).not.toHaveBeenCalled();
+  });
+
+  it("retries an archive's failed stop on its own, snapshot first, and logs it abandoned after three tries (#1740)", async () => {
+    const logged = captureLogs();
+    const orb = setup();
+    await orb.controller.open(create);
+    const attemptsAt: number[] = [];
+    orb.container.snapshotContainer.mockImplementation(async () => {
+      attemptsAt.push(orb.now());
+      throw new Error("internal");
+    });
+    const archivedAt = orb.now();
+    await expect(
+      orb.controller.pause({ threadId: "thr_archived" }),
+    ).resolves.toBe("stopping");
+    // Its idle deadline is now: nothing keeps it for the full idle time.
+    // Twenty minutes of heartbeats.
+    while (orb.now() < archivedAt + 20 * 60_000) {
+      orb.advance(ORB_HEARTBEAT_MS);
+      await expect(orb.controller.alarm()).resolves.toBeUndefined();
+    }
+    // The archive's own try, then two more, five minutes apart.
+    expect(attemptsAt.slice(0, 3).map((at) => at - archivedAt)).toEqual([
+      0, 300_000, 600_000,
+    ]);
+    // Never stopped without a save.
+    expect(orb.container.destroy).not.toHaveBeenCalled();
+    const abandoned = logged.filter(
+      (line) => line.event === "orb_stop_abandoned",
+    );
+    expect(abandoned).toHaveLength(1);
+    expect(abandoned[0]).toMatchObject({
+      level: "error",
+      threadId: "thr_archived",
+      sandboxId: "a".repeat(64),
+      tries: 3,
+    });
+
+    // A retry that saves stops it, and nothing is lost.
+    const retried = setup();
+    await retried.controller.open(create);
+    retried.container.snapshotContainer.mockRejectedValueOnce(
+      new Error("internal"),
+    );
+    await expect(retried.controller.pause()).resolves.toBe("stopping");
+    retried.advance(300_000);
+    await retried.controller.alarm();
+    expect(retried.container.running).toBe(false);
+    await expect(retried.controller.status()).resolves.toEqual({
+      running: false,
+      status: "paused",
+    });
+  });
+
+  it("stops an Orb archived while its first start is still running, once the start ends (#1740)", async () => {
+    const orb = setup();
+    let ready: (() => void) | undefined;
+    // The readiness probe answers only when the test says so.
+    orb.container.exec.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          ready = () =>
+            resolve({
+              stdout: stream(""),
+              stderr: stream(""),
+              exitCode: Promise.resolve(0),
+              kill: vi.fn(),
+            });
+        }),
+    );
+    const opening = orb.controller.open(create);
+    await vi.waitFor(() => expect(ready).toBeDefined());
+    // Archive does not wait for the start.
+    await expect(
+      orb.controller.pause({ threadId: "thr_archived", defer: true }),
+    ).resolves.toBe("stopping");
+    ready?.();
+    await expect(opening).resolves.toMatchObject({ residency: "created" });
+    expect(orb.container.running).toBe(true);
+    // The stop runs at once, snapshot first.
+    await orb.controller.alarm();
+    expect(orb.container.snapshotContainer).toHaveBeenCalledOnce();
+    expect(orb.container.running).toBe(false);
+    await expect(orb.controller.status()).resolves.toEqual({
+      running: false,
+      status: "paused",
+    });
+  });
+
+  it("keeps an Orb that was opened again after its archive's stop was asked for (#1740)", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValueOnce(
+      new Error("internal"),
+    );
+    await expect(orb.controller.pause()).resolves.toBe("stopping");
+    // Unarchived and activated: Core opens only an active Thread's Orb.
+    orb.advance(60_000);
+    await orb.controller.open({ ...create, allowReset: true });
+    // When the cancelled stop would have been tried again.
+    orb.advance(240_000);
+    await orb.controller.alarm();
+    expect(orb.container.running).toBe(true);
+    expect(orb.container.snapshotContainer).toHaveBeenCalledOnce();
   });
 
   it("clears caches between commands when the disk runs critically low mid-turn, and the next turn hears what was freed (#1649)", async () => {

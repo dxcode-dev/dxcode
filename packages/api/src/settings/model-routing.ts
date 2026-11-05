@@ -267,6 +267,8 @@ export const ClaudePlanChoiceDataSchema = Schema.Struct({
   enabled: Schema.Boolean,
   allowExtraUsage: Schema.Boolean,
   usage: Schema.optional(ClaudePlanUsage),
+  /** Threads on the plan working now or bound in the last few minutes. */
+  load: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
 });
 
 export type ClaudePlanChoiceData = typeof ClaudePlanChoiceDataSchema.Type;
@@ -276,6 +278,11 @@ export const ChoicesResponseSchema = successResponse(
     modes: Schema.Array(ModeChoiceDataSchema),
     models: Schema.Array(ServedModelChoiceDataSchema),
     claudePlans: Schema.Array(ClaudePlanChoiceDataSchema),
+    /**
+     * The requester's `claude-plan-auto-pick` flag: on, a Claude Code
+     * Thread they create without naming a plan gets dx's pick ("Auto").
+     */
+    claudeAutoPick: Schema.optional(Schema.Boolean),
   }),
 );
 

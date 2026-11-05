@@ -25,6 +25,11 @@ import type { AppEnv } from "../http/types.js";
 import { bugReportLogger } from "../logging.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
 import {
+  deliverBugReportForward,
+  forwardingDestination,
+  queueBugReportForward,
+} from "./forwarding.js";
+import {
   investigateBugReport,
   mayOpenThread,
   readInvestigation,
@@ -170,7 +175,8 @@ const readForm = async <R extends { readonly message: string }>(
 
 /**
  * Keeps one redacted report: its row in `bug_report` and its files in
- * `DX_STORAGE` under `bug-reports/<id>/`. Nothing leaves this deployment.
+ * `DX_STORAGE` under `bug-reports/<id>/`. A deployment that names a central
+ * one also forwards it there (`forwarding.ts`).
  */
 const keepReport = async (
   context: Context<AppEnv>,
@@ -240,6 +246,19 @@ const keepReport = async (
       errorName: cause instanceof Error ? cause.name : "UnknownError",
     });
     return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+  }
+  // Shared with the central deployment after it is kept here; the person's
+  // report never waits for it or fails because of it.
+  const forwarding = await queueBugReportForward(context.env, db, id).catch(
+    () => false,
+  );
+  if (forwarding) {
+    const sending = deliverBugReportForward(context.env, id).catch(() => {});
+    try {
+      context.executionCtx.waitUntil(sending);
+    } catch {
+      // No execution context outside a Worker request; the cron retries.
+    }
   }
   bugReportLogger.info("Bug report received.", {
     event: "bug_report_received",
@@ -322,6 +341,10 @@ export const threadBugReportRoutes = new Hono<AppEnv>().post(
     });
   },
 );
+
+/** The host a forwarded report's sender stated, as its row shows it. */
+const sourceHost = (origin: string) =>
+  URL.canParse(origin) ? new URL(origin).host : origin;
 
 /** Reports per page of All Bug Reports. */
 const ALL_REPORTS_PAGE = 50;
@@ -432,11 +455,17 @@ export const bugReportRoutes = new Hono<AppEnv>()
       context.get("principal").userId,
       context.env.DX_BUG_REPORT_READERS,
     );
+    const destination = forwardingDestination(context.env);
     context.header("Cache-Control", "no-store");
     return context.json(
       Schema.encodeUnknownSync(BugReportAccessResponseSchema)({
         status: "success",
-        data: { reader },
+        data: {
+          reader,
+          ...(destination === undefined
+            ? {}
+            : { sharedWith: destination.host }),
+        },
       }),
       200,
     );
@@ -489,10 +518,14 @@ export const bugReportRoutes = new Hono<AppEnv>()
         data: {
           items: items.map(({ report, reporterUserId }) => ({
             ...report,
-            reporter: {
-              ...(reporters.get(reporterUserId) ?? { name: "Unknown" }),
-              you: reporterUserId === userId,
-            },
+            reporter:
+              report.source === undefined
+                ? {
+                    ...(reporters.get(reporterUserId) ?? { name: "Unknown" }),
+                    you: reporterUserId === userId,
+                  }
+                : // Forwarded: its sender's deployment, never a person.
+                  { name: sourceHost(report.source.origin), you: false },
           })),
           ...(page.length > ALL_REPORTS_PAGE && last !== undefined
             ? { nextCursor: last.report.id }

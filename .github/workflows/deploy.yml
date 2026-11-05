@@ -88,6 +88,10 @@ jobs:
           BOAT_API_KEY: ${{ secrets.BOAT_API_KEY }}
           # Optional: overrides the config's bugReportReaders.
           DX_BUG_REPORT_READERS: ${{ vars.DX_BUG_REPORT_READERS }}
+          # Only with the `bugReportForwarding` and `bugReportIntake`
+          # integrations; the deployment holds them after.
+          DX_BUG_REPORT_DESTINATION_KEY: ${{ secrets.DX_BUG_REPORT_DESTINATION_KEY }}
+          DX_BUG_REPORT_INTAKE_SECRET: ${{ secrets.DX_BUG_REPORT_INTAKE_SECRET }}
           DX_SELFHOST_CONFIG: .dx/deploy.selfhost.json
           DX_DEPLOY_APPROVE: "1"
         run: node scripts/run-alchemy-deployment.mjs deploy selfhost

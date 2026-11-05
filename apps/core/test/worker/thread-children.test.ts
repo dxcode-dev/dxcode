@@ -324,9 +324,13 @@ describe("Child Threads", () => {
           .all<{ id: string; lifecycle_state: string }>()
       ).results.map(({ lifecycle_state }) => lifecycle_state);
 
-    // These tests run no Orbs, so stopping them reports unavailable after
-    // every Thread is archived, as for a single Thread.
-    expect((await archive(true)).status).toBe(503);
+    // These tests run no Orbs, so every Thread is archived and the answer
+    // says their Orbs are still stopping (#1740), as for a single Thread.
+    const archivedAll = await archive(true);
+    expect(archivedAll.status).toBe(200);
+    await expect(archivedAll.json()).resolves.toMatchObject({
+      orbStopping: true,
+    });
     expect(await states()).toEqual(["archived", "archived", "archived"]);
     expect(await list("lifecycleState=archived&roots=true")).toEqual([
       expect.objectContaining({ id: parent.data.id, childCount: 2 }),
@@ -515,9 +519,12 @@ describe("Child Threads", () => {
         bindings,
       );
     const archived = await archive({ archived: true, includeChildren: true });
-    // These tests run no Orbs, so stopping them reports unavailable after
-    // every Thread is archived.
-    expect(archived.status).toBe(503);
+    // These tests run no Orbs: every Thread is archived, and their Orbs
+    // are still stopping (#1740).
+    expect(archived.status).toBe(200);
+    await expect(archived.json()).resolves.toMatchObject({
+      orbStopping: true,
+    });
 
     const restored = await archive({
       archived: false,

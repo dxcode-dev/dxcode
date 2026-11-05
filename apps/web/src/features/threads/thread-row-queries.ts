@@ -1,12 +1,16 @@
 import type { ThreadId, UserId } from "@dx/domain";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
-import { DateTime } from "effect";
 import {
   getThreadListItem,
   type ThreadListClientItem,
   type ThreadPage,
 } from "../../shared/api/client.js";
 import { shareEqualData } from "../../shared/query/structural-sharing.js";
+import {
+  belongsInLoadedList,
+  listOrder,
+  millis,
+} from "./thread-list-order-queries.js";
 import { isOptimisticThread } from "./thread-mutations.js";
 import {
   invalidateThreadLists,
@@ -19,27 +23,6 @@ type ListData = InfiniteData<ThreadPage, unknown>;
 
 /** Hints for one Thread within this window share one row read. */
 export const THREAD_ROW_COALESCE_MS = 250;
-
-const millis = (time: DateTime.Utc | undefined) =>
-  time === undefined ? undefined : DateTime.toEpochMillis(time);
-
-/**
- * Core's list order: pinned Threads first, newest pin first, then newest
- * activity, then the higher ID. Children and shared Threads are never pinned.
- */
-const listOrder = (a: Row, b: Row) => {
-  const pinA = millis(a.pinnedAt);
-  const pinB = millis(b.pinnedAt);
-  if (pinA === undefined && pinB !== undefined) return 1;
-  if (pinA !== undefined && pinB === undefined) return -1;
-  if (pinA !== undefined && pinB !== undefined && pinA !== pinB)
-    return pinB - pinA;
-  const activity =
-    DateTime.toEpochMillis(b.lastActivityAt) -
-    DateTime.toEpochMillis(a.lastActivityAt);
-  if (activity !== 0) return activity;
-  return a.id < b.id ? 1 : a.id > b.id ? -1 : 0;
-};
 
 /**
  * Changes that move a row between lists, under another parent, or change
@@ -93,44 +76,6 @@ const listRows = (data: ListData | undefined, threadId: ThreadId) =>
       ({ id }) => id === threadId,
     ),
   ) ?? [];
-
-interface ListFilters {
-  readonly projectId: string | null;
-  readonly lifecycleState: string | null;
-  readonly tree: string | null;
-}
-
-/**
- * The list's filters admit the row, and its loaded pages reach the row's
- * place: the list should show the row, so a list without it is stale.
- */
-const belongsInLoadedList = (
-  queryKey: readonly unknown[],
-  data: ListData,
-  row: Row,
-) => {
-  const filters = queryKey[3] as ListFilters | undefined;
-  if (filters === undefined) return false;
-  if (filters.projectId !== null && filters.projectId !== row.projectId)
-    return false;
-  if (
-    filters.lifecycleState !== null &&
-    filters.lifecycleState !== row.lifecycleState
-  )
-    return false;
-  if (filters.tree === "roots" && row.parentThreadId !== undefined)
-    return false;
-  if (
-    filters.tree !== null &&
-    filters.tree !== "roots" &&
-    filters.tree !== row.parentThreadId
-  )
-    return false;
-  const lastPage = data.pages.at(-1);
-  if (lastPage?.nextCursor === undefined) return true;
-  const last = lastPage.items.at(-1);
-  return last === undefined || listOrder(row, last) < 0;
-};
 
 /** Only a roots list's own items show a child count. */
 const isRootsList = (queryKey: readonly unknown[]) =>

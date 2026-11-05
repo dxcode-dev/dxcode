@@ -388,10 +388,7 @@ function PaneTabPanel({
       ? renderPaneContent(contents.agent, active)
       : tab.kind === "file"
         ? contents.file(tab.target, active)
-        : renderPaneContent(
-            contents.views[tab.kind] ?? contents.unavailableView,
-            active,
-          );
+        : renderPaneContent(contents.views[tab.kind], active);
   return (
     <div
       id={panelDomId(id)}

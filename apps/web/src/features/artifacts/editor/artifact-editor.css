@@ -64,7 +64,9 @@
   flex: none;
 }
 
-/* The toolbar: one row under the header; scrolls sideways when narrow. */
+/* The toolbar: one row under the header. Its buttons keep their size and,
+   on a phone, show only their icons, the label staying as the button's
+   name. It scrolls sideways if even that does not fit. */
 .artifact-toolbar {
   display: flex;
   align-items: center;
@@ -79,8 +81,35 @@
   border-bottom: 1px solid var(--divider);
   scrollbar-width: none;
 }
+.artifact-toolbar > * {
+  flex: none;
+}
+/* A pixel less each side than other buttons, so every tool and its label
+   fits the Artifacts pane beside the conversation on a 1440 px screen. */
+.artifact-toolbar > .artifact-tool {
+  padding: 0 5px;
+}
 .artifact-tool-end {
   margin-left: auto;
+}
+/* An icon only a phone needs, where it stands in for the label. */
+.artifact-tool > .artifact-tool-phone-icon {
+  display: none;
+}
+@media (max-width: 640px) {
+  .artifact-tool > .artifact-tool-phone-icon {
+    display: block;
+  }
+  .artifact-tool > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .artifact-tool > .artifact-tool-caret {
+    display: none;
+  }
 }
 
 .artifact-notice {
@@ -301,22 +330,37 @@
   text-decoration: line-through;
 }
 
-/* Tables scroll sideways inside their box. */
+/* Tables scroll sideways inside their box rather than squeeze their
+   columns. Columns size to their content, not the plugin's equal fixed
+   split; a cell breaks inside a word only when the word alone is wider than
+   the column; and on a narrow screen each column keeps room for a few words
+   a line. */
 .artifact-table-scroll {
   max-width: 100%;
   overflow-x: auto;
 }
 .artifact-prose table {
   border-collapse: collapse;
+  table-layout: auto;
+  width: auto;
   min-width: 100%;
   font-size: 13px;
 }
+/* The table plugin gives each cell this minimum width. */
+.artifact-prose {
+  --default-cell-min-width: 80px;
+}
 .artifact-prose th,
 .artifact-prose td {
-  min-width: 80px;
   padding: 6px 10px;
   border: 1px solid var(--divider);
   vertical-align: top;
+  overflow-wrap: break-word;
+}
+@media (max-width: 640px) {
+  .artifact-prose {
+    --default-cell-min-width: 140px;
+  }
 }
 .artifact-prose th {
   font-weight: 600;
@@ -670,10 +714,11 @@
 .artifact-comment-new {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px;
+  gap: 10px;
+  padding: 10px 12px 12px;
   border: 1px solid var(--divider);
-  border-radius: 8px;
+  border-radius: 10px;
+  background: var(--surface);
 }
 .artifact-comment-new {
   margin-bottom: 8px;
@@ -699,21 +744,74 @@
   cursor: default;
   text-decoration: line-through;
 }
+.artifact-comment {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+/* Replies sit under the comment, on a line from its avatar. */
+.artifact-comment + .artifact-comment {
+  padding-left: 30px;
+}
 .artifact-comment-meta {
   display: flex;
-  align-items: baseline;
-  gap: 6px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
   color: var(--muted-foreground);
   font-size: 11px;
 }
 .artifact-comment-meta > strong {
+  overflow: hidden;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-comment-avatar {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  overflow: hidden;
+  color: var(--foreground);
+  border-radius: 999px;
+  background: var(--accent);
+}
+.artifact-comment-avatar > .dx-avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 9px;
+}
+.artifact-comment-avatar > .dx-brand-wordmark {
+  font-size: 10px;
 }
 .artifact-comment-body {
-  margin: 2px 0 0;
+  margin: 0;
+  padding-left: 30px;
+  line-height: 1.45;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.artifact-comment-mention {
+  padding: 0 4px;
+  color: var(--primary);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  font-weight: 500;
+}
+.artifact-comment-asking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.artifact-comment-asking > .dx-brand-wordmark {
+  color: var(--foreground);
 }
 .artifact-comment-body a {
   color: var(--link, #3b82f6);
@@ -761,9 +859,14 @@
   font-size: 12px;
   cursor: pointer;
 }
-.artifact-comment-actions > .artifact-comment-mention {
+.artifact-comment-actions > .artifact-comment-ask {
   margin-right: auto;
   color: var(--muted-foreground);
+}
+.artifact-comment-actions > .artifact-comment-ask[aria-pressed="true"] {
+  color: var(--primary);
+  border-color: color-mix(in srgb, var(--primary) 45%, transparent);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 .artifact-comment-actions > .artifact-comment-submit {
   color: var(--primary-foreground);
@@ -994,4 +1097,14 @@ span.artifact-image-upload {
     right: 16px;
     left: 48px;
   }
+}
+
+/* Notify agent (#1765): its own color once the agent was told. */
+.artifact-notify-agent[data-sent] {
+  color: var(--success, #22a06b);
+  border-color: color-mix(in srgb, var(--success, #22a06b) 45%, transparent);
+  background: color-mix(in srgb, var(--success, #22a06b) 12%, transparent);
+}
+.artifact-notify-agent[data-failed] {
+  color: var(--warning);
 }

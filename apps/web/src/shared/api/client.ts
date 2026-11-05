@@ -2,7 +2,6 @@ import {
   AcceptWorkspaceInviteResponseSchema,
   AddVerificationKeyResponseSchema,
   ApplyBulkEnvironmentVariablesResponseSchema,
-  ArchiveThreadExecutionUnavailableResponseSchema,
   ArchiveThreadInvalidRequestResponseSchema,
   ArchiveThreadNotFoundResponseSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
@@ -457,7 +456,6 @@ export const request = async <
         ArchiveThreadInvalidRequestResponseSchema,
         ArchiveThreadNotFoundResponseSchema,
         ArchiveThreadPersistenceUnavailableResponseSchema,
-        ArchiveThreadExecutionUnavailableResponseSchema,
         ArchiveThreadProjectDeletedResponseSchema,
         DeleteProjectInvalidRequestResponseSchema,
         DeleteProjectNameMismatchResponseSchema,
@@ -1580,6 +1578,7 @@ export const updateProject = async (
     readonly description?: string;
     readonly runnerProfileId?: RunnerProfileId;
     readonly additionalRepositories?: ReadonlyArray<string>;
+    readonly remoteAliases?: ReadonlyArray<string>;
   },
 ): Promise<ProjectData> =>
   (
@@ -1620,13 +1619,15 @@ export const restartThreadOrb = async (
 
 export const rebindProjectSource = async (
   projectId: ProjectId,
-  input: {
-    readonly revision: number;
-    readonly grantId: string;
-    readonly providerRepositoryId: ProviderRepositoryId;
-    readonly provider?: "github" | "bitbucket";
-    readonly workspaceId?: string;
-  },
+  input:
+    | {
+        readonly revision: number;
+        readonly grantId: string;
+        readonly providerRepositoryId: ProviderRepositoryId;
+        readonly provider?: "github" | "bitbucket";
+        readonly workspaceId?: string;
+      }
+    | { readonly revision: number; readonly url: string },
 ): Promise<ProjectData> =>
   (
     await request(
@@ -1806,6 +1807,8 @@ export const setThreadFollowing = async (
 export interface ArchivedThread {
   readonly thread: ThreadData;
   readonly changedChildThreadIds?: ReadonlyArray<ThreadId>;
+  /** Archived, but its Orb couldn't be stopped yet; the server finishes it. */
+  readonly orbStopping?: true;
 }
 
 /**
@@ -1838,6 +1841,7 @@ export const setThreadArchived = async (
     ...(response.changedChildThreadIds === undefined
       ? {}
       : { changedChildThreadIds: response.changedChildThreadIds }),
+    ...(response.orbStopping === true ? { orbStopping: true as const } : {}),
   };
 };
 

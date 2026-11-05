@@ -18,6 +18,7 @@ const CONFIG_KEYS = new Set([
   "modelDeploymentProviders",
   "modelEndpointAllowlist",
   "bugReportReaders",
+  "bugReportDestination",
   "dxdBinary",
   "integrations",
   "plugins",
@@ -65,6 +66,8 @@ export const DEPLOYMENT_SECRET_NAMES = Object.freeze([
   "SARVAM_API_KEY",
   "EXA_API_KEY",
   "BOAT_API_KEY",
+  "DX_BUG_REPORT_DESTINATION_KEY",
+  "DX_BUG_REPORT_INTAKE_SECRET",
   "DX_GOOGLE_CLIENT_SECRET",
   "DX_R2_ACCESS_KEY_ID",
   "DX_R2_SECRET_ACCESS_KEY",
@@ -274,17 +277,42 @@ export const validateSelfhostConfig = (input) => {
     if (input[key] !== undefined && typeof input[key] !== "boolean")
       throw new Error(`${key} must be true or false.`);
   // `boat`: Boat Orbs on the deployment's own Boat account (BOAT_API_KEY).
+  // `bugReportForwarding`: share each bug report with `bugReportDestination`
+  // (DX_BUG_REPORT_DESTINATION_KEY). `bugReportIntake`: take reports other
+  // deployments forward (DX_BUG_REPORT_INTAKE_SECRET).
   const integrations = input.integrations ?? [];
   if (
     !Array.isArray(integrations) ||
     integrations.some(
       (value) =>
-        !new Set(["github", "bitbucket", "sarvam", "exa", "boat"]).has(value),
+        !new Set([
+          "github",
+          "bitbucket",
+          "sarvam",
+          "exa",
+          "boat",
+          "bugReportForwarding",
+          "bugReportIntake",
+        ]).has(value),
     ) ||
     new Set(integrations).size !== integrations.length
   )
     throw new Error(
-      "integrations may contain github, bitbucket, sarvam, exa, and boat once each.",
+      "integrations may contain github, bitbucket, sarvam, exa, boat, bugReportForwarding, and bugReportIntake once each.",
+    );
+  // The central dx deployment this one shares bug reports with: an `https`
+  // origin, required while `bugReportForwarding` is on and dropped when off.
+  const bugReportDestination = input.bugReportDestination;
+  const forwarding = integrations.includes("bugReportForwarding");
+  if (
+    forwarding &&
+    (typeof bugReportDestination !== "string" ||
+      !URL.canParse(bugReportDestination) ||
+      new URL(bugReportDestination).protocol !== "https:" ||
+      new URL(bugReportDestination).origin !== bugReportDestination)
+  )
+    throw new Error(
+      "With bugReportForwarding, bugReportDestination must be an https origin, such as https://dx.example.com.",
     );
   // Settings `pnpm dx:configure` has asked this deployment about
   // (deploy/selfhost/settings.mjs); absent before it existed.
@@ -402,6 +430,7 @@ export const validateSelfhostConfig = (input) => {
             ...new Set(bugReportReaders.map((email) => email.toLowerCase())),
           ].sort(),
         }),
+    ...(forwarding ? { bugReportDestination } : {}),
     orbProviders: [...orbProviders].sort(),
     ...(configuredSettings === undefined
       ? {}
