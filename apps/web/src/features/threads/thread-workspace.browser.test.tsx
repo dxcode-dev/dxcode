@@ -215,8 +215,10 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
 }));
 
 import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
+import { paneLayoutWith } from "../../testing/pane-layouts.js";
 import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
 import { projectKeys } from "../projects/project-queries.js";
+import { ThreadTerminal } from "../terminal/thread-terminal.js";
 import { defaultPaneLayout } from "./panes/pane-layout.js";
 import { paneLayoutKeys } from "./panes/pane-layout-queries.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
@@ -410,6 +412,115 @@ describe("ThreadSession panes", () => {
     await click(container.querySelector('[aria-label="Close Changes"]'));
     expect(container.querySelectorAll(".thread-pane")).toHaveLength(1);
     expect(container.querySelector(".pane-divider")).toBeNull();
+    await React.act(() => root.unmount());
+  });
+
+  // Issue #1847: reopening a paused Thread whose saved panes keep Terminal
+  // behind Changes woke its Orb. The hidden Terminal connected on load, and
+  // Core takes a Terminal's attach as the intent to wake.
+  it("reopens a saved Terminal behind Changes without connecting it until it shows", async () => {
+    viewport.mobile = false;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const sockets: Array<{ url: string; sent: unknown[]; closed: boolean }> =
+      [];
+    vi.stubGlobal(
+      "WebSocket",
+      class extends EventTarget {
+        static readonly OPEN = 1;
+        readyState = 0;
+        binaryType = "";
+        readonly record: { url: string; sent: unknown[]; closed: boolean };
+        constructor(url: string) {
+          super();
+          this.record = { url, sent: [], closed: false };
+          sockets.push(this.record);
+          queueMicrotask(() => {
+            this.readyState = 1;
+            this.dispatchEvent(new Event("open"));
+          });
+        }
+        send(value: unknown) {
+          this.record.sent.push(value);
+        }
+        close() {
+          this.record.closed = true;
+        }
+      },
+    );
+    const loadEmulator = (() =>
+      Promise.resolve({
+        mountBrowserTerminal: async () => ({
+          terminal: {
+            cols: 80,
+            rows: 24,
+            write: () => {},
+            reset: () => {},
+            resize: () => {},
+            onResize: () => ({ dispose: () => {} }),
+          },
+          setVisible: () => {},
+          dispose: () => {},
+        }),
+      })) as unknown as React.ComponentProps<
+      typeof ThreadTerminal
+    >["loadEmulator"];
+    const Terminal = (
+      props: Omit<React.ComponentProps<typeof ThreadTerminal>, "loadEmulator">,
+    ) => <ThreadTerminal {...props} loadEmulator={loadEmulator} />;
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    // The layout the critical suite leaves: Changes shown, Terminal behind it.
+    queryClient.setQueryData(
+      paneLayoutKeys.layout(userId, thread.id),
+      paneLayoutWith(["changes", "terminal"]),
+    );
+    await React.act(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ThreadSession
+            thread={thread}
+            project={project}
+            Terminal={Terminal}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    const settle = async () => {
+      for (let turn = 0; turn < 5; turn += 1)
+        await React.act(() => new Promise((resolve) => setTimeout(resolve)));
+    };
+    await settle();
+    const changesTab = tabNamed(container, "Changes");
+    const terminalTab = tabNamed(container, "Terminal");
+    expect(changesTab?.getAttribute("aria-selected")).toBe("true");
+    expect(terminalTab?.getAttribute("aria-selected")).toBe("false");
+    expect(sockets).toEqual([]);
+
+    // Showing Terminal is the intent: it connects and attaches then.
+    await click(terminalTab);
+    await settle();
+    expect(sockets.map(({ url }) => new URL(url).pathname)).toEqual([
+      `/v1/threads/${thread.id}/terminal`,
+    ]);
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach"]);
+
+    // Hidden again, it stays connected with its screen.
+    await click(changesTab);
+    await settle();
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0]?.closed).toBe(false);
     await React.act(() => root.unmount());
   });
 

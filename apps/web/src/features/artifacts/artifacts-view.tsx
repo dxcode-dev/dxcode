@@ -12,6 +12,7 @@ import {
   createArtifactMutation,
 } from "./artifact-document-queries.js";
 import "./artifacts-view.css";
+import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 
 // ProseMirror and the Markdown codec load only when an artifact opens, so
 // the Thread page's first load does not grow. `lazyRouteComponent` reloads
@@ -128,12 +129,14 @@ function OpenArtifact({
   active,
   readOnly,
   switcher,
+  dictation,
 }: {
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly active: boolean;
   readonly readOnly: boolean;
   readonly switcher: React.ReactNode;
+  readonly dictation: DictationSlot | undefined;
 }) {
   const query = useQuery(artifactOptions(threadId, artifactId, active));
   if (query.data === undefined)
@@ -163,6 +166,7 @@ function OpenArtifact({
         initial={query.data}
         readOnly={readOnly}
         switcher={switcher}
+        dictation={dictation}
       />
     </React.Suspense>
   );
@@ -176,10 +180,13 @@ export function ArtifactsView({
   threadId,
   active,
   readOnly,
+  dictation,
 }: {
   readonly threadId: ThreadId;
   readonly active: boolean;
   readonly readOnly: boolean;
+  /** The composer's mic, when the Thread page offers dictation. */
+  readonly dictation?: DictationSlot | undefined;
 }) {
   const queryClient = useQueryClient();
   const requested = useSearch({
@@ -259,6 +266,7 @@ export function ArtifactsView({
       active={active}
       readOnly={readOnly}
       switcher={switcher}
+      dictation={dictation}
     />
   );
 }

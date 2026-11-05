@@ -415,3 +415,22 @@ export const tableAction = (
 
 export const selectionInTable = (state: EditorState) =>
   isInTable(state) || state.selection instanceof CellSelection;
+
+/**
+ * A transcript typed at the cursor, as one transaction. It gets a space
+ * before it when it would otherwise run into the word before the cursor.
+ */
+export const insertDictation = (
+  state: EditorState,
+  text: string,
+): Transaction | undefined => {
+  const words = text.trim();
+  if (words === "") return undefined;
+  const { $from } = state.selection;
+  const before = $from.parent.textBetween(
+    Math.max(0, $from.parentOffset - 1),
+    $from.parentOffset,
+  );
+  const spaced = before === "" || /\s$/.test(before) ? words : ` ${words}`;
+  return state.tr.insertText(spaced).scrollIntoView();
+};

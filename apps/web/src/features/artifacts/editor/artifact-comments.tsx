@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
 import * as React from "react";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
+import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
 import {
   ModalSurface,
@@ -59,6 +60,7 @@ function CommentComposer({
   onCancel,
   text,
   focus = false,
+  dictation,
 }: {
   readonly label: string;
   readonly placeholder: string;
@@ -73,12 +75,17 @@ function CommentComposer({
     readonly set: (value: string) => void;
   };
   readonly focus?: boolean;
+  /** The composer's mic, when dictation is available and the person may edit. */
+  readonly dictation?: DictationSlot | undefined;
 }) {
   const [own, setOwn] = React.useState("");
   const body = text?.value ?? own;
   const setBody = text?.set ?? setOwn;
   // The box shows `@dx` as people read it; it posts as the mention.
   const asking = asksAgent(body);
+  const box = React.useRef<HTMLTextAreaElement | null>(null);
+  // The mic's words show on their own line under the buttons.
+  const [noticeHost, setNoticeHost] = React.useState<HTMLElement | null>(null);
   const submit = () => {
     const value = body.trim();
     if (value === "" || pending) return;
@@ -93,7 +100,10 @@ function CommentComposer({
       }}
     >
       <textarea
-        ref={focus ? focusOnOpen : undefined}
+        ref={(node) => {
+          box.current = node;
+          if (focus) focusOnOpen(node);
+        }}
         aria-label={label}
         placeholder={placeholder}
         value={body}
@@ -118,6 +128,13 @@ function CommentComposer({
         </p>
       ) : null}
       <div className="artifact-comment-actions">
+        {dictation === undefined ? null : (
+          <dictation.Textarea
+            textareaRef={box}
+            onChange={setBody}
+            noticeHost={noticeHost}
+          />
+        )}
         <button
           type="button"
           className="artifact-comment-ask"
@@ -139,6 +156,9 @@ function CommentComposer({
           {label}
         </button>
       </div>
+      {dictation === undefined ? null : (
+        <div className="artifact-comment-dictation" ref={setNoticeHost} />
+      )}
     </form>
   );
 }
@@ -183,6 +203,7 @@ function CommentThread({
   anchored,
   readOnly,
   people,
+  dictation,
   threadId,
   artifactId,
   onSelect,
@@ -193,6 +214,7 @@ function CommentThread({
   readonly anchored: boolean;
   readonly readOnly: boolean;
   readonly people: CommentPeople;
+  readonly dictation: DictationSlot | undefined;
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly onSelect: (id: string) => void;
@@ -238,6 +260,7 @@ function CommentThread({
       {readOnly ? null : (
         <>
           <CommentComposer
+            dictation={dictation}
             label="Reply"
             placeholder="Reply…"
             pending={reply.isPending}
@@ -273,6 +296,7 @@ function CommentsList({
   draftText,
   readOnly,
   people,
+  dictation,
   threadId,
   artifactId,
   onSelect,
@@ -290,6 +314,8 @@ function CommentsList({
   readonly readOnly: boolean;
   /** Pictures for comment authors, from the Thread's members. */
   readonly people: CommentPeople;
+  /** Dictation is served, switched on, and the person may edit. */
+  readonly dictation: DictationSlot | undefined;
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly onSelect: (id: string) => void;
@@ -320,6 +346,7 @@ function CommentsList({
       anchored={isAnchored}
       readOnly={readOnly}
       people={people}
+      dictation={dictation}
       threadId={threadId}
       artifactId={artifactId}
       onSelect={onSelect}
@@ -333,6 +360,7 @@ function CommentsList({
             {shorten(draft.quote)}
           </p>
           <CommentComposer
+            dictation={dictation}
             label="Comment"
             placeholder="Add a comment…"
             pending={create.isPending}

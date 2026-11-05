@@ -1930,7 +1930,28 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
             : jsonResponse(attribution, 200);
         }
         case "/resolve": {
-          const route = await this.#prepare(envelope as ResolveEnvelope);
+          const route = await this.#prepare(envelope as ResolveEnvelope).catch(
+            (error: unknown) => {
+              // The Thread was archived before its run started (#1849): an
+              // account failure with the text the Thread's error card shows,
+              // never retried.
+              if (error instanceof Error && error.message === "THREAD_ARCHIVED")
+                return undefined;
+              throw error;
+            },
+          );
+          if (route === undefined) {
+            settingsPersistenceLogger.warn("BYOK invocation failed.", {
+              event: "byok_invocation_failed",
+              code: "THREAD_ARCHIVED",
+            });
+            return failureResponse({
+              class: "account",
+              code: "THREAD_ARCHIVED",
+              message: LIVENESS_FAILURE_MESSAGES.THREAD_ARCHIVED,
+              retryable: false,
+            });
+          }
           return jsonResponse(
             {
               model: `${route.model.provider}/${route.model.id}`,

@@ -1,3 +1,5 @@
+import { getLogger } from "@logtape/logtape";
+
 /**
  * Masks the values of a Thread's secrets in text the agent, its tool results,
  * or the Thread's history would show. Commands still receive the values;
@@ -744,11 +746,61 @@ export interface SecretMasker {
   ): { readonly released: string; readonly held: string };
 }
 
+const logger = getLogger(["dx", "secret-masking"]);
+
+/**
+ * What a masker throws when it cannot prepare or run its matchers. Its
+ * message is fixed: a regular expression's own error quotes its pattern,
+ * which holds the secrets' forms, so that error never leaves the masker.
+ */
+export class SecretMaskingFailed extends Error {
+  override readonly name = "SecretMaskingFailed";
+  constructor() {
+    super("Secret masking could not be prepared.");
+  }
+}
+
 /**
  * A masker for the given secret values. Where values share a form, the
- * first given names it.
+ * first given names it. Any failure inside it, building its regular
+ * expressions or running them, throws SecretMaskingFailed and logs only
+ * each secret's name and length.
  */
 export const secretMasker = (
+  values: ReadonlyArray<{ readonly name: string; readonly value: string }>,
+): SecretMasker => {
+  const guard = <A>(operation: string, run: () => A): A => {
+    try {
+      return run();
+    } catch (cause) {
+      logger.error("Secret masking failed", {
+        operation,
+        errorName: cause instanceof Error ? cause.name : typeof cause,
+        secrets: values.map(({ name, value }) => ({
+          name,
+          bytes: Buffer.byteLength(value),
+        })),
+      });
+      throw new SecretMaskingFailed();
+    }
+  };
+  const masker = guard("prepare", () => unguardedSecretMasker(values));
+  return {
+    secrets: masker.secrets,
+    markers: masker.markers,
+    get readContextBytes() {
+      return guard("readContextBytes", () => masker.readContextBytes);
+    },
+    mask: (text) => guard("mask", () => masker.mask(text)),
+    maskBytes: (bytes) => guard("maskBytes", () => masker.maskBytes(bytes)),
+    maskRead: (before, text, options) =>
+      guard("maskRead", () => masker.maskRead(before, text, options)),
+    maskFragment: (held, fragment, final) =>
+      guard("maskFragment", () => masker.maskFragment(held, fragment, final)),
+  };
+};
+
+const unguardedSecretMasker = (
   values: ReadonlyArray<{ readonly name: string; readonly value: string }>,
 ): SecretMasker => {
   const names = new Map<string, string>();

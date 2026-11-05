@@ -1056,6 +1056,42 @@ describe("thread composer ownership", () => {
     await React.act(() => panel.root.unmount());
   });
 
+  it("says a run that started on an archived Thread failed because the Thread is archived (#1849)", async () => {
+    const panel = await mountPanel(
+      {
+        settlements: [
+          {
+            submissionId: "archived-run",
+            outcome: "failed",
+            // The settlement error exactly as #1854's preview delivered it.
+            error: {
+              name: "FlueError",
+              type: "model_routing_failure",
+              message:
+                "This Thread is archived. Restore it to continue. (dx_failure:account:THREAD_ARCHIVED)",
+              details: "",
+              meta: { code: "THREAD_ARCHIVED", class: "account" },
+            },
+          },
+        ],
+      },
+      true,
+      {},
+      { onOpenModelRouting: vi.fn() },
+    );
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("This Thread is archived");
+    expect(card?.textContent).toContain(
+      "This Thread is archived. Restore it to continue.",
+    );
+    // Not a model connection problem, and nothing to fix in Model Routing.
+    expect(card?.textContent).not.toContain("Model connection");
+    expect(card?.textContent).not.toContain("Open Model Routing");
+    expect(card?.textContent).not.toContain("dx_failure");
+    await React.act(() => panel.root.unmount());
+  });
+
   it("suppresses Model Routing actions on archived cards", async () => {
     const panel = await mountPanel(
       {

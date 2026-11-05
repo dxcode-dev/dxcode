@@ -1,12 +1,15 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Download, Mic, RotateCcw, Square } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
+import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
 import { playUiSound } from "../../../shared/ui/ui-sounds.js";
 import { Waveform } from "../../../shared/ui/waveform.js";
+import { settingsContextQueryOptions } from "../../settings/settings-context-queries.js";
 import { ThreadPresentationContext } from "../thread-session-context.js";
 import {
   cancelDictationJob,
@@ -134,21 +137,49 @@ const DictationCaret = ({
   return textarea === null ? null : <CaretMarker textarea={textarea} />;
 };
 
+/**
+ * Where a transcript goes: a textarea, at its cursor (`textareaRef` with
+ * `onChange`), or anything else that inserts text itself (`insertText`,
+ * which returns false when it could not), such as the artifact editor.
+ */
+type DictationTarget =
+  | {
+      readonly textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+      readonly onChange: (value: string) => void;
+      readonly insertText?: never;
+    }
+  | {
+      readonly insertText: (text: string) => boolean;
+      readonly textareaRef?: never;
+      readonly onChange?: never;
+    };
+
+/** What the mic is doing, in words, for a surface that shows it itself. */
+export interface DictationNotice {
+  readonly tone: "progress" | "error";
+  readonly text: string;
+}
+
 export const useDictation = ({
   enabled = false,
   locked = false,
+  noticeOutside = false,
   onChange,
   onSend,
   session,
   textareaRef,
+  insertText,
 }: {
   readonly enabled?: boolean;
   readonly locked?: boolean;
-  readonly onChange: (value: string) => void;
+  /**
+   * The surface shows `notice` itself, so the controls draw no floating
+   * status: in a toolbar that scrolls, a bubble above the mic is cut off.
+   */
+  readonly noticeOutside?: boolean;
   readonly session?: DictationRecoverySession;
   readonly onSend: (value: string) => void;
-  readonly textareaRef: React.RefObject<HTMLTextAreaElement | null>;
-}) => {
+} & DictationTarget) => {
   const send = React.useRef(onSend);
   const lockedRef = React.useRef(false);
   const thread = React.useContext(ThreadPresentationContext);
@@ -178,6 +209,8 @@ export const useDictation = ({
   const recording = React.useRef<LiveRecording | undefined>(undefined);
   const insert = (text: string, intent: DictationIntent) => {
     if (lockedRef.current) return false;
+    if (insertText !== undefined) return insertText(text);
+    if (textareaRef === undefined || onChange === undefined) return false;
     const textarea = textareaRef.current;
     if (textarea === null) return false;
     const start = textarea.selectionStart;
@@ -500,7 +533,7 @@ export const useDictation = ({
           </Button>
         </>
       ) : null}
-      {status ? (
+      {status && !noticeOutside ? (
         <span
           className={
             snapshot.state === "error" || mutation.isError || recoverable
@@ -516,16 +549,135 @@ export const useDictation = ({
           {status}
         </span>
       ) : null}
-      {snapshot.state === "recording" && processingIntent === undefined ? (
+      {snapshot.state === "recording" &&
+      processingIntent === undefined &&
+      textareaRef !== undefined ? (
         <DictationCaret textareaRef={textareaRef} />
       ) : null}
     </span>
   ) : undefined;
 
+  const failed = snapshot.state === "error" || mutation.isError || recoverable;
+  const notice: DictationNotice | undefined =
+    !enabled || status === undefined
+      ? undefined
+      : failed
+        ? {
+            tone: "error",
+            text: recoverable ? `${status} Retry, or record again.` : status,
+          }
+        : {
+            tone: "progress",
+            text:
+              snapshot.state === "recording" && processingIntent === undefined
+                ? "Listening… Stop when you're done."
+                : processingIntent !== undefined
+                  ? "Transcribing…"
+                  : status,
+          };
+
   return {
     active,
     controls,
+    notice,
     hideSubmit: processingIntent === "send",
     interceptSubmit,
   };
+};
+
+// The composer's mic for the Thread page's other surfaces, in this module so
+// it ships with the hook (the composer's chunk), not with the Thread page.
+
+const sendNothing = () => undefined;
+
+/** The mic's words, where the surface asked for them, or after the mic. */
+function Notice({
+  notice,
+  host,
+}: {
+  readonly notice: DictationNotice | undefined;
+  readonly host: HTMLElement | null | undefined;
+}) {
+  if (notice === undefined) return null;
+  const line = (
+    <p
+      className="dictation-notice"
+      data-tone={notice.tone}
+      role={notice.tone === "error" ? "alert" : "status"}
+    >
+      {notice.text}
+    </p>
+  );
+  return host ? createPortal(line, host) : line;
+}
+
+/**
+ * The composer's mic for the Thread page's other surfaces. Each keeps its
+ * own recovery session, so a dictation saved there never shows up in the
+ * composer.
+ */
+export function InsertDictation({
+  insertText,
+  noticeHost,
+}: {
+  readonly insertText: (text: string) => boolean;
+  readonly noticeHost?: HTMLElement | null;
+}) {
+  const [session] = React.useState(() => new DictationRecoverySession());
+  const dictation = useDictation({
+    enabled: true,
+    noticeOutside: true,
+    insertText,
+    onSend: sendNothing,
+    session,
+  });
+  return (
+    <span className="dictation-slot">
+      {dictation.controls}
+      <Notice notice={dictation.notice} host={noticeHost} />
+    </span>
+  );
+}
+
+export function TextareaDictation({
+  textareaRef,
+  onChange,
+  noticeHost,
+}: {
+  readonly textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  readonly onChange: (value: string) => void;
+  readonly noticeHost?: HTMLElement | null;
+}) {
+  const [session] = React.useState(() => new DictationRecoverySession());
+  const dictation = useDictation({
+    enabled: true,
+    noticeOutside: true,
+    textareaRef,
+    onChange,
+    onSend: sendNothing,
+    session,
+  });
+  return (
+    <span className="dictation-slot">
+      {dictation.controls}
+      <Notice notice={dictation.notice} host={noticeHost} />
+    </span>
+  );
+}
+
+/** The composer's mic for the Thread page's other surfaces. */
+const dictationSlot: DictationSlot = {
+  Insert: InsertDictation,
+  Textarea: TextareaDictation,
+};
+
+/**
+ * Dictation for surfaces such as artifacts, by the composer's rule: the
+ * deployment serves a speech provider and the person's dictation switch is
+ * on. The components wrap the composer's hook, which the page loads anyway.
+ */
+export const useDictationSlot = () => {
+  const { identity } = useAuthenticatedIdentity();
+  const settings = useQuery(settingsContextQueryOptions(identity.id));
+  return settings.data?.dictationAvailable === true ? dictationSlot : undefined;
 };

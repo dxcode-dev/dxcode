@@ -5,6 +5,7 @@ import { X } from "lucide-react";
 import { openedArtifactSheet } from "../../shared/navigation/open-artifact.js";
 import { ArtifactsView } from "./artifacts-view.js";
 import "./artifact-sheet.css";
+import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 
 /**
  * An artifact full screen over the Thread, opened from its card on a phone.
@@ -13,9 +14,12 @@ import "./artifact-sheet.css";
 export function ArtifactSheet({
   threadId,
   readOnly,
+  dictation,
 }: {
   readonly threadId: ThreadId;
   readonly readOnly: boolean;
+  /** The composer's mic, when the Thread page offers dictation. */
+  readonly dictation?: DictationSlot | undefined;
 }) {
   const navigate = useNavigate();
   const router = useRouter();
@@ -54,7 +58,12 @@ export function ArtifactSheet({
             </Dialog.Close>
           </div>
           <div className="artifact-sheet-body">
-            <ArtifactsView threadId={threadId} active readOnly={readOnly} />
+            <ArtifactsView
+              threadId={threadId}
+              active
+              readOnly={readOnly}
+              dictation={dictation}
+            />
           </div>
         </Dialog.Popup>
       </Dialog.Portal>

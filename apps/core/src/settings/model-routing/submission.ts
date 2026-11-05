@@ -468,7 +468,19 @@ export const resolveThreadSubmission = async (
   const db = bindings.DB;
   if (db === undefined) throw new Error("Model routing is not configured.");
   const thread = await loadThreadRoute(db, threadId);
-  if (thread === undefined) throw new Error("THREAD_ROUTE_NOT_FOUND");
+  if (thread === undefined) {
+    // A run that starts as its Thread is archived (one admitted just before
+    // the archive's agent stop, #1849) is refused for what it is.
+    const archived = await db
+      .prepare(
+        "SELECT 1 AS archived FROM threads WHERE id = ? AND lifecycle_state = 'archived'",
+      )
+      .bind(threadId)
+      .first();
+    throw new Error(
+      archived === null ? "THREAD_ROUTE_NOT_FOUND" : "THREAD_ARCHIVED",
+    );
+  }
   return resolveRouteSubmission(bindings, thread, submissionId);
 };
 

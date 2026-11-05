@@ -45,6 +45,7 @@ import { settingsContextQueryOptions } from "../settings/settings-context-querie
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { ThreadScheduleHint } from "./automations/thread-schedule-hint.js";
 import { ChangesPane } from "./changes/changes-pane.js";
+import { useDictationSlot } from "./dictation/use-dictation.js";
 import { CenterFilePane } from "./files/center-file-pane.js";
 import type { CenterFileTab } from "./files/file-tab.js";
 import {
@@ -82,6 +83,7 @@ import {
   useSetThreadFollowing,
 } from "./sharing/sharing-mutations.js";
 import { threadMembersQueryOptions } from "./sharing/thread-chat-queries.js";
+import { ShipOutcomeActions } from "./ship-outcome.js";
 import { useThreadDraftValue } from "./thread-draft-queries.js";
 import {
   type ThreadFileNavigation,
@@ -109,7 +111,6 @@ import {
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
 import type { TranscriptFocus } from "./thread-transcript.js";
-import { ShipOutcomeActions } from "./ship-outcome.js";
 import { createTranscriptAccess } from "./transcript-access.js";
 import {
   absolutePathFor,
@@ -231,6 +232,7 @@ export function ThreadWorkspace({
   const navigate = useNavigate();
   // A card's Open on a phone shows the artifact full screen over the Thread.
   const artifactSheet = useArtifactSheet();
+  const dictationSlot = useDictationSlot();
   const returnTo = useLocation({ select: (location) => location.href });
   // A notification opens the Thread at a message; the URL keeps it only
   // until the transcript has scrolled there.
@@ -412,6 +414,7 @@ export function ThreadWorkspace({
         <React.Suspense fallback={null}>
           <ArtifactSheet
             threadId={thread.id}
+            dictation={dictationSlot}
             readOnly={
               thread.access === "view" || thread.lifecycleState === "archived"
             }
@@ -877,6 +880,7 @@ function ArtifactsTab({
   readonly active: boolean;
   readonly readOnly: boolean;
 }) {
+  const dictation = useDictationSlot();
   // One editor per artifact on a page.
   if (useArtifactSheet())
     return (
@@ -886,7 +890,12 @@ function ArtifactsTab({
     );
   return (
     <React.Suspense fallback={loadingArtifacts}>
-      <ArtifactsView threadId={threadId} active={active} readOnly={readOnly} />
+      <ArtifactsView
+        threadId={threadId}
+        active={active}
+        readOnly={readOnly}
+        dictation={dictation}
+      />
     </React.Suspense>
   );
 }

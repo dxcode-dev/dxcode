@@ -701,6 +701,13 @@ export function ThreadTerminal(props: ThreadTerminalProps) {
   const { terminalScheme, terminalTheme, codeFontFamily, codeFontSize } =
     useTheme();
   const session = React.use(TerminalSessionContext);
+  // Core takes a Terminal's attach as the intent to wake a paused Orb, so a
+  // tab restored behind another connects only once it first shows (#1847).
+  // After that it stays connected while hidden, keeping its screen.
+  const active = props.active ?? true;
+  const [shown, setShown] = React.useState(active);
+  if (active && !shown) setShown(true);
+  if (!shown) return null;
   // The emulator reads its font when it mounts, so a new font remounts it.
   return (
     <ThreadTerminalSession

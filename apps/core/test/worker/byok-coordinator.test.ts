@@ -11,7 +11,12 @@ import {
   it,
   vi,
 } from "vitest";
-import { settingsPersistenceLogger } from "../../src/logging.js";
+import {
+  agentModelLogger,
+  settingsPersistenceLogger,
+} from "../../src/logging.js";
+import { makeAgentRuntimeComposition } from "../../src/runtime/agent-composition.js";
+import { classifyRunFailure } from "../../src/runtime/run-failure.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { createDxModelRoutingProvider } from "../../src/settings/model-byok/flue-provider.js";
 import {
@@ -1294,6 +1299,64 @@ describe("ByokCredentialCoordinatorObject", () => {
     });
     expect(response.status).toBe(400);
     expect(((await response.json()) as { code: string }).code).toBe(
+      "THREAD_ROUTE_NOT_FOUND",
+    );
+  });
+
+  it("ends a run that starts on an archived Thread as archived, not as an internal error (#1849)", async () => {
+    // staging, 2026-11-05 09:11: a first message admitted as its Thread was
+    // archived ran 4 ms after archive's agent stop. Its route lookup found
+    // no active Thread and the run failed as "internal".
+    await seed();
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
+    )
+      .bind(THREAD)
+      .run();
+    const warned = vi.spyOn(agentModelLogger, "warn");
+    const failure = await makeAgentRuntimeComposition(
+      env as never,
+      { createSandbox: vi.fn() } as never,
+    )
+      .model.resolvePromptData({
+        instanceId: THREAD,
+        agentName: "dx",
+        scope: { kind: "prompt", submissionId: "sub-archived" },
+        signal: new AbortController().signal,
+        recovery: false,
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error as Error,
+      );
+    expect(failure).toBeInstanceOf(Error);
+    // dx's own log line names the run and the reason.
+    expect(warned).toHaveBeenCalledWith(
+      "Model route resolution failed.",
+      expect.objectContaining({
+        event: "model_route_resolution_failed",
+        threadId: THREAD,
+        submissionId: "sub-archived",
+        code: "THREAD_ARCHIVED",
+        class: "account",
+      }),
+    );
+    // What the Thread's error card reads, and not retried.
+    expect(
+      classifyRunFailure({ message: failure?.message ?? "" }),
+    ).toMatchObject({
+      class: "account",
+      code: "THREAD_ARCHIVED",
+      message: "This Thread is archived. Restore it to continue.",
+      retryable: false,
+    });
+
+    // A Thread that doesn't exist still fails as no route.
+    const missing = await stub().fetch("https://coordinator/resolve", {
+      method: "POST",
+      body: JSON.stringify({ threadId: "gone-thread", submissionId: "sub-x" }),
+    });
+    expect(((await missing.json()) as { code: string }).code).toBe(
       "THREAD_ROUTE_NOT_FOUND",
     );
   });

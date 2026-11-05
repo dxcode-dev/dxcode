@@ -92,6 +92,48 @@
 .artifact-tool-end {
   margin-left: auto;
 }
+
+/* The mic, first in the toolbar and in a comment's buttons, sized like the
+   tools beside it. */
+.artifact-toolbar .dictation-action {
+  width: 26px;
+  height: 26px;
+}
+.artifact-toolbar > .dictation-slot,
+.artifact-comment-actions > .dictation-slot {
+  display: inline-flex;
+  align-items: center;
+}
+.artifact-comment-actions > .dictation-slot {
+  margin-right: auto;
+}
+
+/* What the mic is doing, in words: under the toolbar, or under a comment's
+   buttons. Empty, it takes no room. */
+.artifact-dictation-notice,
+.artifact-comment-dictation {
+  flex: none;
+}
+.artifact-dictation-notice:empty,
+.artifact-comment-dictation:empty {
+  display: none;
+}
+.artifact-dictation-notice {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.artifact-comment-dictation {
+  margin-top: 6px;
+}
+.dictation-notice {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.dictation-notice[data-tone="error"] {
+  color: var(--destructive);
+}
 /* An icon only a phone needs, where it stands in for the label. */
 .artifact-tool > .artifact-tool-phone-icon {
   display: none;
@@ -409,6 +451,16 @@
   }
   .artifact-toolbar {
     height: 48px;
+  }
+  /* The mic and its retry and download, full tap targets like the tools. */
+  .artifact-toolbar .dictation-controls button,
+  .artifact-comment-actions .dictation-controls button {
+    width: 44px;
+    height: 44px;
+  }
+  .dictation-notice {
+    font-size: 13px;
+    line-height: 18px;
   }
   .artifact-notice button {
     height: 44px;

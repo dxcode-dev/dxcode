@@ -8,6 +8,7 @@ import {
 import { Effect } from "effect";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import type { Bindings } from "../http/types.js";
+import { agentModelLogger } from "../logging.js";
 import { loadThreadRoute } from "../settings/model-routing/connection-store-d1.js";
 import {
   loadRuntimeConfiguration,
@@ -77,6 +78,16 @@ const resolvePromptData =
         );
       }
       const { code = "UNKNOWN", message } = body;
+      // Flue's own line for a failed submission carries only the stack;
+      // this one names the run and why its route failed (#1849).
+      agentModelLogger.warn("Model route resolution failed.", {
+        event: "model_route_resolution_failed",
+        threadId: context.instanceId,
+        submissionId: context.scope.submissionId,
+        status: response.status,
+        code,
+        ...(body.class === undefined ? {} : { class: body.class }),
+      });
       // Flue keeps only a FlueError's message on the failed settlement, so
       // the texts the Thread's error card reads are thrown as one: the
       // Claude plan's limit text, and the coordinator's classified failures,

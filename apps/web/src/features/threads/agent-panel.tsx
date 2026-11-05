@@ -540,13 +540,21 @@ const threadErrorPresentation = (
     const accountFailure = latestSettlementFailed
       ? accountFailureMessage(latestSettlement.error)
       : undefined;
-    if (accountFailure !== undefined)
+    if (accountFailure !== undefined) {
+      // A run that started, or reached the model, after its Thread was
+      // archived (#1849, #1668): nothing to fix in Model Routing.
+      const archived = errorSearchText(latestSettlement.error).includes(
+        ":THREAD_ARCHIVED)",
+      );
       return {
         id: `settlement:${latestSettlement.submissionId}`,
-        title: "Model connection needs attention",
+        title: archived
+          ? "Archived thread"
+          : "Model connection needs attention",
         message: accountFailure,
-        action: "model-routing",
+        action: archived ? "none" : "model-routing",
       };
+    }
     if (latestSettlementFailed && isModelRoutingError(latestSettlement.error)) {
       return {
         id: `settlement:${latestSettlement.submissionId}`,

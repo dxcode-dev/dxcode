@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { Sandbox, SandboxToolFactory } from "@flue/runtime";
 import { getLogger } from "@logtape/logtape";
+import { SecretMaskingFailed } from "../../../settings/environment-variables/masking.js";
 import { environmentMaskerOf } from "../../../settings/environment-variables/sandbox.js";
 import { shellDefinitions } from "./definitions.js";
 
@@ -259,6 +260,8 @@ printf '%s' "$pid"`,
             START_BUDGET_MS,
           ).catch((cause: unknown) => {
             if (signal?.aborted === true) throw cause;
+            // Masking failed before the command could start; say only that.
+            if (cause instanceof SecretMaskingFailed) throw cause;
             // It may still start once the Orb catches up; never leave a
             // command running that the agent was told failed.
             stopStarted();

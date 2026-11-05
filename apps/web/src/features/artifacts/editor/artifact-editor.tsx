@@ -56,6 +56,7 @@ import {
   insertBlock,
   insertBlockBelow,
   insertChip,
+  insertDictation,
   moveBlock,
   moveBlockTo,
   type TableAction,
@@ -68,6 +69,7 @@ import { NotifyAgentButton } from "./notify-agent-button.js";
 import { SuggestMenu } from "./suggest-menu.js";
 import "prosemirror-view/style/prosemirror.css";
 import "prosemirror-tables/style/tables.css";
+import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { linkClickProps, linkToOpen } from "./link-clicks.js";
 import "./artifact-editor.css";
 
@@ -580,6 +582,7 @@ function ArtifactToolbar({
   onComment,
   onImage,
   onWide,
+  dictation,
 }: {
   readonly threadId: ThreadId;
   readonly artifactId: string;
@@ -591,81 +594,102 @@ function ArtifactToolbar({
   readonly onComment: () => void;
   readonly onImage: () => void;
   readonly onWide: () => void;
+  /** The composer's mic, when dictation is available and the person may edit. */
+  readonly dictation?: DictationSlot | undefined;
 }) {
+  // The mic's words show on a line under the toolbar, which scrolls sideways
+  // and would cut off a bubble.
+  const [noticeHost, setNoticeHost] = React.useState<HTMLElement | null>(null);
   return (
-    <fieldset className="artifact-toolbar" aria-label="Artifact tools">
-      <button
-        type="button"
-        className="artifact-tool"
-        title="Table"
-        onClick={() => run((state) => insertBlock(state, "table"))}
-      >
-        <Table aria-hidden="true" />
-        <span>Table</span>
-      </button>
-      <button
-        type="button"
-        className="artifact-tool"
-        title="Checklist"
-        onClick={() => run((state) => insertBlock(state, "checklist"))}
-      >
-        <ListChecks aria-hidden="true" />
-        <span>Checklist</span>
-      </button>
-      <Menu.Root>
-        <Menu.Trigger
+    <>
+      <fieldset className="artifact-toolbar" aria-label="Artifact tools">
+        {dictation === undefined ? null : (
+          // First, so it shows however many tools follow. A transcript is
+          // typed at the cursor, as one transaction.
+          <dictation.Insert
+            noticeHost={noticeHost}
+            insertText={(text) => {
+              run((state) => insertDictation(state, text));
+              return true;
+            }}
+          />
+        )}
+        <button
+          type="button"
           className="artifact-tool"
-          aria-label="Insert"
-          title="Insert"
+          title="Table"
+          onClick={() => run((state) => insertBlock(state, "table"))}
         >
-          <Plus aria-hidden="true" />
-          <span>Insert</span>
-        </Menu.Trigger>
-        <MenuPopup label="Insert">
-          <BlockKindItems
-            onPick={(kind) => run((state) => insertBlock(state, kind))}
-          />
-          <Menu.Item className="thread-menu-item" onClick={onImage}>
-            <ImageIcon aria-hidden="true" />
-            Image
-          </Menu.Item>
-          <ChipInsertItems
-            threadId={threadId}
-            onInsert={(source) => run((state) => insertChip(state, source))}
-          />
-        </MenuPopup>
-      </Menu.Root>
-      <button
-        type="button"
-        className="artifact-tool"
-        title="Comment"
-        disabled={!snapshot.selection.ranged}
-        onClick={onComment}
-      >
-        <MessageSquarePlus aria-hidden="true" />
-        <span>Comment</span>
-      </button>
-      <NotifyAgentButton
-        threadId={threadId}
-        artifactId={artifactId}
-        revision={snapshot.revision}
-      />
-      {snapshot.selection.inTable ? (
-        <TableTools
-          onAction={(action) => run((state) => tableAction(state, action))}
+          <Table aria-hidden="true" />
+          <span>Table</span>
+        </button>
+        <button
+          type="button"
+          className="artifact-tool"
+          title="Checklist"
+          onClick={() => run((state) => insertBlock(state, "checklist"))}
+        >
+          <ListChecks aria-hidden="true" />
+          <span>Checklist</span>
+        </button>
+        <Menu.Root>
+          <Menu.Trigger
+            className="artifact-tool"
+            aria-label="Insert"
+            title="Insert"
+          >
+            <Plus aria-hidden="true" />
+            <span>Insert</span>
+          </Menu.Trigger>
+          <MenuPopup label="Insert">
+            <BlockKindItems
+              onPick={(kind) => run((state) => insertBlock(state, kind))}
+            />
+            <Menu.Item className="thread-menu-item" onClick={onImage}>
+              <ImageIcon aria-hidden="true" />
+              Image
+            </Menu.Item>
+            <ChipInsertItems
+              threadId={threadId}
+              onInsert={(source) => run((state) => insertChip(state, source))}
+            />
+          </MenuPopup>
+        </Menu.Root>
+        <button
+          type="button"
+          className="artifact-tool"
+          title="Comment"
+          disabled={!snapshot.selection.ranged}
+          onClick={onComment}
+        >
+          <MessageSquarePlus aria-hidden="true" />
+          <span>Comment</span>
+        </button>
+        <NotifyAgentButton
+          threadId={threadId}
+          artifactId={artifactId}
+          revision={snapshot.revision}
         />
-      ) : null}
-      <button
-        type="button"
-        className="artifact-tool artifact-tool-end"
-        aria-pressed={wide}
-        aria-label="Wide Layout"
-        title="Wide Layout"
-        onClick={onWide}
-      >
-        <MoveHorizontal aria-hidden="true" />
-      </button>
-    </fieldset>
+        {snapshot.selection.inTable ? (
+          <TableTools
+            onAction={(action) => run((state) => tableAction(state, action))}
+          />
+        ) : null}
+        <button
+          type="button"
+          className="artifact-tool artifact-tool-end"
+          aria-pressed={wide}
+          aria-label="Wide Layout"
+          title="Wide Layout"
+          onClick={onWide}
+        >
+          <MoveHorizontal aria-hidden="true" />
+        </button>
+      </fieldset>
+      {dictation === undefined ? null : (
+        <div className="artifact-dictation-notice" ref={setNoticeHost} />
+      )}
+    </>
   );
 }
 
@@ -725,12 +749,15 @@ export function ArtifactEditor({
   initial,
   readOnly,
   switcher,
+  dictation: dictationSlot,
 }: {
   readonly threadId: ThreadId;
   readonly initial: ArtifactDocument;
   readonly readOnly: boolean;
   /** The header's artifact switcher, from the view. */
   readonly switcher: React.ReactNode;
+  /** The composer's mic, when the Thread page offers dictation. */
+  readonly dictation?: DictationSlot | undefined;
 }) {
   const queryClient = useQueryClient();
   // The session a previous view of this artifact left (a pane move, the
@@ -759,6 +786,9 @@ export function ArtifactEditor({
   const comments = useQuery(
     artifactCommentsOptions(threadId, initial.artifact.id),
   );
+  // Dictation, as the composer has it: the Thread page offers it only when
+  // the deployment serves a speech provider and the person's switch is on.
+  const dictation = readOnly ? undefined : dictationSlot;
   const [renaming, setRenaming] = React.useState(false);
   const [hovered, setHovered] = React.useState<
     { readonly pos: number; readonly top: number } | undefined
@@ -904,6 +934,7 @@ export function ArtifactEditor({
           run={run}
           onImage={session.pickImage}
           onWide={() => setWide((value) => !value)}
+          dictation={dictation}
           onComment={async () => {
             const quote = await session.quoteSelection();
             if (quote === undefined || quote === "unsaved") {
@@ -996,6 +1027,7 @@ export function ArtifactEditor({
             draftText={{ value: draftBody, set: setDraftBody }}
             readOnly={readOnly}
             people={people}
+            dictation={dictation}
             threadId={threadId}
             artifactId={initial.artifact.id}
             onSelect={session.selectComment}

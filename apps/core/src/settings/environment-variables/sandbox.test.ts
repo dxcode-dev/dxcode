@@ -23,8 +23,9 @@ import {
   type WorkspaceContextSnapshot,
 } from "@flue/runtime";
 import { local, start } from "@flue/runtime/node";
+import { configure, reset } from "@logtape/logtape";
 import { Redacted, Schema } from "effect";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ClaudeCodeStream } from "../../claude-code/stream.js";
 import { createFileTools } from "../../plugins/execution/files/tools.js";
 import { createShellTools } from "../../plugins/execution/shell/tools.js";
@@ -1827,4 +1828,127 @@ describe("shell reads mask wrapped base64 and long secrets split across reads (#
     expect(text).toBeLessThan(150);
     expect(reads).toBeLessThan(150);
   }, 120_000);
+});
+
+/**
+ * #1844: a regular expression's error quotes its pattern, and the masker's
+ * patterns hold the secrets' forms. Before the fix, a failure to compile
+ * one (#1816) wrote part of a secret into the error a tool threw, the turn's
+ * error text, and Workers Logs.
+ */
+describe("a masking failure names no secret (#1844)", () => {
+  const SECRET = "q7Zw9f3kXv2LmT8pR4nB6yH1";
+
+  /** Whether any 6 characters of the secret appear in `text`. */
+  const leaks = (text: string) => {
+    for (let start = 0; start + 6 <= SECRET.length; start += 1)
+      if (text.includes(SECRET.slice(start, start + 6))) return true;
+    return false;
+  };
+
+  /**
+   * Every regular expression built from the secret fails as V8 fails one
+   * too large to compile: with a SyntaxError that quotes its pattern.
+   */
+  const failToCompile = () => {
+    const exec = RegExp.prototype.exec;
+    vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+      this: RegExp,
+      text: string,
+    ) {
+      if (this.source.includes(SECRET.slice(0, 12)))
+        throw new SyntaxError(
+          `Invalid regular expression: /${this.source}/${this.flags}: Stack overflow`,
+        );
+      return exec.call(this, text);
+    });
+  };
+
+  const records: Array<unknown> = [];
+  beforeEach(async () => {
+    records.length = 0;
+    await configure({
+      reset: true,
+      sinks: { memory: (record) => records.push(record) },
+      loggers: [
+        { category: ["dx"], sinks: ["memory"], lowestLevel: "debug" },
+        { category: ["logtape", "meta"], sinks: [], lowestLevel: "error" },
+      ],
+    });
+  });
+  afterEach(async () => {
+    await reset();
+  });
+
+  const saved = () => snapshot([value("LEAK_TOKEN", "secret", SECRET)]);
+
+  it("throws, records, and logs a fixed message when shell_command's masking fails", async () => {
+    const { sandbox, directory } = await localSandbox(async () => saved());
+    const tools = createShellTools(
+      {
+        ...sandbox,
+        exec: (command, options) =>
+          sandbox.exec(command, {
+            ...options,
+            env: { HOME: directory, ...options?.env },
+          }),
+      },
+      { defaultWorkdir: directory },
+    );
+    failToCompile();
+    const failure = await tools[0]
+      ?.execute("leak", {
+        command: `printf '%s' "$LEAK_TOKEN"`,
+        timeout_ms: 2_000,
+      })
+      .then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+    expect(failure).toBeInstanceOf(Error);
+    const error = failure as Error;
+    expect(
+      leaks(`${error.message}\n${error.stack}\n${String(error.cause)}`),
+    ).toBe(false);
+    const logged = JSON.stringify(records);
+    expect(leaks(logged)).toBe(false);
+    expect(error.message).toBe("Secret masking could not be prepared.");
+    expect(logged).toContain("Secret masking failed");
+    expect(logged).toContain('"name":"LEAK_TOKEN","bytes":24');
+  });
+
+  it("keeps the secret out of the turn's tool error when masking fails", async () => {
+    const { factory } = await localSandbox(async () => saved());
+    let toolError = "";
+    const provider = fauxProvider();
+    provider.setResponses([
+      fauxAssistantMessage(
+        fauxToolCall("bash", { command: `printf '%s' "$LEAK_TOKEN"` }),
+        { stopReason: "toolUse" },
+      ),
+      (context) => {
+        toolError = JSON.stringify(
+          context.messages.filter(({ role }) => role === "toolResult"),
+        );
+        return fauxAssistantMessage("done");
+      },
+    ]);
+    function LeakAgent(_props: AgentProps) {
+      useModel("faux/faux-1");
+      useSandbox(factory);
+      return "Use bash.";
+    }
+    LeakAgent.agentName = "masking-failure-test";
+    await using _runtime = await start({
+      agents: [LeakAgent],
+      providers: [provider.provider],
+    });
+    const handle = init(LeakAgent, { id: "masking-failure" });
+    failToCompile();
+    const receipt = await handle.dispatch("Print the token.");
+    await handle.read(receipt).catch(() => undefined);
+    expect(leaks(toolError)).toBe(false);
+    expect(toolError).toContain("Secret masking could not be prepared.");
+    expect(leaks(JSON.stringify(records))).toBe(false);
+  });
 });
