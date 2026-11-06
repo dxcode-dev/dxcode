@@ -62,6 +62,7 @@ const runtime = () =>
     goForward: vi.fn(),
     toggleAndFocusSidebar: vi.fn(),
     moveSidebarSelection: vi.fn(),
+    moveBetweenMessages: vi.fn(),
     openFocusedSidebarItem: vi.fn(),
     switchThread: vi.fn(),
     openFocusedThreadMenu: vi.fn(),

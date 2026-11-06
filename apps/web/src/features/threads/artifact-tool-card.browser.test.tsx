@@ -21,7 +21,7 @@ import {
 } from "@tanstack/react-router";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { ArtifactToolCard } from "./artifact-tool-card.js";
 import type { ToolPart } from "./transcript-activity-projection.js";
@@ -31,6 +31,13 @@ import { TranscriptTurn } from "./transcript-work.js";
 const THREAD = "thr_00000000-0000-4000-8000-0000000000a1";
 const ARTIFACT = "art_0123456789abcdef0123456789abcdef";
 let root: Root | undefined;
+
+// The delete card's controls are a lazy chunk with a dozen modules behind it.
+// The dev server serves them on first import, one level of the module graph
+// at a time, and while other test files load theirs that has taken longer
+// than a 1 s wait below (#1879). Load them before the tests, so each wait
+// times the card, not the dev server.
+beforeAll(() => import("./artifact-delete-controls.js"));
 
 afterEach(async () => {
   await act(() => root?.unmount());

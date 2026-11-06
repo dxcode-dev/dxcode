@@ -12,9 +12,9 @@ import type { PointerEventHandler, ReactNode } from "react";
 import { Button } from "../../../shared/ui/button.js";
 import { ClaudeIcon } from "../../../shared/ui/claude-icon.js";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
+import { ProviderMark } from "../../../shared/ui/provider-marks.js";
 import { providerKeyPresentation } from "./provider-key-presentation.js";
 import { hasProviderMark } from "./provider-mark-ids.js";
-import { ProviderMark } from "./provider-marks.js";
 
 const healthLabel = (health: ConnectionData["health"]): string => {
   switch (health.state) {

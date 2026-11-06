@@ -13,6 +13,7 @@ import {
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import {
+  ChevronRight,
   ClipboardCopy,
   KeyRound,
   Monitor,
@@ -74,6 +75,9 @@ const signedInFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 const isPhone = (device: string) => / on (?:iOS|Android)$/.test(device);
+
+/** Sessions shown before Show all sessions; this device sorts first. */
+const COLLAPSED_SESSIONS = 5;
 
 function CardState({
   loading,
@@ -451,14 +455,29 @@ function SessionRow({
 }) {
   const DeviceIcon = isPhone(session.device) ? Smartphone : Monitor;
   const active = useTimeText((now) => ago(session.lastActiveAt, now));
+  const [open, setOpen] = React.useState(false);
+  const detailsId = React.useId();
+  const signedIn = signedInFormatter.format(
+    DateTime.toEpochMillis(session.createdAt),
+  );
   // Rows can share a browser name, so the button names the session fully.
-  const signOutLabel = `Sign out ${session.device}, ${session.network}, active ${active}, signed in ${signedInFormatter.format(DateTime.toEpochMillis(session.createdAt))}`;
+  const signOutLabel = `Sign out ${session.device}, ${session.network}, active ${active}, signed in ${signedIn}`;
   return (
     <div className="security-row" data-session-id={session.id}>
       <DeviceIcon className="security-row-icon" aria-hidden="true" />
       <div className="security-row-copy">
         <div>
-          <strong>{session.device}</strong>
+          <button
+            type="button"
+            className="security-row-toggle"
+            aria-expanded={open}
+            aria-controls={open ? detailsId : undefined}
+            aria-label={`Details for ${session.device}`}
+            onClick={() => setOpen(!open)}
+          >
+            <ChevronRight aria-hidden="true" data-open={open || undefined} />
+            <strong>{session.device}</strong>
+          </button>
           {session.isCurrent ? (
             <span className="security-tag">This device</span>
           ) : null}
@@ -466,6 +485,14 @@ function SessionRow({
         <span>
           {session.network} · Active {active}
         </span>
+        {open ? (
+          <span className="security-row-details" id={detailsId}>
+            Signed in {signedIn} · Expires{" "}
+            {signedInFormatter.format(
+              DateTime.toEpochMillis(session.expiresAt),
+            )}
+          </span>
+        ) : null}
       </div>
       {session.isCurrent ? null : (
         <div className="security-row-actions">
@@ -496,6 +523,10 @@ function SessionList() {
   const items = sessions.data?.pages.flatMap((page) => page.items) ?? [];
   const hasOthers =
     items.some((session) => !session.isCurrent) || sessions.hasNextPage;
+  const [showAll, setShowAll] = React.useState(false);
+  const collapsed =
+    !showAll && (items.length > COLLAPSED_SESSIONS || sessions.hasNextPage);
+  const visible = collapsed ? items.slice(0, COLLAPSED_SESSIONS) : items;
   const [target, setTarget] = React.useState<BrowserSessionData | "others">();
   const [error, setError] = React.useState<string>();
   const busy = revokeSession.isPending || revokeOthers.isPending;
@@ -550,14 +581,27 @@ function SessionList() {
         <p className="security-empty">No active sessions.</p>
       ) : (
         <>
-          {items.map((session) => (
+          {visible.map((session) => (
             <SessionRow
               key={session.id}
               session={session}
               signOut={() => setTarget(session)}
             />
           ))}
-          {sessions.isFetchNextPageError ? (
+          {collapsed ? (
+            <div className="security-load-more">
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={() => setShowAll(true)}
+              >
+                {sessions.hasNextPage
+                  ? "Show all sessions"
+                  : `Show all sessions (${items.length})`}
+              </Button>
+            </div>
+          ) : null}
+          {!collapsed && sessions.isFetchNextPageError ? (
             <p className="security-error" role="alert">
               {securityErrorMessage(
                 sessions.error,
@@ -565,7 +609,7 @@ function SessionList() {
               )}
             </p>
           ) : null}
-          {sessions.hasNextPage ? (
+          {!collapsed && sessions.hasNextPage ? (
             <div className="security-load-more">
               <Button
                 size="xs"

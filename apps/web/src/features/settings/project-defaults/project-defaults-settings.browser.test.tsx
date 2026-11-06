@@ -381,6 +381,63 @@ describe("project defaults settings", () => {
     await React.act(() => root.unmount());
   });
 
+  it("labels deployment-owned sizes without inventing a price, keeping supplied labels and unavailable sizes distinct", async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const initial = defaults(1);
+    const size = (id: string, costLabel?: string) => ({
+      id: id as RunnerProfileId,
+      label: id,
+      adapter: "cloudflare" as const,
+      resources: { cpuCores: 1, memoryMb: 4096, diskGb: 8 },
+      isolation: "sandbox" as const,
+      availability: "available" as const,
+      capabilities: [],
+      ...(costLabel === undefined ? {} : { costLabel }),
+    });
+    const { container, root } = await renderSettings(
+      queryClient,
+      {
+        ...initial,
+        overrides: {
+          ...initial.overrides,
+          runnerProfileId: "standard-1" as RunnerProfileId,
+        },
+        catalog: {
+          ...initial.catalog,
+          profiles: [size("standard-1"), size("standard-2", "45 credits/hour")],
+        },
+      },
+      resolvedOrbs(["cloudflare"]),
+    );
+    const cards = () => [
+      ...container.querySelectorAll("label.runner-profile-card"),
+    ];
+    expect(cards()[0]?.querySelector(".orb-size-card-cost")).toBeNull();
+    expect(
+      cards()[0]?.querySelector(".orb-size-card-billing")?.textContent,
+    ).toBe("Provided by this deployment");
+    expect(cards()[1]?.querySelector(".orb-size-card-cost")?.textContent).toBe(
+      "45 credits/hour",
+    );
+    expect(cards()[1]?.textContent).not.toContain(
+      "Provided by this deployment",
+    );
+    await React.act(() => {
+      queryClient.setQueryData(
+        orbProviderKeys.list(userId, target),
+        resolvedOrbs([]),
+      );
+    });
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("Not available"),
+    );
+    expect(container.textContent).not.toContain("Provided by this deployment");
+    expect(cards()[0]?.querySelector("input")?.disabled).toBe(true);
+    await React.act(() => root.unmount());
+  });
+
   it("says no Orb provider is set up when none is, and links to Orb Providers", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },

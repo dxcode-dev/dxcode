@@ -1,0 +1,9 @@
+# dx
+
+> dx gives each coding task its own computer in the cloud, hosted at https://dxcode.dev.
+> Its agent, or Claude Code on your own Claude plan, writes the code, runs the tests and starts the app while you're away, and you follow and steer it from any browser, your phone included.
+
+## Docs
+
+- [dx documentation for LLMs](https://dxcode.dev/docs/llms.txt): an index of the docs pages
+- [Full dx documentation](https://dxcode.dev/docs/llms-full.txt): every docs page in one file

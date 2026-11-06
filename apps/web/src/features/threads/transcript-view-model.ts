@@ -58,6 +58,8 @@ export type TranscriptRow =
       readonly kind: "assistant-prose" | "final-answer";
       readonly text: string;
       readonly streaming: boolean;
+      /** When Flue recorded the reply. */
+      readonly sentAt?: string;
     } & TranscriptRowBase &
       SourcePart)
   | ({
@@ -274,10 +276,12 @@ const messageRows = (
         });
       } else {
         if (!part.text.trim()) continue;
+        const sentAt = authoritativeTimestamp(message);
         rows.push({
           ...source,
           kind: "assistant-prose",
           text: part.text,
+          ...(sentAt === undefined ? {} : { sentAt }),
           ...(message.role === "assistant"
             ? { streaming: part.state === "streaming" }
             : {}),
@@ -1034,6 +1038,7 @@ export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
     return false;
   if ("text" in a && "text" in b) {
     if (a.text !== b.text) return false;
+    if (a.sentAt !== b.sentAt) return false;
     if ("streaming" in a || "streaming" in b)
       return (
         "streaming" in a && "streaming" in b && a.streaming === b.streaming

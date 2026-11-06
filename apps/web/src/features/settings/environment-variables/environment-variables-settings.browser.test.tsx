@@ -1,4 +1,7 @@
-import { EnvironmentVariableDataSchema } from "@dx/api";
+import {
+  EnvironmentVariableDataSchema,
+  ListEnvironmentVariableHistoryResponseSchema,
+} from "@dx/api";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -41,6 +44,102 @@ const renderSettings = (children: ReactNode) =>
   );
 
 describe("environment variables settings", () => {
+  it("shows the latest five history rows until the person asks for more", async () => {
+    const queryClient = new QueryClient();
+    const userId = "usr_test" as never;
+    const target = {
+      scope: "workspace",
+      workspaceSlug: "alpha" as never,
+    } as const;
+    queryClient.setQueryData(
+      environmentVariablesQueryOptions(userId, target).queryKey,
+      { items: [], precedence: ["personal", "project", "workspace"] },
+    );
+    queryClient.setQueryData(
+      environmentVariableHistoryQueryOptions(userId, target).queryKey,
+      {
+        pages: [
+          Schema.decodeUnknownSync(
+            ListEnvironmentVariableHistoryResponseSchema,
+          )({
+            status: "success",
+            data: {
+              items: Array.from({ length: 12 }, (_, index) => ({
+                id: `event-${index}`,
+                variableId: `env-${index}`,
+                name: `KEY_${index}`,
+                kind: "variable",
+                action: "create",
+                actorUserId: "usr_test",
+                actorName: "Test User",
+                requestId: `request-${index}`,
+                occurredAt: new Date(
+                  Date.UTC(2026, 10, 1, 0, 59 - index),
+                ).toISOString(),
+              })),
+              nextCursor: "b2xkZXI",
+            },
+          }).data,
+        ],
+        pageParams: [undefined],
+      },
+    );
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const rows = () =>
+      [...container.querySelectorAll(".environment-history li code")].map(
+        (code) => code.textContent,
+      );
+    const button = (text: string) =>
+      [...container.querySelectorAll("button")].find(
+        (element) => element.textContent?.trim() === text,
+      );
+    try {
+      await act(() =>
+        root.render(
+          <AuthContext.Provider
+            value={{
+              identity: {
+                id: userId,
+                name: "Test User",
+                email: "test@example.com",
+              },
+              logout: () => undefined,
+            }}
+          >
+            <QueryClientProvider client={queryClient}>
+              <EnvironmentVariablesSettings
+                workspaceSlug={"alpha" as never}
+                workspace={
+                  {
+                    id: "alpha",
+                    displayName: "alpha",
+                    shortName: "alpha",
+                    lifecycleState: "active",
+                    revision: 0,
+                    role: "owner",
+                  } as never
+                }
+                onDirtyChange={() => undefined}
+              />
+            </QueryClientProvider>
+          </AuthContext.Provider>,
+        ),
+      );
+      expect(rows()).toEqual(["KEY_0", "KEY_1", "KEY_2", "KEY_3", "KEY_4"]);
+      expect(button("Load older changes")).toBeUndefined();
+      await act(async () => button("Show more")?.click());
+      expect(rows()).toHaveLength(12);
+      // Every loaded row shows; older pages still load from the server.
+      expect(button("Show more")).toBeUndefined();
+      expect(button("Load older changes")).toBeDefined();
+    } finally {
+      await act(() => root.unmount());
+      container.remove();
+    }
+  });
+
   it("remounts the controller when the workspace target changes", async () => {
     const queryClient = new QueryClient();
     const userId = "usr_test" as never;

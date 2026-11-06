@@ -280,11 +280,11 @@ describe("Integrations & MCP", () => {
     expect(personal.textContent).toContain("Integrations & MCP");
     expect(group("enabled")).toContain("Docs");
     expect(group("enabled")).toContain("Tools not discovered");
-    // A configured template leaves Available and asks for its sign-in.
+    // A configured template leaves Suggested and asks for its sign-in.
     expect(group("enabled")).toContain("Sign in required");
-    expect(group("available")).not.toContain("Linear");
-    expect(group("available")).toContain("Notion");
-    expect(group("available")).toContain("GitHub");
+    expect(group("suggested")).not.toContain("Linear");
+    expect(group("suggested")).toContain("Notion");
+    expect(group("suggested")).toContain("GitHub");
     expect(personal.textContent).not.toContain("Allow personal MCP servers");
     act(() => root?.unmount());
     container?.remove();

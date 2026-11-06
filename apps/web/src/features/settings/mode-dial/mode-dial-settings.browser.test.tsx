@@ -1,3 +1,5 @@
+import { WorkspaceShortName } from "@dx/domain";
+import { Schema } from "effect";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { assert, describe, expect, it, vi } from "vitest";
@@ -22,9 +24,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
   useQueryClient: () => ({}),
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
-    data: router.data[queryKey[2]],
+    data: router.data[queryKey.at(-2) ?? ""],
     isError: false,
-    isPending: router.data[queryKey[2]] === undefined,
+    isPending: router.data[queryKey.at(-2) ?? ""] === undefined,
   }),
   useMutation: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
 }));
@@ -36,72 +38,105 @@ vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
 }));
 
 describe("mode dial settings", () => {
-  it("opens Medium and reports edits and discard to the settings shell", async () => {
-    router.search = {};
-    router.data = {
-      profile: {
-        modes: Object.fromEntries(
-          ["low", "medium", "high", "ultra"].map((mode) => [
-            mode,
+  it.each([
+    undefined,
+    Schema.decodeUnknownSync(WorkspaceShortName)("qa-workspace"),
+  ])(
+    "shows sync state and resets an unsaved Auto-mode draft in scope %s",
+    async (workspaceSlug) => {
+      router.search = {};
+      router.data = {
+        profile: {
+          modes: Object.fromEntries(
+            ["low", "medium", "high", "ultra"].map((mode) => [
+              mode,
+              {
+                source: "default",
+                config: { agent: { model: "openai/a", thinking: "medium" } },
+              },
+            ]),
+          ),
+        },
+        choices: {
+          models: [
             {
-              source: "default",
-              config: { agent: { model: "openai/a", thinking: "medium" } },
+              canonical: "openai/a",
+              name: "A",
+              reasoning: true,
+              connectionName: "Provider",
             },
-          ]),
-        ),
-      },
-      choices: {
-        models: [
-          {
-            canonical: "openai/a",
-            name: "A",
-            reasoning: true,
-            connectionName: "Provider",
-          },
-          {
-            canonical: "openai/b",
-            name: "B",
-            reasoning: true,
-            connectionName: "Provider",
-          },
-        ],
-      },
-    };
-    const onDirtyChange = vi.fn();
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    try {
-      await React.act(() =>
-        root.render(<ModeDialSettings onDirtyChange={onDirtyChange} />),
-      );
-      expect(
-        container
-          .querySelector(".mode-tuning-workbench")
-          ?.getAttribute("data-mode"),
-      ).toBe("medium");
-      const select =
-        container.querySelector<HTMLSelectElement>("#mode-dial-model");
-      assert.exists(select);
-      await React.act(() => {
-        select.value = "openai/b";
-        select.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-      expect(onDirtyChange).toHaveBeenLastCalledWith(true);
-      await React.act(() =>
-        Array.from(container.querySelectorAll("button"))
-          .find((button) => button.textContent === "Discard")
-          ?.click(),
-      );
-      expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-      // An unpinned mode shows Auto, not the model Auto resolves to.
-      expect(select.value).toBe("auto");
-    } finally {
-      await React.act(() => root.unmount());
-      container.remove();
-      router.data = {};
-    }
-  });
+            {
+              canonical: "openai/b",
+              name: "B",
+              reasoning: true,
+              connectionName: "Provider",
+            },
+          ],
+        },
+      };
+      const onDirtyChange = vi.fn();
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      try {
+        await React.act(() =>
+          root.render(
+            <ModeDialSettings
+              onDirtyChange={onDirtyChange}
+              workspaceSlug={workspaceSlug}
+            />,
+          ),
+        );
+        expect(
+          container
+            .querySelector(".mode-tuning-workbench")
+            ?.getAttribute("data-mode"),
+        ).toBe("medium");
+        const select =
+          container.querySelector<HTMLSelectElement>("#mode-dial-model");
+        assert.exists(select);
+        const button = (text: string) =>
+          Array.from(container.querySelectorAll("button")).find(
+            (element) => element.textContent?.trim() === text,
+          );
+        const reset = button("Reset to default");
+        assert.exists(reset);
+        expect(reset.disabled).toBe(true);
+        expect(
+          container.querySelector("footer [role='status']")?.textContent,
+        ).toBe("In sync");
+        const edit = async () => {
+          await React.act(() => {
+            select.value = "openai/b";
+            select.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        };
+        await edit();
+        expect(onDirtyChange).toHaveBeenLastCalledWith(true);
+        expect(
+          container.querySelector("footer [role='status']")?.textContent,
+        ).toBe("Unsaved changes");
+        expect(reset.disabled).toBe(false);
+        expect(button("Save")?.disabled).toBe(false);
+        await React.act(() => reset.click());
+        expect(select.value).toBe("auto");
+        expect(reset.disabled).toBe(true);
+        expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+        expect(
+          container.querySelector("footer [role='status']")?.textContent,
+        ).toBe("In sync");
+        await edit();
+        await React.act(() => button("Discard")?.click());
+        expect(onDirtyChange).toHaveBeenLastCalledWith(false);
+        // An unpinned mode shows Auto, not the model Auto resolves to.
+        expect(select.value).toBe("auto");
+      } finally {
+        await React.act(() => root.unmount());
+        container.remove();
+        router.data = {};
+      }
+    },
+  );
 
   it("names Auto's model as the catalog does when no connection serves it", async () => {
     router.search = { mode: "low" };

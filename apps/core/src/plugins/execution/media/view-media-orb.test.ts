@@ -172,6 +172,12 @@ describe.skipIf(!hasFfmpeg)("view_media downsizing in the Orb", () => {
     bomb.writeUInt16BE(60000, 2 + 69 + 5);
     bomb.writeUInt16BE(60000, 2 + 69 + 7);
     writeFileSync(file("bomb.jpg"), bomb);
+    // A full-page phone recording strip: small enough to send, too many
+    // pixels to decode in the isolate (thr_40ba508d's video-390.png).
+    execFileSync("ffmpeg", [
+      ...["-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi"],
+      ...["-i", "testsrc2=s=1920x5190", "-frames:v", "1", file("tall.png")],
+    ]);
   }, 120_000);
 
   afterAll(() => {
@@ -213,6 +219,31 @@ describe.skipIf(!hasFfmpeg)("view_media downsizing in the Orb", () => {
       sourceBytes: size,
       resizedIn: "workspace",
     });
+    expect(leftovers()).toEqual(before);
+  });
+
+  it("downsizes a small image with too many pixels to decode in the isolate", async () => {
+    // Sent at full size, it passed while a conversation held 20 images or
+    // fewer, then made every later turn fail: providers refuse any image
+    // over 2000–3000 px once a request holds more than 20.
+    const size = (await stat(file("tall.png"))).size;
+    expect(size).toBeLessThan(3.75 * 1024 * 1024);
+    const result = await viewMedia(
+      shellSandbox(dir),
+      { path: file("tall.png") },
+      deps,
+    );
+    const sent = Buffer.from(result.image?.data ?? "", "base64");
+    expect(imageInfo(sent)).toEqual({
+      format: "jpeg",
+      width: 740,
+      height: 2000,
+    });
+    expect(result.text).toMatch(
+      new RegExp(
+        `^${file("tall.png")}: PNG, 740×2000, resized in the workspace from 1920×5190 `,
+      ),
+    );
     expect(leftovers()).toEqual(before);
   });
 

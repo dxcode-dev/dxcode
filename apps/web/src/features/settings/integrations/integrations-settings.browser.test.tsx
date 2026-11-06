@@ -249,4 +249,170 @@ describe("integrations settings", () => {
     expect(markup).toContain(">Retry<");
     expect(markup).toContain(">Disconnect<");
   });
+
+  it("explains who can turn on Bitbucket when this deployment lacks it", () => {
+    const markup = render([], { configured: false, connection: null });
+    expect(markup).toContain("not configured on this deployment");
+    expect(markup).toContain("whoever runs this dx deployment");
+    expect(markup).not.toContain(">Connect<");
+  });
+
+  it.each([
+    [
+      "connects",
+      {
+        status: 200,
+        body: {
+          status: "success",
+          data: {
+            configured: true,
+            connection: { id: "bb-1", accountName: "team", status: "active" },
+          },
+        },
+      },
+      "team on Bitbucket",
+    ],
+    [
+      "fails",
+      { status: 503, body: { error: "unavailable" } },
+      "Connection status is unavailable",
+    ],
+  ] as const)(
+    "keeps every card in place while Bitbucket is slow, then %s",
+    async (_outcome, bitbucketAnswer, bitbucketText) => {
+      const answers = new Map<string, (response: Response) => void>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(
+          (input: RequestInfo | URL) =>
+            new Promise<Response>((resolve) => {
+              const path = new URL(String(input), window.location.href)
+                .pathname;
+              answers.set(path, resolve);
+            }),
+        ),
+      );
+      const answer = async (path: string, status: number, body: unknown) => {
+        await vi.waitFor(() => expect(answers.has(path)).toBe(true));
+        await act(async () => {
+          answers.get(path)?.(Response.json(body, { status }));
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        });
+      };
+      const container = document.createElement("div");
+      document.body.append(container);
+      const root = createRoot(container);
+      // Each shown card as "section / group: card", in page order.
+      const placements: string[][] = [];
+      const record = () =>
+        placements.push(
+          [...container.querySelectorAll<HTMLElement>(".integration-tile")].map(
+            (card) => {
+              const section = card
+                .closest(".integrations-section")
+                ?.querySelector("h2")?.textContent;
+              const group =
+                card.closest(".integration-group")?.querySelector("h3")
+                  ?.textContent ?? "";
+              return `${section} / ${group}: ${card.getAttribute("aria-label")}`;
+            },
+          ),
+        );
+      const section = (title: string) =>
+        [...container.querySelectorAll(".integrations-section")].find(
+          (element) => element.querySelector("h2")?.textContent === title,
+        );
+      try {
+        await act(async () =>
+          root.render(
+            <AuthContext.Provider
+              value={{
+                identity: {
+                  id: userId,
+                  name: "Test",
+                  email: "test@example.com",
+                },
+                logout: () => undefined,
+              }}
+            >
+              <QueryClientProvider
+                client={
+                  new QueryClient({
+                    defaultOptions: { queries: { retry: false } },
+                  })
+                }
+              >
+                <IntegrationsSettings onDirtyChange={() => undefined} />
+              </QueryClientProvider>
+            </AuthContext.Provider>,
+          ),
+        );
+        record();
+        // Source control shows at once, in a fixed order, before any read.
+        expect(placements[0]).toEqual([
+          "Integrations / : GitHub integration",
+          "Integrations / : Bitbucket integration",
+        ]);
+        await answer("/v1/settings/personal/mcp-servers", 200, {
+          status: "success",
+          data: { items: [], canMutate: true },
+        });
+        record();
+        await answer("/v1/integrations/github/personal/grants", 200, {
+          status: "success",
+          data: {
+            configured: true,
+            grants: [
+              {
+                id: "grant-1",
+                ownerScope: "personal",
+                ownerId: "user-1",
+                installationId: "1",
+                status: "active",
+                installationStatus: "active",
+                account: { id: "9", login: "octocat", type: "user" },
+                repositorySelection: "all",
+                repositories: [],
+              },
+            ],
+          },
+        });
+        record();
+        // Bitbucket is still checking, yet MCP is placed and usable.
+        expect(section("Integrations")?.textContent).toContain(
+          "Checking connection",
+        );
+        const mcp = section("MCP");
+        expect(
+          [...(mcp?.querySelectorAll("button") ?? [])].find(
+            (button) => button.textContent?.trim() === "Add MCP Server",
+          ),
+        ).toBeDefined();
+        expect(mcp?.textContent).toContain("Notion");
+        await answer(
+          "/v1/integrations/bitbucket/personal/connection",
+          bitbucketAnswer.status,
+          bitbucketAnswer.body,
+        );
+        record();
+        expect(section("Integrations")?.textContent).toContain(bitbucketText);
+
+        const final = placements.at(-1) ?? [];
+        expect(final.slice(0, 2)).toEqual([
+          "Integrations / : GitHub integration",
+          "Integrations / : Bitbucket integration",
+        ]);
+        // A card never changes place: every earlier frame is the final
+        // page without the MCP cards that had not loaded yet.
+        for (const placement of placements)
+          expect(placement).toEqual(
+            final.filter((card) => placement.includes(card)),
+          );
+      } finally {
+        await act(async () => root.unmount());
+        container.remove();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
 });

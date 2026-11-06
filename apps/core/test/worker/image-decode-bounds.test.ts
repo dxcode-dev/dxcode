@@ -4,6 +4,7 @@ import { GifWriter } from "omggif";
 import { describe, expect, it } from "vitest";
 import {
   IMAGE_MAX_EDGE,
+  ImageTooLarge,
   prepareImage,
 } from "../../src/plugins/execution/media/image.js";
 
@@ -191,13 +192,17 @@ describe("view_media image decoding bounds (#1473)", () => {
 
   it("does not decode an image whose header needs more memory than the isolate allows", async () => {
     // 16-bit RGBA at 3000×2000 is under the pixel limit but needs 96 MB of
-    // rows twice over; it is small, so it goes to the model unchanged.
+    // rows twice over. It is past the 2000 px edge, so it is left for the
+    // Orb to downsize rather than sent at full size: providers refuse such
+    // images once a request holds more than 20 (thr_40ba508d).
     const deep = pngFile(3000, 2000, 16, 6, [
       pngChunk("IDAT", await zlibOfZeros(2000 * (1 + 3000 * 8))),
     ]);
-    const prepared = await prepareImage(deep);
-    expect(prepared.data).toBe(deep);
-    expect(prepared).toMatchObject({ width: 3000, height: 2000 });
+    const refusal = await prepareImage(deep).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ImageTooLarge);
+    expect(refusal).toMatchObject({
+      image: { format: "png", width: 3000, height: 2000 },
+    });
 
     // jpeg-js would hold over 100 MB for this 4:4:4 JPEG.
     const photo = new Uint8Array(
@@ -206,7 +211,7 @@ describe("view_media image decoding bounds (#1473)", () => {
         90,
       ).data,
     );
-    expect((await prepareImage(photo)).data).toBe(photo);
+    await expect(prepareImage(photo)).rejects.toBeInstanceOf(ImageTooLarge);
   });
 
   it("refuses a GIF whose first frame is larger than its screen", async () => {

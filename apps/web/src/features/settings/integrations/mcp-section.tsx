@@ -190,10 +190,100 @@ function PolicyCard({
   );
 }
 
+/** Source control cards, always in the same order. */
+function SourceControlSection({
+  entries,
+}: {
+  readonly entries: ReadonlyArray<IntegrationEntry>;
+}) {
+  return (
+    <section
+      className="integrations-section"
+      aria-labelledby="integrations-section-integrations"
+    >
+      <header className="integrations-section-header">
+        <h2 id="integrations-section-integrations">Integrations</h2>
+      </header>
+      <div className="integration-grid">
+        {entries.map((entry) => entry.node)}
+      </div>
+    </section>
+  );
+}
+
+/** MCP servers by state, and templates to add, once the servers read answers. */
+function McpServersSection({
+  canAdd,
+  error,
+  placed,
+  pending,
+  enabled,
+  disabled,
+  suggested,
+  onAdd,
+  onRetry,
+}: {
+  readonly canAdd: boolean;
+  readonly error: unknown;
+  readonly placed: boolean;
+  readonly pending: boolean;
+  readonly enabled: ReadonlyArray<IntegrationEntry>;
+  readonly disabled: ReadonlyArray<IntegrationEntry>;
+  readonly suggested: ReadonlyArray<IntegrationEntry>;
+  readonly onAdd: () => void;
+  readonly onRetry: () => void;
+}) {
+  const empty = enabled.length + disabled.length + suggested.length === 0;
+  return (
+    <section
+      className="integrations-section"
+      aria-labelledby="integrations-section-mcp"
+    >
+      <header className="integrations-section-header">
+        <h2 id="integrations-section-mcp">MCP</h2>
+        {canAdd ? (
+          <Button size="xs" onClick={onAdd}>
+            <Plus /> Add MCP Server
+          </Button>
+        ) : null}
+      </header>
+      {error === null ? null : (
+        <p className="integrations-status" role="alert">
+          {errorMessage(error)}{" "}
+          <Button size="xs" variant="outline" onClick={onRetry}>
+            Retry
+          </Button>
+        </p>
+      )}
+      {!placed ? (
+        pending ? (
+          <p className="integrations-empty">Loading MCP servers…</p>
+        ) : null
+      ) : empty ? (
+        <p className="integrations-empty">No MCP servers match.</p>
+      ) : (
+        <>
+          <IntegrationGroup title="Enabled">
+            {enabled.map((entry) => entry.node)}
+          </IntegrationGroup>
+          <IntegrationGroup title="Disabled">
+            {disabled.map((entry) => entry.node)}
+          </IntegrationGroup>
+          <IntegrationGroup title="Suggested">
+            {suggested.map((entry) => entry.node)}
+          </IntegrationGroup>
+        </>
+      )}
+    </section>
+  );
+}
+
 /**
- * The Integrations & MCP page body: heading, search, and the Enabled,
- * Disabled, and Available groups. Source control cards come from the page;
- * MCP servers, templates, and their dialogs live here.
+ * The Integrations & MCP page body: heading, search, then two sections.
+ * Integrations holds the page's source control cards in a fixed order; each
+ * shows its own status, so no card waits for or moves with another read. MCP
+ * groups servers into Enabled and Disabled and suggests templates, placed once
+ * the MCP servers read answers.
  */
 export function McpIntegrations({
   target,
@@ -204,12 +294,10 @@ export function McpIntegrations({
 }: {
   readonly target: McpServersTarget;
   readonly description: string;
-  /** The link to the other settings scope, beside Add MCP Server. */
+  /** The link to the other settings scope, at the top right. */
   readonly scopeLink?: React.ReactNode;
-  readonly integrations: {
-    readonly enabled: ReadonlyArray<IntegrationEntry>;
-    readonly available: ReadonlyArray<IntegrationEntry>;
-  };
+  /** Source control cards, in the order they always show. */
+  readonly integrations: ReadonlyArray<IntegrationEntry>;
   readonly onDirtyChange: (dirty: boolean) => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
@@ -377,8 +465,10 @@ export function McpIntegrations({
         }
       : undefined;
   const visible = (entry: IntegrationEntry) => matches(entry, query);
+  const sourceControl = integrations.filter(visible);
+  // MCP placement depends only on the MCP servers read.
+  const mcpPlaced = resource.data !== undefined;
   const enabled = [
-    ...integrations.enabled,
     ...(policy === undefined ? [] : [policy]),
     ...servers.flatMap((server) =>
       server.enabled ? [serverEntry(server)] : [],
@@ -389,12 +479,11 @@ export function McpIntegrations({
     const entry = serverEntry(server);
     return visible(entry) ? [entry] : [];
   });
-  const available = [
-    ...integrations.available,
-    ...MCP_TEMPLATES.flatMap((template) =>
-      usedTemplates.has(template.id) ? [] : [templateEntry(template)],
-    ),
-  ].filter(visible);
+  const suggested = MCP_TEMPLATES.flatMap((template) => {
+    if (usedTemplates.has(template.id)) return [];
+    const entry = templateEntry(template);
+    return visible(entry) ? [entry] : [];
+  });
   const openServer = servers.find(({ id }) => id === openServerId);
   return (
     <div className="integrations-settings">
@@ -402,14 +491,9 @@ export function McpIntegrations({
         title="Integrations & MCP"
         description={description}
         actions={
-          <div className="integrations-heading-actions">
-            {scopeLink}
-            {canMutate ? (
-              <Button size="sm" onClick={() => setConnecting({})}>
-                <Plus /> Add MCP Server
-              </Button>
-            ) : null}
-          </div>
+          scopeLink === undefined ? undefined : (
+            <div className="integrations-heading-actions">{scopeLink}</div>
+          )
         }
       />
       <div className="integrations-search">
@@ -427,32 +511,20 @@ export function McpIntegrations({
           {status}
         </p>
       )}
-      {resource.error === null ? null : (
-        <p className="integrations-status" role="alert">
-          {errorMessage(resource.error)}{" "}
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={() => void resource.refetch()}
-          >
-            Retry
-          </Button>
-        </p>
+      {sourceControl.length === 0 ? null : (
+        <SourceControlSection entries={sourceControl} />
       )}
-      <IntegrationGroup title="Enabled">
-        {enabled.map((entry) => entry.node)}
-      </IntegrationGroup>
-      <IntegrationGroup title="Disabled">
-        {disabled.map((entry) => entry.node)}
-      </IntegrationGroup>
-      <IntegrationGroup title="Available">
-        {available.map((entry) => entry.node)}
-      </IntegrationGroup>
-      {enabled.length + disabled.length + available.length === 0 ? (
-        <p className="integrations-empty">
-          {resource.isPending ? "Loading…" : "No integrations match."}
-        </p>
-      ) : null}
+      <McpServersSection
+        canAdd={canMutate}
+        error={resource.error}
+        placed={mcpPlaced}
+        pending={resource.isPending}
+        enabled={enabled}
+        disabled={disabled}
+        suggested={suggested}
+        onAdd={() => setConnecting({})}
+        onRetry={() => void resource.refetch()}
+      />
       <ConnectDialog
         key={connecting?.template?.id ?? (connecting ? "custom" : "idle")}
         template={connecting?.template}

@@ -861,7 +861,7 @@ const formatOrbResources = ({ resources }: RunnerProfile) =>
 function OrbPicker({
   groups,
   selectedProfile,
-  selectedProvider,
+  selectedProviderName,
   selectedName,
   disabled,
   isProfileAllowed,
@@ -869,7 +869,8 @@ function OrbPicker({
 }: {
   readonly groups: ReturnType<typeof runnerProfileGroups> | undefined;
   readonly selectedProfile: RunnerProfile;
-  readonly selectedProvider: RunnerProviderPresentation | undefined;
+  /** The selected size's provider as the picker names it. */
+  readonly selectedProviderName: string | undefined;
   readonly selectedName: string;
   readonly disabled: boolean;
   readonly isProfileAllowed: (profile: RunnerProfile) => boolean;
@@ -895,9 +896,9 @@ function OrbPicker({
         <span>
           {groups === undefined
             ? "Loading Orbs…"
-            : selectedProvider === undefined
+            : selectedProviderName === undefined
               ? selectedProfile.label
-              : `${orbProviderName(selectedProvider)} · ${selectedProfile.label}`}
+              : `${selectedProviderName} · ${selectedProfile.label}`}
         </span>
       </Menu.Trigger>
       <Menu.Portal>
@@ -1101,16 +1102,22 @@ export function NewThreadConfigurationStrip({
     runnerOrbs === undefined
       ? undefined
       : runnerProfileGroups(runnerProfiles, runnerProviders, runnerOrbs);
-  const selectedOrbOwner = (() => {
-    const scope = runnerOrbs?.find(
-      ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
-    )?.scope;
-    return scope === undefined ? undefined : orbKeyOwner(scope);
-  })();
+  const selectedOrb = runnerOrbs?.find(
+    ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
+  );
+  const selectedOrbOwner =
+    selectedOrb === undefined ? undefined : orbKeyOwner(selectedOrb.scope);
+  // The deployment's own name for its account wins, as in the menu, over
+  // the name of the provider underneath it.
+  const selectedProviderName =
+    selectedOrb?.displayName ??
+    (selectedRunnerProvider === undefined
+      ? undefined
+      : orbProviderName(selectedRunnerProvider));
   const selectedOrbName =
     selectedRunnerProfile === undefined
       ? ""
-      : `Orb: ${selectedRunnerProvider === undefined ? "" : `${orbProviderName(selectedRunnerProvider)} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
+      : `Orb: ${selectedProviderName === undefined ? "" : `${selectedProviderName} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
   const canRetryRunnerProfiles = onRunnerProfileRetry !== undefined;
   const allowedRunnerProfileIdSet =
     allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
@@ -1173,7 +1180,7 @@ export function NewThreadConfigurationStrip({
         <OrbPicker
           groups={runnerGroups}
           selectedProfile={selectedRunnerProfile}
-          selectedProvider={selectedRunnerProvider}
+          selectedProviderName={selectedProviderName}
           selectedName={selectedOrbName}
           disabled={locked || onRunnerProfileChange === undefined}
           isProfileAllowed={(runnerProfile) =>

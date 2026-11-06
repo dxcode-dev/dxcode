@@ -5,6 +5,7 @@ import { RunnerProfileCard } from "./runner-profile-card.js";
 function OrbSizeGrid({
   label,
   billing,
+  deploymentProvided,
   profiles,
   selectedId,
   isDisabled,
@@ -12,6 +13,7 @@ function OrbSizeGrid({
 }: {
   readonly label: string;
   readonly billing: string | undefined;
+  readonly deploymentProvided: boolean;
   readonly profiles: ReadonlyArray<RunnerProfile>;
   readonly selectedId: RunnerProfileId | undefined;
   readonly isDisabled: (profile: RunnerProfile) => boolean;
@@ -24,6 +26,7 @@ function OrbSizeGrid({
           key={profile.id}
           profile={profile}
           {...(billing === undefined ? {} : { billing })}
+          deploymentProvided={deploymentProvided}
           selected={selectedId === profile.id}
           disabled={isDisabled(profile)}
           onSelect={() => onSelect(profile.id)}
@@ -45,6 +48,8 @@ type OrbSizeGroup = {
    * account; the cards then show the provider's list price above it.
    */
   readonly billing?: string;
+  /** Show a provision note only when this deployment actually supplies it. */
+  readonly deploymentProvided?: boolean;
   readonly profiles: ReadonlyArray<RunnerProfile>;
 };
 
@@ -71,6 +76,7 @@ export function OrbSizePicker({
       <OrbSizeGrid
         label={group.label}
         billing={group.billing}
+        deploymentProvided={group.deploymentProvided ?? false}
         profiles={group.profiles}
         selectedId={selectedId}
         isDisabled={isDisabled}

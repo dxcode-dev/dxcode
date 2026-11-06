@@ -1317,7 +1317,9 @@ a {
   max-width: var(--thread-width);
   min-height: 100%;
   margin: 0 auto;
-  padding: 24px 24px calc(var(--agent-composer-dock-height, 132px) + 16px);
+  /* The left gutter holds the ⋯ of left-side messages clear of their text. */
+  padding: 24px 24px calc(var(--agent-composer-dock-height, 132px) + 16px)
+    max(24px, calc(var(--message-actions-size) + 8px));
   color: var(--chat-foreground);
   font-size: 13px;
   line-height: 20px;
@@ -1381,6 +1383,170 @@ a {
   min-width: 0;
   margin: 0;
 }
+:root {
+  /* ⋯ (Message Actions): 26px, or 32px on touch, as the reference. */
+  --message-actions-size: 26px;
+}
+@media (pointer: coarse) {
+  :root {
+    --message-actions-size: 32px;
+  }
+}
+/* As the reference (captures of 2026-11-05 and the owner's, 2026-11-06):
+   ⋯ (Message Actions) shows at a message's top right while the pointer is
+   over it, and stays while the message is selected (clicked, tapped,
+   focused, or with its menu open). A selected prompt's bubble gets a 1px
+   grey ring and a reply no mark, never the browser's focus ring. */
+.conversation-message:has(> .message-actions-anchor) {
+  position: relative;
+  /* Where ⋯ centres below the message's top. On the left (replies, other
+     people's and other Threads' messages) its top meets the message's
+     first line; on the right, on the viewer's bubble's top-right corner. */
+  --message-actions-y: calc(4px + var(--message-actions-size) / 2);
+}
+.conversation-message:has(> .message-actions-anchor[data-side="right"]) {
+  /* Centred on the bubble's top-right corner, as the reference (owner's
+     comparison, 2026-11-06). The anchor already starts at the bubble's
+     top, below the row's padding. */
+  --message-actions-y: 0px;
+}
+.conversation-message:has(> .message-actions-anchor):focus {
+  outline: none;
+}
+/* Zero height at the message's top. While shown it is sticky, so ⋯ stays
+   20px below the transcript's top as a long message scrolls, then leaves
+   with the message's bottom edge. */
+.message-actions-anchor {
+  position: relative;
+  z-index: 10;
+  height: 0;
+}
+/* Owner's call (2026-11-06): ⋯ follows the side the message sits on. On
+   the left it sits in the transcript's left gutter, 4px clear of the text,
+   so it never covers a line, at rest or pinned. */
+.message-actions-controls {
+  position: absolute;
+  top: var(--message-actions-y);
+  left: calc(-4px - var(--message-actions-size));
+  display: flex;
+  transform: translateY(-50%);
+}
+.message-actions-anchor[data-side="right"] > .message-actions-controls {
+  right: -8px;
+  left: auto;
+}
+.message-actions-button {
+  display: grid;
+  place-items: center;
+  width: var(--message-actions-size);
+  height: var(--message-actions-size);
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+  background: var(--popover);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.message-actions-button svg {
+  width: 14px;
+  height: 14px;
+}
+@media (pointer: coarse) {
+  .message-actions-button svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+.message-actions-button:hover,
+.message-actions-button[data-popup-open] {
+  color: var(--foreground);
+}
+.conversation-message:is(
+    :focus-within,
+    [data-popup-open],
+    :has(.message-actions-button[data-popup-open])
+  )
+  > .message-actions-anchor {
+  position: sticky;
+  /* The row's virtual-list transform shifts where Chrome pins it. */
+  top: calc(
+    20px -
+    var(--message-actions-y) -
+    var(--transcript-item-offset, 0px)
+  );
+}
+@media (hover: hover) {
+  .conversation-message:has(> .message-actions-anchor):hover
+    > .message-actions-anchor {
+    position: sticky;
+    top: calc(
+      20px -
+      var(--message-actions-y) -
+      var(--transcript-item-offset, 0px)
+    );
+  }
+  .conversation-message:not([data-text-selected]):has(
+      > .message-actions-anchor
+    ):hover
+    .message-actions-button {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+/* Text selected in a message: its selection toolbar shows, not ⋯. */
+.conversation-message:not([data-text-selected]):is(
+  :focus-within,
+  [data-popup-open],
+  :has(.message-actions-button[data-popup-open])
+) .message-actions-button {
+  opacity: 1;
+  pointer-events: auto;
+}
+/* The toolbar under selected text in a message: icon buttons with one-key
+   shortcuts (their titles say which). */
+.transcript-selection-popup {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  gap: 0;
+  padding: 3px 5px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+  background: var(--popover);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.16);
+}
+.transcript-selection-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+}
+.transcript-selection-button:hover,
+.transcript-selection-button:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.transcript-selection-button svg {
+  width: 15px;
+  height: 15px;
+}
+.message-menu-time {
+  display: block;
+  padding: 3px 8px 5px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+}
 .conversation-message > time {
   display: flex;
   align-items: center;
@@ -1438,6 +1604,14 @@ a {
     light-dark(rgb(80 80 55 / 0.12), rgb(246 255 245 / 0.072));
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+/* A selected prompt: a 1px grey ring, as the reference. */
+.user-message:has(> .message-actions-anchor):is(
+  :focus-within,
+  [data-popup-open],
+  :has(.message-actions-button[data-popup-open])
+) > .message-content {
+  box-shadow: inset 0 0 0 1px light-dark(#595959, #8c8c8c);
 }
 .user-message {
   margin-bottom: 8px;
@@ -9452,7 +9626,8 @@ div.claude-code-mode-main {
   display: none;
 }
 .mobile-pane-content .agent-transcript {
-  padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px);
+  padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px)
+    max(16px, calc(var(--message-actions-size) + 8px));
   font-size: 13px;
 }
 /* Above the composer and the dock's bottom space, as on desktop. */
@@ -9871,7 +10046,8 @@ div.claude-code-mode-main {
   color: var(--muted-foreground);
   font-size: 11px;
 }
-.first-party-plugin-row > .settings-toggle {
+.first-party-plugin-row > .settings-toggle,
+.first-party-plugin-row > .first-party-plugin-set-up {
   margin-left: auto;
 }
 /* Line the workspace policy switch up with the plugin switches (gear width + gap). */
@@ -10177,6 +10353,31 @@ div.claude-code-mode-main {
 }
 .settings-heading .skills-heading-actions a {
   text-decoration: none;
+}
+.skills-empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+}
+.skills-empty > p {
+  margin: 0;
+}
+.skills-prompt {
+  display: flex;
+  max-width: 100%;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.skills-prompt > code {
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 .skill-row {
   display: flex;
@@ -10528,11 +10729,27 @@ div.claude-code-mode-main {
   font-size: 12px;
   text-align: center;
 }
+.integrations-section {
+  display: grid;
+  gap: 12px;
+}
+.integrations-section-header {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.integrations-section-header > h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 500;
+}
 .integration-group {
   display: grid;
   gap: 8px;
 }
-.integration-group > h2 {
+.integration-group > h3 {
   margin: 0;
   color: var(--muted-foreground);
   font-size: 12px;
@@ -15016,4 +15233,10 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
 .thread-actions-menu .thread-menu-item > .shortcut-keycaps {
   flex: none;
   margin-left: auto;
+}
+/* Touch has no keyboard: a message's menu hides its shortcuts. */
+@media (hover: none) {
+  .message-menu .thread-context-item > .shortcut-keycaps {
+    display: none;
+  }
 }

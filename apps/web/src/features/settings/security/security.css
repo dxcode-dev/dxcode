@@ -53,6 +53,36 @@
   font-weight: 500;
   line-height: 16px;
 }
+/* The session name expands the row; the chevron turns when open. */
+.security-row-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin: 0 0 0 -2px;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.security-row-toggle svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--muted-foreground);
+  transition: transform 120ms ease;
+}
+.security-row-toggle svg[data-open] {
+  transform: rotate(90deg);
+}
+.security-row-toggle:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 .security-row-copy code {
   color: var(--muted-foreground);
   font-family: var(--font-mono-family);

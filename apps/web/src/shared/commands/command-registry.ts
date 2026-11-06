@@ -56,6 +56,14 @@ export interface CommandRuntime {
   readonly goForward: () => void;
   readonly toggleAndFocusSidebar: () => void;
   readonly moveSidebarSelection: (direction: -1 | 1) => void;
+  /**
+   * Focuses the next or previous message in the open Thread's transcript:
+   * only people's messages, or every message.
+   */
+  readonly moveBetweenMessages: (
+    direction: -1 | 1,
+    which: "user" | "all",
+  ) => void;
   readonly openFocusedSidebarItem: () => void;
   readonly switchThread: (direction: -1 | 1) => void;
   readonly openFocusedThreadMenu: () => void;
@@ -315,6 +323,42 @@ const commandDefinitions = Object.freeze([
     scope: "thread",
     defaults: everyPlatform("Control+Shift+A"),
     execute: (runtime) => runtime.focusThreadComposer(),
+  },
+  {
+    id: "thread.previous-user-message",
+    label: "Previous user message",
+    description: "Move focus to the previous message people sent.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("ArrowUp"),
+    execute: (runtime) => runtime.moveBetweenMessages(-1, "user"),
+  },
+  {
+    id: "thread.next-user-message",
+    label: "Next user message",
+    description: "Move focus to the next message people sent.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("ArrowDown"),
+    execute: (runtime) => runtime.moveBetweenMessages(1, "user"),
+  },
+  {
+    id: "thread.previous-message",
+    label: "Previous message",
+    description: "Move focus to the previous message, from anyone.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Shift+ArrowUp"),
+    execute: (runtime) => runtime.moveBetweenMessages(-1, "all"),
+  },
+  {
+    id: "thread.next-message",
+    label: "Next message",
+    description: "Move focus to the next message, from anyone.",
+    category: "Threads",
+    scope: "thread",
+    defaults: everyPlatform("Shift+ArrowDown"),
+    execute: (runtime) => runtime.moveBetweenMessages(1, "all"),
   },
   {
     id: "thread.open-files",
@@ -625,12 +669,54 @@ const assertUniqueDefinitions = <Id extends string>(
   }
 };
 
-/** A key belongs to one command on every screen, defaults included. */
+/**
+ * Up and Down move the sidebar selection while focus is in the sidebar, and
+ * between an open Thread's messages otherwise, as in the reference keymap.
+ * These pairs are the only commands that may hold the same key, and only
+ * their shared default: editing, persisted overrides, and the dispatcher
+ * treat any other key, or either command rebound, as single-owner.
+ */
+const SHARED_DEFAULTS: ReadonlyArray<readonly [string, string]> = [
+  ["sidebar.selection-up", "thread.previous-user-message"],
+  ["sidebar.selection-down", "thread.next-user-message"],
+];
+
+/** The command that shares a default key with this one, if any. */
+export const sharedDefaultPartner = (id: string) => {
+  for (const [first, second] of SHARED_DEFAULTS) {
+    if (first === id) return second;
+    if (second === id) return first;
+  }
+  return undefined;
+};
+
+/** Whether two commands may both hold `key`: a pair's shared default. */
+const isSharedDefault = <Id extends string>(
+  a: CommandDefinition<Id>,
+  b: CommandDefinition<Id>,
+  key: string,
+  platform: CommandPlatform,
+) => {
+  if (sharedDefaultPartner(a.id) !== b.id) return false;
+  const aDefault = a.defaults[platform];
+  const bDefault = b.defaults[platform];
+  return (
+    aDefault !== null &&
+    bDefault !== null &&
+    normalizeHotkey(aDefault, platform) === key &&
+    normalizeHotkey(bDefault, platform) === key
+  );
+};
+
+/**
+ * A key belongs to one command on every screen, defaults included, except
+ * the `SHARED_DEFAULTS` pairs.
+ */
 const assertDistinctDefaults = <Id extends string>(
   definitions: ReadonlyArray<CommandDefinition<Id>>,
   platform: CommandPlatform,
 ) => {
-  const owners = new Map<string, Id>();
+  const owners = new Map<string, CommandDefinition<Id>>();
   for (const definition of definitions) {
     const keys = new Set(
       [
@@ -643,11 +729,14 @@ const assertDistinctDefaults = <Id extends string>(
     );
     for (const key of keys) {
       const owner = owners.get(key);
-      if (owner !== undefined)
+      if (
+        owner !== undefined &&
+        !isSharedDefault(owner, definition, key, platform)
+      )
         throw new Error(
-          `Default shortcut ${key} is shared by ${owner} and ${definition.id} on ${platform}`,
+          `Default shortcut ${key} is shared by ${owner.id} and ${definition.id} on ${platform}`,
         );
-      owners.set(key, definition.id);
+      owners.set(key, definition);
     }
   }
 };
@@ -1039,9 +1128,12 @@ export const createCommandRegistry = <Id extends string = CommandId>(
       };
     }
     const conflicts: Array<CommandConflict<Id>> = [];
+    const editing = definitionFor(id);
     for (const candidate of definitions) {
       if (
         candidate.id !== id &&
+        // Its pair partner may keep their shared default; nothing else.
+        !isSharedDefault(editing, candidate, normalized, platform) &&
         (() => {
           const candidateBinding = getBinding(candidate.id);
           const candidateSequence = sequenceFor(candidate.id);

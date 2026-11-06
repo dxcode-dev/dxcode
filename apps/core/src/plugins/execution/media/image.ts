@@ -652,8 +652,11 @@ export const prepareImage = async (
       ? notDecoded
       : planDecode(format, bytes, width, height);
   if (plan.bytes > MAX_DECODE_BYTES) {
-    // Not decoded here; model providers downsize these themselves.
-    if (longest <= MAX_UNDECODED_EDGE && bytes.length <= MAX_UNDECODED_BYTES)
+    // Not decoded here. One within the edge limit goes as it is; a larger
+    // one is downsized in the Orb. Sent at full size, it would pass while a
+    // conversation holds 20 images or fewer and then fail every later turn:
+    // providers refuse images over 2000–3000 px in larger requests.
+    if (longest <= IMAGE_MAX_EDGE && bytes.length <= MAX_UNDECODED_BYTES)
       return unchanged();
     throw new ImageTooLarge(source);
   }

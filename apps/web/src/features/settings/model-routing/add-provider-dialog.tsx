@@ -9,9 +9,9 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
+import { ProviderMark } from "../../../shared/ui/provider-marks.js";
 import { providerKeyPresentation } from "./provider-key-presentation.js";
 import { hasProviderMark } from "./provider-mark-ids.js";
-import { ProviderMark } from "./provider-marks.js";
 
 export type AddConnectionPick =
   | "copilot"

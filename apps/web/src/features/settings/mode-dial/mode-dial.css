@@ -41,8 +41,8 @@
 }
 .tuning-device {
   position: relative;
-  flex: 0 0 320px;
-  width: 320px;
+  flex: 0 0 400px;
+  width: 400px;
   max-width: 100%;
 }
 .tuning-editor-column {

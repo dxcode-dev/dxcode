@@ -40,6 +40,28 @@ type Run = (
   success: string,
 ) => Promise<string | undefined>;
 
+const LOGOS = import.meta.glob<string>("./provider-logos/*.{svg,png}", {
+  eager: true,
+  query: "?url",
+  import: "default",
+});
+
+/** The provider's bundled logo URL, when dx has one. */
+const providerLogo = (id: string): string | undefined =>
+  LOGOS[`./provider-logos/${id}.svg`] ?? LOGOS[`./provider-logos/${id}.png`];
+
+/**
+ * The row's action: Manage an own connection, Connect a provider nothing
+ * runs yet, or Use own account where the deployment or workspace already
+ * runs it, so the row does not read as not connected.
+ */
+const rowAction = (provider: OrbProviderData) =>
+  provider.connection !== null
+    ? "Manage"
+    : provider.workspaceConnection !== null || provider.deployment
+      ? "Use own account"
+      : "Connect";
+
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
@@ -64,10 +86,16 @@ function OrbProviderRow({
   readonly provider: OrbProviderData;
   readonly onOpen: (trigger: HTMLButtonElement) => void;
 }) {
+  const logo = providerLogo(provider.id);
+  const action = rowAction(provider);
   return (
     <div className="orb-provider-row" data-provider={provider.id}>
       <span className="orb-provider-mark">
-        <OrbIcon aria-hidden="true" />
+        {logo === undefined ? (
+          <OrbIcon aria-hidden="true" />
+        ) : (
+          <img src={logo} alt="" width={16} height={16} />
+        )}
       </span>
       <div className="orb-provider-copy">
         <strong>{provider.displayName}</strong>
@@ -78,10 +106,14 @@ function OrbProviderRow({
           size="xs"
           variant="outline"
           disabled={!data.canUpdate}
-          aria-label={`${provider.connection === null ? "Connect" : "Manage"} ${provider.displayName}`}
+          aria-label={
+            action === "Use own account"
+              ? `Use own account for ${provider.displayName}`
+              : `${action} ${provider.displayName}`
+          }
           onClick={(event) => onOpen(event.currentTarget)}
         >
-          {provider.connection === null ? "Connect" : "Manage"}
+          {action}
         </Button>
       )}
     </div>

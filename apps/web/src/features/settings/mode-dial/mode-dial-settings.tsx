@@ -161,6 +161,11 @@ export const ModeDialSettings = ({
   };
   const reset = async () => {
     setError(undefined);
+    // An unsaved pin on Auto has nothing to reset on the server.
+    if (!pinned) {
+      updateDrafts({ ...drafts, [selected]: undefined });
+      return;
+    }
     const outcome = await settle(() => resetMutation.mutateAsync(selected));
     if (!outcome.ok) {
       setError(message(outcome.error));
@@ -222,15 +227,15 @@ export const ModeDialSettings = ({
                   <span> · Workspace</span>
                 ) : null}
               </h2>
-              {pinned ? (
-                <button
-                  type="button"
-                  onClick={() => void reset()}
-                  disabled={busy}
-                >
-                  Reset to default
-                </button>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => void reset()}
+                disabled={
+                  busy || (!pinned && (draft === undefined || draft === AUTO))
+                }
+              >
+                Reset to default
+              </button>
             </div>
             <div className="tuning-agent-card" data-auto={choice === AUTO}>
               <label htmlFor="mode-dial-model">Main Agent</label>
@@ -258,6 +263,17 @@ export const ModeDialSettings = ({
           </div>
         </div>
         <footer className="tuning-footer">
+          <span role="status">
+            {profile.isPending
+              ? "Loading…"
+              : profile.isError
+                ? "Unavailable"
+                : busy
+                  ? "Saving…"
+                  : dirty
+                    ? "Unsaved changes"
+                    : "In sync"}
+          </span>
           <button
             type="button"
             disabled={!dirty || busy}

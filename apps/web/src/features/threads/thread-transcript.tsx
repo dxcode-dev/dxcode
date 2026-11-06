@@ -6,7 +6,9 @@ import {
 import { ArrowDown } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
+import { MessageActions } from "./message-actions.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
+import { rowMatchesMessageLink } from "./message-link.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
@@ -18,6 +20,7 @@ import {
   ThreadSourceMessage,
 } from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
+import type { TranscriptReply } from "./transcript-selection-popup.js";
 import {
   sameTranscriptRow,
   type TranscriptOutlineAnchor,
@@ -165,8 +168,32 @@ function TranscriptRowShellContent({
     user ? row.admitted : true,
     user ? row.sentAt : undefined,
   );
+  // What people and the agent wrote has a menu; tool work does not.
+  const withMenu = (article: React.ReactElement, content: React.ReactNode) =>
+    row.kind === "user-prompt" ||
+    row.kind === "assistant-prose" ||
+    row.kind === "final-answer" ? (
+      <MessageActions
+        row={row}
+        render={article}
+        // The viewer's own prompts sit on the right; replies, other people's
+        // messages, and messages from other Threads on the left.
+        side={
+          user &&
+          fromThread === undefined &&
+          automation === undefined &&
+          (author === undefined || author.mine)
+            ? "right"
+            : "left"
+        }
+      >
+        {content}
+      </MessageActions>
+    ) : (
+      React.cloneElement(article, undefined, content)
+    );
   if (fromThread !== undefined && row.kind === "user-prompt")
-    return (
+    return withMenu(
       <article
         id={row.id}
         data-row-id={row.id}
@@ -175,16 +202,15 @@ function TranscriptRowShellContent({
         ref={measureElement}
         tabIndex={-1}
         className="transcript-row conversation-message thread-source-row"
-      >
-        <ThreadSourceMessage
-          sourceThreadId={fromThread}
-          text={row.text}
-          pending={!row.admitted}
-        />
-      </article>
+      />,
+      <ThreadSourceMessage
+        sourceThreadId={fromThread}
+        text={row.text}
+        pending={!row.admitted}
+      />,
     );
   if (automation !== undefined && row.kind === "user-prompt")
-    return (
+    return withMenu(
       <article
         id={row.id}
         data-row-id={row.id}
@@ -193,15 +219,14 @@ function TranscriptRowShellContent({
         ref={measureElement}
         tabIndex={-1}
         className="transcript-row conversation-message thread-source-row"
-      >
-        <AutomationMessage
-          automation={automation}
-          text={row.text}
-          pending={!row.admitted}
-        />
-      </article>
+      />,
+      <AutomationMessage
+        automation={automation}
+        text={row.text}
+        pending={!row.admitted}
+      />,
     );
-  return (
+  return withMenu(
     <article
       id={row.id}
       data-row-id={row.id}
@@ -213,7 +238,8 @@ function TranscriptRowShellContent({
       ref={measureElement}
       tabIndex={-1}
       className={`transcript-row conversation-message ${user ? "user-message" : "agent-message"}`}
-    >
+    />,
+    <>
       {user && author !== undefined && row.continued !== true ? (
         <MessageAuthorLabel author={author} />
       ) : null}
@@ -224,7 +250,7 @@ function TranscriptRowShellContent({
       {user && steering ? (
         <small className="message-steering">Steering</small>
       ) : null}
-    </article>
+    </>,
   );
 }
 
@@ -496,9 +522,7 @@ function useMessageFocus({
   const target =
     messageId === undefined
       ? undefined
-      : model.rows.find(
-          (row) => row.kind === "user-prompt" && row.dxMessageId === messageId,
-        );
+      : model.rows.find((row) => rowMatchesMessageLink(row, messageId));
   const targetIndex =
     target === undefined
       ? -1
@@ -1068,10 +1092,15 @@ export function TranscriptViewport(
                   className="transcript-virtual-item"
                   data-index={item.index}
                   key={item.key}
-                  style={{
-                    transform: `translateY(${item.start - scrollMargin}px)`,
-                    transitionProperty: "none",
-                  }}
+                  style={
+                    {
+                      transform: `translateY(${item.start - scrollMargin}px)`,
+                      transitionProperty: "none",
+                      // Chrome offsets sticky children before this transform;
+                      // a message's sticky ⋯ subtracts it (see styles.css).
+                      "--transcript-item-offset": `${item.start - scrollMargin}px`,
+                    } as React.CSSProperties
+                  }
                 >
                   <div ref={measureTurn} data-index={item.index}>
                     <TranscriptTurn
@@ -1145,9 +1174,22 @@ function TranscriptFocusRequest({
 // Whether this page has mounted a transcript yet.
 let transcriptMounted = false;
 
-export function ThreadTranscript(
-  props: React.ComponentProps<typeof TranscriptViewport>,
-) {
+// The selection popup loads after the transcript renders, not with it.
+const TranscriptSelectionPopup = React.lazy(() =>
+  import("./transcript-selection-popup.js").then((module) => ({
+    default: module.TranscriptSelectionPopup,
+  })),
+);
+
+export function ThreadTranscript({
+  onReply,
+  canDictate = false,
+  ...props
+}: React.ComponentProps<typeof TranscriptViewport> & {
+  /** Quotes selected text into the composer; absent where nobody writes. */
+  readonly onReply?: TranscriptReply;
+  readonly canDictate?: boolean;
+}) {
   const active = props.active ?? true;
   // A page's first transcript renders in the background: the Thread page
   // commits its header, panes, and composer first, then React renders the
@@ -1177,6 +1219,11 @@ export function ThreadTranscript(
       <React.Activity mode={active ? "visible" : "hidden"}>
         {active ? viewport : (hiddenViewport ?? viewport)}
       </React.Activity>
+      {active ? (
+        <React.Suspense fallback={null}>
+          <TranscriptSelectionPopup onReply={onReply} canDictate={canDictate} />
+        </React.Suspense>
+      ) : null}
       {active || props.focus === undefined ? null : (
         <TranscriptFocusRequest
           key={props.focus.requestKey}

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  dxcode.dev's pages outside the docs. The docs keep their own sitemap at
+  /docs/sitemap-index.xml, which robots.txt names beside this one: a sitemap
+  index cannot list another index, so the two are separate.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://dxcode.dev/</loc>
+  </url>
+</urlset>

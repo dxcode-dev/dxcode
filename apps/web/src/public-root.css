@@ -11,11 +11,15 @@ body {
   overflow: hidden;
 }
 
-/* Beige for the landing page, and until a theme is known. Once the launch
-   script or the signed-in app applies one (data-themed), the body behind
-   the app and its loading screen keeps it, so launching at "/" never
-   flashes beige. */
-:root:not([data-themed]) body,
-body:has(.cloud-landing) {
-  background: #f5f2e9;
+/* Until a theme is known, the app's background in the visitor's system
+   scheme, which the landing page at "/" also follows. Once the launch script
+   or the signed-in app applies a theme (data-themed), the body behind the
+   app and its loading screen keeps it. */
+:root:not([data-themed]) body {
+  background: #0b0d0b;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-themed]) body {
+    background: #f7f8f4;
+  }
 }

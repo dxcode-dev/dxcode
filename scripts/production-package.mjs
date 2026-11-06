@@ -615,8 +615,12 @@ export const createProductionPackage = async ({
     "icon-192.png",
     "icon-512.png",
     "index.html",
+    // A summary for language models, linking the docs' own llms.txt.
+    "llms.txt",
     "manifest.webmanifest",
     "robots.txt",
+    // The hosted site's sitemap, which robots.txt names.
+    "sitemap.xml",
     "social-card.png",
     // The push service worker: served from the origin root, so the browser
     // can scope it to the whole app.
@@ -993,8 +997,10 @@ export const validateProductionPackage = async (root) => {
     "assets/icon-192.png",
     "assets/icon-512.png",
     "assets/index.html",
+    "assets/llms.txt",
     "assets/manifest.webmanifest",
     "assets/robots.txt",
+    "assets/sitemap.xml",
     "assets/social-card.png",
     "assets/sw.js",
     "assets/view-frame.html",

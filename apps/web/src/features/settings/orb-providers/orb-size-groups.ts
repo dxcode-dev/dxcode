@@ -7,8 +7,8 @@ import type {
 
 /**
  * Who bills an Orb on the account it starts on: the provider, for a person's
- * or workspace's own connection. The deployment's account has no note; its
- * sizes show the deployment's own cost label.
+ * or workspace's own connection. Deployment-owned sizes use their own cost
+ * label, or a provision note when the deployment supplies no price.
  */
 const orbBillingNote = (
   scope: OrbResolvedProvider["scope"],
@@ -26,6 +26,7 @@ export type SetUpOrbSizeGroup = {
   readonly name?: string;
   readonly hint?: string;
   readonly billing?: string;
+  readonly deploymentProvided?: boolean;
   readonly label: string;
   /** False for a saved size whose provider is no longer set up. */
   readonly available: boolean;
@@ -66,6 +67,7 @@ export const setUpOrbSizeGroups = (
           key: adapter,
           name,
           ...(billing === undefined ? {} : { billing }),
+          deploymentProvided: account.scope === "deployment",
           available: true,
           profiles,
         },
@@ -79,6 +81,7 @@ export const setUpOrbSizeGroups = (
             key: adapter,
             name,
             hint: "Not available",
+            deploymentProvided: false,
             available: false,
             profiles: saved,
           },

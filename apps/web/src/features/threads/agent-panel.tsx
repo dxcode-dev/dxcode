@@ -64,6 +64,7 @@ import {
   type TranscriptFocus,
 } from "./thread-transcript.js";
 import type { TranscriptAccess } from "./transcript-access.js";
+import type { TranscriptReply } from "./transcript-selection-popup.js";
 import {
   deriveTranscriptViewModel,
   type TranscriptViewModel,
@@ -838,8 +839,11 @@ function AgentComposer({
   onRemoveImage,
   onSubmit,
   onTakeScreenshot,
+  replyRef,
   ref,
 }: {
+  /** Set to quote text into the draft, from a transcript selection. */
+  readonly replyRef?: React.RefObject<TranscriptReply | undefined>;
   readonly mentions?: ComposerMentions;
   readonly agentActive: boolean;
   /** The quick-action row, which hides while a message is being sent. */
@@ -879,6 +883,23 @@ function AgentComposer({
     draft,
     setDraft: onChangeDraft,
     textareaRef,
+  });
+  React.useImperativeHandle(replyRef, () => (quote, dictate) => {
+    if (draftLocked) return;
+    const current = draftValue.get();
+    const next =
+      current.trim() === ""
+        ? quote
+        : `${current.replace(/\s*$/, "")}\n\n${quote}`;
+    onChangeDraft(next);
+    // After React writes the draft: the caret goes below the quote.
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (textarea === null) return;
+      textarea.focus();
+      textarea.setSelectionRange(next.length, next.length);
+      if (dictate) dictation.start();
+    });
   });
   const enterKey = useComposerEnterKey();
   const submit = (event: React.FormEvent) => {
@@ -1576,7 +1597,11 @@ function AgentConversation({
   focus,
   onFocusHandled,
   onFocusRequested,
+  onReply,
+  canDictate,
 }: {
+  readonly onReply?: TranscriptReply;
+  readonly canDictate: boolean;
   readonly source: AgentSource<PanelAgent>;
   readonly transcripts: ReturnType<typeof createTranscriptDerivation>;
   readonly view: TranscriptView;
@@ -1623,6 +1648,8 @@ function AgentConversation({
     <ThreadTranscript
       model={model}
       active={active}
+      onReply={onReply}
+      canDictate={canDictate}
       historyReady={agent.historyReady}
       hasMore={agent.hasMore}
       loadingOlder={agent.loadingOlder}
@@ -1704,6 +1731,8 @@ export function AgentPanel({
   >("discarded-sends", () => new Set());
   const retainedDraft = useThreadPresentationValue("draft", "");
   const draftValue = ownerDraft ?? retainedDraft;
+  // The composer's Reply, which a transcript selection quotes into.
+  const composerReply = React.useRef<TranscriptReply>(undefined);
   const { images, setImages, imageCollection } = usePendingImages(
     controlledImages,
     onImagesChange,
@@ -1862,6 +1891,12 @@ export function AgentPanel({
           focus={focus}
           onFocusHandled={onFocusHandled}
           onFocusRequested={onFocusRequested}
+          onReply={
+            archived || readOnlyNotice !== undefined
+              ? undefined
+              : (quote, dictate) => composerReply.current?.(quote, dictate)
+          }
+          canDictate={dictationAvailable}
         />
 
         {archived ? null : readOnlyNotice !== undefined ? (
@@ -1887,6 +1922,7 @@ export function AgentPanel({
             dictationAvailable={dictationAvailable}
             draftValue={draftValue}
             draftLocked={draftLocked}
+            replyRef={composerReply}
             images={images}
             dockRef={composerDockRef}
             errorCard={errorCard}

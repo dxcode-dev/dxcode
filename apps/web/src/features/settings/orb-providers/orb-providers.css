@@ -25,9 +25,17 @@
   border: 1px solid var(--border);
   border-radius: 6px;
 }
-.orb-provider-mark svg {
+.orb-provider-mark svg,
+.orb-provider-mark img {
   width: 16px;
   height: 16px;
+}
+.orb-provider-mark img {
+  /* A light tile keeps dark logos (Freestyle) readable in dark mode. */
+  padding: 1px;
+  border-radius: 3px;
+  background: #fff;
+  object-fit: contain;
 }
 .orb-provider-copy {
   flex: 1;

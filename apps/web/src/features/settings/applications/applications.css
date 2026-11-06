@@ -5,8 +5,22 @@
 }
 .applications-card {
   width: 100%;
-  max-width: 823px;
-  margin: 0 auto;
+}
+.applications-docs-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  text-decoration: none;
+}
+.applications-docs-link:hover {
+  color: var(--foreground);
+}
+.applications-docs-link svg {
+  width: 12px;
+  height: 12px;
 }
 .applications-card .settings-card-header > button {
   flex: none;

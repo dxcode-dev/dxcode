@@ -78,7 +78,7 @@ export function IntegrationGroup({
   const id = `integration-group-${title.toLowerCase()}`;
   return (
     <section className="integration-group" aria-labelledby={id}>
-      <h2 id={id}>{title}</h2>
+      <h3 id={id}>{title}</h3>
       <div className="integration-grid">{cards}</div>
     </section>
   );

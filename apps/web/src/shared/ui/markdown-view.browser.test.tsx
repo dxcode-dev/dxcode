@@ -3,15 +3,30 @@
 // view's frame is created, and that streaming text around it never rebuilds
 // it.
 
+import { VIEW_FRAME_MESSAGE } from "@dx/api/views/view-frame.mjs";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RichMarkdown } from "./rich-markdown.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
 const mounted: Array<() => void> = [];
+/** The windows of the frames whose view reported its size in this test. */
+const sized = new Set<MessageEventSource>();
+const recordSize = (event: MessageEvent) => {
+  const data = event.data as { source?: unknown; type?: unknown } | null;
+  if (
+    event.source !== null &&
+    data?.source === VIEW_FRAME_MESSAGE &&
+    data.type === "size"
+  )
+    sized.add(event.source);
+};
+beforeEach(() => window.addEventListener("message", recordSize));
 afterEach(() => {
+  window.removeEventListener("message", recordSize);
+  sized.clear();
   for (const unmount of mounted.splice(0)) unmount();
   document.body.replaceChildren();
 });
@@ -35,7 +50,10 @@ const frames = (container: HTMLElement) =>
 
 /**
  * Waits for the lazily loaded kit, then for the view inside the frame to
- * report its height, which it does once its document has run.
+ * report its size, which it does once its document has run. The frame gets
+ * that document only from its own load event, so after this a load event
+ * means the frame loaded again. The slot's height is no such sign: it starts
+ * at the height an earlier frame of the same view reported (#1883).
  */
 const loadedFrame = async (container: HTMLElement) => {
   await expect.poll(() => frames(container).length).toBe(1);
@@ -43,17 +61,15 @@ const loadedFrame = async (container: HTMLElement) => {
   await expect
     .poll(
       () =>
-        frame === undefined
-          ? ""
-          : getComputedStyle(frame).getPropertyValue("--view-height"),
+        frame?.contentWindow !== null &&
+        frame?.contentWindow !== undefined &&
+        sized.has(frame.contentWindow) &&
+        getComputedStyle(frame).getPropertyValue("--view-height") !== "",
       {
         timeout: 10_000,
       },
     )
-    .not.toBe("");
-  // The view reports its height while it loads; the frame's own load event
-  // follows once the view finishes.
-  await new Promise((done) => setTimeout(done, 500));
+    .toBe(true);
   return frame as HTMLIFrameElement;
 };
 

@@ -39,6 +39,7 @@ import {
 import { resolveSettingsSection } from "./features/settings/settings-registration.js";
 import { SettingsRouteNotFound } from "./features/settings/settings-route-not-found.js";
 import { SettingsRoutePending } from "./features/settings/settings-route-pending.js";
+import { isMessageLinkId } from "./features/threads/message-link.js";
 import { NewThreadProvider } from "./features/threads/new-thread-provider.js";
 import { ThreadArchiveProvider } from "./features/threads/thread-archive.js";
 import { ThreadEditingProvider } from "./features/threads/thread-editing.js";
@@ -317,7 +318,8 @@ const seeOpenedThread = ({
 const threadRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/threads/$threadId",
-  // `message` opens the Thread at a message, for example a mention;
+  // `message` opens the Thread at a message, for example a mention or a
+  // copied message link;
   // `artifact` is the artifact its Artifacts view shows; `sheet=artifact`
   // shows it full screen over the Thread (a phone).
   validateSearch: (
@@ -327,10 +329,7 @@ const threadRoute = createRoute({
     readonly artifact?: string;
     readonly sheet?: "artifact";
   } => ({
-    ...(typeof search.message === "string" &&
-    /^msg_[0-9a-f]{24}$/.test(search.message)
-      ? { message: search.message }
-      : {}),
+    ...(isMessageLinkId(search.message) ? { message: search.message } : {}),
     ...(typeof search.artifact === "string" &&
     /^art_[0-9a-f]{32}$/.test(search.artifact)
       ? { artifact: search.artifact }

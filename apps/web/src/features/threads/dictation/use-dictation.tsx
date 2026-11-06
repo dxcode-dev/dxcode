@@ -582,6 +582,8 @@ export const useDictation = ({
     notice,
     hideSubmit: processingIntent === "send",
     interceptSubmit,
+    /** Starts recording, as the mic button does (it stops one under way). */
+    start,
   };
 };
 

@@ -215,6 +215,37 @@ const openSettingsFor = async (container: HTMLElement, name: string) => {
 };
 
 describe("SkillsSettings import routing", () => {
+  it("offers a prompt to copy when there are no personal skills", async () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(skillsQueryOptions(userId, target).queryKey, {
+      ...skillsListResponse.data,
+      items: [],
+    } as never);
+    const copied: string[] = [];
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText: async (text: string) => copied.push(text) },
+    });
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(() =>
+      root.render(
+        <AuthContext.Provider value={authValue}>
+          <QueryClientProvider client={queryClient}>
+            <SkillsSettings onDirtyChange={() => undefined} />
+          </QueryClientProvider>
+        </AuthContext.Provider>,
+      ),
+    );
+    const prompt = "Create a personal skill for writing our release notes";
+    expect(container.textContent).toContain(prompt);
+    await act(async () => findButtonByText(container, "Copy prompt").click());
+    expect(copied).toEqual([prompt]);
+    expect(container.textContent).toContain("Copied");
+    await act(() => root.unmount());
+  });
+
   it("imports an export as a fresh skill after a dismissed version upload instead of switching to an unrelated skill", async () => {
     const network = new FrontendNetworkHarness(
       respondSkills({

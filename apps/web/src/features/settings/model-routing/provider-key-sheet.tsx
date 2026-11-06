@@ -5,6 +5,7 @@ import { KeyRound, LockKeyhole, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
+import { ProviderMark } from "../../../shared/ui/provider-marks.js";
 import type { ConnectionDialogSubmit } from "./connection-dialog.js";
 import {
   type HeaderRow,
@@ -17,7 +18,6 @@ import {
   providerSheetTitle,
 } from "./provider-key-presentation.js";
 import { hasProviderMark } from "./provider-mark-ids.js";
-import { ProviderMark } from "./provider-marks.js";
 import { ProviderModelsSection } from "./provider-models-section.js";
 import { ProviderSettingsFields } from "./provider-settings-fields.js";
 

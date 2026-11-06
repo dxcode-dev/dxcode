@@ -15,7 +15,13 @@ import {
 import { Link } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import { ArrowUpRight, Check, Ellipsis, Plus, Search } from "lucide-react";
-import { type FormEvent, type ReactNode, type RefObject, useRef } from "react";
+import {
+  type FormEvent,
+  type ReactNode,
+  type RefObject,
+  useRef,
+  useState,
+} from "react";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -677,6 +683,8 @@ const historyActions = {
   delete: "Deleted",
 } as const;
 
+const COLLAPSED_HISTORY_ROWS = 5;
+
 export function EnvironmentVariableHistory({
   loading,
   loadError,
@@ -696,6 +704,9 @@ export function EnvironmentVariableHistory({
   readonly onReload: () => void;
   readonly onLoadMore: () => void;
 }) {
+  // The latest few changes, until the person asks for the rest.
+  const [expanded, setExpanded] = useState(false);
+  const shown = expanded ? items : items.slice(0, COLLAPSED_HISTORY_ROWS);
   return (
     <SettingsCard title="History" className="environment-history-card">
       {loading ? (
@@ -716,7 +727,7 @@ export function EnvironmentVariableHistory({
       ) : (
         <>
           <ul className="environment-history">
-            {items.map((item) => (
+            {shown.map((item) => (
               <li key={item.id}>
                 <span>
                   {historyActions[item.action]} <code>{item.name}</code>
@@ -733,12 +744,29 @@ export function EnvironmentVariableHistory({
               {moreError}
             </p>
           )}
-          {hasMore ? (
+          {!expanded && items.length > COLLAPSED_HISTORY_ROWS ? (
+            <div className="environment-history-more">
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setExpanded(true)}
+              >
+                Show more
+              </Button>
+            </div>
+          ) : hasMore ? (
             <div className="environment-history-more">
               {loadingMore ? (
                 <DxLoading label="Loading older changes…" />
               ) : (
-                <Button size="xs" variant="outline" onClick={onLoadMore}>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => {
+                    setExpanded(true);
+                    onLoadMore();
+                  }}
+                >
                   Load older changes
                 </Button>
               )}

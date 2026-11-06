@@ -12,9 +12,9 @@ import { Check, Info, KeyRound } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
+import { ProviderMark } from "../../../shared/ui/provider-marks.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import { hasProviderMark } from "./provider-mark-ids.js";
-import { ProviderMark } from "./provider-marks.js";
 
 type CatalogModel = CatalogProviderData["models"][number];
 

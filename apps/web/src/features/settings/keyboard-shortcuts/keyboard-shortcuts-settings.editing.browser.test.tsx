@@ -161,8 +161,17 @@ describe("KeyboardShortcutsSettings editing", () => {
     expect(registry.getBinding("navigation.projects")).toBe("Mod+Shift+O");
   });
 
+  // Owner direction, 2026-11-06 (#1811): ↑ and ↓ move the sidebar
+  // selection while the sidebar has focus, and an open Thread's messages
+  // otherwise. These two keys, each shared by exactly these two commands,
+  // are the only default shortcuts with more than one owner.
+  const approvedShared = new Map([
+    ["↑", ["Move sidebar selection up", "Previous user message"]],
+    ["↓", ["Move sidebar selection down", "Next user message"]],
+  ]);
+
   it.each(["mac", "windows", "linux"] as const)(
-    "lists every default shortcut on %s for exactly one command",
+    "lists every default shortcut on %s for exactly one command, except the approved ↑ and ↓ pairs",
     async (platform) => {
       registry = createCommandRegistry({ platform });
       await mount();
@@ -176,8 +185,19 @@ describe("KeyboardShortcutsSettings editing", () => {
           owners.set(keys, (owners.get(keys) ?? new Set()).add(label));
         }
       }
-      const shared = [...owners].filter(([, labels]) => labels.size > 1);
-      expect(shared).toEqual([]);
+      const shared = Object.fromEntries(
+        [...owners]
+          .filter(([, labels]) => labels.size > 1)
+          .map(([keys, labels]) => [keys, [...labels].sort()]),
+      );
+      expect(shared).toEqual(
+        Object.fromEntries(
+          [...approvedShared].map(([keys, labels]) => [
+            keys,
+            [...labels].sort(),
+          ]),
+        ),
+      );
     },
   );
 

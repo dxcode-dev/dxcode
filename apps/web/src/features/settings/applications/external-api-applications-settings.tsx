@@ -18,7 +18,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
-import { Check, Copy, Ellipsis, Plus } from "lucide-react";
+import { Check, Copy, Ellipsis, ExternalLink, Plus } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
@@ -656,7 +656,19 @@ function WorkspaceApplications({
   };
   return (
     <div className="applications-settings">
-      <SettingsHeading title="External API Apps" />
+      <SettingsHeading
+        title="External API Apps"
+        actions={
+          <a
+            className="applications-docs-link"
+            href="/docs/use/external-api/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            External API Docs <ExternalLink aria-hidden="true" />
+          </a>
+        }
+      />
       <SettingsCard
         className="applications-card"
         title="Applications"

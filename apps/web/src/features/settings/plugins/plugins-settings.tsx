@@ -74,6 +74,9 @@ function PluginRow({
 }) {
   const toggle = pluginSwitch(plugin, scope);
   const hint = pluginHint(plugin, scope);
+  // On but unable to work: ask for the key instead of showing it on.
+  const needsSetUp =
+    !toggle.locked && plugin.effective.status === "no-provider";
   return (
     <div className="first-party-plugin-row">
       <span className="first-party-plugin-creator">
@@ -81,29 +84,43 @@ function PluginRow({
       </span>
       <strong>{plugin.displayName}</strong>
       {hint === undefined ? null : <span>{hint}</span>}
-      <SettingsToggle
-        checked={toggle.checked}
-        disabled={!canUpdate || busy || toggle.locked}
-        label={`${plugin.displayName} ${toggle.checked ? "on" : "off"}`}
-        onCheckedChange={(checked) =>
-          void run(
-            {
-              type: "enablement",
-              pluginId: plugin.id,
-              enablement: checked ? "enabled" : "disabled",
-            },
-            `${plugin.displayName} turned ${checked ? "on" : "off"}.`,
-          )
-        }
-      />
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        aria-label={`${plugin.displayName} settings`}
-        onClick={(event) => onOpenSettings(event.currentTarget)}
-      >
-        <Settings />
-      </Button>
+      {needsSetUp ? (
+        <Button
+          className="first-party-plugin-set-up"
+          size="xs"
+          variant="outline"
+          disabled={busy}
+          onClick={(event) => onOpenSettings(event.currentTarget)}
+        >
+          Set up
+        </Button>
+      ) : (
+        <>
+          <SettingsToggle
+            checked={toggle.checked}
+            disabled={!canUpdate || busy || toggle.locked}
+            label={`${plugin.displayName} ${toggle.checked ? "on" : "off"}`}
+            onCheckedChange={(checked) =>
+              void run(
+                {
+                  type: "enablement",
+                  pluginId: plugin.id,
+                  enablement: checked ? "enabled" : "disabled",
+                },
+                `${plugin.displayName} turned ${checked ? "on" : "off"}.`,
+              )
+            }
+          />
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            aria-label={`${plugin.displayName} settings`}
+            onClick={(event) => onOpenSettings(event.currentTarget)}
+          >
+            <Settings />
+          </Button>
+        </>
+      )}
     </div>
   );
 }

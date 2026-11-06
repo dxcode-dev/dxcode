@@ -1,10 +1,11 @@
-import { matchesKeyboardEvent } from "@tanstack/react-hotkeys";
+import { type Hotkey, matchesKeyboardEvent } from "@tanstack/react-hotkeys";
 import type {
   CommandContext,
   CommandId,
   CommandRegistry,
   CommandRuntime,
 } from "./command-registry.js";
+import { sharedDefaultPartner } from "./command-registry.js";
 
 const SEQUENCE_TIMEOUT_MS = 700;
 
@@ -100,7 +101,29 @@ const isKeyOwnedByControl = (
   );
 };
 
+/**
+ * Whether an open Thread's messages take a key the sidebar shares with them
+ * (Up and Down by default): they do unless focus is in the sidebar, as in
+ * the reference keymap.
+ */
+const messagesTakeArrows = (document: Document) => {
+  const sidebar = document.querySelector("[data-command-surface='sidebar']");
+  if (sidebar?.contains(document.activeElement) === true) return false;
+  return transcriptShown(document);
+};
+const transcriptShown = (document: Document) =>
+  [...document.querySelectorAll(".transcript-viewport")].some((viewport) =>
+    viewport.checkVisibility(),
+  );
+const MESSAGE_COMMANDS = new Set<CommandId>([
+  "thread.previous-user-message",
+  "thread.next-user-message",
+  "thread.previous-message",
+  "thread.next-message",
+]);
+
 const surfaceExists = (id: CommandId, document: Document) => {
+  if (MESSAGE_COMMANDS.has(id)) return transcriptShown(document);
   // Enter opens the row that has focus, never one marked before focus moved.
   if (id === "sidebar.open-focused")
     return (
@@ -218,14 +241,27 @@ export const createCommandKeydownHandler = ({
       sequenceIndex = 0;
     }
 
+    const matches = (binding: Hotkey) =>
+      matchesKeyboardEvent(event, binding, registry.platform);
+    // A key a sidebar command shares with its message partner (only their
+    // shared default) goes to one of them by focus; every other key, and
+    // either command once rebound, has one owner and is unaffected.
+    const yieldsSharedKey = (candidate: (typeof commands)[number]) => {
+      const partnerId = sharedDefaultPartner(candidate.id);
+      if (partnerId === undefined) return false;
+      const partner = commands.find((command) => command.id === partnerId);
+      if (partner === undefined || !partner.bindings.some(matches))
+        return false;
+      const messagesWin = messagesTakeArrows(document);
+      return MESSAGE_COMMANDS.has(candidate.id) ? !messagesWin : messagesWin;
+    };
     const command = commands.find(
       (candidate) =>
         candidate.available &&
         (menu === null || candidate.scope === "global") &&
         surfaceExists(candidate.id, document) &&
-        candidate.bindings.some((candidateBinding) =>
-          matchesKeyboardEvent(event, candidateBinding, registry.platform),
-        ),
+        candidate.bindings.some(matches) &&
+        !yieldsSharedKey(candidate),
     );
     if (command === undefined) return;
     event.preventDefault();

@@ -3,9 +3,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadPortalsPane } from "./portals-pane.js";
+import {
+  preloadPortalsPane,
+  ThreadPortalsPane,
+} from "./portals-pane-loader.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+// The pane renders through its lazy loader, as the Thread page renders it.
+await preloadPortalsPane();
 
 const threadId = "thr_00000000-0000-4000-8000-000000001319" as ThreadId;
 const portalUrl =

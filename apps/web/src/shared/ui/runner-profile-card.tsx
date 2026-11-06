@@ -28,17 +28,24 @@ const costText = (profile: RunnerProfile, billing: string | undefined) => {
 export function RunnerProfileCard({
   profile,
   billing,
+  deploymentProvided = false,
   selected,
   disabled,
   onSelect,
 }: {
   readonly profile: RunnerProfile;
   readonly billing?: string;
+  readonly deploymentProvided?: boolean;
   readonly selected: boolean;
   readonly disabled: boolean;
   readonly onSelect: () => void;
 }) {
   const cost = costText(profile, billing);
+  const note =
+    billing ??
+    (deploymentProvided && cost === undefined
+      ? "Provided by this deployment"
+      : undefined);
   return (
     <label
       className="runner-profile-card"
@@ -67,8 +74,8 @@ export function RunnerProfileCard({
           {cost === undefined ? null : (
             <span className="orb-size-card-cost">{cost}</span>
           )}
-          {billing === undefined ? null : (
-            <span className="orb-size-card-billing">{billing}</span>
+          {note === undefined ? null : (
+            <span className="orb-size-card-billing">{note}</span>
           )}
         </span>
         <span

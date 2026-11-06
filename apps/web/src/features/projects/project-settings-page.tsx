@@ -1248,8 +1248,8 @@ function useAuthorizedRepositories(userId: UserId) {
 
 /**
  * Who bills an Orb on the account a Thread in this project starts on: the
- * provider, for a person's or workspace's own connection. The deployment's
- * account has no note; its sizes show the deployment's own cost label.
+ * provider, for a person's or workspace's own connection. Deployment-owned
+ * sizes use their own cost label, or a provision note when none is supplied.
  */
 const orbBillingNote = (scope: PluginScope, providerName: string) =>
   scope === "deployment"
@@ -1263,6 +1263,7 @@ type OrbSizeGroupDraft = {
   readonly name: string;
   readonly hint?: string;
   readonly billing?: string;
+  readonly deploymentProvided?: boolean;
   readonly available: boolean;
   readonly profiles: ReadonlyArray<RunnerProfile>;
 };
@@ -1300,6 +1301,7 @@ const orbSizeGroups = (
           key: adapter,
           name,
           ...(billing === undefined ? {} : { billing }),
+          deploymentProvided: account.scope === "deployment",
           available: true,
           profiles,
         },

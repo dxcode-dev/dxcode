@@ -123,7 +123,7 @@ function BitbucketIntegration() {
           : unavailable
             ? "Connection status is unavailable."
             : configured === false
-              ? "Bitbucket is not configured on this deployment."
+              ? "Bitbucket is not configured on this deployment. To turn it on, ask whoever runs this dx deployment to add a Bitbucket OAuth consumer."
               : reconnectRequired
                 ? "Authorization expired or was revoked. Reconnect to continue."
                 : active
@@ -264,75 +264,55 @@ export function IntegrationsSettings({
   settingsReturnTo,
   workspaceSlug,
 }: SettingsSectionProps) {
-  const { identity } = useAuthenticatedIdentity();
-  const github = useQuery({
-    ...githubIntegrationQueryOptions(identity.id),
-    enabled: workspaceSlug === undefined,
-  });
-  const bitbucket = useQuery({
-    ...bitbucketConnectionQueryOptions(identity.id),
-    enabled: workspaceSlug === undefined,
-  });
   const target: McpServersTarget =
     workspaceSlug === undefined
       ? { scope: "personal" }
       : { scope: "workspace", workspaceSlug };
-  const githubEntry: IntegrationEntry = {
-    key: "github",
-    search: "github source control repositories",
-    node: (
-      <GitHubIntegration
-        key="github"
-        onDirtyChange={onDirtyChange}
-        settingsReturnTo={settingsReturnTo}
-      />
-    ),
-  };
-  const githubConnected = (github.data?.grants.length ?? 0) > 0;
-  const bitbucketConnected = bitbucket.data?.connection?.status === "active";
-  const integrations =
+  // Fixed order; each card reads and shows its own connection status.
+  const integrations: ReadonlyArray<IntegrationEntry> =
     workspaceSlug === undefined
-      ? {
-          enabled: [
-            ...(githubConnected ? [githubEntry] : []),
-            ...(bitbucketConnected ? [bitbucketEntry] : []),
-          ],
-          available: [
-            ...(githubConnected ? [] : [githubEntry]),
-            ...(bitbucketConnected ? [] : [bitbucketEntry]),
-          ],
-        }
-      : {
-          enabled: [],
-          available: [
-            {
-              key: "source-control",
-              search: "github bitbucket source control",
-              node: (
-                <IntegrationCard
-                  key="source-control"
-                  label="Source control integration"
-                  icon={<GitHubIcon />}
-                  title="GitHub and Bitbucket"
-                  description="Each member connects their own account in personal settings to work in the workspace's repositories."
-                  action={
-                    <Link
-                      to="/settings/$section"
-                      params={{ section: "integrations" }}
-                      state={(previous) => previous}
-                      className={buttonVariants({
-                        variant: "ghost",
-                        size: "xs",
-                      })}
-                    >
-                      Personal integrations
-                    </Link>
-                  }
-                />
-              ),
-            },
-          ],
-        };
+      ? [
+          {
+            key: "github",
+            search: "github source control repositories",
+            node: (
+              <GitHubIntegration
+                key="github"
+                onDirtyChange={onDirtyChange}
+                settingsReturnTo={settingsReturnTo}
+              />
+            ),
+          },
+          bitbucketEntry,
+        ]
+      : [
+          {
+            key: "source-control",
+            search: "github bitbucket source control",
+            node: (
+              <IntegrationCard
+                key="source-control"
+                label="Source control integration"
+                icon={<GitHubIcon />}
+                title="GitHub and Bitbucket"
+                description="Each member connects their own account in personal settings to work in the workspace's repositories."
+                action={
+                  <Link
+                    to="/settings/$section"
+                    params={{ section: "integrations" }}
+                    state={(previous) => previous}
+                    className={buttonVariants({
+                      variant: "ghost",
+                      size: "xs",
+                    })}
+                  >
+                    Personal integrations
+                  </Link>
+                }
+              />
+            ),
+          },
+        ];
   return (
     <McpIntegrations
       target={target}

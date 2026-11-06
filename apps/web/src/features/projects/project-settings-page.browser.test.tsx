@@ -588,7 +588,9 @@ describe("project settings workspace state", () => {
               profiles: data.catalog.profiles.map((size) =>
                 size.id === "large"
                   ? { ...size, costLabel: "Included in your plan" }
-                  : size,
+                  : size.id === "standard-2"
+                    ? { ...size, costLabel: "45 credits/hour" }
+                    : size,
               ),
             },
           }),
@@ -625,9 +627,12 @@ describe("project settings workspace state", () => {
     );
     // On the person's own E2B account, the deployment's label does not apply.
     expect(cost("Large")).toBe("$0.17/hour");
-    // The deployment's account shows no list price and no billing note.
+    // Deployment-owned sizes never borrow the provider's list price.
     expect(cost("standard-1")).toBeUndefined();
-    expect(billing("standard-1")).toBeUndefined();
+    expect(billing("standard-1")).toBe("Provided by this deployment");
+    // A supplied label takes precedence over the fallback, unchanged.
+    expect(cost("standard-2")).toBe("45 credits/hour");
+    expect(billing("standard-2")).toBeUndefined();
     await React.act(() => root.unmount());
   });
 

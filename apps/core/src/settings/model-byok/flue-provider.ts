@@ -3,8 +3,10 @@ import {
   type AssistantMessageEvent,
   type Context,
   createAssistantMessageEventStream,
+  type ImageContent,
   type Model,
   type Provider,
+  type TextContent,
 } from "@earendil-works/pi-ai";
 import type {
   ProviderOptions as FlueProviderOptions,
@@ -12,6 +14,11 @@ import type {
   ModelResolutionContext,
 } from "@flue/runtime";
 import type { FlueDurableObjectIdentity } from "@flue/runtime/cloudflare";
+import { decodeBase64 } from "../../encoding/base64.js";
+import {
+  IMAGE_MAX_EDGE,
+  imageInfo,
+} from "../../plugins/execution/media/image.js";
 import { AGENT_RUN_LIMIT_MS } from "../../runtime/agent-run-limit.js";
 import {
   classifyRunFailure,
@@ -131,6 +138,62 @@ export const withNonEmptyToolErrors = (context: Context): Context => {
   });
   return changed ? { ...context, messages } : context;
 };
+
+/**
+ * Above this many images in one request, Anthropic refuses any image over
+ * 2000–3000 px on a side ("many-image requests"); one such image fails the
+ * whole request.
+ */
+const MANY_IMAGES = 20;
+/** Base64 read first for an image's size; the header is near the start. */
+const IMAGE_HEAD_CHARS = 64 * 1024;
+
+const imageSize = (data: string) =>
+  imageInfo(decodeBase64(data.slice(0, IMAGE_HEAD_CHARS))) ??
+  (data.length > IMAGE_HEAD_CHARS ? imageInfo(decodeBase64(data)) : undefined);
+
+/**
+ * Flue keeps every image in history, so one sent at full size while a
+ * conversation held few images makes every turn fail once it holds more
+ * than 20. Past that count, an image over the edge `view_media` sends is
+ * replaced by a note naming it, so the agent can view a smaller copy.
+ */
+const withSendableImages = (context: Context): Context => {
+  let count = 0;
+  for (const message of context.messages)
+    if (message.role !== "assistant" && typeof message.content !== "string")
+      for (const block of message.content) if (block.type === "image") count++;
+  if (count <= MANY_IMAGES) return context;
+  let changed = false;
+  const sendable = (
+    block: TextContent | ImageContent,
+  ): TextContent | ImageContent => {
+    if (block.type !== "image") return block;
+    const size = imageSize(block.data);
+    if (
+      size === undefined ||
+      Math.max(size.width, size.height) <= IMAGE_MAX_EDGE
+    )
+      return block;
+    changed = true;
+    return {
+      type: "text",
+      text: `[A ${size.width}×${size.height} image was left out: with more than ${MANY_IMAGES} images in the conversation, models refuse images over ${IMAGE_MAX_EDGE} pixels on a side. View a smaller copy if you need it.]`,
+    };
+  };
+  const messages = context.messages.map((message) =>
+    message.role === "user" && typeof message.content !== "string"
+      ? { ...message, content: message.content.map(sendable) }
+      : message.role === "toolResult"
+        ? { ...message, content: message.content.map(sendable) }
+        : message,
+  );
+  return changed ? { ...context, messages } : context;
+};
+
+/** History as every provider accepts it. */
+const sendableContext = (context: Context) =>
+  withSendableImages(withNonEmptyToolErrors(context));
 
 const FAILURE_CLASSES: ReadonlySet<string> = new Set<RunFailureClass>([
   "account",
@@ -561,7 +624,7 @@ export const createDxModelRoutingProvider = (
     },
     getModels: () => models,
     stream: ((model: Model<Api>, rawContext: Context, options: never) => {
-      const context = withNonEmptyToolErrors(rawContext);
+      const context = sendableContext(rawContext);
       if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")
         return streamViaCoordinator(deps, model, context, options);
       const loadAdapter = PROXY_STREAM[model.api];
@@ -577,7 +640,7 @@ export const createDxModelRoutingProvider = (
       );
     }) as Provider["stream"],
     streamSimple: ((model: Model<Api>, rawContext: Context, options: never) => {
-      const context = withNonEmptyToolErrors(rawContext);
+      const context = sendableContext(rawContext);
       if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")
         return streamViaCoordinator(deps, model, context, options);
       const loadAdapter = PROXY_STREAM[model.api];

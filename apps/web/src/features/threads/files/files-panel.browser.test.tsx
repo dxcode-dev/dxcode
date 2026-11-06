@@ -17,7 +17,7 @@ import {
 } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const treeHarness = vi.hoisted(() => {
   type Options = {
@@ -213,6 +213,12 @@ const createChangesTransport = (
   push: vi.fn(),
 });
 
+// The panel loads the tree's code once its first listing arrives. The dev
+// server serves that chunk on first import, and while other test files load
+// theirs that has taken longer than a 1 s wait below (#1884). Load it before
+// the tests, so each wait times the panel, not the dev server.
+beforeAll(() => import("./files-tree.js"));
+
 afterEach(() => {
   focusManager.setFocused(undefined);
   onlineManager.setOnline(true);
@@ -271,7 +277,6 @@ describe("Thread Files lazy reads", () => {
     await settle();
 
     expect(transport.list).toHaveBeenCalledOnce();
-    // The tree's code loads when the Files pane first opens.
     await vi.waitFor(() =>
       expect(container.textContent).toContain("README.md"),
     );

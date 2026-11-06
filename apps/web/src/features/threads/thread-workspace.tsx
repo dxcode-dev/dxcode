@@ -53,6 +53,7 @@ import {
   ThreadFilesPanel,
 } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
+import { isMessageLinkId } from "./message-link.js";
 import { OrbDiskNotice } from "./orb-disk/orb-disk-notice.js";
 import { OrbMemoryNotice } from "./orb-memory/orb-memory-notice.js";
 import {
@@ -71,7 +72,7 @@ import {
 import type { PaneContents } from "./panes/pane-views.js";
 import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
 import { ThreadPageLayout } from "./panes/thread-page-layout.js";
-import { ThreadPortalsPane } from "./portals/portals-pane.js";
+import { ThreadPortalsPane } from "./portals/portals-pane-loader.js";
 import {
   useThreadPresence,
   useThreadWorkspaceStatus,
@@ -239,9 +240,7 @@ export function ThreadWorkspace({
   const focusMessageId = useLocation({
     select: (location) => {
       const message: unknown = location.search?.message;
-      return typeof message === "string" && /^msg_[0-9a-f]{24}$/.test(message)
-        ? message
-        : undefined;
+      return isMessageLinkId(message) ? message : undefined;
     },
   });
   // Each navigation is its own request, so opening the same mention again
@@ -493,7 +492,11 @@ const previewTool = (
   portalDomain === undefined
     ? undefined
     : (active: boolean) => (
-        <ThreadPortalsPane active={active} threadId={thread.id} />
+        <React.Suspense
+          fallback={<div className="thread-portals-pane" aria-busy="true" />}
+        >
+          <ThreadPortalsPane active={active} threadId={thread.id} />
+        </React.Suspense>
       );
 
 /** The Desktop tool; absent when the router gives none. */

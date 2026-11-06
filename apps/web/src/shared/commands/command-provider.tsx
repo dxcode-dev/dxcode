@@ -182,6 +182,37 @@ const useCommandRuntime = ({
       next.focus();
       next.scrollIntoView({ block: "nearest" });
     },
+    moveBetweenMessages: (direction, which) => {
+      const viewport = [
+        ...document.querySelectorAll<HTMLElement>(".transcript-viewport"),
+      ].find((element) => element.checkVisibility());
+      if (viewport === undefined) return;
+      // People's messages, or every message; rendered rows in reading order
+      // (the list positions them absolutely).
+      const selector =
+        which === "user"
+          ? 'article[data-row-kind="user-prompt"]'
+          : 'article:is([data-row-kind="user-prompt"], [data-row-kind="assistant-prose"], [data-row-kind="final-answer"])';
+      const rows = Array.from(
+        viewport.querySelectorAll<HTMLElement>(selector),
+        (row) => ({ row, box: row.getBoundingClientRect() }),
+      ).sort((a, b) => a.box.top - b.box.top);
+      const focused = document.activeElement?.closest<HTMLElement>(
+        "article[data-row-kind]",
+      );
+      const current = rows.findIndex(({ row }) => row === focused);
+      const bounds = viewport.getBoundingClientRect();
+      // From no message: Up takes the last one in view, Down the first.
+      const next =
+        current >= 0
+          ? rows[current + direction]
+          : direction < 0
+            ? rows.findLast(({ box }) => box.top < bounds.bottom)
+            : rows.find(({ box }) => box.bottom > bounds.top);
+      if (next === undefined) return;
+      next.row.focus({ preventScroll: true });
+      next.row.scrollIntoView({ block: "nearest" });
+    },
     openFocusedSidebarItem: () =>
       document
         .querySelector<HTMLElement>("[data-command-focused='true']")

@@ -67,7 +67,7 @@ export const redactSessionNetwork = (value: string | null): string => {
 };
 
 const coarseSessionDevice = (value: string | null): string => {
-  if (value === null) return "Unknown browser/device";
+  if (value === null) return "Unknown device";
   const browser = /Edg\//.test(value)
     ? "Edge"
     : /(?:Chrome|CriOS)\//.test(value)
@@ -76,7 +76,7 @@ const coarseSessionDevice = (value: string | null): string => {
         ? "Firefox"
         : /Safari\//.test(value)
           ? "Safari"
-          : "Unknown browser";
+          : undefined;
   const device = /Android/.test(value)
     ? "Android"
     : /(?:iPhone|iPad|iPod)/.test(value)
@@ -87,8 +87,11 @@ const coarseSessionDevice = (value: string | null): string => {
           ? "macOS"
           : /Linux/.test(value)
             ? "Linux"
-            : "unknown device";
-  return `${browser} on ${device}`;
+            : undefined;
+  // A client that is neither a known browser nor on a known system, such as
+  // a script, reads as one plain label instead of two unknowns.
+  if (browser === undefined && device === undefined) return "Unknown device";
+  return `${browser ?? "Unknown browser"} on ${device ?? "unknown device"}`;
 };
 
 const sessionFrom = (row: typeof SessionRow.Type, currentSessionId: string) =>

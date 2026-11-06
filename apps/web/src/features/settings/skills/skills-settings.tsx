@@ -6,7 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { Plus, Settings } from "lucide-react";
+import { Copy, Plus, Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
@@ -273,6 +273,27 @@ function SkillsHeading({
   );
 }
 
+/** An example request to dx, copied with one click. */
+function SkillPrompt({ text }: { readonly text: string }) {
+  const [copied, setCopied] = React.useState<boolean>();
+  const copy = async () => {
+    const outcome = await settle(() => navigator.clipboard.writeText(text));
+    setCopied(outcome.ok);
+  };
+  return (
+    <div className="skills-prompt">
+      <code>"{text}"</code>
+      <Button size="xs" variant="ghost" onClick={() => void copy()}>
+        <Copy aria-hidden="true" />
+        Copy prompt
+      </Button>
+      <span aria-live="polite">
+        {copied === undefined ? null : copied ? "Copied" : "Copy failed"}
+      </span>
+    </div>
+  );
+}
+
 function SkillList({
   skills,
   canMutate,
@@ -295,11 +316,18 @@ function SkillList({
   return (
     <SettingsCard>
       {skills.length === 0 ? (
-        <p className="settings-card-empty">
-          {canMutate
-            ? `No ${scopeLabel} skills yet. Create one with New Skill, or import a skill folder.`
-            : `No ${scopeLabel} skills yet.`}
-        </p>
+        <div className="settings-card-empty skills-empty">
+          <p>
+            {canMutate
+              ? `No ${scopeLabel} skills yet. Create one with New Skill, import a skill folder, or ask dx in any Thread:`
+              : `No ${scopeLabel} skills yet.`}
+          </p>
+          {canMutate ? (
+            <SkillPrompt
+              text={`Create a ${scopeLabel} skill for writing our release notes`}
+            />
+          ) : null}
+        </div>
       ) : (
         skills.map((skill) => (
           <SkillRow
