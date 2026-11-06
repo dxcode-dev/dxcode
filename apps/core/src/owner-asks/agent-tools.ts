@@ -1,8 +1,3 @@
-import {
-  OFFER_REPLIES_TOOL,
-  REPLY_OFFER_LIMIT,
-  REPLY_OFFER_MAX_LENGTH,
-} from "@dx/api";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import { addOwnerAsk } from "../thread-artifacts/owner-ask.js";
@@ -16,11 +11,6 @@ import type { ThreadToolsContext } from "../threads/agent-tools.js";
  * the Thread's Plan artifact, or in the artifact the agent names
  * (`thread-artifacts/owner-ask.ts`); the mention notifies the owner, and a
  * tick or an answer under it wakes the Thread.
- *
- * `offer_replies`: the agent offers the choices it ends on as replies. The
- * call's input is the record: with the experimental composer quick actions
- * on, Clef Flash picks which to show as chips above the composer, and a
- * click sends a reply's text unchanged (`../quick-actions/actions.ts`).
  */
 export const createOwnerAskTools = (
   callingThreadId: string,
@@ -88,36 +78,5 @@ export const createOwnerAskTools = (
         },
       };
     },
-  }),
-  defineTool({
-    name: OFFER_REPLIES_TOOL,
-    description: [
-      `Offer up to ${REPLY_OFFER_LIMIT} replies the person can send with one click. Call it when you end your turn by asking them to choose between explicit options, such as "Ship it now" and "Add tests first", with one reply per option; then end your turn. dx may show them as buttons above the message box until the next message; a click sends that reply's text exactly as you wrote it.`,
-      "Write each reply as the person's own short message. Offer none when your question is open-ended.",
-    ].join("\n\n"),
-    input: v.object({
-      replies: v.pipe(
-        v.array(
-          v.pipe(
-            v.string(),
-            v.trim(),
-            v.minLength(1),
-            v.maxLength(REPLY_OFFER_MAX_LENGTH),
-          ),
-        ),
-        v.minLength(1),
-        v.maxLength(REPLY_OFFER_LIMIT),
-        v.description(
-          `One to ${REPLY_OFFER_LIMIT} replies, each at most ${REPLY_OFFER_MAX_LENGTH} characters, written as the person's message.`,
-        ),
-      ),
-    }),
-    run: ({ data }) =>
-      Promise.resolve({
-        output: {
-          offered: data.replies,
-          note: "The person may see these as reply buttons. End your turn now.",
-        },
-      }),
   }),
 ];

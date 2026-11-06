@@ -164,6 +164,7 @@ import {
   FILES_ROOT_SNAPSHOT_HEADER,
   residentThreadDaemonEndpoint,
 } from "./daemon-client.js";
+import { WARM_PATH, warmResponse } from "./initial-objects.js";
 import {
   HOP_BY_HOP_HEADERS,
   type ProxyBrowserAttachment,
@@ -828,6 +829,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
 
   async #fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
+    // A new Thread wakes this object early; see initial-objects.ts.
+    if (path === WARM_PATH && request.method === "GET") return warmResponse();
     if (path === "/daemon/activate") return this.#activate(request);
     if (path === "/daemon/request") return this.#requestDaemon(request);
     if (path === "/daemon/drain") return this.#drainDaemon(request);

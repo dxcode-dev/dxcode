@@ -4,20 +4,13 @@ import {
   ThreadQuickActionsErrorResponseSchema,
   ThreadQuickActionsResponseSchema,
 } from "@dx/api";
-import type { ExperimentalFeatureId, UserId } from "@dx/domain";
+import type { ExperimentalFeatureId } from "@dx/domain";
 import { Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
-import { readHistory } from "../thread-search/history.js";
 import { clefAvailable } from "../workers-ai/clef.js";
-import {
-  chooseQuickActions,
-  endedTurn,
-  type QuickActionsCaller,
-  workersAiQuickActions,
-} from "./actions.js";
-import { cachedQuickActions, cacheQuickActions } from "./cache.js";
+import { storedQuickActions } from "./store.js";
 
 type QuickActionsFailure =
   (typeof ThreadQuickActionsErrorResponseSchema.Type)["data"]["code"];
@@ -75,16 +68,14 @@ const ownerCanSnooze = async (db: D1Database, threadId: string) => {
  * `GET /v1/threads/:threadId/quick-actions`, behind `authorizeThread`: the
  * actions to show above the composer after the agent's latest response, for
  * someone who can send in the Thread and has the personal
- * `composer-quick-actions` flag on. `?messageId=` names the agent message
- * on the person's screen, so a cached pick answers without reading Flue's
- * history. `call` is the Clef call and
- * `readTurnHistory` Flue's history read; tests replace both.
+ * `composer-quick-actions` flag on. It serves what the turn-end hook picked
+ * (`turn-ended.ts`) and never asks a model itself. `?messageId=` names the
+ * agent message on the person's screen: until the hook has picked for that
+ * message the answer is `pending`, so the page asks again shortly.
  */
-export const createThreadQuickActionsRoutes = (
-  call: QuickActionsCaller = workersAiQuickActions,
-  readTurnHistory: typeof readHistory = readHistory,
-) =>
-  new Hono<AppEnv>().get("/:threadId/quick-actions", async (context) => {
+export const threadQuickActionsRoutes = new Hono<AppEnv>().get(
+  "/:threadId/quick-actions",
+  async (context) => {
     const actor = context.get("actor") ?? context.get("principal");
     if (
       !(await experimentalFeatureEnabled(
@@ -100,40 +91,26 @@ export const createThreadQuickActionsRoutes = (
     if (access === "view") return failure(context, "QUICK_ACTIONS_READ_ONLY");
     const threadId = context.req.param("threadId");
     const db = context.env.DB;
+    if (db === undefined) return answer(context, { actions: [] });
+    const shown = context.req.query("messageId");
+    const picked = await storedQuickActions(db, threadId);
+    if (
+      picked === undefined ||
+      (shown !== undefined && picked.messageId !== shown)
+    )
+      return answer(context, {
+        actions: [],
+        ...(shown === undefined || shown === "" ? {} : { pending: true }),
+      });
     const canSnooze =
       access === "owner" &&
-      db !== undefined &&
+      picked.actions.some(({ kind }) => kind === "snooze") &&
       (await ownerCanSnooze(db, threadId));
-    // The message the person sees: its pick may be cached already.
-    const shown = context.req.query("messageId");
-    if (shown !== undefined && shown !== "" && shown.length <= 200) {
-      const cached = await cachedQuickActions(threadId, shown, canSnooze);
-      if (cached !== undefined)
-        return answer(context, { messageId: shown, actions: cached });
-    }
-    const ownerUserId = (context.get("threadOwnerUserId") ??
-      actor.userId) as UserId;
-    const history = await readTurnHistory(
-      context.env,
-      ownerUserId,
-      threadId,
-      1,
-    );
-    const turn = history.kind === "page" ? endedTurn(history.page) : undefined;
-    if (turn === undefined) return answer(context, { actions: [] });
-    const cached =
-      turn.messageId === shown
-        ? undefined
-        : await cachedQuickActions(threadId, turn.messageId, canSnooze);
-    if (cached !== undefined)
-      return answer(context, { messageId: turn.messageId, actions: cached });
-    const chosen = await chooseQuickActions(call, context.env, turn, canSnooze);
-    if (chosen !== undefined)
-      await cacheQuickActions(threadId, turn.messageId, canSnooze, chosen);
     return answer(context, {
-      messageId: turn.messageId,
-      actions: chosen ?? [],
+      messageId: picked.messageId,
+      actions: canSnooze
+        ? picked.actions
+        : picked.actions.filter(({ kind }) => kind !== "snooze"),
     });
-  });
-
-export const threadQuickActionsRoutes = createThreadQuickActionsRoutes();
+  },
+);

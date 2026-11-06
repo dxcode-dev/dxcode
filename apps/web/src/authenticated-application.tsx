@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { RouterProvider, useRouterState } from "@tanstack/react-router";
 import { lazy, Suspense } from "react";
 import { attachInAppNavigation } from "./features/install-app/in-app-navigation.js";
+import { FeedbackWidgetOnDx } from "./features/projects/feedback-widget-on-dx.js";
 import { recordBrowserTimeZone } from "./features/threads/automations/automations-queries.js";
 import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.js";
 import { ThreadSessionProvider } from "./features/threads/thread-session-provider.js";
@@ -105,6 +106,7 @@ export function AuthenticatedApplication({
         </ReportBugSlot.Provider>
         <InAppNavigation key={auth.identity.id} router={router} />
         <RecordTimeZone key={auth.identity.id} />
+        <FeedbackWidgetOnDx key={auth.identity.id} />
         <AppToaster router={router} />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>

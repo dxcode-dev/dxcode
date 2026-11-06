@@ -80,6 +80,7 @@ import {
   loadRunnerProfileCatalog,
   selectRunnerProfile,
 } from "../execution/runner-profiles/catalog.js";
+import { feedbackWidgetSettingsRoutes } from "../feedback-widget/settings-routes.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -1532,6 +1533,7 @@ projectRoutes.put("/:projectId/icon", async (context) => {
 });
 
 projectRoutes.route("/", projectOrbScriptRoutes);
+projectRoutes.route("/", feedbackWidgetSettingsRoutes);
 
 /**
  * `POST /v1/projects/:projectId/move` (Change Owner, #1198): the creator of

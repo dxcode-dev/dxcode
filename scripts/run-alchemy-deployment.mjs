@@ -538,6 +538,22 @@ const authEmailFrom =
       ? hostedPolicy.authEmailFrom
       : "destroy@invalid.example";
 
+// Other dx hosts whose Feedback Widget the app may load (experimental),
+// such as the dx where the team's own Project lives.
+const feedbackWidgetOrigins = [
+  ...new Set(
+    (process.env.DX_DEPLOYMENT_FEEDBACK_WIDGET_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim().replace(/\/+$/, "").toLowerCase())
+      .filter((origin) => origin !== ""),
+  ),
+];
+for (const origin of feedbackWidgetOrigins)
+  if (!/^https:\/\/[a-z0-9.-]+(?::\d{1,5})?$/.test(origin))
+    throw new Error(
+      `DX_DEPLOYMENT_FEEDBACK_WIDGET_ORIGINS has an invalid origin: ${origin}`,
+    );
+
 const packageDirectory = `.dx/alchemy/${stage}/package`;
 prepareDeploymentPackage({
   operation,
@@ -565,6 +581,9 @@ prepareDeploymentPackage({
         ...(portals === undefined ? [] : ["--portal-domain", portals.domain]),
         "--storage-origin",
         `https://${accountId}.r2.cloudflarestorage.com`,
+        ...(feedbackWidgetOrigins.length === 0
+          ? []
+          : ["--feedback-widget-origins", feedbackWidgetOrigins.join(",")]),
       ],
       {
         cwd: workspaceRoot,

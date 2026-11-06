@@ -1,17 +1,13 @@
-import { Dialog } from "@base-ui/react/dialog";
+import { Menu } from "@base-ui/react/menu";
+import { Popover } from "@base-ui/react/popover";
 import type { ThreadArtifactComment } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, X } from "lucide-react";
+import { ArrowUp, AtSign, Check, MessageSquare } from "lucide-react";
 import * as React from "react";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
-import {
-  ModalSurface,
-  ModalSurfaceClose,
-  ModalSurfaceHeader,
-} from "../../../shared/ui/modal-surface.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
 import {
@@ -19,12 +15,8 @@ import {
   resolveArtifactCommentMutation,
 } from "../artifact-comments-queries.js";
 import { ArtifactApiError } from "../artifacts-api.js";
-import type { ArtifactSessionSnapshot } from "./artifact-session.js";
-import {
-  asksAgent,
-  toggleAgent,
-  withAgentMention,
-} from "./comment-mentions.js";
+import { useCommentMentions } from "./comment-mention-menu.js";
+import { asksAgent, toggleAgent } from "./comment-mentions.js";
 import { CommentText } from "./comment-text.js";
 
 /** A comment being written on a quote in the current revision. */
@@ -47,28 +39,35 @@ const failure = (error: unknown) =>
 const shorten = (text: string, length = 140) =>
   text.length > length ? `${text.slice(0, length)}…` : text;
 
-/** Writes a comment or a reply; posts on the button or Mod-Enter. */
 /** A new comment's box takes focus as it opens. */
 const focusOnOpen = (node: HTMLTextAreaElement | null) => node?.focus();
 
+/**
+ * Writes a comment or a reply, as the reference editor's card does: one box,
+ * then `@` (mention someone), the mic, and a round send button. Enter posts;
+ * Shift+Enter starts a new line.
+ */
 function CommentComposer({
   label,
   placeholder,
   pending,
   error,
   onSubmit,
-  onCancel,
   text,
   focus = false,
   dictation,
+  threadId,
 }: {
+  readonly threadId: ThreadId;
   readonly label: string;
   readonly placeholder: string;
   readonly pending: boolean;
   readonly error: string | undefined;
-  /** Posts `body`; `done` clears the box once the post succeeded. */
-  readonly onSubmit: (body: string, done: () => void) => void;
-  readonly onCancel?: () => void;
+  /**
+   * Posts `body`. The box empties at once, so what is typed next is kept
+   * whenever the post lands; `failed` puts the text back if it did not.
+   */
+  readonly onSubmit: (body: string, failed: () => void) => void;
   /** The text, when it must outlive the box (a new comment's draft). */
   readonly text?: {
     readonly value: string;
@@ -86,10 +85,29 @@ function CommentComposer({
   const box = React.useRef<HTMLTextAreaElement | null>(null);
   // The mic's words show on their own line under the buttons.
   const [noticeHost, setNoticeHost] = React.useState<HTMLElement | null>(null);
+  // `@` lists the Thread's people, dx, and @here (#1808).
+  const mentions = useCommentMentions({ threadId, body, setBody, box });
   const submit = () => {
     const value = body.trim();
     if (value === "" || pending) return;
-    onSubmit(withAgentMention(value), () => setBody(""));
+    const posted = mentions.post(value);
+    setBody("");
+    mentions.reset();
+    onSubmit(posted, () => setBody(value));
+  };
+  /** The `@` button: starts a mention at the caret, as typing `@` does. */
+  const mention = () => {
+    const node = box.current;
+    const caret = node?.selectionStart ?? body.length;
+    const before = body.slice(0, caret);
+    const lead = before === "" || /\s$/u.test(before) ? "@" : " @";
+    const next = before + lead + body.slice(caret);
+    setBody(next);
+    mentions.track(next, caret + lead.length);
+    requestAnimationFrame(() => {
+      node?.focus();
+      node?.setSelectionRange(caret + lead.length, caret + lead.length);
+    });
   };
   return (
     <form
@@ -99,6 +117,7 @@ function CommentComposer({
         submit();
       }}
     >
+      {mentions.menu}
       <textarea
         ref={(node) => {
           box.current = node;
@@ -108,26 +127,52 @@ function CommentComposer({
         placeholder={placeholder}
         value={body}
         maxLength={8_000}
-        rows={2}
-        onChange={(event) => setBody(event.currentTarget.value)}
+        rows={1}
+        onChange={(event) => {
+          setBody(event.currentTarget.value);
+          mentions.track(
+            event.currentTarget.value,
+            event.currentTarget.selectionStart,
+          );
+        }}
         onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+          if (mentions.onKeyDown(event)) return;
+          if (
+            event.key === "Enter" &&
+            !event.shiftKey &&
+            !event.nativeEvent.isComposing
+          ) {
             event.preventDefault();
             submit();
           }
         }}
       />
-      {error === undefined ? null : (
-        <p className="artifact-comment-error" role="alert">
-          {error}
-        </p>
-      )}
       {asking ? (
         <p className="artifact-comment-asking">
           <DxWordmark size="small" /> will reply
         </p>
       ) : null}
       <div className="artifact-comment-actions">
+        <button
+          type="button"
+          className="artifact-comment-icon"
+          aria-label="Mention someone"
+          title="Mention someone"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={mention}
+        >
+          <AtSign aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="artifact-comment-icon artifact-comment-ask"
+          aria-label="Ask @dx"
+          title={asking ? "Don't ask dx" : "Ask dx to reply"}
+          aria-pressed={asking}
+          onClick={() => setBody(toggleAgent(body))}
+        >
+          <DxWordmark size="small" />
+        </button>
         {dictation === undefined ? null : (
           <dictation.Textarea
             textareaRef={box}
@@ -136,26 +181,20 @@ function CommentComposer({
           />
         )}
         <button
-          type="button"
-          className="artifact-comment-ask"
-          aria-pressed={asking}
-          onClick={() => setBody(toggleAgent(body))}
-        >
-          Ask @dx
-        </button>
-        {onCancel === undefined ? null : (
-          <button type="button" onClick={onCancel}>
-            Cancel
-          </button>
-        )}
-        <button
           type="submit"
           className="artifact-comment-submit"
+          aria-label={label}
+          title={label}
           disabled={pending || body.trim() === ""}
         >
-          {label}
+          <ArrowUp aria-hidden="true" />
         </button>
       </div>
+      {error === undefined ? null : (
+        <p className="artifact-comment-error" role="alert">
+          {error}
+        </p>
+      )}
       {dictation === undefined ? null : (
         <div className="artifact-comment-dictation" ref={setNoticeHost} />
       )}
@@ -196,53 +235,23 @@ function CommentAvatar({
   );
 }
 
-function CommentThread({
-  comment,
-  replies,
-  active,
-  anchored,
-  readOnly,
+/** A comment and its replies: picture, name, when, and what they said. */
+function CommentEntries({
+  entries,
   people,
-  dictation,
-  threadId,
-  artifactId,
-  onSelect,
+  onResolve,
+  resolving,
 }: {
-  readonly comment: ThreadArtifactComment;
-  readonly replies: ReadonlyArray<ThreadArtifactComment>;
-  readonly active: boolean;
-  readonly anchored: boolean;
-  readonly readOnly: boolean;
+  readonly entries: ReadonlyArray<ThreadArtifactComment>;
   readonly people: CommentPeople;
-  readonly dictation: DictationSlot | undefined;
-  readonly threadId: ThreadId;
-  readonly artifactId: string;
-  readonly onSelect: (id: string) => void;
+  /** Resolves the comment; absent for a reader who cannot edit. */
+  readonly onResolve: (() => void) | undefined;
+  readonly resolving: boolean;
 }) {
-  const queryClient = useQueryClient();
-  const reply = useMutation(
-    createArtifactCommentMutation(queryClient, threadId, artifactId),
-  );
-  const resolve = useMutation(
-    resolveArtifactCommentMutation(queryClient, threadId, artifactId),
-  );
   return (
-    <li
-      className="artifact-comment-thread"
-      data-active={active || undefined}
-      data-comment={comment.id}
-    >
-      <button
-        type="button"
-        className="artifact-comment-quote"
-        disabled={!anchored}
-        title={anchored ? "Show in the artifact" : "This text is gone"}
-        onClick={() => onSelect(comment.id)}
-      >
-        {shorten(comment.quote)}
-      </button>
-      {[comment, ...replies].map((entry) => (
-        <div key={entry.id} className="artifact-comment">
+    <ol className="artifact-comment-entries">
+      {entries.map((entry, index) => (
+        <li key={entry.id} className="artifact-comment">
           <div className="artifact-comment-meta">
             <CommentAvatar author={entry.author} people={people} />
             <strong>{authorName(entry.author)}</strong>
@@ -251,201 +260,264 @@ function CommentThread({
                 formatRelativeTime({ epochMilliseconds: entry.createdAt }, now)
               }
             />
+            {index === 0 && onResolve !== undefined ? (
+              <button
+                type="button"
+                className="artifact-comment-resolve"
+                aria-label="Resolve"
+                title="Resolve"
+                disabled={resolving}
+                onClick={onResolve}
+              >
+                <Check aria-hidden="true" />
+              </button>
+            ) : null}
           </div>
           <p className="artifact-comment-body">
             <CommentText text={entry.body} people={people} />
           </p>
-        </div>
+        </li>
       ))}
-      {readOnly ? null : (
-        <>
-          <CommentComposer
-            dictation={dictation}
-            label="Reply"
-            placeholder="Reply…"
-            pending={reply.isPending}
-            error={reply.isError ? failure(reply.error) : undefined}
-            onSubmit={(body, done) =>
-              reply.mutate({ parentId: comment.id, body }, { onSuccess: done })
-            }
-          />
-          <button
-            type="button"
-            className="artifact-comment-resolve"
-            disabled={resolve.isPending}
-            onClick={() => resolve.mutate(comment.id)}
-          >
-            <Check aria-hidden="true" />
-            Resolve
-          </button>
-        </>
-      )}
-    </li>
+    </ol>
   );
 }
 
+/** What the card is open on: a comment, or the selection being commented on. */
+export type CommentCardTarget =
+  | { readonly kind: "comment"; readonly id: string }
+  | { readonly kind: "draft"; readonly draft: CommentDraft };
+
 /**
- * The open comments, in the order their text appears, then those whose text
- * is gone; and the composer for a new comment on the selection.
+ * A comment's card, at its text (owner direction, 2026-11-06, as the
+ * reference editor has it on a wide pane and on a phone): the comment and
+ * its replies with Resolve, and a box to reply; or, for the selection, a
+ * box for the new comment. Escape or a click elsewhere closes it.
  */
-function CommentsList({
-  snapshot,
+export function CommentCard({
+  target,
+  anchor,
   comments,
-  loadFailed,
-  draft,
   draftText,
   readOnly,
   people,
   dictation,
   threadId,
   artifactId,
-  onSelect,
-  onDraftDone,
+  onPosted,
+  onClose,
 }: {
-  readonly snapshot: ArtifactSessionSnapshot;
-  /** The comments query's data. */
+  readonly target: CommentCardTarget;
+  /** The text the card sits against. */
+  readonly anchor: () => Element | null;
   readonly comments: ReadonlyArray<ThreadArtifactComment>;
-  readonly loadFailed: boolean;
-  readonly draft: CommentDraft | undefined;
+  /** A new comment's text, kept while the card closes and opens again. */
   readonly draftText: {
     readonly value: string;
     readonly set: (value: string) => void;
   };
   readonly readOnly: boolean;
-  /** Pictures for comment authors, from the Thread's members. */
   readonly people: CommentPeople;
-  /** Dictation is served, switched on, and the person may edit. */
   readonly dictation: DictationSlot | undefined;
   readonly threadId: ThreadId;
   readonly artifactId: string;
-  readonly onSelect: (id: string) => void;
-  readonly onDraftDone: () => void;
+  /** A new comment saved: its card opens in place of the draft's. */
+  readonly onPosted: (id: string) => void;
+  readonly onClose: () => void;
 }) {
   const queryClient = useQueryClient();
   const create = useMutation(
     createArtifactCommentMutation(queryClient, threadId, artifactId),
   );
-  const open = comments.filter(
-    (comment) => comment.parentId === null && comment.resolvedAt === null,
+  const resolve = useMutation(
+    resolveArtifactCommentMutation(queryClient, threadId, artifactId),
   );
-  const order = new Map(
-    snapshot.anchors.map((anchor) => [anchor.id, anchor.from] as const),
-  );
-  const anchored = open
-    .filter((comment) => order.has(comment.id))
-    .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-  const detached = open.filter((comment) => !order.has(comment.id));
-  const repliesTo = (id: string) =>
-    comments.filter((comment) => comment.parentId === id);
-  const thread = (comment: ThreadArtifactComment, isAnchored: boolean) => (
-    <CommentThread
-      key={comment.id}
-      comment={comment}
-      replies={repliesTo(comment.id)}
-      active={snapshot.activeComment === comment.id}
-      anchored={isAnchored}
-      readOnly={readOnly}
-      people={people}
-      dictation={dictation}
-      threadId={threadId}
-      artifactId={artifactId}
-      onSelect={onSelect}
-    />
-  );
+  const comment =
+    target.kind === "comment"
+      ? comments.find((entry) => entry.id === target.id)
+      : undefined;
+  if (target.kind === "comment" && comment === undefined) return null;
+  const entries =
+    comment === undefined
+      ? []
+      : [comment, ...comments.filter((entry) => entry.parentId === comment.id)];
   return (
-    <div className="artifact-comments-body">
-      {draft === undefined || readOnly ? null : (
-        <div className="artifact-comment-new">
-          <p className="artifact-comment-quote" data-draft="true">
-            {shorten(draft.quote)}
-          </p>
-          <CommentComposer
-            dictation={dictation}
-            label="Comment"
-            placeholder="Add a comment…"
-            pending={create.isPending}
-            error={create.isError ? failure(create.error) : undefined}
-            text={draftText}
-            focus
-            onSubmit={(body, done) =>
-              create.mutate(
-                { quote: draft.quote, near: draft.near, body },
-                {
-                  onSuccess: () => {
-                    done();
-                    onDraftDone();
-                  },
-                },
-              )
-            }
-            onCancel={() => {
-              draftText.set("");
-              onDraftDone();
-            }}
-          />
-        </div>
-      )}
-      {loadFailed ? (
-        <p className="artifact-comment-error" role="alert">
-          Couldn't load the comments.
-        </p>
-      ) : open.length === 0 && draft === undefined ? (
-        <p className="artifact-comments-empty">
-          {readOnly
-            ? "No comments."
-            : "No comments yet. Select text and choose Comment."}
-        </p>
-      ) : null}
-      <ul className="artifact-comment-list">
-        {anchored.map((comment) => thread(comment, true))}
-      </ul>
-      {detached.length === 0 ? null : (
-        <>
-          <h3 className="artifact-comments-heading">Text no longer here</h3>
-          <ul className="artifact-comment-list">
-            {detached.map((comment) => thread(comment, false))}
-          </ul>
-        </>
-      )}
-    </div>
+    <Popover.Root
+      open
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <Popover.Portal>
+        <Popover.Positioner
+          className="artifact-comment-positioner"
+          anchor={anchor}
+          side="bottom"
+          align="center"
+          sideOffset={6}
+          collisionPadding={8}
+        >
+          <Popover.Popup
+            className="artifact-comment-card"
+            aria-label="Comment"
+            initialFocus={target.kind === "draft"}
+            finalFocus={false}
+          >
+            {comment === undefined ? null : (
+              <CommentEntries
+                entries={entries}
+                people={people}
+                resolving={resolve.isPending}
+                onResolve={
+                  readOnly
+                    ? undefined
+                    : () => resolve.mutate(comment.id, { onSuccess: onClose })
+                }
+              />
+            )}
+            {readOnly ? null : comment === undefined &&
+              target.kind === "draft" ? (
+              <CommentComposer
+                key="draft"
+                threadId={threadId}
+                dictation={dictation}
+                label="Comment"
+                placeholder="Comment, or @mention dx"
+                pending={create.isPending}
+                error={create.isError ? failure(create.error) : undefined}
+                text={draftText}
+                focus
+                onSubmit={(body, failed) =>
+                  create.mutate(
+                    {
+                      quote: target.draft.quote,
+                      near: target.draft.near,
+                      body,
+                    },
+                    {
+                      onSuccess: (posted) => onPosted(posted.id),
+                      onError: failed,
+                    },
+                  )
+                }
+              />
+            ) : comment === undefined ? null : (
+              <CommentComposer
+                key={comment.id}
+                threadId={threadId}
+                dictation={dictation}
+                label="Reply"
+                placeholder="Reply, or @mention dx"
+                pending={create.isPending}
+                error={create.isError ? failure(create.error) : undefined}
+                onSubmit={(body, failed) =>
+                  create.mutate(
+                    { parentId: comment.id, body },
+                    { onError: failed },
+                  )
+                }
+              />
+            )}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
-/** The comments: a column beside the artifact, or a sheet on a phone. */
-export function ArtifactComments({
-  phone,
-  onClose,
-  ...props
-}: React.ComponentProps<typeof CommentsList> & {
-  readonly phone: boolean;
-  readonly onClose: () => void;
+/**
+ * The header's Comments button: the open comments, in the order their text
+ * appears, then those whose text is gone. Choosing one opens its card.
+ */
+export function CommentsMenu({
+  comments,
+  anchors,
+  loadFailed,
+  onSelect,
+}: {
+  readonly comments: ReadonlyArray<ThreadArtifactComment>;
+  /** Open comments whose text the editor holds, in document order. */
+  readonly anchors: ReadonlyArray<{
+    readonly id: string;
+    readonly from: number;
+  }>;
+  readonly loadFailed: boolean;
+  readonly onSelect: (id: string) => void;
 }) {
-  if (phone)
-    return (
-      <Dialog.Root open onOpenChange={(next) => (next ? undefined : onClose())}>
-        <ModalSurface className="artifact-comments-sheet" ariaLabel="Comments">
-          <ModalSurfaceHeader>
-            <strong>Comments</strong>
-            <ModalSurfaceClose />
-          </ModalSurfaceHeader>
-          <CommentsList {...props} />
-        </ModalSurface>
-      </Dialog.Root>
-    );
+  const open = comments.filter(
+    (comment) => comment.parentId === null && comment.resolvedAt === null,
+  );
+  const order = new Map(anchors.map((anchor) => [anchor.id, anchor.from]));
+  const anchored = open
+    .filter((comment) => order.has(comment.id))
+    .toSorted((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+  const detached = open.filter((comment) => !order.has(comment.id));
+  const replies = (id: string) =>
+    comments.filter((comment) => comment.parentId === id).length;
+  const item = (comment: ThreadArtifactComment) => (
+    <Menu.Item
+      key={comment.id}
+      className="thread-menu-item artifact-comments-item"
+      onClick={() => onSelect(comment.id)}
+    >
+      <span className="artifact-comments-item-quote">
+        {shorten(comment.quote, 60)}
+      </span>
+      <span className="artifact-comments-item-body">
+        <strong>{authorName(comment.author)}</strong>{" "}
+        {shorten(comment.body, 90)}
+      </span>
+      {replies(comment.id) === 0 ? null : (
+        <span className="artifact-comments-item-replies">
+          {replies(comment.id) === 1
+            ? "1 reply"
+            : `${replies(comment.id)} replies`}
+        </span>
+      )}
+    </Menu.Item>
+  );
   return (
-    <aside className="artifact-comments" aria-label="Comments">
-      <header className="artifact-comments-header">
-        <strong>Comments</strong>
-        <button
-          type="button"
-          className="artifact-icon-button"
-          aria-label="Close comments"
-          onClick={onClose}
+    <Menu.Root>
+      <Menu.Trigger
+        className="artifact-icon-button artifact-comments-toggle"
+        aria-label={`Comments (${open.length})`}
+        title="Comments"
+      >
+        <MessageSquare aria-hidden="true" />
+        {open.length === 0 ? null : <span>{open.length}</span>}
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Positioner
+          className="thread-menu-positioner"
+          side="bottom"
+          align="end"
+          sideOffset={4}
+          collisionPadding={8}
         >
-          <X aria-hidden="true" />
-        </button>
-      </header>
-      <CommentsList {...props} />
-    </aside>
+          <Menu.Popup
+            className="thread-menu-popup artifact-comments-menu"
+            aria-label="Comments"
+          >
+            {loadFailed ? (
+              <p className="artifact-comments-empty" role="alert">
+                Couldn't load the comments.
+              </p>
+            ) : open.length === 0 ? (
+              <p className="artifact-comments-empty">
+                No comments yet. Select text and choose Comment.
+              </p>
+            ) : null}
+            {anchored.map(item)}
+            {detached.length === 0 ? null : (
+              <Menu.Group>
+                <Menu.GroupLabel className="artifact-comments-heading">
+                  Text no longer here
+                </Menu.GroupLabel>
+                {detached.map(item)}
+              </Menu.Group>
+            )}
+          </Menu.Popup>
+        </Menu.Positioner>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }

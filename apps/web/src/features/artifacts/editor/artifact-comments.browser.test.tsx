@@ -135,7 +135,7 @@ const entry = (
 
 const ROOT = `cmt_${"1".repeat(32)}`;
 
-/** Opens the comments panel on the seeded comment. */
+/** Opens the seeded comment's card. */
 const openComments = async (prose: HTMLElement) => {
   await settle(200);
   const highlight = prose.querySelector<HTMLElement>(
@@ -144,8 +144,10 @@ const openComments = async (prose: HTMLElement) => {
   if (highlight === null) throw new Error("No comment highlight.");
   await userEvent.click(highlight);
   await settle(200);
-  const panel = document.querySelector<HTMLElement>('[aria-label="Comments"]');
-  if (panel === null) throw new Error("No comments panel.");
+  const panel = document.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Comment"]',
+  );
+  if (panel === null) throw new Error("No comment card.");
   return panel;
 };
 
@@ -228,9 +230,9 @@ describe("artifact comments", () => {
     const box = panel.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Reply"]',
     );
-    const ask = [...panel.querySelectorAll<HTMLElement>("button")].find(
-      (button) => button.textContent?.includes("Ask @dx"),
-    );
+    const ask =
+      panel.querySelector<HTMLElement>('button[aria-label="Ask @dx"]') ??
+      undefined;
     if (box === null || ask === undefined) throw new Error("No reply box.");
     await userEvent.click(ask);
     await settle();
@@ -247,8 +249,8 @@ describe("artifact comments", () => {
     await userEvent.click(ask);
     await userEvent.type(box, "please check the date");
     await userEvent.click(
-      [...panel.querySelectorAll<HTMLElement>("button")].find(
-        (button) => button.textContent === "Reply",
+      panel.querySelector<HTMLElement>(
+        'button[aria-label="Reply"]',
       ) as HTMLElement,
     );
     await settle();
@@ -272,8 +274,8 @@ describe("artifact comments", () => {
       "dx will reply",
     );
     await userEvent.click(
-      [...panel.querySelectorAll<HTMLElement>("button")].find(
-        (button) => button.textContent === "Reply",
+      panel.querySelector<HTMLElement>(
+        'button[aria-label="Reply"]',
       ) as HTMLElement,
     );
     await settle();

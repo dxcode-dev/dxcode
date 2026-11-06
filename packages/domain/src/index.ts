@@ -104,6 +104,16 @@ export {
   WebToolErrorCode,
 } from "./plugins/web.js";
 export {
+  FEEDBACK_WIDGET_FEATURE,
+  FeedbackWidgetClientId,
+  FeedbackWidgetComment,
+  FeedbackWidgetOrigin,
+  MAX_FEEDBACK_WIDGET_COMMENTS,
+  MAX_FEEDBACK_WIDGET_ORIGINS,
+  normalizeFeedbackWidgetOrigin,
+  parseFeedbackWidgetScriptUrl,
+} from "./projects/feedback-widget.js";
+export {
   CreateProjectInput,
   createProject,
   isValidProjectName,

@@ -48,6 +48,7 @@ import {
   type NodeViews,
 } from "./chip-views.js";
 import { commentHighlights } from "./comment-highlights.js";
+import { findPlugin } from "./find.js";
 
 const nodes = schema.nodes;
 const marks = schema.marks;
@@ -116,29 +117,27 @@ export const withTrailingParagraph = (doc: Node) =>
     : doc;
 
 // ---------------------------------------------------------------------------
-// Placeholder on an empty document.
+// The hint on each empty line (#1810): every empty top-level paragraph, as
+// the reference editor has it. The editor view adds it for people who can
+// edit; a reader's view has none.
 
-const placeholder = new Plugin({
-  props: {
-    decorations: (state) => {
-      const { doc } = state;
-      const first = doc.firstChild;
-      if (
-        doc.childCount !== 1 ||
-        first === null ||
-        first.type !== nodes.paragraph ||
-        first.childCount !== 0
-      )
-        return DecorationSet.empty;
-      return DecorationSet.create(doc, [
-        Decoration.node(0, first.nodeSize, {
+export const PLACEHOLDER = "Type / for blocks, @ to mention";
+
+export const placeholderDecorations = (state: EditorState) => {
+  const found: Decoration[] = [];
+  state.doc.forEach((node, offset) => {
+    if (node.type === nodes.paragraph && node.childCount === 0)
+      found.push(
+        Decoration.node(offset, offset + node.nodeSize, {
           class: "artifact-placeholder",
-          "data-placeholder": "Start writing…",
+          "data-placeholder": PLACEHOLDER,
         }),
-      ]);
-    },
-  },
-});
+      );
+  });
+  return found.length === 0
+    ? DecorationSet.empty
+    : DecorationSet.create(state.doc, found);
+};
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -529,6 +528,6 @@ export const createArtifactEditorState = (
       conflictFlags,
       chipToggles,
       commentHighlights,
-      placeholder,
+      findPlugin,
     ],
   });

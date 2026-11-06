@@ -2,11 +2,11 @@ import type * as React from "react";
 import type { CommentPeople } from "./artifact-comments.js";
 
 /**
- * A mention as artifacts write it, `@[Name](user:ID)` or `@[dx](agent)`, or
- * an http(s) URL, up to whitespace or brackets.
+ * A mention as artifacts write it, `@[Name](user:ID)`, `@[dx](agent)`, or
+ * `@[here](here)`, or an http(s) URL, up to whitespace or brackets.
  */
 const PART_PATTERN =
-  /@\[([^\]\n]+)\]\((?:user:([A-Za-z0-9_-]+)|agent)\)|https?:\/\/[^\s<>()[\]{}"']+/g;
+  /@\[([^\]\n]+)\]\((?:user:([A-Za-z0-9_-]+)|agent|(here))\)|https?:\/\/[^\s<>()[\]{}"']+/g;
 /** Punctuation that ends a sentence, not the URL before it. */
 const TRAILING = /[.,;:!?]+$/;
 
@@ -41,6 +41,10 @@ export function CommentText({
         <a key={start} href={matched} target="_blank" rel="noopener noreferrer">
           {matched}
         </a>
+      ) : match[3] !== undefined ? (
+        <span key={start} className="artifact-comment-mention">
+          @here
+        </span>
       ) : userId === undefined ? (
         <span key={start} className="artifact-comment-mention">
           @dx

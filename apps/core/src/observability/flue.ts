@@ -12,6 +12,7 @@ import {
   settingsPersistenceLogger,
 } from "../logging.js";
 import { notifyTurnCompleted } from "../notifications/turn-completed.js";
+import { pickQuickActionsAtTurnEnd } from "../quick-actions/turn-ended.js";
 import { recordFlueUsage } from "../settings/usage/recorder.js";
 import { enqueueThreadSearchIndex } from "../thread-search/enqueue.js";
 import { recordFlueThreadActivity } from "../threads/activity.js";
@@ -70,7 +71,8 @@ const unknownFailure = (error: unknown) =>
 
 /**
  * What one runtime observation does: logging, usage, Thread activity,
- * startup phases, search indexing, and the finished-turn notification.
+ * startup phases, search indexing, the finished-turn notification, and
+ * the composer's quick actions.
  * Exported so a test can drive it with a real observation and real
  * bindings; Flue is the only caller in production.
  */
@@ -177,11 +179,22 @@ export const observeFlueEvent = (
               }),
         })
       : Promise.resolve();
+  // The same settled turn picks the composer's quick actions, so they are
+  // ready when the person looks, whichever runtime ran the turn.
+  const quickActions =
+    event.type === "submission_settled" && event.instanceId !== undefined
+      ? pickQuickActionsAtTurnEnd(bindings, {
+          threadId: event.instanceId as ThreadId,
+          submissionId: event.submissionId,
+          outcome: event.outcome,
+        })
+      : Promise.resolve();
   const persistence = Promise.all([
     usageDelivery,
     activityDelivery,
     searchIndexDelivery,
     turnNotification,
+    quickActions,
     startupDelivery.catch(() => {
       settingsPersistenceLogger.warn(
         "Startup phase observation could not be delivered.",

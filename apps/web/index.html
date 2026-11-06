@@ -54,7 +54,7 @@
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://dxcode.dev/" />
     <meta property="og:site_name" content="dx" />
-    <meta property="og:title" content="dx — Run coding agents and Claude Code in the cloud" />
+    <meta property="og:title" content="dx (dxcode): Run coding agents and Claude Code in the cloud" />
     <meta
       property="og:description"
       content="Hand off the task and close the laptop. dx runs coding agents and Claude Code on their own cloud computers. Follow and steer them from any device."
@@ -64,7 +64,7 @@
     <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="dx — Cloud agents, on your terms" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="dx — Run coding agents and Claude Code in the cloud" />
+    <meta name="twitter:title" content="dx (dxcode): Run coding agents and Claude Code in the cloud" />
     <meta
       name="twitter:description"
       content="Hand off the task and close the laptop. dx runs coding agents and Claude Code on their own cloud computers. Follow and steer them from any device."
@@ -82,15 +82,29 @@
         "@context": "https://schema.org",
         "@graph": [
           {
+            "@type": "WebSite",
+            "@id": "https://dxcode.dev/#website",
+            "name": "dx",
+            "alternateName": ["dxcode", "dxcode.dev"],
+            "url": "https://dxcode.dev/",
+            "publisher": { "@id": "https://dxcode.dev/#organization" }
+          },
+          {
             "@type": "Organization",
             "@id": "https://dxcode.dev/#organization",
             "name": "dx",
+            "alternateName": ["dxcode", "dxcode.dev"],
             "url": "https://dxcode.dev",
-            "logo": "https://dxcode.dev/icon-512.png"
+            "logo": "https://dxcode.dev/icon-512.png",
+            "sameAs": [
+              "https://github.com/dxcode-dev",
+              "https://x.com/dxcode_dev"
+            ]
           },
           {
             "@type": "SoftwareApplication",
             "name": "dx",
+            "alternateName": "dxcode",
             "url": "https://dxcode.dev",
             "applicationCategory": "DeveloperApplication",
             "operatingSystem": "Web",

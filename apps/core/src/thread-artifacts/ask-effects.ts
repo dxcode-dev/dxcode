@@ -249,6 +249,8 @@ export const artifactSaved = async (
 
 const PERSON_MENTION = /@\[[^\]\n]+\]\(user:([A-Za-z0-9_-]+)\)/g;
 const AGENT_MENTION = /@\[[^\]\n]+\]\(agent\)/;
+/** `@here`: everyone who can open the Thread (#1808). */
+const HERE_MENTION = /@\[[^\]\n]+\]\(here\)/;
 
 export interface ArtifactCommentedEvent {
   readonly threadId: string;
@@ -312,9 +314,12 @@ export const artifactCommented = async (
   const writerId =
     event.writer.kind === "user" ? event.writer.userId : undefined;
   const recipients = [
-    ...new Set(
-      [...event.body.matchAll(PERSON_MENTION)].map((match) => match[1] ?? ""),
-    ),
+    ...new Set([
+      ...[...event.body.matchAll(PERSON_MENTION)].map(
+        (match) => match[1] ?? "",
+      ),
+      ...(HERE_MENTION.test(event.body) ? readers : []),
+    ]),
   ].filter((userId) => readers.has(userId) && userId !== writerId);
   try {
     if (recipients.length > 0)
@@ -326,7 +331,7 @@ export const artifactCommented = async (
         ...(writerId === undefined
           ? { actorName: "dx" }
           : { actorUserId: writerId as UserId }),
-        excerpt: `${title}: ${event.body.replace(/@\[([^\]]+)\]\((?:user:[^)]+|agent)\)/g, "@$1")}`,
+        excerpt: `${title}: ${event.body.replace(/@\[([^\]]+)\]\((?:user:[^)]+|agent|here)\)/g, "@$1")}`,
       });
     if (writerId === undefined || !AGENT_MENTION.test(event.body)) return;
     // With Notify agent on, a mention wakes the agent right away, or joins

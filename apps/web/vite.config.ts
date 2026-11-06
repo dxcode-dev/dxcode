@@ -127,6 +127,25 @@ export default defineConfig(({ mode }) => {
           },
         },
         "/api/invites": { target: apiTarget, changeOrigin: true },
+        // The Feedback Widget's script, panel, and sign-in popup.
+        // Only a same-origin request (the consent form) gets the trusted
+        // origin; any other keeps its own, so Core still refuses it.
+        "/api/feedback-widget": {
+          target: apiTarget,
+          changeOrigin: false,
+          configure(proxy) {
+            if (requestOrigin === undefined) return;
+            proxy.on("proxyReq", (request, incoming) => {
+              const origin = incoming.headers.origin;
+              if (
+                origin !== undefined &&
+                URL.canParse(origin) &&
+                new URL(origin).host === incoming.headers.host
+              )
+                request.setHeader("origin", requestOrigin);
+            });
+          },
+        },
         "/v1": {
           target: apiTarget,
           changeOrigin: false,

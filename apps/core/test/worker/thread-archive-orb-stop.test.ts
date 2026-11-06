@@ -10,11 +10,11 @@ import { Effect, Schema } from "effect";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../../src/app.js";
 import { assertThreadLifecycleState } from "../../src/execution/activation.js";
-import { cloudflareExecutionProvider } from "../../src/execution/cloudflare/provider.js";
 import {
   ORB_STOP_RETRY_MS,
   OrbContainerController,
 } from "../../src/execution/cloudflare/orb-container.js";
+import { cloudflareExecutionProvider } from "../../src/execution/cloudflare/provider.js";
 import type { Bindings } from "../../src/http/types.js";
 import type { ExecutionContext as OrbExecutionContext } from "../../src/plugins/execution/provider.js";
 import { project, thread } from "./fixtures.js";
@@ -346,19 +346,21 @@ describe("archive's Orb stop through the real route and Orb object", () => {
   it("archives a Thread whose Orb never started with a 200 and stops it without a snapshot (#1777)", async () => {
     const { cookie, threadId, world } = await ownThread();
     // staging, thr_5b6834e0: the fresh start's readiness probe never
-    // returned, its stop did not land, and an open queued behind it
-    // answered "running".
+    // returned and its stop did not land, so the container still reads as
+    // running. Before #1783 an open queued behind it answered "running";
+    // now neither open is handed a container that never became ready.
     world.setProbe("hang");
-    world.container.destroy.mockRejectedValueOnce(new Error("not stopped"));
+    world.container.destroy.mockRejectedValue(new Error("not stopped"));
     const [first, queued] = await Promise.allSettled([
       openOrb(threadId),
       openOrb(threadId),
     ]);
-    expect(
-      [first.status, queued.status].sort((a, b) => a.localeCompare(b)),
-    ).toEqual(["fulfilled", "rejected"]);
-    await expect(recordState(threadId)).resolves.toBe("initialized");
+    expect([first.status, queued.status]).toEqual(["rejected", "rejected"]);
     expect(world.container.running).toBe(true);
+    // Cloudflare stops it once asked again.
+    world.container.destroy.mockImplementation(async () => {
+      world.container.running = false;
+    });
     world.container.snapshotContainer.mockRejectedValue(
       new Error("The container has not been started"),
     );
@@ -370,12 +372,17 @@ describe("archive's Orb stop through the real route and Orb object", () => {
       status: "success",
       data: { id: threadId, lifecycleState: "archived" },
     });
-    expect(archived.body).not.toHaveProperty("orbStopping");
+    // No open succeeded, so Core's record still says a start may be
+    // running: the stop is left to the Orb's alarm (#1740).
+    expect(archived.body).toMatchObject({ orbStopping: true });
+    await world.fireAlarm();
+    // Cloudflare says it never started: stopped without a snapshot.
     expect(world.container.running).toBe(false);
     await expect(world.controller.status()).resolves.toEqual({
       running: false,
       status: "paused",
     });
+    await expect(lifecycleState(threadId)).resolves.toBe("archived");
   });
 
   it("never stops a started, never-saved Orb it can't snapshot; answers orbStopping, nothing wakes it, and the stop is retried then logged abandoned", async () => {

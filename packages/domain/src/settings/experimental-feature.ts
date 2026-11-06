@@ -308,7 +308,7 @@ export const productionExperimentalFeatureRegistry =
         id: "composer-quick-actions",
         title: "Composer quick actions",
         description:
-          "When the agent ends a turn, Cloudflare's Clef Flash model on Workers AI picks which quick actions to show above the composer, and in what order: Snooze Until I'm Needed and the replies the agent offered.",
+          "When the agent ends a turn, a small Workers AI model writes the replies you might send next, and Cloudflare's Clef Flash model picks which quick actions to show above the composer, and in what order: Snooze Until I'm Needed and those replies.",
         // Tracked in the private repository, so no public issue yet.
         owner: { team: "dx/threads" },
         status: "experimental",
@@ -322,11 +322,11 @@ export const productionExperimentalFeatureRegistry =
         reviewDate: "2027-01-15",
         lifecyclePlan: {
           migration:
-            "Nothing is stored; turning the flag off hides the row at once.",
+            "Each Thread keeps its latest pick in thread_quick_actions; turning the flag off hides the row at once and stops new picks.",
           graduation:
-            "Drop the flag check from the quick-actions route and the Thread page.",
+            "Drop the flag check from the turn-end hook, the quick-actions route, and the Thread page.",
           removal:
-            "Delete the quick-actions route, the composer row, and the offer_replies tool.",
+            "Delete the turn-end hook, the quick-actions route, the composer row, and drop thread_quick_actions.",
         },
       },
       {
@@ -349,6 +349,31 @@ export const productionExperimentalFeatureRegistry =
           migration: "Nothing is stored; bound Threads keep their plan.",
           graduation: "Drop the flag checks.",
           removal: "Delete the automatic pick and the composer's Auto.",
+        },
+      },
+      {
+        id: "feedback-widget",
+        title: "Feedback Widget",
+        description:
+          "Adds Feedback Widget to Project Settings: a script for your website that lets you click any element, write what to change, and send it to a new Thread in the Project. You need it on to set up the widget and to send from it.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/projects" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration:
+            "Widgets, origins, and grants stay in D1; turning the flag off hides the settings tab and refuses setup and sending.",
+          graduation:
+            "Drop the flag checks from the settings tab, the settings routes, and the send route.",
+          removal:
+            "Turn every widget off, drop its tables, and delete the public widget routes and the settings tab.",
         },
       },
     ],

@@ -63,7 +63,8 @@ export function ClefQuickActions({
 /**
  * The row above the composer once the agent's turn ends, in the order Clef
  * Flash picked: Snooze Until I'm Needed for the owner, and a chip per reply
- * the agent offered, which sends its text as the next message.
+ * taken from what the agent asked or proposed, which sends its text as the
+ * next message.
  */
 function ThreadQuickActions({
   actions,

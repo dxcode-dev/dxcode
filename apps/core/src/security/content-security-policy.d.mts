@@ -6,6 +6,7 @@ export declare const appPolicy: (options: {
   readonly scriptHashes: ReadonlyArray<string>;
   readonly portalDomain?: string;
   readonly storageOrigin?: string;
+  readonly feedbackWidgetOrigins?: ReadonlyArray<string>;
 }) => string;
 export declare const docsPolicy: (options: {
   readonly scriptHashes: ReadonlyArray<string>;
@@ -20,4 +21,5 @@ export declare const staticHeaders: (options: {
   readonly docsHtml?: ReadonlyArray<string>;
   readonly portalDomain?: string;
   readonly storageOrigin?: string;
+  readonly feedbackWidgetOrigins?: ReadonlyArray<string>;
 }) => string;

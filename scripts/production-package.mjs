@@ -62,10 +62,21 @@ const staticHeadersPath = "assets/_headers";
 const STORAGE_ORIGIN = /^https:\/\/[0-9a-f]{32}\.r2\.cloudflarestorage\.com$/;
 const PORTAL_DOMAIN =
   /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
+/** Other dx hosts whose Feedback Widget the app may load: https origins. */
+const FEEDBACK_WIDGET_ORIGIN =
+  /^https:\/\/(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?::\d{1,5})?$/;
+const validFeedbackWidgetOrigins = (origins) =>
+  origins === undefined ||
+  (Array.isArray(origins) &&
+    origins.length <= 10 &&
+    origins.every(
+      (origin) =>
+        typeof origin === "string" && FEEDBACK_WIDGET_ORIGIN.test(origin),
+    ));
 const packageStaticHeaders = (
   root,
   docsOutputs,
-  { portalDomain, storageOrigin },
+  { portalDomain, storageOrigin, feedbackWidgetOrigins },
 ) =>
   staticHeaders({
     indexHtml: readFileSync(resolve(root, "assets/index.html"), "utf8"),
@@ -74,6 +85,7 @@ const packageStaticHeaders = (
       .map((path) => readFileSync(resolve(root, "assets/docs", path), "utf8")),
     portalDomain,
     storageOrigin,
+    feedbackWidgetOrigins,
   });
 const forbiddenPath =
   /(^|\/)(?:__fixtures__?|fixtures?|recordings?|certification|testing|tests?|private)(?:\/|$)|(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$|(?:^|\/)\.dev\.vars(?:\.|$)|\.har$|\.map$/i;
@@ -576,10 +588,13 @@ export const createProductionPackage = async ({
   deploymentLabel = `Branch preview · ${stage} · ${revision.slice(0, 12)}`,
   portalDomain,
   storageOrigin,
+  feedbackWidgetOrigins,
   webBuildRoot,
 }) => {
   if (portalDomain !== undefined && !PORTAL_DOMAIN.test(portalDomain))
     throw new Error("Production package Portal domain is invalid.");
+  if (!validFeedbackWidgetOrigins(feedbackWidgetOrigins))
+    throw new Error("Production package Feedback Widget origins are invalid.");
   if (storageOrigin !== undefined && !STORAGE_ORIGIN.test(storageOrigin))
     throw new Error("Production package storage origin is invalid.");
   if (!/^[a-f0-9]{40}$/.test(revision))
@@ -715,6 +730,7 @@ export const createProductionPackage = async ({
     packageStaticHeaders(outputRoot, docs?.outputs, {
       portalDomain,
       storageOrigin,
+      feedbackWidgetOrigins,
     }),
     { mode: 0o644 },
   );
@@ -734,6 +750,10 @@ export const createProductionPackage = async ({
       path: staticHeadersPath,
       ...(portalDomain === undefined ? {} : { portalDomain }),
       ...(storageOrigin === undefined ? {} : { storageOrigin }),
+      ...(feedbackWidgetOrigins === undefined ||
+      feedbackWidgetOrigins.length === 0
+        ? {}
+        : { feedbackWidgetOrigins }),
     },
     graph: {
       docs: docs?.outputs ?? [],
@@ -885,15 +905,18 @@ export const validateProductionPackage = async (root) => {
 
   const portalDomain = manifest.contentSecurityPolicy?.portalDomain;
   const storageOrigin = manifest.contentSecurityPolicy?.storageOrigin;
+  const feedbackWidgetOrigins =
+    manifest.contentSecurityPolicy?.feedbackWidgetOrigins;
   if (
     manifest.contentSecurityPolicy?.path !== staticHeadersPath ||
+    !validFeedbackWidgetOrigins(feedbackWidgetOrigins) ||
     (portalDomain !== undefined && !PORTAL_DOMAIN.test(portalDomain)) ||
     (storageOrigin !== undefined && !STORAGE_ORIGIN.test(storageOrigin)) ||
     readFileSync(resolve(root, staticHeadersPath), "utf8") !==
       packageStaticHeaders(
         root,
         servesDocs ? manifest.graph?.docs : undefined,
-        { portalDomain, storageOrigin },
+        { portalDomain, storageOrigin, feedbackWidgetOrigins },
       )
   )
     throw new Error(

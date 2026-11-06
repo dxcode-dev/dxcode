@@ -15,6 +15,7 @@ import {
   personalDictationVocabularyRoutes,
   workspaceDictationVocabularyRoutes,
 } from "../dictation/vocabulary.js";
+import { feedbackWidgetEmbedRoutes } from "../feedback-widget/embed-routes.js";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
 import { notificationPreferenceRoutes } from "../notifications/routes.js";
@@ -251,6 +252,7 @@ settingsRoutes.route(
   personalExperimentalFeaturesRoutes,
 );
 settingsRoutes.route("/personal/security", personalSecurityRoutes);
+settingsRoutes.route("/personal/feedback-widget", feedbackWidgetEmbedRoutes);
 settingsRoutes.route("/personal/projects", personalProjectDefaultsRoutes);
 settingsRoutes.route("/personal/keys", personalSigningKeyRoutes);
 settingsRoutes.route("/personal/triggers", personalPluginTriggerRoutes);

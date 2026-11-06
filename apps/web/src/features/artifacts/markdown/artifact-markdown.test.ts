@@ -23,6 +23,9 @@
  * 10. An edited block in a CRLF document gets bare LF line endings.
  * 11. The three-way merge drops one side's change, drops a person's draft on
  *     an overlapping change, or flags the wrong blocks.
+ * 12. A dropdown an agent wrote in a table cell without escaping its `|`
+ *     splits across cells (#1865), an escaped one is escaped twice, or a
+ *     dropdown outside a table changes.
  */
 import { readdirSync, readFileSync } from "node:fs";
 import { Fragment, type Node } from "prosemirror-model";
@@ -364,6 +367,42 @@ describe("artifact Markdown edits", () => {
     const output = createArtifactMarkdownCodec().serialize(doc);
     expect(output).toBe("| A | B |\n| --- | --- |\n| x \\| y |  |\n");
     expect(sameArtifactContent(parseArtifactMarkdown(output), doc)).toBe(true);
+  });
+
+  it("reads a dropdown written in a table cell with bare | as one chip, keeping the bytes", () => {
+    const source = [
+      "| Task | State |",
+      "| --- | --- |",
+      "| Editor | {{dropdown:Todo|*Doing:blue|Done:green}} |",
+      "| Docs | {{dropdown:Todo\\|*Doing:blue}} |",
+      "",
+      "Outside {{dropdown:A|*B}}.",
+      "",
+    ].join("\n");
+    const doc = parseArtifactMarkdown(source);
+    const table = doc.child(0);
+    expect(table.type.name).toBe("table");
+    const cells = (row: number) =>
+      Array.from({ length: table.child(row).childCount }, (_, at) => {
+        const cell = table.child(row).child(at);
+        const chips: string[] = [];
+        cell.descendants((node) => {
+          if (node.type.name === "chip") chips.push(String(node.attrs.source));
+        });
+        return chips.length > 0 ? chips : cell.textContent;
+      });
+    expect(cells(1)).toEqual([
+      "Editor",
+      ["{{dropdown:Todo|*Doing:blue|Done:green}}"],
+    ]);
+    expect(cells(2)).toEqual(["Docs", ["{{dropdown:Todo|*Doing:blue}}"]]);
+    const outside: string[] = [];
+    doc.child(1).descendants((node) => {
+      if (node.type.name === "chip") outside.push(String(node.attrs.source));
+    });
+    expect(outside).toEqual(["{{dropdown:A|*B}}"]);
+    const codec = createArtifactMarkdownCodec();
+    expect(codec.serialize(codec.parse(source))).toBe(source);
   });
 
   it("fences code that contains a fence with a longer fence", () => {

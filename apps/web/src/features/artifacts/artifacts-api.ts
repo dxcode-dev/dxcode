@@ -128,6 +128,24 @@ export const saveArtifact = async (
     )
   ).data;
 
+/**
+ * An image the artifact shows, as bytes, for an export to carry inside it;
+ * undefined when it cannot be read (gone, or on another site).
+ */
+export const artifactImageBlob = async (
+  source: string,
+): Promise<Blob | undefined> => {
+  try {
+    const url = new URL(source, window.location.href);
+    if (url.protocol !== "data:" && url.origin !== window.location.origin)
+      return undefined;
+    const response = await sameOriginFetch(url.href);
+    return response.ok ? await response.blob() : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 /** Every comment and reply on an artifact, oldest first, resolved ones too. */
 export const listArtifactComments = async (
   threadId: ThreadId,

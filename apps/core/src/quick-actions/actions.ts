@@ -1,8 +1,4 @@
-import {
-  isOfferRepliesTool,
-  offeredRepliesOf,
-  type ThreadQuickAction,
-} from "@dx/api";
+import { REPLY_OFFER_LIMIT, type ThreadQuickAction } from "@dx/api";
 import type { Bindings } from "../http/types.js";
 import { agentModelLogger } from "../logging.js";
 import { plainPreview } from "../notifications/plain-preview.js";
@@ -19,7 +15,8 @@ import { type ClefCall, runClef } from "../workers-ai/clef.js";
  * Workers AI scores how likely each is to be the person's next step after
  * the agent's last message. The row shows the ones Clef does not rule out,
  * most likely first. Clef writes no text: each action is dx's own, or a
- * reply the agent offered as data with `offer_replies`.
+ * reply a small text model wrote from the agent's final reply
+ * (`reply-writer.ts`). The agent is never told.
  */
 
 /** Only Clef Flash, Workers AI's fast Clef. */
@@ -28,8 +25,8 @@ export const QUICK_ACTIONS_MODEL = {
   selector: "clef-flash",
 } as const;
 
-/** What Clef reads of the agent's last message. */
-const SUMMARY_LIMIT = 1_200;
+/** What Clef reads of the agent's last message: its end, where it asks. */
+const SUMMARY_LIMIT = 2_000;
 
 /** Lowest first, as Clef's score rubric reads them; 0 hides the action. */
 const FIT = [
@@ -44,15 +41,20 @@ export interface EndedTurn {
   readonly messageId: string;
   /** What the agent said last, as plain text, shortened. */
   readonly summary: string;
-  readonly replies: ReadonlyArray<string>;
+  /** The agent's final reply as Markdown, for the reply writer. */
+  readonly reply: string;
 }
 
 /**
- * The agent's response that ends the history, if its turn completed. A
- * newer message from anyone, a failed or stopped turn, or a response still
- * streaming ends nothing yet.
+ * The agent's response that ends the history, if it ended the turn
+ * `submissionId` and that turn completed. A newer message from anyone, a
+ * failed or stopped turn, or a response still streaming ends nothing yet.
+ * The turn end hook names its own submission, which it knows completed.
  */
-export const endedTurn = (page: HistoryPage): EndedTurn | undefined => {
+export const endedTurn = (
+  page: HistoryPage,
+  submissionId?: string,
+): EndedTurn | undefined => {
   const last = page.messages.findLast(
     (message: HistoryMessage) => message.role !== "system",
   );
@@ -61,19 +63,17 @@ export const endedTurn = (page: HistoryPage): EndedTurn | undefined => {
     last.role !== "assistant" ||
     last.purpose !== "assistant" ||
     last.submissionId === undefined ||
-    page.settled.get(last.submissionId) !== "completed"
+    (submissionId === undefined
+      ? page.settled.get(last.submissionId) !== "completed"
+      : last.submissionId !== submissionId ||
+        (page.settled.get(submissionId) ?? "completed") !== "completed")
   )
     return undefined;
-  const parts = last.parts ?? [];
-  const offer = parts.findLast(
-    ({ type, toolName }) =>
-      type === "dynamic-tool" && isOfferRepliesTool(toolName),
-  );
+  const reply = finalReplyText(last.parts ?? []);
   return {
     messageId: last.id,
-    summary: plainPreview(finalReplyText(parts)).slice(0, SUMMARY_LIMIT),
-    replies:
-      offer?.state === "output-available" ? offeredRepliesOf(offer.input) : [],
+    summary: plainPreview(reply).slice(-SUMMARY_LIMIT),
+    reply,
   };
 };
 
@@ -115,17 +115,19 @@ const describe = (action: ThreadQuickAction) =>
 
 /**
  * The actions to show after `turn`, most likely first: the candidates Clef
- * scored above "unlikely". Undefined when Clef did not answer usably: the
- * caller then shows no row rather than a guess, and keeps nothing.
+ * scored above "unlikely", at most `REPLY_OFFER_LIMIT` of them replies.
+ * Undefined when Clef did not answer usably: the row then shows nothing
+ * rather than a guess.
  */
 export const chooseQuickActions = async (
   call: QuickActionsCaller,
   bindings: Bindings,
   turn: EndedTurn,
+  replies: ReadonlyArray<string>,
   canSnooze: boolean,
 ): Promise<ReadonlyArray<ThreadQuickAction> | undefined> => {
   const candidates: ReadonlyArray<ThreadQuickAction> = [
-    ...turn.replies.map((text) => ({ kind: "reply" as const, text })),
+    ...replies.map((text) => ({ kind: "reply" as const, text })),
     ...(canSnooze ? [{ kind: "snooze" as const }] : []),
   ];
   if (candidates.length === 0) return [];
@@ -134,7 +136,7 @@ export const chooseQuickActions = async (
     bindings,
     state: {
       setting:
-        "A person just read an AI coding agent's last message in a Thread. Above the message box dx can offer a few one-click actions; replies are ones the agent itself offered.",
+        "A person just read an AI coding agent's last message in a Thread. Above the message box dx can offer a few one-click actions. Each reply is sent as the person's next message; a small model wrote it from the agent's message, so it may not fit.",
       lastAgentMessage:
         turn.summary === "" ? "(The agent ended without text.)" : turn.summary,
       actions: candidates.map((action, index) => ({
@@ -170,7 +172,13 @@ export const chooseQuickActions = async (
         scored.fit !== undefined && Math.round(scored.fit) >= 1,
     )
     .sort((a, b) => b.fit - a.fit || a.index - b.index)
-    .map(({ action }) => action);
+    .map(({ action }) => action)
+    .filter(
+      (action, _, kept) =>
+        action.kind !== "reply" ||
+        kept.filter(({ kind }) => kind === "reply").indexOf(action) <
+          REPLY_OFFER_LIMIT,
+    );
 };
 
 const FIT_TOP = FIT.length - 1;

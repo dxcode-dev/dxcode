@@ -24,6 +24,7 @@ import {
   TextSelection,
   type Transaction,
 } from "prosemirror-state";
+import { selectedRect } from "prosemirror-tables";
 import type { EditorView } from "prosemirror-view";
 import { threadKeys } from "../../threads/thread-queries.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
@@ -67,6 +68,7 @@ import {
   commentAt,
   commentHighlightsKey,
 } from "./comment-highlights.js";
+import { findKey, findMatches } from "./find.js";
 import {
   type ImageUpload,
   imageUploads,
@@ -76,6 +78,16 @@ import {
   removeUpload,
 } from "./image-uploads.js";
 import { replaceDocument } from "./replace-document.js";
+import {
+  linkSelection,
+  type SelectionBox,
+  type SelectionMark,
+  type SelectionMarks,
+  selectionBox,
+  selectionMarkdown,
+  selectionMarks,
+  toggleSelectionMark,
+} from "./selection-format.js";
 import {
   type PersonItem,
   peopleItems,
@@ -123,6 +135,14 @@ export interface ArtifactSessionSnapshot {
   readonly anchors: ReadonlyArray<CommentRange>;
   /** The comment chosen in the panel or in the text. */
   readonly activeComment: string | undefined;
+  /** Find (#1810): open with its query, how many matches, and which is current. */
+  readonly find?:
+    | {
+        readonly query: string;
+        readonly count: number;
+        readonly current: number;
+      }
+    | undefined;
 }
 
 /** One row of the open menu, as it shows. */
@@ -165,12 +185,29 @@ export interface ArtifactViewFrame {
   readonly source: string;
 }
 
+export interface ArtifactTablePlacement {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+  readonly column: number;
+  readonly row: number;
+}
+
 export interface ArtifactSelection {
   readonly inTable: boolean;
+  /** Table controls relative to the page, clipped to its horizontal scroller. */
+  readonly table?: ArtifactTablePlacement | undefined;
   /** Whether text is selected (something to comment on). */
   readonly ranged: boolean;
   /** The top-level block holding the selection, and its top in the page. */
   readonly block: { readonly pos: number; readonly top: number } | undefined;
+  /** Selected text's place in the page, for the selection toolbar. */
+  readonly box?: SelectionBox | undefined;
+  /** The marks the selected text has. */
+  readonly marks?: SelectionMarks | undefined;
+  /** Whether the editor (or the selection's own toolbar) has focus. */
+  readonly focused?: boolean;
 }
 
 const MESSAGE: Record<string, string> = {
@@ -245,8 +282,10 @@ export class ArtifactSession {
     return this.#shown.at(-1)?.page;
   }
   /** The revision the editor's content is based on, and its Markdown. */
-  #base: { revision: number; markdown: string; title: string };
+  #base: { revision: number; markdown: string; title: string; folder: string };
   #title: string;
+  /** The folder the artifact is filed in; a move saves with the next save. */
+  #folder: string;
   #timer: ReturnType<typeof setTimeout> | undefined;
   #inFlight = false;
   #again = false;
@@ -286,8 +325,10 @@ export class ArtifactSession {
       revision: initial.artifact.revision,
       markdown: initial.markdown,
       title: initial.artifact.title,
+      folder: initial.artifact.folder,
     };
     this.#title = initial.artifact.title;
+    this.#folder = initial.artifact.folder;
     this.#snapshot = {
       save: { kind: "saved" },
       revision: initial.artifact.revision,
@@ -415,20 +456,86 @@ export class ArtifactSession {
     };
   }
 
+  #placedTable(): ArtifactTablePlacement | undefined {
+    const view = this.#view;
+    const page = this.#page;
+    if (
+      view === undefined ||
+      page === undefined ||
+      !selectionInTable(this.#state)
+    )
+      return undefined;
+    const rect = selectedRect(this.#state);
+    const dom = view.nodeDOM(rect.tableStart - 1);
+    const cell = view.nodeDOM(
+      rect.tableStart +
+        (rect.map.map[rect.top * rect.map.width + rect.left] ?? 0),
+    );
+    if (!(dom instanceof HTMLElement) || !(cell instanceof HTMLElement))
+      return undefined;
+    const table = dom.querySelector("table") ?? dom;
+    const box = table.getBoundingClientRect();
+    const clip = dom.getBoundingClientRect();
+    const at = cell.getBoundingClientRect();
+    const origin = page.getBoundingClientRect();
+    const left = Math.max(box.left, clip.left);
+    const right = Math.min(box.right, clip.right);
+    return {
+      top: box.top - origin.top,
+      left: left - origin.left,
+      width: right - left,
+      height: box.height,
+      column:
+        Math.max(left + 12, Math.min(right - 12, at.left + at.width / 2)) -
+        origin.left,
+      row: at.top + at.height / 2 - origin.top,
+    };
+  }
+
+  /** The editor gained or lost focus: the selection's toolbar follows it. */
+  readonly setFocused = (focused: boolean) => {
+    const current = this.#snapshot.selection;
+    if (current.focused === focused) return;
+    this.#publish({ selection: { ...current, focused } });
+  };
+
+  /** Resize and nested table scrolling can move grips without a transaction. */
+  readonly refreshLayout = () => this.#trackSelection();
+
   #trackSelection() {
     const block = topLevelBlockAt(this.#state, this.#state.selection.from);
     const placed = block === undefined ? undefined : this.#placed(block.pos);
     const inTable = selectionInTable(this.#state);
+    const table = this.#placedTable();
     const ranged = !this.#state.selection.empty;
+    const view = this.#view;
+    const box =
+      ranged && view !== undefined && this.#page !== undefined
+        ? selectionBox(view, this.#page)
+        : undefined;
+    const marks = ranged ? selectionMarks(this.#state) : undefined;
     const current = this.#snapshot.selection;
     if (
       current.ranged === ranged &&
       current.inTable === inTable &&
       current.block?.pos === placed?.pos &&
-      current.block?.top === placed?.top
+      current.block?.top === placed?.top &&
+      JSON.stringify(current.table) === JSON.stringify(table) &&
+      JSON.stringify(current.box) === JSON.stringify(box) &&
+      JSON.stringify(current.marks) === JSON.stringify(marks)
     )
       return;
-    this.#publish({ selection: { inTable, ranged, block: placed } });
+    this.#publish({
+      selection: {
+        inTable,
+        ranged,
+        block: placed,
+        table,
+        box,
+        marks,
+        focused: current.focused === true,
+      },
+    });
   }
 
   /**
@@ -483,6 +590,7 @@ export class ArtifactSession {
   get dirty() {
     return (
       this.#title !== this.#base.title ||
+      this.#folder !== this.#base.folder ||
       this.#savable() !== this.#base.markdown
     );
   }
@@ -496,6 +604,7 @@ export class ArtifactSession {
       this.#publish({ headed: headed(this.#state) });
     if (tr.docChanged || tr.selectionSet) this.#trackSelection();
     if (tr.docChanged) this.#trackAnchors();
+    if (tr.docChanged) this.#trackFind();
     this.#trackSuggest();
     const open = this.#snapshot.chip;
     if (open !== undefined && tr.docChanged) {
@@ -552,6 +661,15 @@ export class ArtifactSession {
     if (node?.type.name !== "chip" || source === undefined) return;
     this.dispatch(this.#state.tr.setNodeMarkup(pos, null, { source }));
     this.#publish({ chip: { pos, chip } });
+  }
+
+  /** Deletes the chip at `pos` (Remove Dropdown) and closes its picker. */
+  removeChip(pos: number) {
+    const node = this.#state.doc.nodeAt(pos);
+    if (node?.type.name !== "chip") return;
+    this.#publish({ chip: undefined });
+    this.dispatch(this.#state.tr.delete(pos, pos + node.nodeSize));
+    this.#view?.focus();
   }
 
   /** The chip's element, which its picker is placed against. */
@@ -884,6 +1002,15 @@ export class ArtifactSession {
     this.#edited();
   }
 
+  /** Files the artifact in `folder` ("" for none), saving at once. */
+  moveTo(folder: string) {
+    const next = folder.trim();
+    if (next === this.#folder) return;
+    this.#folder = next;
+    this.#edited();
+    this.flush();
+  }
+
   /** Saves now (Mod-S, or leaving the page). */
   flush() {
     if (this.#held) return;
@@ -901,7 +1028,12 @@ export class ArtifactSession {
     }
     const markdown = this.#savable();
     const title = this.#title;
-    if (markdown === this.#base.markdown && title === this.#base.title) {
+    const folder = this.#folder;
+    if (
+      markdown === this.#base.markdown &&
+      title === this.#base.title &&
+      folder === this.#base.folder
+    ) {
       this.#publish({ save: { kind: "saved" } });
       return;
     }
@@ -918,6 +1050,7 @@ export class ArtifactSession {
           baseRevision: base.revision,
           markdown,
           ...(title === base.title ? {} : { title }),
+          ...(folder === base.folder ? {} : { folder }),
         }),
       };
     } catch (error) {
@@ -931,6 +1064,7 @@ export class ArtifactSession {
         revision: saved.artifact.revision,
         markdown: saved.markdown,
         title: saved.artifact.title,
+        folder: saved.artifact.folder,
       };
       acceptSavedArtifact(this.#queryClient, this.#threadId, saved);
       // The server stores the Markdown it was sent; should it ever differ,
@@ -995,12 +1129,15 @@ export class ArtifactSession {
       theirs: current.markdown,
     });
     const keepTitle = this.#title !== this.#base.title;
+    const keepFolder = this.#folder !== this.#base.folder;
     this.#base = {
       revision: current.artifact.revision,
       markdown: current.markdown,
       title: current.artifact.title,
+      folder: current.artifact.folder,
     };
     if (!keepTitle) this.#title = current.artifact.title;
+    if (!keepFolder) this.#folder = current.artifact.folder;
     acceptSavedArtifact(this.#queryClient, this.#threadId, current);
     this.#load(merge.markdown, merge.conflicts);
     if (merge.conflicts.length > 0 && !this.#detached) {
@@ -1044,8 +1181,10 @@ export class ArtifactSession {
         revision: remote.artifact.revision,
         markdown: remote.markdown,
         title: remote.artifact.title,
+        folder: remote.artifact.folder,
       };
       this.#title = remote.artifact.title;
+      this.#folder = remote.artifact.folder;
       this.#load(remote.markdown, []);
       this.#publish({ save: { kind: "saved" }, merged: undefined });
       return;
@@ -1164,6 +1303,86 @@ export class ArtifactSession {
     element?.scrollIntoView({ block: "center", behavior: "smooth" });
   };
 
+  // -- find ---------------------------------------------------------------
+
+  /** Opens Find, or changes its query; the first match becomes current. */
+  readonly find = (query: string) => this.#showFind(query, 0);
+
+  /** Moves to the next (1) or previous (-1) match, wrapping around. */
+  readonly findStep = (step: 1 | -1) => {
+    const find = this.#snapshot.find;
+    if (find === undefined || find.count === 0) return;
+    this.#showFind(find.query, (find.current + step + find.count) % find.count);
+  };
+
+  readonly closeFind = () => {
+    this.dispatch(
+      this.#state.tr
+        .setMeta(findKey, { query: "", current: 0 })
+        .setMeta("addToHistory", false),
+    );
+    this.#publish({ find: undefined });
+  };
+
+  #showFind(query: string, current: number) {
+    const matches = findMatches(this.#state.doc, query);
+    const at = matches.length === 0 ? 0 : Math.min(current, matches.length - 1);
+    this.dispatch(
+      this.#state.tr
+        .setMeta(findKey, { query, current: at })
+        .setMeta("addToHistory", false),
+    );
+    this.#publish({ find: { query, count: matches.length, current: at } });
+    const match = matches[at];
+    const view = this.#view;
+    if (match === undefined || view === undefined) return;
+    const { node } = view.domAtPos(match.from);
+    const element = node instanceof Element ? node : node.parentElement;
+    element?.scrollIntoView({ block: "nearest" });
+  }
+
+  /** Edits move the matches: recount, keeping the current one in range. */
+  #trackFind() {
+    const find = this.#snapshot.find;
+    if (find === undefined) return;
+    const count = findMatches(this.#state.doc, find.query).length;
+    if (count === find.count) return;
+    const current = count === 0 ? 0 : Math.min(find.current, count - 1);
+    this.#publish({ find: { query: find.query, count, current } });
+    this.dispatch(
+      this.#state.tr
+        .setMeta(findKey, { query: find.query, current })
+        .setMeta("addToHistory", false),
+    );
+  }
+
+  /** Leaves the caret at the end of the selection, selecting nothing. */
+  readonly collapseSelection = () => {
+    const { to, empty } = this.#state.selection;
+    if (empty) return;
+    this.dispatch(
+      this.#state.tr
+        .setSelection(TextSelection.create(this.#state.doc, to))
+        .setMeta("addToHistory", false),
+    );
+  };
+
+  /** Marks the selection as the text a new comment is on, or clears it. */
+  readonly markCommentDraft = (on: boolean) => {
+    const { from, to } = this.#state.selection;
+    this.dispatch(
+      this.#state.tr
+        .setMeta(commentHighlightsKey, {
+          draft: on && from < to ? { from, to } : undefined,
+        })
+        .setMeta("addToHistory", false),
+    );
+  };
+
+  /** The highlighted text of a comment (or of the draft), for its card. */
+  readonly commentElement = (id: string): Element | null =>
+    this.#view?.dom.querySelector(`[data-comment="${CSS.escape(id)}"]`) ?? null;
+
   /** The comment whose highlighted text holds `pos`. */
   readonly commentAt = (pos: number) => commentAt(this.#snapshot.anchors, pos);
 
@@ -1193,6 +1412,23 @@ export class ArtifactSession {
         }
       });
     });
+  }
+
+  /** Bold, Italic, Strikethrough, or Code on the selection, keeping it. */
+  formatSelection(mark: SelectionMark) {
+    const view = this.#view;
+    if (view !== undefined) toggleSelectionMark(view, mark);
+  }
+
+  /** Links the selection, or unlinks it for `""`; false for an unsafe link. */
+  linkSelection(input: string) {
+    const view = this.#view;
+    return view === undefined ? false : linkSelection(view, input);
+  }
+
+  /** The selection as Markdown, for Copy as Markdown and Send to Thread. */
+  selectionMarkdown() {
+    return this.#state.selection.empty ? "" : selectionMarkdown(this.#state);
   }
 
   /**

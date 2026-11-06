@@ -1,4 +1,4 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { formatMessageAttachments } from "@dx/api";
 import {
   AgentInstanceExistsError,
@@ -24,6 +24,10 @@ import {
   MAX_INITIAL_DISPATCH_ATTEMPTS,
   sweepInitialDispatches,
 } from "../../src/threads/initial-dispatch.js";
+import {
+  type InitialThreadObjectsWarmer,
+  warmInitialThreadObjects,
+} from "../../src/threads/initial-objects.js";
 import { createThreadRoutes } from "../../src/threads/routes.js";
 import {
   bindings,
@@ -93,6 +97,7 @@ const harness = (
   /** False answers without waiting for work the route left running. */
   settle = true,
   requestPrincipal = principal,
+  warmObjects?: InitialThreadObjectsWarmer,
 ) => {
   const persisted: Array<Promise<boolean>> = [];
   const titleAgent = vi.fn(
@@ -108,7 +113,14 @@ const harness = (
   });
   app.route(
     "/threads",
-    createThreadRoutes(dispatch, titleAgent, lookup, initialOrb),
+    createThreadRoutes(
+      dispatch,
+      titleAgent,
+      lookup,
+      initialOrb,
+      undefined,
+      warmObjects,
+    ),
   );
   app.onError(errorHandler);
   const pending: Array<Promise<unknown>> = [];
@@ -983,6 +995,151 @@ describe("Thread creation admission in workerd with real D1", () => {
           failureCode: "INITIAL_ADMISSION_UNAVAILABLE",
         },
       },
+    });
+  });
+  describe("waking the new Thread's objects (#1793)", () => {
+    /** Forwards to the real namespace and records each request's path. */
+    const recording = (namespace: DurableObjectNamespace, seen: string[]) =>
+      ({
+        idFromName: (name: string) => namespace.idFromName(name),
+        get: (id: DurableObjectId) => {
+          const stub = namespace.get(id);
+          return {
+            fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+              const request = new Request(input, init);
+              seen.push(`${request.method} ${new URL(request.url).pathname}`);
+              return stub.fetch(request);
+            },
+          };
+        },
+      }) as unknown as DurableObjectNamespace;
+
+    it("wakes the coordinator and execution objects once its checks pass, leaving them no storage or alarm", async () => {
+      const project = await createProjectViaApi("wake-objects");
+      const dispatched: Array<Parameters<Dispatch>[0]> = [];
+      const coordinatorSeen: string[] = [];
+      const executionSeen: string[] = [];
+      const { create } = harness(
+        flueValidatedDispatch(dispatched),
+        async () => null,
+        {
+          ...bindings,
+          THREAD_EXECUTION: recording(env.THREAD_EXECUTION, executionSeen),
+        },
+        undefined,
+        true,
+        principal,
+        (routeBindings, threadId) =>
+          warmInitialThreadObjects(
+            {
+              ...routeBindings,
+              BYOK_CREDENTIAL_COORDINATOR: recording(
+                env.BYOK_CREDENTIAL_COORDINATOR,
+                coordinatorSeen,
+              ),
+            },
+            threadId,
+          ),
+      );
+      const threadId = newThreadId();
+
+      expect(
+        (await create({ projectId: project.data.id, threadId })).status,
+      ).toBe(201);
+
+      expect(coordinatorSeen).toEqual(["GET /warm"]);
+      expect(executionSeen).toEqual(["GET /warm"]);
+      for (const [namespace, name] of [
+        [env.BYOK_CREDENTIAL_COORDINATOR, `byok-${threadId}`],
+        [env.THREAD_EXECUTION, threadId],
+      ] as const)
+        await runInDurableObject(
+          namespace.get(namespace.idFromName(name)),
+          async (_instance, state) => {
+            expect([...(await state.storage.list()).keys()]).toEqual([]);
+            expect(await state.storage.getAlarm()).toBeNull();
+          },
+        );
+    });
+
+    it("wakes nothing for a request it refuses", async () => {
+      const project = await createProjectViaApi("wake-nothing-refused");
+      const warmed: string[] = [];
+      const warm: InitialThreadObjectsWarmer = async (_bindings, threadId) => {
+        warmed.push(threadId);
+      };
+      const catalog = JSON.parse(TEST_RUNNER_PROFILE_CATALOG) as {
+        profiles: Array<{ id: string; availability: string }>;
+      };
+      for (const profile of catalog.profiles)
+        if (profile.id === "a1.large") profile.availability = "maintenance";
+      const { create } = harness(
+        flueValidatedDispatch([]),
+        async () => null,
+        { ...bindings, DX_RUNNER_PROFILE_CATALOG: JSON.stringify(catalog) },
+        undefined,
+        true,
+        principal,
+        warm,
+      );
+
+      // Malformed: refused by validation.
+      expect(
+        (await create({ projectId: 42, threadId: newThreadId() })).status,
+      ).toBe(400);
+      // Another person's Project: refused by authorization.
+      const stranger = harness(
+        flueValidatedDispatch([]),
+        async () => null,
+        bindings,
+        undefined,
+        true,
+        otherPrincipal,
+        warm,
+      );
+      expect(
+        (
+          await stranger.create({
+            projectId: project.data.id,
+            threadId: newThreadId(),
+          })
+        ).status,
+      ).toBe(404);
+      // A runner profile in maintenance: refused by admission.
+      await env.DB.prepare(
+        "UPDATE projects SET runner_profile_id = 'a1.large' WHERE id = ?",
+      )
+        .bind(project.data.id)
+        .run();
+      expect(
+        (await create({ projectId: project.data.id, threadId: newThreadId() }))
+          .status,
+      ).toBe(409);
+
+      expect(warmed).toEqual([]);
+    });
+
+    it("creates the Thread and admits its message when waking fails", async () => {
+      const project = await createProjectViaApi("wake-fails");
+      const dispatched: Array<Parameters<Dispatch>[0]> = [];
+      const { create } = harness(
+        flueValidatedDispatch(dispatched),
+        async () => null,
+        bindings,
+        undefined,
+        true,
+        principal,
+        async () => {
+          throw new Error("Durable Object unavailable.");
+        },
+      );
+      const threadId = newThreadId();
+
+      const response = await create({ projectId: project.data.id, threadId });
+
+      expect(response.status).toBe(201);
+      await expect(threadRow(threadId)).resolves.toEqual({ id: threadId });
+      expect(dispatched.map(({ id }) => id)).toEqual([threadId]);
     });
   });
 });

@@ -587,6 +587,44 @@ describe("asks in artifacts", () => {
     );
   });
 
+  it("notifies everyone who can open the Thread of a comment's @here, except its writer, and wakes no agent (#1808)", async () => {
+    const threadId = await newThread();
+    await share(threadId, "contribute");
+    const artifactId = await agentWrites(threadId, PLAN);
+    const commented = await addArtifactComment(bindings, {
+      threadId,
+      artifactId,
+      quote: "Review the copy",
+      body: "@[here](here) ready to ship?",
+      writer: { kind: "user", userId: member },
+    });
+    if (commented.kind !== "saved") throw new Error("Expected a comment.");
+    const comment = commented.comment;
+    await artifactCommented(
+      bindings,
+      {
+        threadId,
+        artifactId,
+        commentId: comment.id,
+        quote: comment.quote,
+        body: comment.body,
+        writer: { kind: "user", userId: member },
+      },
+      { deliver },
+    );
+    const count = (recipient: string) =>
+      env.DB.prepare(
+        "SELECT count(*) AS n FROM notification WHERE recipient_user_id = ? AND source_key = ?",
+      )
+        .bind(recipient, `artifact-comment-mention:${comment.id}`)
+        .first<number>("n");
+    // Olive, who owns it, hears; Maya wrote it; Otto cannot open the Thread.
+    expect(await count(owner)).toBe(1);
+    expect(await count(member)).toBe(0);
+    expect(await count(outsider)).toBe(0);
+    expect(wakes).toEqual([]);
+  });
+
   it("wakes the Thread for a comment that mentions the agent, and keeps it in the next turn's note until the agent replies", async () => {
     const threadId = await newThread();
     await share(threadId, "contribute");

@@ -15240,3 +15240,114 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
     display: none;
   }
 }
+
+/* Project Settings → Feedback Widget (experimental): cards like the
+   project's other settings. */
+.project-feedback-widget {
+  gap: 16px;
+}
+.project-feedback-widget-steps {
+  display: grid;
+  list-style: decimal;
+  gap: 4px;
+  margin: 0;
+  padding: 12px 16px 12px 32px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 18px;
+}
+.project-feedback-widget-code {
+  margin: 12px 16px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--background);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.project-feedback-widget-origins {
+  display: grid;
+  margin: 0;
+  padding: 4px 16px;
+  list-style: none;
+}
+.project-feedback-widget-origins li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.project-feedback-widget-origins li + li {
+  border-top: 1px solid var(--divider);
+}
+.project-feedback-widget-origins li > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-feedback-widget-origin-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--divider);
+}
+.project-feedback-widget-origin-form > input {
+  flex: 1;
+  max-width: 32rem;
+  height: 26px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--background);
+  font-size: 12px;
+  line-height: 16px;
+}
+.settings-card > .project-feedback-widget-error {
+  padding: 0 16px 12px;
+  color: var(--destructive);
+}
+/* Experimental Features → Feedback Widget → Show on dx: a nested row. */
+.feedback-widget-on-dx > .settings-row {
+  padding-left: 32px;
+}
+.feedback-widget-on-dx .settings-select {
+  width: 220px;
+}
+.feedback-widget-on-dx-other {
+  display: grid;
+  gap: 6px;
+  padding: 0 16px 12px 32px;
+}
+.feedback-widget-on-dx-other p,
+.feedback-widget-on-dx-error {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17.875px;
+}
+.feedback-widget-on-dx-error {
+  padding: 0 16px 12px 32px;
+  color: var(--destructive);
+}
+.feedback-widget-on-dx-other-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.feedback-widget-on-dx-other-row > input {
+  flex: 1;
+  height: 26px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--background);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 12px;
+}

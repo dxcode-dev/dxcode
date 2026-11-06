@@ -182,15 +182,15 @@ import {
   findSharedThreadGrant,
 } from "../thread-sharing/access.js";
 import {
+  announceInitialMentions,
+  resolveInitialMentions,
+} from "../thread-sharing/initial-mentions.js";
+import {
   ownerWorkspaceId,
   threadSharingDecorations,
   threadSharingDetail,
   userIdentity,
 } from "../thread-sharing/service.js";
-import {
-  announceInitialMentions,
-  resolveInitialMentions,
-} from "../thread-sharing/initial-mentions.js";
 import { childActivityField, markThreadOpened } from "./attention-d1.js";
 import {
   type DxTitleAgentRunner,
@@ -205,6 +205,10 @@ import {
   readInitialDispatchState,
   retryInitialDispatch,
 } from "./initial-dispatch.js";
+import {
+  type InitialThreadObjectsWarmer,
+  warmInitialThreadObjects,
+} from "./initial-objects.js";
 import {
   readInboundMessages,
   readParentColors,
@@ -767,6 +771,7 @@ export const createThreadRoutes = (
   initialOrb: InitialThreadOrb = noInitialThreadOrb,
   stopAgent: ThreadAgentStopper = async (threadId, env) =>
     (await import("../agents/routes.js")).stopThreadAgent(threadId, env),
+  warmThreadObjects: InitialThreadObjectsWarmer = warmInitialThreadObjects,
 ) => {
   const threadRoutes = new Hono<AppEnv>();
 
@@ -1160,6 +1165,15 @@ export const createThreadRoutes = (
         !v.is(DxAgentInitialDataSchema, detail.agentInitialization)
       )
         return yield* new InitialMessageRejected();
+      // Every check has passed: wake the objects the first turn reaches, so
+      // their cold starts overlap persistence and the agent's own start.
+      // Best effort, and the response never waits for it.
+      if (target.insert !== undefined && initialMessage !== undefined) {
+        const warming = warmThreadObjects(context.env, target.thread.id).catch(
+          () => undefined,
+        );
+        execution?.waitUntil(warming);
+      }
       // The files are linked to the Thread only once Flue admits the message.
       const admitted =
         initialAttachments === undefined

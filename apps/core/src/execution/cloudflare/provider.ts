@@ -54,7 +54,9 @@ const MAX_INACTIVITY_MS = 3_600_000;
 const STATE_RETRIES = 3;
 /**
  * The longest Core waits for the container object to open a workspace: its
- * lock, a snapshot restore, and the 90 s readiness wait, with headroom. An
+ * lock, a snapshot restore, and the readiness wait, with headroom. A new
+ * workspace's stuck first start is started over once (#1783): 60 s, a 5 s
+ * stop, then 90 s, so 155 s at worst. An
  * open that took 945 s in production now fails here, and Flue retries the
  * run on a fresh stub.
  */

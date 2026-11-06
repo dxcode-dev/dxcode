@@ -134,6 +134,10 @@ try {
     outputRoot,
     portalDomain: values.get("portal-domain"),
     storageOrigin: values.get("storage-origin"),
+    feedbackWidgetOrigins: values
+      .get("feedback-widget-origins")
+      ?.split(",")
+      .filter((origin) => origin !== ""),
     revision: required("revision"),
     stage: required("stage"),
     target: required("target"),

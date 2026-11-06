@@ -55,7 +55,7 @@ export const chipLabel = (chip: Chip): string => {
     case "time":
       return timeFormat.format(new Date(chip.instant));
     case "dropdown":
-      return chip.options.find((option) => option.selected)?.label ?? "Select";
+      return chip.options.find((option) => option.selected)?.label ?? "Select…";
     case "toggle":
       return chip.label;
     case "mention":

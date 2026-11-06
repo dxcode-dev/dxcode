@@ -70,9 +70,18 @@ export const inlineScriptHashes = (html) => {
  * storage files redirect there to presigned reads, and uploads PUT their
  * parts there.
  *
- * @param {{ scriptHashes: readonly string[]; portalDomain?: string; storageOrigin?: string }} options
+ * `feedbackWidgetOrigins` are other dx hosts whose Feedback Widget the app
+ * may load (experimental): their script runs in the app and frames their
+ * panel. The app's own origin is always allowed through 'self'.
+ *
+ * @param {{ scriptHashes: readonly string[]; portalDomain?: string; storageOrigin?: string; feedbackWidgetOrigins?: readonly string[] }} options
  */
-export const appPolicy = ({ scriptHashes, portalDomain, storageOrigin }) => {
+export const appPolicy = ({
+  scriptHashes,
+  portalDomain,
+  storageOrigin,
+  feedbackWidgetOrigins = [],
+}) => {
   const storage = storageOrigin === undefined ? "" : ` ${storageOrigin}`;
   return [
     "default-src 'self'",
@@ -82,6 +91,7 @@ export const appPolicy = ({ scriptHashes, portalDomain, storageOrigin }) => {
       ...scriptHashes,
       TURNSTILE,
       ANALYTICS_SCRIPT,
+      ...feedbackWidgetOrigins,
     ].join(" "),
     "style-src 'self' 'unsafe-inline'",
     `img-src 'self' data: blob: ${GOOGLE_AVATARS}${storage}`,
@@ -94,6 +104,7 @@ export const appPolicy = ({ scriptHashes, portalDomain, storageOrigin }) => {
       "frame-src 'self' blob:",
       TURNSTILE,
       ...(portalDomain === undefined ? [] : [`https://*.${portalDomain}`]),
+      ...feedbackWidgetOrigins,
     ].join(" "),
     "manifest-src 'self'",
     "object-src 'none'",
@@ -151,13 +162,14 @@ export const reportingEndpoints = () =>
  * and asset (workers read their own response's policy), the view shell's own
  * policy, and the docs site's.
  *
- * @param {{ indexHtml: string; docsHtml?: readonly string[]; portalDomain?: string; storageOrigin?: string }} options
+ * @param {{ indexHtml: string; docsHtml?: readonly string[]; portalDomain?: string; storageOrigin?: string; feedbackWidgetOrigins?: readonly string[] }} options
  */
 export const staticHeaders = ({
   indexHtml,
   docsHtml,
   portalDomain,
   storageOrigin,
+  feedbackWidgetOrigins,
 }) => {
   const scriptHashes = inlineScriptHashes(indexHtml);
   const detach = [
@@ -166,7 +178,7 @@ export const staticHeaders = ({
   ];
   const rules = [
     "/*",
-    `  ${enforcedHeader()}: ${appPolicy({ scriptHashes, portalDomain, storageOrigin })}`,
+    `  ${enforcedHeader()}: ${appPolicy({ scriptHashes, portalDomain, storageOrigin, feedbackWidgetOrigins })}`,
     `  Reporting-Endpoints: ${reportingEndpoints()}`,
     "  X-Content-Type-Options: nosniff",
     VIEW_FRAME_PATH,

@@ -1,5 +1,10 @@
 /** The sections `/projects/$projectId/settings/$section` can open. */
-export const projectSettingsSectionIds = ["general", "orb", "secrets"] as const;
+export const projectSettingsSectionIds = [
+  "general",
+  "orb",
+  "secrets",
+  "feedback-widget",
+] as const;
 
 export type ProjectSettingsSection = (typeof projectSettingsSectionIds)[number];
 

@@ -2,12 +2,14 @@ import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronRight } from "lucide-react";
+import { ArrowUp, Check, ChevronRight, Pencil, Trash2, X } from "lucide-react";
+import * as React from "react";
 import { createPortal } from "react-dom";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { MarkdownView } from "../../../shared/ui/markdown-view.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import {
+  CHIP_COLORS,
   type Chip,
   chipSource,
   instantOf,
@@ -26,12 +28,225 @@ const localInput = (instant: string) => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
+type DropdownChip = Extract<Chip, { readonly kind: "dropdown" }>;
+
+/** Why a new or renamed option can't be written, if it can't. */
+const optionProblem = (
+  label: string,
+  options: DropdownChip["options"],
+  except?: number,
+) => {
+  const text = label.trim();
+  if (text === "") return "Type a name.";
+  if (/[|{}\n]/u.test(text) || text.startsWith("*"))
+    return "A name can't hold |, { or }, or start with *.";
+  if (options.some((option, at) => at !== except && option.label === text))
+    return "That option is already there.";
+  return undefined;
+};
+
+/**
+ * A dropdown's options, as the reference editor edits them (#1865): pick
+ * one; rename it (the pencil, or a double click); cycle its color; move it
+ * up; remove it; add one at the end; or remove the dropdown.
+ */
+function DropdownFields({
+  chip,
+  onChange,
+}: {
+  readonly chip: DropdownChip;
+  readonly onChange: (chip: Chip, close?: boolean | "remove") => void;
+}) {
+  const [renaming, setRenaming] = React.useState<number>();
+  const [problem, setProblem] = React.useState<string>();
+  const options = chip.options;
+  const write = (next: DropdownChip["options"]) => {
+    setProblem(undefined);
+    onChange({ ...chip, options: next });
+  };
+  const rename = (index: number, label: string) => {
+    const issue = optionProblem(label, options, index);
+    if (issue !== undefined) {
+      setProblem(issue);
+      return;
+    }
+    setRenaming(undefined);
+    write(
+      options.map((option, at) =>
+        at === index ? { ...option, label: label.trim() } : option,
+      ),
+    );
+  };
+  return (
+    <div className="artifact-chip-dropdown">
+      <div
+        className="artifact-chip-options"
+        role="listbox"
+        aria-label="Options"
+      >
+        {options.map((option, index) => (
+          <div
+            key={option.label}
+            className="artifact-chip-option-row"
+            data-color={option.color}
+          >
+            {renaming === index ? (
+              <input
+                className="artifact-chip-rename"
+                aria-label={`Name of ${option.label}`}
+                defaultValue={option.label}
+                ref={(node) => node?.select()}
+                maxLength={60}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    rename(index, event.currentTarget.value);
+                  } else if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setRenaming(undefined);
+                    setProblem(undefined);
+                  }
+                }}
+                onBlur={(event) => rename(index, event.currentTarget.value)}
+              />
+            ) : (
+              <button
+                type="button"
+                role="option"
+                aria-selected={option.selected}
+                className="artifact-chip-option"
+                onClick={() =>
+                  onChange(
+                    {
+                      ...chip,
+                      options: options.map((other, at) => ({
+                        ...other,
+                        selected: at === index,
+                      })),
+                    },
+                    true,
+                  )
+                }
+                onDoubleClick={() => setRenaming(index)}
+              >
+                <span className="artifact-chip-swatch" aria-hidden="true" />
+                <span>{option.label}</span>
+                {option.selected ? <Check aria-hidden="true" /> : null}
+              </button>
+            )}
+            <button
+              type="button"
+              className="artifact-chip-tool"
+              aria-label={`Rename ${option.label}`}
+              title="Rename"
+              onClick={() => setRenaming(index)}
+            >
+              <Pencil aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="artifact-chip-tool artifact-chip-color"
+              aria-label={`Change Color of ${option.label}`}
+              title="Change color"
+              onClick={() =>
+                write(
+                  options.map((other, at) => {
+                    if (at !== index) return other;
+                    const next =
+                      CHIP_COLORS[
+                        (CHIP_COLORS.indexOf(other.color ?? "gray") + 1) %
+                          CHIP_COLORS.length
+                      ];
+                    // In the parser's key order, which the chip is checked by.
+                    return next === "gray"
+                      ? { label: other.label, selected: other.selected }
+                      : {
+                          label: other.label,
+                          color: next,
+                          selected: other.selected,
+                        };
+                  }),
+                )
+              }
+            >
+              <span className="artifact-chip-swatch" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="artifact-chip-tool"
+              aria-label={`Move ${option.label} Up`}
+              title="Move up"
+              disabled={index === 0}
+              onClick={() =>
+                write(
+                  options.toSpliced(
+                    index - 1,
+                    2,
+                    option,
+                    options[index - 1] ?? option,
+                  ),
+                )
+              }
+            >
+              <ArrowUp aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="artifact-chip-tool"
+              aria-label={`Remove ${option.label}`}
+              title="Remove"
+              disabled={options.length === 1}
+              onClick={() => write(options.toSpliced(index, 1))}
+            >
+              <X aria-hidden="true" />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="artifact-chip-add">
+        <input
+          aria-label="New option"
+          placeholder="Add an option"
+          maxLength={60}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            const input = event.currentTarget;
+            const issue = optionProblem(input.value, options);
+            if (issue !== undefined) {
+              setProblem(issue);
+              return;
+            }
+            write([...options, { label: input.value.trim(), selected: false }]);
+            input.value = "";
+          }}
+        />
+        <button
+          type="button"
+          className="artifact-chip-tool"
+          aria-label="Remove Dropdown"
+          title="Remove dropdown"
+          onClick={() => onChange(chip, "remove")}
+        >
+          <Trash2 aria-hidden="true" />
+        </button>
+      </div>
+      {problem === undefined ? null : (
+        <p className="artifact-chip-problem" role="alert">
+          {problem}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function ChipFields({
   chip,
   onChange,
 }: {
   readonly chip: Chip;
-  readonly onChange: (chip: Chip) => void;
+  readonly onChange: (chip: Chip, close?: boolean | "remove") => void;
 }) {
   switch (chip.kind) {
     case "date":
@@ -64,37 +279,7 @@ function ChipFields({
         </label>
       );
     case "dropdown":
-      return (
-        <div
-          className="artifact-chip-options"
-          role="listbox"
-          aria-label="Options"
-        >
-          {chip.options.map((option, index) => (
-            <button
-              key={option.label}
-              type="button"
-              role="option"
-              aria-selected={option.selected}
-              className="artifact-chip-option"
-              data-color={option.color}
-              onClick={() =>
-                onChange({
-                  ...chip,
-                  options: chip.options.map((other, at) => ({
-                    ...other,
-                    selected: at === index,
-                  })),
-                })
-              }
-            >
-              <span className="artifact-chip-swatch" aria-hidden="true" />
-              <span>{option.label}</span>
-              {option.selected ? <Check aria-hidden="true" /> : null}
-            </button>
-          ))}
-        </div>
-      );
+      return <DropdownFields chip={chip} onChange={onChange} />;
     default:
       return null;
   }
@@ -130,9 +315,13 @@ export function ChipPicker({
           >
             <ChipFields
               chip={open.chip}
-              onChange={(chip) => {
+              onChange={(chip, close) => {
+                if (close === "remove") {
+                  session.removeChip(open.pos);
+                  return;
+                }
                 session.setChip(open.pos, chip);
-                if (chip.kind === "dropdown") session.closeChip();
+                if (close === true) session.closeChip();
               }}
             />
           </Popover.Popup>

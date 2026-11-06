@@ -2323,6 +2323,7 @@ getLogger(["dx", "bug-reports"]);
 getLogger(["dx", "attachments"]);
 getLogger(["dx", "thread-storage"]);
 getLogger(["dx", "portals"]);
+getLogger(["dx", "feedback-widget"]);
 getLogger([
 	"dx",
 	"source-control",
@@ -2599,6 +2600,24 @@ var decodeBase64 = (text) => {
 var MAX_CONTAINER_INACTIVITY_MS = 216e5;
 var CONTAINER_INACTIVITY_MARGIN_MS = 9e5;
 var READY_TIMEOUT_MS = 9e4;
+/**
+* A fresh start's first attempt gets this long before it is started over
+* (#1783): on staging every fresh start that became ready did within 41 s,
+* and the three that did not never would (one probe that never returned).
+* With the retry's own `READY_TIMEOUT_MS` and `ABANDON_START_MS`, the worst
+* case is 155 s, under Core's 180 s open (`CLOUDFLARE_OPEN_TIMEOUT_MS`).
+*/
+var FIRST_START_READY_MS = 6e4;
+/**
+* A wake's restore from its snapshot that has not answered in this long is
+* stopped and started again from the same snapshot (#1804). On production
+* over 7 days (n = 2,426), 95% of wakes answered within about 5 s and almost
+* none between 10 and 30 s, but 4% hung for a minute or more, or for the
+* whole 90 s. Starting the same snapshot again answered in a median of 1.5 s.
+*/
+var ORB_SNAPSHOT_ATTEMPT_MS = 12e3;
+/** Restores per wake, all within `READY_TIMEOUT_MS` of the first. */
+var SNAPSHOT_START_ATTEMPTS = 3;
 var READY_RETRY_MS = 100;
 /** While a start waits for readiness, log its progress this often. */
 var READY_PROGRESS_LOG_MS = 3e4;
@@ -2722,6 +2741,12 @@ var OrbContainerController = class {
 	#relieving = false;
 	/** The restart work (`resumeAfterRestart`) while it runs. */
 	#restart;
+	/**
+	* A start began and its container never became ready, and Cloudflare has
+	* not confirmed it stopped: `running` may still read true, but nothing
+	* can run in it (thr_5b6834e0, whose queued open took it for running).
+	*/
+	#neverReady = false;
 	constructor(input) {
 		this.#container = input.container;
 		this.#storage = input.storage;
@@ -2735,6 +2760,7 @@ var OrbContainerController = class {
 		this.#stoppingItself = true;
 		try {
 			await this.#container.destroy();
+			this.#neverReady = false;
 		} finally {
 			this.#stoppingItself = false;
 		}
@@ -2824,9 +2850,9 @@ var OrbContainerController = class {
 	* waits, so a stalled start shows whether one probe hung
 	* (`currentAttemptMs`) or probes kept failing (`attempts`, `lastFailure`).
 	*/
-	async #waitReady(operation) {
+	async #waitReady(operation, timeoutMs = READY_TIMEOUT_MS, reportedMs = timeoutMs) {
 		const startedAt = this.#now();
-		const deadline = startedAt + READY_TIMEOUT_MS;
+		const deadline = startedAt + timeoutMs;
 		let lastFailure;
 		let attempts = 0;
 		let attemptStartedAt = startedAt;
@@ -2855,6 +2881,7 @@ var OrbContainerController = class {
 						break;
 					}
 					if (exitCode === 0) {
+						this.#neverReady = false;
 						slowestAttemptMs = Math.max(slowestAttemptMs, this.#now() - attemptStartedAt);
 						orbContainerLogger.info("Orb container is ready.", progress("ready"));
 						return;
@@ -2869,7 +2896,7 @@ var OrbContainerController = class {
 		} finally {
 			clearInterval(watchdog);
 		}
-		throw new Error(`Orb container ${operation} timed out after ${READY_TIMEOUT_MS / 1e3} s: ${lastFailure instanceof Error ? lastFailure.message : "not ready"}`);
+		throw new Error(`Orb container ${operation} timed out after ${Math.round(reportedMs / 1e3)} s: ${lastFailure instanceof Error ? lastFailure.message : "not ready"}`);
 	}
 	/**
 	* Starts the stopped container from its latest snapshot, or from the
@@ -2912,30 +2939,21 @@ var OrbContainerController = class {
 	}
 	async #startContainer(state, idleMs, fresh, now) {
 		const snapshot = state.snapshot;
-		if (snapshot === void 0) {
-			const image = this.#image();
-			if (image === void 0) throw failure("start", "the Orb image is not configured");
-			if (!fresh) orbContainerLogger.warn("Orb container restarted without a snapshot.", {
-				event: "orb_container_restart_without_snapshot",
-				sandboxId: this.#sandboxId
-			});
-			this.#container.start({
-				image,
-				instance: state.instance,
-				enableInternet: true,
-				env: ORB_START_ENVIRONMENT
-			});
-		} else this.#container.start({
-			containerSnapshot: { id: snapshot.id },
-			instance: state.instance,
-			enableInternet: true,
-			env: ORB_START_ENVIRONMENT
+		const options = this.#startOptions(state);
+		const retryable = fresh && snapshot === void 0;
+		const resumable = snapshot !== void 0;
+		if (snapshot === void 0 && !fresh) orbContainerLogger.warn("Orb container restarted without a snapshot.", {
+			event: "orb_container_restart_without_snapshot",
+			sandboxId: this.#sandboxId
 		});
+		let startedAt = now;
+		this.#neverReady = true;
+		this.#container.start(options);
 		try {
-			await this.#waitReady("start");
+			await this.#waitReady("start", retryable ? FIRST_START_READY_MS : resumable ? ORB_SNAPSHOT_ATTEMPT_MS : READY_TIMEOUT_MS);
 		} catch (cause) {
-			await within(this.#destroyContainer().catch(() => void 0), ABANDON_START_MS);
-			throw cause;
+			if (!await this.#abandonStart() || !(retryable || resumable)) throw cause;
+			startedAt = resumable ? await this.#retryResume(options, now, cause) : await this.#retryStart(options, now, cause);
 		}
 		await this.#armInactivity(idleMs);
 		await this.#watchForStop();
@@ -2943,7 +2961,7 @@ var OrbContainerController = class {
 			...await this.#load() ?? state,
 			status: "active",
 			idleDeadline: Math.max(state.idleDeadline, this.#now() + idleMs),
-			startedAt: now,
+			startedAt,
 			...snapshot === void 0 ? {} : { snapshot: {
 				...snapshot,
 				refreshedAt: now
@@ -2951,6 +2969,139 @@ var OrbContainerController = class {
 		});
 		await this.#schedule(this.#now() + ORB_HEARTBEAT_MS);
 		return snapshot === void 0 ? "created" : "paused";
+	}
+	#startOptions(state) {
+		const snapshot = state.snapshot;
+		if (snapshot !== void 0) return {
+			containerSnapshot: { id: snapshot.id },
+			instance: state.instance,
+			enableInternet: true,
+			env: ORB_START_ENVIRONMENT
+		};
+		const image = this.#image();
+		if (image === void 0) throw failure("start", "the Orb image is not configured");
+		return {
+			image,
+			instance: state.instance,
+			enableInternet: true,
+			env: ORB_START_ENVIRONMENT
+		};
+	}
+	/**
+	* Stops a container that never became ready, which would otherwise pass
+	* for running on the next open. Whether it stopped within the bound.
+	*/
+	async #abandonStart() {
+		return await within(this.#destroyContainer().then(() => true, () => false), ABANDON_START_MS) === true && !this.#container.running;
+	}
+	/** Whether the container runs and became ready: commands can use it. */
+	#usable() {
+		return this.#container.running && !this.#neverReady;
+	}
+	/**
+	* Stops a container left from a start that never became ready, before
+	* anything starts it again; fails while Cloudflare has not stopped it.
+	*/
+	async #stopNeverReady() {
+		if (!this.#neverReady || !this.#container.running) return;
+		if (await this.#abandonStart()) return;
+		throw new Error("Orb container start timed out earlier, and that container has not stopped yet");
+	}
+	/**
+	* Restores a wake's snapshot again after its first restore hung (#1804):
+	* each attempt gets `ORB_SNAPSHOT_ATTEMPT_MS`, the last what is left of
+	* `READY_TIMEOUT_MS`, and one starts only once Cloudflare confirmed the
+	* previous one stopped. Nothing here snapshots: the stored snapshot stays
+	* the one every attempt restores. Logs `orb_resume_retried` with every
+	* attempt's timing. Returns when the ready attempt started.
+	*/
+	async #retryResume(options, firstStartedAt, firstFailure) {
+		const attempts = [{
+			attempt: 1,
+			ms: this.#now() - firstStartedAt,
+			outcome: "hung"
+		}];
+		const details = () => ({
+			event: "orb_resume_retried",
+			sandboxId: this.#sandboxId,
+			instance: options.instance,
+			..."containerSnapshot" in options && options.containerSnapshot ? { snapshotId: options.containerSnapshot.id } : {},
+			attempts: [...attempts],
+			totalMs: this.#now() - firstStartedAt,
+			firstFailure: firstFailure instanceof Error ? firstFailure.message : String(firstFailure),
+			safeBecause: "a wake whose restore never answered its readiness probe: every call waits behind the lifecycle lock, and no dxd registered from a hung restore in 99 of 99 production cases (#1804)"
+		});
+		for (let attempt = 2;; attempt += 1) {
+			const attemptStartedAt = this.#now();
+			const remainingMs = READY_TIMEOUT_MS - (attemptStartedAt - firstStartedAt);
+			const last = attempt >= SNAPSHOT_START_ATTEMPTS || remainingMs <= 12e3;
+			const timeoutMs = Math.max(0, last ? remainingMs : ORB_SNAPSHOT_ATTEMPT_MS);
+			this.#neverReady = true;
+			this.#container.start(options);
+			try {
+				await this.#waitReady("start", timeoutMs, attemptStartedAt - firstStartedAt + timeoutMs);
+				attempts.push({
+					attempt,
+					ms: this.#now() - attemptStartedAt,
+					outcome: "ready"
+				});
+				orbContainerLogger.warn("Orb container restored again and is ready.", {
+					...details(),
+					outcome: "ready"
+				});
+				return attemptStartedAt;
+			} catch (cause) {
+				const stopped = await this.#abandonStart();
+				attempts.push({
+					attempt,
+					ms: this.#now() - attemptStartedAt,
+					outcome: stopped ? "hung" : "not_stopped"
+				});
+				if (last || !stopped) {
+					orbContainerLogger.error("Orb container restore failed again.", {
+						...details(),
+						outcome: "error",
+						error: cause instanceof Error ? cause.message : String(cause)
+					});
+					throw cause;
+				}
+			}
+		}
+	}
+	/**
+	* Starts a new workspace's stuck container over, once (#1783). Logs
+	* `orb_start_retried` with both attempts' timings, for the watch to count.
+	*/
+	async #retryStart(options, firstStartedAt, firstFailure) {
+		const retriedAt = this.#now();
+		const details = {
+			event: "orb_start_retried",
+			sandboxId: this.#sandboxId,
+			instance: options.instance,
+			firstAttemptMs: retriedAt - firstStartedAt,
+			firstFailure: firstFailure instanceof Error ? firstFailure.message : String(firstFailure),
+			safeBecause: "first start of a new workspace from the image, never ready: Core still waited on its open, and no command or file call had run"
+		};
+		try {
+			this.#neverReady = true;
+			this.#container.start(options);
+			await this.#waitReady("start");
+		} catch (cause) {
+			await this.#abandonStart();
+			orbContainerLogger.error("Orb container start failed again.", {
+				...details,
+				outcome: "error",
+				secondAttemptMs: this.#now() - retriedAt,
+				error: cause instanceof Error ? cause.message : String(cause)
+			});
+			throw cause;
+		}
+		orbContainerLogger.warn("Orb container started over and is ready.", {
+			...details,
+			outcome: "ready",
+			secondAttemptMs: this.#now() - retriedAt
+		});
+		return retriedAt;
 	}
 	/**
 	* Core's create (`create: true`) or connect. A paused workspace is
@@ -2981,7 +3132,7 @@ var OrbContainerController = class {
 				state = stopDone(state);
 				await this.#save(state);
 			}
-			if (this.#container.running) {
+			if (this.#usable()) {
 				const deadline = Math.max(state.idleDeadline, this.#now() + input.idleMs);
 				if (deadline !== state.idleDeadline || state.status !== "active") await this.#save({
 					...state,
@@ -2997,6 +3148,7 @@ var OrbContainerController = class {
 					...await this.#tellDiskRelief(input.allowReset === true)
 				};
 			}
+			await this.#stopNeverReady();
 			if (!fresh && input.allowReset === false) this.#refuseReset(state, "open");
 			const residency = await this.#start(state, input.idleMs, fresh, lockWaitMs);
 			const started = await this.#load();
@@ -3262,12 +3414,13 @@ var OrbContainerController = class {
 		await this.#afterRestart();
 		while (true) {
 			await this.#idle();
-			if (this.#container.running) break;
+			if (this.#usable()) break;
 			await this.#exclusive(async () => {
-				if (this.#container.running) return;
+				if (this.#usable()) return;
 				const state = await this.#load();
 				if (state === void 0) throw failure("use", "no workspace");
 				if (state.status === "destroyed") throw failure("use", "the workspace was destroyed");
+				await this.#stopNeverReady();
 				this.#refuseReset(state, "use");
 				await this.#start(state, Math.max(ORB_HEARTBEAT_MS, state.idleDeadline - this.#now()));
 			});

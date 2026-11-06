@@ -14,11 +14,17 @@ export interface CommentRange {
 interface Highlights {
   readonly ranges: ReadonlyArray<CommentRange>;
   readonly active: string | undefined;
+  /** The text a comment is being written on, before it is saved. */
+  readonly draft: { readonly from: number; readonly to: number } | undefined;
 }
 
 type HighlightsMeta =
   | { readonly ranges: ReadonlyArray<CommentRange> }
-  | { readonly active: string | undefined };
+  | { readonly active: string | undefined }
+  | { readonly draft: Highlights["draft"] };
+
+/** The `data-comment` of the text a new comment is being written on. */
+export const DRAFT_COMMENT = "draft";
 
 export const commentHighlightsKey = new PluginKey<Highlights>(
   "artifactCommentHighlights",
@@ -27,7 +33,7 @@ export const commentHighlightsKey = new PluginKey<Highlights>(
 export const commentHighlights = new Plugin<Highlights>({
   key: commentHighlightsKey,
   state: {
-    init: () => ({ ranges: [], active: undefined }),
+    init: () => ({ ranges: [], active: undefined, draft: undefined }),
     apply: (tr, value) => {
       const meta = tr.getMeta(commentHighlightsKey) as
         | HighlightsMeta
@@ -41,6 +47,13 @@ export const commentHighlights = new Plugin<Highlights>({
             const to = tr.mapping.map(range.to, -1);
             return from < to ? [{ ...range, from, to }] : [];
           }),
+          draft:
+            next.draft === undefined
+              ? undefined
+              : {
+                  from: tr.mapping.map(next.draft.from, 1),
+                  to: tr.mapping.map(next.draft.to, -1),
+                },
         };
       if (meta !== undefined) next = { ...next, ...meta };
       return next;
@@ -49,11 +62,22 @@ export const commentHighlights = new Plugin<Highlights>({
   props: {
     decorations: (state) => {
       const value = commentHighlightsKey.getState(state);
-      if (value === undefined || value.ranges.length === 0)
+      if (
+        value === undefined ||
+        (value.ranges.length === 0 && value.draft === undefined)
+      )
         return DecorationSet.empty;
-      return DecorationSet.create(
-        state.doc,
-        value.ranges.map((range) =>
+      const draft =
+        value.draft === undefined || value.draft.from >= value.draft.to
+          ? []
+          : [
+              Decoration.inline(value.draft.from, value.draft.to, {
+                class: "artifact-comment-anchor artifact-comment-anchor-active",
+                "data-comment": DRAFT_COMMENT,
+              }),
+            ];
+      return DecorationSet.create(state.doc, [
+        ...value.ranges.map((range) =>
           Decoration.inline(range.from, range.to, {
             class:
               range.id === value.active
@@ -62,7 +86,8 @@ export const commentHighlights = new Plugin<Highlights>({
             "data-comment": range.id,
           }),
         ),
-      );
+        ...draft,
+      ]);
     },
   },
 });

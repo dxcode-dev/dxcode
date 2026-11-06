@@ -151,3 +151,23 @@ export const peopleItems = (
     ),
   ].slice(0, 8);
 };
+
+/** `@here`: everyone who can open the Thread. */
+const HERE_ITEM: PersonItem = {
+  id: "here",
+  label: "here",
+  hint: "Notify everyone in this Thread",
+};
+
+/**
+ * Whom `@query` in a comment can mention: the body's people (dx, then the
+ * Thread's people other than you), then `@here`.
+ */
+export const commentPeopleItems = (
+  query: string,
+  members: ReadonlyArray<ThreadMemberData>,
+  viewerId: string,
+): ReadonlyArray<PersonItem> => [
+  ...peopleItems(query, members, viewerId),
+  ...(startsAWord("here everyone", query.toLowerCase()) ? [HERE_ITEM] : []),
+];

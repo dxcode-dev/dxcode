@@ -86,8 +86,14 @@ const verifyContentSecurityPolicy = async (origin, packageRoot, manifest) => {
   );
   if (scriptHashes.length !== 1)
     throw new Error("Packaged index.html should carry one inline script.");
-  const { portalDomain, storageOrigin } = manifest.contentSecurityPolicy ?? {};
-  const app = appPolicy({ scriptHashes, portalDomain, storageOrigin });
+  const { portalDomain, storageOrigin, feedbackWidgetOrigins } =
+    manifest.contentSecurityPolicy ?? {};
+  const app = appPolicy({
+    scriptHashes,
+    portalDomain,
+    storageOrigin,
+    feedbackWidgetOrigins,
+  });
   const expected = (policy) =>
     JSON.stringify(
       CSP_ENFORCED

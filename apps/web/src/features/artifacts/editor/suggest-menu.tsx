@@ -18,6 +18,7 @@ import {
   TextQuote,
   ToggleLeft,
   Type,
+  Users,
 } from "lucide-react";
 import { Fragment } from "react";
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
@@ -74,7 +75,7 @@ function Lead({ row }: { readonly row: ArtifactSuggestRow }) {
   if (row.userId === undefined)
     return (
       <span className="dx-avatar composer-mention-agent" aria-hidden="true">
-        <Bot />
+        {row.id === "here" ? <Users /> : <Bot />}
       </span>
     );
   return <Avatar name={row.label} image={row.image} seed={row.userId} />;

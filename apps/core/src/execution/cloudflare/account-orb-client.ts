@@ -24,6 +24,11 @@ export class AccountOrbUnavailable extends Error {
 
 /** Waits this long for one call; `exec` adds its own command timeout. */
 const CALL_TIMEOUT_MS = 120_000;
+/**
+ * An open may retry a stuck cold start (#1783), up to 155 s; Core bounds it
+ * at `CLOUDFLARE_OPEN_TIMEOUT_MS` (180 s), and this call must not end first.
+ */
+const OPEN_CALL_TIMEOUT_MS = 180_000;
 
 /**
  * One Thread's Orb container object in a person's or workspace's own
@@ -42,34 +47,48 @@ export const accountOrbContainer = (input: {
     async (...args: ReadonlyArray<unknown>): Promise<never> => {
       const options = args[1] as { readonly timeoutMs?: number } | undefined;
       const timeoutMs =
-        CALL_TIMEOUT_MS +
+        (method === "open" ? OPEN_CALL_TIMEOUT_MS : CALL_TIMEOUT_MS) +
         (method === "exec" && typeof options?.timeoutMs === "number"
           ? options.timeoutMs
           : 0);
-      const response = await send(new URL("/rpc", input.endpoint), {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${input.secret}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          threadId: input.threadId,
-          method,
-          args: args.map(encodeRpcValue),
-        }),
-        signal: AbortSignal.timeout(timeoutMs),
-      });
-      const body = (await response.json().catch(() => undefined)) as
-        | { readonly result?: unknown; readonly error?: unknown }
-        | undefined;
-      if (!response.ok)
-        throw new AccountOrbUnavailable(
-          response.status,
-          typeof body?.error === "string"
-            ? body.error
-            : `The account Orb Worker answered ${response.status}.`,
-        );
-      return decodeRpcValue(body?.result) as never;
+      // A timer the call clears, rather than `AbortSignal.timeout`, so tests
+      // can drive it with fake timers.
+      const timeout = new AbortController();
+      const timer = setTimeout(
+        () =>
+          timeout.abort(
+            new DOMException("The operation timed out.", "TimeoutError"),
+          ),
+        timeoutMs,
+      );
+      try {
+        const response = await send(new URL("/rpc", input.endpoint), {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${input.secret}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            threadId: input.threadId,
+            method,
+            args: args.map(encodeRpcValue),
+          }),
+          signal: timeout.signal,
+        });
+        const body = (await response.json().catch(() => undefined)) as
+          | { readonly result?: unknown; readonly error?: unknown }
+          | undefined;
+        if (!response.ok)
+          throw new AccountOrbUnavailable(
+            response.status,
+            typeof body?.error === "string"
+              ? body.error
+              : `The account Orb Worker answered ${response.status}.`,
+          );
+        return decodeRpcValue(body?.result) as never;
+      } finally {
+        clearTimeout(timer);
+      }
     };
   return Object.fromEntries(
     ACCOUNT_ORB_METHODS.map((method) => [method, call(method)]),

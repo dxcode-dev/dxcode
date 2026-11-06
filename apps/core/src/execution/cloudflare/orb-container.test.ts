@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { orbContainerLogger } from "../../logging.js";
 import { classifyRunFailure } from "../../runtime/run-failure.js";
 import {
   ORB_DISK_CHECK_MS,
@@ -11,6 +12,7 @@ import {
   type OrbContainerStartOptions,
   type OrbContainerStorage,
 } from "./orb-container.js";
+import { CLOUDFLARE_OPEN_TIMEOUT_MS } from "./provider.js";
 
 vi.mock("cloudflare:workers", () => ({
   DurableObject: class {
@@ -110,7 +112,7 @@ const fakeStorage = () => {
   return storage;
 };
 
-const setup = (handler?: ExecHandler) => {
+const setup = (handler?: ExecHandler, clock?: () => number) => {
   let now = 1_000_000;
   const fake = fakeContainer(handler);
   const storage = fakeStorage();
@@ -121,7 +123,7 @@ const setup = (handler?: ExecHandler) => {
     image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
     sandboxId: "a".repeat(64),
     stopNotice: () => stopNotice,
-    now: () => now,
+    now: clock ?? (() => now),
   });
   return {
     ...fake,
@@ -473,10 +475,15 @@ describe("Orb container object", () => {
         () => "ready",
         () => "failed",
       );
-      const queued = orb.controller.open(create);
+      const queued = orb.controller
+        .open(create)
+        .catch((cause: unknown) => cause);
       await vi.advanceTimersByTimeAsync(100_000);
       await expect(first).resolves.toBe("failed");
-      await expect(queued).resolves.toMatchObject({ residency: "running" });
+      // Since #1783 the queued open is no longer handed that container as
+      // running; it fails as a retryable platform failure instead. Archive
+      // must still stop the container that never started.
+      expect(await queued).toBeInstanceOf(Error);
       orb.container.snapshotContainer.mockRejectedValue(
         new Error("The container has not been started"),
       );
@@ -1090,29 +1097,320 @@ describe("Orb container object", () => {
     }
   });
 
-  it("fails a start whose readiness probe hangs at the bound, as a platform failure", async () => {
+  // A fresh start's readiness probe can hang with the container "running"
+  // (3 of 568 fresh staging starts, 2026-10-29 to 11-05, #1783), while every
+  // start that became ready did within 41 s. Ways this could go wrong:
+  // - the stuck start is never retried, and the Thread's first turn fails;
+  // - the retry runs while something already reached the container, losing
+  //   that work;
+  // - an open or command queued behind the stuck start reads its container
+  //   as running, or starts a third container;
+  // - a slow but healthy start (41 s) is thrown away;
+  // - a start that hangs twice retries forever, past Core's 180 s open;
+  // - a stuck container that will not stop is started over anyway.
+  const stuckProbes = (
+    container: ReturnType<typeof fakeContainer>["container"],
+    hung: number,
+  ) => {
+    const exec = container.exec.getMockImplementation();
+    if (exec === undefined) throw new Error("the fake has no exec");
+    let probes = 0;
+    container.exec.mockImplementation(async (argv, options) => {
+      if (argv[0] === "true") {
+        probes += 1;
+        if (probes <= hung) return new Promise<never>(() => {});
+      }
+      return exec(argv, options);
+    });
+    return () => probes;
+  };
+
+  it("starts a fresh Orb over once when its readiness probe hangs, and opens on the retry (#1783)", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(orbContainerLogger, "warn");
+    try {
+      // The fake timers' clock, so the attempts' timings are real.
+      const orb = setup(undefined, () => Date.now());
+      const probes = stuckProbes(orb.container, 1);
+      let opened: unknown;
+      void orb.controller.open(create).then((value) => {
+        opened = value;
+      });
+      // An open and a command queued behind the stuck start (the #1777
+      // pattern) wait for the retry's result.
+      let reconnected: unknown;
+      await vi.advanceTimersByTimeAsync(1_000);
+      void orb.controller.open({ ...create, create: false }).then((value) => {
+        reconnected = value;
+      });
+      let ran: unknown;
+      void orb.controller.exec("echo hi").then((value) => {
+        ran = value;
+      });
+      await vi.advanceTimersByTimeAsync(58_000);
+      expect(opened).toBeUndefined();
+      expect(reconnected).toBeUndefined();
+      expect(ran).toBeUndefined();
+      expect(orb.starts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(opened).toMatchObject({ kind: "ready", residency: "created" });
+      expect(reconnected).toMatchObject({
+        kind: "ready",
+        residency: "running",
+      });
+      expect(ran).toMatchObject({ exitCode: 0 });
+      // One stuck container stopped, one started again from the image.
+      expect(orb.container.destroy).toHaveBeenCalledTimes(1);
+      expect(orb.starts).toHaveLength(2);
+      expect(orb.starts[1]).toMatchObject({
+        image: "registry.cloudflare.com/account/dx-orb@sha256:abc",
+        instance: "standard-2",
+      });
+      expect(probes()).toBe(2);
+      expect(orb.container.running).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          event: "orb_start_retried",
+          outcome: "ready",
+          firstAttemptMs: 60_000,
+          secondAttemptMs: expect.any(Number),
+          safeBecause: expect.any(String),
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a slow but healthy fresh start instead of starting it over (#1783)", async () => {
     vi.useFakeTimers();
     try {
-      const { container } = fakeContainer();
-      container.exec.mockImplementation(() => new Promise(() => {}));
-      const controller = new OrbContainerController({
-        container,
-        storage: fakeStorage(),
-        image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
-        sandboxId: "c".repeat(64),
+      const orb = setup();
+      const exec = orb.container.exec.getMockImplementation();
+      if (exec === undefined) throw new Error("the fake has no exec");
+      orb.container.exec.mockImplementation(async (argv, options) => {
+        if (argv[0] === "true")
+          await new Promise((done) => setTimeout(done, 41_000));
+        return exec(argv, options);
       });
-      const opened = controller.open(create).then(
+      const opened = orb.controller.open(create);
+      await vi.advanceTimersByTimeAsync(41_000);
+      await expect(opened).resolves.toMatchObject({ residency: "created" });
+      expect(orb.starts).toHaveLength(1);
+      expect(orb.container.destroy).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A wake's restore can hang the same way (#1804): on production, 4% of
+  // 2,426 wakes hung for a minute or more, or failed at 90 s, while the same
+  // snapshot started again answered in a median of 1.5 s. Ways this could
+  // go wrong:
+  // - the hung restore is waited out, and the turn waits 90 s or fails;
+  // - starting it over takes a new snapshot of the stalled container, or
+  //   restores anything but the stored one;
+  // - an open or command queued behind it is handed the stalled container;
+  // - it retries past the 90 s bound, or over a container that won't stop.
+  const pausedOrb = async () => {
+    const orb = setup(undefined, () => Date.now());
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    const stored = (await orb.storage.get("workspace")) as {
+      snapshot: { id: string; refreshedAt: number };
+    };
+    expect(orb.container.snapshotContainer).toHaveBeenCalledTimes(1);
+    return { ...orb, stored: stored.snapshot };
+  };
+  const wake = { ...create, create: false } as const;
+
+  it("restores a wake's snapshot again after 12 s when the restore hangs, and queued calls wait for it (#1804)", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(orbContainerLogger, "warn");
+    try {
+      const orb = await pausedOrb();
+      const probes = stuckProbes(orb.container, 1);
+      const wakeStartedAt = Date.now();
+      let woken: unknown;
+      void orb.controller.open(wake).then((value) => {
+        woken = value;
+      });
+      // A second open and a command arrive while the restore hangs.
+      await vi.advanceTimersByTimeAsync(1_000);
+      let queued: unknown;
+      void orb.controller.open(wake).then((value) => {
+        queued = value;
+      });
+      let ran: unknown;
+      void orb.controller.exec("echo hi").then((value) => {
+        ran = value;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect([woken, queued, ran]).toEqual([undefined, undefined, undefined]);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(woken).toMatchObject({ kind: "ready", residency: "paused" });
+      expect(queued).toMatchObject({ kind: "ready", residency: "running" });
+      expect(ran).toMatchObject({ exitCode: 0 });
+      expect(probes()).toBe(2);
+      // Both restores were of the stored snapshot, and nothing snapshotted
+      // the stalled container: the stored snapshot is the same one.
+      expect(orb.starts.slice(1)).toEqual([
+        expect.objectContaining({ containerSnapshot: { id: orb.stored.id } }),
+        expect.objectContaining({ containerSnapshot: { id: orb.stored.id } }),
+      ]);
+      expect(orb.container.snapshotContainer).toHaveBeenCalledTimes(1);
+      const after = (await orb.storage.get("workspace")) as {
+        snapshot: { id: string; refreshedAt: number };
+      };
+      // A wake moves the TTL clock to its start, as without a retry.
+      expect(after.snapshot).toEqual({
+        ...orb.stored,
+        refreshedAt: wakeStartedAt,
+      });
+      expect(warn).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.objectContaining({
+          event: "orb_resume_retried",
+          outcome: "ready",
+          snapshotId: orb.stored.id,
+          attempts: [
+            { attempt: 1, ms: 12_000, outcome: "hung" },
+            { attempt: 2, ms: expect.any(Number), outcome: "ready" },
+          ],
+          safeBecause: expect.any(String),
+        }),
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a wake whose restore never answers within 90 s, after three restores, leaving the snapshot as it was (#1804)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await pausedOrb();
+      stuckProbes(orb.container, Number.POSITIVE_INFINITY);
+      const wakeStartedAt = Date.now();
+      let failedAt: number | undefined;
+      const opened = orb.controller.open(wake).then(
+        () => undefined,
+        (cause: unknown) => {
+          failedAt = Date.now();
+          return cause;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(100_000);
+      const cause = await opened;
+      expect(cause).toBeInstanceOf(Error);
+      expect((cause as Error).message).toContain("timed out after 90 s");
+      expect(
+        classifyRunFailure({ message: (cause as Error).message }),
+      ).toMatchObject({ class: "platform", retryable: true });
+      expect((failedAt ?? Infinity) - wakeStartedAt).toBeLessThanOrEqual(
+        90_000,
+      );
+      expect(orb.starts.slice(1)).toHaveLength(3);
+      expect(orb.container.running).toBe(false);
+      expect(orb.container.snapshotContainer).toHaveBeenCalledTimes(1);
+      const after = (await orb.storage.get("workspace")) as {
+        snapshot: unknown;
+      };
+      expect(after.snapshot).toEqual(orb.stored);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never restores a wake again over a hung restore that would not stop (#1804)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await pausedOrb();
+      stuckProbes(orb.container, 1);
+      orb.container.destroy.mockImplementation(() => new Promise(() => {}));
+      const opened = orb.controller.open(wake).catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const command = orb.controller
+        .exec("echo hi")
+        .catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await opened).toBeInstanceOf(Error);
+      expect(await command).toBeInstanceOf(Error);
+      expect(orb.starts.slice(1)).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("fails a fresh start whose probe hangs twice, within Core's open timeout, as a platform failure", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = setup();
+      stuckProbes(orb.container, 2);
+      const opened = orb.controller.open(create).then(
         () => undefined,
         (cause: unknown) => cause,
       );
-      await vi.advanceTimersByTimeAsync(90_000);
+      await vi.advanceTimersByTimeAsync(CLOUDFLARE_OPEN_TIMEOUT_MS - 20_000);
       const cause = await opened;
       expect(cause).toBeInstanceOf(Error);
       expect(
         classifyRunFailure({ message: (cause as Error).message }),
       ).toMatchObject({ class: "platform", retryable: true });
-      // The half-started container is stopped, so a retry starts it again.
-      expect(container.destroy).toHaveBeenCalled();
+      // Retried once, never more; the half-started container is stopped, so
+      // the next open starts it again.
+      expect(orb.starts).toHaveLength(2);
+      expect(orb.container.destroy).toHaveBeenCalledTimes(2);
+      expect(orb.container.running).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never hands a queued open the stuck container that would not stop (thr_5b6834e0, #1767)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = setup();
+      stuckProbes(orb.container, 1);
+      // Cloudflare does not confirm the stop in time: `running` stays true.
+      orb.container.destroy.mockImplementation(() => new Promise(() => {}));
+      const opened = orb.controller
+        .open(create)
+        .catch((cause: unknown) => cause);
+      // Activation's open, queued behind the prestart's stuck start.
+      await vi.advanceTimersByTimeAsync(1_000);
+      const queued = orb.controller
+        .open({ ...create, create: false })
+        .catch((cause: unknown) => cause);
+      const command = orb.controller
+        .exec("mkdir -p ~/workspace")
+        .catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(100_000);
+      expect(await opened).toBeInstanceOf(Error);
+      expect(orb.container.running).toBe(true);
+      // Neither reads the never-ready container as running...
+      const [reconnect, ran] = [await queued, await command];
+      expect(reconnect).toBeInstanceOf(Error);
+      expect(ran).toBeInstanceOf(Error);
+      // ...and both fail as platform failures, which Flue retries.
+      for (const cause of [reconnect, ran])
+        expect(
+          classifyRunFailure({ message: (cause as Error).message }),
+        ).toMatchObject({ class: "platform", retryable: true });
+      // Never started over on top of a container that has not stopped.
+      expect(orb.starts).toHaveLength(1);
+      // Once Cloudflare stops it, the next open starts it again.
+      orb.container.destroy.mockImplementation(async () => {
+        orb.container.running = false;
+      });
+      const again = orb.controller
+        .open({ ...create, create: false })
+        .catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(again).resolves.toMatchObject({ kind: "ready" });
+      expect(orb.starts).toHaveLength(2);
     } finally {
       vi.useRealTimers();
     }

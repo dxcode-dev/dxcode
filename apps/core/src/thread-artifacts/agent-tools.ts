@@ -183,9 +183,15 @@ export const artifactsEditedByPeopleNote = async (
   db: D1Database,
   threadId: string,
 ) => {
-  const { results } = await db
-    .prepare(
-      `SELECT artifact.id, artifact.title, artifact.current_revision
+  // One round trip for both reads (#1793).
+  const [edited, mentions] = await db.batch<{
+    id: string;
+    title: string;
+    current_revision?: number;
+  }>([
+    db
+      .prepare(
+        `SELECT artifact.id, artifact.title, artifact.current_revision
          FROM thread_artifact AS artifact
         WHERE artifact.thread_id = ?1 AND artifact.deleted_at IS NULL
           AND EXISTS (
@@ -199,12 +205,11 @@ export const artifactsEditedByPeopleNote = async (
           )
         ORDER BY artifact.updated_at DESC
         LIMIT ?2`,
-    )
-    .bind(threadId, NOTE_ARTIFACTS + 1)
-    .all<{ id: string; title: string; current_revision: number }>();
-  const { results: mentioned } = await db
-    .prepare(
-      `SELECT DISTINCT artifact.id, artifact.title
+      )
+      .bind(threadId, NOTE_ARTIFACTS + 1),
+    db
+      .prepare(
+        `SELECT DISTINCT artifact.id, artifact.title
          FROM thread_artifact_comment AS comment
          JOIN thread_artifact AS artifact ON artifact.id = comment.artifact_id
         WHERE artifact.thread_id = ?1 AND artifact.deleted_at IS NULL
@@ -219,9 +224,15 @@ export const artifactsEditedByPeopleNote = async (
                AND reply.created_at > comment.created_at
           )
         LIMIT ?2`,
-    )
-    .bind(threadId, NOTE_ARTIFACTS)
-    .all<{ id: string; title: string }>();
+      )
+      .bind(threadId, NOTE_ARTIFACTS),
+  ]);
+  const results = (edited?.results ?? []) as Array<{
+    id: string;
+    title: string;
+    current_revision: number;
+  }>;
+  const mentioned = mentions?.results ?? [];
   if (results.length === 0 && mentioned.length === 0) return undefined;
   const commentLines =
     mentioned.length === 0
@@ -290,7 +301,7 @@ const commentOperation = v.object({
 
 const DESCRIPTION = [
   "List, read, create, update, and delete artifacts: documents that belong to this Thread, which people open, edit, and comment on beside the conversation. A Thread holds any number of artifacts, grouped in folders. Write an artifact for what people will read: reports, notes, running records, plans for their review, and findings you combine from several child Threads. Keep your own working plans, scratch notes, screenshots, and data exports as files under `~/.dx/work/<topic>/` in the workspace, outside the repository, and answer one-off questions in your reply.",
-  "You read and write artifacts as Markdown: GitHub-flavored Markdown plus `- [ ]`/`- [x]` checklists; `@[Name](user:USER_ID)` mentions of people and `@[dx](agent)` of yourself; `{{date:YYYY-MM-DD}}` and `{{time:ISO_INSTANT}}` chips; `{{dropdown:Todo|*Doing:blue|Done:green}}` chips, where `*` marks the selection and colors are gray, blue, green, yellow, red, and purple; and `{{toggle:key|Label}}`, a button each reader uses to show or hide the chips tagged with its key, as in `{{time#key:ISO_INSTANT}}`. A fenced `dx-view` block holding one self-contained HTML page renders as an interactive view; the creating-views skill explains how to write one. To show an image, store the file with `dxd files put <path>` in the workspace and write `![description](<printed url>)`; it stays with this Thread, so only people who can open it see it. People add images from the editor the same way. An artifact holds at most 2 MB of Markdown.",
+  "You read and write artifacts as Markdown: GitHub-flavored Markdown plus `- [ ]`/`- [x]` checklists; `@[Name](user:USER_ID)` mentions of people and `@[dx](agent)` of yourself; `{{date:YYYY-MM-DD}}` and `{{time:ISO_INSTANT}}` chips; `{{dropdown:Todo|*Doing:blue|Done:green}}` chips, where `*` marks the selection and colors are gray, blue, green, yellow, red, and purple (inside a table cell, write each of a chip's `|` as `\\|`); and `{{toggle:key|Label}}`, a button each reader uses to show or hide the chips tagged with its key, as in `{{time#key:ISO_INSTANT}}`. A fenced `dx-view` block holding one self-contained HTML page renders as an interactive view; the creating-views skill explains how to write one. To show an image, store the file with `dxd files put <path>` in the workspace and write `![description](<printed url>)`; it stays with this Thread, so only people who can open it see it. People add images from the editor the same way. An artifact holds at most 2 MB of Markdown.",
   "Keep artifacts shallow, because people navigate them by hand. An artifact is one page: use headings for its sections, including parallel parts such as one per meeting or per option. Keep artifacts at the top level, and use a folder (one level, a single name) only to group several related artifacts. Before creating one, list the existing artifacts and extend a matching one instead of starting a parallel one.",
   "read returns at most 500 lines with the artifact's revision. When that is not the whole artifact, it adds an outline of the heading lines with their line numbers; start_line and end_line read other parts. It also returns the open comments and, when people saved changes after your last save, edited_by_people_since: a diff of what they changed.",
   "People edit artifacts while you work, so read an artifact before updating it. update names the revision you read in base_revision. When someone saved a newer revision, nothing is saved and the result returns the current Markdown: merge your change into it and update again with its revision. Keep people's wording unless they asked you to change it. Set force only when the user explicitly asks you to overwrite their newer changes. For small changes pass edits instead of the whole markdown: each old_str must appear exactly once in the whole artifact, and the edits apply together or not at all, so reading the part you change is enough.",

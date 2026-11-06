@@ -237,7 +237,7 @@ describe("links in an artifact", () => {
     const start = markdown.indexOf(quote);
     const linked = "the cell guide";
     const linkedStart = markdown.indexOf(linked);
-    const { container, prose } = await mount(markdown, [
+    const { prose } = await mount(markdown, [
       comment("1", quote, start),
       comment("2", linked, linkedStart),
     ]);
@@ -246,7 +246,9 @@ describe("links in an artifact", () => {
     await userEvent.click(link(prose, linked));
     await settle();
     expect(openedUrls()).toEqual(["https://example.com/cell"]);
-    expect(container.querySelector("aside.artifact-comments")).toBeNull();
+    expect(
+      document.querySelector('[role="dialog"][aria-label="Comment"]'),
+    ).toBeNull();
     // The commented text beside it opens its comment.
     const note = [...prose.querySelectorAll<HTMLElement>("td span")].find(
       (span) => span.textContent === quote,
@@ -255,7 +257,8 @@ describe("links in an artifact", () => {
     await userEvent.click(note);
     await settle(200);
     expect(
-      document.querySelector('[aria-label="Comments"]')?.textContent,
+      document.querySelector('[role="dialog"][aria-label="Comment"]')
+        ?.textContent,
     ).toContain(`About ${quote}`);
     expect(openedUrls()).toEqual(["https://example.com/cell"]);
   });

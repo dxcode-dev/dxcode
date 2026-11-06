@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -148,6 +148,55 @@ const menuLabels = () =>
     (item) => item.textContent?.trim(),
   );
 
+/** Renders the menu for `shown` and opens it. */
+const openMenu = async (shown: ThreadDetailData, showDetails: boolean) => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  await React.act(() =>
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <AuthContext value={auth}>
+          <ThreadArchiveContext value={archive}>
+            <ThreadEditingContext value={editing}>
+              <ThreadSnoozeContext value={snooze}>
+                <ThreadMenu
+                  thread={shown}
+                  project={{ name: "dx" }}
+                  transcript={() => model}
+                  onOpenShare={() => undefined}
+                  showDetails={showDetails}
+                />
+              </ThreadSnoozeContext>
+            </ThreadEditingContext>
+          </ThreadArchiveContext>
+        </AuthContext>
+      </QueryClientProvider>,
+    ),
+  );
+  await React.act(() =>
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="More Actions"]')
+      ?.click(),
+  );
+};
+
+// A Thread page loads the Orb and cost rows' chunk once idle or when a
+// pointer nears the button, so the menu opens with them in its first frame.
+// Load them that way before the tests. Arriving after the menu opened, the
+// rows pushed its items down under wherever an earlier test file left the
+// pointer: Snooze or Color slid under it, took the hover, and closed the
+// submenu a test had just opened. The chunk itself, served on first import,
+// has also taken longer than a 1 s wait below.
+beforeAll(async () => {
+  await import("./thread-menu-details.js");
+  await openMenu(thread, false);
+  await vi.waitFor(() => expect(menuLabels()).toContain("OrbPaused"));
+  for (const root of roots.splice(0)) await React.act(() => root.unmount());
+  document.body.replaceChildren();
+});
+
 describe("More Actions", () => {
   for (const [width, height, showDetails, shown] of [
     [1440, 900, false, thread],
@@ -164,40 +213,11 @@ describe("More Actions", () => {
           : "a Thread";
     it(`shows every label in full for ${kind} at ${width}x${height}`, async () => {
       await page.viewport(width, height);
-      const container = document.createElement("div");
-      document.body.append(container);
-      const root = createRoot(container);
-      roots.push(root);
-      await React.act(() =>
-        root.render(
-          <QueryClientProvider client={queryClient}>
-            <AuthContext value={auth}>
-              <ThreadArchiveContext value={archive}>
-                <ThreadEditingContext value={editing}>
-                  <ThreadSnoozeContext value={snooze}>
-                    <ThreadMenu
-                      thread={shown}
-                      project={{ name: "dx" }}
-                      transcript={() => model}
-                      onOpenShare={() => undefined}
-                      showDetails={showDetails}
-                    />
-                  </ThreadSnoozeContext>
-                </ThreadEditingContext>
-              </ThreadArchiveContext>
-            </AuthContext>
-          </QueryClientProvider>,
-        ),
-      );
-      await React.act(() =>
-        container
-          .querySelector<HTMLButtonElement>('[aria-label="More Actions"]')
-          ?.click(),
-      );
+      await openMenu(shown, showDetails);
       await vi.waitFor(() =>
         expect(document.querySelector(".shortcut-keycaps")).not.toBeNull(),
       );
-      // The Orb and cost rows load with the open menu.
+      // The Orb and cost rows show with the open menu.
       await vi.waitFor(() =>
         expect(menuLabels()).toEqual(
           expect.arrayContaining([
@@ -224,17 +244,28 @@ describe("More Actions", () => {
       expect(cutLabels()).toEqual([]);
 
       // The submenus' items too.
-      for (const name of shown === child ? ["Export"] : ["Export", "Snooze"]) {
+      for (const [name, first] of shown === child
+        ? [["Export", "Markdown"]]
+        : [
+            ["Export", "Markdown"],
+            ["Snooze", "Custom…"],
+          ]) {
         const trigger = Array.from(
           document.querySelectorAll<HTMLElement>(
             ".thread-actions-menu .thread-menu-item",
           ),
         ).find((item) => item.textContent?.trim() === name);
         await React.act(() => trigger?.click());
+        // This submenu's own items, not the one before it while it closes.
         await vi.waitFor(() =>
           expect(
-            document.querySelector(".thread-actions-submenu .thread-menu-item"),
-          ).not.toBeNull(),
+            Array.from(
+              document.querySelectorAll(
+                ".thread-actions-submenu .thread-menu-item",
+              ),
+              (item) => item.textContent?.trim(),
+            ),
+          ).toContain(first),
         );
         expect(cutLabels()).toEqual([]);
       }

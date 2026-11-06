@@ -26,7 +26,15 @@ import {
   useNavigate,
   useParams,
 } from "@tanstack/react-router";
-import { Copy, FolderCog, KeyRound, Plus, Upload, X } from "lucide-react";
+import {
+  Copy,
+  FolderCog,
+  KeyRound,
+  MessageSquareText,
+  Plus,
+  Upload,
+  X,
+} from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -67,6 +75,8 @@ import {
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { ChangeOwnerCard } from "./change-owner-card.js";
 import { DeleteProjectCard } from "./delete-project-card.js";
+import { useFeedbackWidgetEnabled } from "./feedback-widget-queries.js";
+import { FeedbackWidgetProjectSettings } from "./feedback-widget-settings.js";
 import { AdditionalRepositoriesPicker } from "./new-project-dialog.js";
 import { buildProjectMetadataChanges } from "./project-metadata.js";
 import {
@@ -99,6 +109,13 @@ const sections = [
   { id: "secrets", label: "Secrets & Env Vars", icon: KeyRound },
 ] as const;
 
+/** Shown only to people who turned on the experimental flag. */
+const feedbackWidgetSection = {
+  id: "feedback-widget",
+  label: "Feedback Widget",
+  icon: MessageSquareText,
+} as const;
+
 export function ProjectSettingsPage({
   renderEnvironmentSettings,
 }: {
@@ -125,6 +142,7 @@ export function ProjectSettingsPage({
       }),
   );
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
+  const feedbackWidget = useFeedbackWidgetEnabled();
   const project = projectQuery.data;
   const section: ProjectSettingsSection = isProjectSettingsSection(
     params.section,
@@ -161,7 +179,10 @@ export function ProjectSettingsPage({
         </header>
         <div className="project-settings-layout">
           <nav aria-label="Project settings sections">
-            {sections.map((item) => (
+            {(feedbackWidget
+              ? [...sections, feedbackWidgetSection]
+              : sections
+            ).map((item) => (
               <Link
                 key={item.id}
                 className={section === item.id ? "active" : ""}
@@ -199,6 +220,12 @@ export function ProjectSettingsPage({
                   settingsQuery.data === undefined &&
                   settingsQuery.error === null
                 }
+                userId={identity.id}
+              />
+            ) : null}
+            {canManage && feedbackWidget && section === "feedback-widget" ? (
+              <FeedbackWidgetProjectSettings
+                projectId={project.id}
                 userId={identity.id}
               />
             ) : null}

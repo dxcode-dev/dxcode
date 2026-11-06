@@ -16,12 +16,18 @@ const getThreadQuickActions = async (
     )
   ).data;
 
+/** How often, and how many times, to ask again while the pick is pending. */
+const PENDING_POLL_MS = 1_500;
+const PENDING_POLLS = 20;
+
 /**
  * What Clef Flash picked to show above the composer after the agent's
- * message `messageId`. One model call per agent message: the server keeps
- * each pick, so a reload asks no model, and here the answer for a message
- * never changes while a newer message is a new key. It loads after the
- * composer has painted; a failure shows no row, so it does not retry.
+ * message `messageId`. The server picks once, when the agent's turn ends,
+ * and keeps the pick, so a reload asks no model. Until that pick is in,
+ * the answer is `pending` and the page asks again every 1.5 seconds, for
+ * at most 30 seconds. A settled answer never changes, while a newer
+ * message is a new key. It loads after the composer has painted; a failure
+ * shows no row, so it does not retry.
  */
 export const threadQuickActionsQueryOptions = (
   threadId: ThreadId,
@@ -34,4 +40,9 @@ export const threadQuickActionsQueryOptions = (
     gcTime: 10 * 60_000,
     retry: false,
     refetchOnWindowFocus: false,
+    refetchInterval: (query) =>
+      query.state.data?.pending === true &&
+      query.state.dataUpdateCount < PENDING_POLLS
+        ? PENDING_POLL_MS
+        : false,
   });

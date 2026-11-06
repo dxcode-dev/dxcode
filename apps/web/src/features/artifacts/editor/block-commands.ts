@@ -8,7 +8,9 @@ import {
 } from "prosemirror-state";
 import {
   addColumnAfter,
+  addColumnBefore,
   addRowAfter,
+  addRowBefore,
   CellSelection,
   deleteColumn,
   deleteRow,
@@ -40,7 +42,7 @@ export type BlockKind =
 export const BLOCK_KINDS: ReadonlyArray<{
   readonly kind: BlockKind;
   readonly label: string;
-  /** Whether Turn Into offers it; a table or divider has no text to keep. */
+  /** Whether Turn Into offers it; a view has no place for the text. */
   readonly convertible: boolean;
 }> = [
   { kind: "paragraph", label: "Text", convertible: true },
@@ -52,9 +54,9 @@ export const BLOCK_KINDS: ReadonlyArray<{
   { kind: "checklist", label: "Checklist", convertible: true },
   { kind: "quote", label: "Quote", convertible: true },
   { kind: "code", label: "Code", convertible: true },
-  { kind: "table", label: "Table", convertible: false },
+  { kind: "table", label: "Table", convertible: true },
   { kind: "view", label: "View", convertible: false },
-  { kind: "divider", label: "Divider", convertible: false },
+  { kind: "divider", label: "Divider", convertible: true },
 ];
 
 const paragraph = (content?: Fragment) =>
@@ -253,7 +255,37 @@ export const turnBlockInto = (
 ): Transaction | undefined => {
   const block = state.doc.nodeAt(pos);
   if (block === null || block.type === nodes.table) return undefined;
-  const replacement = blockOf(kind, linesOf(block));
+  const lines = linesOf(block);
+  const texts = lines.filter((line) => line.size > 0);
+  // A table or a divider keeps the text too (#1810): a table holds a line
+  // per row, its first as the header; a divider goes above the text.
+  const replacement =
+    kind === "table"
+      ? [
+          nodes.table.create(
+            null,
+            [
+              ...(texts.length === 0 ? [Fragment.empty] : texts),
+              ...(texts.length > 1 ? [] : [Fragment.empty]),
+            ].map((line, row) =>
+              nodes.table_row.create(
+                null,
+                (row === 0 ? nodes.table_header : nodes.table_cell).create(
+                  null,
+                  paragraph(headingInline(line)),
+                ),
+              ),
+            ),
+          ),
+        ]
+      : kind === "divider"
+        ? [
+            nodes.horizontal_rule.create(),
+            ...(texts.length === 0
+              ? [paragraph()]
+              : texts.map((line) => paragraph(line))),
+          ]
+        : blockOf(kind, lines);
   const tr = state.tr.replaceWith(pos, pos + block.nodeSize, replacement);
   return cursorInto(tr, pos + 1);
 };
@@ -324,6 +356,12 @@ export const deleteBlock = (
 export type TableAction =
   | "add-row"
   | "add-column"
+  | "insert-left"
+  | "insert-right"
+  | "insert-above"
+  | "insert-below"
+  | "append-row"
+  | "append-column"
   | "delete-row"
   | "delete-column"
   | "delete-table"
@@ -331,12 +369,46 @@ export type TableAction =
   | "align-center"
   | "align-right";
 
+/** GFM has exactly one header, always its first row. Keep the live view
+ * consistent with what saving and reloading the same table will show. */
+const gfmTableHeader = (tr: Transaction | undefined, tableStart: number) => {
+  const table = tr?.doc.nodeAt(tableStart - 1);
+  if (tr === undefined || table?.type !== nodes.table) return tr;
+  table.forEach((row, rowOffset, rowIndex) => {
+    row.forEach((cell, cellOffset) => {
+      const type = rowIndex === 0 ? nodes.table_header : nodes.table_cell;
+      if (cell.type !== type)
+        tr.setNodeMarkup(
+          tableStart + rowOffset + 1 + cellOffset,
+          type,
+          cell.attrs,
+        );
+    });
+  });
+  return tr;
+};
+
 /** Runs a table action on the table holding the selection. */
 export const tableAction = (
   state: EditorState,
   action: TableAction,
 ): Transaction | undefined => {
   if (!isInTable(state)) return undefined;
+  if (action === "append-row" || action === "append-column") {
+    const rect = selectedRect(state);
+    const index =
+      action === "append-row"
+        ? (rect.map.height - 1) * rect.map.width + rect.left
+        : rect.top * rect.map.width + rect.map.width - 1;
+    const pos = rect.tableStart + itemAt(rect.map.map, index) + 1;
+    const atEnd = state.apply(
+      state.tr.setSelection(TextSelection.near(state.doc.resolve(pos))),
+    );
+    return tableAction(
+      atEnd,
+      action === "append-row" ? "add-row" : "add-column",
+    );
+  }
   const run = (command: Command) => {
     const captured: { tr?: Transaction } = {};
     command(state, (tr) => {
@@ -350,25 +422,30 @@ export const tableAction = (
     tableStart: number,
     index: (map: TableMap) => number,
   ) => {
+    gfmTableHeader(tr, tableStart);
     const table = tr?.doc.nodeAt(tableStart - 1);
-    if (tr === undefined || table === null || table === undefined) return tr;
+    if (tr === undefined || table?.type !== nodes.table) return tr;
     const map = TableMap.get(table);
     const cell = tableStart + itemAt(map.map, index(map));
     return tr.setSelection(TextSelection.near(tr.doc.resolve(cell + 1)));
   };
   switch (action) {
+    case "insert-above":
+    case "insert-below":
     case "add-row": {
       // The cursor moves into the new row, ready to type.
       const rect = selectedRect(state);
-      const tr = run(addRowAfter);
+      const above = action === "insert-above";
+      const row = above ? rect.top : rect.bottom;
+      const tr = run(above ? addRowBefore : addRowAfter);
       // New cells take their column's alignment, as Markdown shows them.
       const table = tr?.doc.nodeAt(rect.tableStart - 1);
       if (tr !== undefined && table !== null && table !== undefined) {
         const map = TableMap.get(table);
         for (let column = 0; column < map.width; column += 1) {
-          const header = table.nodeAt(itemAt(map.map, column));
+          const header = rect.table.nodeAt(itemAt(rect.map.map, column));
           const cellPos =
-            rect.tableStart + itemAt(map.map, rect.bottom * map.width + column);
+            rect.tableStart + itemAt(map.map, row * map.width + column);
           const cell = tr.doc.nodeAt(cellPos);
           if (header !== null && cell !== null && header.attrs.align !== null)
             tr.setNodeMarkup(cellPos, null, {
@@ -377,18 +454,21 @@ export const tableAction = (
             });
         }
       }
-      return enterCell(tr, rect.tableStart, (map) => rect.bottom * map.width);
+      return enterCell(tr, rect.tableStart, (map) => row * map.width);
     }
+    case "insert-left":
+    case "insert-right":
     case "add-column": {
       const rect = selectedRect(state);
+      const left = action === "insert-left";
       return enterCell(
-        run(addColumnAfter),
+        run(left ? addColumnBefore : addColumnAfter),
         rect.tableStart,
-        (map) => rect.top * map.width + rect.right,
+        (map) => rect.top * map.width + (left ? rect.left : rect.right),
       );
     }
     case "delete-row":
-      return run(deleteRow);
+      return gfmTableHeader(run(deleteRow), selectedRect(state).tableStart);
     case "delete-column":
       return run(deleteColumn);
     case "delete-table":

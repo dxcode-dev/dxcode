@@ -801,6 +801,23 @@ interface ParsedDocument {
 }
 
 /**
+ * A table row's dropdown and toggle chips with each bare `|` escaped, as a
+ * cell needs (#1865): an agent that writes
+ * `| {{dropdown:Todo|*Doing}} |` meant one chip, not two cells. Only what
+ * markdown-it reads changes; the lines kept for each block are the source
+ * as written, so an untouched row saves byte for byte.
+ */
+const escapeChipPipes = (source: string) =>
+  source.includes("{{")
+    ? source.replace(/^([ \t]*\|.*)$/gmu, (row: string) =>
+        row.replace(
+          /\{\{(?:dropdown|toggle)(?:#[A-Za-z0-9_-]{1,40})?:[^\n]*?\}\}/gu,
+          (chip) => chip.replace(/(?<!\\)\|/gu, "\\|"),
+        ),
+      )
+    : source;
+
+/**
  * The top-level blocks with their source lines. Text between blocks that is
  * not blank (reference definitions) becomes a `markdown_source` block.
  */
@@ -810,7 +827,7 @@ const parseDocument = (
 ): ParsedDocument => {
   const lines = splitLines(source);
   const context: ParseContext = {
-    tokens: markdownIt.parse(source, {}),
+    tokens: markdownIt.parse(escapeChipPipes(source), {}),
     lines,
     registry,
     index: 0,
@@ -1439,7 +1456,7 @@ export const blockParts = (
       }>;
     }
   | undefined => {
-  const tokens = markdownIt.parse(source, {});
+  const tokens = markdownIt.parse(escapeChipPipes(source), {});
   const first = tokens[0];
   if (first === undefined || first.level !== 0) return undefined;
   const lines = splitLines(source);

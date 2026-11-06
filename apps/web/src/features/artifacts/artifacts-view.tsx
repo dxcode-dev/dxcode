@@ -51,12 +51,15 @@ function ArtifactSwitcher({
   onSelect,
   onCreate,
   canCreate,
+  extra,
 }: {
   readonly artifacts: ReadonlyArray<ThreadArtifact>;
   readonly selected: ThreadArtifact | undefined;
   readonly onSelect: (artifactId: string) => void;
   readonly onCreate: () => void;
   readonly canCreate: boolean;
+  /** The open artifact's file actions, from the editor. */
+  readonly extra?: React.ReactNode;
 }) {
   return (
     <Menu.Root>
@@ -116,6 +119,7 @@ function ArtifactSwitcher({
                 </Menu.Item>
               </>
             ) : null}
+            {extra}
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>
@@ -135,14 +139,14 @@ function OpenArtifact({
   readonly artifactId: string;
   readonly active: boolean;
   readonly readOnly: boolean;
-  readonly switcher: React.ReactNode;
+  readonly switcher: (extra?: React.ReactNode) => React.ReactNode;
   readonly dictation: DictationSlot | undefined;
 }) {
   const query = useQuery(artifactOptions(threadId, artifactId, active));
   if (query.data === undefined)
     return (
       <section className="artifact-view">
-        <header className="artifact-header">{switcher}</header>
+        <header className="artifact-header">{switcher()}</header>
         {query.isError ? (
           <div className="artifacts-state" role="alert">
             {message(query.error)}
@@ -156,7 +160,7 @@ function OpenArtifact({
     <React.Suspense
       fallback={
         <section className="artifact-view">
-          <header className="artifact-header">{switcher}</header>
+          <header className="artifact-header">{switcher()}</header>
           {loading}
         </section>
       }
@@ -215,13 +219,14 @@ export function ArtifactsView({
   )
     setPinned(selected.id);
   const startBlank = () => create.mutate({ title: "Untitled" });
-  const switcher = (
+  const switcher = (extra?: React.ReactNode) => (
     <ArtifactSwitcher
       artifacts={artifacts}
       selected={selected}
       onSelect={openArtifact}
       onCreate={startBlank}
       canCreate={!readOnly && !create.isPending}
+      extra={extra}
     />
   );
   if (list.data === undefined)

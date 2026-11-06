@@ -61,7 +61,7 @@ const unavailable = (operation: string) => (cause: unknown) =>
  * change the Project, as `projects/repository-d1.ts` decides for its other
  * settings.
  */
-const manageableSql = `EXISTS (
+export const manageableSql = `EXISTS (
   SELECT 1 FROM projects AS project
    WHERE project.id = ?1
      AND ((project.workspace_id IS NULL AND project.owner_user_id = ?2)

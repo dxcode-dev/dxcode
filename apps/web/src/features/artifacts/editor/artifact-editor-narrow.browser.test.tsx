@@ -15,7 +15,12 @@
  *  6. On a desktop the labels disappear, though there is room for them.
  *  7. On a desktop, the Artifacts pane beside the conversation (about
  *     590 px at 1440) no longer fits every tool, as it did before, so the
- *     last ones scroll out of sight.
+ *     last ones scroll out of sight; also with the dictation mic first in
+ *     the toolbar (seen on staging after #1773).
+ *
+ * Insert Image and Wide Layout are icons on every screen, as in the
+ * reference editor's toolbar (#1810); in that pane the table tools are
+ * icons too, the cell grips (#1809) being where tables are edited.
  */
 import type { ThreadArtifact } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
@@ -28,7 +33,14 @@ import "../../../styles.css";
 import "../artifacts-view.css";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
 import { createQueryClient } from "../../../shared/query/query-client.js";
+import {
+  InsertDictation,
+  TextareaDictation,
+} from "../../threads/dictation/use-dictation.js";
 import { ArtifactEditor } from "./artifact-editor.js";
+
+/** The mic the Thread page passes down when dictation is available. */
+const micSlot = { Insert: InsertDictation, Textarea: TextareaDictation };
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -72,7 +84,7 @@ afterEach(async () => {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 60));
 
 /** The editor at `width` with the caret in the table, so its tools show. */
-const mount = async (width: number, pane?: number) => {
+const mount = async (width: number, pane?: number, mic = false) => {
   await page.viewport(width, 844);
   document.body.style.margin = "0";
   vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
@@ -95,6 +107,7 @@ const mount = async (width: number, pane?: number) => {
             initial={{ artifact: artifact(), markdown: TABLE }}
             readOnly={false}
             switcher={null}
+            dictation={mic ? micSlot : undefined}
           />
         </AuthContext>
       </QueryClientProvider>,
@@ -109,8 +122,12 @@ const mount = async (width: number, pane?: number) => {
   return { container, toolbar };
 };
 
+/** Icons on every screen, as in the reference editor's toolbar. */
+const ICON_ONLY = new Set(["Insert Image", "Wide Layout"]);
+
 const NAMES = [
   "Table",
+  "Insert Image",
   "Checklist",
   "Insert",
   "Comment",
@@ -195,14 +212,37 @@ describe.each([390, 360])("on a %i px phone", (width) => {
 });
 
 describe("on a 1440 px desktop", () => {
-  it("fits every tool, with its label, in the Artifacts pane beside the conversation", async () => {
+  it("fits every tool in the Artifacts pane beside the conversation, the table tools as icons", async () => {
     const { toolbar } = await mount(1440, 590);
     expect(overlaps(toolbar)).toEqual([]);
     expect(toolbar.scrollWidth).toBeLessThanOrEqual(toolbar.clientWidth);
-    for (const { element, name } of tools(toolbar)) {
-      if (name === "Wide Layout") continue;
+    expect(tools(toolbar).map(({ name }) => name)).toEqual(NAMES);
+    for (const name of ["Table", "Checklist", "Insert", "Comment"]) {
+      const element = tools(toolbar).find(
+        (tool) => tool.name === name,
+      )?.element;
       expect(
-        element.querySelector("span")?.getBoundingClientRect().width,
+        element?.querySelector("span")?.getBoundingClientRect().width,
+        `${name} label shows`,
+      ).toBeGreaterThan(20);
+    }
+  });
+
+  it("fits every tool in that pane with the dictation mic first, the table tools as icons", async () => {
+    const { toolbar } = await mount(1440, 590, true);
+    expect(
+      toolbar.querySelector('[aria-label="Start dictation"]'),
+    ).not.toBeNull();
+    expect(overlaps(toolbar)).toEqual([]);
+    expect(toolbar.scrollWidth).toBeLessThanOrEqual(toolbar.clientWidth);
+    // Still named, and the tools before them keep their labels.
+    expect(tools(toolbar).map(({ name }) => name)).toEqual(NAMES);
+    for (const name of ["Table", "Checklist", "Insert", "Comment"]) {
+      const element = tools(toolbar).find(
+        (tool) => tool.name === name,
+      )?.element;
+      expect(
+        element?.querySelector("span")?.getBoundingClientRect().width,
         `${name} label shows`,
       ).toBeGreaterThan(20);
     }
@@ -213,7 +253,7 @@ describe("on a 1440 px desktop", () => {
     expect(tools(toolbar).map(({ name }) => name)).toEqual(NAMES);
     expect(overlaps(toolbar)).toEqual([]);
     for (const { element, name } of tools(toolbar)) {
-      if (name === "Wide Layout") continue;
+      if (ICON_ONLY.has(name)) continue;
       const label = element.querySelector("span");
       expect(
         label?.getBoundingClientRect().width,

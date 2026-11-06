@@ -1,4 +1,5 @@
 import { Menu } from "@base-ui/react/menu";
+import type { ThreadArtifactComment } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,34 +12,46 @@ import {
   ChevronRight,
   CircleAlert,
   Copy,
-  Download,
   GripVertical,
   Image as ImageIcon,
   ListChecks,
   LoaderCircle,
-  MessageSquare,
   MessageSquarePlus,
   MoveHorizontal,
   Pencil,
   Plus,
+  Search,
   Table,
   TableProperties,
   Trash2,
 } from "lucide-react";
-import type { EditorState, Transaction } from "prosemirror-state";
-import { type EditorProps, EditorView } from "prosemirror-view";
+import {
+  type EditorState,
+  TextSelection,
+  type Transaction,
+} from "prosemirror-state";
+import {
+  type DirectEditorProps,
+  type EditorProps,
+  EditorView,
+} from "prosemirror-view";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
-import { useMobile } from "../../../shared/use-mobile.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
 import { artifactsApi } from "../artifacts-api.js";
-import { ArtifactComments, type CommentDraft } from "./artifact-comments.js";
+import {
+  CommentCard,
+  type CommentDraft,
+  CommentsMenu,
+} from "./artifact-comments.js";
 import {
   artifactClipboardTextParser,
   artifactNodeViews,
+  placeholderDecorations,
 } from "./artifact-editor-state.js";
+import { useArtifactFileActions } from "./artifact-file-actions.js";
 import type {
   ArtifactSession,
   ArtifactSessionSnapshot,
@@ -64,9 +77,14 @@ import {
   turnBlockInto,
 } from "./block-commands.js";
 import { ChipInsertItems, ChipPicker, ViewFrames } from "./chip-picker.js";
+import { DRAFT_COMMENT } from "./comment-highlights.js";
 import { useCommentPeople } from "./comment-people.js";
+import { ExportMenu } from "./export-menu.js";
+import { FindBar, useFindOpener } from "./find-bar.js";
 import { NotifyAgentButton } from "./notify-agent-button.js";
+import { SelectionToolbar } from "./selection-toolbar.js";
 import { SuggestMenu } from "./suggest-menu.js";
+import { TableCellTools } from "./table-cell-tools.js";
 import "prosemirror-view/style/prosemirror.css";
 import "prosemirror-tables/style/tables.css";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
@@ -320,6 +338,20 @@ function BlockHandle({
                       }
                       convertibleOnly
                     />
+                    <Menu.Item
+                      className="thread-menu-item"
+                      onClick={() => {
+                        // The image goes at the block's start; its text stays.
+                        run((state) =>
+                          state.tr.setSelection(
+                            TextSelection.near(state.doc.resolve(pos + 1)),
+                          ),
+                        );
+                        session.pickImage();
+                      }}
+                    >
+                      Image
+                    </Menu.Item>
                   </Menu.Popup>
                 </Menu.Positioner>
               </Menu.Portal>
@@ -383,7 +415,7 @@ function TableTools({
     <>
       <button
         type="button"
-        className="artifact-tool"
+        className="artifact-tool artifact-table-tool"
         title="Add Row"
         onClick={() => onAction("add-row")}
       >
@@ -395,7 +427,7 @@ function TableTools({
       </button>
       <button
         type="button"
-        className="artifact-tool"
+        className="artifact-tool artifact-table-tool"
         title="Add Column"
         onClick={() => onAction("add-column")}
       >
@@ -407,7 +439,7 @@ function TableTools({
       </button>
       <Menu.Root>
         <Menu.Trigger
-          className="artifact-tool"
+          className="artifact-tool artifact-table-tool"
           aria-label="Row Options"
           title="Row Options"
         >
@@ -487,6 +519,82 @@ const imageDropProps = (session: ArtifactSession): Partial<EditorProps> => ({
   },
 });
 
+/** The editor's DOM interactions; the mounted view owns their lifetime. */
+const artifactEditorProps = (
+  session: ArtifactSession,
+  readOnly: boolean,
+  openComments: () => void,
+): Omit<DirectEditorProps, "state"> => ({
+  editable: () => !readOnly,
+  ...(readOnly ? {} : { decorations: placeholderDecorations }),
+  nodeViews: artifactNodeViews({
+    // A reader may still flip toggles; only editors open pickers.
+    onChip: (pos, chip) => {
+      if (!readOnly || chip.kind === "toggle") session.onChip(pos, chip);
+    },
+    showView: session.showView,
+    setImageAlt: session.setImageAlt,
+  }),
+  clipboardTextParser: artifactClipboardTextParser,
+  ...(readOnly ? {} : imageDropProps(session)),
+  ...linkClickProps,
+  handleDOMEvents: {
+    ...linkClickProps.handleDOMEvents,
+    focus: () => {
+      session.setFocused(true);
+      return false;
+    },
+    // Into the selection's toolbar (its Link field) or a comment's card
+    // keeps the selection in play; anywhere else hides its toolbar.
+    blur: (_, event) => {
+      const next = event.relatedTarget;
+      if (
+        !(
+          next instanceof Element &&
+          next.closest(".artifact-selection-toolbar, .artifact-comment-card")
+        )
+      )
+        session.setFocused(false);
+      return false;
+    },
+    contextmenu: (target, event) => {
+      if (readOnly || !(event.target instanceof Element)) return false;
+      const cell = event.target.closest("td, th");
+      if (cell === null || !target.dom.contains(cell)) return false;
+      // A right-click does not consistently move the browser caret.
+      const pos = target.posAtDOM(cell, 0);
+      session.dispatch(
+        target.state.tr.setSelection(
+          TextSelection.near(target.state.doc.resolve(pos)),
+        ),
+      );
+      target.focus();
+      event.preventDefault();
+      return true;
+    },
+  },
+  dispatchTransaction: session.dispatch,
+  // Clicking highlighted text opens its comment, unless it is a link.
+  handleClick: (clicked, pos, event) => {
+    if (linkToOpen(clicked, event) !== undefined) return false;
+    const id = session.commentAt(pos);
+    if (id === undefined) return false;
+    // After this click has finished: the card it opens would otherwise
+    // take the click's end as a click outside it, and close.
+    setTimeout(() => {
+      openComments();
+      session.selectComment(id);
+    });
+    return false;
+  },
+  attributes: {
+    class: "artifact-prose",
+    "aria-label": "Artifact content",
+    role: "textbox",
+    "aria-multiline": "true",
+  },
+});
+
 /**
  * The file picker Insert Image opens, which the session opens while it is
  * mounted; picked images upload to the Thread.
@@ -557,20 +665,12 @@ function TitleField({
   );
 }
 
-const downloadMarkdown = (title: string, markdown: string) => {
-  const url = URL.createObjectURL(
-    new Blob([markdown], { type: "text/markdown;charset=utf-8" }),
-  );
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "artifact"}.md`;
-  anchor.rel = "noopener";
-  anchor.style.display = "none";
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
-};
+/** The key shortcuts are written with: ⌘ on Apple devices, Ctrl+ elsewhere. */
+const modKey = () =>
+  typeof navigator !== "undefined" &&
+  /Mac|iP(hone|ad|od)/.test(navigator.platform)
+    ? "⌘"
+    : "Ctrl+";
 
 /** Insert blocks and chips, comment on the selection, and table tools. */
 function ArtifactToolbar({
@@ -622,6 +722,15 @@ function ArtifactToolbar({
         >
           <Table aria-hidden="true" />
           <span>Table</span>
+        </button>
+        <button
+          type="button"
+          className="artifact-tool"
+          aria-label="Insert Image"
+          title="Image"
+          onClick={onImage}
+        >
+          <ImageIcon aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -740,6 +849,174 @@ function ArtifactNotices({
   );
 }
 
+/** The space below the document: a click or tap starts a paragraph at the end, as Notion does. */
+function AppendBlock({ session }: { readonly session: ArtifactSession }) {
+  return (
+    <button
+      type="button"
+      className="artifact-append"
+      aria-label="Add a block at the end"
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={session.focusEnd}
+    />
+  );
+}
+
+/** Comments on the selection: its quote, or why it can't be quoted. */
+const commentOnSelection =
+  (
+    session: ArtifactSession,
+    done: (result: {
+      readonly quote?: CommentDraft;
+      readonly error?: string;
+    }) => void,
+  ) =>
+  async () => {
+    const quote = await session.quoteSelection();
+    if (quote === undefined || quote === "unsaved")
+      done({
+        error:
+          quote === "unsaved"
+            ? "Save your edits before commenting."
+            : "Select text to comment on.",
+      });
+    else done({ quote });
+  };
+
+/** The artifact's header: switcher, save state, comments, and its actions. */
+function ArtifactHeader({
+  switcher,
+  session,
+  snapshot,
+  comments,
+  readOnly,
+  onSelectComment,
+  onRename,
+  onFind,
+}: {
+  readonly switcher: React.ReactNode;
+  readonly session: ArtifactSession;
+  readonly snapshot: ArtifactSessionSnapshot;
+  readonly comments: {
+    readonly data: ReadonlyArray<ThreadArtifactComment> | undefined;
+    readonly isError: boolean;
+  };
+  readonly readOnly: boolean;
+  readonly onSelectComment: (id: string) => void;
+  readonly onRename: () => void;
+  readonly onFind: () => void;
+}) {
+  return (
+    <header className="artifact-header">
+      {switcher}
+      <SaveIndicator snapshot={snapshot} />
+      <CommentsMenu
+        comments={comments.data ?? []}
+        anchors={snapshot.anchors}
+        loadFailed={comments.isError}
+        onSelect={onSelectComment}
+      />
+      {readOnly ? null : (
+        <button
+          type="button"
+          className="artifact-icon-button"
+          aria-label="Rename"
+          title="Rename"
+          onClick={onRename}
+        >
+          <Pencil aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        className="artifact-icon-button"
+        aria-label="Find in Artifact"
+        title={`Find in Artifact (${modKey()}F)`}
+        onClick={onFind}
+      >
+        <Search aria-hidden="true" />
+      </button>
+      <ExportMenu session={session} title={snapshot.title} />
+    </header>
+  );
+}
+
+/** The card of the comment being written, or of the chosen comment. */
+function OpenCommentCard({
+  session,
+  snapshot,
+  draft,
+  page,
+  ...props
+}: Omit<
+  React.ComponentProps<typeof CommentCard>,
+  "target" | "anchor" | "key"
+> & {
+  readonly session: ArtifactSession;
+  readonly snapshot: ArtifactSessionSnapshot;
+  readonly draft: CommentDraft | undefined;
+  readonly page: React.RefObject<HTMLDivElement | null>;
+}) {
+  const active = snapshot.activeComment;
+  if (draft === undefined && active === undefined) return null;
+  return (
+    <CommentCard
+      key={draft === undefined ? active : "draft"}
+      target={
+        draft === undefined
+          ? { kind: "comment", id: active ?? "" }
+          : { kind: "draft", draft }
+      }
+      anchor={() =>
+        session.commentElement(
+          draft === undefined ? (active ?? "") : DRAFT_COMMENT,
+        ) ?? page.current
+      }
+      {...props}
+    />
+  );
+}
+
+/**
+ * A comment being written on the selection: its quote, the text typed so
+ * far (kept while its card closes and opens), and why the selection can't
+ * be quoted, if it can't.
+ */
+function useCommentDraft(session: ArtifactSession) {
+  const [draft, setDraft] = React.useState<CommentDraft>();
+  const [quoteError, setQuoteError] = React.useState<string>();
+  const [draftBody, setDraftBody] = React.useState("");
+  // Comment on the selection, from the toolbar or the selection's own.
+  const start = commentOnSelection(session, (result) => {
+    setQuoteError(result.error);
+    if (result.quote === undefined) return;
+    session.selectComment(undefined);
+    session.markCommentDraft(true);
+    setDraft(result.quote);
+  });
+  const close = () => {
+    // The commented text is done with: its toolbar should not come back.
+    if (draft !== undefined) session.collapseSelection();
+    session.markCommentDraft(false);
+    setDraft(undefined);
+  };
+  /** Another comment was chosen in the text: the draft gives way. */
+  const drop = () => {
+    session.markCommentDraft(false);
+    setDraft(undefined);
+  };
+  return {
+    draft,
+    quoteError,
+    setQuoteError,
+    draftBody,
+    setDraftBody,
+    start,
+    close,
+    drop,
+  };
+}
+
 /**
  * The block editor for one artifact: edits save on their own, and a newer
  * revision someone else saved merges into what is on screen.
@@ -754,8 +1031,13 @@ export function ArtifactEditor({
   readonly threadId: ThreadId;
   readonly initial: ArtifactDocument;
   readonly readOnly: boolean;
-  /** The header's artifact switcher, from the view. */
-  readonly switcher: React.ReactNode;
+  /**
+   * The header's artifact switcher, from the view; given as a function, it
+   * gets the file actions (Move to Folder…, Delete Artifact…) for its menu.
+   */
+  readonly switcher:
+    | React.ReactNode
+    | ((items: React.ReactNode) => React.ReactNode);
   /** The composer's mic, when the Thread page offers dictation. */
   readonly dictation?: DictationSlot | undefined;
 }) {
@@ -775,11 +1057,16 @@ export function ArtifactEditor({
     session.getSnapshot,
   );
   const [wide, setWide] = React.useState(false);
-  const phone = useMobile(1023);
-  const [commentsOpen, setCommentsOpen] = React.useState(false);
-  const [draft, setDraft] = React.useState<CommentDraft>();
-  const [quoteError, setQuoteError] = React.useState<string>();
-  const [draftBody, setDraftBody] = React.useState("");
+  const {
+    draft,
+    quoteError,
+    setQuoteError,
+    draftBody,
+    setDraftBody,
+    start: comment,
+    close: closeDraft,
+    drop: dropDraft,
+  } = useCommentDraft(session);
   // `@` lists the Thread's people; comments show their pictures.
   const { identity } = useAuthenticatedIdentity();
   const people = useCommentPeople(identity, threadId);
@@ -805,38 +1092,13 @@ export function ArtifactEditor({
     if (mount === null || pageNode === null) return;
     const editor = new EditorView(mount, {
       state: session.state,
-      editable: () => !readOnly,
-      nodeViews: artifactNodeViews({
-        // A reader may still flip toggles; only editors open pickers.
-        onChip: (pos, chip) => {
-          if (!readOnly || chip.kind === "toggle") session.onChip(pos, chip);
-        },
-        showView: session.showView,
-        setImageAlt: session.setImageAlt,
-      }),
-      clipboardTextParser: artifactClipboardTextParser,
-      ...(readOnly ? {} : imageDropProps(session)),
-      dispatchTransaction: session.dispatch,
-      // A link opens in a new tab, in a table cell as anywhere else.
-      ...linkClickProps,
-      // Clicking highlighted text opens its comment, unless it is a link.
-      handleClick: (clicked, pos, event) => {
-        if (linkToOpen(clicked, event) !== undefined) return false;
-        const id = session.commentAt(pos);
-        if (id === undefined) return false;
-        session.selectComment(id);
-        setCommentsOpen(true);
-        return false;
-      },
-      attributes: {
-        class: "artifact-prose",
-        "aria-label": "Artifact content",
-        role: "textbox",
-        "aria-multiline": "true",
-      },
+      ...artifactEditorProps(session, readOnly, dropDraft),
     });
     view.current = editor;
     session.attach(editor, pageNode);
+    const resize = new ResizeObserver(session.refreshLayout);
+    resize.observe(pageNode);
+    pageNode.addEventListener("scroll", session.refreshLayout, true);
     holdArtifactSession(queryClient, threadId, initial, session);
     const stopFollowing = session.followQuery();
     const stopComments = session.followComments();
@@ -852,6 +1114,8 @@ export function ArtifactEditor({
     return () => {
       window.removeEventListener("beforeunload", warn);
       document.removeEventListener("visibilitychange", leave);
+      resize.disconnect();
+      pageNode.removeEventListener("scroll", session.refreshLayout, true);
       stopFollowing();
       stopComments();
       stopPeople();
@@ -864,16 +1128,25 @@ export function ArtifactEditor({
 
   const run = (
     build: (state: typeof session.state) => Transaction | undefined,
+    focus = true,
   ) => {
     const tr = build(session.state);
     if (tr === undefined) return;
     session.dispatch(tr);
-    view.current?.focus();
+    if (focus) view.current?.focus();
   };
   const handle = pinned ?? hovered ?? snapshot.selection.block;
-  const openComments = (comments.data ?? []).filter(
-    (comment) => comment.parentId === null && comment.resolvedAt === null,
-  ).length;
+  const files = useArtifactFileActions({
+    session,
+    threadId,
+    artifactId: initial.artifact.id,
+    folder: initial.artifact.folder,
+    readOnly,
+  });
+  const { openings: findOpenings, open: openFind } = useFindOpener(
+    session,
+    snapshot,
+  );
 
   return (
     <section
@@ -888,43 +1161,32 @@ export function ArtifactEditor({
           event.preventDefault();
           session.flush();
         }
+        // The artifact's Find, not the browser's (#1810).
+        if (
+          (event.metaKey || event.ctrlKey) &&
+          !event.altKey &&
+          event.key.toLowerCase() === "f"
+        ) {
+          event.preventDefault();
+          openFind();
+        }
       }}
     >
-      <header className="artifact-header">
-        {switcher}
-        <SaveIndicator snapshot={snapshot} />
-        <button
-          type="button"
-          className="artifact-icon-button artifact-comments-toggle"
-          aria-label={`Comments (${openComments})`}
-          aria-pressed={commentsOpen}
-          title="Comments"
-          onClick={() => setCommentsOpen((open) => !open)}
-        >
-          <MessageSquare aria-hidden="true" />
-          {openComments === 0 ? null : <span>{openComments}</span>}
-        </button>
-        {readOnly ? null : (
-          <button
-            type="button"
-            className="artifact-icon-button"
-            aria-label="Rename"
-            title="Rename"
-            onClick={() => setRenaming(true)}
-          >
-            <Pencil aria-hidden="true" />
-          </button>
-        )}
-        <button
-          type="button"
-          className="artifact-icon-button"
-          aria-label="Export Markdown"
-          title="Export Markdown"
-          onClick={() => downloadMarkdown(snapshot.title, session.markdown())}
-        >
-          <Download aria-hidden="true" />
-        </button>
-      </header>
+      <ArtifactHeader
+        switcher={
+          typeof switcher === "function" ? switcher(files.items) : switcher
+        }
+        session={session}
+        snapshot={snapshot}
+        comments={comments}
+        readOnly={readOnly}
+        onSelectComment={(id) => {
+          closeDraft();
+          session.selectComment(id);
+        }}
+        onRename={() => setRenaming(true)}
+        onFind={openFind}
+      />
       {readOnly ? null : (
         <ArtifactToolbar
           threadId={threadId}
@@ -935,19 +1197,17 @@ export function ArtifactEditor({
           onImage={session.pickImage}
           onWide={() => setWide((value) => !value)}
           dictation={dictation}
-          onComment={async () => {
-            const quote = await session.quoteSelection();
-            if (quote === undefined || quote === "unsaved") {
-              setQuoteError(
-                quote === "unsaved"
-                  ? "Save your edits before commenting."
-                  : "Select text to comment on.",
-              );
-              return;
-            }
-            setQuoteError(undefined);
-            setDraft(quote);
-            setCommentsOpen(true);
+          onComment={comment}
+        />
+      )}
+      {snapshot.find === undefined ? null : (
+        <FindBar
+          key={findOpenings}
+          session={session}
+          find={snapshot.find}
+          onClose={() => {
+            session.closeFind();
+            view.current?.focus();
           }}
         />
       )}
@@ -982,8 +1242,30 @@ export function ArtifactEditor({
               />
             )}
             <div className="artifact-content" ref={host} />
+            {readOnly || snapshot.selection.table === undefined ? null : (
+              <TableCellTools
+                placement={snapshot.selection.table}
+                focusEditor={() => view.current?.focus()}
+                onAction={(action) =>
+                  run((state) => tableAction(state, action), false)
+                }
+              />
+            )}
             {readOnly ? null : <ImageFileInput session={session} />}
             <ViewFrames views={snapshot.views} />
+            <SelectionToolbar
+              key={JSON.stringify(snapshot.selection.box)}
+              threadId={threadId}
+              session={session}
+              selection={snapshot.selection}
+              hidden={
+                readOnly ||
+                snapshot.selection.focused !== true ||
+                draft !== undefined ||
+                snapshot.activeComment !== undefined
+              }
+              onComment={comment}
+            />
             {readOnly ? null : (
               <SuggestMenu
                 menu={snapshot.suggest}
@@ -1004,43 +1286,33 @@ export function ArtifactEditor({
                 onDone={() => setHovered(undefined)}
               />
             )}
-            {readOnly ? null : (
-              // The space below the document: a click or tap there starts a
-              // paragraph at the end, as Notion does.
-              <button
-                type="button"
-                className="artifact-append"
-                aria-label="Add a block at the end"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={session.focusEnd}
-              />
-            )}
+            {readOnly ? null : <AppendBlock session={session} />}
           </div>
         </div>
-        {commentsOpen ? (
-          <ArtifactComments
-            phone={phone}
-            snapshot={snapshot}
-            comments={comments.data ?? []}
-            loadFailed={comments.isError}
-            draft={draft}
-            draftText={{ value: draftBody, set: setDraftBody }}
-            readOnly={readOnly}
-            people={people}
-            dictation={dictation}
-            threadId={threadId}
-            artifactId={initial.artifact.id}
-            onSelect={session.selectComment}
-            onDraftDone={() => setDraft(undefined)}
-            // A comment being written stays for when the panel opens again.
-            onClose={() => {
-              setCommentsOpen(false);
-              setQuoteError(undefined);
-              session.selectComment(undefined);
-            }}
-          />
-        ) : null}
+        <OpenCommentCard
+          session={session}
+          snapshot={snapshot}
+          draft={draft}
+          draftText={{ value: draftBody, set: setDraftBody }}
+          comments={comments.data ?? []}
+          page={page}
+          readOnly={readOnly}
+          people={people}
+          dictation={dictation}
+          threadId={threadId}
+          artifactId={initial.artifact.id}
+          onPosted={(id) => {
+            closeDraft();
+            session.selectComment(id);
+          }}
+          onClose={() => {
+            closeDraft();
+            setQuoteError(undefined);
+            session.selectComment(undefined);
+          }}
+        />
       </div>
+      {files.dialogs}
     </section>
   );
 }

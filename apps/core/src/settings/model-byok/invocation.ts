@@ -39,6 +39,7 @@ import {
   type RunFailureClass,
 } from "../../runtime/run-failure.js";
 import { CLAUDE_CODE_TITLE_DEFERRED } from "../../threads/dx-title-agent.js";
+import { WARM_PATH, warmResponse } from "../../threads/initial-objects.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import {
@@ -1895,6 +1896,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   }
 
   async #fetch(request: Request): Promise<Response> {
+    // A new Thread wakes this object early; see initial-objects.ts.
+    if (request.method === "GET" && new URL(request.url).pathname === WARM_PATH)
+      return warmResponse();
     if (request.method !== "POST") {
       return jsonResponse({ code: "NOT_FOUND" }, 404);
     }

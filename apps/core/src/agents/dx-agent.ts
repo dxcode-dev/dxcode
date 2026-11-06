@@ -36,7 +36,6 @@ import {
 } from "../execution/additional-repository-note.js";
 import { takeDxFilesSandbox } from "../execution/dx-files-sandbox.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
-import { createOwnerAskTools } from "../owner-asks/agent-tools.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
   takeWorkspaceDisk,
@@ -58,6 +57,7 @@ import {
   unsavedStopNote,
   WORKSPACE_UNSAVED_STOP_SIGNAL,
 } from "../orb-disk/unsaved-stop.js";
+import { createOwnerAskTools } from "../owner-asks/agent-tools.js";
 import {
   agentPluginHostContext,
   agentThreadToolsContext,
@@ -437,6 +437,15 @@ const usePluginLifecycle = (
     // Skills live outside the repository, so their writes skip Changes
     // coordination while that stays true; the two sets are separate
     // directories.
+    // People's artifact edits since the agent's last save, so it reads them
+    // before writing. Read beside the skill installs: it waits on D1 alone,
+    // and it was the last step before every model request (#1793). Best
+    // effort: a failed read never fails the turn.
+    const editedNote = (async () =>
+      artifactsEditedByPeopleNote(
+        agentThreadToolsContext().db,
+        threadId,
+      ))().catch(() => undefined);
     const outside = takeDxFilesSandbox(threadId);
     const target = {
       coordinated: context.harness.sandbox,
@@ -461,13 +470,7 @@ const usePluginLifecycle = (
         type: WORKSPACE_DISK_RELIEF_SIGNAL,
         body: diskReliefNote(diskRelief),
       });
-    // People's artifact edits since the agent's last save, so it reads them
-    // before writing. Best effort: a failed read never fails the turn.
-    const edited = await (async () =>
-      artifactsEditedByPeopleNote(
-        agentThreadToolsContext().db,
-        threadId,
-      ))().catch(() => undefined);
+    const edited = await editedNote;
     if (edited !== undefined)
       context.append({
         kind: "signal",

@@ -15,6 +15,7 @@ import {
   threadBugReportRoutes,
 } from "./bug-reports/routes.js";
 import { dictationRoutes } from "./dictation/routes.js";
+import { feedbackWidgetPublicRoutes } from "./feedback-widget/public-routes.js";
 import { healthHandler } from "./health/handler.js";
 import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
@@ -99,6 +100,8 @@ app.route("/api/invites", publicInviteRoutes);
 // Other deployments forward bug reports here with an intake key, not a session.
 app.route("/api/bug-reports", bugReportIntakeRoutes);
 app.route("/api/notifications/unsubscribe", notificationUnsubscribeRoutes);
+// Websites embed the Feedback Widget; its panel signs in with its own grant.
+app.route("/api/feedback-widget", feedbackWidgetPublicRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
 app.route("/v1", threadDaemonRoutes);
