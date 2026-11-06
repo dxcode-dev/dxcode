@@ -15,6 +15,7 @@ import {
 } from "../../shared/auth/session-ended.js";
 import { wakingExecutionEnvironmentMessage } from "../../shared/execution-environment-copy.js";
 import {
+  RestoredTerminalsContext,
   TerminalSessionContext,
   terminalEnvironmentFormId,
 } from "../../shared/terminal-session.js";
@@ -206,6 +207,11 @@ interface ThreadTerminalProps {
 interface ThreadTerminalSessionProps extends ThreadTerminalProps {
   readonly terminalTheme: ReturnType<typeof terminalThemeFor>;
   readonly session: ThreadTerminalId;
+  /**
+   * The page restored this Terminal as it opened: its first attach joins a
+   * running Orb but never wakes a paused one (#1847).
+   */
+  readonly restored: boolean;
 }
 
 const useTerminalConnection = ({
@@ -214,6 +220,7 @@ const useTerminalConnection = ({
   loadEmulator = loadBrowserTerminal,
   onWorkspaceStatusChange,
   terminalTheme,
+  restored,
 }: ThreadTerminalSessionProps) => {
   const [status, setStatus] = React.useState<ThreadTerminalServerControl>({
     v: 1,
@@ -229,6 +236,13 @@ const useTerminalConnection = ({
   const recoverDisconnected = React.useRef<() => void>(() => {});
   const setActivity = React.useRef<(active: boolean) => void>(() => {});
   const activeRef = React.useRef(false);
+  /**
+   * A restored Terminal (`restored`) wakes a paused Orb only for the
+   * person's own act on it: a press or key in it, or showing its tab again.
+   * Focus alone never does (the emulator takes focus as it opens), nor do the
+   * page's focus, visibility, and online events (#1847).
+   */
+  const awaitingIntent = React.useRef(restored);
   /** Sends bytes as if typed, for the on-screen keys. */
   const sendInput = React.useRef<(data: string) => void>(() => {});
   /** Rewrites typed input, so a latched on-screen Ctrl applies to it. */
@@ -322,6 +336,8 @@ const useTerminalConnection = ({
         // Recovery stays on this socket while it is open: Core checks the
         // daemon, or wakes a waiting attachment, and answers here.
         const requestRecovery = () => {
+          // A restored Terminal the person has not touched never asks.
+          if (awaitingIntent.current) return;
           if (recoveryTimer !== undefined) return;
           if (
             !attachSent ||
@@ -351,8 +367,9 @@ const useTerminalConnection = ({
             clearHeartbeat();
             return;
           }
-          if (unavailableObserved) requestRecovery();
-          else expectHeartbeat();
+          if (unavailableObserved) {
+            if (!awaitingIntent.current) requestRecovery();
+          } else expectHeartbeat();
         };
         recoverDisconnected.current = resumeOnUserPresence;
         const updateActivity = (active: boolean) => {
@@ -390,6 +407,8 @@ const useTerminalConnection = ({
                 rows: terminalDimension(emulator.terminal.rows),
               },
               ...(restartResident ? { restartResident: true } : {}),
+              // Until the person acts on it, a reconnect stays quiet too.
+              ...(awaitingIntent.current ? { wake: false } : {}),
             }),
           );
         };
@@ -510,6 +529,7 @@ const useTerminalConnection = ({
               if (control.retry === "on-focus") unavailableObserved = true;
               if (
                 control.retry === "on-focus" &&
+                !awaitingIntent.current &&
                 document.hasFocus() &&
                 element.contains(document.activeElement)
               ) {
@@ -599,13 +619,21 @@ const useTerminalConnection = ({
     };
   };
   const retry = (restart = true) => {
+    intend();
     nextRestartResident.current = restart;
     setStatus({ v: 1, type: "progress", phase: "waking" });
     setAttempt((value) => value + 1);
   };
+  /** The person acted on this Terminal: it may wake the Orb now. */
+  const intend = () => {
+    awaitingIntent.current = false;
+  };
+  const waitsForIntent = () => awaitingIntent.current;
   return {
     activeRef,
     attempt,
+    intend,
+    waitsForIntent,
     mount,
     recoverDisconnected,
     refreshEnvironment,
@@ -622,6 +650,8 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
   const {
     activeRef,
     attempt,
+    intend,
+    waitsForIntent,
     mount,
     recoverDisconnected,
     refreshEnvironment,
@@ -633,13 +663,20 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
     transformInput,
   } = useTerminalConnection(props);
   const mobile = useMobile();
+  const wasHidden = React.useRef(false);
   const active = props.active ?? true;
   const recoverOnActivation = (element: HTMLSpanElement | null) => {
+    // Shown again after being hidden is the person's choice; being hidden
+    // (another tab chosen) is not a choice about this Terminal.
+    if (element === null) wasHidden.current = true;
+    else if (wasHidden.current) intend();
     activeRef.current = element !== null;
     setActivity.current(element !== null);
     if (element !== null) recoverDisconnected.current();
   };
   const wakeOnFocus = () => {
+    // The emulator focuses itself as it opens: not the person's act.
+    if (waitsForIntent()) return;
     if (
       status === disconnected ||
       (status.type === "error" && status.retry === "on-focus")
@@ -667,7 +704,27 @@ function ThreadTerminalSession(props: ThreadTerminalSessionProps) {
           refreshEnvironment.current();
       }}
       onFocusCapture={wakeOnFocus}
+      onKeyDownCapture={() => {
+        if (!waitsForIntent()) return;
+        intend();
+        if (
+          status === disconnected ||
+          (status.type === "error" && status.retry === "on-focus")
+        )
+          recoverDisconnected.current();
+      }}
       onPointerDown={(event) => {
+        if (waitsForIntent()) {
+          intend();
+          // Already focused by the emulator, so focus() below fires nothing.
+          if (
+            status === disconnected ||
+            (status.type === "error" && status.retry === "on-focus")
+          ) {
+            recoverDisconnected.current();
+            return;
+          }
+        }
         if (status === disconnected) recoverDisconnected.current();
         else if (
           status.type === "error" &&
@@ -703,8 +760,13 @@ export function ThreadTerminal(props: ThreadTerminalProps) {
   const session = React.use(TerminalSessionContext);
   // Core takes a Terminal's attach as the intent to wake a paused Orb, so a
   // tab restored behind another connects only once it first shows (#1847).
-  // After that it stays connected while hidden, keeping its screen.
+  // After that it stays connected while hidden, keeping its screen. One the
+  // page restored showing attaches without waking (`restored`).
   const active = props.active ?? true;
+  const restoredTerminals = React.use(RestoredTerminalsContext);
+  const [restored] = React.useState(
+    () => active && restoredTerminals.has(session),
+  );
   const [shown, setShown] = React.useState(active);
   if (active && !shown) setShown(true);
   if (!shown) return null;
@@ -714,6 +776,7 @@ export function ThreadTerminal(props: ThreadTerminalProps) {
       key={`${terminalTheme}:${terminalScheme}:${codeFontFamily}:${codeFontSize}:${session}`}
       {...props}
       session={session}
+      restored={restored}
       terminalTheme={terminalThemeFor(terminalTheme, terminalScheme)}
     />
   );

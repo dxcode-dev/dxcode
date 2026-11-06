@@ -93,6 +93,13 @@ export const ThreadTerminalBrowserControlSchema = Schema.Union([
     dimensions: ThreadTerminalDimensionsSchema,
     /** Explicit recovery for an exited/failed resident, not environment restart. */
     restartResident: Schema.optional(Schema.Literal(true)),
+    /**
+     * `false` for a Terminal the page restored, not one the person opened:
+     * it joins a live daemon but never wakes a paused Orb. It waits as
+     * `workspace-paused` until `recover` or anything else wakes the Orb
+     * (#1847). Absent, the attach wakes the Orb as before.
+     */
+    wake: Schema.optional(Schema.Literal(false)),
   }),
   Schema.Struct({
     v: Schema.Literal(1),

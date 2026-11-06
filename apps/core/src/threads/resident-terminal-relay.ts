@@ -68,6 +68,11 @@ interface ResidentSession {
   readonly socket: ResidentTerminalSocket;
   readonly transport: ResidentTerminalTransport;
   phase: ResidentPhase;
+  /**
+   * A restored Terminal's attach is checking the daemon is live; a fence
+   * it causes must not ask this browser to recover, which would wake.
+   */
+  checkingLiveness?: boolean;
   dimensions: ThreadTerminalDimensions;
   requested: boolean;
   restartResident: boolean;
@@ -350,7 +355,9 @@ export class ResidentTerminalRelay {
       session.restartResident = control.restartResident === true;
       session.dimensions = control.dimensions;
       this.#persist(session);
-      void this.#start(session);
+      void (control.wake === false
+        ? this.#attachIfLive(session)
+        : this.#start(session));
       return;
     }
     if (session.phase !== "ready") {
@@ -387,6 +394,38 @@ export class ResidentTerminalRelay {
     return this.#enqueueReadyFrame(session, data);
   }
 
+  /**
+   * A Terminal the page restored (`wake: false`): attach only to a daemon
+   * proven live, which never wakes the Orb. A paused Orb leaves it waiting,
+   * told so, until `recover` or anything else wakes the Orb (#1847).
+   */
+  async #attachIfLive(session: ResidentSession) {
+    const check = session.transport.checkLiveness;
+    let live: boolean;
+    session.checkingLiveness = true;
+    try {
+      live = check === undefined ? true : await check();
+    } catch {
+      live = false;
+    } finally {
+      session.checkingLiveness = false;
+    }
+    // Something else woke the Orb meanwhile and reattached it.
+    if (!this.#current(session) || session.activation !== undefined) return;
+    if (live && session.phase === "starting") {
+      void this.#start(session);
+      return;
+    }
+    session.phase = "waiting";
+    this.#persist(session);
+    this.#sendControl(session, {
+      v: 1,
+      type: "error",
+      code: "workspace-paused",
+      retry: "on-focus",
+    });
+  }
+
   async #checkLiveness(session: ResidentSession) {
     let live: boolean;
     try {
@@ -420,7 +459,7 @@ export class ResidentTerminalRelay {
       session.replayThrough = undefined;
       session.replayBytes = undefined;
       session.replayReceived = 0;
-      if (!quiet)
+      if (!quiet && session.checkingLiveness !== true)
         this.#sendControl(session, {
           v: 1,
           type: "progress",

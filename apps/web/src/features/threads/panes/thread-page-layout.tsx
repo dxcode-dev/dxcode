@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { THREAD_OPEN_VIEW_EVENT } from "../../../shared/commands/command-provider.js";
+import { RestoredTerminalsContext } from "../../../shared/terminal-session.js";
 import { threadQueryOptions } from "../thread-queries.js";
 import {
   defaultPaneLayout,
@@ -13,6 +14,7 @@ import {
   type PaneViewKind,
   reducePaneLayout,
   tabId,
+  terminalSessions,
 } from "./pane-layout.js";
 import { usePaneLayout } from "./pane-layout-queries.js";
 import { ViewsMenuButton } from "./pane-menus.js";
@@ -98,6 +100,9 @@ export function ThreadPageLayout({
   const { layout, dispatch } = archived
     ? archivedLayout
     : { layout: saved, dispatch: saveLayout };
+  // The Terminals the saved layout brought back as this page opened: the
+  // page waits for the layout and remounts per Thread (#1847).
+  const [restoredTerminals] = React.useState(() => terminalSessions(saved));
   const mode = useThreadLayoutMode();
   // Pointing at Terminal may wake the Orb only for people who may open it.
   const { identity } = useAuthenticatedIdentity();
@@ -116,18 +121,16 @@ export function ThreadPageLayout({
     React.startTransition(() => dispatch({ type: "open-view", view }));
   };
   useOpenViewCommands(openView);
-  if (mode.stacked)
-    return (
-      <div className="mobile-thread-region thread-page" data-stacked="">
-        {renderTitleBar({ views: null, stacked: true })}
-        <ThreadStackedLayout
-          layout={layout}
-          contents={contents}
-          dispatch={dispatch}
-        />
-      </div>
-    );
-  return (
+  const page = mode.stacked ? (
+    <div className="mobile-thread-region thread-page" data-stacked="">
+      {renderTitleBar({ views: null, stacked: true })}
+      <ThreadStackedLayout
+        layout={layout}
+        contents={contents}
+        dispatch={dispatch}
+      />
+    </div>
+  ) : (
     <TerminalWarmContext value={mayOpenTerminal ? threadId : undefined}>
       <div className="thread-region thread-page">
         {renderTitleBar({
@@ -151,5 +154,10 @@ export function ThreadPageLayout({
         />
       </div>
     </TerminalWarmContext>
+  );
+  return (
+    <RestoredTerminalsContext value={restoredTerminals}>
+      {page}
+    </RestoredTerminalsContext>
   );
 }

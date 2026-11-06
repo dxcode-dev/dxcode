@@ -866,7 +866,19 @@ export const destroyOrbWorker = async ({
       });
   }
   await api(`/workers/scripts/${workerName}?force=true`, { method: "DELETE" });
-  const listed = await run(["containers", "images", "list", "--json"]);
+  // Only this Worker's images: the account's whole list (every stage's
+  // snapshot tags) outgrows the 1 MB of output a command keeps, and a cut
+  // list is not JSON. Wrangler matches the filter against the registry's
+  // own name, `<account>/<image>`, before it drops the account.
+  const literal = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const listed = await run([
+    "containers",
+    "images",
+    "list",
+    "--json",
+    "--filter",
+    `^(?:${literal(accountId)}/)?${literal(workerName)}-`,
+  ]);
   if (listed.status !== 0) return;
   const images = JSON.parse(listed.stdout || "[]");
   for (const image of images.filter(({ name }) =>

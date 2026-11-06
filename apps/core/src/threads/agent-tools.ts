@@ -523,7 +523,7 @@ export const createThreadTools = (
     defineTool({
       name: "create_thread",
       description: description([
-        "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, stays private to them, and lists under this Thread in their sidebar.",
+        "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, lists under this Thread in their sidebar, and has this Thread's sharing: private while this Thread is private, and open to the same people with the same access while it is shared, so they can read its prompt and work.",
         "Use a child Thread for a self-contained task that can run on its own or in parallel with yours, or that needs a separate Orb. Do the work yourself when it is small, when you need its result immediately, or when it depends on files you changed here.",
         "Files do not transfer on their own. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt and push any commits it must build on first; for unpushed work, tell the child to copy it from this Thread with download_thread_changes or download_thread_file, naming the repository and branch.",
         "Returns the child's thread ID. The child sends its result to this Thread as a message when it finishes, and that message starts a new turn here. Use send_thread_message for follow-ups.",

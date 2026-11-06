@@ -415,11 +415,15 @@ describe("ThreadSession panes", () => {
     await React.act(() => root.unmount());
   });
 
-  // Issue #1847: reopening a paused Thread whose saved panes keep Terminal
-  // behind Changes woke its Orb. The hidden Terminal connected on load, and
-  // Core takes a Terminal's attach as the intent to wake.
-  it("reopens a saved Terminal behind Changes without connecting it until it shows", async () => {
-    viewport.mobile = false;
+  // Issue #1847: reopening a paused Thread woke its Orb. Its saved panes
+  // brought a Terminal back, which attached on load, and Core takes a
+  // Terminal's attach as the intent to wake.
+  const renderSavedLayout = async (
+    layout: ReturnType<typeof paneLayoutWith>,
+    mobile = false,
+    manualOpen = false,
+  ) => {
+    viewport.mobile = mobile;
     vi.stubGlobal(
       "ResizeObserver",
       class {
@@ -428,24 +432,42 @@ describe("ThreadSession panes", () => {
         disconnect() {}
       },
     );
-    const sockets: Array<{ url: string; sent: unknown[]; closed: boolean }> =
-      [];
+    const sockets: Array<{
+      url: string;
+      sent: unknown[];
+      closed: boolean;
+      receive: (data: string) => void;
+      drop: () => void;
+      open: () => void;
+    }> = [];
     vi.stubGlobal(
       "WebSocket",
       class extends EventTarget {
         static readonly OPEN = 1;
         readyState = 0;
         binaryType = "";
-        readonly record: { url: string; sent: unknown[]; closed: boolean };
         constructor(url: string) {
           super();
-          this.record = { url, sent: [], closed: false };
-          sockets.push(this.record);
-          queueMicrotask(() => {
-            this.readyState = 1;
-            this.dispatchEvent(new Event("open"));
-          });
+          const record = {
+            url,
+            sent: [] as unknown[],
+            closed: false,
+            receive: (data: string) =>
+              this.dispatchEvent(new MessageEvent("message", { data })),
+            drop: () => {
+              this.readyState = 3;
+              this.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+            },
+            open: () => {
+              this.readyState = 1;
+              this.dispatchEvent(new Event("open"));
+            },
+          };
+          this.record = record;
+          sockets.push(record);
+          if (!manualOpen) queueMicrotask(record.open);
         }
+        record!: (typeof sockets)[number];
         send(value: unknown) {
           this.record.sent.push(value);
         }
@@ -456,18 +478,23 @@ describe("ThreadSession panes", () => {
     );
     const loadEmulator = (() =>
       Promise.resolve({
-        mountBrowserTerminal: async () => ({
-          terminal: {
-            cols: 80,
-            rows: 24,
-            write: () => {},
-            reset: () => {},
-            resize: () => {},
-            onResize: () => ({ dispose: () => {} }),
-          },
-          setVisible: () => {},
-          dispose: () => {},
-        }),
+        // Like Ghostty, the emulator focuses its input as it opens.
+        mountBrowserTerminal: async (element: HTMLElement) => {
+          const input = element.appendChild(document.createElement("textarea"));
+          input.focus();
+          return {
+            terminal: {
+              cols: 80,
+              rows: 24,
+              write: () => {},
+              reset: () => {},
+              resize: () => {},
+              onResize: () => ({ dispose: () => {} }),
+            },
+            setVisible: () => {},
+            dispose: () => {},
+          };
+        },
       })) as unknown as React.ComponentProps<
       typeof ThreadTerminal
     >["loadEmulator"];
@@ -479,11 +506,7 @@ describe("ThreadSession panes", () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
-    // The layout the critical suite leaves: Changes shown, Terminal behind it.
-    queryClient.setQueryData(
-      paneLayoutKeys.layout(userId, thread.id),
-      paneLayoutWith(["changes", "terminal"]),
-    );
+    queryClient.setQueryData(paneLayoutKeys.layout(userId, thread.id), layout);
     await React.act(() =>
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -500,27 +523,225 @@ describe("ThreadSession panes", () => {
         await React.act(() => new Promise((resolve) => setTimeout(resolve)));
     };
     await settle();
+    const attaches = (index: number) =>
+      (sockets[index]?.sent ?? [])
+        .map((frame) => JSON.parse(String(frame)))
+        .filter((frame) => frame.type === "attach");
+    return { container, root, sockets, settle, attaches };
+  };
+
+  it("reopens a saved Terminal behind Changes without connecting it until it shows", async () => {
+    // The layout the critical suite's wake-files leaves: Changes shown,
+    // Terminal behind it.
+    const { container, root, sockets, settle, attaches } =
+      await renderSavedLayout(paneLayoutWith(["changes", "terminal"]));
     const changesTab = tabNamed(container, "Changes");
     const terminalTab = tabNamed(container, "Terminal");
     expect(changesTab?.getAttribute("aria-selected")).toBe("true");
     expect(terminalTab?.getAttribute("aria-selected")).toBe("false");
     expect(sockets).toEqual([]);
 
-    // Showing Terminal is the intent: it connects and attaches then.
+    // Showing Terminal is the intent: it connects and may wake the Orb.
     await click(terminalTab);
     await settle();
     expect(sockets.map(({ url }) => new URL(url).pathname)).toEqual([
       `/v1/threads/${thread.id}/terminal`,
     ]);
-    expect(
-      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
-    ).toEqual(["attach"]);
+    expect(attaches(0)).toHaveLength(1);
+    expect(attaches(0)[0]).not.toHaveProperty("wake");
 
     // Hidden again, it stays connected with its screen.
     await click(changesTab);
     await settle();
     expect(sockets).toHaveLength(1);
     expect(sockets[0]?.closed).toBe(false);
+    await React.act(() => root.unmount());
+  });
+
+  it("reopens a saved Terminal that shows without waking the Orb until the person acts", async () => {
+    // The layout the critical suite's wake-terminal leaves: Terminal shown.
+    const { container, root, sockets, settle, attaches } =
+      await renderSavedLayout(paneLayoutWith(["terminal", "changes"]));
+    expect(tabNamed(container, "Terminal")?.getAttribute("aria-selected")).toBe(
+      "true",
+    );
+    expect(sockets).toHaveLength(1);
+    expect(attaches(0)).toEqual([
+      expect.objectContaining({ type: "attach", wake: false }),
+    ]);
+
+    // Core parks it: the Orb is paused. Clicking the Terminal asks to wake.
+    await React.act(() =>
+      sockets[0]?.receive(
+        JSON.stringify({
+          v: 1,
+          type: "error",
+          code: "workspace-paused",
+          retry: "on-focus",
+        }),
+      ),
+    );
+    expect(container.textContent).toContain("Terminal workspace is paused.");
+    // Nothing the page does by itself asks to wake it.
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach"]);
+    await React.act(() => {
+      window.dispatchEvent(new Event("focus"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach"]);
+    const shell = container.querySelector<HTMLElement>(
+      ".thread-terminal-shell",
+    );
+    // The emulator holds focus already; only the person's press is intent.
+    expect(shell?.contains(document.activeElement)).toBe(true);
+    await React.act(() => {
+      shell?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    });
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toContain("recover");
+    await React.act(() => root.unmount());
+  });
+
+  // The critical suite's wake-chat: the page restores Terminal showing, and
+  // the person opens Changes before the Terminal's socket has opened.
+  it("keeps a restored Terminal quiet when another tab is chosen before it connects, and wakes it when shown again", async () => {
+    const { container, root, sockets, settle, attaches } =
+      await renderSavedLayout(
+        paneLayoutWith(["terminal", "changes"]),
+        false,
+        true,
+      );
+    expect(sockets).toHaveLength(1);
+    await click(tabNamed(container, "Changes"));
+    await React.act(() => sockets[0]?.open());
+    await settle();
+    expect(attaches(0)).toEqual([
+      expect.objectContaining({ type: "attach", wake: false }),
+    ]);
+    await React.act(() =>
+      sockets[0]?.receive(
+        JSON.stringify({
+          v: 1,
+          type: "error",
+          code: "workspace-paused",
+          retry: "on-focus",
+        }),
+      ),
+    );
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach"]);
+    // Choosing Terminal again is the person's act: it asks to wake.
+    await click(tabNamed(container, "Terminal"));
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach", "recover"]);
+    await React.act(() => root.unmount());
+  });
+
+  it("lets an untouched restored Terminal's Orb pause, and reconnects it only for the person", async () => {
+    const { root, sockets, settle, attaches } = await renderSavedLayout(
+      paneLayoutWith(["terminal", "changes"]),
+    );
+    // The Orb runs: Core attaches it.
+    await React.act(() =>
+      sockets[0]?.receive(
+        JSON.stringify({
+          v: 1,
+          type: "ready",
+          terminal: "default",
+          dimensions: { columns: 80, rows: 24 },
+          replayBytes: 0,
+          replayTruncated: false,
+          restartRequired: false,
+        }),
+      ),
+    );
+    // It goes quiet as the Orb pauses. Watching is not using it: nothing
+    // asks Core to wake it.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach"]);
+    await React.act(() =>
+      sockets[0]?.receive(
+        JSON.stringify({
+          v: 1,
+          type: "progress",
+          phase: "resident-restarting",
+        }),
+      ),
+    );
+    await settle();
+    expect(
+      sockets[0]?.sent.map((frame) => JSON.parse(String(frame)).type),
+    ).toEqual(["attach"]);
+    // A dropped socket waits too; the person's press reconnects it.
+    await React.act(() => sockets[0]?.drop());
+    await settle();
+    expect(sockets).toHaveLength(1);
+    const shell = document.querySelector<HTMLElement>(".thread-terminal-shell");
+    await React.act(() =>
+      shell?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true })),
+    );
+    await settle();
+    expect(sockets).toHaveLength(2);
+    expect(attaches(1)).toHaveLength(1);
+    expect(attaches(1)[0]).not.toHaveProperty("wake");
+    await React.act(() => root.unmount());
+  }, 10_000);
+
+  it("on a phone, keeps a restored Terminal quiet and wakes one the person picks", async () => {
+    // The phone shows the saved focused tab: Terminal, restored.
+    const shown = await renderSavedLayout(
+      paneLayoutWith(["terminal", "changes"]),
+      true,
+    );
+    expect(shown.sockets).toHaveLength(1);
+    expect(shown.attaches(0)).toEqual([
+      expect.objectContaining({ type: "attach", wake: false }),
+    ]);
+    await React.act(() => shown.root.unmount());
+    document.body.replaceChildren();
+
+    // Saved behind Changes, Terminal waits; picking it is the intent.
+    const behind = await renderSavedLayout(
+      paneLayoutWith(["changes", "terminal"]),
+      true,
+    );
+    expect(behind.sockets).toEqual([]);
+    await click(
+      [...behind.container.querySelectorAll('[role="tab"]')].find(
+        (tab) => tab.textContent === "Terminal",
+      ) ?? null,
+    );
+    await behind.settle();
+    expect(behind.sockets).toHaveLength(1);
+    expect(behind.attaches(0)).toHaveLength(1);
+    expect(behind.attaches(0)[0]).not.toHaveProperty("wake");
+    await React.act(() => behind.root.unmount());
+  });
+
+  it("wakes the Orb for a Terminal the person opens from Views", async () => {
+    const { container, root, sockets, settle, attaches } =
+      await renderSavedLayout(paneLayoutWith(["changes"]));
+    expect(sockets).toEqual([]);
+    await openView(container, "Terminal");
+    await settle();
+    expect(sockets).toHaveLength(1);
+    expect(attaches(0)).toHaveLength(1);
+    expect(attaches(0)[0]).not.toHaveProperty("wake");
     await React.act(() => root.unmount());
   });
 

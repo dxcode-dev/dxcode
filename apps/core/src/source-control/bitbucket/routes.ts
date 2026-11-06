@@ -116,35 +116,46 @@ bitbucketControlPlaneRoutes.onError((cause, context) => {
 });
 const dbFor = (context: Context<AppEnv>) =>
   Effect.runPromise(decodeD1Binding(context.env.DB));
-const status = async (context: Context<AppEnv>) => {
-  const db = await dbFor(context);
-  const userId = context.get("principal").userId;
-  if (
-    !context.env.DX_INTEGRATION_BITBUCKET_OAUTH ||
-    context.env.DX_INTEGRATION_BITBUCKET_OAUTH === "{}" ||
-    context.env.DX_RUNTIME_MODE === "local"
-  ) {
-    const row = await readBitbucketConnection(db, userId);
-    return {
-      configured: false,
-      connection:
-        row === null
-          ? null
-          : { id: row.id, accountName: row.account_name, status: row.status },
-    };
-  }
-  return (await bitbucketControlPlaneFor(db, context.env)).status(userId);
+const configured = (context: Context<AppEnv>) =>
+  Boolean(context.env.DX_INTEGRATION_BITBUCKET_OAUTH) &&
+  context.env.DX_INTEGRATION_BITBUCKET_OAUTH !== "{}" &&
+  context.env.DX_RUNTIME_MODE !== "local";
+/**
+ * The stored connection, from one D1 read. Every use of the token updates
+ * it: a refused grant marks it for reconnect.
+ */
+const storedStatus = async (context: Context<AppEnv>) => {
+  const row = await readBitbucketConnection(
+    await dbFor(context),
+    context.get("principal").userId,
+  );
+  return {
+    configured: configured(context),
+    connection:
+      row === null
+        ? null
+        : { id: row.id, accountName: row.account_name, status: row.status },
+  };
 };
+// The Integrations page reads the stored connection, so it never waits on
+// Bitbucket; Refresh status asks Bitbucket.
 bitbucketControlPlaneRoutes.get("/personal/connection", async (context) =>
   context.json(
-    encode(BitbucketConnectionResponseSchema, await status(context)),
+    encode(BitbucketConnectionResponseSchema, await storedStatus(context)),
   ),
 );
 bitbucketControlPlaneRoutes.post("/personal/refresh", async (context) => {
   const db = await dbFor(context);
   await allowPersonal(context, db);
   return context.json(
-    encode(BitbucketConnectionResponseSchema, await status(context)),
+    encode(
+      BitbucketConnectionResponseSchema,
+      configured(context)
+        ? await (await bitbucketControlPlaneFor(db, context.env)).status(
+            context.get("principal").userId,
+          )
+        : await storedStatus(context),
+    ),
   );
 });
 bitbucketControlPlaneRoutes.post("/personal/authorize", async (context) => {

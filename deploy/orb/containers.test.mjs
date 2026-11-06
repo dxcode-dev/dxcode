@@ -78,7 +78,91 @@ describe("Cloudflare Containers Orb Worker deployment", () => {
       `DELETE /client/v4/accounts/${"a".repeat(32)}/containers/applications/app-orb`,
       `DELETE /client/v4/accounts/${"a".repeat(32)}/workers/scripts/dx-orb-test`,
     ]);
+    // The list asks for this Worker's images only, so it stays far below
+    // the 1 MB of output a command keeps.
+    expect(run.mock.calls[0][0]).toEqual([
+      "containers",
+      "images",
+      "list",
+      "--json",
+      "--filter",
+      `^(?:${"a".repeat(32)}/)?dx-orb-test-`,
+    ]);
     expect(run.mock.calls.slice(1).map(([args]) => args[3])).toEqual([
+      "dx-orb-test-orb-orbcontainerobject:a",
+      "dx-orb-test-orb-orbcontainerobject:rootfs-snapshot-b",
+    ]);
+  });
+});
+
+describe("Orb Worker removal on an account with many images", () => {
+  // Ways this could fail: the account's image list (every stage's snapshot
+  // tags; 1.06 MB on the preview account on 2026-11-05) outgrows the 1 MB
+  // of output a command keeps, so the kept tail is not JSON and the destroy
+  // fails after the Worker is already gone; a fix that deletes another
+  // stage's or the shared preview image; a filter that misses the
+  // account-qualified name Wrangler matches, so this stage's snapshots stay
+  // behind while the destroy reports success.
+  it("removes only this Worker's images and snapshots, through the real command capture", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dx-orb-destroy-"));
+    const bin = join(root, "node_modules/wrangler-containers/bin");
+    mkdirSync(bin, { recursive: true });
+    const deleted = join(root, "deleted.log");
+    // A stand-in for Wrangler 4.147's `containers images list`: the
+    // registry names each repository `<account>/<image>`; `--filter` is
+    // matched against that name, then the account is dropped from what it
+    // prints. Each `containers images delete` is recorded.
+    writeFileSync(
+      join(bin, "wrangler.js"),
+      `const { appendFileSync } = require("node:fs");
+const args = process.argv.slice(2);
+if (args[2] === "delete") {
+  appendFileSync(${JSON.stringify(deleted)}, args[3] + "\\n");
+  process.exit(0);
+}
+const tags = (prefix, count) =>
+  Array.from({ length: count }, (_, i) => prefix + "-" + String(i).padStart(40, "0"));
+const catalog = [
+  ...Array.from({ length: 30 }, (_, i) => ({
+    name: "dx-orb-branch-other-" + i + "-orb-orbcontainerobject",
+    tags: tags("rootfs-snapshot", 600),
+  })),
+  { name: "dx-orb-preview", tags: ["shared"] },
+  { name: "dx-orb-test-orb-orbcontainerobject", tags: ["a", "rootfs-snapshot-b"] },
+];
+const account = "${"a".repeat(32)}/";
+const at = args.indexOf("--filter");
+const pattern = new RegExp(at === -1 ? "" : args[at + 1]);
+const shown = catalog
+  .map(({ name, tags }) => ({ repository: account + name, tags }))
+  .filter(({ repository }) => pattern.test(repository))
+  .map(({ repository, tags }) => ({ name: repository.slice(account.length), tags }));
+process.stdout.write(JSON.stringify(shown, null, 2));
+`,
+    );
+    const full = spawnSync(
+      process.execPath,
+      [join(bin, "wrangler.js"), "containers", "images", "list", "--json"],
+      { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    ).stdout;
+    expect(full.length).toBeGreaterThan(1024 * 1024);
+    const fetch = vi.fn(async (url) => {
+      const path = new URL(url).pathname;
+      return Response.json({
+        success: true,
+        result: path.endsWith("/workers/durable_objects/namespaces")
+          ? []
+          : null,
+      });
+    });
+    await destroyOrbWorker({
+      workerName: "dx-orb-test",
+      accountId: "a".repeat(32),
+      apiToken: "token",
+      workspaceRoot: root,
+      fetch,
+    });
+    expect(readFileSync(deleted, "utf8").trim().split("\n")).toEqual([
       "dx-orb-test-orb-orbcontainerobject:a",
       "dx-orb-test-orb-orbcontainerobject:rootfs-snapshot-b",
     ]);

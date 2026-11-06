@@ -178,6 +178,12 @@ const terminalTabs = (layout: ThreadPaneLayout) =>
     pane.tabs.filter((tab): tab is TerminalTab => tab.kind === "terminal"),
   );
 
+/** The shell sessions of every Terminal tab in the layout. */
+export const terminalSessions = (
+  layout: ThreadPaneLayout,
+): ReadonlySet<ThreadTerminalId> =>
+  new Set(terminalTabs(layout).map(terminalSession));
+
 /** The highest Terminal ordinal, and so session number, a layout holds. */
 const TERMINAL_ORDINAL_LIMIT = 1_000;
 

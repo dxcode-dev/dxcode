@@ -4,6 +4,7 @@ import {
   discoverOAuthServerInfo,
   exchangeAuthorization,
   type OAuthClientInformationMixed,
+  RegistrationRejectedError,
   refreshAuthorization,
   registerClient,
   resourceUrlFromServerUrl,
@@ -175,13 +176,241 @@ export const mcpServerAdvertisesOAuth = async (
   }
 };
 
-const tokenAuthMethod = (metadata: AuthorizationServerMetadata) => {
+const stringList = (value: unknown): Array<string> | undefined =>
+  Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : undefined;
+
+type ClientAuthMethod = "none" | "client_secret_basic" | "client_secret_post";
+
+const isClientAuthMethod = (value: unknown): value is ClientAuthMethod =>
+  value === "none" ||
+  value === "client_secret_basic" ||
+  value === "client_secret_post";
+
+/**
+ * The client authentication dx registers with first. MCP clients are
+ * public clients using PKCE, so dx asks for `none` unless the server lists
+ * secret methods and not `none`; then the listed secret method,
+ * `client_secret_basic` first (the RFC 7591 default).
+ */
+const firstRegistrationMethod = (
+  metadata: AuthorizationServerMetadata,
+): ClientAuthMethod => {
   const supported = metadata.token_endpoint_auth_methods_supported;
-  if (supported === undefined) return "client_secret_basic";
-  for (const method of ["client_secret_post", "client_secret_basic", "none"])
+  if (supported === undefined || supported.includes("none")) return "none";
+  for (const method of ["client_secret_basic", "client_secret_post"] as const)
     if (supported.includes(method)) return method;
-  return supported[0] ?? "client_secret_basic";
+  return "none";
 };
+
+/** The other kind of client: secret for public, public for secret. */
+const otherRegistrationMethod = (
+  method: ClientAuthMethod,
+  metadata: AuthorizationServerMetadata,
+): ClientAuthMethod => {
+  if (method !== "none") return "none";
+  return metadata.token_endpoint_auth_methods_supported?.includes(
+    "client_secret_post",
+  ) &&
+    !metadata.token_endpoint_auth_methods_supported.includes(
+      "client_secret_basic",
+    )
+    ? "client_secret_post"
+    : "client_secret_basic";
+};
+
+/** The RFC 7591 error a refused registration names, when it is one. */
+const registrationRefusal = (
+  cause: unknown,
+): { readonly error: string; readonly description?: string } | undefined => {
+  if (!(cause instanceof RegistrationRejectedError)) return undefined;
+  try {
+    const body: unknown = JSON.parse(cause.body);
+    if (typeof body !== "object" || body === null) return undefined;
+    const { error, error_description: description } = body as Record<
+      string,
+      unknown
+    >;
+    if (typeof error !== "string") return undefined;
+    return typeof description === "string" && description.length > 0
+      ? { error, description }
+      : { error };
+  } catch {
+    return undefined;
+  }
+};
+
+const CLIENT_AUTH_WORDS =
+  /token_endpoint_auth|auth(entication)?[ _-]?method|client[ _-]?secret|public client|confidential/i;
+
+/**
+ * Whether a refusal may be about the kind of client: `invalid_client_metadata`
+ * that names client authentication or names nothing, or `invalid_request`
+ * that names client authentication (some servers answer that way).
+ */
+const refusedClientKind = (
+  refusal: ReturnType<typeof registrationRefusal>,
+): boolean => {
+  if (refusal === undefined) return false;
+  const named =
+    refusal.description !== undefined &&
+    CLIENT_AUTH_WORDS.test(refusal.description);
+  if (refusal.error === "invalid_client_metadata")
+    return named || refusal.description === undefined;
+  return refusal.error === "invalid_request" && named;
+};
+
+/** The server's reason for a refusal, in words fit to show a person. */
+const refusalReason = (cause: unknown): string | undefined => {
+  const refusal = registrationRefusal(cause);
+  const reason = refusal?.description ?? refusal?.error;
+  if (reason === undefined) {
+    return cause instanceof RegistrationRejectedError
+      ? `HTTP status ${cause.status}`
+      : undefined;
+  }
+  // Server text is shown as plain words: one short line, no markup.
+  const plain = reason
+    .replace(/[{}<>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return plain.length === 0 ? undefined : plain.slice(0, 200);
+};
+
+const registrationFailure = (reasons: ReadonlyArray<string | undefined>) => {
+  const known = [...new Set(reasons.filter((r) => r !== undefined))];
+  return failure(
+    `The server refused dx's client registration${
+      known.length === 0 ? "." : ` (${known.join("; ")}).`
+    } Some servers only accept approved clients; enter your own OAuth app or a different client name.`,
+  );
+};
+
+/**
+ * Registers dx as a client: first as the kind the server's metadata points
+ * to, then once as the other kind when the server refuses that kind of
+ * client. The result records the method the client was registered with, so
+ * token requests authenticate the same way.
+ */
+const registerMcpClient = async (
+  authorizationServerUrl: string,
+  metadata: AuthorizationServerMetadata,
+  clientMetadata: Omit<
+    Parameters<typeof registerClient>[1]["clientMetadata"],
+    "token_endpoint_auth_method"
+  >,
+  scope: string | undefined,
+  fetchFn: typeof fetch,
+): Promise<OAuthClientInformationMixed> => {
+  const register = async (method: ClientAuthMethod) => {
+    const registered = await registerClient(authorizationServerUrl, {
+      metadata,
+      clientMetadata: { ...clientMetadata, token_endpoint_auth_method: method },
+      ...(scope === undefined ? {} : { scope }),
+      fetchFn,
+    });
+    // A server may answer with a different method than dx asked for; RFC
+    // 7591 makes the answer authoritative. A public client never sends a
+    // secret, so one issued anyway is not kept.
+    const used = isClientAuthMethod(registered.token_endpoint_auth_method)
+      ? registered.token_endpoint_auth_method
+      : method;
+    if (used === "none") {
+      const { client_secret: _unused, ...client } = registered;
+      return { ...client, token_endpoint_auth_method: used };
+    }
+    if (registered.client_secret === undefined)
+      throw failure(
+        "The server registered dx as a confidential client but sent no client secret.",
+      );
+    return { ...registered, token_endpoint_auth_method: used };
+  };
+  const first = firstRegistrationMethod(metadata);
+  try {
+    return await register(first);
+  } catch (cause) {
+    if (cause instanceof McpOAuthFailed) throw cause;
+    if (!refusedClientKind(registrationRefusal(cause)))
+      throw registrationFailure([refusalReason(cause)]);
+    try {
+      return await register(otherRegistrationMethod(first, metadata));
+    } catch (retryCause) {
+      if (retryCause instanceof McpOAuthFailed) throw retryCause;
+      throw registrationFailure([
+        refusalReason(cause),
+        refusalReason(retryCause),
+      ]);
+    }
+  }
+};
+
+/**
+ * The method a token request authenticates with: the one the client was
+ * registered with when known, else what the SDK picks from the server's
+ * metadata (an own OAuth app, or a grant stored before dx recorded it).
+ */
+const clientAuthMethod = (
+  client: OAuthClientInformationMixed,
+  supported: ReadonlyArray<string>,
+): ClientAuthMethod => {
+  const registered =
+    "token_endpoint_auth_method" in client
+      ? client.token_endpoint_auth_method
+      : undefined;
+  if (isClientAuthMethod(registered)) return registered;
+  const selected = selectClientAuthMethod(client, [...supported]);
+  return isClientAuthMethod(selected) ? selected : "none";
+};
+
+/**
+ * HTTP Basic client credentials as RFC 6749 §2.3.1 defines them: the ID and
+ * secret each form-urlencoded, then base64 over the UTF-8 bytes.
+ */
+const basicCredentials = (clientId: string, clientSecret: string) => {
+  const formEncoded = (value: string) =>
+    new URLSearchParams({ value }).toString().slice("value=".length);
+  const bytes = new TextEncoder().encode(
+    `${formEncoded(clientId)}:${formEncoded(clientSecret)}`,
+  );
+  return `Basic ${btoa(String.fromCharCode(...bytes))}`;
+};
+
+/** Adds client authentication (RFC 6749 §2.3) to a token-endpoint request. */
+const applyClientAuth = (
+  method: ClientAuthMethod,
+  client: OAuthClientInformationMixed,
+  headers: Headers,
+  params: URLSearchParams,
+) => {
+  if (method === "client_secret_basic" && client.client_secret !== undefined) {
+    headers.set(
+      "authorization",
+      basicCredentials(client.client_id, client.client_secret),
+    );
+    return;
+  }
+  params.set("client_id", client.client_id);
+  if (method === "client_secret_post" && client.client_secret !== undefined)
+    params.set("client_secret", client.client_secret);
+};
+
+/** The SDK hook that makes code exchange and refresh use `clientAuthMethod`. */
+const clientAuthentication =
+  (client: OAuthClientInformationMixed, metadata: unknown) =>
+  async (headers: Headers, params: URLSearchParams) =>
+    applyClientAuth(
+      clientAuthMethod(
+        client,
+        stringList(
+          (metadata as AuthorizationServerMetadata | undefined)
+            ?.token_endpoint_auth_methods_supported,
+        ) ?? [],
+      ),
+      client,
+      headers,
+      params,
+    );
 
 export interface McpOAuthClientChoice {
   /** Sent as `client_name` when dx registers a client. */
@@ -217,29 +446,19 @@ export const beginMcpOAuth = async (input: {
         "The server does not allow automatic client registration. Enter your own OAuth app's client ID.",
       );
     }
-    try {
-      clientInformation = await registerClient(server.authorizationServerUrl, {
-        metadata: server.metadata,
-        clientMetadata: {
-          client_name: input.client.clientName,
-          redirect_uris: [input.redirectUrl],
-          grant_types: ["authorization_code", "refresh_token"],
-          response_types: ["code"],
-          token_endpoint_auth_method: tokenAuthMethod(server.metadata),
-          ...(server.scope === undefined ? {} : { scope: server.scope }),
-        },
+    clientInformation = await registerMcpClient(
+      server.authorizationServerUrl,
+      server.metadata,
+      {
+        client_name: input.client.clientName,
+        redirect_uris: [input.redirectUrl],
+        grant_types: ["authorization_code", "refresh_token"],
+        response_types: ["code"],
         ...(server.scope === undefined ? {} : { scope: server.scope }),
-        fetchFn: input.fetchFn,
-      });
-    } catch (cause) {
-      throw failure(
-        `The server rejected dx's client registration${
-          cause instanceof Error && cause.message.length < 200
-            ? `: ${cause.message}`
-            : "."
-        } Some servers only accept approved clients; enter your own OAuth app or a different client name.`,
-      );
-    }
+      },
+      server.scope,
+      input.fetchFn,
+    );
   }
   const { authorizationUrl, codeVerifier } = await startAuthorization(
     server.authorizationServerUrl,
@@ -285,6 +504,10 @@ export const finishMcpOAuth = async (
         ...(iss === undefined ? {} : { iss }),
         codeVerifier: transaction.codeVerifier,
         redirectUri: transaction.redirectUrl,
+        addClientAuthentication: clientAuthentication(
+          transaction.clientInformation,
+          transaction.metadata,
+        ),
         ...(transaction.resource === undefined
           ? {}
           : { resource: new URL(transaction.resource) }),
@@ -316,6 +539,10 @@ const refresh = async (
       metadata: payload.metadata as AuthorizationServerMetadata,
       clientInformation: payload.clientInformation,
       refreshToken,
+      addClientAuthentication: clientAuthentication(
+        payload.clientInformation,
+        payload.metadata,
+      ),
       ...(payload.resource === undefined
         ? {}
         : { resource: new URL(payload.resource) }),
@@ -333,11 +560,6 @@ const refresh = async (
     throw failure("Sign in again.");
   }
 };
-
-const stringList = (value: unknown): Array<string> | undefined =>
-  Array.isArray(value) && value.every((item) => typeof item === "string")
-    ? value
-    : undefined;
 
 /**
  * Asks the grant's authorization server to revoke it (RFC 7009): the
@@ -366,23 +588,18 @@ export const revokeMcpOAuthGrant = async (
     accept: "application/json",
     "content-type": "application/x-www-form-urlencoded",
   });
-  const client = payload.clientInformation;
-  const method = selectClientAuthMethod(
-    client as OAuthClientInformationMixed,
-    stringList(metadata.revocation_endpoint_auth_methods_supported) ??
-      stringList(metadata.token_endpoint_auth_methods_supported) ??
-      [],
+  const client = payload.clientInformation as OAuthClientInformationMixed;
+  applyClientAuth(
+    clientAuthMethod(
+      client,
+      stringList(metadata.revocation_endpoint_auth_methods_supported) ??
+        stringList(metadata.token_endpoint_auth_methods_supported) ??
+        [],
+    ),
+    client,
+    headers,
+    body,
   );
-  if (method === "client_secret_basic" && client.client_secret !== undefined)
-    headers.set(
-      "authorization",
-      `Basic ${btoa(`${client.client_id}:${client.client_secret}`)}`,
-    );
-  else {
-    body.set("client_id", client.client_id);
-    if (method !== "none" && client.client_secret !== undefined)
-      body.set("client_secret", client.client_secret);
-  }
   const response = await fetchFn(endpoint, { method: "POST", headers, body });
   if (response.status !== 200)
     throw failure("The authorization server refused to revoke the token.");
