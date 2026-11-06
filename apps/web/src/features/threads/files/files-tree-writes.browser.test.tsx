@@ -11,7 +11,7 @@ import {
 } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ChangesTransport } from "../changes/changes-api.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import { ThreadFilesPanel } from "./files-panel.js";
@@ -60,6 +60,12 @@ const changes: ChangesTransport = {
 
 const settle = () =>
   React.act(() => new Promise((resolve) => setTimeout(resolve, 0)));
+
+// Delete's confirmation is a lazy chunk. The dev server serves it on first
+// import, and while other test files load theirs that has taken longer than
+// the 1 s wait below. Load it before the tests, so that wait times the
+// dialog, not the dev server.
+beforeAll(() => import("../../../shared/ui/confirm-dialog.js"));
 
 afterEach(() => {
   focusManager.setFocused(undefined);
@@ -287,7 +293,6 @@ describe("Files tree write actions", () => {
     await openMenu(container, "src/");
     await clickMenuItem("Delete");
     const dialog = () => dialogTitled("Delete Folder?");
-    // The dialog's code loads the first time one opens.
     await vi.waitFor(() => expect(dialog()).not.toBeNull());
     expect(dialog()?.textContent).toContain(
       "“src” and everything in it will be deleted from the workspace.",

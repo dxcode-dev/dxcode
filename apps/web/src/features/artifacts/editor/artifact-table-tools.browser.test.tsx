@@ -42,30 +42,43 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   await page.viewport(1280, 800);
 });
-let saved = "";
+/** The Markdown each artifact's editor last saved, by artifact id. */
+const saves = new Map<string, string>();
+let mounts = 0;
+/** The artifact the test's editor shows. */
+let shown = artifact;
+/** What the editor now on screen saved: no other editor's save counts. */
+const saved = () => saves.get(shown.id) ?? "";
 const mount = async (width: number, readOnly = false, source = markdown) => {
   await page.viewport(width, 844);
-  saved = "";
+  // Each editor edits its own artifact, and a test reads only its editor's
+  // saves. An editor a test left behind can still save after the test ends:
+  // twice in release runs, the Markdown a round trip checked matched an
+  // earlier test's last edit.
+  mounts += 1;
+  shown = { ...artifact, id: `art_${mounts.toString(16).padStart(32, "0")}` };
   // Saves succeed, answered as the server answers them. An answer the editor
   // cannot read is a failed save, which it retries for as long as the page
-  // lives, so an earlier test's edits would land in a later test's `saved`.
-  vi.stubGlobal("fetch", (_input: RequestInfo | URL, init?: RequestInit) => {
+  // lives.
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "PUT" && typeof init.body === "string") {
+      const id = decodeURIComponent(String(input).split("/").at(-1) ?? "");
       const body = JSON.parse(init.body) as {
         markdown: string;
         baseRevision: number;
       };
-      saved = body.markdown;
+      saves.set(id, body.markdown);
       return Promise.resolve(
         Response.json({
           status: "success",
           data: {
             artifact: {
               ...artifact,
+              id,
               revision: body.baseRevision + 1,
-              sizeBytes: saved.length,
+              sizeBytes: body.markdown.length,
             },
-            markdown: saved,
+            markdown: body.markdown,
           },
         }),
       );
@@ -86,7 +99,7 @@ const mount = async (width: number, readOnly = false, source = markdown) => {
         >
           <ArtifactEditor
             threadId={threadId}
-            initial={{ artifact, markdown: source }}
+            initial={{ artifact: shown, markdown: source }}
             readOnly={readOnly}
             switcher={null}
           />
@@ -253,13 +266,14 @@ describe.each([1440, 390])("table grips at %i", (width) => {
     await choose(menu, action);
     await userEvent.keyboard("Inserted");
     const expected = cells(prose);
+    expect(expected.flat()).toContain("Inserted");
     await userEvent.keyboard("{Control>}s{/Control}");
-    await expect.poll(() => saved).toContain("Inserted");
+    await expect.poll(saved).toContain("Inserted");
     // The editor took the save, so nothing retries it into a later test.
     await expect
       .poll(() => document.querySelector(".artifact-save")?.textContent)
       .toBe("Saved");
-    const source = saved;
+    const source = saved();
     await React.act(() => root?.unmount());
     root = undefined;
     document.body.replaceChildren();
