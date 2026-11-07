@@ -40,9 +40,12 @@ const threadClient = (threadId: string) =>
 const startScenarioThread = async (scenario: string, firstMessage: string) => {
   expect(
     (
-      await fixtureRequest(`/__fixture/scenario/${scenario}`, {
-        method: "POST",
-      })
+      await fixtureRequest(
+        `/__fixture/scenario/${scenario}${process.env.DX_LIFECYCLE_ALONE === "1" ? "?force=1" : ""}`,
+        {
+          method: "POST",
+        },
+      )
     ).status,
   ).toBe(204);
   const projectResponse = await fixtureRequest("/v1/projects", {
@@ -1079,4 +1082,156 @@ describe("generated Flue Worker lifecycle", () => {
       commandRuns: await commandRuns(),
     });
   });
+
+  // #1934: after a storage reset, a turn whose attempts were used up kept
+  // failing to write its ending, and every wake opened a full agent session
+  // to retry it: about 35 wakes a minute for 3.5 hours, each reading the
+  // long Thread again, until someone pressed Stop.
+  it("gives up on a recovery that keeps failing on a long Thread, says so, and takes the next message", async () => {
+    const threadId = await startScenarioThread(
+      "recovery-loop",
+      "Build a long history.",
+    );
+    const client = threadClient(threadId);
+    await waitUntil(
+      async () => (await client.history()).settlements.length > 0,
+      "the long first turn to settle",
+      240_000,
+    );
+    const shape = await (
+      await fixtureRequest(`/__fixture/recovery/shape/${threadId}`)
+    ).json<{
+      batches: number;
+      historyEntries: number;
+      checkpointOffset: string | null;
+    }>();
+    expect(shape.historyEntries).toBeGreaterThan(5_000);
+
+    const wedged = await client.send({
+      message: { kind: "user", body: "Hold this turn open." },
+      idempotencyKey: "recovery-loop-wedged",
+    });
+    await waitUntil(
+      async () =>
+        (
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "the second turn to hold",
+    );
+    const wedge = await (
+      await fixtureRequest(`/__fixture/recovery/wedge/${threadId}`, {
+        method: "POST",
+      })
+    ).json<{ submissionId: string } | null>();
+    expect(wedge?.submissionId).toBe(wedged.submissionId);
+    const wedgedAt = Date.now();
+
+    type Wake = {
+      instance: number;
+      at: number;
+      durationMs: number;
+      rowsRead: number;
+      rowsWritten: number;
+      failedAppends: number;
+    };
+    const wakes = async () =>
+      (
+        await (
+          await fixtureRequest(`/__fixture/recovery/wakes/${threadId}`)
+        ).json<{ instances: number; wakes: Wake[] }>()
+      ).wakes.filter(({ at }) => at >= wedgedAt);
+    const row = async () =>
+      (
+        await fixtureRequest(
+          `/__fixture/recovery/submission/${threadId}/${wedged.submissionId}`,
+        )
+      ).json<{ status: string; error: string | null } | null>();
+    const RECOVERY_WINDOW_MS = 60_000;
+    let ending = await row();
+    while (
+      ending?.status !== "settled" &&
+      Date.now() < wedgedAt + RECOVERY_WINDOW_MS
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      ending = await row();
+    }
+    const settledAt = Date.now();
+    // Recovery that gave up wakes no more: nothing retries the dead turn.
+    await new Promise((resolve) => setTimeout(resolve, 10_000));
+    const observed = await wakes();
+    const retries = observed.filter(({ failedAppends }) => failedAppends > 0);
+    // What dx heard: Flue's live settlement, which drives the Thread's
+    // activity and notifications.
+    const settlements = await (
+      await fixtureRequest(`/__fixture/settlements/${threadId}`)
+    ).json<Array<{ submissionId: string; outcome: string; error?: string }>>();
+    const proof = {
+      threadId,
+      shape,
+      wedgedSubmissionId: wedged.submissionId,
+      ending,
+      settledAfterMs: settledAt - wedgedAt,
+      reported: settlements.filter(
+        ({ submissionId }) => submissionId === wedged.submissionId,
+      ),
+      retries: retries.map(({ at, rowsRead, rowsWritten, durationMs }) => ({
+        afterMs: at - wedgedAt,
+        rowsRead,
+        rowsWritten,
+        durationMs,
+      })),
+      totals: {
+        wakes: observed.length,
+        rowsRead: observed.reduce((sum, wake) => sum + wake.rowsRead, 0),
+        rowsWritten: observed.reduce((sum, wake) => sum + wake.rowsWritten, 0),
+      },
+      wakes: observed.map((wake) => ({ ...wake, at: wake.at - wedgedAt })),
+    };
+    writeProof("recovery-loop", proof);
+
+    // Before the fix the turn never ended: a fresh object every second ran
+    // the same failing recovery, 70 times in this window.
+    expect(ending).toMatchObject({
+      status: "settled",
+      error: expect.stringMatching(/could not be recovered after 4 tries/),
+    });
+    expect(proof.reported).toEqual([
+      expect.objectContaining({
+        outcome: "failed",
+        error: expect.stringMatching(/could not be recovered/),
+      }),
+    ]);
+    // Four tries, then one last attempt to write the ending, then nothing.
+    expect(retries.length).toBeLessThanOrEqual(5);
+    expect(
+      observed
+        .filter(({ at }) => at > settledAt)
+        .every(({ failedAppends }) => failedAppends === 0),
+    ).toBe(true);
+    // Tries back off: 1, 2 and 4 s apart (the fixture's policy).
+    const tries = retries.slice(0, 4).map(({ at }) => at);
+    const gaps = tries.flatMap((at, index) =>
+      index === 0 ? [] : [at - (tries[index - 1] ?? at)],
+    );
+    expect(gaps).toHaveLength(3);
+    for (const [index, gap] of gaps.entries())
+      expect(gap).toBeGreaterThanOrEqual(1_000 * 2 ** index - 250);
+
+    await (
+      await fixtureRequest(`/__fixture/recovery/heal/${threadId}`, {
+        method: "POST",
+      })
+    ).body?.cancel();
+    const after = await client.send({
+      message: { kind: "user", body: "Continue after recovery gave up." },
+      idempotencyKey: "recovery-loop-after",
+    });
+    await client.wait(after);
+    const continued = await threadClient(threadId).history();
+    expect(textsOf(continued, "assistant").at(-1)).toBe(
+      "after-recovery-complete",
+    );
+  }, 420_000);
 });

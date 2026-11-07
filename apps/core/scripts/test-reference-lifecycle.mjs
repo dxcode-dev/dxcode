@@ -205,7 +205,14 @@ try {
   // Asynchronous, so the fixture's exit above is seen while the tests run.
   tests = spawn(
     "pnpm",
-    ["exec", "vitest", "run", "--config", "vitest.lifecycle.config.ts"],
+    [
+      "exec",
+      "vitest",
+      "run",
+      "--config",
+      "vitest.lifecycle.config.ts",
+      ...process.argv.slice(2),
+    ],
     {
       stdio: "inherit",
       env: { ...process.env, DX_LIFECYCLE_FIXTURE_URL: fixtureUrl },

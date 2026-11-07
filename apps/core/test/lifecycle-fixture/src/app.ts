@@ -4,7 +4,12 @@ import {
   fauxText,
   fauxToolCall,
 } from "@earendil-works/pi-ai/providers/faux";
-import { dispatch, observe, setProvider } from "@flue/runtime";
+import {
+  configureRetryPolicy,
+  dispatch,
+  observe,
+  setProvider,
+} from "@flue/runtime";
 import { createAgentRouter } from "@flue/runtime/routing";
 import { Hono } from "hono";
 import { authenticate } from "../../../src/auth/authenticate.js";
@@ -25,6 +30,7 @@ import { FixturePlanAgent } from "./agents/fixture-plan-agent.js";
 import { armAttachmentPoison } from "./attachment-poison.js";
 import { heavyTurnResponses } from "./heavy-history.js";
 import { planLimitRoutes } from "./plan-limit.js";
+import { recoveryWakes } from "./recovery-probe.js";
 import {
   failNextActivation,
   hangNextActivation,
@@ -75,6 +81,16 @@ faux.setResponses([
 ]);
 setProvider(faux.provider);
 installFlueObservation();
+// Recovery that keeps failing retries after 1, 2 and 4 s, then gives up
+// (dx keeps Flue's default: 30 s doubling to 8 minutes).
+configureRetryPolicy({
+  recoveryRetryPolicy: ({ attempt }) =>
+    attempt <= 3 ? 1_000 * 2 ** (attempt - 1) : undefined,
+});
+
+/** The long Thread of the recovery-loop scenario: steps × parallel calls. */
+const RECOVERY_HISTORY_STEPS = 20;
+const RECOVERY_HISTORY_CALLS = 260;
 
 // Model steps for scenarios that run after the scripted lifecycle above.
 const scenarioResponses = {
@@ -120,6 +136,28 @@ const scenarioResponses = {
     ),
     fauxAssistantMessage("duplicate-retry-complete"),
     fauxAssistantMessage("after-duplicate-complete"),
+  ],
+  // #1934: a long Thread whose next turn is wedged in recovery. The first
+  // turn writes over 5,000 history items; the second holds until the probe
+  // wedges it; the third runs once recovery has given up.
+  "recovery-loop": () => [
+    ...Array.from({ length: RECOVERY_HISTORY_STEPS }, (_, step) =>
+      fauxAssistantMessage(
+        Array.from({ length: RECOVERY_HISTORY_CALLS }, (_, call) =>
+          fauxToolCall(
+            "fixture_fetch",
+            { bytes: 64, seed: step * RECOVERY_HISTORY_CALLS + call },
+            { id: `long-${step}-${call}` },
+          ),
+        ),
+        { stopReason: "toolUse" },
+      ),
+    ),
+    fauxAssistantMessage("long-history-complete"),
+    fauxAssistantMessage([fauxToolCall("bash", { command: "hold-turn" })], {
+      stopReason: "toolUse",
+    }),
+    fauxAssistantMessage("after-recovery-complete"),
   ],
   unready: () => [
     fauxAssistantMessage("unready-first-complete"),
@@ -304,7 +342,12 @@ let scenarioStarted = false;
 app.post("/__fixture/scenario/:name", (context) => {
   const name = context.req.param("name");
   if (!(name in scenarioResponses)) return context.notFound();
-  if (!scenarioStarted && faux.getPendingResponseCount() !== 0)
+  // `?force=1` lets one case run alone (`-t`), before the scripted steps.
+  if (
+    !scenarioStarted &&
+    context.req.query("force") !== "1" &&
+    faux.getPendingResponseCount() !== 0
+  )
     return context.json({ pending: faux.getPendingResponseCount() }, 409);
   scenarioStarted = true;
   faux.setResponses(
@@ -360,6 +403,68 @@ app.post("/__fixture/seed-cross-owner", async (context) => {
     .run();
   return context.json({ threadId });
 });
+type RecoveryProbeStub = {
+  wedgeRecovery(): Promise<{ submissionId: string } | null>;
+  healAppends(): Promise<void>;
+  submissionRow(
+    submissionId: string,
+  ): Promise<{ status: string; error: string | null } | null>;
+  storageShape(): Promise<{
+    batches: number;
+    historyEntries: number;
+    checkpointOffset: string | null;
+  }>;
+};
+const recoveryProbe = (env: AppEnv["Bindings"], threadId: string) => {
+  const namespace = (
+    env as unknown as {
+      FLUE_FIXTURE_LIFECYCLE_AGENT_AGENT: DurableObjectNamespace;
+    }
+  ).FLUE_FIXTURE_LIFECYCLE_AGENT_AGENT;
+  const id = namespace.idFromName(threadId);
+  return {
+    id: id.toString(),
+    stub: namespace.get(id) as unknown as RecoveryProbeStub,
+  };
+};
+app.post("/__fixture/recovery/wedge/:threadId", async (context) =>
+  context.json(
+    await recoveryProbe(
+      context.env,
+      context.req.param("threadId"),
+    ).stub.wedgeRecovery(),
+  ),
+);
+app.post("/__fixture/recovery/heal/:threadId", async (context) => {
+  await recoveryProbe(
+    context.env,
+    context.req.param("threadId"),
+  ).stub.healAppends();
+  return context.body(null, 204);
+});
+app.get("/__fixture/recovery/shape/:threadId", async (context) =>
+  context.json(
+    await recoveryProbe(
+      context.env,
+      context.req.param("threadId"),
+    ).stub.storageShape(),
+  ),
+);
+app.get(
+  "/__fixture/recovery/submission/:threadId/:submissionId",
+  async (context) =>
+    context.json(
+      await recoveryProbe(
+        context.env,
+        context.req.param("threadId"),
+      ).stub.submissionRow(context.req.param("submissionId")),
+    ),
+);
+app.get("/__fixture/recovery/wakes/:threadId", (context) =>
+  context.json(
+    recoveryWakes(recoveryProbe(context.env, context.req.param("threadId")).id),
+  ),
+);
 app.route("/__fixture/plan", planLimitRoutes);
 app.use("/v1/*", authenticate);
 app.route("/v1/projects", projectRoutes);

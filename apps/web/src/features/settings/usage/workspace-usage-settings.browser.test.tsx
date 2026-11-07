@@ -283,12 +283,12 @@ describe("workspace usage settings", () => {
     expect(page("cost")).toContain("Total Spend");
   });
 
-  it("keeps private-inspection drafts mounted when usage refresh fails", async () => {
+  it("hides Private Thread access from the page, even for a permitted Auditor", async () => {
     const usagePage = {
       ...data,
       privateInspection: { ...data.privateInspection, permitted: true },
     };
-    let usageResult = {
+    const usageResult = {
       data: { pages: [usagePage], pageParams: [undefined] },
       error: null as Error | null,
       hasNextPage: false,
@@ -329,50 +329,13 @@ describe("workspace usage settings", () => {
       />
     );
     await act(() => root.render(page()));
-    await act(() =>
-      document.body
-        .querySelector<HTMLButtonElement>(
-          'button[aria-label="Open Private Thread access"]',
-        )
-        ?.click(),
-    );
-    const thread = document.body.querySelector<HTMLInputElement>(
-      "#workspace-inspection-thread",
-    );
-    const reason = document.body.querySelector<HTMLTextAreaElement>(
-      "#workspace-inspection-reason",
-    );
-    await act(() => {
-      const inputSetter = Object.getOwnPropertyDescriptor(
-        HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      const textareaSetter = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value",
-      )?.set;
-      inputSetter?.call(thread, "thr_00000000-0000-4000-8000-000000000042");
-      thread?.dispatchEvent(new Event("input", { bubbles: true }));
-      textareaSetter?.call(reason, "Approved investigation");
-      reason?.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-
-    await act(() => {
-      usageResult = { ...usageResult, error: new Error("Unavailable") };
-      for (const listener of usageListeners) listener();
-    });
-
-    expect(thread).not.toBeNull();
+    expect(container.textContent).toContain("Usage Breakdown");
+    expect(container.textContent).not.toContain("Private Thread access");
     expect(
-      document.body.querySelector<HTMLInputElement>(
-        "#workspace-inspection-thread",
+      document.body.querySelector(
+        'button[aria-label="Open Private Thread access"]',
       ),
-    ).toBe(thread);
-    expect(thread?.value).toContain("000000000042");
-    expect(reason?.value).toBe("Approved investigation");
-    expect(container.textContent).toContain(
-      "Workspace usage could not be refreshed. Showing the last loaded data.",
-    );
+    ).toBeNull();
     await act(() => root.unmount());
   });
 

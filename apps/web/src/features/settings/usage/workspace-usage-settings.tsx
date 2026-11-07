@@ -37,6 +37,10 @@ import {
 } from "./usage-values.js";
 import { PrivateThreadAccess } from "./workspace-private-access.js";
 
+// Private Thread access for Auditors stays hidden until it is tested and
+// polished (owner, 2026-11-07). Set this to show it again.
+const PRIVATE_THREAD_ACCESS_SHOWN: boolean = false;
+
 const workspaceRange = (days: UsageRange): WorkspaceUsageFilters => ({
   ...utcRange(days),
   ranking: "users",
@@ -383,11 +387,13 @@ function WorkspaceUsageSettingsForSlug({
               })
             }
           />
-          <PrivateThreadAccess
-            workspaceSlug={workspaceSlug}
-            capability={data.privateInspection}
-            range={data.range}
-          />
+          {PRIVATE_THREAD_ACCESS_SHOWN ? (
+            <PrivateThreadAccess
+              workspaceSlug={workspaceSlug}
+              capability={data.privateInspection}
+              range={data.range}
+            />
+          ) : null}
         </>
       )}
     </div>

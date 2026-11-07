@@ -17,6 +17,8 @@ import { AGENT_RUN_LIMIT_MS } from "../../../../src/runtime/agent-run-limit.js";
 import { fixtureText } from "../heavy-history.js";
 import { fixtureSandboxFactory } from "../sandbox.js";
 
+export { cloudflare } from "../recovery-probe.js";
+
 /** An untruncated text output, as an MCP server or a web fetch returns. */
 const fixtureFetch = defineTool({
   name: "fixture_fetch",
