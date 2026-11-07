@@ -75,12 +75,25 @@ export interface UsageThreadAggregate {
   readonly runnerDurationMs: number;
   readonly modelTurns: number;
   readonly errorEvents: number;
+  /** Model use by UTC hour within the range, oldest first. */
+  readonly activity: ReadonlyArray<UsageThreadActivity>;
+}
+
+/** One UTC hour of a Thread's model use. */
+export interface UsageThreadActivity {
+  readonly hour: DateTime.Utc;
+  readonly totalTokens: number;
+  readonly estimatedCostMicros: number;
 }
 
 /** Model turns by the provider and model that answered them. */
 export interface UsageModelAggregate {
   readonly providerId: ModelProviderId;
+  /** The provider as people know it ("Custom URL", "Workers AI"). */
+  readonly providerName: string;
   readonly modelId: UsageModelId;
+  /** The model catalog's name, or `modelId` when the catalog has none. */
+  readonly modelName: string;
   readonly totalTokens: number;
   readonly unknownTokenEvents: number;
   readonly estimatedCostMicros: number;
@@ -91,6 +104,8 @@ export interface UsageModelAggregate {
 export interface UsageUserAggregate {
   readonly userId: UserId;
   readonly userName: string;
+  /** Threads of this member's that used anything in the range. */
+  readonly threadCount: number;
   readonly totalTokens: number;
   readonly unknownTokenEvents: number;
   readonly estimatedCostMicros: number;
@@ -114,6 +129,36 @@ export interface UsageProjectAggregate {
   readonly runnerDurationMs: number;
   readonly modelTurns: number;
   readonly errorEvents: number;
+}
+
+/** A Thread's model use since a recent instant, such as the last 12 hours. */
+export interface UsageRecentThread {
+  readonly threadId: ThreadId;
+  readonly title: string;
+  readonly projectName: string;
+  readonly lastUsedAt: DateTime.Utc;
+  readonly totalTokens: number;
+  readonly estimatedCostMicros: number;
+  readonly unknownCostEvents: number;
+  readonly modelTurns: number;
+}
+
+/**
+ * A Thread shared with the workspace and its model use. Private Threads are
+ * never listed: workspace usage counts them only in totals.
+ */
+export interface UsageWorkspaceThread {
+  readonly threadId: ThreadId;
+  readonly title: string;
+  readonly ownerUserId: UserId;
+  readonly ownerName: string;
+  readonly createdAt: DateTime.Utc;
+  readonly totalTokens: number;
+  readonly estimatedCostMicros: number;
+  readonly unknownCostEvents: number;
+  readonly modelTurns: number;
+  /** Model use by UTC hour within the range, oldest first. */
+  readonly activity: ReadonlyArray<UsageThreadActivity>;
 }
 
 export interface UsageRunnerAggregate {
@@ -187,6 +232,8 @@ export interface UsageDashboard {
   readonly threads: ReadonlyArray<UsageThreadAggregate>;
   /** Every provider and model in the range, highest estimated cost first. */
   readonly models: ReadonlyArray<UsageModelAggregate>;
+  /** Threads that used models in the last 12 hours, most recent first. */
+  readonly recent: ReadonlyArray<UsageRecentThread>;
   readonly runners: ReadonlyArray<UsageRunnerAggregate>;
   readonly plugins: ReadonlyArray<PluginUsageAggregate>;
   readonly priceSources: ReadonlyArray<UsagePriceSourceSummary>;
@@ -212,6 +259,12 @@ export interface WorkspaceUsageDashboard {
   };
   readonly summary: UsageSummary;
   readonly daily: ReadonlyArray<UsageDailyTrend>;
+  /** The most members who used models on any one day of the range. */
+  readonly peakDailyUsers: number;
+  /** Every provider and model in the range, highest estimated cost first. */
+  readonly models: ReadonlyArray<UsageModelAggregate>;
+  /** The range's most expensive shared Threads, highest estimated cost first. */
+  readonly threads: ReadonlyArray<UsageWorkspaceThread>;
   readonly ranking: WorkspaceUsageRankingPage;
   readonly runners: ReadonlyArray<UsageRunnerAggregate>;
   readonly plugins: ReadonlyArray<PluginUsageAggregate>;

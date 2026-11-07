@@ -1,5 +1,6 @@
-import { Blocks, ChartSpline } from "lucide-react";
+import { Blocks, ChartSpline, Orbit } from "lucide-react";
 import type { SettingsSectionRegistration } from "../settings-registration.js";
+import { OrbUsageSettings } from "./orb-usage.js";
 import {
   PersonalPluginUsageSettings,
   WorkspacePluginUsageSettings,
@@ -13,11 +14,23 @@ export const personalUsageSettingsSection = {
   slug: "usage",
   group: "usage",
   label: "Model",
-  title: "Model usage",
-  description:
-    "Inspect content-free model, tool, and runner activity attributed to your Threads.",
+  title: "Model Usage",
+  description: "Tokens and estimated cost by day, model, and Thread.",
   icon: ChartSpline,
   component: PersonalUsageSettings,
+} satisfies SettingsSectionRegistration;
+
+export const personalOrbUsageSettingsSection = {
+  id: "personal-orb-usage",
+  scope: "personal",
+  slug: "orbs",
+  group: "usage",
+  label: "Orb",
+  title: "Orb Usage",
+  description:
+    "Running and recently paused Orbs, with their time in the last 24 hours.",
+  icon: Orbit,
+  component: OrbUsageSettings,
 } satisfies SettingsSectionRegistration;
 
 export const workspaceUsageSettingsSection = {
@@ -27,9 +40,9 @@ export const workspaceUsageSettingsSection = {
   adminOnly: true,
   slug: "usage",
   label: "Usage",
-  title: "Workspace usage",
+  title: "Workspace Usage",
   description:
-    "Review content-free workspace aggregates and exceptional private-access audit.",
+    "The workspace's tokens and estimated cost by model, member, and Thread.",
   icon: ChartSpline,
   component: WorkspaceUsageSettings,
 } satisfies SettingsSectionRegistration;

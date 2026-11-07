@@ -8,6 +8,7 @@ import {
   BookOpen,
   Bug,
   UserRound,
+  X,
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -108,8 +109,9 @@ function SettingsSheetHandle({ onClose }: { readonly onClose: () => void }) {
 }
 
 /**
- * Keeps the open section's pill in view when the menu is a sideways row: on
- * arrival, and whenever the row's width changes as sections load in.
+ * Keeps the open section's link in view: in the sideways pill row on phones,
+ * and in the rail when the menu is taller than the window (#1823). It runs on
+ * arrival and whenever the menu's size changes as sections load in.
  */
 const revealActiveLink = (link: HTMLElement | null) => {
   if (link === null) return;
@@ -119,8 +121,10 @@ const revealActiveLink = (link: HTMLElement | null) => {
   const reveal = () => {
     const box = row.getBoundingClientRect();
     const pill = link.getBoundingClientRect();
-    if (pill.left >= box.left && pill.right <= box.right) return;
-    row.scrollLeft += pill.left + pill.width / 2 - (box.left + box.width / 2);
+    if (pill.left < box.left || pill.right > box.right)
+      row.scrollLeft += pill.left + pill.width / 2 - (box.left + box.width / 2);
+    if (pill.top < box.top || pill.bottom > box.bottom)
+      row.scrollTop += pill.top + pill.height / 2 - (box.top + box.height / 2);
   };
   const observer = new ResizeObserver(reveal);
   observer.observe(menu);
@@ -217,6 +221,15 @@ function SettingsTopBar({
         {dirty ? (
           <span className="settings-dirty-state">Unsaved changes</span>
         ) : null}
+        {/* Phones: the sheet's close button, as the reference's X. */}
+        <button
+          type="button"
+          className="settings-close"
+          aria-label="Close"
+          onClick={onClose}
+        >
+          <X aria-hidden="true" />
+        </button>
       </div>
     </header>
   );
@@ -321,20 +334,21 @@ function SettingsNavigation(props: SettingsNavigationProps) {
             ),
           )}
         </nav>
+        {/* In the scroller, after the last section: it never covers one. */}
+        <nav className="settings-rail-footer" aria-label="dx links">
+          <ul>
+            {railLinks.map(({ label, href, Icon }) => (
+              <li key={href}>
+                <a href={href} target="_blank" rel="noreferrer">
+                  <Icon />
+                  <span>{label}</span>
+                </a>
+              </li>
+            ))}
+            <SettingsReportBug />
+          </ul>
+        </nav>
       </div>
-      <nav className="settings-rail-footer" aria-label="dx links">
-        <ul>
-          {railLinks.map(({ label, href, Icon }) => (
-            <li key={href}>
-              <a href={href} target="_blank" rel="noreferrer">
-                <Icon />
-                <span>{label}</span>
-              </a>
-            </li>
-          ))}
-          <SettingsReportBug />
-        </ul>
-      </nav>
     </aside>
   );
 }

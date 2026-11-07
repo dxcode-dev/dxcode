@@ -21,9 +21,11 @@ import {
   PluginUsageDataSchema,
   TimezoneOffsetQuerySchema,
   UsageDailyTrendDataSchema,
+  UsageModelDataSchema,
   UsagePriceSourceDataSchema,
   UsageRunnerDataSchema,
   UsageSummaryDataSchema,
+  UsageThreadActivityDataSchema,
 } from "./personal-usage.js";
 
 export const WORKSPACE_CONTENT_SUMMARY_UNAVAILABLE_REASON =
@@ -60,8 +62,27 @@ const WorkspaceUsageAggregateFields = {
 export const WorkspaceUsageUserDataSchema = Schema.Struct({
   userId: UserId,
   userName: Schema.String,
+  threadCount: Schema.Int,
   ...WorkspaceUsageAggregateFields,
 });
+
+/** One Thread shared with the workspace and its model use; private Threads are never listed. */
+export const WorkspaceUsageThreadDataSchema = Schema.Struct({
+  threadId: ThreadId,
+  title: Schema.String,
+  ownerUserId: UserId,
+  ownerName: Schema.String,
+  createdAt: Schema.DateTimeUtcFromString,
+  totalTokens: Schema.Int,
+  estimatedCostMicros: Schema.Int,
+  unknownCostEvents: Schema.Int,
+  modelTurns: Schema.Int,
+  /** Model use by UTC hour within the range, oldest first. */
+  activity: Schema.Array(UsageThreadActivityDataSchema),
+});
+
+export type WorkspaceUsageThreadData =
+  typeof WorkspaceUsageThreadDataSchema.Type;
 
 /** One member's plugin usage, attributed like {@link WorkspaceUsageUserDataSchema}. */
 export const WorkspacePluginUsageUserDataSchema = Schema.Struct({
@@ -118,6 +139,9 @@ export const WorkspaceUsageDataSchema = Schema.Struct({
   }),
   summary: UsageSummaryDataSchema,
   daily: Schema.Array(UsageDailyTrendDataSchema),
+  peakDailyUsers: Schema.Int,
+  models: Schema.Array(UsageModelDataSchema),
+  threads: Schema.Array(WorkspaceUsageThreadDataSchema),
   ranking: WorkspaceUsageRankingDataSchema,
   runners: Schema.Array(UsageRunnerDataSchema),
   plugins: Schema.Array(PluginUsageDataSchema),

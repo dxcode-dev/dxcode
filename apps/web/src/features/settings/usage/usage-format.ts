@@ -1,17 +1,14 @@
-export type UsageMode = "tokens" | "cost" | "latency" | "runners";
+/**
+ * Usage numbers read the same on every device: K, M and B, never a locale's
+ * own grouping such as lakh and crore.
+ */
+export const USAGE_LOCALE = "en-US";
 
-const compactNumber = new Intl.NumberFormat(undefined, {
+const compactNumber = new Intl.NumberFormat(USAGE_LOCALE, {
   notation: "compact",
   maximumFractionDigits: 1,
 });
 
 export const formatTokens = (value: number) => compactNumber.format(value);
-
-export const formatDuration = (value: number | null) =>
-  value === null
-    ? "Unknown"
-    : value < 1_000
-      ? `${Math.round(value)} ms`
-      : `${(value / 1_000).toFixed(1)} s`;
 
 export { formatCost } from "../../../shared/usage-cost.js";

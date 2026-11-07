@@ -103,11 +103,11 @@ describe("plugin usage", () => {
     );
     expect(rowsOf(container)).toEqual([
       [
-        "Avery Engineer usr_avery",
+        "Avery Engineer",
         "Web search · Exa web.search | Personal key | 2 requests | 2 1 failed",
       ],
       [
-        "Blake Reviewer usr_blake",
+        "Blake Reviewer",
         "Web search · Exa web.search | Deployment key | 1 request | 1",
       ],
     ]);

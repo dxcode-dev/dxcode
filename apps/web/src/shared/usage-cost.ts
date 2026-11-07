@@ -1,9 +1,10 @@
 /**
  * An estimated usage cost in US dollars, from millionths of a dollar: four
- * decimals under a cent, so a small cost does not read as $0.00.
+ * decimals under a cent, so a small cost does not read as $0.00. Always US
+ * grouping, whatever the device locale.
  */
 export const formatCost = (micros: number) =>
-  new Intl.NumberFormat(undefined, {
+  new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: micros < 10_000 ? 4 : 2,

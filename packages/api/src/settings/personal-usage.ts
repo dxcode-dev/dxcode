@@ -80,6 +80,13 @@ export const UsageDailyTrendDataSchema = Schema.Struct({
 
 export type UsageDailyTrendData = typeof UsageDailyTrendDataSchema.Type;
 
+/** One UTC hour of a Thread's model use. */
+export const UsageThreadActivityDataSchema = Schema.Struct({
+  hour: Schema.DateTimeUtcFromString,
+  totalTokens: Schema.Int,
+  estimatedCostMicros: Schema.Int,
+});
+
 export const UsageThreadDataSchema = Schema.Struct({
   threadId: ThreadId,
   title: Schema.String,
@@ -98,6 +105,8 @@ export const UsageThreadDataSchema = Schema.Struct({
   runnerDurationMs: Schema.Int,
   modelTurns: Schema.Int,
   errorEvents: Schema.Int,
+  /** Model use by UTC hour within the range, oldest first. */
+  activity: Schema.Array(UsageThreadActivityDataSchema),
 });
 
 export type UsageThreadData = typeof UsageThreadDataSchema.Type;
@@ -105,7 +114,9 @@ export type UsageThreadData = typeof UsageThreadDataSchema.Type;
 /** Model turns by the provider and model that answered them. */
 export const UsageModelDataSchema = Schema.Struct({
   providerId: ModelProviderId,
+  providerName: Schema.String,
   modelId: UsageModelId,
+  modelName: Schema.String,
   totalTokens: Schema.Int,
   unknownTokenEvents: Schema.Int,
   estimatedCostMicros: Schema.Int,
@@ -114,6 +125,20 @@ export const UsageModelDataSchema = Schema.Struct({
 });
 
 export type UsageModelData = typeof UsageModelDataSchema.Type;
+
+/** A Thread's model use in the last 12 hours. */
+export const UsageRecentThreadDataSchema = Schema.Struct({
+  threadId: ThreadId,
+  title: Schema.String,
+  projectName: Schema.String,
+  lastUsedAt: Schema.DateTimeUtcFromString,
+  totalTokens: Schema.Int,
+  estimatedCostMicros: Schema.Int,
+  unknownCostEvents: Schema.Int,
+  modelTurns: Schema.Int,
+});
+
+export type UsageRecentThreadData = typeof UsageRecentThreadDataSchema.Type;
 
 export const UsageRunnerDataSchema = Schema.Struct({
   provider: Schema.Literal("e2b"),
@@ -189,6 +214,7 @@ export const PersonalUsageDataSchema = Schema.Struct({
   daily: Schema.Array(UsageDailyTrendDataSchema),
   threads: Schema.Array(UsageThreadDataSchema),
   models: Schema.Array(UsageModelDataSchema),
+  recent: Schema.Array(UsageRecentThreadDataSchema),
   runners: Schema.Array(UsageRunnerDataSchema),
   plugins: Schema.Array(PluginUsageDataSchema),
   priceSources: Schema.Array(UsagePriceSourceDataSchema),

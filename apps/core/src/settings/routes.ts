@@ -19,6 +19,7 @@ import { feedbackWidgetEmbedRoutes } from "../feedback-widget/embed-routes.js";
 import type { AppEnv } from "../http/types.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
 import { notificationPreferenceRoutes } from "../notifications/routes.js";
+import { personalOrbUsageRoutes } from "../orb-usage/routes.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
   personalOrbProviderRoutes,
@@ -247,6 +248,7 @@ settingsRoutes.route("/personal/plugin-bundles", personalPluginBundleRoutes);
 settingsRoutes.route("/personal/plugins", personalPluginRoutes);
 settingsRoutes.route("/personal/skills", personalSkillRoutes);
 settingsRoutes.route("/personal/usage", personalUsageRoutes);
+settingsRoutes.route("/personal/orb-usage", personalOrbUsageRoutes);
 settingsRoutes.route(
   "/personal/experimental-features",
   personalExperimentalFeaturesRoutes,

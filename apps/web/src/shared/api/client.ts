@@ -74,7 +74,6 @@ import {
   type EnvironmentVariableData,
   EnvironmentVariablesErrorResponseSchema,
   ExperimentalFeaturesErrorResponseSchema,
-  ExportPersonalUsageResponseSchema,
   ExportSkillResponseSchema,
   ExportWorkspaceUsageAuditResponseSchema,
   ExportWorkspaceUsageResponseSchema,
@@ -84,6 +83,7 @@ import {
   FirstPartyPluginErrorResponseSchema,
   FirstPartyPluginListResponseSchema,
   GetIntegrationDisconnectImpactResponseSchema,
+  GetOrbUsageResponseSchema,
   GetPersonalAccountResponseSchema,
   GetPersonalAgentInstructionsResponseSchema,
   GetPersonalComposerDefaultsResponseSchema,
@@ -141,6 +141,7 @@ import {
   OrbProviderErrorResponseSchema,
   type OrbProviderId,
   OrbProviderListResponseSchema,
+  type OrbUsageData,
   type PersonalAccountData,
   PersonalAccountErrorResponseSchema,
   type PersonalAgentInstructionsData,
@@ -2943,13 +2944,16 @@ export const getPersonalUsage = async (
     )
   ).data;
 
-export const exportPersonalUsage = async (
-  input: PersonalUsageQuery,
-): Promise<PersonalUsageExportData> =>
+export const getOrbUsage = async (
+  signal?: AbortSignal,
+): Promise<OrbUsageData> =>
   (
     await request(
-      `/v1/settings/personal/usage/export?${personalUsageSearch(input)}`,
-      ExportPersonalUsageResponseSchema,
+      "/v1/settings/personal/orb-usage",
+      GetOrbUsageResponseSchema,
+      {
+        signal,
+      },
     )
   ).data;
 

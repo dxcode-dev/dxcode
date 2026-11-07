@@ -120,6 +120,14 @@ import {
   restartOrb,
   takeOrbRestartNote,
 } from "../orb-restart/execution-object.js";
+import {
+  NO_ORB_RUNS,
+  ORB_RUNS_STORAGE_KEY,
+  type OrbRuns,
+  orbRunEnded,
+  orbRunStarted,
+  summarizeOrbRuns,
+} from "../orb-usage/runs.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
   publishChangesInvalidation,
@@ -650,6 +658,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
    * activation; only providers whose pause restarts processes report it.
    */
   #processesStartedAt?: number;
+  /** When the Orb ran, for Settings → Usage → Orb (`orb-usage/runs.ts`). */
+  #orbRuns: OrbRuns = NO_ORB_RUNS;
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -657,6 +667,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#authority = await ctx.storage.get<DaemonAuthority>(
         AUTHORITY_STORAGE_KEY,
       );
+      this.#orbRuns =
+        (await ctx.storage.get<OrbRuns>(ORB_RUNS_STORAGE_KEY)) ?? NO_ORB_RUNS;
       this.#lastPersistedHeartbeatAt = this.#authority?.lastSeen;
       const storedEnvironmentGeneration = await ctx.storage.get<number>(
         ENVIRONMENT_GENERATION_STORAGE_KEY,
@@ -852,6 +864,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return this.#serveOrbMemory(request, path);
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
+    if (path === "/orb/usage") return this.#serveOrbUsage(request);
     if (path === "/orb/restart") return this.#restartOrb(request);
     if (path === "/orb/restart/note")
       return request.method === "POST"
@@ -1079,6 +1092,29 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (this.#sessionCheckAt !== undefined) return;
     this.#sessionCheckAt = Date.now() + sessionSocketCheckMs(this.env);
     await this.#scheduleAlarm().catch(() => undefined);
+  }
+
+  /**
+   * Whether the Orb runs, when it paused, and how long it ran in the last
+   * 24 hours, from this object's own record. Reads nothing from the Orb.
+   */
+  async #serveOrbUsage(request: Request) {
+    if (request.method !== "GET") return new Response(null, { status: 405 });
+    const now = Date.now();
+    const live = this.#isTransportReady(now) && this.#isHeartbeatFresh(now);
+    if (live && this.#orbRuns.since === undefined) {
+      // Connected before this record existed: count from now.
+      this.#orbRuns = orbRunStarted(this.#orbRuns, now);
+      await this.ctx.storage.put(ORB_RUNS_STORAGE_KEY, this.#orbRuns);
+    }
+    return Response.json(
+      summarizeOrbRuns(
+        this.#orbRuns,
+        now,
+        live,
+        this.#lastHeartbeatAt ?? this.#authority?.lastSeen,
+      ),
+    );
   }
 
   /**
@@ -3451,6 +3487,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       retry,
       1000,
     );
+    // The drain stops the Orb: its run ends at the daemon's last heartbeat.
+    this.#orbRuns = orbRunEnded(
+      this.#orbRuns,
+      this.#lastHeartbeatAt ?? authority?.lastSeen ?? Date.now(),
+      Date.now(),
+    );
     this.#authority = undefined;
     this.#pendingChangesRefresh = undefined;
     this.#failAllPending();
@@ -3468,6 +3510,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     await Promise.all([
       this.ctx.storage.delete(AUTHORITY_STORAGE_KEY),
       this.ctx.storage.delete(APPLIED_ENVIRONMENT_STORAGE_KEY),
+      this.ctx.storage.put(ORB_RUNS_STORAGE_KEY, this.#orbRuns),
     ]);
     await revokeThreadDaemonApiKey(this.env, authority?.apiKeyId);
     // And every other key of the Thread: none may outlive the drain.
@@ -4488,6 +4531,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         return;
       }
       const nonce = randomBase64Url(18);
+      // A run left open by a daemon that vanished without a close (an
+      // eviction, a lost socket) ended at its last heartbeat, not now.
+      const priorHeartbeat = this.#lastHeartbeatAt ?? authority.lastSeen;
       const next: DaemonAuthority = {
         ...authority,
         attachmentNonce: nonce,
@@ -4516,9 +4562,22 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#proxyRelay.daemonUnavailable(nonce);
       this.#plannedHandoffUntil = undefined;
       this.#fenceDaemonSockets(socket);
+      const registeredAt = Date.now();
+      if (
+        this.#orbRuns.since !== undefined &&
+        (priorHeartbeat === undefined ||
+          registeredAt - priorHeartbeat > DXD_HEARTBEAT_LEASE_MS)
+      )
+        this.#orbRuns = orbRunEnded(
+          this.#orbRuns,
+          priorHeartbeat ?? this.#orbRuns.since,
+          registeredAt,
+        );
+      this.#orbRuns = orbRunStarted(this.#orbRuns, registeredAt);
       await Promise.all([
         this.ctx.storage.put(AUTHORITY_STORAGE_KEY, next),
         this.ctx.storage.delete(APPLIED_ENVIRONMENT_STORAGE_KEY),
+        this.ctx.storage.put(ORB_RUNS_STORAGE_KEY, this.#orbRuns),
       ]);
       socket.serializeAttachment({
         kind: "daemon",
@@ -4813,6 +4872,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       runtimeAssurance: authority.runtimeAssurance,
     };
     this.#authority = disconnected;
+    // The run ends at the daemon's last heartbeat, not when the loss is seen.
+    const ranUntil = this.#lastHeartbeatAt ?? authority.lastSeen ?? Date.now();
+    this.#orbRuns = orbRunEnded(this.#orbRuns, ranUntil, Date.now());
+    // Storage output gates hold the reply until this write lands.
+    void this.ctx.storage.put(ORB_RUNS_STORAGE_KEY, this.#orbRuns);
     this.#orbMemory.reset();
     this.#orbDisk.reset();
     this.#orbDiskUsage = undefined;

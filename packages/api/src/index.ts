@@ -69,6 +69,7 @@ export * from "./settings/mcp-servers.js";
 export * from "./settings/model-routing.js";
 export * from "./settings/model-subscriptions.js";
 export * from "./settings/orb-providers.js";
+export * from "./settings/orb-usage.js";
 export * from "./settings/personal-account.js";
 export * from "./settings/personal-agent-instructions.js";
 export * from "./settings/personal-security.js";

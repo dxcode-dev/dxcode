@@ -35,10 +35,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   useQueryClient: () => ({ invalidateQueries: vi.fn() }),
 }));
 
+import { PrivateInspection } from "./workspace-private-access.js";
 import {
-  PrivateInspection,
-  WorkspaceRankingTable,
-  WorkspaceUsageOverview,
+  WorkspaceUsageDashboard,
   WorkspaceUsageSettings,
 } from "./workspace-usage-settings.js";
 
@@ -85,12 +84,53 @@ const data = Schema.decodeUnknownSync(WorkspaceUsageDataSchema)({
       modelTurns: 2,
     },
   ],
+  peakDailyUsers: 2,
+  models: [
+    {
+      providerId: "dx-custom",
+      providerName: "Custom URL",
+      modelId: "gpt-5.6-luna",
+      modelName: "GPT-5.6 Luna",
+      totalTokens: 1680,
+      unknownTokenEvents: 1,
+      estimatedCostMicros: 4100,
+      unknownCostEvents: 1,
+      modelTurns: 2,
+    },
+  ],
+  threads: [
+    {
+      threadId: "thr_00000000-0000-4000-8000-000000000041",
+      title: "Shared launch checklist",
+      ownerUserId: "workspace-user-42",
+      ownerName: "Avery Engineer",
+      createdAt: "2026-08-03T10:00:00.000Z",
+      totalTokens: 1200,
+      estimatedCostMicros: 4100,
+      unknownCostEvents: 0,
+      modelTurns: 1,
+      activity: [],
+    },
+    {
+      threadId: "thr_00000000-0000-4000-8000-000000000042",
+      title: "Shared design review",
+      ownerUserId: "workspace-user-43",
+      ownerName: "Blair Member",
+      createdAt: "2026-08-03T11:00:00.000Z",
+      totalTokens: 480,
+      estimatedCostMicros: 0,
+      unknownCostEvents: 1,
+      modelTurns: 1,
+      activity: [],
+    },
+  ],
   ranking: {
     kind: "users",
     items: [
       {
         userId: "workspace-user-42",
         userName: "Avery Engineer",
+        threadCount: 1,
         totalTokens: 1680,
         unknownTokenEvents: 1,
         estimatedCostMicros: 4100,
@@ -211,24 +251,36 @@ describe("workspace usage settings", () => {
     document.body.replaceChildren();
   });
 
-  it("reuses aggregate cards/trends/runners and exposes user rankings without Thread rows", () => {
-    const overview = renderToStaticMarkup(
-      <WorkspaceUsageOverview
-        data={data}
-        mode="tokens"
-        onModeChange={() => undefined}
-      />,
-    );
-    const ranking = renderToStaticMarkup(
-      <WorkspaceRankingTable ranking={data.ranking} />,
-    );
-
-    expect(overview).toContain("Estimated cost");
-    expect(overview).toContain("Daily workspace activity");
-    expect(overview).toContain("E2B runners");
-    expect(overview).toContain("never read prompts, responses");
-    expect(ranking).toContain("Avery Engineer");
-    expect(ranking).not.toContain("Thread</th>");
+  it("shows the reference's totals, breakdown, members and shared Threads", () => {
+    const page = (mode: "tokens" | "cost") =>
+      renderToStaticMarkup(
+        <WorkspaceUsageDashboard
+          data={data}
+          days={7}
+          mode={mode}
+          now={Date.parse("2026-08-05T12:00:00.000Z")}
+          onExport={() => undefined}
+          exporting={false}
+        />,
+      );
+    const tokens = page("tokens");
+    expect(tokens).toContain("Total Tokens");
+    expect(tokens).toContain("Daily Average");
+    expect(tokens).toContain("Peak Daily Users");
+    expect(tokens).toContain("Usage Breakdown");
+    expect(tokens).toContain("GPT-5.6 Luna");
+    expect(tokens).toContain("User-Level Metrics");
+    expect(tokens).toContain("Avery Engineer");
+    expect(tokens).toContain("Most Expensive Threads");
+    expect(tokens).toContain("Shared launch checklist");
+    expect(tokens).toContain("Shared design review");
+    // Created reads as the reference's "2d ago".
+    expect(tokens).toContain("2d ago");
+    expect(tokens).toContain("Blair Member");
+    // Engineering metrics are gone.
+    expect(tokens).not.toContain("E2B");
+    expect(tokens).not.toContain("latency");
+    expect(page("cost")).toContain("Total Spend");
   });
 
   it("keeps private-inspection drafts mounted when usage refresh fails", async () => {
@@ -268,6 +320,7 @@ describe("workspace usage settings", () => {
       ),
     );
     const container = document.createElement("div");
+    document.body.append(container);
     const root = createRoot(container);
     const page = () => (
       <WorkspaceUsageSettings
@@ -277,14 +330,16 @@ describe("workspace usage settings", () => {
     );
     await act(() => root.render(page()));
     await act(() =>
-      [...container.querySelectorAll("button")]
-        .find((button) => button.textContent === "Private access & audit")
+      document.body
+        .querySelector<HTMLButtonElement>(
+          'button[aria-label="Open Private Thread access"]',
+        )
         ?.click(),
     );
-    const thread = container.querySelector<HTMLInputElement>(
+    const thread = document.body.querySelector<HTMLInputElement>(
       "#workspace-inspection-thread",
     );
-    const reason = container.querySelector<HTMLTextAreaElement>(
+    const reason = document.body.querySelector<HTMLTextAreaElement>(
       "#workspace-inspection-reason",
     );
     await act(() => {
@@ -307,8 +362,11 @@ describe("workspace usage settings", () => {
       for (const listener of usageListeners) listener();
     });
 
+    expect(thread).not.toBeNull();
     expect(
-      container.querySelector<HTMLInputElement>("#workspace-inspection-thread"),
+      document.body.querySelector<HTMLInputElement>(
+        "#workspace-inspection-thread",
+      ),
     ).toBe(thread);
     expect(thread?.value).toContain("000000000042");
     expect(reason?.value).toBe("Approved investigation");

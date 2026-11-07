@@ -10,9 +10,9 @@ import {
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
+import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
 import { sharedThreadRoutes } from "../../src/thread-sharing/routes.js";
 import { initialSubmissionId } from "../../src/threads/initial-dispatch.js";

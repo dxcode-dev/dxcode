@@ -1,4 +1,5 @@
 import type {
+  OrbUsageData,
   PersonalUsageData,
   UsageThreadData,
   WorkspacePrivateThreadInspectionData,
@@ -9,14 +10,15 @@ import type { UserId, WorkspaceSlug } from "@dx/domain";
 import {
   hashKey,
   infiniteQueryOptions,
+  keepPreviousData,
   mutationOptions,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
 import {
-  exportPersonalUsage,
   exportWorkspaceUsage,
   exportWorkspaceUsageAudit,
+  getOrbUsage,
   getPersonalUsage,
   getWorkspaceUsage,
   inspectWorkspacePrivateThread,
@@ -27,6 +29,7 @@ import {
 } from "../../../shared/api/client.js";
 
 export type {
+  OrbUsageData,
   PersonalUsageData,
   UsageThreadData,
   WorkspacePrivateThreadInspectionData,
@@ -100,6 +103,8 @@ export const personalUsageQueryOptions = (
       ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.nextCursor,
+    // Switching the range keeps the last range on screen until the next loads.
+    placeholderData: keepPreviousData,
     ...volatileUsageOptions,
   });
 
@@ -121,6 +126,15 @@ export const personalUsageSummaryQueryOptions = (
     ...volatileUsageOptions,
   });
 
+/** Running and recently paused Orbs; refreshed every 30 seconds while open. */
+export const orbUsageQueryOptions = (userId: UserId) =>
+  queryOptions({
+    queryKey: ["usage", userId, "orbs"] as const,
+    queryFn: ({ signal }) => getOrbUsage(signal),
+    ...volatileUsageOptions,
+    refetchInterval: 30_000,
+  });
+
 export const workspaceUsageQueryOptions = (
   userId: UserId,
   workspaceSlug: WorkspaceSlug,
@@ -139,6 +153,8 @@ export const workspaceUsageQueryOptions = (
       ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page) => page.ranking.nextCursor,
+    // Switching the range keeps the last range on screen until the next loads.
+    placeholderData: keepPreviousData,
     ...volatileUsageOptions,
   });
 
@@ -228,17 +244,6 @@ type UsageExport = {
   readonly contentType: string;
   readonly filename: string;
 };
-
-export const personalUsageExportMutationOptions = (
-  deliver: (exported: UsageExport) => void,
-) =>
-  mutationOptions({
-    mutationKey: ["usage-export", "personal"] as const,
-    gcTime: 0,
-    mutationFn: async (filters: PersonalUsageFilters): Promise<void> => {
-      deliver(await exportPersonalUsage(filters));
-    },
-  });
 
 export const workspaceUsageExportMutationOptions = (
   workspaceSlug: WorkspaceSlug,

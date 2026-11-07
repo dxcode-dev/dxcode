@@ -54,6 +54,7 @@ import {
 } from "./skills/registration.js";
 import { personalPluginTriggersSettingsSection } from "./triggers/registration.js";
 import {
+  personalOrbUsageSettingsSection,
   personalPluginUsageSettingsSection,
   personalUsageSettingsSection,
   workspacePluginUsageSettingsSection,
@@ -68,6 +69,7 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     personalIntegrationsSettingsSection,
     personalExperimentalFeaturesSettingsSection,
     personalUsageSettingsSection,
+    personalOrbUsageSettingsSection,
     personalPluginUsageSettingsSection,
     personalAdvancedSettingsSection,
     personalModeDialSettingsSection,

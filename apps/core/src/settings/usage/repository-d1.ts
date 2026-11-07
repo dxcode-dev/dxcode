@@ -23,6 +23,8 @@ import {
   type WorkspaceUsageRanking,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
+import { activeMemberSql } from "../members/membership-sql.js";
+import { usageModelName, usageProviderName } from "./display-names.js";
 import {
   decodePluginUsage,
   decodePluginUsageUsers,
@@ -106,6 +108,7 @@ const ModelAggregateRow = Schema.Struct({
 const UserAggregateRow = Schema.Struct({
   user_id: UserId,
   user_name: Schema.String,
+  thread_count: Schema.Number,
   total_tokens: Schema.Number,
   unknown_token_events: Schema.Number,
   estimated_cost_micros: Schema.Number,
@@ -115,6 +118,96 @@ const UserAggregateRow = Schema.Struct({
   model_turns: Schema.Number,
   error_events: Schema.Number,
 });
+
+const RecentThreadRow = Schema.Struct({
+  thread_id: ThreadId,
+  title: Schema.String,
+  project_name: Schema.String,
+  last_used_at: Schema.DateTimeUtcFromString,
+  total_tokens: Schema.Number,
+  estimated_cost_micros: Schema.Number,
+  unknown_cost_events: Schema.Number,
+  model_turns: Schema.Number,
+});
+
+const WorkspaceThreadRow = Schema.Struct({
+  thread_id: ThreadId,
+  title: Schema.String,
+  owner_user_id: UserId,
+  owner_name: Schema.String,
+  created_at: Schema.DateTimeUtcFromString,
+  total_tokens: Schema.Number,
+  estimated_cost_micros: Schema.Number,
+  unknown_cost_events: Schema.Number,
+  model_turns: Schema.Number,
+});
+
+const PeakDailyUsersRow = Schema.Struct({ peak_daily_users: Schema.Number });
+
+const ThreadActivityRow = Schema.Struct({
+  thread_id: ThreadId,
+  hour: Schema.DateTimeUtcFromString,
+  total_tokens: Schema.Number,
+  estimated_cost_micros: Schema.Number,
+});
+
+/**
+ * The listed Threads' model use by UTC hour, for the activity strip, scoped
+ * to their owner (personal) or their workspace. Reads only the Threads on
+ * the page, through the owner/thread or workspace time index.
+ */
+const threadActivitySql = (
+  scope: "event.owner_user_id" | "event.workspace_id",
+  threads: number,
+) => `
+  SELECT
+    event.thread_id,
+    substr(event.occurred_at, 1, 13) || ':00:00.000Z' AS hour,
+    COALESCE(SUM(event.total_tokens), 0) AS total_tokens,
+    COALESCE(SUM(event.estimated_cost_micros_snapshot), 0) AS estimated_cost_micros
+  FROM usage_event AS event
+  WHERE ${scope} = ?
+    AND event.thread_id IN (${Array.from({ length: threads }, () => "?").join(", ")})
+    AND event.occurred_at >= ? AND event.occurred_at < ?
+    AND event.kind = 'model'
+  GROUP BY event.thread_id, hour
+  ORDER BY event.thread_id, hour`;
+
+/** Each listed Thread's hours of model use, by Thread ID. */
+const readThreadActivity = (
+  db: D1Database,
+  scope: Parameters<typeof threadActivitySql>[0],
+  scopeId: string,
+  threadIds: ReadonlyArray<string>,
+  range: { readonly fromInclusive: string; readonly toExclusive: string },
+) =>
+  Effect.gen(function* () {
+    const activity = new Map<
+      string,
+      Array<{
+        hour: typeof ThreadActivityRow.Type.hour;
+        totalTokens: number;
+        estimatedCostMicros: number;
+      }>
+    >();
+    if (threadIds.length === 0) return activity;
+    const { results } = yield* run("usage.thread.activity", () =>
+      db
+        .prepare(threadActivitySql(scope, threadIds.length))
+        .bind(scopeId, ...threadIds, range.fromInclusive, range.toExclusive)
+        .all(),
+    );
+    for (const row of yield* decodeRows(ThreadActivityRow, results)) {
+      const hours = activity.get(row.thread_id) ?? [];
+      hours.push({
+        hour: row.hour,
+        totalTokens: row.total_tokens,
+        estimatedCostMicros: row.estimated_cost_micros,
+      });
+      activity.set(row.thread_id, hours);
+    }
+    return activity;
+  });
 
 const ProjectAggregateRow = Schema.Struct({
   project_id: ProjectId,
@@ -512,6 +605,7 @@ const threadSql = (where: string, hasCursor: boolean) => `${costedCte(where)},
 const rankingTotals = (idColumns: string) => `
     SELECT
       ${idColumns},
+      COUNT(DISTINCT thread_id) AS thread_count,
       COALESCE(SUM(CASE WHEN kind = 'model' THEN total_tokens ELSE 0 END), 0) AS total_tokens,
       COALESCE(SUM(CASE WHEN kind = 'model' AND total_tokens IS NULL THEN 1 ELSE 0 END), 0) AS unknown_token_events,
       COALESCE(SUM(CASE WHEN kind = 'model' THEN estimated_cost_micros ELSE 0 END), 0) AS estimated_cost_micros,
@@ -570,6 +664,94 @@ const rankingSql = (
   ranking === "users"
     ? userSql(where, hasCursor)
     : projectSql(where, hasCursor);
+
+/** How far back Last 12 Hours reaches. */
+const RECENT_USAGE_MS = 12 * 60 * 60 * 1_000;
+const RECENT_THREAD_LIMIT = 10;
+const WORKSPACE_THREAD_LIMIT = 10;
+
+/**
+ * The owner's Threads that used models since the bound instant, most recent
+ * first. Reads `usage_event_owner_time_idx` for 12 hours of one owner's
+ * events, whatever the dashboard's range.
+ */
+const recentSql = `
+  SELECT
+    event.thread_id,
+    thread.title,
+    project.name AS project_name,
+    MAX(event.occurred_at) AS last_used_at,
+    COALESCE(SUM(event.total_tokens), 0) AS total_tokens,
+    COALESCE(SUM(event.estimated_cost_micros_snapshot), 0) AS estimated_cost_micros,
+    COALESCE(SUM(CASE WHEN event.estimated_cost_micros_snapshot IS NULL THEN 1 ELSE 0 END), 0) AS unknown_cost_events,
+    COUNT(*) AS model_turns
+  FROM usage_event AS event
+  INNER JOIN threads AS thread ON thread.id = event.thread_id
+  INNER JOIN projects AS project ON project.id = event.project_id
+  WHERE event.owner_user_id = ? AND event.occurred_at >= ? AND event.kind = 'model'
+  GROUP BY event.thread_id
+  ORDER BY last_used_at DESC, event.thread_id DESC
+  LIMIT ${RECENT_THREAD_LIMIT}`;
+
+/**
+ * The range's most expensive Threads shared with this workspace (the
+ * trailing bound workspace ID) by an owner who is still an active member, so
+ * every member can already open them. Private Threads, and Threads shared
+ * with another workspace, stay out: workspace usage counts them only in
+ * totals, and only an Auditor's logged inspection reaches a private one.
+ */
+const workspaceThreadSql = (where: string) => `${costedCte(where)},
+  thread_totals AS (
+    SELECT
+      thread_id,
+      owner_user_id,
+      COALESCE(SUM(total_tokens), 0) AS total_tokens,
+      COALESCE(SUM(estimated_cost_micros), 0) AS estimated_cost_micros,
+      COALESCE(SUM(CASE WHEN estimated_cost_micros IS NULL THEN 1 ELSE 0 END), 0) AS unknown_cost_events,
+      COUNT(*) AS model_turns
+    FROM costed
+    WHERE kind = 'model'
+    GROUP BY thread_id, owner_user_id
+  )
+  SELECT
+    totals.*,
+    thread.title,
+    thread.created_at,
+    COALESCE(personal_account.display_name, user.name) AS owner_name
+  FROM thread_totals AS totals
+  INNER JOIN threads AS thread
+    ON thread.id = totals.thread_id
+   AND thread.visibility = 'workspace'
+   AND thread.workspace_access != 'none'
+   AND thread.shared_workspace_id = ?
+   AND thread.lifecycle_state <> 'deleted'
+   AND ${activeMemberSql("thread.shared_workspace_id", "thread.owner_user_id")}
+  INNER JOIN user ON user.id = totals.owner_user_id
+  LEFT JOIN personal_account ON personal_account.user_id = totals.owner_user_id
+  ORDER BY totals.estimated_cost_micros DESC, totals.total_tokens DESC, totals.thread_id DESC
+  LIMIT ${WORKSPACE_THREAD_LIMIT}`;
+
+/** The most members who used models on one day; the day modifier binds first. */
+const peakDailyUsersSql = (where: string) => `
+  SELECT COALESCE(MAX(users), 0) AS peak_daily_users
+  FROM (
+    SELECT date(event.occurred_at, ?) AS day, COUNT(DISTINCT event.owner_user_id) AS users
+    FROM usage_event AS event
+    WHERE ${where} AND event.kind = 'model'
+    GROUP BY day
+  )`;
+
+const modelFrom = (row: typeof ModelAggregateRow.Type) => ({
+  providerId: row.provider_id,
+  providerName: usageProviderName(row.provider_id),
+  modelId: row.model_id,
+  modelName: usageModelName(row.provider_id, row.model_id),
+  totalTokens: row.total_tokens,
+  unknownTokenEvents: row.unknown_token_events,
+  estimatedCostMicros: row.estimated_cost_micros,
+  unknownCostEvents: row.unknown_cost_events,
+  modelTurns: row.model_turns,
+});
 
 const runnerSql = (where: string) => `${costedCte(where)}
   SELECT
@@ -713,22 +895,29 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               db,
               personalPluginUsageWhere(ownerUserId, query),
             );
+            const recent = db
+              .prepare(recentSql)
+              .bind(
+                ownerUserId,
+                new Date(Date.now() - RECENT_USAGE_MS).toISOString(),
+              );
             // The rollups answer the same aggregates without reading every
             // event, once the backfill of older events is done; until then
             // each read moves the backfill on and reads raw events.
             const results = yield* run("usage.dashboard", async () => {
               if (!usageRollupServes(query))
-                return db.batch([...rawStatements, plugins]);
+                return db.batch([...rawStatements, plugins, recent]);
               const rolled = await db.batch([
                 ...usageRollupStatements(db, ownerUserId, query, cursor),
                 plugins,
+                recent,
               ]);
               const ready = (
                 rolled[0]?.results[0] as { rollups_ready?: unknown } | undefined
               )?.rollups_ready;
               if (ready === 1) return rolled;
               await backfillUsageRollups(db, 1);
-              return db.batch([...rawStatements, plugins]);
+              return db.batch([...rawStatements, plugins, recent]);
             });
             const summaryRows = yield* decodeRows(
               SummaryRow,
@@ -757,6 +946,10 @@ export const UsageRepositoryD1 = (db: D1Database) =>
             const pluginUsage = yield* decodePluginUsage(
               results[6]?.results ?? [],
             );
+            const recentRows = yield* decodeRows(
+              RecentThreadRow,
+              results[7]?.results ?? [],
+            );
             const summary = summaryRows[0];
             if (summary === undefined) {
               return yield* unavailable(
@@ -765,6 +958,13 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               );
             }
             const visibleThreads = threadRows.slice(0, query.limit);
+            const activity = yield* readThreadActivity(
+              db,
+              "event.owner_user_id",
+              ownerUserId,
+              visibleThreads.map((row) => row.thread_id),
+              query,
+            );
             const lastThread = visibleThreads.at(-1);
             const nextCursor =
               threadRows.length > query.limit && lastThread !== undefined
@@ -823,12 +1023,15 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 runnerDurationMs: row.runner_duration_ms,
                 modelTurns: row.model_turns,
                 errorEvents: row.error_events,
+                activity: activity.get(row.thread_id) ?? [],
               })),
-              models: modelRows.map((row) => ({
-                providerId: row.provider_id,
-                modelId: row.model_id,
+              models: modelRows.map(modelFrom),
+              recent: recentRows.map((row) => ({
+                threadId: row.thread_id,
+                title: row.title,
+                projectName: row.project_name,
+                lastUsedAt: row.last_used_at,
                 totalTokens: row.total_tokens,
-                unknownTokenEvents: row.unknown_token_events,
                 estimatedCostMicros: row.estimated_cost_micros,
                 unknownCostEvents: row.unknown_cost_events,
                 modelTurns: row.model_turns,
@@ -919,6 +1122,13 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 db.prepare(priceSourcesSql(where)).bind(...values),
                 pluginUsageStatement(db, pluginWhere),
                 pluginUsageUsersStatement(db, pluginWhere),
+                db.prepare(modelSql(where)).bind(...values),
+                db
+                  .prepare(workspaceThreadSql(where))
+                  .bind(...values, workspaceId),
+                db
+                  .prepare(peakDailyUsersSql(where))
+                  .bind(query.sqliteTimezoneModifier, ...values),
               ]),
             );
             const summaryRows = yield* decodeRows(
@@ -940,6 +1150,25 @@ export const UsageRepositoryD1 = (db: D1Database) =>
             const plugins = yield* decodePluginUsage(results[5]?.results ?? []);
             const pluginUsers = yield* decodePluginUsageUsers(
               results[6]?.results ?? [],
+            );
+            const modelRows = yield* decodeRows(
+              ModelAggregateRow,
+              results[7]?.results ?? [],
+            );
+            const threadRows = yield* decodeRows(
+              WorkspaceThreadRow,
+              results[8]?.results ?? [],
+            );
+            const peakRows = yield* decodeRows(
+              PeakDailyUsersRow,
+              results[9]?.results ?? [],
+            );
+            const threadActivity = yield* readThreadActivity(
+              db,
+              "event.workspace_id",
+              workspaceId,
+              threadRows.map((row) => row.thread_id),
+              query,
             );
             const summary = summaryRows[0];
             if (summary === undefined) {
@@ -1003,6 +1232,20 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               filters,
               summary: summaryFrom(summary),
               daily,
+              peakDailyUsers: peakRows[0]?.peak_daily_users ?? 0,
+              models: modelRows.map(modelFrom),
+              threads: threadRows.map((row) => ({
+                threadId: row.thread_id,
+                title: row.title,
+                ownerUserId: row.owner_user_id,
+                ownerName: row.owner_name,
+                createdAt: row.created_at,
+                totalTokens: row.total_tokens,
+                estimatedCostMicros: row.estimated_cost_micros,
+                unknownCostEvents: row.unknown_cost_events,
+                modelTurns: row.model_turns,
+                activity: threadActivity.get(row.thread_id) ?? [],
+              })),
               runners,
               plugins,
               pluginUsers,
@@ -1031,6 +1274,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                   items: visible.map((row) => ({
                     userId: row.user_id,
                     userName: row.user_name,
+                    threadCount: row.thread_count,
                     totalTokens: row.total_tokens,
                     unknownTokenEvents: row.unknown_token_events,
                     estimatedCostMicros: row.estimated_cost_micros,

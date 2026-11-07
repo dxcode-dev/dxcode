@@ -15,7 +15,7 @@ describe("settings navigation", () => {
   it("shows only the settings features currently exposed in each menu", () => {
     expect(menu("personal")).toEqual([
       [null, ["Account", "Integrations & MCP", "Experimental Features"]],
-      ["Usage", ["Model", "Plugin usage"]],
+      ["Usage", ["Model", "Orb", "Plugin usage"]],
       ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
       ["Library", ["Secrets & Env Vars", "Skills", "Plugins"]],
       ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],
@@ -47,6 +47,12 @@ describe("settings navigation", () => {
       ["Agent", ["Instructions"]],
       ["Library", ["Skills", "Plugins"]],
       ["Interface", ["Composer"]],
+    ]);
+
+    // Auditors don't see workspace Usage for now (owner, 2026-11-07).
+    expect(menu("workspace", "auditor")[0]).toEqual([
+      null,
+      ["Workspace", "Members", "Integrations & MCP"],
     ]);
   });
 });

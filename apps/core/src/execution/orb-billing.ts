@@ -32,6 +32,18 @@ export interface OrbBillingPolicy {
    * is logged and treated as `continue`.
    */
   readonly recordUsage: (usage: OrbUsage) => Promise<OrbUsageOutcome>;
+  /**
+   * The Orb time this deployment metered for `userId`'s Threads between
+   * `from` and `until` (epoch ms), in milliseconds per Thread ID. Display
+   * only: Settings → Usage → Orb prefers it to the Thread's own run record
+   * for an Orb the deployment meters. Absent when the deployment meters
+   * nothing.
+   */
+  readonly meteredOrbTime?: (window: {
+    readonly userId: string;
+    readonly from: number;
+    readonly until: number;
+  }) => Promise<ReadonlyMap<string, number>>;
 }
 
 export interface OrbStartRequest {
