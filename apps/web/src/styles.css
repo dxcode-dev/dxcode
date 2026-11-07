@@ -1317,9 +1317,7 @@ a {
   max-width: var(--thread-width);
   min-height: 100%;
   margin: 0 auto;
-  /* The left gutter holds the ⋯ of left-side messages clear of their text. */
-  padding: 24px 24px calc(var(--agent-composer-dock-height, 132px) + 16px)
-    max(24px, calc(var(--message-actions-size) + 8px));
+  padding: 24px 24px calc(var(--agent-composer-dock-height, 132px) + 16px);
   color: var(--chat-foreground);
   font-size: 13px;
   line-height: 20px;
@@ -1399,10 +1397,10 @@ a {
    grey ring and a reply no mark, never the browser's focus ring. */
 .conversation-message:has(> .message-actions-anchor) {
   position: relative;
-  /* Where ⋯ centres below the message's top. On the left (replies, other
-     people's and other Threads' messages) its top meets the message's
-     first line; on the right, on the viewer's bubble's top-right corner. */
-  --message-actions-y: calc(4px + var(--message-actions-size) / 2);
+  /* Where ⋯ centres relative to the message's top. On the left (replies,
+     other people's and other Threads' messages) it floats partly above the
+     message, its bottom on the first line's top, clear of its text (#1944). */
+  --message-actions-y: calc(4px - var(--message-actions-size) / 2);
 }
 .conversation-message:has(> .message-actions-anchor[data-side="right"]) {
   /* Centred on the bubble's top-right corner, as the reference (owner's
@@ -1421,13 +1419,14 @@ a {
   z-index: 10;
   height: 0;
 }
-/* Owner's call (2026-11-06): ⋯ follows the side the message sits on. On
-   the left it sits in the transcript's left gutter, 4px clear of the text,
-   so it never covers a line, at rest or pinned. */
+/* Owner's calls (2026-11-06, 2026-11-07, #1944): ⋯ follows the side the
+   message sits on and floats over the message's top outer corner, 8px past
+   its edge, on both sides. The transcript keeps no gutter for it, so text
+   uses the full width and lines up with the composer. */
 .message-actions-controls {
   position: absolute;
   top: var(--message-actions-y);
-  left: calc(-4px - var(--message-actions-size));
+  left: -8px;
   display: flex;
   transform: translateY(-50%);
 }
@@ -1455,6 +1454,20 @@ a {
   height: 14px;
 }
 @media (pointer: coarse) {
+  .message-actions-button {
+    position: relative;
+  }
+  /* A 44px touch target around the 32px circle: 6px past its 1px border
+     on every side. Sized explicitly, since the button's grid centring
+     would shrink an inset-only box. */
+  .message-actions-button::before {
+    position: absolute;
+    top: -7px;
+    left: -7px;
+    width: calc(100% + 14px);
+    height: calc(100% + 14px);
+    content: "";
+  }
   .message-actions-button svg {
     width: 16px;
     height: 16px;
@@ -9882,8 +9895,7 @@ div.claude-code-mode-main {
   display: none;
 }
 .mobile-pane-content .agent-transcript {
-  padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px)
-    max(16px, calc(var(--message-actions-size) + 8px));
+  padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px);
   font-size: 13px;
 }
 /* Above the composer and the dock's bottom space, as on desktop. */
