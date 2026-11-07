@@ -13,7 +13,10 @@ import {
 } from "./logging.js";
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
-import { scheduleUsageRetention } from "./settings/usage/retention.js";
+import {
+  scheduleUsageRetention,
+  scheduleWorkspaceUsageBackfill,
+} from "./settings/usage/retention.js";
 import { sweepArtifactAgentWakes } from "./thread-artifacts/ask-effects.js";
 import { threadArtifactLogger } from "./thread-artifacts/logger.js";
 import { sweepDeletedArtifacts } from "./thread-artifacts/store.js";
@@ -137,6 +140,7 @@ export const scheduled = (
       }),
     ),
   );
+  scheduleWorkspaceUsageBackfill(bindings, context);
   if (controller.cron === THREAD_SWEEP_CRON) return;
   scheduleUsageRetention(controller, bindings, context);
   // Bodies of deleted artifacts still stored: a deleted account's Threads'

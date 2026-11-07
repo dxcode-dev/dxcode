@@ -19,16 +19,16 @@ import type { NormalizedUsageQuery, UserId } from "@dx/domain";
  * must match the triggers in migration 0125.
  */
 
-const HOUR_MS = 3_600_000;
+export const HOUR_MS = 3_600_000;
 /** More providers and models than a person uses in a range. */
 export const MODEL_BREAKDOWN_LIMIT = 50;
-const DAY_MS = 86_400_000;
+export const DAY_MS = 86_400_000;
 
 const floorTo = (ms: number, unit: number) => Math.floor(ms / unit) * unit;
 const ceilTo = (ms: number, unit: number) => Math.ceil(ms / unit) * unit;
 const iso = (ms: number) => new Date(ms).toISOString();
 
-interface Buckets {
+export interface Buckets {
   /** Whole buckets read from the rollup: [from, to). */
   readonly from: string;
   readonly to: string;
@@ -38,7 +38,7 @@ interface Buckets {
   readonly raw: string;
 }
 
-const buckets = (
+export const buckets = (
   fromMs: number,
   toMs: number,
   unit: number,
@@ -86,18 +86,19 @@ const dayBuckets = (query: NormalizedUsageQuery) =>
     [],
   );
 
-type Column = readonly [name: string, expression: string];
+export type Column = readonly [name: string, expression: string];
 
-const provider = (e: string) =>
+export const provider = (e: string) =>
   `COALESCE(${e}.observed_provider_id, ${e}.provider_id)`;
-const model = (e: string) => `COALESCE(${e}.observed_model_id, ${e}.model_id)`;
-const fresh = (e: string, column: string) =>
+export const model = (e: string) =>
+  `COALESCE(${e}.observed_model_id, ${e}.model_id)`;
+export const fresh = (e: string, column: string) =>
   `CASE WHEN ${e}.price_status = 'fresh' THEN COALESCE(${e}.${column}, '') ELSE '' END`;
 const runner = (e: string, value: string, otherwise: string) =>
   `CASE WHEN ${e}.kind = 'runner' THEN ${value} ELSE ${otherwise} END`;
 
 /** usage_hourly's key after owner and hour. */
-const hourlyKeys = (e: string): ReadonlyArray<Column> => [
+export const hourlyKeys = (e: string): ReadonlyArray<Column> => [
   ["kind", `${e}.kind`],
   ["provider_id", provider(e)],
   ["model_id", model(e)],
@@ -117,7 +118,7 @@ const hourlyKeys = (e: string): ReadonlyArray<Column> => [
 ];
 
 /** usage_hourly's sums, as each event contributes to them. */
-const hourlyMeasures = (e: string): ReadonlyArray<Column> => [
+export const hourlyMeasures = (e: string): ReadonlyArray<Column> => [
   ["events", "1"],
   ["success_events", `${e}.outcome = 'success'`],
   ["error_events", `${e}.outcome = 'error'`],
@@ -162,9 +163,9 @@ const dailyMeasures = (e: string): ReadonlyArray<Column> =>
     ].includes(name),
   );
 
-const names = (columns: ReadonlyArray<Column>) =>
+export const names = (columns: ReadonlyArray<Column>) =>
   columns.map(([name]) => name).join(", ");
-const aliased = (columns: ReadonlyArray<Column>) =>
+export const aliased = (columns: ReadonlyArray<Column>) =>
   columns.map(([name, expression]) => `${expression} AS ${name}`).join(", ");
 
 interface Filter {
@@ -344,7 +345,7 @@ const runnerStatement = (filter: Filter, hours: Buckets): Part => {
 };
 
 /** The usage_price row the raw query's join picks for one key at one time. */
-const priceAt = (key: {
+export const priceAt = (key: {
   readonly provider: string;
   readonly model: string;
   readonly source: string;
@@ -583,19 +584,22 @@ export const usageRollupStatements = (
   ].map(({ sql, values }) => db.prepare(sql).bind(...values));
 };
 
-const upsert = (measures: ReadonlyArray<Column>) =>
+export const upsert = (measures: ReadonlyArray<Column>) =>
   measures.map(([name]) => `${name} = ${name} + excluded.${name}`).join(", ");
 
-const summed = (measures: ReadonlyArray<Column>) =>
+export const summed = (measures: ReadonlyArray<Column>) =>
   measures.map(([, expression]) => `SUM(${expression})`).join(", ");
 
-const positions = (count: number) =>
+export const positions = (count: number) =>
   Array.from({ length: count }, (_, index) => index + 1).join(", ");
 
 // ?1 is the chunk's start and must still be the backfill's position, so a
 // chunk two runs both read adds nothing the second time; ?2 is its end.
-const chunk = `event.rowid > ?1 AND event.rowid <= ?2
-  AND (SELECT through_rowid FROM usage_rollup_backfill) = ?1`;
+export const backfillChunk = (
+  state: string,
+) => `event.rowid > ?1 AND event.rowid <= ?2
+  AND (SELECT through_rowid FROM ${state}) = ?1`;
+const chunk = backfillChunk("usage_rollup_backfill");
 
 const hourlyBackfill = (() => {
   const keys = [
@@ -634,37 +638,57 @@ const dailyBackfill = (() => {
 })();
 
 /**
- * Adds up to `chunks` rowid chunks of the events stored before migration 0125
- * to the rollups. Returns true once every such event is in them. A chunk of
- * 50,000 events runs in well under a second, far inside D1's 30-second limit.
+ * Adds up to `chunks` rowid chunks of the events stored before a rollup
+ * migration to its rollups: `state` is its backfill table, `inserts` its
+ * statements, each binding the chunk as ?1 and ?2 (`backfillChunk`). Returns
+ * true once every such event is in them. A chunk of 50,000 events runs in
+ * well under a second, far inside D1's 30-second limit.
  */
-export const backfillUsageRollups = async (
+export const backfillRollups = async (
+  db: D1Database,
+  state: string,
+  inserts: ReadonlyArray<string>,
+  chunks: number,
+  chunkRows: number,
+): Promise<boolean> => {
+  for (let index = 0; index < chunks; index += 1) {
+    const position = await db
+      .prepare(`SELECT through_rowid, end_rowid FROM ${state}`)
+      .first<{ through_rowid: number; end_rowid: number }>();
+    if (position === null) return false;
+    if (position.through_rowid >= position.end_rowid) return true;
+    const end = Math.min(
+      position.through_rowid + chunkRows,
+      position.end_rowid,
+    );
+    await db.batch([
+      ...inserts.map((insert) =>
+        db.prepare(insert).bind(position.through_rowid, end),
+      ),
+      db
+        .prepare(
+          `UPDATE ${state} SET through_rowid = ?2
+           WHERE singleton = 1 AND through_rowid = ?1`,
+        )
+        .bind(position.through_rowid, end),
+    ]);
+  }
+  const done = await db
+    .prepare(`SELECT through_rowid >= end_rowid AS done FROM ${state}`)
+    .first<{ done: number }>();
+  return done?.done === 1;
+};
+
+/** Backfills migration 0125's owner rollups; see `backfillRollups`. */
+export const backfillUsageRollups = (
   db: D1Database,
   chunks: number,
   chunkRows = 50_000,
-): Promise<boolean> => {
-  for (let index = 0; index < chunks; index += 1) {
-    const state = await db
-      .prepare("SELECT through_rowid, end_rowid FROM usage_rollup_backfill")
-      .first<{ through_rowid: number; end_rowid: number }>();
-    if (state === null) return false;
-    if (state.through_rowid >= state.end_rowid) return true;
-    const end = Math.min(state.through_rowid + chunkRows, state.end_rowid);
-    await db.batch([
-      db.prepare(hourlyBackfill).bind(state.through_rowid, end),
-      db.prepare(dailyBackfill).bind(state.through_rowid, end),
-      db
-        .prepare(
-          `UPDATE usage_rollup_backfill SET through_rowid = ?2
-           WHERE singleton = 1 AND through_rowid = ?1`,
-        )
-        .bind(state.through_rowid, end),
-    ]);
-  }
-  const state = await db
-    .prepare(
-      "SELECT through_rowid >= end_rowid AS done FROM usage_rollup_backfill",
-    )
-    .first<{ done: number }>();
-  return state?.done === 1;
-};
+): Promise<boolean> =>
+  backfillRollups(
+    db,
+    "usage_rollup_backfill",
+    [hourlyBackfill, dailyBackfill],
+    chunks,
+    chunkRows,
+  );

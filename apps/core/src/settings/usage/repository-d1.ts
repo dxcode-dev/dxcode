@@ -39,6 +39,23 @@ import {
   usageRollupServes,
   usageRollupStatements,
 } from "./rollup-d1.js";
+import {
+  backfillWorkspaceUsageRollups,
+  workspacePriceSourcesStatement,
+  workspaceProjectNamesStatement,
+  workspaceRollupPlan,
+  workspaceRollupReadyStatement,
+  workspaceThreadActivityStatement,
+  workspaceThreadsStatement,
+  workspaceUsageRowsStatement,
+  workspaceUserNamesStatement,
+} from "./workspace-rollup-d1.js";
+import {
+  aggregateWorkspaceUsage,
+  rankProjects,
+  rankUsers,
+  WorkspaceUsageRow,
+} from "./workspace-usage-aggregate.js";
 
 type EncodedUsageEvent = typeof UsageEventInput.Encoded;
 type EncodedUsagePrice = typeof UsagePriceMetadata.Encoded;
@@ -173,30 +190,19 @@ const threadActivitySql = (
   GROUP BY event.thread_id, hour
   ORDER BY event.thread_id, hour`;
 
-/** Each listed Thread's hours of model use, by Thread ID. */
-const readThreadActivity = (
-  db: D1Database,
-  scope: Parameters<typeof threadActivitySql>[0],
-  scopeId: string,
-  threadIds: ReadonlyArray<string>,
-  range: { readonly fromInclusive: string; readonly toExclusive: string },
-) =>
+type ThreadActivity = Map<
+  string,
+  Array<{
+    hour: typeof ThreadActivityRow.Type.hour;
+    totalTokens: number;
+    estimatedCostMicros: number;
+  }>
+>;
+
+/** Activity rows (`threadActivitySql`'s columns), by Thread ID. */
+const threadActivityFrom = (results: ReadonlyArray<unknown>) =>
   Effect.gen(function* () {
-    const activity = new Map<
-      string,
-      Array<{
-        hour: typeof ThreadActivityRow.Type.hour;
-        totalTokens: number;
-        estimatedCostMicros: number;
-      }>
-    >();
-    if (threadIds.length === 0) return activity;
-    const { results } = yield* run("usage.thread.activity", () =>
-      db
-        .prepare(threadActivitySql(scope, threadIds.length))
-        .bind(scopeId, ...threadIds, range.fromInclusive, range.toExclusive)
-        .all(),
-    );
+    const activity: ThreadActivity = new Map();
     for (const row of yield* decodeRows(ThreadActivityRow, results)) {
       const hours = activity.get(row.thread_id) ?? [];
       hours.push({
@@ -207,6 +213,25 @@ const readThreadActivity = (
       activity.set(row.thread_id, hours);
     }
     return activity;
+  });
+
+/** Each listed Thread's hours of model use, by Thread ID. */
+const readThreadActivity = (
+  db: D1Database,
+  scope: Parameters<typeof threadActivitySql>[0],
+  scopeId: string,
+  threadIds: ReadonlyArray<string>,
+  range: { readonly fromInclusive: string; readonly toExclusive: string },
+) =>
+  Effect.gen(function* () {
+    if (threadIds.length === 0) return new Map() as ThreadActivity;
+    const { results } = yield* run("usage.thread.activity", () =>
+      db
+        .prepare(threadActivitySql(scope, threadIds.length))
+        .bind(scopeId, ...threadIds, range.fromInclusive, range.toExclusive)
+        .all(),
+    );
+    return yield* threadActivityFrom(results);
   });
 
 const ProjectAggregateRow = Schema.Struct({
@@ -818,6 +843,209 @@ const summaryFrom = (row: typeof SummaryRow.Type): UsageSummary => ({
   },
 });
 
+interface WorkspaceUsageResults {
+  readonly summary: ReadonlyArray<unknown>;
+  readonly daily: ReadonlyArray<unknown>;
+  readonly ranking: ReadonlyArray<unknown>;
+  readonly runners: ReadonlyArray<unknown>;
+  readonly priceSources: ReadonlyArray<unknown>;
+  readonly plugins: ReadonlyArray<unknown>;
+  readonly pluginUsers: ReadonlyArray<unknown>;
+  readonly models: ReadonlyArray<unknown>;
+  readonly threads: ReadonlyArray<unknown>;
+  readonly peakDailyUsers: ReadonlyArray<unknown>;
+  readonly activity: ThreadActivity;
+}
+
+type WorkspaceRankingCursor = Effect.Success<
+  ReturnType<typeof decodeWorkspaceUsageRankingCursor>
+>;
+
+/** The workspace page's rows read from raw events, about ten times over. */
+const readRawWorkspaceUsage = (
+  db: D1Database,
+  workspaceId: WorkspaceId,
+  query: NormalizedWorkspaceUsageQuery,
+  cursor: WorkspaceRankingCursor | undefined,
+) =>
+  Effect.gen(function* () {
+    const { where, values } = workspaceQueryParts(workspaceId, query);
+    const pluginWhere = workspacePluginUsageWhere(workspaceId, query);
+    const results = yield* run("usage.workspace.dashboard", () =>
+      db.batch([
+        db.prepare(summarySql(where)).bind(...values),
+        db
+          .prepare(dailySql(where))
+          .bind(...values, query.sqliteTimezoneModifier),
+        db
+          .prepare(rankingSql(query.ranking, where, cursor !== undefined))
+          .bind(
+            ...values,
+            ...(cursor === undefined
+              ? []
+              : [
+                  cursor.estimatedCostMicros,
+                  cursor.estimatedCostMicros,
+                  cursor.id,
+                ]),
+            query.limit + 1,
+          ),
+        db.prepare(runnerSql(where)).bind(...values),
+        db.prepare(priceSourcesSql(where)).bind(...values),
+        pluginUsageStatement(db, pluginWhere),
+        pluginUsageUsersStatement(db, pluginWhere),
+        db.prepare(modelSql(where)).bind(...values),
+        db.prepare(workspaceThreadSql(where)).bind(...values, workspaceId),
+        db
+          .prepare(peakDailyUsersSql(where))
+          .bind(query.sqliteTimezoneModifier, ...values),
+      ]),
+    );
+    const threads = results[8]?.results ?? [];
+    const activity = yield* readThreadActivity(
+      db,
+      "event.workspace_id",
+      workspaceId,
+      (yield* decodeRows(WorkspaceThreadRow, threads)).map(
+        (row) => row.thread_id,
+      ),
+      query,
+    );
+    return {
+      summary: results[0]?.results ?? [],
+      daily: results[1]?.results ?? [],
+      ranking: results[2]?.results ?? [],
+      runners: results[3]?.results ?? [],
+      priceSources: results[4]?.results ?? [],
+      plugins: results[5]?.results ?? [],
+      pluginUsers: results[6]?.results ?? [],
+      models: results[7]?.results ?? [],
+      threads,
+      peakDailyUsers: results[9]?.results ?? [],
+      activity,
+    } satisfies WorkspaceUsageResults;
+  });
+
+const UserNameRow = Schema.Struct({
+  user_id: Schema.String,
+  user_name: Schema.String,
+});
+const ProjectNameRow = Schema.Struct({
+  project_id: Schema.String,
+  project_name: Schema.String,
+});
+
+/** Events a page load backfills while older events are not yet rolled up. */
+const PAGE_BACKFILL_ROWS = 10_000;
+
+/**
+ * The workspace page's rows from the workspace rollups: one scan of the
+ * range, added up in the Worker, then names, price sources, and the Thread
+ * list for what the scan found. Reads raw events until the backfill of
+ * events stored before migration 0151 finishes.
+ */
+const readWorkspaceUsage = (
+  db: D1Database,
+  workspaceId: WorkspaceId,
+  query: NormalizedWorkspaceUsageQuery,
+  cursor: WorkspaceRankingCursor | undefined,
+) =>
+  Effect.gen(function* () {
+    const pluginWhere = workspacePluginUsageWhere(workspaceId, query);
+    const scanned = yield* run("usage.workspace.dashboard", () =>
+      db.batch([
+        workspaceRollupReadyStatement(db),
+        workspaceUsageRowsStatement(
+          db,
+          workspaceId,
+          query,
+          workspaceRollupPlan(query),
+        ),
+        pluginUsageStatement(db, pluginWhere),
+        pluginUsageUsersStatement(db, pluginWhere),
+      ]),
+    );
+    const ready = (scanned[0]?.results[0] as { ready?: unknown } | undefined)
+      ?.ready;
+    if (ready !== 1) {
+      yield* run("usage.workspace.backfill", () =>
+        backfillWorkspaceUsageRollups(db, 1, PAGE_BACKFILL_ROWS),
+      );
+      return yield* readRawWorkspaceUsage(db, workspaceId, query, cursor);
+    }
+    const aggregates = aggregateWorkspaceUsage(
+      yield* decodeRows(WorkspaceUsageRow, scanned[1]?.results ?? []),
+      query.ranking,
+    );
+    const owners = [
+      ...new Set(aggregates.rankings.map((group) => group.ownerUserId)),
+    ];
+    const projects =
+      query.ranking === "projects"
+        ? [...new Set(aggregates.rankings.map((group) => group.projectId))]
+        : [];
+    const named = yield* run("usage.workspace.dashboard", () =>
+      db.batch([
+        workspaceUserNamesStatement(db, owners),
+        workspaceProjectNamesStatement(db, projects),
+        workspacePriceSourcesStatement(
+          db,
+          workspaceId,
+          query,
+          aggregates.priceProbes,
+        ),
+        workspaceThreadsStatement(db, workspaceId, aggregates.threadCandidates),
+      ]),
+    );
+    const threads = named[3]?.results ?? [];
+    const threadIds = (yield* decodeRows(WorkspaceThreadRow, threads)).map(
+      (row) => row.thread_id,
+    );
+    const activity =
+      threadIds.length === 0
+        ? []
+        : (yield* run("usage.thread.activity", () =>
+            workspaceThreadActivityStatement(
+              db,
+              workspaceId,
+              query,
+              threadIds,
+            ).all(),
+          )).results;
+    const userNames = new Map(
+      (yield* decodeRows(UserNameRow, named[0]?.results ?? [])).map(
+        (row) => [row.user_id, row.user_name] as const,
+      ),
+    );
+    const projectNames = new Map(
+      (yield* decodeRows(ProjectNameRow, named[1]?.results ?? [])).map(
+        (row) => [row.project_id, row.project_name] as const,
+      ),
+    );
+    return {
+      summary: [aggregates.summary],
+      daily: aggregates.daily,
+      ranking:
+        query.ranking === "users"
+          ? rankUsers(aggregates.rankings, userNames, cursor, query.limit + 1)
+          : rankProjects(
+              aggregates.rankings,
+              projectNames,
+              userNames,
+              cursor,
+              query.limit + 1,
+            ),
+      runners: aggregates.runners,
+      priceSources: named[2]?.results ?? [],
+      plugins: scanned[2]?.results ?? [],
+      pluginUsers: scanned[3]?.results ?? [],
+      models: aggregates.models,
+      threads,
+      peakDailyUsers: [{ peak_daily_users: aggregates.peakDailyUsers }],
+      activity: yield* threadActivityFrom(activity),
+    } satisfies WorkspaceUsageResults;
+  });
+
 export const UsageRepositoryD1 = (db: D1Database) =>
   Layer.effect(
     UsageRepository,
@@ -1088,8 +1316,6 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                 return yield* new UsageResourceForbidden();
             }
 
-            const { where, values } = workspaceQueryParts(workspaceId, query);
-            const pluginWhere = workspacePluginUsageWhere(workspaceId, query);
             const cursor =
               query.cursor === undefined
                 ? undefined
@@ -1097,79 +1323,39 @@ export const UsageRepositoryD1 = (db: D1Database) =>
                     query.cursor,
                     query.ranking,
                   );
-            const results = yield* run("usage.workspace.dashboard", () =>
-              db.batch([
-                db.prepare(summarySql(where)).bind(...values),
-                db
-                  .prepare(dailySql(where))
-                  .bind(...values, query.sqliteTimezoneModifier),
-                db
-                  .prepare(
-                    rankingSql(query.ranking, where, cursor !== undefined),
-                  )
-                  .bind(
-                    ...values,
-                    ...(cursor === undefined
-                      ? []
-                      : [
-                          cursor.estimatedCostMicros,
-                          cursor.estimatedCostMicros,
-                          cursor.id,
-                        ]),
-                    query.limit + 1,
-                  ),
-                db.prepare(runnerSql(where)).bind(...values),
-                db.prepare(priceSourcesSql(where)).bind(...values),
-                pluginUsageStatement(db, pluginWhere),
-                pluginUsageUsersStatement(db, pluginWhere),
-                db.prepare(modelSql(where)).bind(...values),
-                db
-                  .prepare(workspaceThreadSql(where))
-                  .bind(...values, workspaceId),
-                db
-                  .prepare(peakDailyUsersSql(where))
-                  .bind(query.sqliteTimezoneModifier, ...values),
-              ]),
+            const results = yield* readWorkspaceUsage(
+              db,
+              workspaceId,
+              query,
+              cursor,
             );
-            const summaryRows = yield* decodeRows(
-              SummaryRow,
-              results[0]?.results ?? [],
-            );
-            const dailyRows = yield* decodeRows(
-              DailyRow,
-              results[1]?.results ?? [],
-            );
+            const summaryRows = yield* decodeRows(SummaryRow, results.summary);
+            const dailyRows = yield* decodeRows(DailyRow, results.daily);
             const runnerRows = yield* decodeRows(
               RunnerAggregateRow,
-              results[3]?.results ?? [],
+              results.runners,
             );
             const priceRows = yield* decodeRows(
               PriceSourceRow,
-              results[4]?.results ?? [],
+              results.priceSources,
             );
-            const plugins = yield* decodePluginUsage(results[5]?.results ?? []);
+            const plugins = yield* decodePluginUsage(results.plugins);
             const pluginUsers = yield* decodePluginUsageUsers(
-              results[6]?.results ?? [],
+              results.pluginUsers,
             );
             const modelRows = yield* decodeRows(
               ModelAggregateRow,
-              results[7]?.results ?? [],
+              results.models,
             );
             const threadRows = yield* decodeRows(
               WorkspaceThreadRow,
-              results[8]?.results ?? [],
+              results.threads,
             );
             const peakRows = yield* decodeRows(
               PeakDailyUsersRow,
-              results[9]?.results ?? [],
+              results.peakDailyUsers,
             );
-            const threadActivity = yield* readThreadActivity(
-              db,
-              "event.workspace_id",
-              workspaceId,
-              threadRows.map((row) => row.thread_id),
-              query,
-            );
+            const threadActivity = results.activity;
             const summary = summaryRows[0];
             if (summary === undefined) {
               return yield* unavailable(
@@ -1255,7 +1441,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
             if (query.ranking === "users") {
               const decoded = yield* decodeRows(
                 UserAggregateRow,
-                results[2]?.results ?? [],
+                results.ranking,
               );
               const visible = decoded.slice(0, query.limit);
               const last = visible.at(-1);
@@ -1290,7 +1476,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
             }
             const decoded = yield* decodeRows(
               ProjectAggregateRow,
-              results[2]?.results ?? [],
+              results.ranking,
             );
             const visible = decoded.slice(0, query.limit);
             const last = visible.at(-1);
