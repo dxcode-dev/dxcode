@@ -941,8 +941,8 @@ const PAGE_BACKFILL_ROWS = 10_000;
 /**
  * The workspace page's rows from the workspace rollups: one scan of the
  * range, added up in the Worker, then names, price sources, and the Thread
- * list for what the scan found. Reads raw events until the backfill of
- * events stored before migration 0151 finishes.
+ * list for what the scan found. Until the backfill of events stored before
+ * migration 0151 finishes, each load adds one chunk and fails fast.
  */
 const readWorkspaceUsage = (
   db: D1Database,
@@ -952,26 +952,36 @@ const readWorkspaceUsage = (
 ) =>
   Effect.gen(function* () {
     const pluginWhere = workspacePluginUsageWhere(workspaceId, query);
-    const scanned = yield* run("usage.workspace.dashboard", () =>
-      db.batch([
-        workspaceRollupReadyStatement(db),
-        workspaceUsageRowsStatement(
-          db,
-          workspaceId,
-          query,
-          workspaceRollupPlan(query),
-        ),
-        pluginUsageStatement(db, pluginWhere),
-        pluginUsageUsersStatement(db, pluginWhere),
-      ]),
-    );
+    const scan = () =>
+      run("usage.workspace.dashboard", () =>
+        db.batch([
+          workspaceRollupReadyStatement(db),
+          workspaceUsageRowsStatement(
+            db,
+            workspaceId,
+            query,
+            workspaceRollupPlan(query),
+          ),
+          pluginUsageStatement(db, pluginWhere),
+          pluginUsageUsersStatement(db, pluginWhere),
+        ]),
+      );
+    let scanned = yield* scan();
     const ready = (scanned[0]?.results[0] as { ready?: unknown } | undefined)
       ?.ready;
     if (ready !== 1) {
-      yield* run("usage.workspace.backfill", () =>
+      // Never fall back to raw events: that read is what overloaded D1 for
+      // every request (#1933). Move the backfill on by one chunk; until the
+      // last chunk is in, answer at once that usage is being prepared.
+      const done = yield* run("usage.workspace.backfill", () =>
         backfillWorkspaceUsageRollups(db, 1, PAGE_BACKFILL_ROWS),
       );
-      return yield* readRawWorkspaceUsage(db, workspaceId, query, cursor);
+      if (!done)
+        return yield* unavailable(
+          "usage.workspace.preparing",
+          new Error("Workspace usage rollups are still backfilling."),
+        );
+      scanned = yield* scan();
     }
     const aggregates = aggregateWorkspaceUsage(
       yield* decodeRows(WorkspaceUsageRow, scanned[1]?.results ?? []),
@@ -1045,6 +1055,222 @@ const readWorkspaceUsage = (
       activity: yield* threadActivityFrom(activity),
     } satisfies WorkspaceUsageResults;
   });
+
+type WorkspaceUsageReader = (
+  db: D1Database,
+  workspaceId: WorkspaceId,
+  query: NormalizedWorkspaceUsageQuery,
+  cursor: WorkspaceRankingCursor | undefined,
+) => Effect.Effect<
+  WorkspaceUsageResults,
+  Effect.Error<ReturnType<typeof readWorkspaceUsage>>
+>;
+
+/** The workspace dashboard, from the rows one reader returns. */
+const workspaceDashboardFrom =
+  (db: D1Database, read: WorkspaceUsageReader) =>
+  (workspaceId: WorkspaceId, query: NormalizedWorkspaceUsageQuery) =>
+    Effect.gen(function* () {
+      for (const [statement, id] of [
+        [
+          `SELECT id FROM member
+           WHERE organizationId = ? AND userId = ? LIMIT 1`,
+          query.userId,
+        ],
+        [
+          `SELECT project.id
+           FROM projects AS project
+           INNER JOIN member
+             ON member.userId = project.owner_user_id
+            AND member.organizationId = ?
+           WHERE project.id = ?
+           LIMIT 1`,
+          query.projectId,
+        ],
+      ] as const) {
+        if (id === undefined) continue;
+        const attributed = yield* run("usage.workspace.authorize", () =>
+          db.prepare(statement).bind(workspaceId, id).first(),
+        );
+        if (attributed === null) return yield* new UsageResourceForbidden();
+      }
+
+      const cursor =
+        query.cursor === undefined
+          ? undefined
+          : yield* decodeWorkspaceUsageRankingCursor(
+              query.cursor,
+              query.ranking,
+            );
+      const results = yield* read(db, workspaceId, query, cursor);
+      const summaryRows = yield* decodeRows(SummaryRow, results.summary);
+      const dailyRows = yield* decodeRows(DailyRow, results.daily);
+      const runnerRows = yield* decodeRows(RunnerAggregateRow, results.runners);
+      const priceRows = yield* decodeRows(PriceSourceRow, results.priceSources);
+      const plugins = yield* decodePluginUsage(results.plugins);
+      const pluginUsers = yield* decodePluginUsageUsers(results.pluginUsers);
+      const modelRows = yield* decodeRows(ModelAggregateRow, results.models);
+      const threadRows = yield* decodeRows(WorkspaceThreadRow, results.threads);
+      const peakRows = yield* decodeRows(
+        PeakDailyUsersRow,
+        results.peakDailyUsers,
+      );
+      const threadActivity = results.activity;
+      const summary = summaryRows[0];
+      if (summary === undefined) {
+        return yield* unavailable(
+          "usage.workspace.dashboard",
+          new Error("Missing aggregate row."),
+        );
+      }
+
+      const range = {
+        from: query.from,
+        to: query.to,
+        timezoneOffsetMinutes: query.timezoneOffsetMinutes,
+        timezone: query.timezone,
+      };
+      const filters = {
+        ...(query.userId === undefined ? {} : { userId: query.userId }),
+        ...(query.projectId === undefined
+          ? {}
+          : { projectId: query.projectId }),
+        ...(query.providerId === undefined
+          ? {}
+          : { providerId: query.providerId }),
+        ...(query.modelId === undefined ? {} : { modelId: query.modelId }),
+      };
+      const daily = dailyRows.map((row) => ({
+        day: row.day,
+        totalTokens: row.total_tokens,
+        unknownTokenEvents: row.unknown_token_events,
+        estimatedCostMicros: row.estimated_cost_micros,
+        unknownCostEvents: row.unknown_cost_events,
+        averageLatencyMs: row.average_latency_ms,
+        runnerDurationMs: row.runner_duration_ms,
+        modelTurns: row.model_turns,
+      }));
+      const runners = runnerRows.map((row) => ({
+        provider: row.provider,
+        profileId: row.profile_id,
+        profileVersion: row.profile_version,
+        template: row.template,
+        cpuCores: row.cpu_cores,
+        memoryMb: row.memory_mb,
+        diskGb: row.disk_gb,
+        durationMs: row.duration_ms,
+        events: row.events,
+        unknownResourceEvents: row.unknown_resource_events,
+      }));
+      const priceSources = priceRows.map((row) => ({
+        source: row.source,
+        sourceVersion: row.source_version,
+        currency: row.currency,
+        effectiveFrom: row.effective_from,
+        effectiveTo: row.effective_to,
+        freshUntil: row.fresh_until,
+        estimated: true as const,
+      }));
+      const base = {
+        range,
+        filters,
+        summary: summaryFrom(summary),
+        daily,
+        peakDailyUsers: peakRows[0]?.peak_daily_users ?? 0,
+        models: modelRows.map(modelFrom),
+        threads: threadRows.map((row) => ({
+          threadId: row.thread_id,
+          title: row.title,
+          ownerUserId: row.owner_user_id,
+          ownerName: row.owner_name,
+          createdAt: row.created_at,
+          totalTokens: row.total_tokens,
+          estimatedCostMicros: row.estimated_cost_micros,
+          unknownCostEvents: row.unknown_cost_events,
+          modelTurns: row.model_turns,
+          activity: threadActivity.get(row.thread_id) ?? [],
+        })),
+        runners,
+        plugins,
+        pluginUsers,
+        priceSources,
+      };
+
+      if (query.ranking === "users") {
+        const decoded = yield* decodeRows(UserAggregateRow, results.ranking);
+        const visible = decoded.slice(0, query.limit);
+        const last = visible.at(-1);
+        const nextCursor =
+          decoded.length > query.limit && last !== undefined
+            ? yield* encodeWorkspaceUsageRankingCursor({
+                ranking: query.ranking,
+                estimatedCostMicros: last.estimated_cost_micros,
+                id: last.user_id,
+              })
+            : undefined;
+        return {
+          ...base,
+          ranking: {
+            kind: query.ranking,
+            items: visible.map((row) => ({
+              userId: row.user_id,
+              userName: row.user_name,
+              threadCount: row.thread_count,
+              totalTokens: row.total_tokens,
+              unknownTokenEvents: row.unknown_token_events,
+              estimatedCostMicros: row.estimated_cost_micros,
+              unknownCostEvents: row.unknown_cost_events,
+              averageLatencyMs: row.average_latency_ms,
+              runnerDurationMs: row.runner_duration_ms,
+              modelTurns: row.model_turns,
+              errorEvents: row.error_events,
+            })),
+            ...(nextCursor === undefined ? {} : { nextCursor }),
+          },
+        };
+      }
+      const decoded = yield* decodeRows(ProjectAggregateRow, results.ranking);
+      const visible = decoded.slice(0, query.limit);
+      const last = visible.at(-1);
+      const nextCursor =
+        decoded.length > query.limit && last !== undefined
+          ? yield* encodeWorkspaceUsageRankingCursor({
+              ranking: query.ranking,
+              estimatedCostMicros: last.estimated_cost_micros,
+              id: last.project_id,
+            })
+          : undefined;
+      return {
+        ...base,
+        ranking: {
+          kind: query.ranking,
+          items: visible.map((row) => ({
+            projectId: row.project_id,
+            projectName: row.project_name,
+            ownerUserId: row.owner_user_id,
+            ownerName: row.owner_name,
+            totalTokens: row.total_tokens,
+            unknownTokenEvents: row.unknown_token_events,
+            estimatedCostMicros: row.estimated_cost_micros,
+            unknownCostEvents: row.unknown_cost_events,
+            averageLatencyMs: row.average_latency_ms,
+            runnerDurationMs: row.runner_duration_ms,
+            modelTurns: row.model_turns,
+            errorEvents: row.error_events,
+          })),
+          ...(nextCursor === undefined ? {} : { nextCursor }),
+        },
+      };
+    });
+
+/**
+ * The workspace dashboard read from raw usage events, as the page read it
+ * before migration 0151. The page never serves it: it can read millions of
+ * D1 rows and starve every other request. It is the reference the rollups
+ * must match exactly (`test/worker/workspace-usage-rollups.test.ts`).
+ */
+export const rawWorkspaceDashboard = (db: D1Database) =>
+  workspaceDashboardFrom(db, readRawWorkspaceUsage);
 
 export const UsageRepositoryD1 = (db: D1Database) =>
   Layer.effect(
@@ -1289,227 +1515,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
               ...(nextCursor === undefined ? {} : { nextCursor }),
             };
           }),
-        workspaceDashboard: (workspaceId, query) =>
-          Effect.gen(function* () {
-            for (const [statement, id] of [
-              [
-                `SELECT id FROM member
-                 WHERE organizationId = ? AND userId = ? LIMIT 1`,
-                query.userId,
-              ],
-              [
-                `SELECT project.id
-                 FROM projects AS project
-                 INNER JOIN member
-                   ON member.userId = project.owner_user_id
-                  AND member.organizationId = ?
-                 WHERE project.id = ?
-                 LIMIT 1`,
-                query.projectId,
-              ],
-            ] as const) {
-              if (id === undefined) continue;
-              const attributed = yield* run("usage.workspace.authorize", () =>
-                db.prepare(statement).bind(workspaceId, id).first(),
-              );
-              if (attributed === null)
-                return yield* new UsageResourceForbidden();
-            }
-
-            const cursor =
-              query.cursor === undefined
-                ? undefined
-                : yield* decodeWorkspaceUsageRankingCursor(
-                    query.cursor,
-                    query.ranking,
-                  );
-            const results = yield* readWorkspaceUsage(
-              db,
-              workspaceId,
-              query,
-              cursor,
-            );
-            const summaryRows = yield* decodeRows(SummaryRow, results.summary);
-            const dailyRows = yield* decodeRows(DailyRow, results.daily);
-            const runnerRows = yield* decodeRows(
-              RunnerAggregateRow,
-              results.runners,
-            );
-            const priceRows = yield* decodeRows(
-              PriceSourceRow,
-              results.priceSources,
-            );
-            const plugins = yield* decodePluginUsage(results.plugins);
-            const pluginUsers = yield* decodePluginUsageUsers(
-              results.pluginUsers,
-            );
-            const modelRows = yield* decodeRows(
-              ModelAggregateRow,
-              results.models,
-            );
-            const threadRows = yield* decodeRows(
-              WorkspaceThreadRow,
-              results.threads,
-            );
-            const peakRows = yield* decodeRows(
-              PeakDailyUsersRow,
-              results.peakDailyUsers,
-            );
-            const threadActivity = results.activity;
-            const summary = summaryRows[0];
-            if (summary === undefined) {
-              return yield* unavailable(
-                "usage.workspace.dashboard",
-                new Error("Missing aggregate row."),
-              );
-            }
-
-            const range = {
-              from: query.from,
-              to: query.to,
-              timezoneOffsetMinutes: query.timezoneOffsetMinutes,
-              timezone: query.timezone,
-            };
-            const filters = {
-              ...(query.userId === undefined ? {} : { userId: query.userId }),
-              ...(query.projectId === undefined
-                ? {}
-                : { projectId: query.projectId }),
-              ...(query.providerId === undefined
-                ? {}
-                : { providerId: query.providerId }),
-              ...(query.modelId === undefined
-                ? {}
-                : { modelId: query.modelId }),
-            };
-            const daily = dailyRows.map((row) => ({
-              day: row.day,
-              totalTokens: row.total_tokens,
-              unknownTokenEvents: row.unknown_token_events,
-              estimatedCostMicros: row.estimated_cost_micros,
-              unknownCostEvents: row.unknown_cost_events,
-              averageLatencyMs: row.average_latency_ms,
-              runnerDurationMs: row.runner_duration_ms,
-              modelTurns: row.model_turns,
-            }));
-            const runners = runnerRows.map((row) => ({
-              provider: row.provider,
-              profileId: row.profile_id,
-              profileVersion: row.profile_version,
-              template: row.template,
-              cpuCores: row.cpu_cores,
-              memoryMb: row.memory_mb,
-              diskGb: row.disk_gb,
-              durationMs: row.duration_ms,
-              events: row.events,
-              unknownResourceEvents: row.unknown_resource_events,
-            }));
-            const priceSources = priceRows.map((row) => ({
-              source: row.source,
-              sourceVersion: row.source_version,
-              currency: row.currency,
-              effectiveFrom: row.effective_from,
-              effectiveTo: row.effective_to,
-              freshUntil: row.fresh_until,
-              estimated: true as const,
-            }));
-            const base = {
-              range,
-              filters,
-              summary: summaryFrom(summary),
-              daily,
-              peakDailyUsers: peakRows[0]?.peak_daily_users ?? 0,
-              models: modelRows.map(modelFrom),
-              threads: threadRows.map((row) => ({
-                threadId: row.thread_id,
-                title: row.title,
-                ownerUserId: row.owner_user_id,
-                ownerName: row.owner_name,
-                createdAt: row.created_at,
-                totalTokens: row.total_tokens,
-                estimatedCostMicros: row.estimated_cost_micros,
-                unknownCostEvents: row.unknown_cost_events,
-                modelTurns: row.model_turns,
-                activity: threadActivity.get(row.thread_id) ?? [],
-              })),
-              runners,
-              plugins,
-              pluginUsers,
-              priceSources,
-            };
-
-            if (query.ranking === "users") {
-              const decoded = yield* decodeRows(
-                UserAggregateRow,
-                results.ranking,
-              );
-              const visible = decoded.slice(0, query.limit);
-              const last = visible.at(-1);
-              const nextCursor =
-                decoded.length > query.limit && last !== undefined
-                  ? yield* encodeWorkspaceUsageRankingCursor({
-                      ranking: query.ranking,
-                      estimatedCostMicros: last.estimated_cost_micros,
-                      id: last.user_id,
-                    })
-                  : undefined;
-              return {
-                ...base,
-                ranking: {
-                  kind: query.ranking,
-                  items: visible.map((row) => ({
-                    userId: row.user_id,
-                    userName: row.user_name,
-                    threadCount: row.thread_count,
-                    totalTokens: row.total_tokens,
-                    unknownTokenEvents: row.unknown_token_events,
-                    estimatedCostMicros: row.estimated_cost_micros,
-                    unknownCostEvents: row.unknown_cost_events,
-                    averageLatencyMs: row.average_latency_ms,
-                    runnerDurationMs: row.runner_duration_ms,
-                    modelTurns: row.model_turns,
-                    errorEvents: row.error_events,
-                  })),
-                  ...(nextCursor === undefined ? {} : { nextCursor }),
-                },
-              };
-            }
-            const decoded = yield* decodeRows(
-              ProjectAggregateRow,
-              results.ranking,
-            );
-            const visible = decoded.slice(0, query.limit);
-            const last = visible.at(-1);
-            const nextCursor =
-              decoded.length > query.limit && last !== undefined
-                ? yield* encodeWorkspaceUsageRankingCursor({
-                    ranking: query.ranking,
-                    estimatedCostMicros: last.estimated_cost_micros,
-                    id: last.project_id,
-                  })
-                : undefined;
-            return {
-              ...base,
-              ranking: {
-                kind: query.ranking,
-                items: visible.map((row) => ({
-                  projectId: row.project_id,
-                  projectName: row.project_name,
-                  ownerUserId: row.owner_user_id,
-                  ownerName: row.owner_name,
-                  totalTokens: row.total_tokens,
-                  unknownTokenEvents: row.unknown_token_events,
-                  estimatedCostMicros: row.estimated_cost_micros,
-                  unknownCostEvents: row.unknown_cost_events,
-                  averageLatencyMs: row.average_latency_ms,
-                  runnerDurationMs: row.runner_duration_ms,
-                  modelTurns: row.model_turns,
-                  errorEvents: row.error_events,
-                })),
-                ...(nextCursor === undefined ? {} : { nextCursor }),
-              },
-            };
-          }),
+        workspaceDashboard: workspaceDashboardFrom(db, readWorkspaceUsage),
       }),
     ),
   );

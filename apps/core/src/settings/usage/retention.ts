@@ -8,9 +8,10 @@ import { backfillWorkspaceUsageRollups } from "./workspace-rollup-d1.js";
 // Chunks of 50,000 events: two million stored events a day at most.
 const ROLLUP_BACKFILL_CHUNKS = 40;
 // Each minute's tick adds one chunk of this many events to the workspace
-// rollups (migration 0151) until the events stored before it are in, so the
-// workspace page leaves raw events minutes after a deploy, not a day.
-const WORKSPACE_ROLLUP_TICK_ROWS = 20_000;
+// rollups (migration 0151) until the events stored before it are in. The
+// workspace page answers only from the rollups, so a deploy over a quarter
+// million events serves it again within about five minutes, not a day.
+const WORKSPACE_ROLLUP_TICK_ROWS = 50_000;
 
 // D1's `changes` also counts the rows the usage rollup triggers change, so
 // the events deleted are counted in the same batch, before the delete.

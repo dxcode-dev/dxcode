@@ -14,7 +14,10 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { UsageRepositoryD1 } from "../../src/settings/usage/repository-d1.js";
+import {
+  rawWorkspaceDashboard,
+  UsageRepositoryD1,
+} from "../../src/settings/usage/repository-d1.js";
 import { purgeExpiredUsageEvents } from "../../src/settings/usage/retention.js";
 import { backfillWorkspaceUsageRollups } from "../../src/settings/usage/workspace-rollup-d1.js";
 
@@ -317,22 +320,16 @@ const setBackfill = (through: number, end: number) =>
     .bind(through, end)
     .run();
 
-/**
- * The dashboard read from raw events. A backfill still running sends the
- * page to raw events; this one ends in the read itself, leaving the rollup
- * path for the next read.
- */
+/** The dashboard read from raw events: what the page returned before. */
 const rawDashboard = async (
   overrides: Record<string, unknown>,
   db: D1Database = env.DB,
 ) => {
-  await setBackfill(-1, 0);
-  const result = await dashboard(overrides, db);
-  const state = await env.DB.prepare(
-    "SELECT through_rowid, end_rowid FROM usage_workspace_rollup_backfill",
-  ).first();
-  expect(state).toEqual({ through_rowid: 0, end_rowid: 0 });
-  return result;
+  const decoded = Schema.decodeUnknownSync(WorkspaceUsageQuery)(overrides);
+  const normalized = await Effect.runPromise(
+    normalizeWorkspaceUsageQuery(decoded),
+  );
+  return Effect.runPromise(rawWorkspaceDashboard(db)(workspaceId, normalized));
 };
 
 const ranges = [
@@ -676,19 +673,83 @@ describe("workspace usage rollups", () => {
           ).toISOString(),
         );
       if (round === 3) {
-        // While the backfill runs, the page reads raw events.
-        const during = await dashboard({
+        // A page load adds a chunk large enough to finish this backfill,
+        // then answers from the rollups.
+        const query = {
           from: "2026-08-01",
           to: "2026-08-12",
           timezoneOffsetMinutes: 330,
-        });
-        expect(during.summary.modelTurns).toBeGreaterThan(0);
+        };
+        const during = await dashboard(query);
+        expect(JSON.stringify(during)).toBe(
+          JSON.stringify(await rawDashboard(query)),
+        );
+        done = true;
       }
       round += 1;
     }
     expect(round).toBeGreaterThan(3);
     await expectRollupsHoldEveryEvent();
     await expectRollupsMatchRaw();
+  }, 300_000);
+
+  it("never reads raw events while older events are still backfilling: it moves the backfill on and fails fast", async () => {
+    await seedPeople();
+    await seedThreads(
+      threads.map(
+        ([
+          index,
+          projectIndex,
+          owner,
+          visibility,
+          access,
+          sharedWith,
+          state,
+        ]) => [
+          thread(index),
+          project(projectIndex),
+          owner,
+          visibility,
+          access,
+          sharedWith,
+          state,
+        ],
+      ),
+    );
+    await record(dataset(300, 60_000));
+    // As migration 0151 leaves a large database: far more stored events than
+    // one page load's chunk adds.
+    await env.DB.batch([
+      env.DB.prepare("DELETE FROM usage_workspace_daily"),
+      env.DB.prepare("DELETE FROM usage_workspace_hourly"),
+    ]);
+    await setBackfill(0, 1_000_000);
+    const query = {
+      from: "2026-08-01",
+      to: "2026-08-12",
+      timezoneOffsetMinutes: 0,
+    };
+    const counter = countRowsRead(env.DB);
+    await expect(dashboard(query, counter.db)).rejects.toMatchObject({
+      _tag: "PersistenceUnavailable",
+    });
+    // One chunk of the backfill and the empty rollup scan: no raw read of
+    // the workspace's events.
+    expect(counter.take()).toBeLessThan(2_000);
+    const position = await env.DB.prepare(
+      "SELECT through_rowid FROM usage_workspace_rollup_backfill",
+    ).first<number>("through_rowid");
+    expect(position).toBe(10_000);
+
+    // Once the backfill reaches its end, the same load answers exactly.
+    await setBackfill(10_000, 10_000);
+    const last = await env.DB.prepare(
+      "SELECT MAX(rowid) AS last FROM usage_event",
+    ).first<number>("last");
+    expect(last).toBeLessThanOrEqual(10_000);
+    expect(JSON.stringify(await dashboard(query))).toBe(
+      JSON.stringify(await rawDashboard(query)),
+    );
   }, 300_000);
 
   it("keeps a 30-day load of ten members' usage inside 20,000 D1 rows, where raw events read far more", async () => {
