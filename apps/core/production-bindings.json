@@ -12,6 +12,11 @@
       "provenance": "authored-wrangler"
     },
     {
+      "name": "BITBUCKET_TOKEN_COORDINATOR",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
       "name": "BOAT_API_KEY",
       "type": "secret",
       "provenance": "alchemy",

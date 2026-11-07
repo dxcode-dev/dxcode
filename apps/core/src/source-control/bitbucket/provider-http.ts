@@ -33,6 +33,8 @@ export class BitbucketProviderError extends Schema.TaggedError<BitbucketProvider
       "invalid-grant",
     ]),
     retryAt: Schema.optional(Schema.instanceOf(Date)),
+    /** The token endpoint's OAuth `error` code, such as `invalid_grant`. */
+    code: Schema.optional(Schema.String),
   },
 ) {}
 
@@ -142,28 +144,49 @@ export const createBitbucketProvider = (
       response = await fetcher(url, {
         ...init,
         redirect: "manual",
-        signal: AbortSignal.timeout(10_000),
+        // A token call that times out after Bitbucket rotated loses the new
+        // refresh token, so it gets far longer than an API read.
+        signal: AbortSignal.timeout(url === TOKEN_URL ? 30_000 : 10_000),
       });
     } catch {
       throw new BitbucketProviderError({ category: "unavailable" });
     }
     if (response.ok) return response;
     if (response.status >= 300 && response.status < 400) invalid();
-    if (url === TOKEN_URL && response.status === 400) {
-      const text = await readText(response);
+    if (
+      url === TOKEN_URL &&
+      (response.status === 400 ||
+        response.status === 401 ||
+        response.status === 403)
+    ) {
+      // Bitbucket's token endpoint is Atlassian's: a refresh token that was
+      // already used, expired, or revoked comes back as `invalid_grant`,
+      // with 403 as well as the 400 RFC 6749 names. Either ends the grant.
+      let code: string | undefined;
       try {
-        const body: unknown = JSON.parse(text);
+        const body: unknown = JSON.parse(await readText(response));
         if (
           typeof body === "object" &&
           body !== null &&
           "error" in body &&
-          body.error === "invalid_grant"
+          typeof body.error === "string" &&
+          /^[a-z_]{1,64}$/.test(body.error)
         )
-          throw new BitbucketProviderError({ category: "invalid-grant" });
+          code = body.error;
       } catch (cause) {
         if (cause instanceof BitbucketProviderError) throw cause;
       }
-      invalid();
+      if (code === "invalid_grant")
+        throw new BitbucketProviderError({ category: "invalid-grant", code });
+      throw new BitbucketProviderError({
+        category:
+          response.status === 401
+            ? "unauthorized"
+            : response.status === 403
+              ? "forbidden"
+              : "invalid-response",
+        ...(code === undefined ? {} : { code }),
+      });
     }
     if (response.status === 401)
       throw new BitbucketProviderError({ category: "unauthorized" });

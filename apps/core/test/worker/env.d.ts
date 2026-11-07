@@ -19,6 +19,9 @@ declare module "cloudflare:test" {
     readonly ORB_PROVIDER_PREPARATION: DurableObjectNamespace<
       import("../../src/plugins/execution/preparation-object.js").OrbProviderPreparationObject
     >;
+    readonly BITBUCKET_TOKEN_COORDINATOR: DurableObjectNamespace<
+      import("../../src/source-control/bitbucket/token-coordinator.js").BitbucketTokenCoordinatorObject
+    >;
     readonly DX_STORAGE: R2Bucket;
     readonly TEST_MIGRATIONS: D1Migration[];
     readonly TEST_SCHEMA_SNAPSHOT: ReadonlyArray<{

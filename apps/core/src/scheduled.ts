@@ -7,6 +7,7 @@ import {
   attachmentLogger,
   bugReportLogger,
   notificationLogger,
+  sourceControlLogger,
   threadDeletionLogger,
   threadPersistenceLogger,
   threadStorageLogger,
@@ -27,7 +28,8 @@ import { sweepThreadStorage } from "./thread-storage/store.js";
 /**
  * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
  * unfinished Thread deletions and undelivered first messages, deletes expired Thread storage files, fires
- * due schedules, polls GitHub subscriptions, and retries bug reports still
+ * due schedules, polls GitHub subscriptions, renews Bitbucket tokens, and
+ * retries bug reports still
  * to forward to the central deployment; the daily tick also runs
  * usage and attachment retention.
  */
@@ -48,6 +50,20 @@ export const scheduled = (
           });
       },
     ),
+  );
+  // Bitbucket connections renew their single-use tokens here, whether or
+  // not anyone uses dx (#1952).
+  context.waitUntil(
+    import("./source-control/bitbucket/token-renewer.js")
+      .then(({ sweepBitbucketRenewals }) =>
+        sweepBitbucketRenewals(bindings, controller.scheduledTime),
+      )
+      .catch((cause) =>
+        sourceControlLogger.error("Bitbucket renewal sweep failed.", {
+          event: "bitbucket_token_renewal_sweep_failed",
+          cause,
+        }),
+      ),
   );
   // A deleted Thread whose cleanup failed must not keep its sandbox or
   // history for a day, so its retry runs on every tick too.

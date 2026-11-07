@@ -16,6 +16,7 @@ import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/reposi
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { SourceAuditD1 } from "../source-control/audit.js";
 import { bitbucketControlPlaneFor } from "../source-control/bitbucket/control-plane.js";
+import { BitbucketProviderError } from "../source-control/bitbucket/provider-http.js";
 import { bitbucketRuntimeBroker } from "../source-control/bitbucket/runtime.js";
 import { loadSourceWorkspaceConfiguration } from "../source-control/configuration.js";
 import {
@@ -503,12 +504,24 @@ export const cloneAdditionalRepositories = async (
   );
   const failures: Array<AdditionalRepositoryFailure> = [];
   const present: Array<string> = [];
-  const ownerTokens = new Map<string, Promise<string | undefined>>();
+  // A token, or why there is none: `absent` (not connected, or the
+  // connection ended) clones anonymously, which still reaches a public
+  // repository; `unavailable` (the connection stands but its token could not
+  // be renewed just now) does not, since an anonymous clone would fail and
+  // misreport the connection as needing a reconnect.
+  const ownerTokens = new Map<
+    string,
+    Promise<string | "absent" | "unavailable">
+  >();
   const ownerToken = (provider: "github" | "bitbucket", userId: string) => {
     const key = `${provider}:${userId}`;
     let token = ownerTokens.get(key);
     if (token === undefined) {
-      token = readOwnerToken(provider, userId).catch(() => undefined);
+      token = readOwnerToken(provider, userId).catch((cause) =>
+        provider === "bitbucket" && cause instanceof BitbucketProviderError
+          ? ("unavailable" as const)
+          : ("absent" as const),
+      );
       ownerTokens.set(key, token);
     }
     return token;
@@ -537,10 +550,13 @@ export const cloneAdditionalRepositories = async (
         present.push(directory);
         continue;
       }
-      token =
+      const owned =
         row.provider === "github" || row.provider === "bitbucket"
           ? await ownerToken(row.provider, row.owner_user_id)
-          : undefined;
+          : "absent";
+      if (owned === "unavailable")
+        throw new AdditionalCloneFailed("credentials-unavailable", "");
+      token = owned === "absent" ? undefined : owned;
       const result = await sandbox.commands.run(ADDITIONAL_CLONE_COMMAND, {
         envs:
           token === undefined

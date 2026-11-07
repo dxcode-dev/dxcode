@@ -354,7 +354,9 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       (await readBitbucketConnection(f.db, userId))?.authorization_epoch,
     ).toBe(1);
   });
-  it("keeps rotated credentials active when superseded-secret cleanup fails", async () => {
+  it("commits a rotation with its credentials and removes the ones it replaces, in one step", async () => {
+    // The superseded pair is deleted in the batch that commits the new one,
+    // so no separate cleanup can fail and strand either pair.
     const f = await fixture();
     const connection = await f.connect();
     const oldAccessId = connection.access_credential_id as string;
@@ -362,12 +364,6 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     f.sqlite
       .prepare("UPDATE bitbucket_connection SET expires_at = ?")
       .run("2000-01-01T00:00:00.000Z");
-    const remove = f.vault.remove;
-    vi.spyOn(f.vault, "remove").mockImplementation((owner, reference) =>
-      reference.id === oldRefreshId
-        ? Effect.fail(new Error("credential cleanup failed"))
-        : remove(owner, reference),
-    );
 
     await expect(
       f.service.withConnection(
@@ -377,12 +373,7 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       ),
     ).resolves.toBe("access-secret-2");
     const row = await readBitbucketConnection(f.db, userId);
-    expect(row).toMatchObject({
-      status: "active",
-      authorization_epoch: 1,
-      refresh_lock_id: null,
-      refresh_lock_until: null,
-    });
+    expect(row).toMatchObject({ status: "active", authorization_epoch: 1 });
     expect(row?.access_credential_id).not.toBe(oldAccessId);
     expect(row?.refresh_credential_id).not.toBe(oldRefreshId);
     const ids = new Set(
@@ -392,20 +383,9 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
           .all() as Array<{ id: string }>
       ).map(({ id }) => id),
     );
-    expect(ids).not.toContain(oldAccessId);
-    expect(ids).toContain(oldRefreshId);
-    expect(ids).toContain(row?.access_credential_id);
-    expect(ids).toContain(row?.refresh_credential_id);
-    await expect(
-      Effect.runPromise(
-        f.vault.read(
-          f.keyring,
-          { scope: "personal", id: userId as never },
-          "access-token",
-          integrationCredentialReferenceFor(row?.access_credential_id as never),
-        ),
-      ),
-    ).resolves.toBe("access-secret-2");
+    expect(ids).toEqual(
+      new Set([row?.access_credential_id, row?.refresh_credential_id]),
+    );
     await expect(
       Effect.runPromise(
         f.vault.read(
@@ -525,26 +505,16 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
           });
         });
       } else {
-        const prepare = f.db.prepare.bind(f.db);
-        vi.spyOn(f.db, "prepare").mockImplementation((sql: string) => {
-          const statement = prepare(sql);
-          if (
-            !sql.startsWith(
-              "UPDATE bitbucket_connection SET access_credential_id =",
-            )
-          )
-            return statement;
-          return {
-            bind: (...parameters: unknown[]) => {
-              const bound = statement.bind(...parameters);
-              return {
-                run: async () => {
-                  await bound.run();
-                  throw new Error("lost D1 commit acknowledgement");
-                },
-              };
-            },
-          } as unknown as D1PreparedStatement;
+        // The commit batch lands; only its acknowledgement is lost.
+        const batch = f.db.batch.bind(f.db);
+        let lost = false;
+        vi.spyOn(f.db, "batch").mockImplementation(async (statements) => {
+          const results = await batch(statements);
+          if (!lost && statements.length === 5) {
+            lost = true;
+            throw new Error("lost D1 commit acknowledgement");
+          }
+          return results;
         });
       }
 
@@ -584,8 +554,6 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     "provider-refresh-rpc",
     "provider-5xx",
     "provider-rate-limit",
-    "access-store-rpc",
-    "refresh-store-rpc",
     "commit-rpc",
   ] as const)(
     "keeps the connection after a transient pre-commit %s failure, and the next use refreshes",
@@ -617,19 +585,6 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
             status: 429,
             headers: { "retry-after": "1" },
           }),
-        );
-      } else if (
-        failure === "access-store-rpc" ||
-        failure === "refresh-store-rpc"
-      ) {
-        const put = f.vault.put;
-        const failedPut = failure === "access-store-rpc" ? 1 : 2;
-        let puts = 0;
-        vi.spyOn(f.vault, "put").mockImplementation(
-          (keyring, owner, purpose, plaintext) =>
-            ++puts === failedPut
-              ? Effect.fail(new Error("transient credential store failure"))
-              : put(keyring, owner, purpose, plaintext),
         );
       } else {
         const prepare = f.db.prepare.bind(f.db);
@@ -719,40 +674,55 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
       f.service.withConnection(userId, row?.id, async (token) => token),
     ).resolves.toBe("access-secret-2");
   });
-  it("finishes a refresh whose request was abandoned mid-flight instead of disconnecting", async () => {
+  it("finishes a renewal whose request gave up, and the next request uses its rotated token", async () => {
     const f = await fixture();
     const row = await f.connect();
     f.sqlite
       .prepare("UPDATE bitbucket_connection SET expires_at = ?")
       .run("2000-01-01T00:00:00.000Z");
-    // The first request takes the refresh lock, then its Worker invocation
-    // is cancelled (the browser left the page) before Bitbucket answers.
+    // The first request starts a renewal, then goes away (the browser left
+    // the page) while Bitbucket, having rotated, is still answering.
+    let answer!: () => void;
     let entered!: () => void;
     const started = new Promise<void>((resolve) => {
       entered = resolve;
     });
     f.fetcher.mockImplementationOnce(() => {
       entered();
-      return new Promise<Response>(() => undefined);
+      return new Promise<Response>((resolve) => {
+        answer = () =>
+          resolve(
+            Response.json({
+              access_token: "rotated-access",
+              refresh_token: "rotated-refresh",
+              expires_in: 7200,
+            }),
+          );
+      });
     });
-    void f.service.withConnection(userId, row.id, async () => "abandoned");
+    void f.service
+      .withConnection(userId, row.id, async () => "abandoned")
+      .catch(() => undefined);
     await started;
-    expect(
-      (await readBitbucketConnection(f.db, userId))?.refresh_lock_id,
-    ).not.toBeNull();
-    // The lock outlives its holder.
-    f.sqlite
-      .prepare("UPDATE bitbucket_connection SET refresh_lock_until = ?")
-      .run("2000-01-01T00:00:00.000Z");
+    f.fetcher.mockClear();
+    const next = f.service.withConnection(
+      userId,
+      row.id,
+      async (token) => token,
+    );
+    answer();
 
-    await expect(
-      f.service.withConnection(userId, row.id, async (token) => token),
-    ).resolves.toBe("access-secret-2");
+    // The rotation is kept and used: Bitbucket is asked once, not again with
+    // the refresh token it already rotated away.
+    await expect(next).resolves.toBe("rotated-access");
+    expect(
+      f.fetcher.mock.calls.filter(([url]) =>
+        String(url).includes("/access_token"),
+      ),
+    ).toHaveLength(0);
     expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
       status: "active",
       authorization_epoch: 1,
-      refresh_lock_id: null,
-      refresh_lock_until: null,
     });
   });
   it("requires reauthorization once Bitbucket refuses the refresh token", async () => {

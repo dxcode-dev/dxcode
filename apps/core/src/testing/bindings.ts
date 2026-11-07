@@ -172,6 +172,7 @@ export const createTestBindings = (
   REALTIME_HUB: validAgentBinding,
   THREAD_SEARCH_INDEX: validAgentBinding,
   ORB_PROVIDER_PREPARATION: validAgentBinding,
+  BITBUCKET_TOKEN_COORDINATOR: validAgentBinding as never,
   AI: validAiBinding,
   DB: validD1Binding,
   EMAIL: validEmailBinding,

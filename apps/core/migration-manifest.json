@@ -219,6 +219,11 @@
       "filename": "0041_release_v0.2.79.sql",
       "sha256": "93e1bc9e74810ea28caa1e09f3e5868a304afda05d056f2fbd9d266a43c76138",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0042_release_v0.2.83.sql",
+      "sha256": "cbdcac58337a9d5dfd4883b8129a323e711b8ba80fb6b1a9f9b1451caaddfed9",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [
@@ -268,6 +273,12 @@
       "tag": "v7-orb-provider-preparation",
       "newSqliteClasses": ["OrbProviderPreparationObject"],
       "sha256": "99e2286f4c7c4c7b0ecda42ff0e230eda8372b80799d8f3914d007c5a38fe65e",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v8-bitbucket-token-coordinator",
+      "newSqliteClasses": ["BitbucketTokenCoordinatorObject"],
+      "sha256": "0b9f28d9d5dd8e4185f54b8f83be1dbe9bfdb817e6386659d0893ad7425d57a7",
       "classification": "non-destructive"
     }
   ]

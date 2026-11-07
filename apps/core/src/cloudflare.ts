@@ -26,6 +26,7 @@ export { RealtimeHub } from "./realtime/realtime-hub.js";
 export { ByokCredentialCoordinatorObject } from "./settings/model-byok/invocation.js";
 export { SubscriptionCredentialCoordinatorObject } from "./settings/model-subscriptions/invocation.js";
 export { PluginTriggerDeliveryObject } from "./settings/triggers/durable-object.js";
+export { BitbucketTokenCoordinatorObject } from "./source-control/bitbucket/token-coordinator.js";
 export { ThreadSearchIndexObject } from "./thread-search/index-object.js";
 export { ThreadExecutionObject } from "./threads/terminal-object.js";
 

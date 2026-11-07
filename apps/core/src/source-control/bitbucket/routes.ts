@@ -27,6 +27,7 @@ import { WorkspacePolicyRepositoryD1 } from "../../settings/workspace-policy/rep
 import { WorkspacePolicyService } from "../../settings/workspace-policy/service.js";
 import {
   BitbucketInvalid,
+  bitbucketConnectionSummary,
   bitbucketControlPlaneFor,
   disconnectBitbucket,
   readBitbucketConnection,
@@ -131,10 +132,7 @@ const storedStatus = async (context: Context<AppEnv>) => {
   );
   return {
     configured: configured(context),
-    connection:
-      row === null
-        ? null
-        : { id: row.id, accountName: row.account_name, status: row.status },
+    connection: row === null ? null : bitbucketConnectionSummary(row),
   };
 };
 // The Integrations page reads the stored connection, so it never waits on

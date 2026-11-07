@@ -71,6 +71,73 @@ export interface IntegrationCredentialVaultShape {
   ) => Effect.Effect<void, unknown>;
 }
 
+/** A credential encrypted for the vault but not yet written. */
+export interface SealedIntegrationCredential {
+  readonly id: string;
+  readonly purpose: IntegrationCredentialPurpose;
+  readonly envelope: typeof EnvironmentVariableEnvelope.Type;
+}
+
+/**
+ * Encrypts a credential under a fresh vault id without writing it, so a
+ * caller can journal it and then commit it in the same D1 batch as the rows
+ * that point at it.
+ */
+export const sealIntegrationCredential = Effect.fn(
+  "IntegrationCredentialVault.seal",
+)(function* (
+  keyring: ConfigEncryptionKeyring,
+  owner: IntegrationOwner,
+  purpose: IntegrationCredentialPurpose,
+  plaintext: string,
+) {
+  if (plaintext.length === 0 || plaintext.length > 32_768) {
+    return yield* new ConfigEncryptionUnavailable();
+  }
+  const id = yield* Schema.decodeUnknownEffect(EnvironmentVariableId)(
+    `icr_${crypto.randomUUID()}`,
+  );
+  const envelope = yield* encryptConfigValue(
+    keyring,
+    aadFor(id, owner, purpose),
+    plaintext,
+  );
+  return { id, purpose, envelope } satisfies SealedIntegrationCredential;
+});
+
+/**
+ * The insert for a sealed credential. Writing the same sealed credential
+ * twice is a no-op, so a journalled commit can be replayed.
+ */
+export const insertSealedIntegrationCredential = (
+  db: D1Database,
+  owner: IntegrationOwner,
+  sealed: SealedIntegrationCredential,
+  now = new Date().toISOString(),
+) =>
+  db
+    .prepare(
+      `INSERT OR IGNORE INTO integration_credential (
+         id, owner_scope, owner_id, purpose, envelope_version,
+         key_version, value_nonce, ciphertext, wrapped_key_nonce,
+         wrapped_key, created_at, rotated_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      sealed.id,
+      owner.scope,
+      owner.id,
+      sealed.purpose,
+      sealed.envelope.version,
+      sealed.envelope.keyVersion,
+      sealed.envelope.valueNonce,
+      sealed.envelope.ciphertext,
+      sealed.envelope.wrappedKeyNonce,
+      sealed.envelope.wrappedKey,
+      now,
+      now,
+    );
+
 export class IntegrationCredentialVault extends Context.Service<
   IntegrationCredentialVault,
   IntegrationCredentialVaultShape

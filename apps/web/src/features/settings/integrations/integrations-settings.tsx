@@ -75,6 +75,8 @@ function BitbucketIcon() {
   );
 }
 
+const RENEWAL_WARNING_AFTER_MS = 10 * 60_000;
+
 function BitbucketIntegration() {
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -112,6 +114,14 @@ function BitbucketIntegration() {
     }
   };
   const reconnectRequired = connection?.status === "reauthorization-required";
+  const renewalFailingSince = active
+    ? connection.renewalFailingSince
+    : undefined;
+  // A single missed renewal is retried within minutes and the token still
+  // has time left, so only a failure that persists is worth a warning.
+  const renewalWarning =
+    renewalFailingSince !== undefined &&
+    Date.now() - Date.parse(renewalFailingSince) >= RENEWAL_WARNING_AFTER_MS;
   return (
     <IntegrationCard
       label="Bitbucket integration"
@@ -126,11 +136,24 @@ function BitbucketIntegration() {
               ? "Bitbucket is not configured on this deployment. To turn it on, ask whoever runs this dx deployment to add a Bitbucket OAuth consumer."
               : reconnectRequired
                 ? "Authorization expired or was revoked. Reconnect to continue."
-                : active
-                  ? undefined
-                  : "Use your Bitbucket repositories in personal projects."
+                : renewalWarning
+                  ? `dx has not been able to renew the Bitbucket authorization since ${new Date(
+                      renewalFailingSince,
+                    ).toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}. It keeps retrying; if this lasts, reconnect.`
+                  : active
+                    ? undefined
+                    : "Use your Bitbucket repositories in personal projects."
       }
-      status={active ? { tone: "ok", text: "Connected" } : undefined}
+      status={
+        renewalWarning
+          ? { tone: "warn", text: "Renewal failing" }
+          : active
+            ? { tone: "ok", text: "Connected" }
+            : undefined
+      }
     >
       <div className="integration-tile-footer">
         {unavailable ? (

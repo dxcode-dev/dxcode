@@ -68,6 +68,10 @@
       {
         "name": "ORB_PROVIDER_PREPARATION",
         "class_name": "OrbProviderPreparationObject"
+      },
+      {
+        "name": "BITBUCKET_TOKEN_COORDINATOR",
+        "class_name": "BitbucketTokenCoordinatorObject"
       }
     ]
   },
@@ -103,6 +107,10 @@
     {
       "tag": "v7-orb-provider-preparation",
       "new_sqlite_classes": ["OrbProviderPreparationObject"]
+    },
+    {
+      "tag": "v8-bitbucket-token-coordinator",
+      "new_sqlite_classes": ["BitbucketTokenCoordinatorObject"]
     }
   ]
 }

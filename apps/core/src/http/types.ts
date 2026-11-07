@@ -118,6 +118,13 @@ export interface Bindings {
   /** One object per Orb provider connection, which prepares its account. */
   readonly ORB_PROVIDER_PREPARATION?: DurableObjectNamespace;
   /**
+   * One object per Bitbucket connection, which renews its single-use OAuth
+   * tokens one at a time and keeps going when the request that asked ends.
+   */
+  readonly BITBUCKET_TOKEN_COORDINATOR?: DurableObjectNamespace<
+    import("../source-control/bitbucket/token-coordinator.js").BitbucketTokenCoordinatorObject
+  >;
+  /**
    * The Cloudflare Containers Orb provider: the Orb Worker's container
    * object namespace, bound across scripts. Present only when the deployment
    * installed the provider.

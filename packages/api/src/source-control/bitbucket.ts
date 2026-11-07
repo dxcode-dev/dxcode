@@ -13,6 +13,12 @@ export const BitbucketConnectionResponseSchema = successResponse(
           "reauthorization-required",
           "disconnected",
         ]),
+        /**
+         * When dx's renewals of this connection's tokens started failing,
+         * while they still fail. The grant still stands; Settings warns
+         * before anyone has to reconnect.
+         */
+        renewalFailingSince: Schema.optional(Schema.String),
       }),
     ),
   }),

@@ -6,7 +6,11 @@
   "vars": {
     "DX_RUNTIME_MODE": "deployed",
     "DX_SESSION_SOCKET_CHECK_MS": "5000",
-    "DX_CONFIG_ENCRYPTION_KEYS": "{\"activeVersion\":1,\"keys\":{\"1\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}"
+    "DX_CONFIG_ENCRYPTION_KEYS": "{\"activeVersion\":1,\"keys\":{\"1\":\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"}}",
+    // The Bitbucket token coordinator reads its consumer from its own
+    // environment, as in a deployment; the callback matches DX_AUTH_URL.
+    "DX_AUTH_URL": "https://dx.test",
+    "DX_INTEGRATION_BITBUCKET_OAUTH": "{\"version\":1,\"clientId\":\"client\",\"clientSecret\":\"secret\",\"callbackUrl\":\"https://dx.test/v1/integrations/bitbucket/oauth/callback\"}"
   },
   "d1_databases": [
     {
@@ -61,6 +65,10 @@
       {
         "name": "ORB_PROVIDER_PREPARATION",
         "class_name": "OrbProviderPreparationObject"
+      },
+      {
+        "name": "BITBUCKET_TOKEN_COORDINATOR",
+        "class_name": "BitbucketTokenCoordinatorObject"
       }
     ]
   },
@@ -92,6 +100,10 @@
     {
       "tag": "v7-orb-provider-preparation",
       "new_sqlite_classes": ["OrbProviderPreparationObject"]
+    },
+    {
+      "tag": "v8-bitbucket-token-coordinator",
+      "new_sqlite_classes": ["BitbucketTokenCoordinatorObject"]
     }
   ]
 }

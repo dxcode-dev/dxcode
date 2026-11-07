@@ -88,6 +88,8 @@ const preSourceShallowCloneBindingOmission = "DX_SOURCE_SHALLOW_CLONE";
 const preRealtimeHubBindingOmission = "REALTIME_HUB";
 const preThreadSearchIndexBindingOmission = "THREAD_SEARCH_INDEX";
 const preOrbProviderPreparationBindingOmission = "ORB_PROVIDER_PREPARATION";
+const preBitbucketTokenCoordinatorBindingOmission =
+  "BITBUCKET_TOKEN_COORDINATOR";
 const preAuthenticationEmailBindingOmissions = ["DX_AUTH_EMAIL_FROM", "EMAIL"];
 const preTurnstileBindingOmissions = [
   "DX_TURNSTILE_SECRET_KEY",
@@ -111,6 +113,7 @@ const isPriorWorkerCrons = (crons, selection) =>
     (prior) => JSON.stringify(crons) === JSON.stringify(prior),
   );
 const destroyWorkerBindingOmissions = new Set([
+  "BITBUCKET_TOKEN_COORDINATOR",
   "BYOK_CREDENTIAL_COORDINATOR",
   "DX_AUTH_EMAIL_FROM",
   "DX_DEPLOYMENT_TARGET",
@@ -147,6 +150,7 @@ const deploymentBuildEnvironmentNames = new Set([
   "TZ",
 ]);
 const workerDurableObjectBindings = [
+  ["BITBUCKET_TOKEN_COORDINATOR", "BitbucketTokenCoordinatorObject"],
   ["BYOK_CREDENTIAL_COORDINATOR", "ByokCredentialCoordinatorObject"],
   ["FLUE_DX_AGENT_AGENT", "FlueDxAgentAgent"],
   ["ORB_PROVIDER_PREPARATION", "OrbProviderPreparationObject"],
@@ -1378,6 +1382,11 @@ const validateWorkerProps = (
         !current &&
         (representation === "persisted" || representation === "prior") &&
         name === preOrbProviderPreparationBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" || representation === "prior") &&
+        name === preBitbucketTokenCoordinatorBindingOmission
       ) &&
       !(
         !current &&

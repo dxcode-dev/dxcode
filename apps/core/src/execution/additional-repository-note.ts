@@ -11,6 +11,7 @@ export type AdditionalRepositoryFailureReason =
   | "stalled"
   | "timed-out"
   | "authorization"
+  | "credentials-unavailable"
   | "not-found"
   | "failed";
 
@@ -47,6 +48,9 @@ const reasonText = (failure: AdditionalRepositoryFailure) => {
       return failure.authenticated
         ? `${name} refused the Thread owner's authorization for it: the repository does not exist, is not shared with them, or their ${name} connection lapsed. If other ${name} repositories fail too, the person needs to reconnect ${name} in Settings → Integrations`
         : `${name} asked for credentials, and the Thread owner's ${name} connection is missing or needs reconnecting: the person needs to connect or reconnect ${name} in Settings → Integrations (or the repository does not exist)`;
+    case "credentials-unavailable":
+      // The connection stands; only this attempt to renew its token failed.
+      return `dx could not get a working ${name} token for the Thread owner just now (${name} did not answer), so dx did not clone it; their ${name} connection does not need reconnecting, and dx retries on the Orb's next start`;
     case "not-found":
       return `${name} says the repository does not exist or the Thread owner's account cannot read it`;
     case "failed":
@@ -64,7 +68,10 @@ export const additionalRepositoryNote = (
       `- ${failure.fullName} (${providerName(failure.provider)}), for ~/workspace/repos/${failure.directory}: ${reasonText(failure)}.`,
   );
   const retry = failures
-    .filter(({ reason }) => reason !== "authorization")
+    .filter(
+      ({ reason }) =>
+        reason !== "authorization" && reason !== "credentials-unavailable",
+    )
     .map(
       ({ cloneUrl, directory }) =>
         `\`git clone ${cloneUrl} ~/workspace/repos/${directory}\``,
