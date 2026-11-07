@@ -178,13 +178,18 @@ export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
      * `no-provider`: no provider the person can use offers the size.
      * `size-unavailable`: the account cannot run this size (its plan
      * refused it); other sizes may run.
+     * `beta-provider-off`: the size is on a beta provider (#1924) the
+     * person has not turned on in Experimental Features.
      */
     reason: Schema.Literals([
       "preparing",
       "failed",
       "no-provider",
       "size-unavailable",
+      "beta-provider-off",
     ]),
+    /** What to do, for a reason the person can fix. */
+    detail: Schema.optional(Schema.String),
   }),
 });
 

@@ -1,5 +1,13 @@
-import type { PluginScope, ThreadExecutionPin } from "@dx/domain";
+import {
+  orbProviderBetaFeature,
+  type PluginScope,
+  type ThreadExecutionPin,
+} from "@dx/domain";
 import { Effect, Schema } from "effect";
+import {
+  type DeploymentOrbs,
+  presentedDeploymentProviders,
+} from "../../execution/deployment-orbs.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../../http/types.js";
 import { threadProjectReachableSql } from "../../settings/members/membership-sql.js";
@@ -74,6 +82,14 @@ export interface OrbProviderSetInput {
   readonly connectors: OrbProviderConnectors;
   /** Each connector's recipe for this build. */
   readonly recipes: ReadonlyMap<ExecutionProviderId, string>;
+  /**
+   * Beta providers the person has not turned on (`hiddenOrbProviders`):
+   * offered on no connection, and on the deployment's account only when the
+   * deployment presents it under its own name (`presentedDeployment`).
+   */
+  readonly hiddenProviders?: ReadonlySet<string>;
+  /** Providers whose deployment account is presented as the deployment's own Orb. */
+  readonly presentedDeployment?: ReadonlySet<string>;
 }
 
 /**
@@ -157,9 +173,12 @@ export const orbProviderSet = (
   return plugin.providers.flatMap((provider): Array<OrbProviderMember> => {
     const providerId = provider.id as ExecutionProviderId;
     if (!input.profileAdapters.has(providerId)) return [];
-    const deployment = input.deploymentProviders.some(
-      (candidate) => candidate.providerId === providerId,
-    );
+    const hidden = input.hiddenProviders?.has(providerId) === true;
+    const deployment =
+      input.deploymentProviders.some(
+        (candidate) => candidate.providerId === providerId,
+      ) &&
+      (!hidden || input.presentedDeployment?.has(providerId) === true);
     // Local runtime ignores personal and workspace connections: `pnpm dev`
     // never reaches a provider account.
     if (input.connectors[providerId] !== undefined && !input.localRuntime) {
@@ -172,7 +191,11 @@ export const orbProviderSet = (
         input.workspace.find(
           (connection) => connection.providerId === providerId,
         );
-      if (own !== undefined) return [connectionMember(own, input)];
+      // A hidden beta provider's own key is not offered, and its Threads
+      // never fall back to the deployment's account: that would bill
+      // someone else's account for a Thread meant for their own.
+      if (own !== undefined)
+        return hidden ? [] : [connectionMember(own, input)];
     }
     return deployment
       ? [
@@ -304,9 +327,22 @@ export class OrbUnavailable extends Schema.TaggedError<OrbUnavailable>()(
       "failed",
       "no-provider",
       "size-unavailable",
+      "beta-provider-off",
     ]),
+    /** The size's provider, for `beta-provider-off`. */
+    provider: Schema.optional(Schema.String),
   },
 ) {}
+
+/** What a person does about `beta-provider-off`: turn the provider's flag on. */
+export const betaProviderOffDetail = (providerId: string | undefined) => {
+  const name =
+    (providerId === undefined
+      ? undefined
+      : findPlugin("execution")?.providers.find(({ id }) => id === providerId)
+          ?.displayName) ?? "This provider";
+  return `${name} Orbs are in beta. Turn on ${name} Orbs in Settings → Experimental Features to start Threads on it, or choose another Orb.`;
+};
 
 /**
  * The pin a new Thread records: resolves the provider set once, at
@@ -326,6 +362,14 @@ export const resolveThreadExecutionPin = async (input: {
   readonly projectlessRunnerProfileId?: string;
   /** The providers people and workspaces can connect (execution/orb-providers). */
   readonly connectors: OrbProviderConnectors;
+  /**
+   * Beta providers the person has not turned on; no Thread pins them. Read
+   * only when the Thread's size is on a beta provider, so other Threads
+   * spend no D1 call on it.
+   */
+  readonly hiddenProviders?: () => Promise<ReadonlySet<string>>;
+  /** How the deployment presents its own accounts; defaults to the registered ones. */
+  readonly deploymentOrbs?: DeploymentOrbs;
 }): Promise<ThreadExecutionPin | undefined> => {
   const connectors = input.connectors;
   const catalog = await Effect.runPromise(
@@ -346,6 +390,11 @@ export const resolveThreadExecutionPin = async (input: {
   if (profile === undefined || profile.adapter === "local") return undefined;
   const deploymentProviders = resolveExecutionProviders(input.bindings);
   const localRuntime = isLocalRuntime(input.bindings);
+  const hiddenProviders =
+    input.hiddenProviders === undefined ||
+    orbProviderBetaFeature(profile.adapter) === undefined
+      ? undefined
+      : await input.hiddenProviders();
   const deploymentPin: ThreadExecutionPin = {
     provider: profile.adapter,
     runnerProfileId: profile.id,
@@ -374,8 +423,24 @@ export const resolveThreadExecutionPin = async (input: {
     localRuntime,
     connectors,
     recipes: await orbProviderRecipes(connectors),
+    ...(hiddenProviders === undefined
+      ? {}
+      : {
+          hiddenProviders,
+          presentedDeployment: presentedDeploymentProviders(
+            input.bindings,
+            input.deploymentOrbs,
+          ),
+        }),
   }).find(({ providerId }) => providerId === profile.adapter);
-  if (member === undefined) throw new OrbUnavailable({ reason: "no-provider" });
+  if (member === undefined)
+    throw new OrbUnavailable({
+      reason:
+        hiddenProviders?.has(profile.adapter) === true
+          ? "beta-provider-off"
+          : "no-provider",
+      provider: profile.adapter,
+    });
   if (member.status !== "ready")
     throw new OrbUnavailable({
       reason: member.status === "failed" ? "failed" : "preparing",

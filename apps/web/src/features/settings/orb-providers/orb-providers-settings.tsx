@@ -1,5 +1,6 @@
 import "./orb-providers.css";
 import type { OrbProviderData, OrbProviderListData } from "@dx/api";
+import { orbProviderBetaFeature } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
@@ -98,7 +99,12 @@ function OrbProviderRow({
         )}
       </span>
       <div className="orb-provider-copy">
-        <strong>{provider.displayName}</strong>
+        <strong>
+          {provider.displayName}
+          {orbProviderBetaFeature(provider.id) === undefined ? null : (
+            <span className="orb-provider-beta">Beta</span>
+          )}
+        </strong>
         <p>{rowStatus(data, provider)}</p>
       </div>
       {provider.fields.length === 0 ? null : (

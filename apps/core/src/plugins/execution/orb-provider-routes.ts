@@ -19,7 +19,10 @@ import {
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
-import type { DeploymentOrbs } from "../../execution/deployment-orbs.js";
+import {
+  type DeploymentOrbs,
+  presentedDeploymentProviders,
+} from "../../execution/deployment-orbs.js";
 import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
 import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
@@ -49,6 +52,7 @@ import {
   type OrbProviderConnectors,
   OrbProviderCredentialsRejected,
 } from "./connector.js";
+import { hiddenOrbProviders } from "./orb-provider-beta.js";
 import {
   connectionMember,
   loadOrbScope,
@@ -208,6 +212,7 @@ const listData = async (
   scope: OrbScopeContext,
   connectors: OrbProviderConnectors,
   deploymentOrbs: DeploymentOrbs,
+  hiddenProviders: ReadonlySet<string>,
 ): Promise<OrbProviderListData> => {
   const plugin = findPlugin("execution");
   const localRuntime = isLocalRuntime(bindings);
@@ -220,6 +225,8 @@ const listData = async (
   const providers: Array<OrbProviderData> = (plugin?.providers ?? []).flatMap(
     (provider) => {
       const id = provider.id as ExecutionProviderId;
+      // A beta provider the person has not turned on is not listed.
+      if (hiddenProviders.has(id)) return [];
       // A deployment account the deployment presents under its own name
       // is offered in the Orb picker, not listed under the provider here.
       const deployment =
@@ -288,6 +295,8 @@ const listData = async (
     localRuntime,
     connectors,
     recipes,
+    hiddenProviders,
+    presentedDeployment: presentedDeploymentProviders(bindings, deploymentOrbs),
   });
   return {
     scope: target.scope,
@@ -460,6 +469,8 @@ const decodeBody = async <S extends Schema.Top>(
 const connectableProvider = async (
   c: Context<AppEnv>,
   connectors: OrbProviderConnectors,
+  /** Refuse a beta provider the person has not turned on. */
+  offeredOnly = false,
 ): Promise<OrbProviderConnector> => {
   const params = Schema.decodeUnknownOption(OrbProviderParamsSchema)({
     providerId: c.req.param("providerId"),
@@ -473,6 +484,13 @@ const connectableProvider = async (
       !(await loadCatalog(c.env)).configuration.profiles.some(
         ({ adapter }) => adapter === connector.providerId,
       ))
+  )
+    throw new OrbProviderFailure("INVALID_ORB_PROVIDER_REQUEST", 400);
+  if (
+    offeredOnly &&
+    (await hiddenOrbProviders(c.env, c.get("principal"))).has(
+      connector.providerId,
+    )
   )
     throw new OrbProviderFailure("INVALID_ORB_PROVIDER_REQUEST", 400);
   return connector;
@@ -549,7 +567,14 @@ const mount = (
         await orbProviderRecipes(connectors),
         connectors,
       );
-      return listData(c.env, target, scope, connectors, deploymentOrbs);
+      return listData(
+        c.env,
+        target,
+        scope,
+        connectors,
+        deploymentOrbs,
+        await hiddenOrbProviders(c.env, c.get("principal")),
+      );
     }),
   );
 
@@ -562,7 +587,7 @@ const mount = (
       const body = await decodeBody(c, SetOrbProviderConnectionRequestSchema);
       const db = await database(c);
       const target = await resolveTarget(c, db);
-      const connector = await connectableProvider(c, connectors);
+      const connector = await connectableProvider(c, connectors, true);
       const userId = c.get("principal").userId;
       await loadScope(db, userId, null, target);
       if (!target.canUpdate) {
@@ -641,6 +666,7 @@ const mount = (
         await loadScope(db, userId, null, target),
         connectors,
         deploymentOrbs,
+        await hiddenOrbProviders(c.env, c.get("principal")),
       );
     }),
   );
@@ -650,7 +676,7 @@ const mount = (
     respond(c, async () => {
       const db = await database(c);
       const target = await resolveTarget(c, db);
-      const connector = await connectableProvider(c, connectors);
+      const connector = await connectableProvider(c, connectors, true);
       const userId = c.get("principal").userId;
       await loadScope(db, userId, null, target);
       if (!target.canUpdate) {
@@ -680,6 +706,7 @@ const mount = (
         await loadScope(db, userId, null, target),
         connectors,
         deploymentOrbs,
+        await hiddenOrbProviders(c.env, c.get("principal")),
       );
     }),
   );
@@ -709,6 +736,7 @@ const mount = (
         await loadScope(db, userId, null, target),
         connectors,
         deploymentOrbs,
+        await hiddenOrbProviders(c.env, c.get("principal")),
       );
     }),
   );
@@ -773,6 +801,7 @@ export const makeWorkspaceOrbProviderRoutes = (
         await loadScope(db, principal.userId, null, target),
         connectors,
         deploymentOrbs,
+        await hiddenOrbProviders(c.env, c.get("principal")),
       );
     }),
   );

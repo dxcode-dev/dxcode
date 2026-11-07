@@ -22,6 +22,7 @@ import {
   resolveExecutionProviders,
 } from "../../src/plugins/execution/provider.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import { setBetaOrbProviders } from "./beta-orb-providers.js";
 import { fakeBoat, type World } from "./fake-boat.js";
 
 /**
@@ -133,6 +134,9 @@ beforeEach(async () => {
     ).bind(project, owner, timestamp, timestamp),
   ]);
 });
+
+// Beta behind its personal flag (#1924); these tests turn it on.
+beforeEach(() => setBetaOrbProviders(owner, ["orb-provider-boat"]));
 
 describe("Boat on the deployment's own account", () => {
   it("is not installed without BOAT_API_KEY, so a self-hoster sees no change", async () => {

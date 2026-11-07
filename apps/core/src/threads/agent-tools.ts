@@ -8,6 +8,7 @@ import {
   claudePlanWindowName,
   isClaudeCodeModel,
   ModeId,
+  orbProviderBetaFeature,
   pickClaudePlan,
   type RunnerProfileCatalog,
   THREAD_COLORS,
@@ -1037,32 +1038,40 @@ export const createThreadTools = (
                 [
                   ...new Set(settings.catalog.profiles.map((p) => p.adapter)),
                 ].map((adapter) => ({ adapter, displayName: adapter }))
-              ).map((provider) => {
-                const usable = resolved.find(
-                  ({ providerId }) => providerId === provider.adapter,
-                );
-                return {
-                  provider: provider.adapter,
-                  name: provider.displayName,
-                  // ready, building, or failed; unavailable when the owner
-                  // has no key or deployment access for it.
-                  status: usable?.status ?? "unavailable",
-                  ...(usable === undefined ? {} : { paidBy: usable.scope }),
-                  sizes: settings.catalog.profiles
-                    .filter(
-                      (profile) =>
-                        profile.adapter === provider.adapter &&
-                        profile.availability === "available" &&
-                        (allowed === null || allowed.includes(profile.id)),
-                    )
-                    .map((profile) => ({
-                      size: profile.id,
-                      cpu: profile.resources.cpuCores,
-                      memoryGb: profile.resources.memoryMb / 1024,
-                      diskGb: profile.resources.diskGb,
-                    })),
-                };
-              }),
+              )
+                // A beta provider the owner has not turned on (#1924) is
+                // not offered, so it is not listed either.
+                .filter(
+                  ({ adapter }) =>
+                    orbProviderBetaFeature(adapter) === undefined ||
+                    resolved.some(({ providerId }) => providerId === adapter),
+                )
+                .map((provider) => {
+                  const usable = resolved.find(
+                    ({ providerId }) => providerId === provider.adapter,
+                  );
+                  return {
+                    provider: provider.adapter,
+                    name: provider.displayName,
+                    // ready, building, or failed; unavailable when the owner
+                    // has no key or deployment access for it.
+                    status: usable?.status ?? "unavailable",
+                    ...(usable === undefined ? {} : { paidBy: usable.scope }),
+                    sizes: settings.catalog.profiles
+                      .filter(
+                        (profile) =>
+                          profile.adapter === provider.adapter &&
+                          profile.availability === "available" &&
+                          (allowed === null || allowed.includes(profile.id)),
+                      )
+                      .map((profile) => ({
+                        size: profile.id,
+                        cpu: profile.resources.cpuCores,
+                        memoryGb: profile.resources.memoryMb / 1024,
+                        diskGb: profile.resources.diskGb,
+                      })),
+                  };
+                }),
             },
           };
         }),

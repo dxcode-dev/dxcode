@@ -16,6 +16,7 @@ import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-provi
 import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import { setBetaOrbProviders } from "./beta-orb-providers.js";
 import {
   type FakeAccount,
   type FakeSandbox,
@@ -189,6 +190,9 @@ beforeEach(async () => {
     ).bind(project, solo, timestamp, timestamp),
   ]);
 });
+
+// Beta behind its personal flag (#1924); these tests turn it on.
+beforeEach(() => setBetaOrbProviders(solo, ["orb-provider-boat"]));
 
 describe("Boat in a person's own account", () => {
   it("saves one Orb snapshot, tests it, and runs a Thread's sandbox through stop and resume", async () => {

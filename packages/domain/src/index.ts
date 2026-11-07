@@ -31,6 +31,7 @@ export {
   ORB_PROVIDERS,
   OrbProviderId,
   OrbRunnerProfileConfiguration,
+  orbProviderBetaFeature,
   orbSizeHourlyPrice,
   withPinnedOrbTarget,
 } from "./orb-providers/index.js";

@@ -1,8 +1,9 @@
 import type { OrbResolvedProvider } from "@dx/api";
-import type {
-  RunnerProfile,
-  RunnerProfileCatalog,
-  RunnerProfileId,
+import {
+  orbProviderBetaFeature,
+  type RunnerProfile,
+  type RunnerProfileCatalog,
+  type RunnerProfileId,
 } from "@dx/domain";
 
 /**
@@ -25,6 +26,8 @@ export type SetUpOrbSizeGroup = {
   /** The provider heading; absent when one set-up provider needs none. */
   readonly name?: string;
   readonly hint?: string;
+  /** A beta provider on a person's or workspace's own account, or a deployment account not presented as the deployment's own Orb. */
+  readonly beta?: boolean;
   readonly billing?: string;
   readonly deploymentProvided?: boolean;
   readonly label: string;
@@ -66,6 +69,9 @@ export const setUpOrbSizeGroups = (
         {
           key: adapter,
           name,
+          beta:
+            orbProviderBetaFeature(adapter) !== undefined &&
+            account.displayName === undefined,
           ...(billing === undefined ? {} : { billing }),
           deploymentProvided: account.scope === "deployment",
           available: true,
@@ -81,6 +87,7 @@ export const setUpOrbSizeGroups = (
             key: adapter,
             name,
             hint: "Not available",
+            beta: false,
             deploymentProvided: false,
             available: false,
             profiles: saved,

@@ -138,15 +138,14 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
 };
 
 /**
- * Whether a personal experimental feature is on for the person, after its
- * prerequisites and incompatibilities. A feature the registry does not
- * list is off; a failed read rejects, so callers fail closed.
+ * The personal experimental features that are on for the person, after
+ * their prerequisites and incompatibilities. A failed read rejects, so
+ * callers fail closed.
  */
-export const experimentalFeatureEnabled = async (
+export const enabledExperimentalFeatures = async (
   bindings: AppEnv["Bindings"],
   principal: Principal,
-  featureId: ExperimentalFeatureId,
-): Promise<boolean> => {
+): Promise<ReadonlySet<ExperimentalFeatureId>> => {
   const operation = Effect.gen(function* () {
     const db = yield* decodeD1Binding(bindings.DB);
     return yield* Effect.gen(function* () {
@@ -155,14 +154,27 @@ export const experimentalFeatureEnabled = async (
         principal,
         experimentalFeatureRegistryFor(bindings),
       );
-      return view.flags.some(
-        ({ registration, effectiveEnabled }) =>
-          registration.id === featureId && effectiveEnabled,
+      return new Set(
+        view.flags.flatMap(({ registration, effectiveEnabled }) =>
+          effectiveEnabled ? [registration.id] : [],
+        ),
       );
     }).pipe(Effect.provide(servicesFor(db)));
   });
   return Effect.runPromise(operation);
 };
+
+/**
+ * Whether a personal experimental feature is on for the person, after its
+ * prerequisites and incompatibilities. A feature the registry does not
+ * list is off; a failed read rejects, so callers fail closed.
+ */
+export const experimentalFeatureEnabled = async (
+  bindings: AppEnv["Bindings"],
+  principal: Principal,
+  featureId: ExperimentalFeatureId,
+): Promise<boolean> =>
+  (await enabledExperimentalFeatures(bindings, principal)).has(featureId);
 
 export const personalExperimentalFeaturesRoutes = new Hono<AppEnv>();
 

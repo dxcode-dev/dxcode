@@ -82,6 +82,7 @@ export const freestyleOrbProvider = defineOrbProvider({
   // A Freestyle pause keeps the VM's memory, so processes resume in place.
   pauseResumePreserves: "processes",
   remote: true,
+  betaFeature: "orb-provider-freestyle",
   profile: FreestyleRunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,

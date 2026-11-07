@@ -8,6 +8,7 @@ import {
   getPersonalExperimentalFeatures,
   updatePersonalExperimentalFeature,
 } from "../../../shared/api/client.js";
+import { orbProviderKeys } from "../orb-providers/orb-providers-queries.js";
 
 export const experimentalFeatureKeys = {
   personal: (userId: UserId) => ["experimental-features", userId] as const,
@@ -42,5 +43,10 @@ export const updatePersonalExperimentalFeatureMutationOptions = (
         experimentalFeatureKeys.personal(userId),
         features,
       );
+      // A beta Orb provider's flag (#1924) changes which providers are
+      // offered, so the Orb Providers list and every picker load again.
+      await queryClient.invalidateQueries({
+        queryKey: orbProviderKeys.all(userId),
+      });
     },
   });

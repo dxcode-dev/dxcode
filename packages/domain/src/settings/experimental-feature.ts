@@ -376,6 +376,81 @@ export const productionExperimentalFeatureRegistry =
             "Turn every widget off, drop its tables, and delete the public widget routes and the settings tab.",
         },
       },
+      {
+        id: "orb-provider-freestyle",
+        title: "Freestyle Orbs",
+        description:
+          "Beta: offers Freestyle in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. It doesn't offer every workspace feature yet; its Orbs have no Desktop. Off, Threads already on it keep running.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/execution" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "new-thread",
+        reviewDate: "2027-01-15",
+        lifecyclePlan: {
+          migration:
+            "Nothing is stored for the flag; connections stay saved, and Threads pinned to the provider keep running when it is off.",
+          graduation:
+            "Once the provider offers every workspace feature (#1924), remove betaFeature from its descriptor and retire this flag as graduated.",
+          removal:
+            "Retire the flag as removed and drop the provider's descriptor, connector, and sizes.",
+        },
+      },
+      {
+        id: "orb-provider-docker",
+        title: "Docker Cloud Sandboxes Orbs",
+        description:
+          "Beta: offers Docker Cloud Sandboxes in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. dx hasn't yet checked every workspace feature on it, such as the Desktop. Off, Threads already on it keep running.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/execution" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "new-thread",
+        reviewDate: "2027-01-15",
+        lifecyclePlan: {
+          migration:
+            "Nothing is stored for the flag; connections stay saved, and Threads pinned to the provider keep running when it is off.",
+          graduation:
+            "Once the provider offers every workspace feature (#1924), remove betaFeature from its descriptor and retire this flag as graduated.",
+          removal:
+            "Retire the flag as removed and drop the provider's descriptor, connector, and sizes.",
+        },
+      },
+      {
+        id: "orb-provider-boat",
+        title: "Boat Orbs",
+        description:
+          "Beta: offers Boat in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. It doesn't offer every workspace feature yet; its Orbs have no Desktop. Off, Threads already on it keep running.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/execution" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "new-thread",
+        reviewDate: "2027-01-15",
+        lifecyclePlan: {
+          migration:
+            "Nothing is stored for the flag; connections stay saved, and Threads pinned to the provider keep running when it is off.",
+          graduation:
+            "Once the provider offers every workspace feature (#1924), remove betaFeature from its descriptor and retire this flag as graduated.",
+          removal:
+            "Retire the flag as removed and drop the provider's descriptor, connector, and sizes.",
+        },
+      },
     ],
     migrations: [
       { kind: "retire", id: "needs-you-prioritize", outcome: "removed" },

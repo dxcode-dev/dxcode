@@ -18,6 +18,7 @@ import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-provi
 import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import { setBetaOrbProviders } from "./beta-orb-providers.js";
 
 const solo = "dk-orb-solo" as UserId;
 const project = "prj_00000000-0000-4000-8000-0000000007b1";
@@ -557,6 +558,9 @@ beforeEach(async () => {
     ).bind(project, solo, timestamp, timestamp),
   ]);
 });
+
+// Beta behind its personal flag (#1924); these tests turn it on.
+beforeEach(() => setBetaOrbProviders(solo, ["orb-provider-docker"]));
 
 describe("Docker Cloud Sandboxes in a person's own account", () => {
   it("tests the public Orb image on a test Orb, then runs a Thread's sandbox through its deadline, pause, wake, archive, and delete", async () => {

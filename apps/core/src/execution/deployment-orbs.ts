@@ -42,3 +42,19 @@ export const deploymentOrbSettings = (
     ? settings
     : undefined;
 };
+
+/**
+ * The providers whose deployment account the deployment presents under its
+ * own name, such as a hosted offer. That account is the deployment's own product,
+ * so a provider's beta flag (#1924) gates only people's and workspaces'
+ * connections to it, never this account.
+ */
+export const presentedDeploymentProviders = (
+  bindings: Bindings,
+  registered: DeploymentOrbs = registeredDeploymentOrbs,
+): ReadonlySet<string> =>
+  new Set(
+    resolveExecutionProviders(bindings).flatMap(({ providerId }) =>
+      registered[providerId]?.displayName === undefined ? [] : [providerId],
+    ),
+  );

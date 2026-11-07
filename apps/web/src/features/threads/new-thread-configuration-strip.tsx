@@ -11,6 +11,7 @@ import {
   type ClaudeCodeEffort,
   isClaudeCodeModel,
   type ModeId,
+  orbProviderBetaFeature,
   type ProjectId,
   type RunnerProfile,
   type RunnerProfileId,
@@ -927,6 +928,11 @@ function OrbPicker({
                         (group.provider === undefined
                           ? group.adapter
                           : orbProviderName(group.provider))}
+                      {group.orb?.displayName !== undefined ||
+                      orbProviderBetaFeature(group.adapter) ===
+                        undefined ? null : (
+                        <span className="orb-provider-beta">Beta</span>
+                      )}
                     </span>
                     {hint === undefined ? null : (
                       <small className="orb-picker-provider-hint">{hint}</small>

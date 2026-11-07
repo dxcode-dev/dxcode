@@ -12,10 +12,14 @@ import { AccountThemeProvider } from "./features/settings/account/account-theme-
 import { onSessionEnded } from "./shared/auth/session-ended.js";
 import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
 import { queryClient } from "./shared/query/query-client.js";
+import { FallbackTitle } from "./shared/ui/document-title.js";
 import "./styles.css";
 
 // Before anything renders, so a bug report holds the earliest failures.
 installClientDiagnostics();
+// index.html's title is the landing title crawlers read; from here React
+// renders every title, and FallbackTitle shows "dx" where no page names one.
+document.head.querySelector(":scope > title")?.remove();
 
 // The session query starts at boot, taking the check bootstrap sent, and
 // AuthGate's query joins it. The shell's data starts the moment that query
@@ -78,6 +82,7 @@ onSessionEnded(() => {
 export function Application() {
   return (
     <QueryClientProvider client={queryClient}>
+      <FallbackTitle />
       <AuthGate onBeforeSignOut={clearDraftsBeforeSignOut}>
         <Suspense fallback={null}>
           <AccountThemeProvider>

@@ -10,6 +10,7 @@ import {
   canonicalGitRemoteAlias,
   MAX_PROJECT_REMOTE_ALIASES,
   MAX_SHIP_PROMPT_LENGTH,
+  orbProviderBetaFeature,
   type PluginScope,
   type ProjectId,
   type ProjectShipAction,
@@ -1289,6 +1290,8 @@ type OrbSizeGroupDraft = {
   readonly key: RunnerProfile["adapter"];
   readonly name: string;
   readonly hint?: string;
+  /** A beta provider (#1924) the person turned on: a Beta label follows its name. */
+  readonly beta?: boolean;
   readonly billing?: string;
   readonly deploymentProvided?: boolean;
   readonly available: boolean;
@@ -1327,6 +1330,9 @@ const orbSizeGroups = (
         {
           key: adapter,
           name,
+          beta:
+            orbProviderBetaFeature(adapter) !== undefined &&
+            account.displayName === undefined,
           ...(billing === undefined ? {} : { billing }),
           deploymentProvided: account.scope === "deployment",
           available: true,

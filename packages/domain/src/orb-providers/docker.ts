@@ -84,6 +84,7 @@ export const dockerOrbProvider = defineOrbProvider({
   // restart from the image entrypoint when they are not kept.
   pauseResumePreserves: "filesystem",
   remote: true,
+  betaFeature: "orb-provider-docker",
   profile: DockerRunnerProfileConfiguration,
   // Each sandbox is a microVM with its own kernel.
   isolation: "sandbox",

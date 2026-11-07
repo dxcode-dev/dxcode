@@ -8153,6 +8153,19 @@ a {
 .orb-picker-provider .orb-picker-provider-name {
   font-size: 12px;
 }
+/* A beta Orb provider's label (#1924), beside its name. */
+.orb-provider-beta {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 5px;
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  vertical-align: 1px;
+}
 .orb-picker-provider-hint {
   color: var(--muted-foreground);
   font-size: 11px;

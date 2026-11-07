@@ -146,7 +146,9 @@ import {
 } from "../observability/startup-runtime.js";
 import { submissionStartupObservations } from "../observability/submission-startup.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { hiddenOrbProviders } from "../plugins/execution/orb-provider-beta.js";
 import {
+  betaProviderOffDetail,
   OrbUnavailable,
   resolveThreadExecutionPin,
 } from "../plugins/execution/orb-providers.js";
@@ -1060,6 +1062,8 @@ export const createThreadRoutes = (
                       db,
                       bindings: context.env,
                       userId: principal.userId,
+                      hiddenProviders: () =>
+                        hiddenOrbProviders(context.env, principal),
                       projectId:
                         project.kind === "project" ? project.projectId : null,
                       runnerProfileId: requestedRunnerProfileId,
@@ -1808,6 +1812,9 @@ export const createThreadRoutes = (
                 message: "The selected Orb is not available.",
                 requestId,
                 reason: failure.reason,
+                ...(failure.reason === "beta-provider-off"
+                  ? { detail: betaProviderOffDetail(failure.provider) }
+                  : {}),
               },
             }),
             409,

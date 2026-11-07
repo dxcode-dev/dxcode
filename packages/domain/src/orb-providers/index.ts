@@ -52,6 +52,18 @@ export const findOrbProvider = (
 ): AnyOrbProvider | undefined =>
   ORB_PROVIDERS.find(({ id }) => id === providerId);
 
+/**
+ * The personal experimental feature a beta provider needs before a person
+ * is offered it, or undefined for a provider offered to everyone.
+ */
+export const orbProviderBetaFeature = (
+  providerId: string,
+): string | undefined => {
+  const provider: { readonly betaFeature?: string } | undefined =
+    findOrbProvider(providerId);
+  return provider?.betaFeature;
+};
+
 /** One runner-profile configuration, whichever provider it names. */
 export const OrbRunnerProfileConfiguration = Schema.Union(
   ORB_PROVIDERS.map(({ profile }) => profile) as unknown as Field<

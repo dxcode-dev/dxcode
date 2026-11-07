@@ -42,6 +42,8 @@ type OrbSizeGroup = {
   readonly name?: string;
   /** A muted note after the name, such as why the group can't be chosen. */
   readonly hint?: string;
+  /** A beta provider (#1924): a Beta label follows the name. */
+  readonly beta?: boolean;
   readonly label: string;
   /**
    * Who bills these sizes when they run on a person's or workspace's own
@@ -70,6 +72,9 @@ export function OrbSizePicker({
       {group.name === undefined ? null : (
         <h3>
           {group.name}
+          {group.beta === true ? (
+            <span className="orb-provider-beta">Beta</span>
+          ) : null}
           {group.hint === undefined ? null : <small>{group.hint}</small>}
         </h3>
       )}

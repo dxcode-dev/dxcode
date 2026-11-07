@@ -21,6 +21,7 @@ import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-provi
 import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import { setBetaOrbProviders } from "./beta-orb-providers.js";
 
 const solo = "fs-orb-solo" as UserId;
 const project = "prj_00000000-0000-4000-8000-0000000006b1";
@@ -381,6 +382,9 @@ beforeEach(async () => {
     ).bind(project, solo, timestamp, timestamp),
   ]);
 });
+
+// Beta behind its personal flag (#1924); these tests turn it on.
+beforeEach(() => setBetaOrbProviders(solo, ["orb-provider-freestyle"]));
 
 describe("Freestyle in a person's own account", () => {
   it("builds an Orb snapshot per size the plan allows, tests it, and runs a Thread's VM through pause and wake", async () => {

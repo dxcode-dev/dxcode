@@ -60,6 +60,13 @@ export interface OrbProviderDescriptor<
   /** The local development runtime; never offered deployed. */
   readonly development?: true;
   /**
+   * The personal experimental feature that offers this provider while it is
+   * in beta (#1924): until a person turns it on, the provider is not listed,
+   * connectable, or pinned by their new Threads. Threads that already pinned
+   * it keep running. Absent: offered to everyone.
+   */
+  readonly betaFeature?: string;
+  /**
    * How a deployment installs the provider on its own account: a secret
    * binding holding its key, or a binding whose presence installs it.
    * Absent: only a person's or workspace's connection runs it.
