@@ -14045,6 +14045,26 @@ body:has(.dx-app-shell) {
   .mobile-thread-region .thread-title-bar {
     padding-left: 42px;
   }
+  /* On a Thread, the trigger centers on the title bar, which starts below
+     the safe area: (36px bar - 26px button) / 2. */
+  .product-sidebar-trigger:has(+ .mobile-thread-region) {
+    top: calc(env(safe-area-inset-top) + 5px);
+  }
+}
+/* Touch: the trigger matches the 44px title bar's 36px controls. */
+@media (pointer: coarse) and (max-width: 767px) {
+  .product-sidebar-trigger:has(+ .mobile-thread-region) {
+    top: calc(env(safe-area-inset-top) + 4px);
+    width: 36px;
+    height: 36px;
+  }
+  .product-sidebar-trigger:has(+ .mobile-thread-region) svg {
+    width: 20px;
+    height: 20px;
+  }
+  .mobile-thread-region .thread-title-bar {
+    padding-left: 48px;
+  }
 }
 @media (prefers-reduced-motion: reduce) {
   .mobile-sidebar-scrim,
