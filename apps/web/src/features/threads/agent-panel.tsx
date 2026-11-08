@@ -44,7 +44,6 @@ import {
   useAttachmentsUploading,
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
-import { RestartOrb } from "./orb-restart/restart-orb-menu.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import { sendRefusal } from "./send-failure.js";
 import {
@@ -300,8 +299,6 @@ type ThreadErrorPresentation = {
     | "retry-send"
     | "model-routing";
   readonly failedSend?: FailedSend;
-  /** The Orb stopped responding or its disk filled: the card offers Restart Orb. */
-  readonly restartOrb?: boolean;
   /** A Claude plan limit: the card carries the Claude mark and a usage link. */
   readonly claudePlan?: boolean;
 };
@@ -421,8 +418,6 @@ const diskFullPresentation = (
     message:
       "dx cleared package caches and temporary files and still couldn’t make room. Retry starts the agent in recovery mode so it can free space, or delete files you don’t need from the disk notice or the Terminal.",
     action: "resume",
-    // A disk too full to free space from can still restart (#1614).
-    restartOrb: true,
   };
 };
 
@@ -463,7 +458,6 @@ const orbStartDenial = (error: unknown) => {
     return {
       title: "The Orb stopped responding",
       message: typeof details === "string" ? details : "",
-      restartOrb: true,
     };
   // Core's 5-minute limit on an Orb start (#1956): Retry waits for it.
   if (type === "orb_start_timed_out")
@@ -651,11 +645,6 @@ function ThreadErrorCard({
           <span>{error.message}</span>
           {retryAction || settingsAction || error.claudePlan ? (
             <div className="thread-error-actions">
-              {/* Restart Orb sits beside Retry, which an archived Thread
-                  doesn't offer (#1592). */}
-              {retryAction && error.restartOrb === true ? (
-                <RestartOrb part="card" />
-              ) : null}
               {retryAction ? (
                 <Button
                   type="button"

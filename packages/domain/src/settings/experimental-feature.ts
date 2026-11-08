@@ -255,31 +255,6 @@ export const productionExperimentalFeatureRegistry =
     version: 1,
     features: [
       {
-        id: "orb-restart",
-        title: "Restart Orb",
-        description:
-          "Adds Restart Orb to the Thread menu and to the stopped-Orb and full-disk error cards. dx restarts a stuck Orb on its own; this is a manual fallback while that recovery matures.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/execution" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "medium",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-01-15",
-        lifecyclePlan: {
-          migration:
-            "Nothing is stored for the flag; turning it off hides the action and the route refuses it.",
-          graduation:
-            "Not planned: the goal is that dx recovers every stuck Orb on its own.",
-          removal:
-            "Once automatic recovery covers every case, delete the restart route, its dialog, the menu item, and the cards' Restart Orb actions, and keep ExecutionWorkspaces.restart only if automatic recovery uses it.",
-        },
-      },
-      {
         id: "artifact-notify-agent",
         title: "Notify agent from artifacts",
         description:
@@ -455,6 +430,7 @@ export const productionExperimentalFeatureRegistry =
     migrations: [
       { kind: "retire", id: "needs-you-prioritize", outcome: "removed" },
       { kind: "retire", id: "artifact-asks", outcome: "removed" },
+      { kind: "retire", id: "orb-restart", outcome: "removed" },
     ],
   });
 

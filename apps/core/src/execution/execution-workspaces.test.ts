@@ -3,10 +3,7 @@ import { FlueError, type Sandbox, type SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executionWorkspaceLogger } from "../logging.js";
-import {
-  takeWorkspaceRecovery,
-  workspaceRecoveryNote,
-} from "../orb-disk/read-only.js";
+import { takeWorkspaceRecovery } from "../orb-disk/read-only.js";
 import type {
   ExecutionContext,
   ExecutionWorkspaceHandle,
@@ -184,16 +181,6 @@ const mocks = vi.hoisted(() => {
       sha256: "a".repeat(64),
     })),
     ensureDaemonInGuest: vi.fn(async () => undefined),
-    takeOrbRestartNote: vi.fn(
-      async (): Promise<
-        | {
-            by: string;
-            files: "kept" | "earlier" | "lost";
-            restartedAt: string;
-          }
-        | undefined
-      > => undefined,
-    ),
   };
 });
 
@@ -245,9 +232,6 @@ vi.mock("./guest/daemon-release.js", () => ({
 vi.mock("./guest/daemon-installer.js", () => ({
   ensureDaemonInGuest: mocks.ensureDaemonInGuest,
 }));
-vi.mock("../orb-restart/execution-object.js", () => ({
-  takeOrbRestartNoteFor: mocks.takeOrbRestartNote,
-}));
 vi.mock("../source-control/tools.js", () => ({
   executeSourcePush: mocks.executeSourcePush,
 }));
@@ -287,8 +271,6 @@ beforeEach(() => {
   mocks.loadDaemonRelease.mockClear();
   mocks.loadDaemonReleaseMetadata.mockClear();
   mocks.ensureDaemonInGuest.mockClear();
-  mocks.takeOrbRestartNote.mockReset();
-  mocks.takeOrbRestartNote.mockResolvedValue(undefined);
 });
 
 it("implements exactly the resident daemon each registered Execution provider claims", () => {
@@ -889,42 +871,6 @@ describe("unresponsive Orb recovery (#1584)", () => {
       },
     });
     expect(recover).toHaveBeenCalledOnce();
-  });
-
-  it("tells the next run's agent who restarted the Orb with Restart Orb (#1592)", async () => {
-    const threadId = thread("thr_00000000-0000-4000-8000-000000001594");
-    mocks.takeOrbRestartNote.mockResolvedValueOnce({
-      by: "Ravi",
-      files: "kept",
-      restartedAt: "2026-11-03T04:00:00.000Z",
-    });
-    const fake = provider([handle(10)]);
-
-    expect(await activateWithin(fake, threadId, 1)).toMatchObject({
-      settled: true,
-      value: expect.anything(),
-    });
-    const recovery = takeWorkspaceRecovery(threadId);
-    expect(recovery).toEqual({ files: "kept", cause: "manual", by: "Ravi" });
-    expect(workspaceRecoveryNote(recovery ?? { files: "kept" })).toContain(
-      '"Ravi restarted the Orb. Files kept; running processes stopped."',
-    );
-  });
-
-  it("lets an automatic restart in the same run replace a person's note", async () => {
-    const threadId = thread("thr_00000000-0000-4000-8000-000000001595");
-    mocks.takeOrbRestartNote.mockResolvedValueOnce({
-      by: "Ravi",
-      files: "kept",
-      restartedAt: "2026-11-03T04:00:00.000Z",
-    });
-    const recover = vi.fn(async () => ({ files: "kept" as const }));
-    const fake = provider([handle("never"), handle(10)], recover);
-
-    await activateWithin(fake, threadId, 5);
-    expect(takeWorkspaceRecovery(threadId)).toMatchObject({
-      cause: "unresponsive",
-    });
   });
 
   it("leaves a slow Orb that still answers alone", async () => {

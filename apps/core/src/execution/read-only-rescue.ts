@@ -10,7 +10,7 @@ import {
 } from "./unsaved-work-script.js";
 
 /**
- * Before dx restarts an Orb whose disk turned read-only, or a Restart Orb
+ * Before dx restarts an Orb whose disk turned read-only, or any restart
  * that cannot keep its files, it copies the person's unsaved work out, which
  * a read-only disk still lets it read: for every git checkout under
  * ~/workspace (the repository, its worktrees, additional repositories,

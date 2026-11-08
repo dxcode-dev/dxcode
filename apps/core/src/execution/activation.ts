@@ -18,7 +18,6 @@ import {
   savedAtText,
   WORKSPACE_READ_ONLY_CODE,
 } from "../orb-disk/read-only.js";
-import { takeOrbRestartNoteFor } from "../orb-restart/execution-object.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import type {
   DaemonInstallation,
@@ -709,11 +708,6 @@ const activationFor =
       const githubConnected = githubCliConnected(db, id);
       githubConnected.catch(() => undefined);
       const additionalRepositories = readAdditionalRepositories(db, id);
-      // A person's Restart Orb since the last run, which this run's agent
-      // tells the Thread about (#1592).
-      const restartNote = existingOnly
-        ? Promise.resolve(undefined)
-        : takeOrbRestartNoteFor(bindings.THREAD_EXECUTION, id);
       const timing = stepTiming(
         executionWorkspaceLogger,
         "execution_activation_timing",
@@ -866,21 +860,6 @@ const activationFor =
           }),
         );
         void recordActiveSubmissionPhase(bindings, id, "workspace_resolved");
-        // Before preparation, so a restart this activation makes itself is
-        // the one the agent hears about.
-        const restarted = await restartNote;
-        if (restarted !== undefined)
-          rememberWorkspaceRecovery(threadId, {
-            files: restarted.files,
-            cause: "manual",
-            by: restarted.by,
-            ...(restarted.savedAt === undefined
-              ? {}
-              : { savedAt: restarted.savedAt }),
-            ...(restarted.restored === undefined
-              ? {}
-              : { restored: restarted.restored }),
-          });
         if (needsFirstReadiness) reportPreparation("Preparing source…");
         let prepared: Awaited<ReturnType<typeof prepareSource>>;
         try {

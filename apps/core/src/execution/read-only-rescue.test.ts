@@ -7,7 +7,7 @@ import type { ExecutionGuest } from "../plugins/execution/provider.js";
 import { rescueUnsavedWork } from "./read-only-rescue.js";
 
 /**
- * #1658: before a read-only Orb restart or a Restart Orb that cannot keep
+ * #1658: before a read-only Orb restart, or any restart that cannot keep
  * the Orb's files, dx copies the person's unsaved work out. It copied only
  * ~/workspace/repo, so work in a worktree or an additional repository was
  * lost. Real git and bash against a temporary workspace with three checkouts

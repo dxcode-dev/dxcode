@@ -30,7 +30,6 @@ import { installFlueObservation } from "./observability/flue.js";
 import { installRuntimeTracing } from "./observability/platform-tracing.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
-import { threadOrbRestartRoutes } from "./orb-restart/routes.js";
 import { confirmMissesAtPrimary, d1Session } from "./persistence/d1-session.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
@@ -166,9 +165,8 @@ app.use("/v1/threads/:threadId/memory/*", authorizeThread);
 app.route("/v1/threads", threadOrbMemoryRoutes);
 app.use("/v1/threads/:threadId/disk/*", authorizeThread);
 app.route("/v1/threads", threadOrbDiskRoutes);
-// Viewers are refused by authorizeThread; the route refuses an archived Thread.
+// The fault route below checks the access authorizeThread sets.
 app.use("/v1/threads/:threadId/orb/*", authorizeThread);
-app.route("/v1/threads", threadOrbRestartRoutes);
 // Branch previews only: reproduces slow Orb restores (#1956).
 app.route("/v1/threads", threadOrbFaultRoutes);
 // `/automations/*` also matches `/automations`; see Portals above.

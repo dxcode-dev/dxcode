@@ -116,11 +116,6 @@ import {
   serveOrbMemory,
 } from "../orb-memory/execution-object.js";
 import {
-  restartedBy,
-  restartOrb,
-  takeOrbRestartNote,
-} from "../orb-restart/execution-object.js";
-import {
   NO_ORB_RUNS,
   ORB_RUNS_STORAGE_KEY,
   type OrbRuns,
@@ -865,13 +860,6 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
     if (path === "/orb/usage") return this.#serveOrbUsage(request);
-    if (path === "/orb/restart") return this.#restartOrb(request);
-    if (path === "/orb/restart/note")
-      return request.method === "POST"
-        ? takeOrbRestartNote(this.ctx.storage).then((note) =>
-            Response.json(note ?? null),
-          )
-        : new Response(null, { status: 404 });
     if (path === "/storage/transfer") return this.#transferStorage(request);
     if (path === "/terminal/close") return this.#closeTerminal(request);
     if (path === "/diagnostics") return this.#diagnostics(request);
@@ -1298,36 +1286,6 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       changesObserved: this.#changesObserved,
       sockets,
     });
-  }
-
-  /** A person restarts the Thread's Orb (#1592); the route checked access. */
-  async #restartOrb(request: Request) {
-    const threadId = Schema.decodeUnknownOption(ThreadId)(
-      request.headers.get("x-dx-thread-id"),
-    );
-    if (request.method !== "POST" || Option.isNone(threadId))
-      return new Response(null, { status: 404 });
-    const result = await restartOrb(threadId.value, {
-      storage: this.ctx.storage,
-      by: restartedBy(request.headers.get("x-dx-restarted-by")),
-      now: () => Date.now(),
-      // Only on the person's explicit second confirmation (#1614).
-      restart: () =>
-        ExecutionWorkspaces.restart(threadId.value, {
-          discardUnsaved:
-            request.headers.get("x-dx-restart-discard-unsaved") === "1",
-        }),
-      // The daemon went with the Orb's processes. Stop waiting on it, and
-      // start the Orb again so its Terminal comes back.
-      restarted: () =>
-        this.ctx.waitUntil(
-          (async () => {
-            await this.#expireCurrentDaemonConnection();
-            await this.#activateWithRetry(threadId.value);
-          })().catch(() => undefined),
-        ),
-    });
-    return Response.json(result);
   }
 
   #serveOrbDisk(request: Request, path: "/orb/disk" | "/orb/disk/delete") {

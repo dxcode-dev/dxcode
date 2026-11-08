@@ -46,7 +46,6 @@ import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
 import type { DictationRecord } from "./dictation/dictation-session.js";
-import { useRestartOrbMenu } from "./orb-restart/restart-orb-menu.js";
 import {
   serializeThreadJson,
   serializeThreadMarkdown,
@@ -175,7 +174,6 @@ export function ThreadMenu({
     readonly changesOpen: boolean;
     readonly dictation?: DictationRecord;
   }>();
-  const restartOrb = useRestartOrbMenu(thread);
   const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
   const download = (format: "markdown" | "json") => {
     const markdown = format === "markdown";
@@ -379,7 +377,6 @@ export function ThreadMenu({
                 />
               ) : null}
               <Menu.Separator className="thread-menu-separator" />
-              {restartOrb.item}
               <Menu.Item
                 className="thread-menu-item"
                 onClick={() => {
@@ -412,7 +409,6 @@ export function ThreadMenu({
           />
         </React.Suspense>
       )}
-      {restartOrb.dialog}
       <span className="sr-only" aria-live="polite">
         {announcement}
         {announcement ? <Check /> : null}

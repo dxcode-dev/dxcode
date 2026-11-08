@@ -247,7 +247,6 @@
   "apps/web/src/features/threads/new-thread-options-menu.browser.test.tsx": 1.4,
   "apps/web/src/features/threads/new-thread-phone-composer.browser.test.tsx": 0.8,
   "apps/web/src/features/threads/new-thread-send-readiness.browser.test.tsx": 0.1,
-  "apps/web/src/features/threads/orb-restart/restart-orb.browser.test.tsx": 0.7,
   "apps/web/src/features/threads/panes/pane-layout.test.ts": 0,
   "apps/web/src/features/threads/panes/pane-tree.browser.test.tsx": 0.5,
   "apps/web/src/features/threads/panes/thread-stacked-terminal.browser.test.tsx": 0.1,

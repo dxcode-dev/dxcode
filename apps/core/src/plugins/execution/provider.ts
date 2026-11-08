@@ -519,8 +519,8 @@ export interface ExecutionWorkspaces {
   /** Thread deleted: drain dxd, then destroy the workspace. */
   readonly destroy: (threadId: ThreadId) => Promise<void>;
   /**
-   * A person restarts the Thread's Orb (#1592): its provider saves it and
-   * stops it, and the next open starts it from that save. Never drops
+   * Restarts the Thread's Orb: its provider saves it and stops it, and the
+   * next open starts it from that save. Never drops
    * files: `unsaved` when the save failed and the Orb was left running,
    * `unsupported` when the provider can't restart an Orb.
    */
@@ -528,7 +528,7 @@ export interface ExecutionWorkspaces {
     threadId: ThreadId,
     options?: {
       /**
-       * The person accepted losing what changed since the last save: the
+       * The caller accepted losing what changed since the last save: the
        * checkout's unsaved work is copied out first when it can be, and
        * put in the restarted Orb and the Thread's storage.
        */

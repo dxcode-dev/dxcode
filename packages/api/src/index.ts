@@ -107,7 +107,6 @@ export * from "./threads/mark-thread-seen.js";
 export * from "./threads/message-author.js";
 export * from "./threads/orb-disk.js";
 export * from "./threads/orb-memory.js";
-export * from "./threads/orb-restart.js";
 export * from "./threads/pane-layout.js";
 export * from "./threads/pin-thread.js";
 export * from "./threads/portals.js";

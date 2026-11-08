@@ -208,6 +208,54 @@ describe("experimental feature routes in workerd with real D1", () => {
     expect(stale.status).toBe(409);
   });
 
+  it("reads saved flags that still name the removed orb-restart and keeps the rest", async () => {
+    await env.DB.prepare(
+      `INSERT INTO personal_experimental_feature_preferences (
+        user_id, preferences, revision, updated_at
+      ) VALUES (?, ?, 2, ?)`,
+    )
+      .bind(
+        userId,
+        JSON.stringify([
+          { id: "orb-restart", enabled: true },
+          { id: "composer-quick-actions", enabled: true },
+        ]),
+        "2026-11-04T00:00:00.000Z",
+      )
+      .run();
+    const response = await createApp(["personal", "workspace"]).request(
+      "/settings/personal/experimental-features",
+      {},
+      { ...bindings, DX_ENV: "production" },
+    );
+    expect(response.status).toBe(200);
+    const { data } = await response.json<{
+      data: {
+        flags: Array<{
+          registration: { id: string };
+          personalEnabled: boolean;
+        }>;
+      };
+    }>();
+    expect(
+      data.flags.find(
+        ({ registration }) => registration.id === "composer-quick-actions",
+      )?.personalEnabled,
+    ).toBe(true);
+    expect(
+      data.flags.some(({ registration }) => registration.id === "orb-restart"),
+    ).toBe(false);
+    await expect(
+      env.DB.prepare(
+        "SELECT preferences FROM personal_experimental_feature_preferences WHERE user_id = ?",
+      )
+        .bind(userId)
+        .first(),
+    ).resolves.toEqual({
+      preferences: '[{"id":"composer-quick-actions","enabled":true}]',
+    });
+  });
+
   it("keeps personal settings authorization independent from fixture availability", async () => {
     const denied = await createApp(["workspace"]).request(
       "/settings/personal/experimental-features",

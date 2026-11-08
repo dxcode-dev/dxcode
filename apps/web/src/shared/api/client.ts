@@ -191,7 +191,6 @@ import {
   RemoveWorkspaceMemberResponseSchema,
   type ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
-  RestartThreadOrbResponseSchema,
   RetryInitialDispatchResponseSchema,
   RetryPluginTriggerDeliveryResponseSchema,
   ReviewMcpToolResponseSchema,
@@ -238,7 +237,6 @@ import {
   ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
   ThreadOrbProcessErrorResponseSchema,
-  ThreadOrbRestartErrorResponseSchema,
   type ThreadPaneLayout,
   ThreadPaneLayoutResponseSchema,
   ThreadPortalPublicErrorResponseSchema,
@@ -472,7 +470,6 @@ export const request = async <
         ThreadSharingErrorResponseSchema,
         ThreadPortalPublicErrorResponseSchema,
         ThreadOrbProcessErrorResponseSchema,
-        ThreadOrbRestartErrorResponseSchema,
         SearchThreadsInvalidRequestResponseSchema,
         SearchThreadsUnavailableResponseSchema,
       ]),
@@ -1598,22 +1595,6 @@ export const deleteProject = async (
     await request(
       `/v1/projects/${encodeURIComponent(projectId)}/delete`,
       DeleteProjectResponseSchema,
-      { method: "POST", body: JSON.stringify(input) },
-    )
-  ).data;
-
-/**
- * Restart Orb (#1592): the Thread's Orb is saved, stopped, and started again
- * from that save, files kept, processes stopped. Owner or Contribute access.
- */
-export const restartThreadOrb = async (
-  threadId: ThreadId,
-  input: { readonly discardUnsaved?: true } = {},
-) =>
-  (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/orb/restart`,
-      RestartThreadOrbResponseSchema,
       { method: "POST", body: JSON.stringify(input) },
     )
   ).data;
