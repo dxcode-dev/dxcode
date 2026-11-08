@@ -66,6 +66,10 @@ export interface OrbContainerRuntime {
   destroy(reason?: unknown): Promise<void>;
   setInactivityTimeout(durationMs: number): Promise<void>;
   interceptOutboundHttp(address: string, binding: Fetcher): Promise<void>;
+  /** HTTPS on port 443 to `address` (`*`: every host). */
+  interceptOutboundHttps(address: string, binding: Fetcher): Promise<void>;
+  /** HTTP on port 80 to any host. */
+  interceptAllOutboundHttp(binding: Fetcher): Promise<void>;
 }
 
 export interface OrbContainerProcess {
@@ -154,6 +158,18 @@ export interface OrbWorkspaceState {
    */
   readonly starting?: number;
   /**
+   * This object's place in the Thread's line of container objects: unset
+   * (0) for the first, which Core names by the Thread; each later one took
+   * over the snapshot from one whose wake stalled (#1956).
+   */
+  readonly generation?: number;
+  /**
+   * Its wake stalled and it handed its snapshot to the next object: it
+   * never starts again, runs nothing, and only waits for Cloudflare to
+   * stop the stalled container.
+   */
+  readonly retired?: { readonly at: number; readonly waitedMs: number };
+  /**
    * An archive asked for a stop this object could not finish yet (#1740):
    * the alarm tries again, snapshot first, until `ORB_STOP_TRIES` or
    * `ORB_STOP_GIVE_UP_MS`, then logs `orb_stop_abandoned`.
@@ -230,7 +246,31 @@ export type OrbOpenResult =
       readonly diskRelief?: DiskRelief;
     }
   | { readonly kind: "missing" }
-  | { readonly kind: "destroyed" };
+  | { readonly kind: "destroyed" }
+  /**
+   * The wake's restore did not answer within `ORB_START_STALL_MS` (#1956):
+   * this object retired, and Core restores the snapshot in a new one.
+   */
+  | {
+      readonly kind: "stalled";
+      readonly handover: OrbHandover;
+      /** It had already handed over before this call: no new stall. */
+      readonly earlier?: true;
+    };
+
+/**
+ * What a container object whose wake stalled hands the next one, which
+ * restores the same snapshot (#1956). Nothing ran in the stalled start, so
+ * the snapshot holds the Thread's latest files.
+ */
+export interface OrbHandover {
+  readonly instance: CloudflareContainerInstance;
+  readonly createdAt: number;
+  readonly idleDeadline: number;
+  readonly snapshot: NonNullable<OrbWorkspaceState["snapshot"]>;
+  /** The handing object's place in the Thread's line: 0 for the first. */
+  readonly generation: number;
+}
 
 export interface OrbExecOptions {
   readonly cwd?: string;
@@ -335,6 +375,18 @@ const READY_TIMEOUT_MS = 90_000;
  */
 export const ORB_START_LIMIT_MS = 300_000;
 /**
+ * A wake's restore that has not answered in this long has stalled (#1956),
+ * when Core asks for a start-over (`startOver`): the object retires, and
+ * Core restores the same snapshot in a new container object. On
+ * production a stalled restore never ran a container at all (Cloudflare's
+ * instance list showed none), Cloudflare dropped it after 7 to 10 minutes,
+ * and a new restore of the same snapshot answered in 2 to 4 s; 95% of
+ * healthy wakes answer within 5 s.
+ */
+export const ORB_START_STALL_MS = 45_000;
+/** A retired object asks Cloudflare to stop its stalled container this often. */
+const RETIRED_STOP_RETRY_MS = 60_000;
+/**
  * A start's container may read as not running for a moment after
  * `start()`; only past this does a stopped container end the wait.
  */
@@ -360,6 +412,18 @@ const TIMEOUT_BACKSTOP_MS = 15_000;
 const SIGKILL = 9;
 
 /** The image user (`user`, uid 1000) and the environment E2B gives commands. */
+/** A start with a stall budget that did not answer within it. */
+class StartStalled extends Error {
+  constructor(readonly waitedMs: number) {
+    super(`Orb container start stalled after ${Math.round(waitedMs / 1000)} s`);
+  }
+}
+
+/** A readiness wait that ran out, as opposed to a container that stopped. */
+const timedOut = (cause: unknown) =>
+  cause instanceof Error &&
+  /Orb container \w+ timed out after/.test(cause.message);
+
 const BASE_ENVIRONMENT = {
   HOME: "/home/user",
   USER: "user",
@@ -477,6 +541,12 @@ export interface OrbContainerControllerInput {
   readonly sandboxId: string;
   /** Answers the entrypoint's stop notice by calling `stopping`. */
   readonly stopNotice?: () => Fetcher;
+  /**
+   * Answers every request from a retired object's container with a
+   * refusal, so a stalled container that comes up late never reaches Core
+   * (#1956).
+   */
+  readonly retiredEgress?: () => Fetcher;
   readonly now?: () => number;
 }
 
@@ -490,6 +560,7 @@ export class OrbContainerController {
   readonly #image: () => string | undefined;
   readonly #sandboxId: string;
   readonly #stopNotice: (() => Fetcher) | undefined;
+  readonly #retiredEgress: (() => Fetcher) | undefined;
   readonly #now: () => number;
   /** This object is stopping the container itself; a stop notice is moot. */
   #stoppingItself = false;
@@ -515,6 +586,7 @@ export class OrbContainerController {
     this.#image = input.image;
     this.#sandboxId = input.sandboxId;
     this.#stopNotice = input.stopNotice;
+    this.#retiredEgress = input.retiredEgress;
     this.#now = input.now ?? Date.now;
   }
 
@@ -758,6 +830,8 @@ export class OrbContainerController {
     idleMs: number,
     fresh = false,
     lockWaitMs = 0,
+    /** Ends the wait early with `StartStalled` (Core's start-over, #1956). */
+    stallMs?: number,
   ): Promise<"paused" | "created"> {
     const now = this.#now();
     const snapshot = state.snapshot;
@@ -778,7 +852,13 @@ export class OrbContainerController {
     };
     orbContainerLogger.info("Orb container start requested.", details);
     try {
-      const residency = await this.#startContainer(state, idleMs, fresh, now);
+      const residency = await this.#startContainer(
+        state,
+        idleMs,
+        fresh,
+        now,
+        stallMs,
+      );
       orbContainerLogger.info("Orb container started.", {
         ...details,
         outcome: "started",
@@ -786,6 +866,15 @@ export class OrbContainerController {
       });
       return residency;
     } catch (cause) {
+      if (cause instanceof StartStalled) {
+        orbContainerLogger.warn("Orb container start stalled.", {
+          ...details,
+          outcome: "stalled",
+          durationMs: this.#now() - now,
+          running: this.#container.running,
+        });
+        throw cause;
+      }
       orbContainerLogger.error("Orb container start failed.", {
         ...details,
         outcome: "error",
@@ -801,6 +890,7 @@ export class OrbContainerController {
     idleMs: number,
     fresh: boolean,
     now: number,
+    stallMs?: number,
   ): Promise<"paused" | "created"> {
     const options = this.#startOptions(state);
     if (state.snapshot === undefined && !fresh)
@@ -813,7 +903,7 @@ export class OrbContainerController {
     this.#neverReady = true;
     await this.#save({ ...state, starting: now });
     this.#container.start(options);
-    await this.#waitReady("start", ORB_START_LIMIT_MS);
+    await this.#waitWithin(stallMs, now);
     await this.#started(state, idleMs, now);
     return state.snapshot === undefined ? "created" : "paused";
   }
@@ -829,12 +919,16 @@ export class OrbContainerController {
     operation: string,
     /** Whether a start from the image may replace it (Core's activation). */
     mayReset: boolean,
+    /** Ends the wait early with `StartStalled` (Core's start-over, #1956). */
+    stallMs?: number,
   ): Promise<"paused" | "created"> {
     const startedAt = state.starting ?? this.#now();
     // A start that already had a whole limit may never answer: ask
     // Cloudflare to stop it, briefly, and start again if it did. Nothing
-    // ran in it, so the same snapshot (or the image) starts over.
+    // ran in it, so the same snapshot (or the image) starts over. With a
+    // stall budget, Core starts it over in a new container instead.
     if (
+      stallMs === undefined &&
       this.#now() - startedAt >= ORB_START_LIMIT_MS &&
       (state.snapshot !== undefined || mayReset)
     ) {
@@ -861,8 +955,9 @@ export class OrbContainerController {
     );
     const waitedFrom = this.#now();
     try {
-      await this.#waitReady("start", ORB_START_LIMIT_MS);
+      await this.#waitWithin(stallMs, startedAt);
     } catch (cause) {
+      if (cause instanceof StartStalled) throw cause;
       orbContainerLogger.error("Orb container start is still not ready.", {
         ...details,
         outcome: "error",
@@ -878,6 +973,27 @@ export class OrbContainerController {
     });
     await this.#started(state, idleMs, startedAt);
     return state.snapshot === undefined ? "created" : "paused";
+  }
+
+  /**
+   * Waits for the start that began at `startedAt`: up to the limit, or,
+   * with a stall budget, until `startedAt + stallMs`, after which it throws
+   * `StartStalled`. A container that stopped meanwhile still fails as one
+   * that is not running, which the next call starts again.
+   */
+  async #waitWithin(stallMs: number | undefined, startedAt: number) {
+    if (stallMs === undefined) {
+      await this.#waitReady("start", ORB_START_LIMIT_MS);
+      return;
+    }
+    const left = startedAt + stallMs - this.#now();
+    if (left <= 0) throw new StartStalled(this.#now() - startedAt);
+    try {
+      await this.#waitReady("start", left);
+    } catch (cause) {
+      if (timedOut(cause)) throw new StartStalled(this.#now() - startedAt);
+      throw cause;
+    }
   }
 
   /** A start answered: arm the container, and record it active. */
@@ -957,6 +1073,13 @@ export class OrbContainerController {
      * allowed, as for a Core from before this option.
      */
     readonly allowReset?: boolean;
+    /**
+     * Core starts a stalled wake over in a new container object (#1956):
+     * a wake whose restore has not answered within `ORB_START_STALL_MS`
+     * retires this object and answers `stalled` with its snapshot. Unset,
+     * as from a Core before it, waits up to `ORB_START_LIMIT_MS`.
+     */
+    readonly startOver?: boolean;
   }): Promise<OrbOpenResult> {
     const requestedAt = this.#now();
     return this.#exclusive(async () => {
@@ -977,6 +1100,13 @@ export class OrbContainerController {
         await this.#save(state);
       }
       if (state.status === "destroyed") return { kind: "destroyed" };
+      // Already handed over: Core finishes the move (it repins its record).
+      if (state.retired !== undefined && state.snapshot !== undefined)
+        return {
+          kind: "stalled",
+          handover: this.#handover(state),
+          earlier: true,
+        };
       // Core opens only an active Thread's Orb: one asked for after an
       // archive's stop means the Thread was restored, so the stop is off.
       // An open already waiting when the archive asked leaves it.
@@ -1009,19 +1139,36 @@ export class OrbContainerController {
           ...(await this.#tellDiskRelief(input.allowReset === true)),
         };
       }
+      // Only a wake (a snapshot to restore) is started over elsewhere.
+      const stallMs =
+        input.startOver === true && !fresh && state.snapshot !== undefined
+          ? ORB_START_STALL_MS
+          : undefined;
       let residency: "paused" | "created";
-      if (this.#container.running)
-        // Running but not usable: a start that has not answered yet.
-        residency = await this.#awaitStart(
-          state,
-          input.idleMs,
-          "open",
-          input.allowReset !== false,
-        );
-      else {
-        if (!fresh && input.allowReset === false)
-          this.#refuseReset(state, "open");
-        residency = await this.#start(state, input.idleMs, fresh, lockWaitMs);
+      try {
+        if (this.#container.running)
+          // Running but not usable: a start that has not answered yet.
+          residency = await this.#awaitStart(
+            state,
+            input.idleMs,
+            "open",
+            input.allowReset !== false,
+            stallMs,
+          );
+        else {
+          if (!fresh && input.allowReset === false)
+            this.#refuseReset(state, "open");
+          residency = await this.#start(
+            state,
+            input.idleMs,
+            fresh,
+            lockWaitMs,
+            stallMs,
+          );
+        }
+      } catch (cause) {
+        if (!(cause instanceof StartStalled)) throw cause;
+        return await this.#retire(state, cause.waitedMs);
       }
       const started = await this.#load();
       return {
@@ -1034,6 +1181,135 @@ export class OrbContainerController {
         ...(await this.#tellUnsavedStop(input.allowReset === true)),
         ...(await this.#tellDiskRelief(input.allowReset === true)),
       };
+    });
+  }
+
+  #handover(state: OrbWorkspaceState): OrbHandover {
+    const snapshot = state.snapshot;
+    if (snapshot === undefined) throw failure("handover", "no snapshot");
+    return {
+      instance: state.instance,
+      createdAt: state.createdAt,
+      idleDeadline: state.idleDeadline,
+      snapshot,
+      generation: state.generation ?? 0,
+    };
+  }
+
+  /**
+   * Hands a stalled wake's snapshot over (#1956): this object never starts
+   * again, its stalled container is cut off from the network, so one that
+   * comes up late can never reach Core, and it is stopped as soon as
+   * Cloudflare lets it. Under the lifecycle lock.
+   */
+  async #retire(
+    state: OrbWorkspaceState,
+    waitedMs: number,
+  ): Promise<OrbOpenResult> {
+    const now = this.#now();
+    const { starting: _starting, ...current } = (await this.#load()) ?? state;
+    const retired: OrbWorkspaceState = {
+      ...current,
+      status: "paused",
+      retired: { at: now, waitedMs },
+    };
+    await this.#save(retired);
+    orbContainerLogger.warn(
+      "Orb container wake stalled; its snapshot moves to a new container.",
+      {
+        event: "orb_container_retired",
+        sandboxId: this.#sandboxId,
+        generation: retired.generation ?? 0,
+        waitedMs,
+        running: this.#container.running,
+        snapshotId: retired.snapshot?.id,
+        snapshotAgeMs:
+          retired.snapshot === undefined
+            ? undefined
+            : now - retired.snapshot.refreshedAt,
+      },
+    );
+    await this.#lockOut();
+    await this.#schedule(now + RETIRED_STOP_RETRY_MS);
+    return { kind: "stalled", handover: this.#handover(retired) };
+  }
+
+  /**
+   * Cuts the stalled container off from the network and asks Cloudflare to
+   * stop it. Each step is bounded and logged, never awaited past
+   * `ABANDON_START_MS`: a stalled container may not answer at all.
+   */
+  async #lockOut() {
+    await this.#cutOff();
+    void this.#container.destroy().catch(() => undefined);
+  }
+
+  /**
+   * Routes all of the container's outbound HTTP and HTTPS to the retired
+   * egress, which answers 410. Made again while a retired object's container
+   * still runs: a cut-off may not land on a container Cloudflare had not
+   * placed yet.
+   */
+  async #cutOff() {
+    const egress = this.#retiredEgress?.();
+    const step = async (name: string, run: () => Promise<void>) => {
+      const outcome = await within(
+        run().then(
+          () => "ok" as const,
+          (cause: unknown) =>
+            cause instanceof Error ? cause.message.slice(0, 200) : "failed",
+        ),
+        ABANDON_START_MS,
+      );
+      orbContainerLogger.info("Orb container lock-out step.", {
+        event: "orb_container_lock_out",
+        sandboxId: this.#sandboxId,
+        step: name,
+        outcome: outcome ?? "timed_out",
+      });
+    };
+    if (egress !== undefined) {
+      await step("https", () =>
+        this.#container.interceptOutboundHttps("*", egress),
+      );
+      await step("http", () =>
+        this.#container.interceptAllOutboundHttp(egress),
+      );
+    }
+  }
+
+  /**
+   * Takes over a snapshot from the Thread's previous container object,
+   * whose wake stalled (#1956). The next `open` restores it here. Taking the
+   * same handover again changes nothing.
+   */
+  adopt(handover: OrbHandover): Promise<"adopted" | "conflict"> {
+    return this.#exclusive(async () => {
+      const generation = handover.generation + 1;
+      const state = await this.#load();
+      if (state !== undefined)
+        return state.generation === generation ? "adopted" : "conflict";
+      await this.#save({
+        version: 1,
+        instance: handover.instance,
+        createdAt: handover.createdAt,
+        status: "paused",
+        idleDeadline: handover.idleDeadline,
+        snapshot: handover.snapshot,
+        generation,
+      });
+      // The snapshot's refresh is this object's now, even if nothing opens
+      // it: the retired object never refreshes again.
+      await this.#schedule(
+        handover.snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS,
+      );
+      orbContainerLogger.info("Orb container took over a stalled wake.", {
+        event: "orb_container_adopted",
+        sandboxId: this.#sandboxId,
+        generation,
+        snapshotId: handover.snapshot.id,
+      });
+      return "adopted";
     });
   }
 
@@ -1303,15 +1579,27 @@ export class OrbContainerController {
   async status(): Promise<{
     readonly running: boolean;
     readonly status: OrbWorkspaceState["status"] | "missing";
+    /**
+     * Its wake stalled and the Thread's Orb moved on (#1956): the generation
+     * of the object that took over, `<thread>~<movedTo>`.
+     */
+    readonly movedTo?: number;
   }> {
     const state = await this.#load();
+    if (state?.retired !== undefined)
+      return {
+        running: false,
+        status: state.status,
+        movedTo: (state.generation ?? 0) + 1,
+      };
     return {
       // A start that has not answered is not running yet: Core announces
       // a wake for it, Retry included (#1956).
       running:
         this.#container.running &&
         !this.#neverReady &&
-        state?.starting === undefined,
+        state?.starting === undefined &&
+        state?.retired === undefined,
       status: state?.status ?? "missing",
     };
   }
@@ -1320,7 +1608,12 @@ export class OrbContainerController {
   async setIdleDeadline(durationMs: number): Promise<void> {
     await this.#afterRestart();
     const state = await this.#load();
-    if (state === undefined || state.status === "destroyed") return;
+    if (
+      state === undefined ||
+      state.status === "destroyed" ||
+      state.retired !== undefined
+    )
+      return;
     await this.#save({ ...state, idleDeadline: this.#now() + durationMs });
     if (this.#container.running) await this.#armInactivity(durationMs);
   }
@@ -1341,6 +1634,12 @@ export class OrbContainerController {
         if (state === undefined) throw failure("use", "no workspace");
         if (state.status === "destroyed")
           throw failure("use", "the workspace was destroyed");
+        // Text the run-failure classifier reads as a platform failure: the
+        // next attempt reaches the Thread's new container object.
+        if (state.retired !== undefined)
+          throw new Error(
+            "Orb container is not running: the Thread's Orb moved to a new container",
+          );
         const idleMs = Math.max(
           ORB_HEARTBEAT_MS,
           state.idleDeadline - this.#now(),
@@ -1684,6 +1983,7 @@ export class OrbContainerController {
         await this.#save({ ...stopDone(state), status: "paused" });
       return { kind: "stopped" };
     }
+    if (state.retired !== undefined) return { kind: "stopped" };
     if (this.#unanswered(state)) {
       await this.#stopUnstarted(state, "its start had not answered");
       return { kind: "stopped" };
@@ -1856,6 +2156,8 @@ export class OrbContainerController {
       if (state === undefined) throw failure("recover", "no workspace");
       if (state.status === "destroyed")
         throw failure("recover", "the workspace was destroyed");
+      if (state.retired !== undefined)
+        throw failure("recover", "the Orb moved to a new container");
       const startedAt = this.#now();
       let current = state;
       let files: "kept" | "earlier" | "lost";
@@ -1984,7 +2286,14 @@ export class OrbContainerController {
         snapshotBytes: refreshed.size,
       });
     } finally {
-      if (this.#container.running) await this.#destroyContainer();
+      // A refresh's restore can stall as a wake's does: never wait on its
+      // stop for long, and never hand its sleeping container (no dxd, no
+      // Internet) to a wake. A wake treats it as a start that has not
+      // answered, and starts over elsewhere (#1956).
+      if (this.#container.running) {
+        await this.#stopBriefly();
+        if (this.#container.running) this.#neverReady = true;
+      }
     }
   }
 
@@ -2057,6 +2366,10 @@ export class OrbContainerController {
       const state = await this.#load();
       if (state === undefined || state.status === "destroyed") return;
       const now = this.#now();
+      if (state.retired !== undefined) {
+        await this.#retiredAlarm(state, state.retired, now);
+        return;
+      }
       if (this.#container.running) {
         if (state.pendingStop !== undefined) {
           await this.#retryPendingStop(state, state.pendingStop);
@@ -2102,6 +2415,31 @@ export class OrbContainerController {
   }
 
   /**
+   * A retired object's alarm: asks Cloudflare to stop the stalled container
+   * until it has, then logs how long it lingered and stops its alarms.
+   */
+  async #retiredAlarm(
+    state: OrbWorkspaceState,
+    retired: NonNullable<OrbWorkspaceState["retired"]>,
+    now: number,
+  ) {
+    if (this.#container.running) {
+      await this.#cutOff();
+      await this.#stopBriefly();
+      if (this.#container.running) {
+        await this.#schedule(now + RETIRED_STOP_RETRY_MS);
+        return;
+      }
+    }
+    orbContainerLogger.info("Retired Orb container stopped.", {
+      event: "orb_container_retired_stopped",
+      sandboxId: this.#sandboxId,
+      generation: state.generation ?? 0,
+      lingeredMs: now - retired.at,
+    });
+  }
+
+  /**
    * After this object restarts with its container still running, re-arm the
    * inactivity timeout and the heartbeat. It runs beside the object's calls,
    * never blocking them: `status` answers at once, and lifecycle and
@@ -2139,6 +2477,16 @@ export class OrbContainerController {
 
   async #resume() {
     const state = await this.#load();
+    if (state?.retired !== undefined) {
+      // Its stalled container is never used: cut it off again, and keep
+      // asking it to stop.
+      this.#neverReady = true;
+      await this.#cutOff();
+      const alarm = await this.#storage.getAlarm();
+      if (alarm === null || alarm > this.#now() + RETIRED_STOP_RETRY_MS)
+        await this.#schedule(this.#now() + RETIRED_STOP_RETRY_MS);
+      return;
+    }
     // A start that had not answered before this object restarted.
     if (state?.starting !== undefined) this.#neverReady = true;
     await this.#armInactivity(

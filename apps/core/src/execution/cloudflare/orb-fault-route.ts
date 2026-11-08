@@ -11,7 +11,8 @@ import type { OrbFaultPlan } from "./orb-container-faults.js";
  * Anywhere else, and for anyone but the Thread's owner, it is not found.
  *
  *   POST   /v1/threads/:threadId/orb/fault
- *          { "startDelaySeconds": 150, "destroyHangs": true, "minutes": 30 }
+ *          { "startDelaySeconds": 150, "destroyHangs": true, "minutes": 30,
+ *            "dropAfterSeconds": 540, "starts": 1 }
  *   DELETE /v1/threads/:threadId/orb/fault
  */
 const FaultRequest = Schema.Struct({
@@ -20,6 +21,12 @@ const FaultRequest = Schema.Struct({
   ),
   destroyHangs: Schema.Boolean,
   minutes: Schema.Finite.check(Schema.isBetween({ minimum: 1, maximum: 240 })),
+  dropAfterSeconds: Schema.optional(
+    Schema.Finite.check(Schema.isBetween({ minimum: 1, maximum: 3_600 })),
+  ),
+  starts: Schema.optional(
+    Schema.Finite.check(Schema.isBetween({ minimum: 1, maximum: 100 })),
+  ),
 });
 
 interface FaultTarget {
@@ -54,6 +61,12 @@ export const threadOrbFaultRoutes = new Hono<AppEnv>()
     const plan: OrbFaultPlan = {
       startDelayMs: Math.round(request.value.startDelaySeconds * 1000),
       destroyHangs: request.value.destroyHangs,
+      ...(request.value.dropAfterSeconds === undefined
+        ? {}
+        : { dropAfterMs: Math.round(request.value.dropAfterSeconds * 1000) }),
+      ...(request.value.starts === undefined
+        ? {}
+        : { starts: Math.round(request.value.starts) }),
       until: Date.now() + Math.round(request.value.minutes * 60_000),
     };
     await orb.injectFault(plan);

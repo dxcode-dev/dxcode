@@ -1383,9 +1383,13 @@ const validateWorkerProps = (
         (representation === "persisted" || representation === "prior") &&
         name === preOrbProviderPreparationBindingOmission
       ) &&
+      // A destroy plan replays the recorded props as desired, so a stage
+      // deployed before the coordinator also lacks it there.
       !(
         !current &&
-        (representation === "persisted" || representation === "prior") &&
+        (representation === "persisted" ||
+          representation === "prior" ||
+          allowDestroyWorkerBindingOmissions) &&
         name === preBitbucketTokenCoordinatorBindingOmission
       ) &&
       !(

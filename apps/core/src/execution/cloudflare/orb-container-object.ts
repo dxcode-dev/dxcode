@@ -4,6 +4,7 @@ import {
   OrbContainerController,
   type OrbContainerRuntime,
   type OrbExecOptions,
+  type OrbHandover,
 } from "./orb-container.js";
 import {
   faultyContainer,
@@ -43,6 +44,21 @@ export class OrbStopNotice extends WorkerEntrypoint<
 }
 
 /**
+ * Refuses every request from a retired container object's container: its
+ * wake stalled and its snapshot moved to a new object, so a stalled
+ * container that comes up late must never reach Core (#1956). The
+ * object's HTTP and HTTPS intercepts route here.
+ */
+export class OrbRetiredEgress extends WorkerEntrypoint {
+  override async fetch(request: Request) {
+    await request.body?.cancel();
+    return new Response("This Orb moved to a new container.", {
+      status: 410,
+    });
+  }
+}
+
+/**
  * The Durable Object class that owns one Thread's Cloudflare container. It
  * runs in the Orb Worker (`orb-worker.ts`), which binds it to a container
  * application with the `durable_object` scheduling policy; Core binds the
@@ -73,6 +89,15 @@ export class OrbContainerObject extends DurableObject {
       storage: ctx.storage,
       image: () => container.images?.[ORB_IMAGE_NAME],
       sandboxId: ctx.id.toString(),
+      // The Worker exports `OrbRetiredEgress` beside this class.
+      retiredEgress: () =>
+        (
+          ctx.exports as unknown as {
+            readonly OrbRetiredEgress: (options: {
+              readonly props: Record<string, never>;
+            }) => Fetcher;
+          }
+        ).OrbRetiredEgress({ props: {} }),
       // The Worker exports `OrbStopNotice` beside this class.
       stopNotice: () =>
         (
@@ -99,6 +124,10 @@ export class OrbContainerObject extends DurableObject {
 
   status() {
     return this.#controller.status();
+  }
+
+  adopt(handover: OrbHandover) {
+    return this.#controller.adopt(handover);
   }
 
   setIdleDeadline(durationMs: number) {

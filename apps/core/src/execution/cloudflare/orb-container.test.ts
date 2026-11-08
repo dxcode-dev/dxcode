@@ -84,6 +84,8 @@ const fakeContainer = (handler: ExecHandler = () => ({})) => {
     }),
     setInactivityTimeout: vi.fn(async () => undefined),
     interceptOutboundHttp: vi.fn(async () => undefined),
+    interceptOutboundHttps: vi.fn(async () => undefined),
+    interceptAllOutboundHttp: vi.fn(async () => undefined),
   } satisfies OrbContainerRuntime & { running: boolean };
   return { container, starts, execs };
 };
@@ -115,12 +117,14 @@ const setup = (handler?: ExecHandler, clock?: () => number) => {
   const fake = fakeContainer(handler);
   const storage = fakeStorage();
   const stopNotice = { fetch: vi.fn() } as unknown as Fetcher;
+  const retiredEgress = { fetch: vi.fn() } as unknown as Fetcher;
   const controller = new OrbContainerController({
     container: fake.container,
     storage,
     image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
     sandboxId: "a".repeat(64),
     stopNotice: () => stopNotice,
+    retiredEgress: () => retiredEgress,
     now: clock ?? (() => now),
   });
   return {
@@ -1389,6 +1393,258 @@ describe("Orb container object", () => {
       await vi.advanceTimersByTimeAsync(1_000);
       await expect(again).resolves.toMatchObject({ kind: "ready" });
       expect(orb.starts.slice(1)).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Start-over (#1956 follow-up). On production a stalled restore never ran
+  // a container, Cloudflare dropped it after 7 to 10 minutes, and a new
+  // restore of the same snapshot answered in 2 to 4 s. Ways it could go
+  // wrong:
+  // - a stalled wake is not handed over, or the stalled object snapshots or
+  //   restarts its container;
+  // - the stalled container is not cut off from the network or not stopped;
+  // - a retired object runs a command or starts again;
+  // - a Core that does not ask for it (no `startOver`) sees anything new;
+  // - a new workspace (no snapshot) or a wake that answers within the budget
+  //   is handed over;
+  // - the next object does not restore the same snapshot, or adopting twice
+  //   or onto a used object does the wrong thing.
+  const stalledWake = async () => {
+    const orb = await pausedOrb();
+    slowProbes(orb.container, () => Date.now() + 36_000_000);
+    orb.container.destroy.mockImplementation(() => new Promise(() => {}));
+    return orb;
+  };
+
+  it("hands a stalled wake over after 45 s: retires, cuts its container off, asks it to stop, and answers stalled with the snapshot (#1956)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await stalledWake();
+      const startedAt = Date.now();
+      let opened: unknown;
+      void orb.controller.open({ ...wake, startOver: true }).then((value) => {
+        opened = value;
+      });
+      await vi.advanceTimersByTimeAsync(44_000);
+      expect(opened).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(opened).toEqual({
+        kind: "stalled",
+        handover: {
+          instance: "standard-2",
+          createdAt: expect.any(Number),
+          idleDeadline: expect.any(Number),
+          snapshot: { ...orb.stored, refreshedAt: orb.stored.refreshedAt },
+          generation: 0,
+        },
+      });
+      // Nothing snapshotted or restarted the stalled container.
+      expect(orb.container.snapshotContainer).toHaveBeenCalledTimes(1);
+      expect(orb.starts.slice(1)).toHaveLength(1);
+      expect(orb.container.interceptOutboundHttps).toHaveBeenCalledWith(
+        "*",
+        expect.anything(),
+      );
+      expect(orb.container.interceptAllOutboundHttp).toHaveBeenCalled();
+      expect(orb.container.destroy).toHaveBeenCalled();
+      const stored = (await orb.storage.get("workspace")) as {
+        retired?: { at: number; waitedMs: number };
+        snapshot: unknown;
+      };
+      expect(stored.retired?.waitedMs).toBeGreaterThanOrEqual(45_000);
+      expect(stored.retired?.at).toBeGreaterThanOrEqual(startedAt + 45_000);
+      expect(stored.snapshot).toEqual(orb.stored);
+      // A later open gets the same handover; a command never runs here.
+      await expect(
+        orb.controller.open({ ...wake, startOver: true }),
+      ).resolves.toMatchObject({ kind: "stalled", earlier: true });
+      const ran = orb.controller.exec("echo hi").catch((cause) => cause);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const failure = (await ran) as Error;
+      expect(failure).toBeInstanceOf(Error);
+      expect(classifyRunFailure({ message: failure.message })).toMatchObject({
+        class: "platform",
+        retryable: true,
+      });
+      expect(orb.starts.slice(1)).toHaveLength(1);
+      // Core follows it to `<thread>~1`.
+      await expect(orb.controller.status()).resolves.toEqual({
+        running: false,
+        status: "paused",
+        movedTo: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a retired object stops its stalled container once Cloudflare lets it, then stops asking (#1956)", async () => {
+    vi.useFakeTimers();
+    try {
+      const logged = captureLogs();
+      const orb = await stalledWake();
+      const opened = orb.controller.open({ ...wake, startOver: true });
+      await vi.advanceTimersByTimeAsync(51_000);
+      await expect(opened).resolves.toMatchObject({ kind: "stalled" });
+      // Still running: the alarm asks again later.
+      const first = orb.controller.alarm();
+      await vi.advanceTimersByTimeAsync(6_000);
+      await first;
+      expect(orb.container.running).toBe(true);
+      expect(orb.storage.alarm()).not.toBeNull();
+      // A cut-off that did not land while the container was unplaced is
+      // made again.
+      expect(orb.container.interceptOutboundHttps).toHaveBeenCalledTimes(2);
+      expect(orb.container.interceptAllOutboundHttp).toHaveBeenCalledTimes(2);
+      // Cloudflare now confirms the stop.
+      orb.container.destroy.mockImplementation(async () => {
+        orb.container.running = false;
+      });
+      await orb.controller.alarm();
+      expect(orb.container.running).toBe(false);
+      expect(
+        logged.some((line) => line.event === "orb_container_retired_stopped"),
+      ).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("without startOver, a wake keeps waiting as before; a new workspace and a wake within 45 s are never handed over (#1956)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await stalledWake();
+      const old = orb.controller.open(wake).catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(60_000);
+      const stored = (await orb.storage.get("workspace")) as {
+        retired?: unknown;
+      };
+      expect(stored.retired).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(250_000);
+      expect(await old).toBeInstanceOf(Error);
+
+      const fresh = setup(undefined, () => Date.now());
+      slowProbes(fresh.container, () => Date.now() + 60_000);
+      const created = fresh.controller.open({ ...create, startOver: true });
+      await vi.advanceTimersByTimeAsync(61_000);
+      await expect(created).resolves.toMatchObject({
+        kind: "ready",
+        residency: "created",
+      });
+
+      const quick = await pausedOrb();
+      const wokeAt = Date.now();
+      slowProbes(quick.container, () => wokeAt + 30_000);
+      const woken = quick.controller.open({ ...wake, startOver: true });
+      await vi.advanceTimersByTimeAsync(31_000);
+      await expect(woken).resolves.toMatchObject({
+        kind: "ready",
+        residency: "paused",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the next object adopts the handover once and restores the same snapshot (#1956)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await stalledWake();
+      const opened = orb.controller.open({ ...wake, startOver: true });
+      await vi.advanceTimersByTimeAsync(51_000);
+      const result = (await opened) as Extract<
+        Awaited<ReturnType<typeof orb.controller.open>>,
+        { kind: "stalled" }
+      >;
+      const next = setup(undefined, () => Date.now());
+      await expect(next.controller.adopt(result.handover)).resolves.toBe(
+        "adopted",
+      );
+      // Its alarm keeps the snapshot alive even if nothing opens it.
+      expect(next.storage.alarm()).toBe(
+        orb.stored.refreshedAt + ORB_SNAPSHOT_REFRESH_MS,
+      );
+      await expect(next.controller.adopt(result.handover)).resolves.toBe(
+        "adopted",
+      );
+      const woken = next.controller.open({ ...wake, startOver: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(woken).resolves.toMatchObject({
+        kind: "ready",
+        residency: "paused",
+      });
+      expect(next.starts).toEqual([
+        expect.objectContaining({ containerSnapshot: { id: orb.stored.id } }),
+      ]);
+      const stored = (await next.storage.get("workspace")) as {
+        generation: number;
+      };
+      expect(stored.generation).toBe(1);
+      // An object that already holds a Thread never takes another's.
+      const used = await pausedOrb();
+      await expect(used.controller.adopt(result.handover)).resolves.toBe(
+        "conflict",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a retired object that restarts never hands its stalled container out, and cuts it off again (#1956)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await stalledWake();
+      const opened = orb.controller.open({ ...wake, startOver: true });
+      await vi.advanceTimersByTimeAsync(51_000);
+      await expect(opened).resolves.toMatchObject({ kind: "stalled" });
+      orb.container.setInactivityTimeout.mockClear();
+      const restarted = new OrbContainerController({
+        container: orb.container,
+        storage: orb.storage,
+        image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
+        sandboxId: "a".repeat(64),
+        retiredEgress: () => ({ fetch: vi.fn() }) as unknown as Fetcher,
+        now: () => Date.now(),
+      });
+      const resumed = restarted.resumeAfterRestart();
+      await vi.advanceTimersByTimeAsync(11_000);
+      await resumed;
+      expect(orb.container.interceptOutboundHttps).toHaveBeenCalledTimes(2);
+      expect(orb.container.setInactivityTimeout).not.toHaveBeenCalled();
+      const ran = restarted.exec("echo hi").catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await ran).toBeInstanceOf(Error);
+      expect(orb.execs.filter(({ argv }) => argv[0] !== "true")).toHaveLength(
+        0,
+      );
+      await restarted.setIdleDeadline(60_000);
+      expect(orb.container.setInactivityTimeout).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a snapshot refresh whose restore stalls neither holds the object nor leaves its sleeping container to be handed out (#1956)", async () => {
+    vi.useFakeTimers();
+    try {
+      const orb = await pausedOrb();
+      vi.setSystemTime(Date.now() + ORB_SNAPSHOT_REFRESH_MS + 1);
+      slowProbes(orb.container, () => Date.now() + 36_000_000);
+      orb.container.destroy.mockImplementation(() => new Promise(() => {}));
+      const refreshed = orb.controller.alarm().catch((cause) => cause);
+      await vi.advanceTimersByTimeAsync(100_000);
+      await refreshed;
+      // The next wake does not take the refresh's container for its own.
+      let woken: unknown;
+      void orb.controller.open({ ...wake, startOver: true }).then((value) => {
+        woken = value;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(woken).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(55_000);
+      expect(woken).toMatchObject({ kind: "stalled" });
     } finally {
       vi.useRealTimers();
     }

@@ -1,6 +1,6 @@
 import { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { ExecutionContext } from "../../plugins/execution/provider.js";
 import { classifyRunFailure } from "../../runtime/run-failure.js";
 
@@ -59,6 +59,15 @@ const fakeDatabase = (row: Row, lifecycle = "active") => {
             row.initialization_attempt_id = null;
             changes = 1;
           }
+        } else if (sql.includes("SET provider_sandbox_id = ?, updated_at")) {
+          if (
+            row.provider === values[3] &&
+            row.state === "initialized" &&
+            row.provider_sandbox_id === values[4]
+          ) {
+            row.provider_sandbox_id = String(values[0]);
+            changes = 1;
+          }
         } else if (sql.includes("SET state = 'lost'")) {
           if (row.provider === values[2] && row.state === "initialized") {
             row.state = "lost";
@@ -71,6 +80,15 @@ const fakeDatabase = (row: Row, lifecycle = "active") => {
   });
   return { prepare } as unknown as D1Database;
 };
+
+/** One Orb container object, for the start-over tests. */
+interface FakeObject {
+  readonly id: { readonly toString: () => string };
+  readonly open: Mock<(input: unknown) => Promise<unknown>>;
+  readonly status: Mock<() => Promise<unknown>>;
+  readonly setIdleDeadline: Mock<(durationMs: number) => Promise<void>>;
+  readonly adopt: Mock<(handover: unknown) => Promise<string>>;
+}
 
 const fakeNamespace = () => {
   const stub = {
@@ -93,6 +111,7 @@ const fakeNamespace = () => {
   };
   const namespace = {
     idFromName: vi.fn((name: string) => name),
+    idFromString: vi.fn((id: string) => id),
     get: vi.fn(() => stub),
   };
   return { namespace, stub };
@@ -271,6 +290,8 @@ describe("Cloudflare Containers Orb provider", () => {
       }),
       setInactivityTimeout: vi.fn(async () => undefined),
       interceptOutboundHttp: vi.fn(async () => undefined),
+      interceptOutboundHttps: vi.fn(async () => undefined),
+      interceptAllOutboundHttp: vi.fn(async () => undefined),
     };
     const values = new Map<string, unknown>();
     let alarm: number | null = null;
@@ -316,7 +337,11 @@ describe("Cloudflare Containers Orb provider", () => {
         delete mocks.workerEnv[key];
       Object.assign(mocks.workerEnv, {
         DB: fakeDatabase(row, lifecycle),
-        ORB_CONTAINER: { idFromName: (name: string) => name, get: () => stub },
+        ORB_CONTAINER: {
+          idFromName: (name: string) => name,
+          idFromString: (id: string) => id,
+          get: () => stub,
+        },
         // Thread storage is readable by View-only members and outlives the
         // Orb: the copy, which may hold untracked secrets, never goes there.
         DX_STORAGE: threadStorage,
@@ -639,6 +664,243 @@ describe("Cloudflare Containers Orb provider", () => {
       ),
     ).rejects.toThrow("Thread is not archived.");
     expect(active.stub.pause).not.toHaveBeenCalled();
+  });
+
+  // Start-over (#1956 follow-up). Ways Core could get it wrong: it does not
+  // move a stalled wake to `<thread>~1`, or not with the same snapshot; the
+  // handle still talks to the stalled object; a later call, an archive, or
+  // a delete reaches the stalled object instead of the one the Thread moved
+  // to; it counts following an earlier move as a new stall; it moves
+  // without bound; it changes the record, which pins the first object.
+  const objects = () => {
+    const made = new Map<string, FakeObject>();
+    const object = (name: string): FakeObject => {
+      const existing = made.get(name);
+      if (existing !== undefined) return existing;
+      const stub: FakeObject = {
+        id: { toString: () => name },
+        open: vi.fn(async () => ({
+          kind: "ready",
+          sandboxId: name,
+          residency: "created",
+        })),
+        status: vi.fn(async () => ({ running: false, status: "paused" })),
+        setIdleDeadline: vi.fn(async () => undefined),
+        adopt: vi.fn(async () => "adopted"),
+      };
+      made.set(name, stub);
+      return stub;
+    };
+    const namespace = {
+      idFromName: vi.fn((name: string) => name),
+      idFromString: vi.fn((id: string) => id),
+      get: vi.fn((name: string) => object(name)),
+    };
+    return { namespace, object };
+  };
+  const handover = (generation: number) => ({
+    instance: "standard-2" as const,
+    createdAt: 1,
+    idleDeadline: 2,
+    snapshot: { id: "snapshot-7", size: 10, refreshedAt: 3 },
+    generation,
+  });
+  const wokenRow = (sandbox: string): Row => ({
+    provider: "cloudflare",
+    state: "initialized",
+    provider_sandbox_id: sandbox,
+    initialization_attempt_id: null,
+  });
+  const bindObjects = (row: Row, lifecycle?: string) => {
+    const world = objects();
+    for (const key of Object.keys(mocks.workerEnv)) delete mocks.workerEnv[key];
+    Object.assign(mocks.workerEnv, {
+      DB: fakeDatabase(row, lifecycle),
+      ORB_CONTAINER: world.namespace,
+      DX_WORKSPACE_INACTIVITY_MS: "120000",
+    });
+    return world;
+  };
+
+  it("moves a stalled wake to the Thread's next container object with the same snapshot, and every later call follows the move (#1956)", async () => {
+    const row = wokenRow(threadId);
+    const world = bindObjects(row);
+    const first = world.object(threadId);
+    first.open
+      .mockImplementationOnce(async () => ({
+        kind: "stalled",
+        handover: handover(0),
+      }))
+      .mockImplementation(async () => ({
+        kind: "stalled",
+        handover: handover(0),
+        earlier: true,
+      }));
+    first.status.mockImplementation(async () => ({
+      running: false,
+      status: "paused",
+      movedTo: 1,
+    }));
+    const next = world.object(`${threadId}~1`);
+    next.open.mockImplementation(async () => ({
+      kind: "ready",
+      sandboxId: `${threadId}~1`,
+      residency: "paused",
+    }));
+    const handle = await cloudflareExecutionProvider.workspace.connect(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    expect(first.open).toHaveBeenCalledWith(
+      expect.objectContaining({ startOver: true }),
+    );
+    expect(next.adopt).toHaveBeenCalledWith(handover(0));
+    // The record keeps pinning the Thread's first object.
+    expect(row.provider_sandbox_id).toBe(threadId);
+    await handle.setIdleDeadline(60_000);
+    expect(next.setIdleDeadline).toHaveBeenCalledWith(60_000);
+    expect(first.setIdleDeadline).not.toHaveBeenCalled();
+    // A later wake asks the moved-to object for its residency and opens it,
+    // and following the earlier move starts nothing over.
+    const observed: string[] = [];
+    next.open.mockClear();
+    await cloudflareExecutionProvider.workspace.create(
+      context,
+      { threadId },
+      {
+        authorize: async () => undefined,
+        observeResidency: (residency) => {
+          observed.push(residency);
+        },
+      },
+    );
+    expect(observed).toEqual(["paused"]);
+    expect(next.status).toHaveBeenCalled();
+    expect(next.open).toHaveBeenCalledWith(
+      expect.objectContaining({ startOver: true }),
+    );
+    expect(first.open).toHaveBeenCalledTimes(1);
+    expect(world.object(`${threadId}~2`).adopt).not.toHaveBeenCalled();
+  });
+
+  it("moves at most twice in one open before it waits the last start out (#1956)", async () => {
+    const row = wokenRow(threadId);
+    const world = bindObjects(row);
+    world.object(threadId).open.mockImplementation(async () => ({
+      kind: "stalled",
+      handover: handover(0),
+    }));
+    world.object(`${threadId}~1`).open.mockImplementation(async () => ({
+      kind: "stalled",
+      handover: handover(1),
+    }));
+    const last = world.object(`${threadId}~2`);
+    last.open.mockImplementation(async () => ({
+      kind: "ready",
+      sandboxId: `${threadId}~2`,
+      residency: "paused",
+    }));
+    await cloudflareExecutionProvider.workspace.connect(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    // The second move's open is the last: it waits its start out.
+    expect(last.open).toHaveBeenCalledWith(
+      expect.not.objectContaining({ startOver: true }),
+    );
+    expect(world.object(`${threadId}~3`).adopt).not.toHaveBeenCalled();
+    expect(row.provider_sandbox_id).toBe(threadId);
+  });
+
+  it("archives and destroys the object the Thread moved to (#1956)", async () => {
+    const row = wokenRow(threadId);
+    const world = bindObjects(row, "archived");
+    world.object(threadId).status.mockImplementation(async () => ({
+      running: false,
+      status: "paused",
+      movedTo: 1,
+    }));
+    const next = world.object(`${threadId}~1`) as FakeObject & {
+      pause?: unknown;
+      destroy?: unknown;
+    };
+    const pause = vi.fn(async () => "paused");
+    const destroy = vi.fn(async () => undefined);
+    Object.assign(next, { pause, destroy });
+    await cloudflareExecutionProvider.workspace.release(
+      context,
+      { threadId },
+      "archive",
+    );
+    expect(pause).toHaveBeenCalled();
+    await cloudflareExecutionProvider.workspace.release(
+      context,
+      { threadId },
+      "destroy",
+    );
+    expect(destroy).toHaveBeenCalled();
+  });
+
+  it("archives and destroys the object a stalled wake moves to while the call waits on the first (#1956)", async () => {
+    // The call reads the first object's status before its wake retires, so
+    // it targets the first object; the open moves the Orb meanwhile.
+    for (const mode of ["archive", "destroy"] as const) {
+      const row = wokenRow(threadId);
+      const world = bindObjects(row, "archived");
+      const first = world.object(threadId) as FakeObject & {
+        pause?: unknown;
+        destroy?: unknown;
+      };
+      const retire = async () => {
+        first.status.mockImplementation(async () => ({
+          running: false,
+          status: "paused",
+          movedTo: 1,
+        }));
+        return mode === "archive" ? "stopped" : undefined;
+      };
+      Object.assign(first, { pause: vi.fn(retire), destroy: vi.fn(retire) });
+      const next = world.object(`${threadId}~1`) as FakeObject & {
+        pause?: unknown;
+        destroy?: unknown;
+      };
+      const pause = vi.fn(async () => "paused");
+      const destroy = vi.fn(async () => undefined);
+      Object.assign(next, { pause, destroy });
+      await cloudflareExecutionProvider.workspace.release(
+        context,
+        { threadId },
+        mode,
+      );
+      expect(mode === "archive" ? pause : destroy).toHaveBeenCalled();
+    }
+  });
+
+  it("keeps following a Thread whose Orb moved many times (#1956)", async () => {
+    const row = wokenRow(threadId);
+    const world = bindObjects(row, "archived");
+    const moves = 12;
+    for (let generation = 0; generation < moves; generation += 1) {
+      const name = generation === 0 ? threadId : `${threadId}~${generation}`;
+      world.object(name).status.mockImplementation(async () => ({
+        running: false,
+        status: "paused",
+        movedTo: generation + 1,
+      }));
+    }
+    const last = world.object(`${threadId}~${moves}`) as FakeObject & {
+      pause?: unknown;
+    };
+    const pause = vi.fn(async () => "paused");
+    Object.assign(last, { pause });
+    await cloudflareExecutionProvider.workspace.release(
+      context,
+      { threadId },
+      "archive",
+    );
+    expect(pause).toHaveBeenCalled();
   });
 
   it("replaces a stub whose Durable Object reset and retries an idempotent read", async () => {

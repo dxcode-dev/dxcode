@@ -28,6 +28,7 @@ import type { OrbContainerObject } from "./orb-container-object.js";
 
 export {
   OrbContainerObject,
+  OrbRetiredEgress,
   OrbStopNotice,
 } from "./orb-container-object.js";
 

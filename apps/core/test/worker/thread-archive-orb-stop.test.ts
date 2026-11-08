@@ -142,6 +142,8 @@ const orbWorld = () => {
     }),
     setInactivityTimeout: vi.fn(async () => undefined),
     interceptOutboundHttp: vi.fn(async () => undefined),
+    interceptOutboundHttps: vi.fn(async () => undefined),
+    interceptAllOutboundHttp: vi.fn(async () => undefined),
   };
   const values = new Map<string, unknown>();
   let alarm: number | null = null;
@@ -210,10 +212,15 @@ beforeAll(() => {
   Object.assign(workerEnv as Record<string, unknown>, {
     ORB_CONTAINER: {
       idFromName: (name: string) => name,
+      // The record pins the object's ID, which here is its name.
+      idFromString: (id: string) => id,
       get: (name: string) => {
         const world = worlds.get(name);
         if (world === undefined) throw new Error(`No Orb for ${name}.`);
-        return world.stub;
+        return new Proxy(world.stub, {
+          get: (target, key) =>
+            key === "id" ? { toString: () => name } : Reflect.get(target, key),
+        });
       },
     },
     DX_WORKSPACE_INACTIVITY_MS: "300000",

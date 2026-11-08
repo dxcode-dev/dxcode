@@ -29,7 +29,8 @@ var ACCOUNT_ORB_METHODS = [
 	"destroy",
 	"recover",
 	"readRescue",
-	"clearRescue"
+	"clearRescue",
+	"adopt"
 ];
 var isAccountOrbMethod = (value) => typeof value === "string" && ACCOUNT_ORB_METHODS.includes(value);
 var toBase64 = (bytes) => {
@@ -2614,6 +2615,18 @@ var READY_TIMEOUT_MS = 9e4;
 */
 var ORB_START_LIMIT_MS = 3e5;
 /**
+* A wake's restore that has not answered in this long has stalled (#1956),
+* when Core asks for a start-over (`startOver`): the object retires, and
+* Core restores the same snapshot in a new container object. On
+* production a stalled restore never ran a container at all (Cloudflare's
+* instance list showed none), Cloudflare dropped it after 7 to 10 minutes,
+* and a new restore of the same snapshot answered in 2 to 4 s; 95% of
+* healthy wakes answer within 5 s.
+*/
+var ORB_START_STALL_MS = 45e3;
+/** A retired object asks Cloudflare to stop its stalled container this often. */
+var RETIRED_STOP_RETRY_MS = 6e4;
+/**
 * A start's container may read as not running for a moment after
 * `start()`; only past this does a stopped container end the wait.
 */
@@ -2638,6 +2651,16 @@ var OUTPUT_DRAIN_MS = 250;
 var TIMEOUT_BACKSTOP_MS = 15e3;
 var SIGKILL = 9;
 /** The image user (`user`, uid 1000) and the environment E2B gives commands. */
+/** A start with a stall budget that did not answer within it. */
+var StartStalled = class extends Error {
+	waitedMs;
+	constructor(waitedMs) {
+		super(`Orb container start stalled after ${Math.round(waitedMs / 1e3)} s`);
+		this.waitedMs = waitedMs;
+	}
+};
+/** A readiness wait that ran out, as opposed to a container that stopped. */
+var timedOut = (cause) => cause instanceof Error && /Orb container \w+ timed out after/.test(cause.message);
 var BASE_ENVIRONMENT = {
 	HOME: "/home/user",
 	USER: "user",
@@ -2729,6 +2752,7 @@ var OrbContainerController = class {
 	#image;
 	#sandboxId;
 	#stopNotice;
+	#retiredEgress;
 	#now;
 	/** This object is stopping the container itself; a stop notice is moot. */
 	#stoppingItself = false;
@@ -2753,6 +2777,7 @@ var OrbContainerController = class {
 		this.#image = input.image;
 		this.#sandboxId = input.sandboxId;
 		this.#stopNotice = input.stopNotice;
+		this.#retiredEgress = input.retiredEgress;
 		this.#now = input.now ?? Date.now;
 	}
 	/** Stops the container on this object's own account (pause, destroy). */
@@ -2908,7 +2933,7 @@ var OrbContainerController = class {
 	* Starts the stopped container from its latest snapshot, or from the
 	* image when it never paused. Runs under the lifecycle lock.
 	*/
-	async #start(state, idleMs, fresh = false, lockWaitMs = 0) {
+	async #start(state, idleMs, fresh = false, lockWaitMs = 0, stallMs) {
 		const now = this.#now();
 		const snapshot = state.snapshot;
 		const details = {
@@ -2926,7 +2951,7 @@ var OrbContainerController = class {
 		};
 		orbContainerLogger.info("Orb container start requested.", details);
 		try {
-			const residency = await this.#startContainer(state, idleMs, fresh, now);
+			const residency = await this.#startContainer(state, idleMs, fresh, now, stallMs);
 			orbContainerLogger.info("Orb container started.", {
 				...details,
 				outcome: "started",
@@ -2934,6 +2959,15 @@ var OrbContainerController = class {
 			});
 			return residency;
 		} catch (cause) {
+			if (cause instanceof StartStalled) {
+				orbContainerLogger.warn("Orb container start stalled.", {
+					...details,
+					outcome: "stalled",
+					durationMs: this.#now() - now,
+					running: this.#container.running
+				});
+				throw cause;
+			}
 			orbContainerLogger.error("Orb container start failed.", {
 				...details,
 				outcome: "error",
@@ -2943,7 +2977,7 @@ var OrbContainerController = class {
 			throw cause;
 		}
 	}
-	async #startContainer(state, idleMs, fresh, now) {
+	async #startContainer(state, idleMs, fresh, now, stallMs) {
 		const options = this.#startOptions(state);
 		if (state.snapshot === void 0 && !fresh) orbContainerLogger.warn("Orb container restarted without a snapshot.", {
 			event: "orb_container_restart_without_snapshot",
@@ -2955,7 +2989,7 @@ var OrbContainerController = class {
 			starting: now
 		});
 		this.#container.start(options);
-		await this.#waitReady("start", ORB_START_LIMIT_MS);
+		await this.#waitWithin(stallMs, now);
 		await this.#started(state, idleMs, now);
 		return state.snapshot === void 0 ? "created" : "paused";
 	}
@@ -2964,9 +2998,9 @@ var OrbContainerController = class {
 	* yet, instead of starting another or stopping it (#1956). Under the
 	* lifecycle lock.
 	*/
-	async #awaitStart(state, idleMs, operation, mayReset) {
+	async #awaitStart(state, idleMs, operation, mayReset, stallMs) {
 		const startedAt = state.starting ?? this.#now();
-		if (this.#now() - startedAt >= 3e5 && (state.snapshot !== void 0 || mayReset)) {
+		if (stallMs === void 0 && this.#now() - startedAt >= 3e5 && (state.snapshot !== void 0 || mayReset)) {
 			await this.#stopBriefly();
 			if (!this.#container.running) {
 				orbContainerLogger.warn("Orb container start is started over.", {
@@ -2987,8 +3021,9 @@ var OrbContainerController = class {
 		orbContainerLogger.info("Orb container start is still running; waiting for it.", details);
 		const waitedFrom = this.#now();
 		try {
-			await this.#waitReady("start", ORB_START_LIMIT_MS);
+			await this.#waitWithin(stallMs, startedAt);
 		} catch (cause) {
+			if (cause instanceof StartStalled) throw cause;
 			orbContainerLogger.error("Orb container start is still not ready.", {
 				...details,
 				outcome: "error",
@@ -3004,6 +3039,26 @@ var OrbContainerController = class {
 		});
 		await this.#started(state, idleMs, startedAt);
 		return state.snapshot === void 0 ? "created" : "paused";
+	}
+	/**
+	* Waits for the start that began at `startedAt`: up to the limit, or,
+	* with a stall budget, until `startedAt + stallMs`, after which it throws
+	* `StartStalled`. A container that stopped meanwhile still fails as one
+	* that is not running, which the next call starts again.
+	*/
+	async #waitWithin(stallMs, startedAt) {
+		if (stallMs === void 0) {
+			await this.#waitReady("start", ORB_START_LIMIT_MS);
+			return;
+		}
+		const left = startedAt + stallMs - this.#now();
+		if (left <= 0) throw new StartStalled(this.#now() - startedAt);
+		try {
+			await this.#waitReady("start", left);
+		} catch (cause) {
+			if (timedOut(cause)) throw new StartStalled(this.#now() - startedAt);
+			throw cause;
+		}
 	}
 	/** A start answered: arm the container, and record it active. */
 	async #started(state, idleMs, startedAt) {
@@ -3080,6 +3135,11 @@ var OrbContainerController = class {
 				await this.#save(state);
 			}
 			if (state.status === "destroyed") return { kind: "destroyed" };
+			if (state.retired !== void 0 && state.snapshot !== void 0) return {
+				kind: "stalled",
+				handover: this.#handover(state),
+				earlier: true
+			};
 			if (state.pendingStop !== void 0 && requestedAt > state.pendingStop.since) {
 				state = stopDone(state);
 				await this.#save(state);
@@ -3100,11 +3160,17 @@ var OrbContainerController = class {
 					...await this.#tellDiskRelief(input.allowReset === true)
 				};
 			}
+			const stallMs = input.startOver === true && !fresh && state.snapshot !== void 0 ? ORB_START_STALL_MS : void 0;
 			let residency;
-			if (this.#container.running) residency = await this.#awaitStart(state, input.idleMs, "open", input.allowReset !== false);
-			else {
-				if (!fresh && input.allowReset === false) this.#refuseReset(state, "open");
-				residency = await this.#start(state, input.idleMs, fresh, lockWaitMs);
+			try {
+				if (this.#container.running) residency = await this.#awaitStart(state, input.idleMs, "open", input.allowReset !== false, stallMs);
+				else {
+					if (!fresh && input.allowReset === false) this.#refuseReset(state, "open");
+					residency = await this.#start(state, input.idleMs, fresh, lockWaitMs, stallMs);
+				}
+			} catch (cause) {
+				if (!(cause instanceof StartStalled)) throw cause;
+				return await this.#retire(state, cause.waitedMs);
 			}
 			const started = await this.#load();
 			return {
@@ -3115,6 +3181,111 @@ var OrbContainerController = class {
 				...await this.#tellUnsavedStop(input.allowReset === true),
 				...await this.#tellDiskRelief(input.allowReset === true)
 			};
+		});
+	}
+	#handover(state) {
+		const snapshot = state.snapshot;
+		if (snapshot === void 0) throw failure("handover", "no snapshot");
+		return {
+			instance: state.instance,
+			createdAt: state.createdAt,
+			idleDeadline: state.idleDeadline,
+			snapshot,
+			generation: state.generation ?? 0
+		};
+	}
+	/**
+	* Hands a stalled wake's snapshot over (#1956): this object never starts
+	* again, its stalled container is cut off from the network, so one that
+	* comes up late can never reach Core, and it is stopped as soon as
+	* Cloudflare lets it. Under the lifecycle lock.
+	*/
+	async #retire(state, waitedMs) {
+		const now = this.#now();
+		const { starting: _starting, ...current } = await this.#load() ?? state;
+		const retired = {
+			...current,
+			status: "paused",
+			retired: {
+				at: now,
+				waitedMs
+			}
+		};
+		await this.#save(retired);
+		orbContainerLogger.warn("Orb container wake stalled; its snapshot moves to a new container.", {
+			event: "orb_container_retired",
+			sandboxId: this.#sandboxId,
+			generation: retired.generation ?? 0,
+			waitedMs,
+			running: this.#container.running,
+			snapshotId: retired.snapshot?.id,
+			snapshotAgeMs: retired.snapshot === void 0 ? void 0 : now - retired.snapshot.refreshedAt
+		});
+		await this.#lockOut();
+		await this.#schedule(now + RETIRED_STOP_RETRY_MS);
+		return {
+			kind: "stalled",
+			handover: this.#handover(retired)
+		};
+	}
+	/**
+	* Cuts the stalled container off from the network and asks Cloudflare to
+	* stop it. Each step is bounded and logged, never awaited past
+	* `ABANDON_START_MS`: a stalled container may not answer at all.
+	*/
+	async #lockOut() {
+		await this.#cutOff();
+		this.#container.destroy().catch(() => void 0);
+	}
+	/**
+	* Routes all of the container's outbound HTTP and HTTPS to the retired
+	* egress, which answers 410. Made again while a retired object's container
+	* still runs: a cut-off may not land on a container Cloudflare had not
+	* placed yet.
+	*/
+	async #cutOff() {
+		const egress = this.#retiredEgress?.();
+		const step = async (name, run) => {
+			const outcome = await within(run().then(() => "ok", (cause) => cause instanceof Error ? cause.message.slice(0, 200) : "failed"), ABANDON_START_MS);
+			orbContainerLogger.info("Orb container lock-out step.", {
+				event: "orb_container_lock_out",
+				sandboxId: this.#sandboxId,
+				step: name,
+				outcome: outcome ?? "timed_out"
+			});
+		};
+		if (egress !== void 0) {
+			await step("https", () => this.#container.interceptOutboundHttps("*", egress));
+			await step("http", () => this.#container.interceptAllOutboundHttp(egress));
+		}
+	}
+	/**
+	* Takes over a snapshot from the Thread's previous container object,
+	* whose wake stalled (#1956). The next `open` restores it here. Taking the
+	* same handover again changes nothing.
+	*/
+	adopt(handover) {
+		return this.#exclusive(async () => {
+			const generation = handover.generation + 1;
+			const state = await this.#load();
+			if (state !== void 0) return state.generation === generation ? "adopted" : "conflict";
+			await this.#save({
+				version: 1,
+				instance: handover.instance,
+				createdAt: handover.createdAt,
+				status: "paused",
+				idleDeadline: handover.idleDeadline,
+				snapshot: handover.snapshot,
+				generation
+			});
+			await this.#schedule(handover.snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS);
+			orbContainerLogger.info("Orb container took over a stalled wake.", {
+				event: "orb_container_adopted",
+				sandboxId: this.#sandboxId,
+				generation,
+				snapshotId: handover.snapshot.id
+			});
+			return "adopted";
 		});
 	}
 	/**
@@ -3344,8 +3515,13 @@ var OrbContainerController = class {
 	/** Whether the container runs now; lets Core report a wake before it. */
 	async status() {
 		const state = await this.#load();
+		if (state?.retired !== void 0) return {
+			running: false,
+			status: state.status,
+			movedTo: (state.generation ?? 0) + 1
+		};
 		return {
-			running: this.#container.running && !this.#neverReady && state?.starting === void 0,
+			running: this.#container.running && !this.#neverReady && state?.starting === void 0 && state?.retired === void 0,
 			status: state?.status ?? "missing"
 		};
 	}
@@ -3353,7 +3529,7 @@ var OrbContainerController = class {
 	async setIdleDeadline(durationMs) {
 		await this.#afterRestart();
 		const state = await this.#load();
-		if (state === void 0 || state.status === "destroyed") return;
+		if (state === void 0 || state.status === "destroyed" || state.retired !== void 0) return;
 		await this.#save({
 			...state,
 			idleDeadline: this.#now() + durationMs
@@ -3375,6 +3551,7 @@ var OrbContainerController = class {
 				const state = await this.#load();
 				if (state === void 0) throw failure("use", "no workspace");
 				if (state.status === "destroyed") throw failure("use", "the workspace was destroyed");
+				if (state.retired !== void 0) throw new Error("Orb container is not running: the Thread's Orb moved to a new container");
 				const idleMs = Math.max(ORB_HEARTBEAT_MS, state.idleDeadline - this.#now());
 				if (this.#container.running) await this.#awaitStart(state, idleMs, "use", false);
 				else {
@@ -3625,6 +3802,7 @@ var OrbContainerController = class {
 			});
 			return { kind: "stopped" };
 		}
+		if (state.retired !== void 0) return { kind: "stopped" };
 		if (this.#unanswered(state)) {
 			await this.#stopUnstarted(state, "its start had not answered");
 			return { kind: "stopped" };
@@ -3766,6 +3944,7 @@ var OrbContainerController = class {
 			const state = await this.#load();
 			if (state === void 0) throw failure("recover", "no workspace");
 			if (state.status === "destroyed") throw failure("recover", "the workspace was destroyed");
+			if (state.retired !== void 0) throw failure("recover", "the Orb moved to a new container");
 			const startedAt = this.#now();
 			let current = state;
 			let files;
@@ -3878,7 +4057,10 @@ var OrbContainerController = class {
 				snapshotBytes: refreshed.size
 			});
 		} finally {
-			if (this.#container.running) await this.#destroyContainer();
+			if (this.#container.running) {
+				await this.#stopBriefly();
+				if (this.#container.running) this.#neverReady = true;
+			}
 		}
 	}
 	/**
@@ -3939,6 +4121,10 @@ var OrbContainerController = class {
 			const state = await this.#load();
 			if (state === void 0 || state.status === "destroyed") return;
 			const now = this.#now();
+			if (state.retired !== void 0) {
+				await this.#retiredAlarm(state, state.retired, now);
+				return;
+			}
 			if (this.#container.running) {
 				if (state.pendingStop !== void 0) {
 					await this.#retryPendingStop(state, state.pendingStop);
@@ -3974,6 +4160,26 @@ var OrbContainerController = class {
 		if (checkDisk && this.#container.running) await this.#checkDisk();
 	}
 	/**
+	* A retired object's alarm: asks Cloudflare to stop the stalled container
+	* until it has, then logs how long it lingered and stops its alarms.
+	*/
+	async #retiredAlarm(state, retired, now) {
+		if (this.#container.running) {
+			await this.#cutOff();
+			await this.#stopBriefly();
+			if (this.#container.running) {
+				await this.#schedule(now + RETIRED_STOP_RETRY_MS);
+				return;
+			}
+		}
+		orbContainerLogger.info("Retired Orb container stopped.", {
+			event: "orb_container_retired_stopped",
+			sandboxId: this.#sandboxId,
+			generation: state.generation ?? 0,
+			lingeredMs: now - retired.at
+		});
+	}
+	/**
 	* After this object restarts with its container still running, re-arm the
 	* inactivity timeout and the heartbeat. It runs beside the object's calls,
 	* never blocking them: `status` answers at once, and lifecycle and
@@ -4007,6 +4213,13 @@ var OrbContainerController = class {
 	}
 	async #resume() {
 		const state = await this.#load();
+		if (state?.retired !== void 0) {
+			this.#neverReady = true;
+			await this.#cutOff();
+			const alarm = await this.#storage.getAlarm();
+			if (alarm === null || alarm > this.#now() + RETIRED_STOP_RETRY_MS) await this.#schedule(this.#now() + RETIRED_STOP_RETRY_MS);
+			return;
+		}
 		if (state?.starting !== void 0) this.#neverReady = true;
 		await this.#armInactivity(Math.max(0, (state?.idleDeadline ?? this.#now()) - this.#now()));
 		await this.#watchForStop();
@@ -4020,32 +4233,56 @@ var OrbContainerController = class {
 var ORB_FAULT_KEY = "orb-fault";
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 var faultyContainer = (container, plan, now = Date.now) => {
-	let readyAt = 0;
+	/** Starts the plan has held back so far. */
+	let heldStarts = 0;
+	/** A start held back by the plan: nothing runs yet. */
+	let held;
+	const release = () => {
+		if (held === void 0) return;
+		clearTimeout(held.start);
+		if (held.drop !== void 0) clearTimeout(held.drop);
+		held = void 0;
+	};
 	const active = () => {
 		const current = plan();
 		return current !== void 0 && now() < current.until ? current : void 0;
 	};
 	return {
 		get running() {
-			return container.running;
+			return held !== void 0 || container.running;
 		},
 		start(options) {
 			const current = active();
-			readyAt = current === void 0 ? 0 : now() + current.startDelayMs;
-			container.start(options);
+			if (current === void 0 || current.starts !== void 0 && heldStarts >= current.starts) {
+				container.start(options);
+				return;
+			}
+			heldStarts += 1;
+			held = {
+				start: setTimeout(() => {
+					release();
+					container.start(options);
+				}, current.startDelayMs),
+				...current.dropAfterMs === void 0 ? {} : { drop: setTimeout(release, current.dropAfterMs) }
+			};
 		},
 		async exec(command, options) {
-			const wait = readyAt - now();
-			if (wait > 0) await sleep(wait);
+			while (held !== void 0) await sleep(250);
 			return container.exec(command, options);
 		},
 		snapshotContainer: (options) => container.snapshotContainer(options),
 		destroy(reason) {
-			if (now() < readyAt && active()?.destroyHangs) return new Promise(() => {});
+			if (held !== void 0) {
+				if (active()?.destroyHangs) return new Promise(() => {});
+				release();
+				return Promise.resolve();
+			}
 			return container.destroy(reason);
 		},
 		setInactivityTimeout: (durationMs) => container.setInactivityTimeout(durationMs),
-		interceptOutboundHttp: (address, binding) => container.interceptOutboundHttp(address, binding)
+		interceptOutboundHttp: (address, binding) => container.interceptOutboundHttp(address, binding),
+		interceptOutboundHttps: (address, binding) => container.interceptOutboundHttps(address, binding),
+		interceptAllOutboundHttp: (binding) => container.interceptAllOutboundHttp(binding)
 	};
 };
 /**
@@ -4060,6 +4297,18 @@ var OrbStopNotice = class extends WorkerEntrypoint {
 		const namespace = this.env.ORB_CONTAINER;
 		const outcome = await namespace.get(namespace.idFromString(this.ctx.props.sandboxId)).stopping();
 		return Response.json({ outcome });
+	}
+};
+/**
+* Refuses every request from a retired container object's container: its
+* wake stalled and its snapshot moved to a new object, so a stalled
+* container that comes up late must never reach Core (#1956). The
+* object's HTTP and HTTPS intercepts route here.
+*/
+var OrbRetiredEgress = class extends WorkerEntrypoint {
+	async fetch(request) {
+		await request.body?.cancel();
+		return new Response("This Orb moved to a new container.", { status: 410 });
 	}
 };
 /**
@@ -4085,6 +4334,7 @@ var OrbContainerObject = class extends DurableObject {
 			storage: ctx.storage,
 			image: () => container.images?.["orb"],
 			sandboxId: ctx.id.toString(),
+			retiredEgress: () => ctx.exports.OrbRetiredEgress({ props: {} }),
 			stopNotice: () => ctx.exports.OrbStopNotice({ props: { sandboxId: ctx.id.toString() } })
 		});
 		this.#controller.resumeAfterRestart();
@@ -4094,6 +4344,9 @@ var OrbContainerObject = class extends DurableObject {
 	}
 	status() {
 		return this.#controller.status();
+	}
+	adopt(handover) {
+		return this.#controller.adopt(handover);
 	}
 	setIdleDeadline(durationMs) {
 		return this.#controller.setIdleDeadline(durationMs);
@@ -4209,4 +4462,4 @@ var account_orb_worker_default = { async fetch(request, env) {
 	}
 } };
 //#endregion
-export { OrbContainerObject, OrbStopNotice, account_orb_worker_default as default };
+export { OrbContainerObject, OrbRetiredEgress, OrbStopNotice, account_orb_worker_default as default };

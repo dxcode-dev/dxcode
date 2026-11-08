@@ -210,20 +210,27 @@ const readRecord = async (
 };
 
 /**
- * Each Thread's workspace is the Orb container object named by its ID: in
- * the deployer's account through the `ORB_CONTAINER` binding, or in a
- * connected account through that account's Orb Worker. The sandbox ID the
- * D1 record pins names the object in its account.
+ * Each Thread's workspace is an Orb container object: in the deployer's
+ * account through the `ORB_CONTAINER` binding, or in a connected account
+ * through that account's Orb Worker. The first is named by the Thread's ID;
+ * one whose wake stalled hands its snapshot to the next, named
+ * `<thread>~<generation>` (#1956). The sandbox ID the D1 record pins names
+ * the current one: the object's ID, or `<account>:<name>`.
  */
 const orbContainer = (
   context: ExecutionContext,
   bindings: Bindings,
   threadId: string,
+  at: { readonly sandboxId?: string | null; readonly name?: string } = {},
 ): { readonly stub: OrbContainerRpc; readonly sandboxId: string } => {
   if (context.account.scope === "deployment") {
     const namespace = bindings.ORB_CONTAINER;
     if (namespace === undefined) throw unavailable("no ORB_CONTAINER binding");
-    const stub = namespace.get(namespace.idFromName(threadId));
+    const stub = namespace.get(
+      at.sandboxId !== undefined && at.sandboxId !== null
+        ? namespace.idFromString(at.sandboxId)
+        : namespace.idFromName(at.name ?? threadId),
+    );
     return {
       stub: stub as unknown as OrbContainerRpc,
       sandboxId: stub.id.toString(),
@@ -236,14 +243,83 @@ const orbContainer = (
       : Redacted.value(context.credentials).workerSecret;
   if (profile.endpoint === undefined || secret === undefined)
     throw unavailable("no account Orb Worker");
+  const prefix = `${context.account.providerAccount}:`;
+  const name =
+    at.name ??
+    (at.sandboxId?.startsWith(prefix) === true
+      ? at.sandboxId.slice(prefix.length)
+      : threadId);
   return {
     stub: accountOrbContainer({
       endpoint: profile.endpoint,
       secret,
-      threadId,
+      threadId: name,
     }),
-    sandboxId: `${context.account.providerAccount}:${threadId}`,
+    sandboxId: `${prefix}${name}`,
   };
+};
+
+/** Start-overs one open makes before it waits out the last start. */
+const MAX_START_OVERS = 2;
+/**
+ * Moves followed before giving up. The record pins the first object, so a
+ * call walks every move the Thread's Orb ever made; generations only rise,
+ * so the walk never loops, and this bound only guards against a broken
+ * object.
+ */
+const MAX_HOPS = 1_000;
+
+/**
+ * The Thread's current container object: the one its record pins, or the
+ * one it moved on to after stalled wakes (#1956).
+ */
+const currentOrbContainer = async (
+  context: ExecutionContext,
+  bindings: Bindings,
+  threadId: string,
+  sandboxId: string | null,
+) => {
+  let container = orbContainer(context, bindings, threadId, { sandboxId });
+  for (let hops = 0; hops <= MAX_HOPS; hops += 1) {
+    const { movedTo } = await container.stub.status();
+    if (movedTo === undefined) return container;
+    container = orbContainer(context, bindings, threadId, {
+      name: `${threadId}~${movedTo}`,
+    });
+  }
+  throw unavailable("too many container moves");
+};
+
+/**
+ * Runs `act` on the Thread's current container object, then again on the
+ * object its Orb moved to meanwhile: an archive or delete that waited on a
+ * wake which stalled and moved on also reaches the new object (#1956).
+ */
+const onCurrentOrb = async <A>(
+  context: ExecutionContext,
+  bindings: Bindings,
+  threadId: string,
+  sandboxId: string | null,
+  act: (stub: OrbContainerRpc) => Promise<A>,
+): Promise<A> => {
+  let target = await currentOrbContainer(
+    context,
+    bindings,
+    threadId,
+    sandboxId,
+  );
+  for (let hops = 0; ; hops += 1) {
+    const result = await act(target.stub);
+    const current = await currentOrbContainer(
+      context,
+      bindings,
+      threadId,
+      sandboxId,
+    );
+    if (current.sandboxId === target.sandboxId) return result;
+    if (hops > MAX_START_OVERS + 1) throw unavailable("container still moving");
+    target = current;
+  }
 };
 
 type OrbContainerStub = OrbContainerRpc;
@@ -443,14 +519,22 @@ const openCloudflareWorkspaceTimed = async (
   const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
   const records = executionWorkspaceRecords(db, CLOUDFLARE);
   const id = Schema.decodeUnknownSync(ThreadId)(threadId);
-  const container = orbContainer(context, bindings, id);
-  const { sandboxId } = container;
-  const stub = resilientOrb(
-    container.stub,
-    () => orbContainer(context, bindings, id).stub,
-    id,
-    sandboxId,
-  );
+  // The Thread's first object until its record names another (#1956).
+  let sandboxId = "";
+  let stub: OrbContainerRpc = undefined as unknown as OrbContainerRpc;
+  const bind = (at: Parameters<typeof orbContainer>[3] = {}) => {
+    const container = orbContainer(context, bindings, id, at);
+    sandboxId = container.sandboxId;
+    stub = resilientOrb(
+      container.stub,
+      () => orbContainer(context, bindings, id, at).stub,
+      id,
+      container.sandboxId,
+    );
+  };
+  bind();
+  // The Thread's first object, which its D1 record pins for its whole life.
+  const rootSandboxId = sandboxId;
   const ready = (result: OrbOpenResult) => {
     if (result.kind === "ready")
       return handleFor(stub, idleMs, result.processesStartedAt);
@@ -460,7 +544,7 @@ const openCloudflareWorkspaceTimed = async (
   // and Cloudflare's instance list (named by Thread), it places a slow start.
   // Only activation sets a workspace up, so only it may start one that lost
   // its files over from the image.
-  const open = async (create: boolean) => {
+  const open = async (create: boolean, startOver = false) => {
     const startedAt = Date.now();
     const details = {
       event: "orb_container_open",
@@ -494,6 +578,7 @@ const openCloudflareWorkspaceTimed = async (
             instance: profile.instance,
             idleMs,
             allowReset: !options.existingOnly,
+            ...(startOver ? { startOver } : {}),
           }),
           CLOUDFLARE_OPEN_TIMEOUT_MS,
           () => orbStartTimedOut(),
@@ -540,7 +625,12 @@ const openCloudflareWorkspaceTimed = async (
       }
       orbContainerLogger.info("Orb container open returned.", {
         ...details,
-        outcome: result.kind,
+        // An object that handed its wake over earlier only points onward:
+        // "moved", so "stalled" counts only wakes that stalled now.
+        outcome:
+          result.kind === "stalled" && result.earlier === true
+            ? "moved"
+            : result.kind,
         ...(result.kind === "ready" ? { residency: result.residency } : {}),
         durationMs: Date.now() - startedAt,
       });
@@ -607,14 +697,67 @@ const openCloudflareWorkspaceTimed = async (
     }
     if (
       record.state !== "initialized" ||
-      record.providerSandboxId !== sandboxId
+      record.providerSandboxId !== rootSandboxId
     )
       throw unavailable(record.state);
     if (status !== undefined && options.observeResidency !== undefined) {
-      const observed = await status;
+      // The Thread's Orb moved on from a stalled wake (#1956): its residency
+      // is the current object's.
+      let observed = await status;
+      for (let hops = 0; observed.movedTo !== undefined; hops += 1) {
+        if (hops > MAX_HOPS) throw unavailable("too many container moves");
+        bind({ name: `${id}~${observed.movedTo}` });
+        observed = await bounded(stub.status(), STATUS_TIMEOUT_MS, () =>
+          platformFailure(
+            "WORKSPACE_STATUS_TIMED_OUT",
+            `The workspace status did not answer within ${STATUS_TIMEOUT_MS / 1000} s.`,
+          ),
+        );
+      }
       await options.observeResidency(observed.running ? "running" : "paused");
     }
-    const result = await open(false);
+    let result = await open(false, true);
+    // A stalled wake moves to the Thread's next container object with the
+    // same snapshot, at most `MAX_START_OVERS` times per open; the last one
+    // waits out its start (#1956). An object that had handed over earlier is
+    // only followed.
+    for (let moves = 0, hops = 0; result.kind === "stalled"; hops += 1) {
+      if (hops > MAX_HOPS) throw unavailable("too many container moves");
+      const { handover } = result;
+      const from = sandboxId;
+      const generation = handover.generation + 1;
+      const name = `${id}~${generation}`;
+      const movedAt = Date.now();
+      const next = orbContainer(context, bindings, id, { name });
+      const adopted = await next.stub.adopt(handover);
+      if (adopted !== "adopted") throw unavailable("start-over conflict");
+      bind({ name });
+      const startedOver = result.earlier !== true;
+      if (startedOver) {
+        moves += 1;
+        orbContainerLogger.warn(
+          "Orb wake stalled; started over in a new container.",
+          {
+            event: "orb_container_started_over",
+            threadId: id,
+            from,
+            to: next.sandboxId,
+            generation,
+            snapshotId: handover.snapshot.id,
+          },
+        );
+      }
+      result = await open(false, moves < MAX_START_OVERS);
+      if (startedOver)
+        orbContainerLogger.info("Orb wake start-over answered.", {
+          event: "orb_container_start_over_result",
+          threadId: id,
+          to: next.sandboxId,
+          generation,
+          outcome: result.kind,
+          durationMs: Date.now() - movedAt,
+        });
+    }
     if (result.kind !== "ready") {
       await records.markLost(id);
       throw unavailable(`container ${result.kind}`);
@@ -671,17 +814,28 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
           if (record.state !== "initialized" && record.state !== "provisioning")
             throw unavailable(record.state);
           await assertThreadLifecycleState(db, threadId, "archived");
-          const { stub } = orbContainer(context, bindings, threadId);
-          const stopped = await stub.pause({
+          const stopped = await onCurrentOrb(
+            context,
+            bindings,
             threadId,
-            ...(record.state === "provisioning" ? { defer: true } : {}),
-          });
+            record.providerSandboxId,
+            (stub) =>
+              stub.pause({
+                threadId,
+                ...(record.state === "provisioning" ? { defer: true } : {}),
+              }),
+          );
           return stopped === "stopping" ? "stopping" : undefined;
         }
         // Provisioning or conflict fails closed, as on E2B.
         if (record.state !== "initialized") throw unavailable(record.state);
-        const { stub } = orbContainer(context, bindings, threadId);
-        await stub.destroy();
+        await onCurrentOrb(
+          context,
+          bindings,
+          threadId,
+          record.providerSandboxId,
+          (stub) => stub.destroy(),
+        );
         await records.markLost(threadId);
       },
       async recover(context, { threadId }, options) {
@@ -694,7 +848,12 @@ export const cloudflareExecutionProvider: ExecutionProvider<CloudflareWorkspaceH
         );
         if (record.provider !== CLOUDFLARE) throw unavailable("other provider");
         if (record.state !== "initialized") throw unavailable(record.state);
-        const { stub } = orbContainer(context, bindings, threadId);
+        const { stub } = await currentOrbContainer(
+          context,
+          bindings,
+          threadId,
+          record.providerSandboxId,
+        );
         return stub.recover(options);
       },
     },

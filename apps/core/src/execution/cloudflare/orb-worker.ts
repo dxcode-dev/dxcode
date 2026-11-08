@@ -14,6 +14,7 @@
  */
 export {
   OrbContainerObject,
+  OrbRetiredEgress,
   OrbStopNotice,
 } from "./orb-container-object.js";
 
