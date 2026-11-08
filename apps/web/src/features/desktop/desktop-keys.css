@@ -54,7 +54,7 @@
 .desktop-key:disabled {
   opacity: 0.5;
 }
-/* Waymote's text input: focusable for the phone keyboard, never seen. */
+/* The viewer's text input: focusable for the phone keyboard, never seen. */
 .thread-desktop-text-input {
   position: absolute;
   bottom: 0;

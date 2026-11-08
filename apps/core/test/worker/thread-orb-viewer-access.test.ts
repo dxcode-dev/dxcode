@@ -342,7 +342,7 @@ const ORB_ROUTES = [
   },
   { name: "Terminal warm-up", path: "/terminal/warm", method: "POST" },
   { name: "Desktop status", path: "/desktop" },
-  { name: "Desktop socket", path: "/desktop/control", headers: socket() },
+  { name: "Desktop socket", path: "/desktop/ws", headers: socket() },
   { name: "Portals", path: "/portals" },
   { name: "Orb processes", path: "/memory" },
   { name: "Orb folders", path: "/disk" },

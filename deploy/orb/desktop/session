@@ -1,12 +1,14 @@
 #!/bin/bash
 # The dx Desktop session. ./start runs it under dbus-run-session as the leader
-# of a new session; ./stop signals that whole session. It runs a headless
-# labwc, the Waymote gateway on 127.0.0.1:5900 (restarted when it exits), a
-# foot terminal, and Chromium with DevTools on 127.0.0.1:9222. The session
-# ends when labwc exits. stdout and stderr go to session.log.
+# of a new session; ./stop signals that whole session. It runs Xvfb (an X11
+# display with no hardware), the openbox window manager, the voxl streamer on
+# 127.0.0.1:5900 (restarted when it exits), an xterm, and Chromium with
+# DevTools on 127.0.0.1:9222. The session ends when Xvfb exits. stdout and
+# stderr go to session.log.
 set -u
 
-desktop=/opt/dx/desktop
+# shellcheck source=env.sh
+. /opt/dx/desktop/env.sh
 state="$HOME/.local/state/dx-desktop"
 runtime="$state/runtime"
 
@@ -22,7 +24,7 @@ failed() {
 
 # Record the session ID (the dbus-run-session leader) for ./start and ./stop.
 # Every program in the desktop inherits it as DX_DESKTOP_SESSION, so ./stop
-# also finds those that labwc starts in sessions of their own.
+# also finds those that openbox starts in sessions of their own.
 sid=$(ps -o sid= -p "$$" | tr -d ' ')
 printf '%s\n' "$sid" >"$state/session.pid"
 export DX_DESKTOP_SESSION="$sid"
@@ -32,18 +34,14 @@ case "${LANG:-}" in
   *) export LANG=C.UTF-8 ;;
 esac
 export XDG_RUNTIME_DIR="$runtime"
-export XDG_SESSION_TYPE=wayland
-export XDG_CURRENT_DESKTOP=labwc:wlroots
-export WLR_BACKENDS=headless
-export WLR_HEADLESS_OUTPUTS=1
-export WLR_LIBINPUT_NO_DEVICES=1
-export WLR_RENDERER=pixman
+export XDG_SESSION_TYPE=x11
+export XDG_CURRENT_DESKTOP=openbox
 export DX_DESKTOP_STATE="$state"
 unset DISPLAY WAYLAND_DISPLAY
 
 rm -rf "$runtime" "$state/environment"
 mkdir -m 0700 "$runtime" || failed "cannot create $runtime"
-for name in waymote chromium foot; do
+for name in xvfb voxl chromium xterm openbox; do
   file="$state/$name.log"
   if [ -f "$file" ] && [ "$(stat -c %s "$file")" -gt 1048576 ]; then
     mv -f "$file" "$file.1"
@@ -56,7 +54,7 @@ started=
 cleanup() {
   [ -n "$stopping" ] && return
   stopping=1
-  # Any exit before the gateway launched (a failed command, an unset
+  # Any exit before the streamer launched (a failed command, an unset
   # variable) is a failed start, which ./start reports at once.
   if [ -z "$started" ] && [ ! -f "$state/session.failed" ]; then
     printf 'the session exited during startup: %s\n' \
@@ -72,47 +70,64 @@ cleanup() {
 trap 'cleanup; exit 0' TERM INT HUP
 trap cleanup EXIT
 
-log "starting labwc"
-labwc --config-dir "$desktop/labwc" &
-labwc_pid=$!
-
-# labwc's autostart (labwc/autostart) writes the display variables once the
-# compositor and its Xwayland socket exist.
-for _ in $(seq 1 100); do
-  [ -f "$state/environment" ] && break
-  kill -0 "$labwc_pid" 2>/dev/null || failed "labwc exited during startup"
-  sleep 0.1
+# Xvfb picks a free display number and writes it to the pipe once it accepts
+# clients. The screen starts large, because voxl can shrink it to the
+# viewer's pane with RandR but never grow it past its start size (a pane at
+# device pixel ratio 2 can ask for more than 2560 wide). -shmem lets voxl capture without copies; the
+# core fonts are only the ones X itself needs.
+log "starting Xvfb"
+mkfifo -m 0600 "$runtime/display" || failed "cannot create $runtime/display"
+exec 8<>"$runtime/display"
+"$bin/Xvfb" -displayfd 8 -screen 0 3840x2160x24 -shmem -nolisten tcp -noreset \
+  -fp "$desktop/env/lib/X11/fonts/misc" >>"$state/xvfb.log" 2>&1 </dev/null &
+xvfb_pid=$!
+display=
+for _ in $(seq 1 300); do
+  if read -r -t 0.1 display <&8 && [ -n "$display" ]; then break; fi
+  kill -0 "$xvfb_pid" 2>/dev/null || failed "Xvfb exited during startup: $(tail -n 1 "$state/xvfb.log" | cut -c 1-160)"
 done
-[ -f "$state/environment" ] || failed "labwc did not start within 10s"
-# shellcheck disable=SC1091
-. "$state/environment"
-[ -n "${WAYLAND_DISPLAY:-}" ] || failed "labwc started without a Wayland display"
-log "labwc ready: WAYLAND_DISPLAY=$WAYLAND_DISPLAY DISPLAY=${DISPLAY:-}"
+exec 8<&-
+[ -n "$display" ] || failed "Xvfb did not start within 30s"
+export DISPLAY=":$display"
+# voxl captures Xvfb's framebuffer straight from its shared memory, and
+# finds the segment by the X server's pid in /tmp/.X<n>-lock. This Xvfb
+# build writes no lock file, so write it: without it voxl could take a
+# segment an earlier Xvfb left behind and stream that. ./stop frees the
+# segment and the file.
+printf '%10d\n' "$xvfb_pid" >"/tmp/.X$display-lock"
+printf '%s\n' "$xvfb_pid" >"$state/xvfb.pid"
+log "Xvfb ready: DISPLAY=$DISPLAY"
 
-# The headless output starts at 1280x720; the viewer may resize it. 30 Hz
-# matches the encoder frame rate, so clients render no faster than streamed.
-wlr-randr --output HEADLESS-1 --custom-mode 1280x720@30Hz ||
-  log "wlr-randr could not set the initial mode"
+# Other programs source this file to open windows on the desktop.
+{
+  for name in DISPLAY XDG_RUNTIME_DIR XDG_SESSION_TYPE XDG_CURRENT_DESKTOP DBUS_SESSION_BUS_ADDRESS; do
+    eval "value=\${$name:-}"
+    [ -n "$value" ] && printf "export %s='%s'\n" "$name" "$value"
+  done
+} >"$state/environment.next" && mv -f "$state/environment.next" "$state/environment"
+
+# openbox and what it starts (menu entries) get the host's PATH; its menu
+# names the toolbelt's programs by path.
+PATH="$DX_HOST_PATH" "$bin/openbox" --config-file "$desktop/openbox/rc.xml" \
+  >>"$state/openbox.log" 2>&1 </dev/null &
 
 (
-  # No audio source: the gateway then runs no Opus encoder, and the session
-  # needs no PulseAudio (deploy/orb/README.md#desktop).
-  # bin/ffmpeg keeps the encoder's RTP sockets on loopback.
-  export PATH="$desktop/bin:$PATH"
+  # voxl streams the display as H.264 over one WebSocket (/ws) and answers
+  # /healthz. No login: it listens on loopback only, and dx Core relays the
+  # person's browser to it through dxd. No audio.
   backoff=1
   while :; do
     started=$SECONDS
-    "$desktop/waymote/bin/waymote-gateway" \
-      -listen 127.0.0.1:5900 \
-      -streamd "$desktop/waymote/bin/waymote-streamd" \
-      -bitrate 4000 \
-      -frame-rate 30 \
-      >>"$state/waymote.log" 2>&1 </dev/null
+    "$bin/voxl" --addr=127.0.0.1 --port=5900 \
+      --enable-basic-auth=false --allowed-hosts='*' \
+      --audio-enabled=false --enable-clipboard=true --file-transfers=none \
+      --enable-resize=true --resize-scale=1 --max-kbps=8000 \
+      >>"$state/voxl.log" 2>&1 </dev/null
     status=$?
     if [ $((SECONDS - started)) -gt 60 ]; then
       backoff=1
     fi
-    log "waymote-gateway exited with status $status; restarting in ${backoff}s"
+    log "voxl exited with status $status; restarting in ${backoff}s"
     sleep "$backoff"
     backoff=$((backoff * 2 > 30 ? 30 : backoff * 2))
   done
@@ -120,13 +135,14 @@ wlr-randr --output HEADLESS-1 --custom-mode 1280x720@30Hz ||
 
 started=1
 
-foot --working-directory="$HOME" >>"$state/foot.log" 2>&1 </dev/null &
+PATH="$DX_HOST_PATH" "$bin/xterm" -fa 'DejaVu Sans Mono' -fs 11 -geometry 100x30 \
+  >>"$state/xterm.log" 2>&1 </dev/null &
 # The repository's or project's Desktop resume script, or else Chromium at
 # about:blank (./resume).
-"$desktop/resume" </dev/null &
+PATH="$DX_HOST_PATH" "$desktop/resume" </dev/null &
 
-while kill -0 "$labwc_pid" 2>/dev/null; do
-  wait "$labwc_pid"
+while kill -0 "$xvfb_pid" 2>/dev/null; do
+  wait "$xvfb_pid"
 done
-log "labwc exited"
+log "Xvfb exited"
 exit 0

@@ -1,16 +1,17 @@
 import orbHostname from "../../../../../deploy/orb/dx-orb-hostname.sh?raw";
 import orbInit from "../../../../../deploy/orb/dx-orb-init?raw";
 import orbOpenFiles from "../../../../../deploy/orb/dx-orb-open-files.sh?raw";
+import orbInstall from "../../../../../deploy/orb/install.sh?raw";
 import orbTmuxConfig from "../../../../../deploy/orb/tmux.conf?raw";
-import vmSetup from "../../../../../deploy/orb/vm-setup.sh?raw";
 import terminalStub from "../../../../dxd/assets/dx-terminal-stub.sh?raw";
 
 /**
  * The dx Orb on a plain Linux VM or container, for providers that boot
- * their own images rather than an OCI image (deploy/orb/vm-setup.sh). A
- * provider's preparation creates a machine from its Debian or Ubuntu base, writes these
- * files, starts the setup, polls its status, and snapshots the VM once it
- * is done; Threads then boot from that snapshot.
+ * their own images rather than an OCI image. A provider's preparation
+ * creates a machine from its Debian or Ubuntu base, writes these files,
+ * starts deploy/orb/install.sh (the installer the OCI image runs too, so
+ * every provider gets the same Orb), polls its status, and snapshots the VM
+ * once it is done; Threads then boot from that snapshot.
  */
 
 const DIRECTORY = "/var/lib/dx-orb-setup";
@@ -25,7 +26,7 @@ export interface VmOrbBuildGuest {
 }
 
 const FILES: ReadonlyArray<readonly [string, string]> = [
-  [`${DIRECTORY}/vm-setup.sh`, vmSetup],
+  [`${DIRECTORY}/install.sh`, orbInstall],
   [`${DIRECTORY}/files/dx-terminal.sh`, terminalStub],
   [`${DIRECTORY}/files/dx-orb-init`, orbInit],
   [`${DIRECTORY}/files/dx-orb-hostname.sh`, orbHostname],
@@ -39,7 +40,7 @@ const hex = (bytes: ArrayBuffer) =>
     .join("");
 
 /**
- * The recipe version (16 hex): the setup script, the files it installs,
+ * The recipe version (16 hex): the installer (which pins the toolbelt), the files it installs,
  * and what the provider adds (its sizes, its base snapshots). A new version
  * prepares new snapshots; pinned Threads keep theirs.
  */
@@ -56,7 +57,7 @@ export const startVmOrbSetup = async (guest: VmOrbBuildGuest) => {
   await guest.runAsRoot(`mkdir -p ${DIRECTORY}/files`, 30_000);
   for (const [path, content] of FILES) await guest.writeFile(path, content);
   const started = await guest.runAsRoot(
-    `chmod 0755 ${DIRECTORY}/vm-setup.sh && echo starting >${DIRECTORY}/status && setsid nohup bash ${DIRECTORY}/vm-setup.sh ${DIRECTORY}/files ${DIRECTORY} >${DIRECTORY}/setup.log 2>&1 </dev/null & echo started`,
+    `chmod 0755 ${DIRECTORY}/install.sh && echo starting >${DIRECTORY}/status && setsid nohup bash ${DIRECTORY}/install.sh --vm ${DIRECTORY}/files ${DIRECTORY} >${DIRECTORY}/setup.log 2>&1 </dev/null & echo started`,
     30_000,
   );
   if (started.exitCode !== 0 || !started.stdout.includes("started"))

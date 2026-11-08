@@ -626,7 +626,11 @@ describe("Docker Cloud Sandboxes in a person's own account", () => {
         timeouts: { timeout: "1800s", onTimeout: "delete", autoResume: false },
       },
     });
-    expect(probe?.execs.map(({ user }) => user)).toEqual(["user", "user"]);
+    expect(probe?.execs.map(({ user }) => user)).toEqual([
+      "user",
+      "user",
+      "user",
+    ]);
     expect(probe?.renewals).toEqual(["1800s"]);
     expect(probe?.lifecycle).toEqual(["stop", "start"]);
 

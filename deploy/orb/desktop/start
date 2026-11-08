@@ -1,15 +1,16 @@
 #!/bin/bash
 # Starts the dx Desktop session (deploy/orb/README.md#desktop) and returns once
-# the Waymote gateway serves on 127.0.0.1:5900. Idempotent: exits 0 at once
-# when the gateway already answers, and waits for a running session whose
-# gateway is restarting instead of replacing it. dxd runs it as `user` with
+# the voxl streamer serves on 127.0.0.1:5900. Idempotent: exits 0 at once
+# when the streamer already answers, and waits for a running session whose
+# streamer is restarting instead of replacing it. dxd runs it as `user` with
 # only HOME, USER, LOGNAME, SHELL, LANG, and PATH set. The session runs
 # detached in its own session, so it outlives the caller. Finishes within
 # 40 s; on failure it prints one line to stderr and exits non-zero. Logs:
 # ~/.local/state/dx-desktop/.
 set -u
 
-desktop=/opt/dx/desktop
+# shellcheck source=env.sh
+. /opt/dx/desktop/env.sh
 state="${HOME:?HOME is not set}/.local/state/dx-desktop"
 log="$state/session.log"
 # dx Core gives the whole call 45 s; every wait below uses what is left of 40.
@@ -61,7 +62,7 @@ recorded_session() {
 # The session runs while its script and its compositor do. The kernel does
 # not reuse a session ID while any process holds it.
 session_runs() {
-  pgrep -s "$1" -x labwc >/dev/null &&
+  pgrep -s "$1" -x Xvfb >/dev/null &&
     pgrep -s "$1" -f '/opt/dx/desktop/session$' >/dev/null
 }
 
@@ -84,19 +85,19 @@ if ready; then
   exit 0
 fi
 
-# A running session whose gateway does not answer yet (the session restarts a
-# crashed gateway after 1 to 30 s, or /healthz is slow) is waited for, not
+# A running session whose streamer does not answer yet (the session restarts a
+# crashed streamer after 1 to 30 s, or /healthz is slow) is waited for, not
 # replaced: replacing it would close the person's and the agent's windows.
 if sid=$(recorded_session) && [ ! -f "$state/session.failed" ] &&
   session_runs "$sid"; then
-  printf '%s start: session %s runs; waiting for its gateway\n' \
+  printf '%s start: session %s runs; waiting for its streamer\n' \
     "$(date -u +%FT%TZ)" "$sid" >>"$log"
   while session_runs "$sid"; do
     if ready; then
       exit 0
     fi
     (($(left_ms) > 0)) ||
-      fail "the running desktop's gateway did not answer within $((budget_ms / 1000))s (see $log)"
+      fail "the running desktop's streamer did not answer within $((budget_ms / 1000))s (see $log)"
     sleep 0.2
   done
   printf '%s start: session %s ended while waiting\n' \
@@ -119,7 +120,10 @@ printf '%s start: launching session\n' "$(date -u +%FT%TZ)" >>"$log"
 # A new session (setsid) with its own process group, so it survives the
 # caller and stop can signal every process in it. The lock descriptor is not
 # inherited.
-setsid -f dbus-run-session -- "$desktop/session" </dev/null >>"$log" 2>&1 9>&- ||
+# The Desktop's own bus configuration (dbus-session.conf): the host may have
+# none, and the host's would start the host's desktop services.
+setsid -f dbus-run-session --config-file="$desktop/dbus-session.conf" \
+  -- "$desktop/session" </dev/null >>"$log" 2>&1 9>&- ||
   fail "cannot launch the session"
 launched=$(now_ms)
 
@@ -137,6 +141,6 @@ while :; do
     fail "the session did not start: $(last_log_line) (see $log)"
   fi
   (($(left_ms) > 0)) ||
-    fail "gateway did not listen on 127.0.0.1:5900 within $((budget_ms / 1000))s (see $log)"
+    fail "the streamer did not listen on 127.0.0.1:5900 within $((budget_ms / 1000))s (see $log)"
   sleep 0.2
 done

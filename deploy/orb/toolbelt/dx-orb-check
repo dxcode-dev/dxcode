@@ -1,0 +1,114 @@
+#!/bin/bash
+# dx-orb-check: proves an Orb has every workspace feature dx needs, on any
+# provider (deploy/orb/toolbelt/README.md#dx-orb-check). Run it as the
+# workspace account, `user`, with dxd's environment. It checks the account,
+# the tools Core and the agent run, the Terminal's tmux, and the Desktop:
+# it starts the Desktop, receives H.264 frames from the voxl streamer as the
+# web viewer does, takes voxl's screenshot of the display, and takes a
+# Chromium screenshot over DevTools; a Desktop it started is stopped again. One line per check, then
+# a JSON summary; exits 1 when any check fails.
+#
+#   /opt/dx/bin/dx-orb-check [--no-desktop]
+set -u
+
+desktop=1
+[ "${1:-}" = "--no-desktop" ] && desktop=
+
+failures=0
+checks=()
+pass() {
+  printf 'ok   %-18s %s\n' "$1" "$2"
+  checks+=("{\"check\":\"$1\",\"ok\":true}")
+}
+fail() {
+  printf 'FAIL %-18s %s\n' "$1" "$2"
+  checks+=("{\"check\":\"$1\",\"ok\":false}")
+  failures=$((failures + 1))
+}
+# attempts: some providers still finish their own setup for a few seconds
+# after boot (Boat's agent rewrites /usr/local/lib/node_modules and serves
+# binaries lazily), so a tool check that fails is tried three times, 5 s
+# apart, before it counts as missing.
+attempts() {
+  local tries=0
+  until "$@"; do
+    tries=$((tries + 1))
+    [ "$tries" -ge 3 ] && return 1
+    sleep 5
+  done
+}
+# check <name> <command...>: passes when the command succeeds; its first
+# output line is the detail.
+check() {
+  local name=$1 out
+  shift
+  if out=$(attempts "$@" 2>&1); then
+    pass "$name" "$(printf '%s' "$out" | head -n 1 | cut -c 1-120)"
+  else
+    fail "$name" "$(printf '%s' "$out" | tail -n 1 | cut -c 1-160)"
+  fi
+}
+version_at_least() {
+  printf '%s\n%s\n' "$2" "$1" | sort -C -V
+}
+
+[ -r /opt/dx/VERSION ] && pass toolbelt "dx toolbelt $(cat /opt/dx/VERSION), $(readlink /opt/dx/desktop/env)" ||
+  fail toolbelt "no /opt/dx/VERSION"
+[ "$(id -un)" = user ] && pass account "user (uid $(id -u)), home $HOME" ||
+  fail account "running as $(id -un), not user"
+check sudo sudo -n true
+check git git --version
+check git-lfs git lfs version
+gh_ok() {
+  gh_version=$(gh --version 2>&1 | head -n 1 | awk '{print $3}')
+  [ -n "$gh_version" ] && version_at_least "$gh_version" 2.40.0
+}
+if attempts gh_ok; then
+  pass gh "gh $gh_version"
+else
+  fail gh "gh ${gh_version:-missing}; Core needs 2.40 or later"
+fi
+node_ok() {
+  node_version=$(node --version 2>&1) && version_at_least "${node_version#v}" 24.0.0 &&
+    npm_version=$(npm --version 2>&1) && corepack_version=$(corepack --version 2>&1)
+}
+if attempts node_ok; then
+  pass node "node $node_version ($(command -v node)), npm $npm_version, corepack $corepack_version"
+else
+  fail node "node: $(printf '%s' "${node_version:-missing}" | tail -n 1 | cut -c 1-80), npm: $(printf '%s' "${npm_version:-?}" | tail -n 1 | cut -c 1-60); dx needs Node.js 24 or later with npm and corepack"
+fi
+check python3 python3 --version
+check java java -version
+check ripgrep rg --version
+check jq jq --version
+check tmux /opt/dx/bin/tmux -V
+[ "$(command -v tmux)" = /usr/local/bin/tmux ] &&
+  [ "$(readlink -f /usr/local/bin/tmux)" = "$(readlink -f /opt/dx/bin/tmux)" ] &&
+  pass tmux.path "tmux on PATH is the toolbelt's" ||
+  fail tmux.path "tmux on PATH is $(command -v tmux), not /opt/dx/bin/tmux"
+check claude "$HOME/.local/bin/claude" --version
+for file in /usr/local/bin/dx-orb-init /etc/profile.d/dx-terminal.sh /opt/dx/share/tmux.conf; do
+  [ -e "$file" ] && pass "file" "$file" || fail "file" "$file is missing"
+done
+
+if [ -n "$desktop" ]; then
+  helper=/opt/dx/share/dx-orb-check.mjs
+  was_running=
+  curl -fsS --max-time 2 -o /dev/null http://127.0.0.1:5900/healthz 2>/dev/null && was_running=1
+  started=$(date +%s%N)
+  if out=$(/opt/dx/desktop/start 2>&1); then
+    pass desktop.start "ready in $((($(date +%s%N) - started) / 1000000)) ms"
+    check desktop.stream node "$helper" stream 3
+    check desktop.screen node "$helper" screen
+    check desktop.chromium node "$helper" cdp
+  else
+    fail desktop.start "$out"
+  fi
+  [ -z "$was_running" ] && /opt/dx/desktop/stop >/dev/null 2>&1
+fi
+
+summary=$(IFS=,; printf '%s' "${checks[*]}")
+printf '{"dxOrbCheck":{"ok":%s,"failures":%d,"kernel":"%s","os":"%s","checks":[%s]}}\n' \
+  "$([ "$failures" -eq 0 ] && echo true || echo false)" "$failures" "$(uname -r)" \
+  "$(. /etc/os-release 2>/dev/null; printf '%s' "${PRETTY_NAME:-unknown}")" "$summary"
+[ "$failures" -eq 0 ]

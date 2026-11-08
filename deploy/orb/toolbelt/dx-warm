@@ -1,0 +1,36 @@
+#!/bin/bash
+# dx-warm: reads the Desktop's programs once, at the lowest CPU and disk
+# priority, so they are in memory before someone opens the Desktop. Some
+# providers restore an Orb's disk lazily from a snapshot (Boat fetches each
+# block on first read), where a cold Desktop start took 17 to 30 s; a warm
+# one takes under a second. dx-orb-init starts it in the background when
+# the Orb starts. First the files a Desktop start runs (Xvfb, openbox, voxl,
+# the shell, dbus), then Chromium's.
+#
+# Such a disk answers each read after a network round trip, so one reader
+# is slow and many are not: on a cold Boat disk, 45 MB of small files took
+# 21 s one at a time and 2 s sixteen at a time, and 264 MB of Chromium's
+# binary 42 s in one stream and 0.5 s in eight. So it reads every file in
+# 8 MB pieces, sixteen pieces at once.
+set -u
+PATH=/opt/dx/desktop/env/bin:$PATH
+share=/opt/dx/share
+piece=$((8 * 1024 * 1024))
+
+pieces() {
+  local file size n
+  while IFS= read -r file; do
+    [ -f "$file" ] || continue
+    size=$(stat -L -c %s -- "$file" 2>/dev/null) || continue
+    for ((n = 0; n * piece < size; n++)); do
+      printf '%s\n%s\n' "$n" "$file"
+    done
+  done
+}
+
+for list in "$share/warm-start.paths" "$share/warm-chromium.paths"; do
+  [ -r "$list" ] || continue
+  pieces <"$list" | xargs -r -d '\n' -n 2 -P 16 \
+    bash -c 'dd if="$2" of=/dev/null bs=8M skip="$1" count=1 status=none' dx-warm \
+    >/dev/null 2>&1
+done

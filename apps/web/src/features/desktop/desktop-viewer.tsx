@@ -1,9 +1,4 @@
 import type { ThreadId } from "@dx/domain";
-import type {
-  SurfaceHandle,
-  WaymoteSession,
-  WaymoteSessionState,
-} from "@rockorager/waymote";
 import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
 import {
@@ -12,6 +7,7 @@ import {
 } from "../../shared/auth/session-ended.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { useMobile } from "../../shared/use-mobile.js";
+import { followPaneSize, writeLocalClipboard } from "./desktop-display.js";
 import {
   codeForCharacter,
   type DesktopModifier,
@@ -22,24 +18,23 @@ import {
   desktopPath,
   checkDesktop as requestDesktop,
 } from "./desktop-queries.js";
+import type { VoxlConnection, VoxlSession } from "./voxl/session.js";
 
-// The Thread's Linux desktop, streamed by Waymote from the sandbox. The
-// browser reaches it only through dx Core's authenticated Thread routes: a
-// status check that starts the desktop, then three WebSockets that Core
-// relays to the sandbox's loopback gateway (deploy/orb/README.md#desktop).
+// The Thread's Linux desktop, streamed by voxl from the sandbox. The browser
+// reaches it only through dx Core's authenticated Thread routes: a status
+// check that starts the desktop, then one WebSocket that Core relays to
+// voxl on the sandbox's loopback (deploy/orb/README.md#desktop).
 
-const loadWaymote = () => import("@rockorager/waymote");
+const loadVoxl = () => import("./voxl/session.js");
 
-type DesktopChannel = "stream" | "audio" | "control";
-
-const desktopChannelUrl = (threadId: ThreadId, channel: DesktopChannel) =>
-  `${window.location.origin.replace(/^http/, "ws")}${desktopPath(threadId)}/${channel}`;
+const desktopSocketUrl = (threadId: ThreadId) =>
+  `${window.location.origin.replace(/^http/, "ws")}${desktopPath(threadId)}/ws`;
 
 /**
- * Without input on the desktop for this long, the viewer disconnects. Waymote
- * pings the control socket every second and Core counts every browser
- * message as workspace activity, so a forgotten Desktop tab would keep the
- * sandbox awake forever. Five minutes, plus the workspace's own five-minute
+ * Without input on the desktop for this long, the viewer disconnects. The
+ * viewer acknowledges every frame and answers voxl's pings, and Core counts
+ * every browser message as workspace activity, so a forgotten Desktop tab
+ * would keep the sandbox awake forever. Five minutes, plus the workspace's own five-minute
  * inactivity pause, bounds a forgotten tab to about ten minutes awake; an
  * agent at work keeps the workspace awake by itself.
  */
@@ -57,9 +52,8 @@ const RECOVERY_LIMIT = 2;
 /** A socket open this long proves the desktop healthy again. */
 const STABLE_SOCKET_MS = 30_000;
 /**
- * The gateway sends a new viewer its latest full picture at once, so a stream
- * open this long with nothing drawn is stuck: reconnect it to get the picture
- * again.
+ * voxl sends a new viewer a full picture at once, so a stream open this long
+ * with nothing drawn is stuck: reconnect it to get the picture again.
  */
 const DESKTOP_PICTURE_WAIT_MS = 5_000;
 /** Stream reconnects without a picture before the viewer gives up. */
@@ -70,29 +64,11 @@ const BLANK_STREAM_LIMIT = 3;
  * code cannot replace the local clipboard on its own.
  */
 const CLIPBOARD_GESTURE_MS = 2_000;
-/** How long an on-screen key waits for desktop control before it is dropped. */
-const CONTROL_WAIT_MS = 2_000;
 /**
  * Kept in the text input so a phone keyboard's Backspace always has
  * something to delete, and so always reports it.
  */
 const TEXT_INPUT_SENTINEL = " ";
-
-// The remote output follows the viewer's size at its pixel density, at least
-// a usable laptop-sized desktop (the canvas letterboxes when the pane is
-// smaller) and at most about 1080p of encoded pixels.
-const remoteDisplay = () => {
-  const density = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
-  const minWidth = Math.round(960 * density);
-  const minHeight = Math.round(540 * density);
-  return {
-    mode: "observe",
-    devicePixelRatio: density,
-    minWidth,
-    minHeight,
-    maxPixels: Math.max(1920 * 1200, minWidth * minHeight),
-  } as const;
-};
 
 const subscribeVisibility = (onChange: () => void) => {
   document.addEventListener("visibilitychange", onChange);
@@ -103,7 +79,7 @@ const serverVisible = () => false;
 
 type DesktopStatus =
   | { readonly phase: "starting" }
-  | { readonly phase: "live"; readonly inputBusy: boolean }
+  | { readonly phase: "live" }
   | { readonly phase: "reconnecting" }
   | { readonly phase: "unsupported" }
   | {
@@ -118,15 +94,11 @@ type DesktopStatus =
 // After that, the last picture stays on the canvas while the stream
 // reconnects.
 const nextStatus = (
-  state: WaymoteSessionState,
+  connection: VoxlConnection,
   drawn: boolean,
 ): DesktopStatus => {
-  if (state.video.state === "error")
-    return { phase: "failed", message: state.video.message };
   if (!drawn) return { phase: "starting" };
-  return state.video.state === "connected"
-    ? { phase: "live", inputBusy: state.input.state === "busy" }
-    : { phase: "reconnecting" };
+  return connection === "open" ? { phase: "live" } : { phase: "reconnecting" };
 };
 
 /** Starts the desktop through Core and says whether it can stream. */
@@ -144,7 +116,7 @@ interface DesktopViewerProps {
   /** The Desktop tab is shown; the viewer connects only then. */
   readonly active?: boolean;
   readonly threadId: ThreadId;
-  readonly loadClient?: typeof loadWaymote;
+  readonly loadClient?: typeof loadVoxl;
   /** Reloads the page, the only way to fetch a viewer chunk that failed. */
   readonly reloadPage?: () => void;
 }
@@ -164,7 +136,7 @@ function DesktopSession({
   onIdle,
 }: {
   readonly threadId: ThreadId;
-  readonly loadClient: typeof loadWaymote;
+  readonly loadClient: typeof loadVoxl;
   readonly reloadPage: () => void;
   readonly onRetry: () => void;
   readonly onIdle: () => void;
@@ -194,10 +166,11 @@ function DesktopSession({
     if (surface === null || display === null) return;
     const controller = new AbortController();
     const disposed = () => controller.signal.aborted;
-    let session: WaymoteSession | undefined;
+    let session: VoxlSession | undefined;
+    let stopFollowing: (() => void) | undefined;
     let idleTimer: ReturnType<typeof setTimeout> | undefined;
     let pictureTimer: ReturnType<typeof setTimeout> | undefined;
-    // Set once the viewer gives up; the SDK's own states no longer show.
+    // Set once the viewer gives up; the session's own states no longer show.
     let halted = false;
     const stop = (next: DesktopStatus) => {
       if (disposed()) return;
@@ -236,9 +209,9 @@ function DesktopSession({
         setStatus(desktop);
         return;
       }
-      const waymote = await client;
+      const voxl = await client;
       if (disposed()) return;
-      if (waymote === undefined) {
+      if (voxl === undefined) {
         setStatus({
           phase: "failed",
           message: "Desktop viewer failed to load.",
@@ -248,7 +221,7 @@ function DesktopSession({
       }
 
       // Core answers a refused upgrade (desktop or workspace unavailable)
-      // with an error status, which the SDK sees as a dropped socket and
+      // with an error status, which the session sees as a dropped socket and
       // retries forever. Count sockets that never open; after a run of
       // them, ask Core again and stop unless the desktop is ready.
       let failures = 0;
@@ -264,19 +237,29 @@ function DesktopSession({
         watchedStream = stream;
         pictureTimer = setTimeout(() => {
           if (watchedStream !== stream) return;
+          // voxl sends no video to a hidden page: wait until it shows.
+          if (document.hidden) return;
           blankStreams += 1;
           if (blankStreams > BLANK_STREAM_LIMIT)
             return stop({
               phase: "failed",
               message: "The desktop isn't sending a picture.",
             });
-          // Closing only the stream waits for the relay to finish the close
-          // handshake, which can take far longer, before the SDK reconnects.
-          // Reconnecting the session opens a new stream at once.
+          // The relay may take long to finish the close handshake;
+          // reconnecting the session opens a new socket at once.
           session?.disconnect();
           session?.connect();
         }, DESKTOP_PICTURE_WAIT_MS);
       };
+      // The wait for a first picture starts over when the page shows again.
+      const onVisible = () => {
+        if (!document.hidden && watchedStream !== undefined)
+          awaitPicture(watchedStream);
+      };
+      document.addEventListener("visibilitychange", onVisible);
+      controller.signal.addEventListener("abort", () =>
+        document.removeEventListener("visibilitychange", onVisible),
+      );
       const recover = async () => {
         recovering = true;
         session?.disconnect();
@@ -294,13 +277,13 @@ function DesktopSession({
         recovering = false;
         session?.connect();
       };
-      const socketFor = (channel: DesktopChannel) => {
-        const socket = new WebSocket(desktopChannelUrl(threadId, channel));
+      const openSocket = () => {
+        const socket = new WebSocket(desktopSocketUrl(threadId));
         let openedAt: number | undefined;
         socket.addEventListener("open", () => {
           openedAt = Date.now();
           failures = 0;
-          if (channel === "stream") awaitPicture(socket);
+          awaitPicture(socket);
         });
         socket.addEventListener("close", (event) => {
           if (socket === watchedStream) {
@@ -323,49 +306,45 @@ function DesktopSession({
         return socket;
       };
 
-      session = new waymote.WaymoteSession({
-        audio: false,
-        remoteDisplay: remoteDisplay(),
-        createWebSocket: (path) => socketFor(path.slice(1) as DesktopChannel),
-      });
-      const current = session;
-      current.on("state", (state) => {
-        if (recovering || halted) return;
-        setStatus(nextStatus(state, drawn));
-      });
-      // The SDK reports stats after each frame it draws on the canvas.
-      current.on("stats", () => {
-        clearTimeout(pictureTimer);
-        blankStreams = 0;
-        if (drawn || recovering || halted) return;
-        drawn = true;
-        setStatus(nextStatus(current.state, drawn));
-      });
-      // The SDK's automatic sync writes every remote clipboard change to
-      // the local clipboard while the page has focus, so guest code could
-      // replace what the person pastes next. Copy only what follows their
-      // own key press or click on the desktop while they hold control.
-      // Pasting (local to remote) is the SDK's native paste handling.
-      current.on("clipboard", ({ text, status: clipboard }) => {
-        if (
-          clipboard !== "Remote clipboard ready" ||
-          !text ||
-          current.state.input.state !== "active" ||
-          Date.now() - inputRef.current.lastGesture > CLIPBOARD_GESTURE_MS ||
-          document.hidden ||
-          !document.hasFocus()
-        )
-          return;
-        navigator.clipboard?.writeText(text).catch(() => undefined);
-      });
-      const handle = current.attachSurface({
+      let connection: VoxlConnection = "connecting";
+      const current = new voxl.VoxlSession({
         canvas: display,
-        inputElement: surface,
-        textInputElement: textInputRef.current ?? undefined,
-        controlOnFocus: true,
-        clipboardAutoSync: false,
+        surface,
+        textInput: textInputRef.current ?? undefined,
+        textInputRest: TEXT_INPUT_SENTINEL,
+        createWebSocket: openSocket,
+        onConnection: (state) => {
+          connection = state;
+          if (recovering || halted) return;
+          setStatus(nextStatus(connection, drawn));
+        },
+        onPicture: () => {
+          clearTimeout(pictureTimer);
+          watchedStream = undefined;
+          blankStreams = 0;
+          if (drawn || recovering || halted) return;
+          drawn = true;
+          setStatus(nextStatus(connection, drawn));
+        },
+        // Guest code can change the remote clipboard at any time; copying
+        // every change would let it replace what the person pastes next.
+        // Copy only what follows their own key press or click on the
+        // desktop while they hold control. Pasting (local to remote) is the
+        // session's paste handling.
+        onClipboard: (content) => {
+          if (
+            !current.controlled ||
+            Date.now() - inputRef.current.lastGesture > CLIPBOARD_GESTURE_MS ||
+            document.hidden ||
+            !document.hasFocus()
+          )
+            return;
+          writeLocalClipboard(content);
+        },
       });
-      remoteRef.current = { session: current, surface: handle };
+      session = current;
+      stopFollowing = followPaneSize(surface, (w, h) => current.resize(w, h));
+      remoteRef.current = current;
       inputRef.current.lastInput = Date.now();
       watchIdle(DESKTOP_IDLE_PAUSE_MS);
       current.connect();
@@ -375,8 +354,9 @@ function DesktopSession({
       controller.abort();
       clearTimeout(idleTimer);
       clearTimeout(pictureTimer);
+      stopFollowing?.();
       remoteRef.current = undefined;
-      void session?.dispose();
+      session?.dispose();
     };
   };
   const noteInput = () => {
@@ -411,9 +391,6 @@ function DesktopSession({
         aria-roledescription="remote desktop"
         // biome-ignore lint/a11y/noNoninteractiveTabindex: the remote desktop takes keyboard focus to receive input.
         tabIndex={0}
-        // Double-click belongs to the remote desktop, not the SDK's
-        // pointer-lock shortcut: stop it before it reaches the surface.
-        onDoubleClickCapture={(event) => event.stopPropagation()}
         onPointerMoveCapture={noteInput}
         onWheelCapture={noteInput}
         onPointerDownCapture={noteGesture}
@@ -470,11 +447,6 @@ function DesktopStatusLayer({
           Reconnecting…
         </span>
       ) : null}
-      {status.phase === "live" && status.inputBusy ? (
-        <span className="thread-desktop-notice" role="status">
-          Another viewer has control
-        </span>
-      ) : null}
       {status.phase === "unsupported" ? (
         <div className="thread-desktop-state" role="status">
           <div className="thread-desktop-state-content">
@@ -507,19 +479,14 @@ function DesktopStatusLayer({
   );
 }
 
-interface RemoteKeyboardTarget {
-  readonly session: WaymoteSession;
-  readonly surface: SurfaceHandle;
-}
-
 /**
- * Typing on the desktop from a phone: the phone keyboard writes into
- * Waymote's text input, and on-screen keys press what a phone keyboard
+ * Typing on the desktop from a phone: the phone keyboard writes into the
+ * session's text input, and on-screen keys press what a phone keyboard
  * lacks. A latched modifier applies to the next key from either.
  */
 function usePhoneKeyboard(inputRef: React.RefObject<DesktopInput>) {
   const textInput = React.useRef<HTMLTextAreaElement | null>(null);
-  const remote = React.useRef<RemoteKeyboardTarget | undefined>(undefined);
+  const remote = React.useRef<VoxlSession | undefined>(undefined);
   const [open, setOpen] = React.useState(false);
   const [modifiers, setModifiers] = React.useState<
     ReadonlySet<DesktopModifier>
@@ -530,23 +497,13 @@ function usePhoneKeyboard(inputRef: React.RefObject<DesktopInput>) {
     latched.current = next;
     setModifiers(next);
   };
-  // Keys reach the desktop only while this viewer holds control.
+  // Keys reach the desktop only while this viewer holds control, which
+  // focusing the surface takes.
   const withControl = (send: () => void) => {
-    const target = remote.current;
-    if (target === undefined) return;
-    if (target.session.state.input.state === "active") {
-      send();
-      return;
-    }
-    if (document.activeElement !== textInput.current) target.surface.focus();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const stop = target.session.on("state", (state) => {
-      if (state.input.state !== "active") return;
-      stop();
-      clearTimeout(timer);
-      send();
-    });
-    timer = setTimeout(stop, CONTROL_WAIT_MS);
+    const session = remote.current;
+    if (session === undefined) return;
+    if (!session.controlled) session.focus();
+    send();
   };
   const press = (codes: readonly string[]) => {
     const chord = [
@@ -564,8 +521,8 @@ function usePhoneKeyboard(inputRef: React.RefObject<DesktopInput>) {
   const attachTextInput = (node: HTMLTextAreaElement | null) => {
     textInput.current = node;
     if (node === null) return;
-    // A phone keyboard reports Backspace and Return without a key code,
-    // which Waymote cannot map; press the real keys instead.
+    // A phone keyboard reports Backspace and Return without a key code;
+    // press the real keys instead.
     const softKey = (event: KeyboardEvent) => {
       if (event.code !== "" || event.isComposing) return;
       if (event.key !== "Backspace" && event.key !== "Enter") return;
@@ -609,7 +566,7 @@ function usePhoneKeyboard(inputRef: React.RefObject<DesktopInput>) {
     press,
     toggle: () => {
       if (open) textInput.current?.blur();
-      else remote.current?.surface.focusTextInput();
+      else remote.current?.focusTextInput();
     },
     toggleModifier: (modifier: DesktopModifier) => {
       const next = new Set(latched.current);
@@ -663,7 +620,7 @@ const reloadWindow = () => window.location.reload();
 export function DesktopViewer({
   active = true,
   threadId,
-  loadClient = loadWaymote,
+  loadClient = loadVoxl,
   reloadPage = reloadWindow,
 }: DesktopViewerProps) {
   const visible = React.useSyncExternalStore(

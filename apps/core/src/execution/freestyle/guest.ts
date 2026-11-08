@@ -6,7 +6,7 @@ import type {
 import type { VmOrbBuildGuest } from "../guest/vm-orb-recipe.js";
 import type { FreestyleApi } from "./api.js";
 
-/** The Orb's workspace account (deploy/orb/vm-setup.sh). */
+/** The Orb's workspace account (deploy/orb/install.sh). */
 const ORB_USER = "user";
 /** Freestyle's own default is 30 s; an Orb command gets E2B's 5 minutes. */
 const DEFAULT_TIMEOUT_MS = 300_000;

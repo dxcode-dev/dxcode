@@ -16,6 +16,7 @@ import {
   deployOrbWorker,
   destroyOrbWorker,
   orbDockerEnvironment,
+  orbRecipeFiles,
   orbWorkerExists,
   retryOrbWorkerDeploy,
   transientDeployFailure,
@@ -28,6 +29,23 @@ import {
 const workspaceRoot = resolve(import.meta.dirname, "../..");
 
 describe("Cloudflare Containers Orb Worker deployment", () => {
+  it("redeploys the Orb Worker when any file the image is built from changes", () => {
+    const dockerfile = readFileSync(
+      resolve(workspaceRoot, "deploy/orb/Dockerfile"),
+      "utf8",
+    );
+    const copied = [...dockerfile.matchAll(/^COPY\s+(\S+)\s+\S+$/gm)].map(
+      ([, source]) => source,
+    );
+    expect(copied).toContain("deploy/orb/install.sh");
+    for (const file of [
+      "deploy/orb/Dockerfile",
+      "deploy/orb/Dockerfile.dockerignore",
+      ...copied,
+    ])
+      expect(orbRecipeFiles, file).toContain(file);
+  });
+
   it("removes the application, the Worker, and the image repository with its snapshots", async () => {
     const calls = [];
     const fetch = vi.fn(async (url, init) => {

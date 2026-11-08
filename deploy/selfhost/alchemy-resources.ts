@@ -9,6 +9,7 @@ import {
   destroyOrbWorker,
   orbRecipeHash,
   orbWorkerExists,
+  previewPublicOrbImage,
 } from "../orb/containers.mjs";
 import { e2bRecipeHash, reconcileE2BProfiles } from "./e2b.mjs";
 
@@ -227,4 +228,4 @@ export const selfhostProviders = () =>
     orbContainersProvider(),
   );
 
-export { e2bRecipeHash, orbRecipeHash };
+export { e2bRecipeHash, orbRecipeHash, previewPublicOrbImage };

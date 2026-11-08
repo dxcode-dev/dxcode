@@ -1,0 +1,45 @@
+{
+  "nodes": {
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1793865203,
+        "narHash": "sha256-/cpdPHaySDIyCgZI6EWngiM6jK3YLUNzv1b7lTzy6Bk=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "c56a87d8e41ce69bd2af57eb35dcc117a9dfca33",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-26.05",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "nixpkgs": "nixpkgs",
+        "voxl": "voxl"
+      }
+    },
+    "voxl": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1794007116,
+        "narHash": "sha256-oNHMes5tL1AxNZ/qviMY1DYLv1n0m7kl2Lr5wfYwPNA=",
+        "owner": "tembo",
+        "repo": "voxl",
+        "rev": "176f8befef4c4420e7bc6df5f143886a0f023b8a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "tembo",
+        "repo": "voxl",
+        "rev": "176f8befef4c4420e7bc6df5f143886a0f023b8a",
+        "type": "github"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

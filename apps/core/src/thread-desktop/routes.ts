@@ -11,9 +11,10 @@ import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
 
-/** The guest's Waymote gateway listens here on loopback only. */
+/** The guest's voxl desktop streamer listens here on loopback only. */
 export const DESKTOP_GATEWAY_PORT = 5900;
-const DESKTOP_CHANNELS = new Set(["stream", "audio", "control"]);
+/** voxl's one WebSocket carries video, input, cursor, and clipboard. */
+const DESKTOP_CHANNELS = new Set(["ws"]);
 const GATEWAY_HOST = `127.0.0.1:${String(DESKTOP_GATEWAY_PORT)}`;
 
 /** The Thread execution object, when this runtime relays to a resident. */
@@ -28,8 +29,8 @@ const executionStub = (env: AppEnv["Bindings"], threadId: ThreadId) => {
 };
 
 /**
- * Asks the Thread execution object to start the Desktop and fetch the
- * gateway's `/healthz`. The object answers `desktop-unsupported` (501) when
+ * Asks the Thread execution object to start the Desktop and fetch voxl's
+ * `/healthz`. The object answers `desktop-unsupported` (501) when
  * the workspace has no Desktop, and `desktop-unavailable` or
  * `workspace-unavailable` (503) when it could not start one.
  */
@@ -57,8 +58,8 @@ const checkDesktop = async (
 };
 
 /**
- * The Desktop: a status check and its three WebSockets. The gateway has no
- * authentication of its own: these routes, after Thread authorization (owner
+ * The Desktop: a status check and its WebSocket. voxl runs with its own
+ * sign-in off (`--enable-basic-auth=false`): these routes, after Thread authorization (owner
  * or Contribute access, active Thread), are its only way in, through the
  * Thread execution object and the resident daemon's session.
  */

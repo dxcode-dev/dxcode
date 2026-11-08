@@ -9,6 +9,11 @@ import {
   OrbProviderCredentialsRejected,
 } from "../../plugins/execution/connector.js";
 import {
+  ORB_CHECK_COMMAND,
+  ORB_CHECK_TIMEOUT_SECONDS,
+  orbCheckFailure,
+} from "../guest/orb-check.js";
+import {
   type DockerSandboxesApi,
   DockerSandboxesApiError,
   dockerSandboxesApi,
@@ -222,6 +227,14 @@ export const makeDockerConnector = (
           throw new ProbeFailed(
             "The test Orb started, but its Orb supervisor is not running as user.",
           );
+        // Every workspace feature, the Desktop included (dx-orb-check).
+        const checked = await api.endpoint(probe).exec({
+          cmd: ["/bin/bash", "-c", ORB_CHECK_COMMAND],
+          user: ORB_USER,
+          timeoutMs: ORB_CHECK_TIMEOUT_SECONDS * 1_000,
+        });
+        const failure = orbCheckFailure(checked.stdout, checked.exitCode);
+        if (failure !== undefined) throw new ProbeFailed(failure);
         await api
           .renewTimeout(probe, PROBE_TIMEOUT_SECONDS)
           .catch((cause: unknown) => {

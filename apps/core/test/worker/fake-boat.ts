@@ -54,6 +54,8 @@ export interface World {
   count: number;
   clock: number;
   failSetup: boolean;
+  /** The test Orb's dx-orb-check finds no Desktop. */
+  missingDesktop?: boolean;
   /** The next Thread create reaches Boat, but its answer is lost. */
   loseNextThreadCreate: boolean;
 }
@@ -397,7 +399,9 @@ export const fakeBoat =
         return done("");
       }
       if (
-        command.includes("setsid nohup bash /var/lib/dx-orb-setup/vm-setup.sh")
+        command.includes(
+          "setsid nohup bash /var/lib/dx-orb-setup/install.sh --vm",
+        )
       )
         return done("started\n");
       if (command.includes("tail -c 400 /var/lib/dx-orb-setup/setup.log"))
@@ -418,6 +422,13 @@ export const fakeBoat =
         return done(`${sandbox.bootedAt}\n`);
       if (command.includes("systemctl is-active --quiet dx-orb.service"))
         return done("", sandbox.orb ? 0 : 1);
+      if (command.includes("/opt/dx/bin/dx-orb-check"))
+        return world.missingDesktop === true
+          ? done(
+              "ok   account            user (uid 1000), home /home/user\nFAIL desktop.start      dx desktop: no /opt/dx/desktop\n",
+              1,
+            )
+          : done("ok   account            user (uid 1000), home /home/user\n");
       return done(`ran as ${asRoot ? "root" : "user"}`);
     }
     return new Response(null, { status: 599 });

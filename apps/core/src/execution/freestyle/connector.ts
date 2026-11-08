@@ -6,6 +6,11 @@ import {
   OrbProviderCredentialsRejected,
 } from "../../plugins/execution/connector.js";
 import {
+  ORB_CHECK_COMMAND,
+  ORB_CHECK_TIMEOUT_SECONDS,
+  orbCheckFailure,
+} from "../guest/orb-check.js";
+import {
   startVmOrbSetup,
   vmOrbRecipe,
   vmOrbSetupStatus,
@@ -18,11 +23,12 @@ import { freestyleBuildGuest } from "./guest.js";
  * (tasks/orb-provider-connections.md). Freestyle VMs boot from snapshots,
  * not OCI images, and a snapshot keeps the hardware it was taken at. So
  * preparing an account builds one dx Orb snapshot per size: a VM from that
- * size's Ubuntu base runs deploy/orb/vm-setup.sh, and once it is done the
+ * size's Ubuntu base runs deploy/orb/install.sh, and once it is done the
  * VM is snapshotted (memory and disk) and deleted. The builds run side by
  * side. A size the account's plan does not allow is skipped. Then a test
  * Orb boots from the smallest snapshot, runs `true` as the workspace
- * account, checks that dx-orb-init is supervising, and is deleted.
+ * account, checks that dx-orb-init is supervising, runs dx-orb-check (every
+ * workspace feature, the Desktop included), and is deleted.
  *
  * Threads pin their size's snapshot and boot from it.
  */
@@ -195,6 +201,14 @@ const probe = async (api: FreestyleApi, snapshotId: string) => {
     });
     if (ran.statusCode !== 0)
       throw new BuildFailed("The test Orb could not run a command.");
+    // Every workspace feature, the Desktop included (dx-orb-check).
+    const checked = await api.exec(vm.id, {
+      command: ORB_CHECK_COMMAND,
+      linuxUser: ORB_USER,
+      timeoutMs: ORB_CHECK_TIMEOUT_SECONDS * 1_000,
+    });
+    const failure = orbCheckFailure(checked.stdout, checked.statusCode ?? 1);
+    if (failure !== undefined) throw new BuildFailed(failure);
   } finally {
     await api.deleteVm(vm.id).catch(() => undefined);
   }

@@ -71,6 +71,13 @@ pause() {
   kill $! 2>/dev/null
 }
 
+# Read the Desktop's programs into memory in the background, at the lowest
+# priority (deploy/orb/toolbelt/dx-warm), so a Desktop opened soon after
+# the Orb starts does not wait on a lazily restored disk.
+if [ -x /opt/dx/bin/dx-warm ]; then
+  /opt/dx/desktop/env/bin/nice -n 19 /opt/dx/desktop/env/bin/ionice -c 3 /opt/dx/bin/dx-warm >/dev/null 2>&1 </dev/null &
+fi
+
 backoff=0
 while :; do
   # An installer from before this image (a rolled-back Core) runs dxd as a

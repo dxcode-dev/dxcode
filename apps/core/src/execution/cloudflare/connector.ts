@@ -11,6 +11,11 @@ import {
   type OrbProviderConnector,
   OrbProviderCredentialsRejected,
 } from "../../plugins/execution/connector.js";
+import {
+  ORB_CHECK_COMMAND,
+  ORB_CHECK_TIMEOUT_SECONDS,
+  orbCheckFailure,
+} from "../guest/orb-check.js";
 import { accountOrbContainer, accountOrbHealth } from "./account-orb-client.js";
 import { ACCOUNT_ORB_PROTOCOL } from "./account-orb-protocol.js";
 import accountOrbWorker from "./account-orb-worker.generated.js?raw";
@@ -33,7 +38,8 @@ import {
  * 4. upload the account Orb Worker (`account-orb-worker.ts`) with the image
  *    and the connection's secret, create its container application, and
  *    serve it on the account's workers.dev subdomain;
- * 5. check the Worker answers, then start a test Orb, run a command in it,
+ * 5. check the Worker answers, then start a test Orb, run a command and
+ *    dx-orb-check (every workspace feature, the Desktop included) in it,
  *    and destroy it.
  *
  * Threads then pin the Worker's URL and reach their containers through it.
@@ -308,6 +314,12 @@ export const makeCloudflareConnector = (
         const ran = await orb.exec("true", { timeoutMs: 30_000 });
         if (ran.exitCode !== 0)
           throw new Error("The test Orb could not run a command.");
+        // Every workspace feature, the Desktop included (dx-orb-check).
+        const checked = await orb.exec(ORB_CHECK_COMMAND, {
+          timeoutMs: ORB_CHECK_TIMEOUT_SECONDS * 1_000,
+        });
+        const failure = orbCheckFailure(checked.stdout, checked.exitCode);
+        if (failure !== undefined) throw new Error(failure);
       } finally {
         await orb.destroy().catch(() => undefined);
       }

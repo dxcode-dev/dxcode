@@ -125,7 +125,7 @@ const openSocket = (
   bindings: Bindings,
   threadId: string,
   cookie: string,
-  channel = "control",
+  channel = "ws",
 ) =>
   app.request(
     `${appOrigin}/v1/threads/${threadId}/desktop/${channel}`,
@@ -246,6 +246,13 @@ describe("Thread Desktop routes in workerd", () => {
     expect(execution.calls[1]?.headers.get("x-dx-proxy-prepare")).toBe(
       "desktop",
     );
+    expect(execution.calls[1]?.headers.get("x-dx-proxy-target")).toBe("/ws");
+    // voxl serves one socket; Waymote's old channels reach nothing.
+    for (const channel of ["stream", "control", "audio"])
+      expect(
+        (await openSocket(bindings, threadId, member.cookie, channel)).status,
+      ).toBe(404);
+    expect(execution.calls).toHaveLength(2);
   });
 
   it("refuses an archived Thread before reaching the sandbox", async () => {
@@ -261,8 +268,7 @@ describe("Thread Desktop routes in workerd", () => {
 
     const responses = [
       await checkDesktop(bindings, threadId, owner.cookie),
-      await openSocket(bindings, threadId, owner.cookie, "control"),
-      await openSocket(bindings, threadId, owner.cookie, "stream"),
+      await openSocket(bindings, threadId, owner.cookie),
     ];
     for (const response of responses) {
       expect(response.status).toBe(409);

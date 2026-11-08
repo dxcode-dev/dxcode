@@ -1,8 +1,8 @@
 #!/bin/bash
 # Stops the dx Desktop session started by ./start: every process in its
-# session (labwc, Xwayland, the gateway and encoder, Chromium, terminals) and
+# session (Xvfb, openbox, the voxl streamer, Chromium, terminals) and
 # every process that carries its DX_DESKTOP_SESSION marker, which reaches the
-# programs labwc launches in sessions of their own (menu entries), and every
+# programs openbox launches in sessions of their own (menu entries), and every
 # Chromium process on the desktop's profile, which reaches Chromium opened by
 # ./chromium from elsewhere. Chromium's browser gets TERM
 # first, then everything gets TERM, then KILL. An optional argument limits
@@ -10,6 +10,8 @@
 # runs.
 set -u
 
+# shellcheck source=env.sh
+. /opt/dx/desktop/env.sh
 state="${HOME:?HOME is not set}/.local/state/dx-desktop"
 pidfile="$state/session.pid"
 
@@ -44,7 +46,7 @@ fi
 # kernel does not reuse an ID while a session holds it, so a match is this
 # session. The marker is the session's own ID, set by ./session.
 in_session=
-if pgrep -s "$sid" -f '^(dbus-run-session -- )?/opt/dx/desktop/|^labwc --config-dir /opt/dx/desktop/' >/dev/null; then
+if pgrep -s "$sid" -f '/opt/dx/desktop/(session$|env/bin/Xvfb )' >/dev/null; then
   in_session=1
 fi
 targets() {
@@ -87,6 +89,14 @@ if [ -n "$pids" ]; then
   pids=$(targets)
   # shellcheck disable=SC2086
   [ -n "$pids" ] && kill -KILL $pids 2>/dev/null
+fi
+# Free the stopped Xvfb's screen (a shared-memory segment that outlives a
+# killed X server) and its lock file (./session).
+if xvfb=$(cat "$state/xvfb.pid" 2>/dev/null) && [ -n "$xvfb" ] && ! kill -0 "$xvfb" 2>/dev/null; then
+  awk -v pid="$xvfb" 'NR > 1 && $5 == pid { print $2 }' /proc/sysvipc/shm |
+    while read -r shmid; do ipcrm -m "$shmid" 2>/dev/null; done
+  grep -lx " *$xvfb" /tmp/.X*-lock 2>/dev/null | xargs -r rm -f
+  rm -f "$state/xvfb.pid"
 fi
 rm -f "$pidfile" "$state/environment"
 exit 0

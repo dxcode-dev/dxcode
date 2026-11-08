@@ -207,6 +207,12 @@
       "optional": true
     },
     {
+      "name": "DX_PREVIEW_ORB_IMAGE",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_PRIVACY_URL",
       "type": "text",
       "provenance": "alchemy",

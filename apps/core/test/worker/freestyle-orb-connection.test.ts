@@ -8,7 +8,7 @@ import {
 import { Effect, Redacted, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import vmSetup from "../../../../deploy/orb/vm-setup.sh?raw";
+import orbInstall from "../../../../deploy/orb/install.sh?raw";
 import { makeFreestyleConnector } from "../../src/execution/freestyle/connector.js";
 import { makeFreestyleExecutionProvider } from "../../src/execution/freestyle/provider.js";
 import { resolveExecutionTarget } from "../../src/execution/runner-profiles/execution.js";
@@ -250,7 +250,9 @@ const fakeFreestyle =
         return json({ stdout: "", stderr: "", statusCode: 0 });
       }
       if (
-        command.includes("setsid nohup bash /var/lib/dx-orb-setup/vm-setup.sh")
+        command.includes(
+          "setsid nohup bash /var/lib/dx-orb-setup/install.sh --vm",
+        )
       )
         return json({ stdout: "started\n", stderr: "", statusCode: 0 });
       if (command.startsWith("tail -c 400 /var/lib/dx-orb-setup/setup.log"))
@@ -443,8 +445,8 @@ describe("Freestyle in a person's own account", () => {
       "freestyle/ubuntu-sm",
     ]);
     for (const build of builds) {
-      expect(build.files.get("/var/lib/dx-orb-setup/vm-setup.sh")).toBe(
-        vmSetup,
+      expect(build.files.get("/var/lib/dx-orb-setup/install.sh")).toBe(
+        orbInstall,
       );
       expect(build.files.has("/var/lib/dx-orb-setup/files/dx-orb-init")).toBe(
         true,
@@ -453,12 +455,17 @@ describe("Freestyle in a person's own account", () => {
         new Set(["root"]),
       );
     }
-    // The test Orb booted from the smallest snapshot and ran as `user`.
+    // The test Orb booted from the smallest snapshot, ran as `user`, and
+    // passed dx-orb-check.
     const probe = world.deletedVms.find(
       ({ displayName }) => displayName === "dx-orb-probe",
     );
     expect(probe?.snapshotId).toBe("snap-1");
-    expect(probe?.execs.map(({ linuxUser }) => linuxUser)).toEqual(["user"]);
+    expect(probe?.execs.map(({ linuxUser }) => linuxUser)).toEqual([
+      "user",
+      "user",
+    ]);
+    expect(probe?.execs.at(-1)?.command).toContain("/opt/dx/bin/dx-orb-check");
 
     const ready = await call("");
     expect(freestyleOf(ready.body.data).connection).toMatchObject({

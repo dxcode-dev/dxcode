@@ -34,6 +34,12 @@ export interface Bindings {
    */
   readonly DX_PORTAL_DOMAIN?: string;
   /**
+   * Branch previews only: the branch's Orb image on Docker Hub, which the
+   * preview's Docker Cloud Sandboxes and Cloudflare connections boot instead
+   * of the released one (deploy/orb/containers.mjs previewPublicOrbImage).
+   */
+  readonly DX_PREVIEW_ORB_IMAGE?: string;
+  /**
    * R2's S3 endpoint for the storage bucket and the JSON
    * `{ accessKeyId, secretAccessKey }` Core signs attachment URLs with.
    * Every stage has attachments only with both; local development names its

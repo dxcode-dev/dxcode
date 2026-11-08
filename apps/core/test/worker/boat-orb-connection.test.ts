@@ -3,7 +3,7 @@ import { BOAT_ORB_SIZES, Principal, type UserId } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import vmSetup from "../../../../deploy/orb/vm-setup.sh?raw";
+import orbInstall from "../../../../deploy/orb/install.sh?raw";
 import { makeBoatConnector } from "../../src/execution/boat/connector.js";
 import { makeBoatExecutionProvider } from "../../src/execution/boat/provider.js";
 import { resolveExecutionTarget } from "../../src/execution/runner-profiles/execution.js";
@@ -255,7 +255,9 @@ describe("Boat in a person's own account", () => {
       name.startsWith("dx-orb-build-"),
     );
     expect(build).toMatchObject({ from: null, noEnv: true, monitoring: false });
-    expect(build?.files.get("/var/lib/dx-orb-setup/vm-setup.sh")).toBe(vmSetup);
+    expect(build?.files.get("/var/lib/dx-orb-setup/install.sh")).toBe(
+      orbInstall,
+    );
     expect(build?.files.has("/var/lib/dx-orb-setup/files/dx-orb-init")).toBe(
       true,
     );
@@ -542,5 +544,19 @@ describe("Boat in a person's own account", () => {
     });
     expect(world.sandboxes.size).toBe(0);
     expect(world.saved.size).toBe(0);
+  }, 30_000);
+
+  it("fails preparation, and offers no snapshot to Threads, when the test Orb lacks a workspace feature", async () => {
+    world.missingDesktop = true;
+    const saved = await call("/boat/connection", "PUT", {
+      credentials: { apiKey: "boat_key_1" },
+    });
+    expect(saved.status).toBe(200);
+    await prepare();
+    expect(boatOf((await call("")).body.data).connection).toMatchObject({
+      status: "failed",
+      error: "The test Orb is missing workspace features: desktop.start.",
+    });
+    expect(world.sandboxes.size).toBe(0);
   }, 30_000);
 });

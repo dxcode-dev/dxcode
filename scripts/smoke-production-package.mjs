@@ -213,6 +213,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_TERMS_URL: "",
     DX_PRIVACY_URL: "",
     DX_PORTAL_DOMAIN: "",
+    DX_PREVIEW_ORB_IMAGE: "",
     DX_PUSH_VAPID_PUBLIC_KEY: "",
     DX_PUSH_VAPID_PRIVATE_KEY: "",
     DX_SOURCE_CONTROL_SCHEMA_VERSION: sourceControlSchemaVersion(migrations),

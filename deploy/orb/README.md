@@ -1,19 +1,30 @@
 # dx Orb image
 
-The standard workspace image for every x86 Orb provider: E2B and Cloudflare
-Containers
-([What phase 4d shipped](../../wiki/plugin-platform-direction.md#what-phase-4d-shipped)).
-E2B builds its template from this same Dockerfile
-([`deploy/e2b/template.mjs`](../e2b/template.mjs)), and the Cloudflare
-Containers Orb Worker ([`containers.mjs`](containers.mjs)) builds it as its
-named image `orb`, so both providers run the same filesystem.
+The standard workspace on every Orb provider. One installer,
+[`install.sh`](install.sh), makes it, so every provider gets the same Orb:
 
-A provider that boots its own Debian or Ubuntu images instead of an OCI
-image (Freestyle VMs, Upstash Box containers) runs [`vm-setup.sh`](vm-setup.sh)
-in a fresh machine and snapshots it: the same packages, pinned downloads,
-account, and dx files as the Dockerfile, with no Desktop. A systemd unit
-starts `dx-orb-init` where systemd is PID 1; elsewhere it runs in the
-background under `tini`. Change both files together.
+- **OCI image providers** (E2B, Cloudflare Containers, Docker Cloud
+  Sandboxes) boot the image this [`Dockerfile`](Dockerfile) builds by running
+  `install.sh --image`. E2B builds its template from the same Dockerfile
+  ([`deploy/e2b/template.mjs`](../e2b/template.mjs)), and the Cloudflare
+  Containers Orb Worker ([`containers.mjs`](containers.mjs)) builds it as its
+  named image `orb`.
+- **Providers that boot their own Linux** (Boat, Freestyle) run
+  `install.sh --vm` in a fresh machine through Core's VM Orb recipe
+  ([`vm-orb-recipe.ts`](../../apps/core/src/execution/guest/vm-orb-recipe.ts))
+  and snapshot it. A systemd unit starts `dx-orb-init` where systemd is PID 1;
+  elsewhere it runs in the background under `tini`.
+
+`install.sh` installs the base packages from the distribution (apt: Debian
+and Ubuntu), Node.js and the GitHub CLI from their own pinned releases, the
+`user` account, the **dx toolbelt**, dx's login hooks and entrypoint, and
+Claude Code. The toolbelt ([`toolbelt/`](toolbelt/README.md)) is everything
+dx ships prebuilt: the Terminal's tmux, the Desktop (Xvfb, openbox,
+Chromium, and Tembo's voxl streamer), and `dx-orb-check`. It is built once with Nix, each
+program carrying its own glibc and libraries, so it runs unchanged on any
+x86-64 Linux; only the base packages come from the provider's distribution.
+Each provider's preparation runs `dx-orb-check` on a test Orb, so an Orb
+missing a feature never reaches a Thread.
 
 ## Build
 
@@ -25,18 +36,20 @@ docker build --platform linux/amd64 -f deploy/orb/Dockerfile -t dx-orb .
 ```
 
 The image must stay `linux/amd64` and fit the smallest instance disk of every
-provider that uses it. It is about 2.4 GB unpacked, 0.9 GB of it the Desktop.
+provider that uses it. The toolbelt is 1.9 GB unpacked (0.56 GB compressed),
+most of it Chromium and its libraries.
 
 ## Contents
 
-- Debian 13 slim (pinned by digest), the `user` account (uid 1000) with
-  passwordless `sudo`, home `/home/user`.
-- Node.js 24 LTS from nodejs.org with corepack (yarn, pnpm), OpenJDK 21,
-  Python 3 with pip and venv, `build-essential` and common `-dev` headers,
-  git, git-lfs, GitHub CLI (from GitHub's repository: Core's source runtime
+- Debian 13 slim (pinned by digest) in the image; the provider's own Debian
+  or Ubuntu on Boat and Freestyle. The `user` account (uid 1000 where it is
+  free) with passwordless `sudo`, home `/home/user`.
+- Node.js 24 LTS from nodejs.org with corepack (yarn, pnpm), OpenJDK, Python 3
+  with pip and venv, `build-essential` and common `-dev` headers, git,
+  git-lfs, the GitHub CLI 2.103.3 from its own release (Core's source runtime
   needs gh 2.40 or later), ripgrep, jq, curl, wget, zip, and procps.
-- tmux 3.7c for the Terminal (below), also `tmux` on `PATH`.
-- The Desktop (below): headless labwc, Xwayland, foot, Chromium, and Waymote.
+- The dx toolbelt in `/opt/dx`: tmux 3.7c for the Terminal (below), also
+  `tmux` on `PATH`; the Desktop (below); `dx-orb-check`.
 - This covers what E2B's `base` image and the earlier dx template added
   (systemd, sudo, ripgrep, jq, ca-certificates, tmux, python3, and the login
   hook), except systemd itself: E2B provisions its own init.
@@ -46,7 +59,7 @@ provider that uses it. It is about 2.4 GB unpacked, 0.9 GB of it the Desktop.
 The browser's Terminal tab is tmux session `main` on socket `dx`, shared by
 the person and the agent
 ([Resident Terminal](../../wiki/runtime-architecture.md#resident-terminal)).
-The image carries it prebuilt; nothing is compiled at build, deploy, or
+The toolbelt carries it prebuilt; nothing is compiled at build, deploy, or
 sandbox time:
 
 - `/opt/dx/bin/tmux`: tmux's own static musl build from
@@ -67,8 +80,9 @@ dxd starts the session from its PTY when the Terminal opens and tmux runs the
 server as a daemon, outside dxd and outside `dx-orb-init`, so restarting or
 updating dxd leaves the shells running. A container restart ends them. To
 move to another tmux release, change the URL and checksum here, in the
-Dockerfile, and in the dxd CI workflow (`.github/workflows/dxd.yml`), whose
-Terminal tests run against the same binary.
+toolbelt's [`flake.nix`](toolbelt/flake.nix), and in the dxd CI workflow
+(`.github/workflows/dxd.yml`), whose Terminal tests run against the same
+binary.
 
 ## dxd from the entrypoint
 
@@ -116,20 +130,22 @@ works there.
 ## Desktop
 
 The Thread's Desktop tab streams a Linux desktop with Chromium from the
-sandbox. Everything lives under `/opt/dx/desktop` (sources in
-[`desktop/`](desktop)):
+sandbox. Everything lives under `/opt/dx/desktop`, from the toolbelt
+(sources in [`desktop/`](desktop)). The scripts run the toolbelt's programs
+by path (`env/bin`, [`desktop/env.sh`](desktop/env.sh)) and start what the
+person and the agent use on the desktop with the host's `PATH`:
 
-- `start` starts the session and returns once the Waymote gateway serves on
-  `127.0.0.1:5900`; it exits 0 at once when the gateway already answers.
+- `start` starts the session and returns once the voxl streamer serves on
+  `127.0.0.1:5900`; it exits 0 at once when it already answers `/healthz`.
   dxd runs it as `user` with only `HOME USER LOGNAME SHELL LANG PATH` set. The
   session runs detached (`setsid`, its own session and process group, lock
   descriptor closed), so it survives the caller and dxd; `start` keeps no
   descriptor open. It takes a lock so concurrent calls start one session.
-  While the recorded session's labwc and session script run, `start` waits
-  for its gateway (the session restarts a crashed gateway after 1 to 30 s)
+  While the recorded session's Xvfb and session script run, `start` waits
+  for its streamer (the session restarts a crashed voxl after 1 to 30 s)
   rather than replacing it and closing the person's and the agent's windows;
   it replaces only a session that died or failed. Every wait (the lock,
-  `stop`, the gateway) uses what is left of 40 s, so `start` finishes within
+  `stop`, the streamer) uses what is left of 40 s, so `start` finishes within
   that with one line on stderr on failure (dx Core allows 45 s), and a
   session that dies during startup fails at once with the reason from
   `session.log`. Run from inside the desktop (its terminal), `start` and
@@ -139,16 +155,19 @@ sandbox. Everything lives under `/opt/dx/desktop` (sources in
   process gets `TERM`, then `KILL` (8.5 s at most, or the seconds given as
   its argument). It finds the processes by session ID, by the
   `DX_DESKTOP_SESSION` marker every desktop program inherits, which reaches
-  what labwc launches from its menu (labwc runs those in sessions of their
-  own), and by the desktop's Chromium profile in the command line, which
-  reaches Chromium opened by `chromium` from a dxd shell (Chromium overwrites
-  its environment with its process title).
-- `session` (under `dbus-run-session`) runs headless labwc
-  (`WLR_BACKENDS=headless`, pixman renderer, one output at 1280x720@30Hz that
-  the viewer resizes), Xwayland on demand, a foot terminal, Chromium
-  (`chromium`), and `waymote-gateway -listen 127.0.0.1:5900 -bitrate 4000
-  -frame-rate 30`, which it restarts when it exits. The session ends when
-  labwc exits; the next `start` begins a new one.
+  what openbox launches from its menu, and by the desktop's Chromium profile
+  in the command line, which reaches Chromium opened by `chromium` from a dxd
+  shell (Chromium overwrites its environment with its process title). It
+  then frees the stopped Xvfb's screen, a shared-memory segment that outlives
+  a killed X server.
+- `session` (under `dbus-run-session` with [`dbus-session.conf`](desktop/dbus-session.conf),
+  a bus that starts none of the host's services) runs Xvfb (a free display
+  number, a 3840x2160 screen that voxl shrinks to the viewer's pane with
+  RandR, `-shmem`), the openbox window manager ([`openbox/`](desktop/openbox):
+  one workspace, a right-click menu with Terminal and Chromium), an xterm,
+  Chromium (`chromium`), and voxl on `127.0.0.1:5900`, which it restarts
+  when it exits. The session ends when Xvfb exits; the next `start` begins a
+  new one.
 - `resume` runs when the session starts, in place of the session's own
   Chromium window: the repository's executable `.agents/desktop/resume`, or
   else the project's Desktop Resume script from Project Settings, which
@@ -158,49 +177,48 @@ sandbox. Everything lives under `/opt/dx/desktop` (sources in
   environment, logs to `desktop-resume.log`, and what it starts stays in the
   session. Without a script, or when the script exits non-zero, it opens
   Chromium at `about:blank` as before.
-- `chromium` opens Chromium with DevTools on `127.0.0.1:9222` and a profile in
-  the state directory, so an agent in the sandbox drives the browser the user
-  watches. Run it with a URL to open a window in the running browser; it
-  returns at once, with Chromium detached and marked for `stop`. Where
+- `chromium` opens Chromium on X11 with DevTools on `127.0.0.1:9222` and a
+  profile in the state directory, so an agent in the sandbox drives the
+  browser the user watches. Run it with a URL to open a window in the
+  running browser; it returns at once, with Chromium detached and marked for
+  `stop`. It first removes a profile lock no running Chromium holds: an Orb
+  resumed from a disk snapshot can run on another machine (Boat), and
+  Chromium refuses a profile locked "on another computer". Where
   unprivileged user namespaces are missing (a plain Docker container) it adds
-  `--no-sandbox`.
-- `bin/ffmpeg` keeps the encoder's RTP sockets on loopback; nothing in the
-  session listens on another address.
-- State and logs: `~/.local/state/dx-desktop/` (`session.log`,
-  `waymote.log`, `chromium.log`, `foot.log`, `desktop-resume.log`, the Chromium profile, and
-  `environment`, which a program sources to open windows on the desktop).
+  `--no-sandbox`. Ubuntu 24.04 grants them only to programs with an AppArmor
+  profile, so `install.sh` gives the toolbelt's Chromium one there.
+- State and logs: `~/.local/state/dx-desktop/` (`session.log`, `xvfb.log`,
+  `voxl.log`, `openbox.log`, `chromium.log`, `xterm.log`, `desktop-resume.log`,
+  the Chromium profile, and `environment`, which a program sources to open
+  windows on the desktop).
 
-Waymote has no authentication; the gateway listens on loopback only and the
-browser reaches it through dx Core's Thread route, which relays through dxd.
-Before opening its sockets the viewer asks Core's status check
-(`GET /v1/threads/:threadId/desktop`), which runs `start` through dxd and
-fetches the gateway's `/healthz`; a guest without `/opt/dx/desktop/start`
-answers that the workspace has no Desktop.
-The gateway rejects a WebSocket whose `Origin` names another host than its
-`Host`, so the relay sends no `Origin`. The session has no audio: the gateway
-runs its Opus encoder whenever an audio source is set, viewer or not, and that
-path cost 2 to 3 % of a core while idle; the video path costs nothing while
-the screen does not change.
+voxl ([tembo/voxl](https://github.com/tembo/voxl), MIT) streams the display
+as H.264 over one WebSocket, `/ws`, which the browser decodes with
+WebCodecs. It captures straight from Xvfb's framebuffer, a shared-memory
+segment it finds by the X server's pid in `/tmp/.X<n>-lock`; this Xvfb build
+writes no lock file, so `session` writes it, or voxl could stream a segment
+an earlier Xvfb left behind. It runs with `--enable-basic-auth=false`,
+listens on loopback only, and the browser reaches it through dx Core's
+Thread route, which relays through dxd (the relay sends no `Origin`). It
+runs at 60 fps with an 8 Mbit/s ceiling, has no audio, no file transfer, and
+the clipboard on. Before opening its socket the viewer asks Core's status
+check (`GET /v1/threads/:threadId/desktop`), which runs `start` through dxd
+and fetches voxl's `/healthz`; a guest without `/opt/dx/desktop/start`
+answers that the workspace has no Desktop. The child Thread's benchmark
+against Waymote, the earlier streamer: 60 fps at 28 to 34 ms median latency
+on a 2 vCPU Orb at 1280x720, against Waymote's 30 fps at 145 ms
+([`artifacts/desktop-bench`](../../artifacts/desktop-bench) on branch
+`exp/desktop-bench`).
 
-Pinned inputs: Waymote 0.1.6 server release (MIT), and labwc 0.9.7 with
-wlroots 0.19.3, libxml2-16 2.14.6, libsfdo0 0.1.4, and libdisplay-info3 0.3.0
-(build 0.3.0-1+b1), each a Debian build pinned by SHA-256. The build fetches
-each one from a list of sources and keeps the first whose checksum matches:
-dx's own copy on the
-[`orb-desktop-debs-1`](https://github.com/dxcode-dev/dxcode/releases/tag/orb-desktop-debs-1)
-release, which also carries their Debian source packages, then
-deb.debian.org while Debian still carries that build, then
-snapshot.debian.org, which keeps every build but is rate-limited and can
-serve 503 for one file for hours. wlroots must be 0.19.3 or later: earlier 0.19
-releases give a virtual pointer's axis source to one axis only, so a diagonal
-(trackpad) scroll from the viewer aborts labwc and the session restarts.
+Pinned inputs, all in the toolbelt ([`toolbelt/flake.nix`](toolbelt/flake.nix),
+nixpkgs `nixos-26.05` and voxl at the revisions `flake.lock` pins): voxl
+0.3.4 and its patched Xvfb (xorg-server 21.1.24 whose XTEST pointer has
+scroll axes, for smooth scrolling), openbox, xterm, Chromium, dbus, the X
+core fonts Xvfb needs, and DejaVu and Liberation fonts (plus the host's).
 Chromium runs with `--enable-unsafe-swiftshader`: without a GPU it otherwise
-blocklists WebGL instead of using its software renderer. Debian 13's labwc 0.8.3 uses wlroots 0.18, which lacks
-`ext-data-control-v1`, Waymote's clipboard protocol. These builds upgrade no
-Debian 13 package and receive no Debian security updates; their sources are on
-that release and on snapshot.debian.org (labwc is GPL-2.0, wlroots MIT). Everything else comes
-from Debian 13. Measurements and the verification procedure:
-[`artifacts/desktop-image-verification`](../../artifacts/desktop-image-verification/README.md).
+blocklists WebGL instead of using its software renderer. A new nixpkgs or
+voxl revision brings fixes; rebuild and repin the toolbelt
+([`toolbelt/README.md`](toolbelt/README.md)).
 
 ## Cloudflare Containers
 
@@ -216,7 +234,7 @@ Docker runs with a configuration of its own under the stage directory
 (`orbDockerEnvironment`): an API-token deploy points HOME at a private
 directory, so Docker keeps the operator's plugins and selected context from
 their own configuration, read only, and stores the registry login in that
-file instead of the OS keychain. The image is about 2.4 GB, so it does not fit the `lite`
+file instead of the OS keychain. The image is several GB, so it does not fit the `lite`
 instance type; Orb sizes start at `standard-1`.
 
 Branch previews share their images instead (`sharedPreviewOrbImage`): the
@@ -233,6 +251,16 @@ Cloudflare's 30-day TTL, and Preview cleanup
 ([`prune-preview-orb-images.mjs`](../../scripts/prune-preview-orb-images.mjs))
 deletes shared images older than 7 days that no Worker's active deployment
 pins.
+
+Docker Cloud Sandboxes and Cloudflare connections in a person's own account
+boot only a public image, and the released one (`public-image.json`) can
+predate the branch. So after each deploy the preview workflow copies the
+recipe's shared image to Docker Hub as
+`dxcodedev/dx-orb:preview-<recipe hash>`
+([`mirror-preview-orb-image.mjs`](../../scripts/mirror-preview-orb-image.mjs),
+once per recipe), and a branch preview's Core boots that image for those two
+connections (`DX_PREVIEW_ORB_IMAGE`). Staging, production, and self-hosted
+deployments boot the released image.
 
 The entrypoint runs unchanged: a container restored from a snapshot runs
 `dx-orb-init` again, which restarts dxd from the binary and configuration

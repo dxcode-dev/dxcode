@@ -1,29 +1,32 @@
 // Ways the Desktop viewer can fail, each covered below against the real
-// Waymote SDK (only the browser transports and dx Core's answers are faked):
+// viewer and its voxl client (only the browser transports, the decoder, and
+// dx Core's answers are faked):
 // - it opens a socket anywhere but dx Core's authenticated Thread route, or
 //   with the wrong scheme, channel, or subprotocol;
-// - it opens sockets before Core says the desktop is ready, or keeps
+// - it opens a socket before Core says the desktop is ready, or keeps
 //   retrying (waking the workspace each time) when Core refuses: it spins
 //   instead of saying the workspace has no Desktop or offering a retry;
+// - it never acknowledges frames or answers pings, so voxl stalls its stream;
 // - an open, untouched Desktop tab keeps the workspace awake forever;
 // - the remote clipboard replaces the local one without the person's own
-//   key press or click on the desktop while holding control;
-// - it opens the audio channel, which the desktop does not serve;
+//   key press or click on the desktop while holding control, or a paste
+//   echoes back as a copy;
+// - it sends input while it does not hold control (focus), maps clicks to
+//   the wrong desktop pixel, or lets the desktop's keys reach dx shortcuts;
+// - it asks for a desktop size that does not follow the pane, or below the
+//   usable minimum;
+// - the phone's on-screen keys and keyboard type nothing, or the wrong keys;
 // - it connects while its tab is hidden, the right pane is collapsed, or the
-//   document is hidden, or it keeps sockets open more than a minute after
-//   any of those (or drops them at once, so coming back reconnects);
+//   document is hidden, or it keeps its socket open more than a minute after
+//   any of those (or drops it at once, so coming back reconnects);
 // - it reconnects to the previous Thread after the Thread changes;
-// - it hangs on a spinner when the SDK chunk fails to load or the browser
-//   cannot decode the stream, instead of saying so and offering a retry that
-//   can succeed;
+// - it hangs on a spinner when its chunk fails to load or the browser cannot
+//   decode the stream, instead of saying so and offering a retry that can
+//   succeed;
 // - the Desktop tab is missing beside Terminal or connects before selection;
-// - keys typed into the remote desktop trigger dx shortcuts;
 // - it shows the desktop as live before a picture is drawn, with nothing
 //   covering the black canvas, so a click there reaches the remote screen
 //   unseen;
-// - it loses the gateway's latest full picture when that picture, with the
-//   frames after it, arrives before the decoder is set up, and then waits
-//   for the next full picture, which a still desktop never sends;
 // - it waits forever on a stream that opens but draws nothing.
 
 import type { ThreadId } from "@dx/domain";
@@ -87,33 +90,35 @@ class FakeSocket extends EventTarget {
   receiveBinary(data: ArrayBuffer) {
     this.dispatchEvent(new MessageEvent("message", { data }));
   }
+  /** Text commands sent so far. */
+  commands() {
+    return this.sent.filter(
+      (message): message is string => typeof message === "string",
+    );
+  }
 }
 
 /**
  * A WebCodecs decoder that, like a real one, decodes nothing until it has a
- * key frame, and works off its queue after the current task: frames decoded
- * in one burst all count in `decodeQueueSize` until then. Its setup check
- * also answers after a task, as Chromium's does.
+ * key frame, and outputs each frame after the current task.
  */
 class FakeVideoDecoder {
   static decoded: string[] = [];
-  static async isConfigSupported() {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    return { supported: true };
-  }
   state = "unconfigured";
   decodeQueueSize = 0;
   #keyed = false;
-  #epoch = 0;
-  constructor(private readonly init: { output: (frame: unknown) => void }) {}
+  constructor(
+    private readonly init: {
+      output: (frame: unknown) => void;
+      error: (error: Error) => void;
+    },
+  ) {}
   configure() {
     this.state = "configured";
   }
   reset() {
     this.state = "unconfigured";
-    this.decodeQueueSize = 0;
     this.#keyed = false;
-    this.#epoch += 1;
   }
   close() {
     this.reset();
@@ -121,11 +126,8 @@ class FakeVideoDecoder {
   }
   decode(chunk: EncodedVideoChunk) {
     FakeVideoDecoder.decoded.push(chunk.type);
-    this.decodeQueueSize += 1;
-    const epoch = this.#epoch;
     setTimeout(() => {
-      if (epoch !== this.#epoch) return;
-      this.decodeQueueSize -= 1;
+      if (this.state === "closed") return;
       if (chunk.type === "key") this.#keyed = true;
       if (!this.#keyed) return;
       this.init.output({
@@ -138,39 +140,35 @@ class FakeVideoDecoder {
   }
 }
 
-/** One H.264 access unit as the gateway frames it. */
-const videoChunk = (key: boolean, index: number) => {
-  const buffer = new ArrayBuffer(48);
-  const view = new DataView(buffer);
-  view.setUint8(0, 2);
-  view.setUint8(1, 1);
-  view.setUint8(2, key ? 1 : 0);
-  view.setBigUint64(12, BigInt(index * 33_333), true);
-  view.setUint32(20, 1, true);
-  view.setUint16(24, 1280, true);
-  view.setUint16(26, 720, true);
-  return buffer;
+/** voxl's hello: the desktop's size, its one stripe, and dynamic resolution. */
+const hello = (w = 1280, h = 720, resize = true) => ({
+  t: "hello",
+  w,
+  h,
+  os: "linux",
+  audio: false,
+  stripes: [[0, h]],
+  ...(resize ? { resize: { scale: 1 } } : {}),
+});
+
+/** One voxl video message: type byte, 15 header bytes, then H.264. */
+const videoFrame = (key: boolean, id: number) => {
+  const bytes = new Uint8Array(16 + 8);
+  bytes[0] = 0x01;
+  bytes[1] = key ? 1 : 0;
+  new DataView(bytes.buffer).setUint32(2, id);
+  bytes[10] = 0; // stripe
+  bytes[12] = 1; // parts
+  return bytes.buffer;
 };
-/**
- * The most frames the Waymote 0.1.6 gateway sends a new viewer: its latest
- * full picture and up to 240 frames since (`hub.broadcast` in its
- * gateway/main.go). The SDK must hold that many while its decoder is set up.
- */
-const GATEWAY_LATEST_PICTURE_FRAMES = 241;
-/**
- * What the gateway sends a new viewer: its decoder settings, then the
- * latest full picture and every frame since.
- */
-const sendLatestPicture = (stream: FakeSocket, frames = 21) => {
-  stream.receive({
-    type: "video-config",
-    version: 1,
-    codec: "avc1.42E034",
-    frameRate: 30,
-  });
+
+/** What voxl sends a new viewer: its hello, then a full picture and frames since. */
+const sendPicture = (socket: FakeSocket, frames = 3, from = 1) => {
+  socket.receive(hello());
   for (let index = 0; index < frames; index += 1)
-    stream.receiveBinary(videoChunk(index === 0, index));
+    socket.receiveBinary(videoFrame(index === 0, from + index));
 };
+
 let draws: ReturnType<typeof vi.fn>;
 const roots: ReturnType<typeof createRoot>[] = [];
 
@@ -198,31 +196,39 @@ const setVisibility = async (state: DocumentVisibilityState) => {
   });
 };
 
-const socketFor = (channel: string) =>
-  openSockets().find((socket) => socket.url.endsWith(`/${channel}`)) as
-    | FakeSocket
-    | undefined;
 const text = (container: HTMLElement) => container.textContent ?? "";
 const button = (container: HTMLElement, label: string) =>
   [...container.querySelectorAll("button")].find((candidate) =>
     candidate.textContent?.includes(label),
   );
-
 const openSockets = () =>
   FakeSocket.instances.filter(
     (socket) => socket.readyState !== FakeSocket.CLOSED,
   );
-const channels = (sockets: FakeSocket[]) =>
-  sockets.map((socket) => new URL(socket.url).pathname).sort();
+const desktopSocket = () => openSockets().at(-1) as FakeSocket;
 const settle = () => React.act(async () => {});
-// The viewer loads the SDK lazily; wait until it has opened its sockets.
-const connected = async (count = 2) => {
-  await vi.waitFor(() => expect(openSockets()).toHaveLength(count));
+// The viewer loads its client lazily; wait until it has opened its socket.
+const connected = async () => {
+  await vi.waitFor(() => expect(openSockets()).toHaveLength(1));
   await settle();
+};
+const surfaceOf = (container: HTMLElement) =>
+  container.querySelector('[role="application"]') as HTMLElement;
+/** Opens the socket and draws the first picture. */
+const live = async (fakeTimers = false) => {
+  const socket = desktopSocket();
+  await React.act(async () => {
+    socket.open();
+    sendPicture(socket);
+  });
+  if (fakeTimers) await React.act(() => vi.advanceTimersByTimeAsync(20));
+  await vi.waitFor(() => expect(draws).toHaveBeenCalled());
+  await settle();
+  return socket;
 };
 
 beforeAll(async () => {
-  await import("@rockorager/waymote");
+  await import("./voxl/session.js");
 });
 
 beforeEach(() => {
@@ -275,21 +281,20 @@ const render = async (element: React.ReactElement) => {
 };
 
 describe("DesktopViewer", () => {
-  it("streams only through dx Core's Thread desktop route, without audio", async () => {
+  it("streams through one socket on dx Core's Thread desktop route", async () => {
     const { container, root } = await render(
       <DesktopViewer active threadId={threadA} />,
     );
     await connected();
 
-    expect(channels(openSockets())).toEqual([
-      `/v1/threads/${threadA}/desktop/control`,
-      `/v1/threads/${threadA}/desktop/stream`,
-    ]);
+    expect(openSockets().map((socket) => new URL(socket.url).pathname)).toEqual(
+      [`/v1/threads/${threadA}/desktop/ws`],
+    );
     for (const socket of FakeSocket.instances) {
       expect(socket.url.startsWith(`ws://${window.location.host}/`)).toBe(true);
       expect(socket.protocols).toBeUndefined();
     }
-    expect(container.querySelector('[role="application"]')).not.toBeNull();
+    expect(surfaceOf(container)).not.toBeNull();
     await React.act(() => root.unmount());
     expect(openSockets()).toEqual([]);
   });
@@ -303,45 +308,41 @@ describe("DesktopViewer", () => {
       "Starting desktop",
     );
 
-    const stream = socketFor("stream") as FakeSocket;
-    await React.act(async () => stream.open());
+    const socket = desktopSocket();
+    await React.act(async () => socket.open());
     // Connected, but nothing drawn yet: still starting.
     expect(container.querySelector(".thread-desktop-loading")).not.toBeNull();
 
-    await React.act(async () => sendLatestPicture(stream));
+    await React.act(async () => sendPicture(socket));
     await vi.waitFor(() => expect(draws).toHaveBeenCalled());
     await settle();
     expect(container.querySelector(".thread-desktop-loading")).toBeNull();
-    expect(container.textContent).not.toContain("Reconnecting");
+    expect(text(container)).not.toContain("Reconnecting");
 
-    // The last picture stays on the canvas while the stream reconnects.
+    // The last picture stays on the canvas while the socket reconnects.
     await React.act(async () => {
-      stream.readyState = FakeSocket.CLOSED;
-      stream.dispatchEvent(new CloseEvent("close", { code: 1006 }));
+      socket.readyState = FakeSocket.CLOSED;
+      socket.dispatchEvent(new CloseEvent("close", { code: 1006 }));
     });
-    expect(container.textContent).toContain("Reconnecting");
+    expect(text(container)).toContain("Reconnecting");
     expect(container.querySelector(".thread-desktop-loading")).toBeNull();
     await React.act(() => root.unmount());
   });
 
-  it("draws the latest full picture when it arrives before the decoder is set up", async () => {
-    // Returning to a Thread whose desktop is still: the gateway sends its
-    // latest full picture and the frames after it in one burst, and no new
-    // full picture follows until the screen changes enough.
-    const { container, root } = await render(
-      <DesktopViewer active threadId={threadA} />,
-    );
+  it("acknowledges every drawn frame and answers pings, as voxl paces its stream by them", async () => {
+    const { root } = await render(<DesktopViewer active threadId={threadA} />);
     await connected();
-    const stream = socketFor("stream") as FakeSocket;
-    await React.act(async () => {
-      stream.open();
-      socketFor("control")?.open();
-      sendLatestPicture(stream, GATEWAY_LATEST_PICTURE_FRAMES);
-    });
-    await vi.waitFor(() => expect(draws).toHaveBeenCalled());
+    const socket = await live();
+    await vi.waitFor(() =>
+      expect(socket.commands()).toEqual(
+        expect.arrayContaining(["v,1", "a,1", "a,2", "a,3"]),
+      ),
+    );
+    expect(socket.commands()[0]).toBe("v,1");
     expect(FakeVideoDecoder.decoded[0]).toBe("key");
-    await settle();
-    expect(container.querySelector(".thread-desktop-loading")).toBeNull();
+
+    await React.act(async () => socket.receive({ t: "ping", s: 4242 }));
+    expect(socket.commands()).toContain("po,4242");
     await React.act(() => root.unmount());
   });
 
@@ -352,14 +353,12 @@ describe("DesktopViewer", () => {
       </div>,
     );
     await connected();
-    const control = socketFor("control") as FakeSocket;
+    const socket = desktopSocket();
     await React.act(async () => {
-      socketFor("stream")?.open();
-      control.open();
+      socket.open();
+      socket.receive(hello());
     });
-    const surface = container.querySelector(
-      '[role="application"]',
-    ) as HTMLElement;
+    const surface = surfaceOf(container);
     const box = surface.getBoundingClientRect();
     const hit = document.elementFromPoint(
       box.left + box.width / 2,
@@ -370,10 +369,182 @@ describe("DesktopViewer", () => {
     await userEvent.click(surface, { force: true });
     await settle();
     expect(document.activeElement).not.toBe(surface);
-    expect(control.sent).toEqual(
-      control.sent.filter((message) => typeof message === "string"),
+    expect(
+      socket.commands().filter((command) => /^[mbk],/.test(command)),
+    ).toEqual([]);
+    await React.act(() => root.unmount());
+  });
+
+  it("sends input only while it holds control, at the desktop pixel under the pointer, and keeps its keys from dx shortcuts", async () => {
+    const shortcut = vi.fn();
+    window.addEventListener("keydown", shortcut);
+    const { container, root } = await render(
+      <div style={{ display: "flex", width: 1280, height: 900 }}>
+        <DesktopViewer active threadId={threadA} />
+      </div>,
     );
-    expect(control.sent).not.toContain("acquire");
+    await connected();
+    const socket = await live();
+    const surface = surfaceOf(container);
+    const canvas = container.querySelector("canvas") as HTMLCanvasElement;
+    // The 1280x720 picture letterboxes in the 1280x900 canvas: 90 px bands.
+    const box = canvas.getBoundingClientRect();
+    const sent = () => socket.commands().filter((c) => /^[mbkr]/.test(c));
+
+    // Without control, moving over the desktop sends nothing.
+    await React.act(async () => {
+      surface.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          clientX: box.left + 640,
+          clientY: box.top + 90 + 360,
+        }),
+      );
+    });
+    expect(sent()).toEqual([]);
+
+    // A click there takes control and lands on the pixel under it.
+    await React.act(async () => {
+      for (const type of ["pointerdown", "pointerup"])
+        surface.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            button: 0,
+            pointerType: "mouse",
+            clientX: box.left + 640,
+            clientY: box.top + 90 + 360,
+          }),
+        );
+    });
+    expect(document.activeElement).toBe(surface);
+    expect(sent()).toEqual(["m,640,360", "b,1,1", "b,1,0"]);
+
+    await React.act(async () => {
+      surface.dispatchEvent(
+        new KeyboardEvent("keydown", { bubbles: true, code: "KeyA", key: "a" }),
+      );
+      surface.dispatchEvent(
+        new KeyboardEvent("keyup", { bubbles: true, code: "KeyA", key: "a" }),
+      );
+    });
+    expect(sent().slice(-2)).toEqual(["k,97,1", "k,97,0"]);
+    expect(shortcut).not.toHaveBeenCalled();
+
+    // Focus leaving the desktop ends control and lets every key go.
+    await React.act(async () => surface.blur());
+    expect(sent().at(-1)).toBe("r");
+    window.removeEventListener("keydown", shortcut);
+    await React.act(() => root.unmount());
+  });
+
+  it("asks for a desktop the size of the pane, at least a laptop's, and follows the pane", async () => {
+    vi.unstubAllGlobals();
+    vi.stubGlobal("fetch", vi.fn(fakeCore));
+    vi.stubGlobal("WebSocket", FakeSocket);
+    vi.stubGlobal("VideoDecoder", FakeVideoDecoder);
+    const sizes = (socket: FakeSocket) =>
+      socket.commands().filter((command) => command.startsWith("sz,"));
+    const frame = document.body.appendChild(document.createElement("div"));
+    frame.style.cssText = "display:flex;width:1400px;height:900px";
+    const container = frame.appendChild(document.createElement("div"));
+    container.style.cssText = "display:flex;flex:1";
+    const root = createRoot(container);
+    roots.push(root);
+    await React.act(() =>
+      root.render(<DesktopViewer active threadId={threadA} />),
+    );
+    await connected();
+    const socket = desktopSocket();
+    await React.act(async () => {
+      socket.open();
+      socket.receive(hello());
+    });
+    const density = Math.min(Math.max(window.devicePixelRatio, 1), 2);
+    const expected = (w: number, h: number) => {
+      const width = Math.round(w * density);
+      const height = Math.round(h * density);
+      return `sz,${width - (width % 8)},${height - (height % 2)}`;
+    };
+    await vi.waitFor(() =>
+      expect(sizes(socket)).toEqual([expected(1400, 900)]),
+    );
+
+    // Narrower than a laptop: the desktop stays usable and letterboxes.
+    frame.style.width = "600px";
+    frame.style.height = "400px";
+    await vi.waitFor(() =>
+      expect(sizes(socket).at(-1)).toBe(expected(960, 540)),
+    );
+
+    // A server without dynamic resolution is never asked.
+    await React.act(async () => {
+      socket.receive(hello(1280, 720, false));
+    });
+    frame.style.width = "1200px";
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(sizes(socket)).toHaveLength(2);
+    await React.act(() => root.unmount());
+  });
+
+  it("types from the phone's on-screen keys and keyboard", async () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes("max-width"),
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const { container, root } = await render(
+      <DesktopViewer active threadId={threadA} />,
+    );
+    await connected();
+    const socket = await live();
+    const keys = () => socket.commands().filter((c) => c.startsWith("k,"));
+    const toolbar = container.querySelector(
+      '[role="toolbar"][aria-label="Desktop keys"]',
+    ) as HTMLElement;
+    expect(toolbar).not.toBeNull();
+
+    // Esc takes control and presses Escape.
+    await React.act(async () =>
+      toolbar
+        .querySelector<HTMLButtonElement>('[aria-label="Escape"]')
+        ?.click(),
+    );
+    expect(keys()).toEqual(["k,65307,1", "k,65307,0"]);
+
+    // The phone keyboard types into the hidden text input.
+    await React.act(async () => button(container, "Keyboard")?.click());
+    const input = container.querySelector(
+      ".thread-desktop-text-input",
+    ) as HTMLTextAreaElement;
+    expect(document.activeElement).toBe(input);
+    await React.act(async () => {
+      input.value = " h";
+      input.dispatchEvent(
+        new InputEvent("input", { inputType: "insertText", data: "h" }),
+      );
+    });
+    expect(keys().slice(-2)).toEqual(["k,104,1", "k,104,0"]);
+    // The input keeps a character for the next Backspace to delete.
+    expect(input.value).toBe(" ");
+
+    // Ctrl, then c from the phone keyboard, sends Ctrl+C.
+    await React.act(async () => button(container, "Ctrl")?.click());
+    await React.act(async () => {
+      input.dispatchEvent(
+        new InputEvent("beforeinput", {
+          inputType: "insertText",
+          data: "c",
+          cancelable: true,
+        }),
+      );
+    });
+    expect(keys().slice(-4)).toEqual([
+      "k,65507,1",
+      "k,99,1",
+      "k,99,0",
+      "k,65507,0",
+    ]);
     await React.act(() => root.unmount());
   });
 
@@ -383,38 +554,33 @@ describe("DesktopViewer", () => {
       <DesktopViewer active threadId={threadA} />,
     );
     await connected();
-    const stream = socketFor("stream") as FakeSocket;
+    const socket = desktopSocket();
     // dx Core's relay may not finish a close handshake the browser starts,
-    // so a closed stream can stay closing for a long time.
-    stream.close = () => {
-      stream.readyState = FakeSocket.CLOSING;
+    // so a closed socket can stay closing for a long time.
+    socket.close = () => {
+      socket.readyState = FakeSocket.CLOSING;
     };
     await React.act(async () => {
-      stream.open();
+      socket.open();
       // Only frames that depend on a full picture this viewer never got.
-      stream.receive({
-        type: "video-config",
-        version: 1,
-        codec: "avc1.42E034",
-        frameRate: 30,
-      });
-      stream.receiveBinary(videoChunk(false, 1));
+      socket.receive(hello());
+      socket.receiveBinary(videoFrame(false, 1));
     });
     await React.act(() => vi.advanceTimersByTimeAsync(1_000));
     expect(draws).not.toHaveBeenCalled();
-    expect(socketFor("stream")).toBe(stream);
+    // It asked for a full picture and still acknowledged the frame.
+    expect(socket.commands()).toEqual(expect.arrayContaining(["kf", "a,1"]));
+    expect(desktopSocket()).toBe(socket);
 
     await React.act(() => vi.advanceTimersByTimeAsync(10_000));
-    const again = FakeSocket.instances
-      .filter((socket) => socket.url.endsWith("/stream"))
-      .at(-1) as FakeSocket;
-    expect(again).not.toBe(stream);
-    expect(stream.readyState).toBe(FakeSocket.CLOSING);
+    const again = FakeSocket.instances.at(-1) as FakeSocket;
+    expect(again).not.toBe(socket);
+    expect(socket.readyState).toBe(FakeSocket.CLOSING);
     expect(container.querySelector(".thread-desktop-loading")).not.toBeNull();
 
     await React.act(async () => {
       again.open();
-      sendLatestPicture(again);
+      sendPicture(again);
     });
     await vi.waitFor(async () => {
       await vi.advanceTimersByTimeAsync(20);
@@ -437,18 +603,18 @@ describe("DesktopViewer", () => {
       root.render(<DesktopViewer active threadId={threadA} />),
     );
     await connected();
-    const control = socketFor("control");
+    const socket = desktopSocket();
+    await React.act(async () => socket.open());
     const checks = desktopChecks.length;
 
-    // Hidden briefly: the session stays. The SDK itself pauses video while
-    // the document is hidden and resumes it; control and the session (no new
-    // status check) survive.
+    // Hidden briefly: the session stays, with its video paused meanwhile.
     await setVisibility("hidden");
     await React.act(() => vi.advanceTimersByTimeAsync(50_000));
-    expect(openSockets()).toEqual([control]);
+    expect(openSockets()).toEqual([socket]);
+    expect(socket.commands().slice(-2)).toEqual(["r", "v,0"]);
     await setVisibility("visible");
-    await connected();
-    expect(socketFor("control")).toBe(control);
+    expect(socket.commands().at(-1)).toBe("v,1");
+    expect(desktopSocket()).toBe(socket);
     expect(desktopChecks).toHaveLength(checks);
 
     // Hidden for longer than the grace period: the stream ends.
@@ -458,12 +624,12 @@ describe("DesktopViewer", () => {
     await setVisibility("visible");
     await connected();
 
-    // A collapsed pane or another tab keeps both sockets for the minute.
+    // A collapsed pane or another tab keeps the socket for the minute.
     await React.act(() =>
       root.render(<DesktopViewer active={false} threadId={threadA} />),
     );
     await React.act(() => vi.advanceTimersByTimeAsync(50_000));
-    expect(openSockets()).toHaveLength(2);
+    expect(openSockets()).toHaveLength(1);
     await React.act(() => vi.advanceTimersByTimeAsync(61_000));
     expect(openSockets()).toEqual([]);
     await React.act(() => root.unmount());
@@ -476,10 +642,9 @@ describe("DesktopViewer", () => {
       root.render(<DesktopViewer active threadId={threadB} />),
     );
     await connected();
-    expect(channels(openSockets())).toEqual([
-      `/v1/threads/${threadB}/desktop/control`,
-      `/v1/threads/${threadB}/desktop/stream`,
-    ]);
+    expect(new URL(desktopSocket().url).pathname).toBe(
+      `/v1/threads/${threadB}/desktop/ws`,
+    );
     await React.act(() => root.unmount());
   });
 
@@ -491,13 +656,10 @@ describe("DesktopViewer", () => {
     );
     expect(FakeSocket.instances).toEqual([]);
     expect(container.querySelector(".thread-desktop-loading")).toBeNull();
-    expect(container.textContent).toContain("WebCodecs");
+    expect(text(container)).toContain("WebCodecs");
 
     vi.stubGlobal("VideoDecoder", FakeVideoDecoder);
-    const retry = [...container.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Retry"),
-    );
-    await React.act(async () => retry?.click());
+    await React.act(async () => button(container, "Retry")?.click());
     await connected();
     await React.act(() => root.unmount());
   });
@@ -567,13 +729,13 @@ describe("DesktopViewer", () => {
   });
 
   it.each([
-    ["unavailable", "The desktop didn't start."],
-    [503, "The desktop couldn't be reached."],
-    [409, "Unarchive the Thread to use its desktop."],
+    [["unavailable", "unavailable"], "The desktop didn't start.", 3],
+    [[503], "The desktop couldn't be reached.", 2],
+    [[409], "Unarchive the Thread to use its desktop.", 2],
   ] as const)(
     "offers a retry when Core answers %s",
-    async (answer, message) => {
-      desktopAnswers = [answer];
+    async (answers, message, checks) => {
+      desktopAnswers = [...answers];
       const { container, root } = await render(
         <DesktopViewer active threadId={threadA} />,
       );
@@ -582,15 +744,27 @@ describe("DesktopViewer", () => {
 
       await React.act(async () => button(container, "Retry")?.click());
       await connected();
-      expect(desktopChecks).toHaveLength(2);
+      expect(desktopChecks).toHaveLength(checks);
       await React.act(() => root.unmount());
     },
   );
 
+  it("asks once more when the desktop is still starting, as on an Orb just resumed", async () => {
+    desktopAnswers = ["unavailable"];
+    const { container, root } = await render(
+      <DesktopViewer active threadId={threadA} />,
+    );
+    await connected();
+    expect(desktopChecks).toHaveLength(2);
+    expect(text(container)).not.toContain("The desktop didn't start.");
+    expect(button(container, "Retry")).toBeUndefined();
+    await React.act(() => root.unmount());
+  });
+
   it("stops retrying sockets Core refuses and says why", async () => {
     vi.useFakeTimers();
     // Ready at first; the desktop then stops, and Core says so.
-    desktopAnswers = ["ready", "unavailable"];
+    desktopAnswers = ["ready", "unavailable", "unavailable"];
     const { container, root } = await render(
       <DesktopViewer active threadId={threadA} />,
     );
@@ -599,14 +773,14 @@ describe("DesktopViewer", () => {
       async () => {
         for (const socket of openSockets()) socket.refuse();
         await vi.advanceTimersByTimeAsync(1_000);
-        expect(desktopChecks).toHaveLength(2);
+        expect(desktopChecks).toHaveLength(3);
       },
       { timeout: 10_000, interval: 5 },
     );
     await settle();
     expect(text(container)).toContain("The desktop didn't start.");
     const attempts = FakeSocket.instances.length;
-    expect(attempts).toBeLessThanOrEqual(8);
+    expect(attempts).toBeLessThanOrEqual(7);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(FakeSocket.instances).toHaveLength(attempts);
     expect(openSockets()).toEqual([]);
@@ -628,7 +802,7 @@ describe("DesktopViewer", () => {
         await vi.advanceTimersByTimeAsync(1_000);
         expect(text(container)).toContain("The desktop stopped responding.");
       },
-      { timeout: 10_000, interval: 5 },
+      { timeout: 20_000, interval: 5 },
     );
     // The first check, two recoveries, and the check that gives up.
     expect(desktopChecks).toHaveLength(4);
@@ -645,37 +819,34 @@ describe("DesktopViewer", () => {
       <DesktopViewer active threadId={threadA} />,
     );
     await connected();
-    await React.act(async () => {
-      const stream = socketFor("stream") as FakeSocket;
-      stream.open();
-      sendLatestPicture(stream);
-    });
-    await React.act(() => vi.advanceTimersByTimeAsync(100));
-    expect(draws).toHaveBeenCalled();
-    await React.act(async () => socketFor("control")?.open());
-    const surface = container.querySelector(
-      '[role="application"]',
-    ) as HTMLElement;
+    const socket = await live(true);
+    const surface = surfaceOf(container);
 
-    // The SDK's once-a-second ping and feedback are not the person's input.
-    await React.act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
-    expect(socketFor("control")?.sent.length).toBeGreaterThan(200);
+    // voxl's pings and the viewer's acknowledgements are not the person's input.
+    for (let second = 0; second < 4 * 60; second += 1) {
+      await React.act(async () => {
+        socket.receive({ t: "ping", s: second });
+        socket.receiveBinary(videoFrame(false, 10 + second));
+      });
+      await React.act(() => vi.advanceTimersByTimeAsync(1_000));
+    }
+    expect(socket.sent.length).toBeGreaterThan(400);
     await React.act(async () => {
       surface.dispatchEvent(
         new PointerEvent("pointermove", { bubbles: true, clientX: 5 }),
       );
     });
     await React.act(() => vi.advanceTimersByTimeAsync(4 * 60_000));
-    expect(openSockets()).toHaveLength(2);
+    expect(openSockets()).toHaveLength(1);
     expect(text(container)).not.toContain("Paused");
 
     await React.act(() => vi.advanceTimersByTimeAsync(60_000 + 1_000));
     expect(openSockets()).toEqual([]);
     expect(text(container)).toContain("Paused to let the workspace sleep.");
-    expect(container.querySelector('[role="application"]')).toBeNull();
+    expect(surfaceOf(container)).toBeNull();
     const checks = desktopChecks.length;
     await React.act(() => vi.advanceTimersByTimeAsync(60 * 60_000));
-    expect(FakeSocket.instances.filter((s) => s.readyState !== 3)).toEqual([]);
+    expect(openSockets()).toEqual([]);
     expect(desktopChecks).toHaveLength(checks);
 
     await React.act(async () => button(container, "Resume")?.click());
@@ -696,22 +867,10 @@ describe("DesktopViewer", () => {
       <DesktopViewer active threadId={threadA} />,
     );
     await connected();
-    await React.act(async () => {
-      const stream = socketFor("stream") as FakeSocket;
-      stream.open();
-      sendLatestPicture(stream);
-    });
-    await React.act(() => vi.advanceTimersByTimeAsync(100));
-    expect(draws).toHaveBeenCalled();
-    const control = socketFor("control") as FakeSocket;
-    await React.act(async () => control.open());
-    const surface = container.querySelector(
-      '[role="application"]',
-    ) as HTMLElement;
+    const socket = await live(true);
+    const surface = surfaceOf(container);
     const remoteCopies = async (copied: string) => {
-      await React.act(async () =>
-        control.receive({ type: "clipboard", text: copied }),
-      );
+      await React.act(async () => socket.receive({ t: "clip", d: copied }));
     };
     const press = async () => {
       await React.act(async () => {
@@ -735,9 +894,6 @@ describe("DesktopViewer", () => {
     await React.act(() => vi.advanceTimersByTimeAsync(5_000));
 
     await React.act(async () => surface.focus());
-    await React.act(async () =>
-      control.receive({ type: "control-state", state: "active" }),
-    );
     await remoteCopies("unprompted");
     expect(writeText).not.toHaveBeenCalled();
 
@@ -749,20 +905,19 @@ describe("DesktopViewer", () => {
     await remoteCopies("later, by guest code");
     expect(writeText).toHaveBeenCalledTimes(1);
 
-    // Pasting the local clipboard into the desktop still works.
+    // Pasting the local clipboard into the desktop still works, and its
+    // echo from the desktop is not copied back.
     const paste = new Event("paste", { bubbles: true, cancelable: true });
     Object.assign(paste, {
-      clipboardData: {
-        types: ["text/plain"],
-        getData: () => "local text",
-      },
+      clipboardData: { getData: () => "local text", items: [] },
     });
     await React.act(async () => {
       surface.dispatchEvent(paste);
     });
-    expect(control.sent).toContainEqual(
-      JSON.stringify({ type: "clipboard-write", text: "local text" }),
-    );
+    expect(socket.commands()).toContain("c,local text");
+    await press();
+    await remoteCopies("local text");
+    expect(writeText).toHaveBeenCalledTimes(1);
     Reflect.deleteProperty(navigator, "clipboard");
     await React.act(() => root.unmount());
   });
@@ -809,7 +964,7 @@ describe("DesktopViewer", () => {
         .querySelector<HTMLButtonElement>("#thread-view-tab-changes")
         ?.click(),
     );
-    expect(openSockets()).toHaveLength(2);
+    expect(openSockets()).toHaveLength(1);
     await React.act(() => vi.advanceTimersByTimeAsync(61_000));
     expect(openSockets()).toEqual([]);
     await React.act(() => root.unmount());

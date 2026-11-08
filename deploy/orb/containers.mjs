@@ -40,15 +40,8 @@ export const orbRecipeFiles = [
   "deploy/orb/dx-orb-hostname.sh",
   "deploy/orb/dx-orb-open-files.sh",
   "deploy/orb/tmux.conf",
-  "deploy/orb/desktop/start",
-  "deploy/orb/desktop/stop",
-  "deploy/orb/desktop/session",
-  "deploy/orb/desktop/chromium",
-  "deploy/orb/desktop/resume",
-  "deploy/orb/desktop/bin/ffmpeg",
-  "deploy/orb/desktop/labwc/autostart",
-  "deploy/orb/desktop/labwc/rc.xml",
-  "deploy/orb/desktop/labwc/menu.xml",
+  // The installer pins the dx toolbelt, which carries the Desktop.
+  "deploy/orb/install.sh",
   "deploy/orb/containers.mjs",
 ];
 
@@ -649,6 +642,175 @@ export const sharedPreviewOrbImage = async ({
 };
 
 /**
+ * The Orb image a branch preview's Docker Cloud Sandboxes and Cloudflare
+ * connections boot, `docker.io/<dockerHubRepository>:preview-<recipe>`, or
+ * undefined without a Docker Hub repository. Those connections boot only
+ * a public image, and the released one (public-image.json) predates the
+ * branch; `mirrorPreviewOrbImage` puts this recipe's image there.
+ */
+export const previewPublicOrbImage = (workspaceRoot) => {
+  const repository = readJson(
+    resolve(workspaceRoot, "deploy/orb/public-image.json"),
+  )?.dockerHubRepository;
+  return repository
+    ? `docker.io/${repository}:preview-${orbImageRecipeHash(workspaceRoot).slice(0, 32)}`
+    : undefined;
+};
+
+/** Whether Docker Hub serves a public repository's tag, read anonymously. */
+const dockerHubHasTag = async (repository, tag, { fetch, signal }) => {
+  const issued = await fetch(
+    `https://auth.docker.io/token?service=registry.docker.io&scope=repository:${repository}:pull`,
+    { signal },
+  );
+  const { token } = await issued.json();
+  if (!issued.ok || typeof token !== "string")
+    throw new Error(`Docker Hub refused a pull token (${issued.status}).`);
+  const response = await fetch(
+    `https://registry-1.docker.io/v2/${repository}/manifests/${tag}`,
+    {
+      method: "HEAD",
+      signal,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept:
+          "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json",
+      },
+    },
+  );
+  if (response.status === 404) return false;
+  if (!response.ok)
+    throw new Error(
+      `Reading ${repository}:${tag} on Docker Hub failed (${response.status}).`,
+    );
+  return true;
+};
+
+/**
+ * Copies this recipe's shared preview Orb image to Docker Hub as
+ * `previewPublicOrbImage`, registry to registry, unless the tag is already
+ * there; or, when that push failed, the image the stage's Orb Worker
+ * (`orbWorkerName`) pins. Needs DOCKERHUB_USERNAME and DOCKERHUB_TOKEN, and
+ * Cloudflare credentials for the account's registry.
+ */
+export const mirrorPreviewOrbImage = async ({
+  workspaceRoot,
+  stateDirectory,
+  orbWorkerName,
+  environment = process.env,
+  signal,
+  fetch = globalThis.fetch,
+}) => {
+  const target = previewPublicOrbImage(workspaceRoot);
+  if (target === undefined)
+    throw new Error("public-image.json names no Docker Hub repository.");
+  const [, repository, tag] = /^docker\.io\/([^:]+):(.+)$/.exec(target);
+  if (await dockerHubHasTag(repository, tag, { fetch, signal }))
+    return { target, copied: false };
+  const username = environment.DOCKERHUB_USERNAME?.trim();
+  const password = environment.DOCKERHUB_TOKEN?.trim();
+  if (!username || !password)
+    throw new Error(
+      `${target} is missing, and copying it needs DOCKERHUB_USERNAME and DOCKERHUB_TOKEN.`,
+    );
+  const recipe = orbImageRecipeHash(workspaceRoot).slice(0, 32);
+  mkdirSync(stateDirectory, { recursive: true, mode: 0o700 });
+  const dockerEnvironment = orbDockerEnvironment({
+    environment,
+    stateDirectory,
+  });
+  const registry = await previewImageRegistry({
+    workspaceRoot,
+    environment: dockerEnvironment,
+    signal,
+    fetch,
+  });
+  let source;
+  for (const shared of (await registry.tags()).filter((name) =>
+    name.startsWith(`${recipe}-`),
+  )) {
+    const digest = await registry.digest(shared);
+    if (digest === undefined) continue;
+    source = `${registry.repository}@${digest}`;
+    break;
+  }
+  // A stage whose shared image push failed built its own; its Orb Worker
+  // pins it.
+  if (source === undefined && orbWorkerName !== undefined)
+    source = (
+      await workerContainerImages(
+        (path) =>
+          cloudflareApi(
+            {
+              accountId: environment.CLOUDFLARE_ACCOUNT_ID,
+              apiToken: environment.CLOUDFLARE_API_TOKEN,
+              fetch,
+            },
+            path,
+            undefined,
+            { missing: true },
+          ),
+        orbWorkerName,
+      )
+    ).find((image) =>
+      image.startsWith(`${registry.credentials.registry_host}/`),
+    );
+  if (source === undefined)
+    throw new Error(
+      `No shared preview Orb image for recipe ${recipe}, and no Orb Worker image to copy.`,
+    );
+  const docker = async (description, args, options = {}) => {
+    const result = await runCommand("docker", args, {
+      env: dockerEnvironment,
+      signal,
+      ...options,
+    });
+    if (result.status !== 0)
+      throw new Error(
+        `${description} failed (exit ${result.status ?? result.signal}).\n${result.stderr.slice(-2000)}`,
+      );
+  };
+  const { credentials } = registry;
+  await docker(
+    "Registry login",
+    [
+      "login",
+      "--username",
+      credentials.username,
+      "--password-stdin",
+      credentials.registry_host,
+    ],
+    { input: credentials.password },
+  );
+  await docker(
+    "Docker Hub login",
+    ["login", "--username", username, "--password-stdin", "docker.io"],
+    { input: password },
+  );
+  await docker(
+    "Copy to Docker Hub",
+    ["buildx", "imagetools", "create", "--tag", target, source],
+    { echo: true },
+  );
+  return { target, source, copied: true };
+};
+
+/** The container images a Worker's active deployment pins. */
+const workerContainerImages = async (api, script) => {
+  const name = encodeURIComponent(script);
+  const deployment = (await api(`/workers/scripts/${name}/deployments`))
+    ?.deployments?.[0];
+  const images = [];
+  for (const { version_id: version } of deployment?.versions ?? []) {
+    const detail = await api(`/workers/scripts/${name}/versions/${version}`);
+    for (const container of detail?.resources?.script_runtime?.containers ?? [])
+      for (const image of Object.values(container.images ?? {}))
+        if (typeof image === "string") images.push(image);
+  }
+  return images;
+};
+
+/**
  * Deletes shared preview Orb images that no Worker's active deployment pins
  * and that were pushed over `minimumAgeDays` ago, so a deploy that just chose
  * one has long since pinned it. Reads every Worker in the account; any failed
@@ -676,16 +838,8 @@ export const pruneSharedPreviewOrbImages = async ({
   const pinned = new Set();
   const scripts = [...((await api("/workers/scripts")) ?? [])];
   const readScript = async ({ id: script }) => {
-    const name = encodeURIComponent(script);
-    const deployment = (await api(`/workers/scripts/${name}/deployments`))
-      ?.deployments?.[0];
-    for (const { version_id: version } of deployment?.versions ?? []) {
-      const detail = await api(`/workers/scripts/${name}/versions/${version}`);
-      for (const container of detail?.resources?.script_runtime?.containers ??
-        [])
-        for (const image of Object.values(container.images ?? {}))
-          if (typeof image === "string") pinned.add(image);
-    }
+    for (const image of await workerContainerImages(api, script))
+      pinned.add(image);
   };
   // Eight reads at a time; any failure fails the prune before it deletes.
   await Promise.all(

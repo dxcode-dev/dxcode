@@ -169,9 +169,9 @@ const createSandbox = async (
 ) => {
   if (profile.image === undefined) throw unavailable("no prepared Orb image");
   const displayName = dockerSandboxName(threadId);
-  const created = await api
-    .createSandbox({
-      imageRef: profile.image,
+  const create = () =>
+    api.createSandbox({
+      imageRef: profile.image as string,
       cpus: profile.resources.cpuCores,
       memoryMib: profile.resources.memoryMb,
       timeoutSeconds: seconds(idleMs),
@@ -179,16 +179,27 @@ const createSandbox = async (
       displayName,
       labels: { dxThread: threadId },
       idempotencyKey: `${displayName}-${record.initializationAttemptId ?? "0"}`,
-    })
-    .catch(async (cause: unknown) => {
-      // A create that reached Docker before an earlier attempt failed.
-      if (cause instanceof DockerSandboxesApiError && cause.status === 409) {
-        const existing = await api.findSandbox(displayName);
-        if (existing !== undefined) return existing;
-      }
-      throw cause;
     });
-  return untilRunning(api, created.uid, CREATE_TIMEOUT_MS);
+  const deadline = Date.now() + CREATE_TIMEOUT_MS;
+  for (;;) {
+    try {
+      return untilRunning(api, (await create()).uid, CREATE_TIMEOUT_MS);
+    } catch (cause) {
+      if (!(cause instanceof DockerSandboxesApiError)) throw cause;
+      // A create that reached Docker before an earlier attempt failed.
+      if (cause.status === 409) {
+        const existing = await api.findSandbox(displayName);
+        if (existing !== undefined)
+          return untilRunning(api, existing.uid, CREATE_TIMEOUT_MS);
+        throw cause;
+      }
+      // Another activation's create with the same key is still running
+      // (Docker: "sandbox request is still in progress; retry with the same
+      // key"). Retried, it returns that sandbox.
+      if (cause.status !== 503 || Date.now() > deadline) throw cause;
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    }
+  }
 };
 
 /**

@@ -1,4 +1,6 @@
+import { env } from "cloudflare:workers";
 import type { OrbProviderId } from "@dx/domain";
+import type { Bindings } from "../http/types.js";
 import type {
   OrbProviderConnector,
   OrbProviderConnectors,
@@ -30,10 +32,31 @@ export interface OrbProviderModule {
   readonly connector?: OrbProviderConnector;
 }
 
+/**
+ * A branch preview's own Orb image on Docker Hub
+ * (`docker.io/<repository>:<tag>`), which its Docker and Cloudflare
+ * connections boot instead of the released one; see DX_PREVIEW_ORB_IMAGE.
+ */
+const previewImage = /^docker\.io\/([^:@]+):([\w.-]+)$/.exec(
+  (env as Partial<Bindings>).DX_PREVIEW_ORB_IMAGE ?? "",
+);
+
 /** Cloudflare connections need a published public Orb image to copy. */
-const cloudflareConnector = makeCloudflareConnector();
+const cloudflareConnector = makeCloudflareConnector(
+  previewImage === null
+    ? {}
+    : {
+        image: {
+          registry: "registry-1.docker.io",
+          repository: previewImage[1] as string,
+          reference: previewImage[2] as string,
+        },
+      },
+);
 /** Docker Sandboxes connections boot the published public Orb image. */
-const dockerConnector = makeDockerConnector();
+const dockerConnector = makeDockerConnector(
+  previewImage === null ? {} : { image: previewImage[0] },
+);
 
 /**
  * Every Orb provider's implementation, one entry per `@dx/domain`

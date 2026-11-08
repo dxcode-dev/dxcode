@@ -6,6 +6,11 @@ import {
   OrbProviderCredentialsRejected,
 } from "../../plugins/execution/connector.js";
 import {
+  ORB_CHECK_COMMAND,
+  ORB_CHECK_TIMEOUT_SECONDS,
+  orbCheckFailure,
+} from "../guest/orb-check.js";
+import {
   startVmOrbSetup,
   vmOrbRecipe,
   vmOrbSetupStatus,
@@ -19,9 +24,10 @@ import { boatBuildGuest } from "./guest.js";
  * Ubuntu 24.04 image; Boat builds no custom images, but a saved snapshot
  * of a sandbox's disk starts new sandboxes of any size. So preparing an
  * account starts one sandbox with none of the account's secrets, runs
- * deploy/orb/vm-setup.sh in it, saves its disk as the saved snapshot
+ * deploy/orb/install.sh in it, saves its disk as the saved snapshot
  * `dx-orb-<recipe>`, and deletes it. Then a test Orb starts from that
- * snapshot, checks that systemd started dx-orb-init, and is deleted.
+ * snapshot, checks that systemd started dx-orb-init, runs dx-orb-check
+ * (every workspace feature, the Desktop included), and is deleted.
  *
  * Threads of every size pin that snapshot. Boat's free trial cannot save
  * snapshots, and an account with zero data retention erases a sandbox's
@@ -213,6 +219,14 @@ const probe = async (api: BoatApi, snapshot: string) => {
     );
     if (ran.exitCode !== 0)
       throw new BuildFailed("The test Orb did not start dx-orb-init.");
+    // Every workspace feature, the Desktop included (dx-orb-check).
+    const checked = await api.command(
+      sandbox.id,
+      ORB_CHECK_COMMAND,
+      ORB_CHECK_TIMEOUT_SECONDS,
+    );
+    const failure = orbCheckFailure(checked.stdout, checked.exitCode ?? 1);
+    if (failure !== undefined) throw new BuildFailed(failure);
   } finally {
     await api.deleteSandbox(sandbox.id).catch(() => undefined);
   }

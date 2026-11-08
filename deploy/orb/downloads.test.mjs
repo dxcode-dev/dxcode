@@ -6,14 +6,14 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-// Every download in the Orb image recipe (the Dockerfile, and vm-setup.sh,
-// which repeats its steps on a VM) must survive a remote that fails once: a
-// public self-host deploy of v0.2.67 died on one HTTP 503 from
+// Every download in the Orb installer (install.sh, which the Dockerfile and
+// the Boat and Freestyle recipes run) must survive a remote that fails once:
+// a public self-host deploy of v0.2.67 died on one HTTP 503 from
 // snapshot.debian.org. Each curl command is run here, with its own options,
 // against a local server whose first answer for each file is a failure.
 
 const root = resolve(import.meta.dirname, "../..");
-const recipes = ["deploy/orb/Dockerfile", "deploy/orb/vm-setup.sh"];
+const recipes = ["deploy/orb/install.sh"];
 const body = "pinned file\n";
 
 const recipe = (path) => readFileSync(resolve(root, path), "utf8");
@@ -22,7 +22,12 @@ const recipe = (path) => readFileSync(resolve(root, path), "utf8");
 const curlCommands = (path) =>
   recipe(path)
     .split(/&&|\|\||[|;\n]/)
-    .map((command) => command.trim().replace(/^(RUN|do|then|else)\s+/, ""))
+    .map((command) =>
+      command
+        .trim()
+        .replace(/^(RUN|do|then|else)\s+/, "")
+        .replace(/^\w+=\$\(/, ""),
+    )
     .filter((command) => /^curl\s/.test(command))
     .map((command) => command.split(/\s+/));
 
@@ -34,11 +39,17 @@ const curlInvocations = (path) =>
     .join("\n")
     .match(/\bcurl\s+-/g)?.length ?? 0;
 
-/** The command's options, without its URL (the last word) and output file. */
+/**
+ * The command's options, without its URL (the last word), its output file,
+ * and shell expansions such as an optional header list.
+ */
 const options = (words) =>
   words
     .slice(1, -1)
-    .filter((word, index, all) => word !== "-o" && all[index - 1] !== "-o");
+    .filter(
+      (word, index, all) =>
+        word !== "-o" && all[index - 1] !== "-o" && !word.startsWith('"$'),
+    );
 
 const downloads = recipes.flatMap((path) =>
   curlCommands(path).map((words) => ({
@@ -48,10 +59,10 @@ const downloads = recipes.flatMap((path) =>
   })),
 );
 
-// The Desktop step's `fetch <name> <sha256> <url>...`, which tries each
-// source of a pinned .deb in order.
-const fetchFunction = /\b(\w+)\(\) \{ .*? \}(?= &&)/.exec(
-  recipe("deploy/orb/Dockerfile"),
+// install.sh's `fetch_toolbelt <file> <sha256> <url>...`, which tries each
+// source of the dx toolbelt in order.
+const fetchFunction = /^fetch_toolbelt\(\) \{\n[\s\S]*?\n\}$/m.exec(
+  recipe("deploy/orb/install.sh"),
 );
 
 // /503/<n> answers 503 first, /reset/<n> drops the connection first; every
@@ -101,17 +112,23 @@ const run = (command, args, options) =>
 
 const curl = (args, output) => run("curl", [...args, "-o", output]);
 
-/** Runs the Dockerfile's fetch function in a fresh directory. */
-const fetchDeb = async (urls) => {
+/** Runs install.sh's fetch_toolbelt in a fresh directory. */
+const fetchToolbelt = async (urls) => {
   const cwd = mkdtempSync(join(directory, "fetch-"));
   const sha256 = createHash("sha256").update(body).digest("hex");
-  const [definition, name] = fetchFunction;
+  const file = join(cwd, "dx-toolbelt.tar.zst");
   const result = await run(
-    "sh",
-    ["-c", `${definition} && ${name} "$@"`, "sh", "pkg", sha256, ...urls],
+    "bash",
+    [
+      "-c",
+      `${fetchFunction[0]}\nfetch_toolbelt "$@"`,
+      "bash",
+      file,
+      sha256,
+      ...urls,
+    ],
     { cwd },
   );
-  const file = join(cwd, "pkg.deb");
   return {
     ...result,
     kept: existsSync(file) ? readFileSync(file, "utf8") : undefined,
@@ -161,18 +178,18 @@ describe("Orb image downloads", () => {
   }, 60_000);
 
   it("falls through a dead source and a tampered one to the next source", async () => {
-    expect(fetchFunction, "the Desktop step's fetch function").not.toBeNull();
+    expect(fetchFunction, "install.sh's fetch_toolbelt").not.toBeNull();
     const [recovered, exhausted] = await Promise.all([
-      fetchDeb([
+      fetchToolbelt([
         `${origin}/down/a`,
         `${origin}/tampered/a`,
         `${origin}/good/a`,
       ]),
-      fetchDeb([`${origin}/down/b`, `${origin}/tampered/b`]),
+      fetchToolbelt([`${origin}/down/b`, `${origin}/tampered/b`]),
     ]);
     expect(recovered.status, recovered.stderr).toBe(0);
     expect(recovered.kept).toBe(body);
     expect(exhausted.status).not.toBe(0);
-    expect(exhausted.stderr).toContain("no source served pkg");
+    expect(exhausted.stderr).toContain("no source served the dx toolbelt");
   }, 60_000);
 });

@@ -29,8 +29,7 @@ describe("archived Thread execution admission", () => {
     ["Files tree read", `/v1/threads/${threadId}/files`],
     ["Files content read", `/v1/threads/${threadId}/files/src%2Findex.ts`],
     ["Desktop status check", `/v1/threads/${threadId}/desktop`],
-    ["Desktop control socket", `/v1/threads/${threadId}/desktop/control`],
-    ["Desktop stream socket", `/v1/threads/${threadId}/desktop/stream`],
+    ["Desktop socket", `/v1/threads/${threadId}/desktop/ws`],
     ["Flue submission", `/v1/agents/dx/${threadId}`],
     ["Flue abort", `/v1/agents/dx/${threadId}/abort`],
   ])("blocks archived %s before execution", async (_label, path) => {

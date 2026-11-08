@@ -9,13 +9,15 @@
 # with --foreground, so the session's own browser stays in its session.
 set -u
 
+# shellcheck source=env.sh
+. /opt/dx/desktop/env.sh
 state="${HOME:?HOME is not set}/.local/state/dx-desktop"
 foreground=
 if [ "${1:-}" = "--foreground" ]; then
   foreground=1
   shift
 fi
-if [ -z "${WAYLAND_DISPLAY:-}" ]; then
+if [ -z "${DISPLAY:-}" ]; then
   [ -f "$state/environment" ] || {
     echo "dx desktop: not running (run /opt/dx/desktop/start)" >&2
     exit 1
@@ -31,8 +33,17 @@ if [ -z "${DX_DESKTOP_SESSION:-}" ]; then
   export DX_DESKTOP_SESSION
 fi
 
+# Chromium locks its profile with the host's name. An Orb resumed from a disk
+# snapshot may run on another machine with another name (Boat), and Chromium
+# then refuses the profile as in use "on another computer". With no Chromium
+# running on the profile, the lock is stale: remove it.
+if ! pgrep -u "$(id -u)" -f -- "--user-data-dir=$state/chromium( |\$)" >/dev/null; then
+  rm -f "$state/chromium/SingletonLock" "$state/chromium/SingletonSocket" \
+    "$state/chromium/SingletonCookie"
+fi
+
 flags=(
-  --ozone-platform=wayland
+  --ozone-platform=x11
   --remote-debugging-address=127.0.0.1
   --remote-debugging-port=9222
   --user-data-dir="$state/chromium"
@@ -49,13 +60,16 @@ flags=(
 )
 # Chromium's sandbox needs unprivileged user namespaces. Sandbox hosts (E2B,
 # Cloudflare Containers) provide them; a plain Docker container's default
-# seccomp profile does not.
-if ! unshare --user --map-root-user true 2>/dev/null; then
+# seccomp profile does not. Ubuntu 24.04 grants them only to programs with
+# an AppArmor profile, which deploy/orb/install.sh gives Chromium.
+if ! unshare --user --map-root-user true 2>/dev/null &&
+  ! [ -f /etc/apparmor.d/dx-chromium ]; then
   flags+=(--no-sandbox --test-type)
 fi
+# Chromium and what it opens run with the host's PATH.
 if [ -n "$foreground" ]; then
-  exec chromium "${flags[@]}" "$@"
+  PATH="$DX_HOST_PATH" exec "$bin/chromium" "${flags[@]}" "$@"
 fi
 # A running browser takes the URL and this process exits; otherwise this one
 # becomes the browser. Either way the caller does not wait for it.
-setsid -f chromium "${flags[@]}" "$@" </dev/null >>"$state/chromium.log" 2>&1
+PATH="$DX_HOST_PATH" "$bin/setsid" -f "$bin/chromium" "${flags[@]}" "$@" </dev/null >>"$state/chromium.log" 2>&1

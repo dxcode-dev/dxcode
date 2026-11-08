@@ -3,6 +3,9 @@ export const ORB_IMAGE_NAME: "orb";
 export const ORB_COMPATIBILITY_DATE: string;
 export const orbRecipeFiles: ReadonlyArray<string>;
 export function orbRecipeHash(workspaceRoot: string): string;
+export function previewPublicOrbImage(
+  workspaceRoot: string,
+): string | undefined;
 export function orbDockerEnvironment(input: {
   environment?: NodeJS.ProcessEnv;
   stateDirectory: string;

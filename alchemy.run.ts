@@ -27,6 +27,7 @@ import {
   HeldSecret,
   OrbContainers,
   orbRecipeHash,
+  previewPublicOrbImage,
   selfhostProviders,
 } from "./deploy/selfhost/alchemy-resources.ts";
 import CLOUDFLARE_ORB_PROFILES from "./packages/domain/cloudflare-orb-profiles.json" with {
@@ -830,6 +831,13 @@ export default Alchemy.Stack(
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
         ...(portals === undefined ? {} : { DX_PORTAL_DOMAIN: portals.domain }),
+        // A branch preview's Docker and Cloudflare connections boot the
+        // branch's Orb image, which the preview workflow copies to Docker
+        // Hub (scripts/mirror-preview-orb-image.mjs).
+        ...(configuration.deploymentTarget === "branch" &&
+        previewPublicOrbImage(import.meta.dirname) !== undefined
+          ? { DX_PREVIEW_ORB_IMAGE: previewPublicOrbImage(import.meta.dirname) }
+          : {}),
         DX_ATTACHMENT_R2_ENDPOINT: attachmentSigning.endpoint,
         ...(e2bProfiles !== undefined
           ? {

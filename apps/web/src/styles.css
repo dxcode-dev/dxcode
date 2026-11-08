@@ -1197,7 +1197,7 @@ a {
 .thread-desktop-surface:focus-visible {
   box-shadow: inset 0 0 0 2px var(--ring);
 }
-/* Waymote letterboxes the frame inside the canvas box and maps pointer
+/* The viewer letterboxes the frame inside the canvas box and maps pointer
    positions to the contained frame. */
 .thread-desktop-canvas {
   display: block;

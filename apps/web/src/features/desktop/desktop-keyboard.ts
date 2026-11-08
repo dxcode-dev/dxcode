@@ -1,6 +1,6 @@
 /**
  * Keys for the remote desktop from a phone, which has no Esc, Tab, arrows,
- * or modifiers. Waymote reads `KeyboardEvent.code` from its text input, so a
+ * or modifiers. The viewer reads `KeyboardEvent.code` and `key` from its text input, so a
  * key is sent by dispatching the events a hardware keyboard would.
  */
 export type DesktopModifier =
