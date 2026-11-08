@@ -54,13 +54,13 @@ const MAX_INACTIVITY_MS = 3_600_000;
 const STATE_RETRIES = 3;
 /**
  * The longest Core waits for the container object to open a workspace: its
- * lock, a snapshot restore, and the readiness wait, with headroom. A new
- * workspace's stuck first start is started over once (#1783): 60 s, a 5 s
- * stop, then 90 s, so 155 s at worst. An
- * open that took 945 s in production now fails here, and Flue retries the
- * run on a fresh stub.
+ * lock, and up to `ORB_START_LIMIT_MS` (300 s) for a start to answer, with
+ * headroom. An open that reaches either limit fails as
+ * `ORB_START_TIMED_OUT`, which Flue does not retry: the person sees that
+ * the Orb is slow to start and can retry, and that retry waits for the same
+ * start (#1956).
  */
-export const CLOUDFLARE_OPEN_TIMEOUT_MS = 180_000;
+export const CLOUDFLARE_OPEN_TIMEOUT_MS = 330_000;
 /** While an open waits, report that it still waits this often. */
 const OPEN_PROGRESS_MS = 30_000;
 /** How long `status`, asked before a wake, may take. */
@@ -103,6 +103,22 @@ const isObjectReset = (cause: unknown) => RESET_PATTERN.test(messageOf(cause));
 const platformFailure = (code: string, message: string) =>
   new Error(
     markRunFailure({ class: "platform", code, message, retryable: true }),
+  );
+
+/**
+ * The Orb did not start within `ORB_START_LIMIT_MS`, or the open within
+ * `CLOUDFLARE_OPEN_TIMEOUT_MS`. Not retried on its own (`run-failure.ts`):
+ * the web offers Retry.
+ */
+const orbStartTimedOut = () =>
+  new Error(
+    markRunFailure({
+      class: "platform",
+      code: "ORB_START_TIMED_OUT",
+      message:
+        "The Orb did not start within 5 minutes. Its files are safe; retry to keep waiting for it.",
+      retryable: false,
+    }),
   );
 
 /**
@@ -480,11 +496,7 @@ const openCloudflareWorkspaceTimed = async (
             allowReset: !options.existingOnly,
           }),
           CLOUDFLARE_OPEN_TIMEOUT_MS,
-          () =>
-            platformFailure(
-              "WORKSPACE_OPEN_TIMED_OUT",
-              `The workspace open timed out after ${CLOUDFLARE_OPEN_TIMEOUT_MS / 1000} s.`,
-            ),
+          () => orbStartTimedOut(),
         ),
       );
       if (result.kind === "ready") timing.set("residency", result.residency);
@@ -540,6 +552,10 @@ const openCloudflareWorkspaceTimed = async (
         durationMs: Date.now() - startedAt,
         error: cause instanceof Error ? cause.message : String(cause),
       });
+      // The start is still running in the container: the person may retry,
+      // and that open waits for it.
+      if (/Orb container start timed out/.test(messageOf(cause)))
+        throw orbStartTimedOut();
       throw cause;
     } finally {
       clearInterval(progress);

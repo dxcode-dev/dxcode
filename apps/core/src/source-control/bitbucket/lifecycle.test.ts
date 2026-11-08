@@ -1,9 +1,11 @@
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { integrationCredentialReferenceFor } from "@dx/domain";
 import { Effect, Redacted } from "effect";
 import { Hono } from "hono";
-import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
 import manifest from "../../../migration-manifest.json" with { type: "json" };
 import type { AppEnv } from "../../http/types.js";
 import { readProjectOrbFiles } from "../../projects/orb-files.js";
@@ -63,17 +65,42 @@ afterEach(() => {
   for (const db of databases.splice(0)) db.close();
 });
 
-const database = () => {
-  const sqlite = new DatabaseSync(":memory:");
-  databases.push(sqlite);
-  sqlite.exec("PRAGMA foreign_keys = ON");
+/**
+ * Every D1 migration, applied once for this file. Each test opens its own
+ * copy: applying all of them took about 0.9 s per test, which a busy release
+ * runner stretched past the 5 s test timeout.
+ */
+const migratedDirectory = mkdtempSync(
+  join(tmpdir(), "dx-bitbucket-lifecycle-"),
+);
+afterAll(() => rmSync(migratedDirectory, { recursive: true, force: true }));
+let migrated: string | undefined;
+const migratedDatabase = () => {
+  if (migrated !== undefined) return migrated;
+  const template = new DatabaseSync(":memory:");
+  template.exec("PRAGMA foreign_keys = ON");
   for (const migration of manifest.d1)
-    sqlite.exec(
+    template.exec(
       readFileSync(
         new URL(`../../../migrations/${migration.filename}`, import.meta.url),
         "utf8",
       ),
     );
+  const path = join(migratedDirectory, "migrated.sqlite");
+  template.exec(`VACUUM INTO '${path}'`);
+  template.close();
+  migrated = path;
+  return path;
+};
+
+const database = () => {
+  const path = join(migratedDirectory, `test-${crypto.randomUUID()}.sqlite`);
+  copyFileSync(migratedDatabase(), path);
+  const sqlite = new DatabaseSync(path);
+  databases.push(sqlite);
+  sqlite.exec(
+    "PRAGMA foreign_keys = ON; PRAGMA journal_mode = MEMORY; PRAGMA synchronous = OFF",
+  );
   sqlite
     .prepare(
       'INSERT INTO "user" (id,name,email,emailVerified,createdAt,updatedAt) VALUES (?,?,?,1,?,?)',

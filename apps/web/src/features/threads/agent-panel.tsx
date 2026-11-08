@@ -465,6 +465,12 @@ const orbStartDenial = (error: unknown) => {
       message: typeof details === "string" ? details : "",
       restartOrb: true,
     };
+  // Core's 5-minute limit on an Orb start (#1956): Retry waits for it.
+  if (type === "orb_start_timed_out")
+    return {
+      title: typeof message === "string" ? message : "The Orb is slow to start",
+      message: typeof details === "string" ? details : "",
+    };
   if (type === "orb_start_refused")
     return {
       title: "Orb not started",

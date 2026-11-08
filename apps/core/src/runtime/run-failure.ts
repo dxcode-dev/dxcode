@@ -116,6 +116,14 @@ const statusOf = (input: RunFailureInput) => {
 const plainText = (message: string) =>
   message.replace(/^\w+\(sub_[^)]*\) failed: /, "");
 
+/**
+ * Platform failures the person retries instead of dx: an Orb that did not
+ * start within its limit is still starting, and a retry on dx's schedule
+ * would keep the person waiting for many more limits without a word
+ * (#1956). The web offers Retry, which waits for the same start.
+ */
+const NOT_RETRIED_CODES: ReadonlySet<string> = new Set(["ORB_START_TIMED_OUT"]);
+
 const failure = (
   failureClass: RunFailureClass,
   code: string,
@@ -125,7 +133,9 @@ const failure = (
   class: failureClass,
   code,
   message,
-  retryable: failureClass === "transient" || failureClass === "platform",
+  retryable:
+    (failureClass === "transient" || failureClass === "platform") &&
+    !NOT_RETRIED_CODES.has(code),
   ...(status === undefined ? {} : { status }),
 });
 
@@ -158,6 +168,13 @@ export const classifyRunFailure = (input: RunFailureInput): RunFailure => {
   for (const rule of ACCOUNT_RULES)
     if (rule.pattern.test(text))
       return failure("account", rule.code, rule.message ?? text, status);
+  if (/orb container start timed out/i.test(text))
+    return failure(
+      "platform",
+      "ORB_START_TIMED_OUT",
+      "The Orb did not start within 5 minutes. Its files are safe; retry to keep waiting for it.",
+      status,
+    );
   if (PLATFORM_PATTERN.test(text))
     return failure(
       "platform",

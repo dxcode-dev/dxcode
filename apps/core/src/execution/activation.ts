@@ -494,6 +494,25 @@ const asSourceRunError = (cause: unknown): never => {
 };
 
 /**
+ * An Orb that did not start within its limit (#1956), as the run's error:
+ * Flue would settle it as a generic internal error, and the person could
+ * not tell that the Orb is only slow, that its files are safe, or that
+ * Retry waits for the same start.
+ */
+const asOrbStartRunError = (cause: unknown): never => {
+  const message = cause instanceof Error ? cause.message : "";
+  if (!message.includes(":ORB_START_TIMED_OUT)")) throw cause;
+  throw new FlueError({
+    type: "orb_start_timed_out",
+    message: "The Orb is slow to start.",
+    details:
+      "It did not start within 5 minutes. Its files are safe. Retry to keep waiting for it.",
+    dev: "",
+    meta: { code: "ORB_START_TIMED_OUT" },
+  });
+};
+
+/**
  * The Orb's disk became read-only, as the run's error: the Thread names the
  * cause and what dx did, instead of a generic internal error.
  */
@@ -715,7 +734,7 @@ const activationFor =
       let wakeStatusPublished = false;
       try {
         const openWorkspace = () =>
-          existingOnly
+          (existingOnly
             ? observeCall(
                 "execution.activation.workspace",
                 "phase",
@@ -766,7 +785,8 @@ const activationFor =
                     options,
                   );
                 },
-              );
+              )
+          ).catch(asOrbStartRunError);
         // The Thread's source is read while the Orb opens; a second
         // preparation after a restart reads it again.
         let sourceRecord: ReturnType<typeof readSourceWorkspace> | undefined =

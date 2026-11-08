@@ -119,8 +119,8 @@ const orbWorld = () => {
     exec: vi.fn(async (argv: string[]) => {
       let exitCode: Promise<number> = Promise.resolve(0);
       if (argv[0] === "true" && probe === "hang") {
-        // The probe never returns; the readiness wait's 90 s pass.
-        clock += 91_000;
+        // The probe never returns; the readiness wait's 300 s pass (#1956).
+        clock += 301_000;
         exitCode = new Promise(() => {});
       } else if (argv[0] === "true" && typeof probe === "function")
         exitCode = probe();

@@ -5,6 +5,11 @@ import {
   type OrbContainerRuntime,
   type OrbExecOptions,
 } from "./orb-container.js";
+import {
+  faultyContainer,
+  ORB_FAULT_KEY,
+  type OrbFaultPlan,
+} from "./orb-container-faults.js";
 
 /** The named image in the Orb Worker's container configuration. */
 export const ORB_IMAGE_NAME = "orb";
@@ -46,14 +51,25 @@ export class OrbStopNotice extends WorkerEntrypoint<
  */
 export class OrbContainerObject extends DurableObject {
   readonly #controller: OrbContainerController;
+  /** A branch preview's fault plan (`orb-container-faults.ts`), if any. */
+  #fault: OrbFaultPlan | undefined;
 
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env as never);
     const container = ctx.container as ContainerWithImages | undefined;
     if (container === undefined)
       throw new Error("The Orb container object has no container binding.");
+    void ctx.storage
+      .get<OrbFaultPlan>(ORB_FAULT_KEY)
+      .then((plan) => {
+        this.#fault ??= plan;
+      })
+      .catch(() => undefined);
     this.#controller = new OrbContainerController({
-      container: container as unknown as OrbContainerRuntime,
+      container: faultyContainer(
+        container as unknown as OrbContainerRuntime,
+        () => this.#fault,
+      ),
       storage: ctx.storage,
       image: () => container.images?.[ORB_IMAGE_NAME],
       sandboxId: ctx.id.toString(),
@@ -138,6 +154,16 @@ export class OrbContainerObject extends DurableObject {
 
   recover(options?: { readonly discardUnsaved?: boolean }) {
     return this.#controller.recover(options);
+  }
+
+  /**
+   * Sets or clears this Orb's fault plan. Core calls it only on a branch
+   * preview (`orb-fault-route.ts`).
+   */
+  async injectFault(plan: OrbFaultPlan | null) {
+    this.#fault = plan ?? undefined;
+    if (plan === null) await this.ctx.storage.delete(ORB_FAULT_KEY);
+    else await this.ctx.storage.put(ORB_FAULT_KEY, plan);
   }
 
   /** Only `OrbStopNotice` calls this; Core never does. */

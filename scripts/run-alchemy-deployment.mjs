@@ -499,12 +499,17 @@ if (operation === "deploy") {
   } else {
     // DX_DXD_BUILD_CACHE: a directory the workflow restores and saves under
     // a key over every dxd build input (preview.yml, staging.yml). A branch
-    // preview reuses the binary built there for the same sources; every
-    // deployment that builds one stores it there.
+    // preview or staging reuses the binary built there for the same
+    // sources; every deployment that builds one stores it there. Staging
+    // reads only main's cache, which a pull request's own runs cannot write.
     const cacheDirectory = process.env.DX_DXD_BUILD_CACHE?.trim();
     const cachedBinary =
       cacheDirectory && resolve(workspaceRoot, cacheDirectory, "dxd");
-    if (target === "branch" && cachedBinary && existsSync(cachedBinary)) {
+    if (
+      (target === "branch" || target === "staging") &&
+      cachedBinary &&
+      existsSync(cachedBinary)
+    ) {
       dxdBinary = cachedBinary;
       console.log("dxd: reusing the build cached for these sources.");
     } else {

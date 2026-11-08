@@ -15,6 +15,7 @@ import {
   threadBugReportRoutes,
 } from "./bug-reports/routes.js";
 import { dictationRoutes } from "./dictation/routes.js";
+import { threadOrbFaultRoutes } from "./execution/cloudflare/orb-fault-route.js";
 import { feedbackWidgetPublicRoutes } from "./feedback-widget/public-routes.js";
 import { healthHandler } from "./health/handler.js";
 import { errorHandler, notFoundHandler } from "./http/http-errors.js";
@@ -168,6 +169,8 @@ app.route("/v1/threads", threadOrbDiskRoutes);
 // Viewers are refused by authorizeThread; the route refuses an archived Thread.
 app.use("/v1/threads/:threadId/orb/*", authorizeThread);
 app.route("/v1/threads", threadOrbRestartRoutes);
+// Branch previews only: reproduces slow Orb restores (#1956).
+app.route("/v1/threads", threadOrbFaultRoutes);
 // `/automations/*` also matches `/automations`; see Portals above.
 app.use("/v1/threads/:threadId/automations/*", authorizeThread);
 app.route("/v1/threads", threadAutomationRoutes);

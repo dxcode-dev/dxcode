@@ -700,7 +700,7 @@ describe("Cloudflare Containers Orb provider", () => {
     ).toMatchObject({ class: "platform", retryable: true });
   });
 
-  it("bounds an open that never returns with a platform failure, reporting its phases", async () => {
+  it("bounds an open that never returns with a start timeout the person retries, reporting its phases", async () => {
     vi.useFakeTimers();
     try {
       const { stub } = bind(uninitialized());
@@ -725,8 +725,9 @@ describe("Cloudflare Containers Orb provider", () => {
         classifyRunFailure({ message: (cause as Error).message }),
       ).toMatchObject({
         class: "platform",
-        code: "WORKSPACE_OPEN_TIMED_OUT",
-        retryable: true,
+        code: "ORB_START_TIMED_OUT",
+        // The web offers Retry instead of Flue retrying on its own (#1956).
+        retryable: false,
       });
       expect(phases[0]).toBe("starting-machine");
       expect(phases).toContain("waiting-for-machine");

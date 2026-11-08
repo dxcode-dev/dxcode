@@ -28,7 +28,10 @@ import { Eye } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
-import { wakingExecutionEnvironmentMessage } from "../../shared/execution-environment-copy.js";
+import {
+  slowWakingExecutionEnvironmentMessage,
+  wakingExecutionEnvironmentMessage,
+} from "../../shared/execution-environment-copy.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import { Button } from "../../shared/ui/button.js";
@@ -397,7 +400,9 @@ export function ThreadWorkspace({
         workspaceStatus={
           workspaceStatus === "waking"
             ? wakingExecutionEnvironmentMessage
-            : undefined
+            : workspaceStatus === "waking-slow"
+              ? slowWakingExecutionEnvironmentMessage
+              : undefined
         }
         onOpenModelRouting={(destination) =>
           void navigate({

@@ -47,7 +47,15 @@ interface RealtimeSocket {
 }
 
 type SocketFactory = (url: string) => RealtimeSocket;
-export type WorkspaceStatus = "waking" | undefined;
+/** `waking-slow`: still waking after `SLOW_WAKE_MS` (#1956). */
+export type WorkspaceStatus = "waking" | "waking-slow" | undefined;
+
+/**
+ * A wake that takes longer than this says so. Most Orbs wake within
+ * seconds; Cloudflare's slow restores take a minute or more, and Core waits
+ * up to 5 minutes before the turn offers Retry.
+ */
+export const SLOW_WAKE_MS = 90_000;
 
 const invalidateAllRealtimeState = (
   queryClient: QueryClient,
@@ -80,6 +88,8 @@ export class RealtimeClient {
   /** The current topic's join was refused; retried once the Thread changes. */
   #deniedTopic?: `thread:${ThreadId}`;
   readonly #workspaceStatuses = new Map<ThreadId, WorkspaceStatus>();
+  /** Per waking Thread, the timer that marks the wake slow. */
+  readonly #slowWakeTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   readonly #workspaceStatusListeners = new Map<ThreadId, Set<() => void>>();
   readonly #presentUsers = new Map<ThreadId, ReadonlyArray<UserId>>();
   readonly #presenceListeners = new Map<ThreadId, Set<() => void>>();
@@ -297,14 +307,23 @@ export class RealtimeClient {
     } else if (event.type === "sidebar.invalidated") {
       void invalidateSidebarLayout(this.#queryClient, this.#userId);
     } else if (event.type === "workspace.status") {
-      if (event.status === "waking")
-        this.#workspaceStatuses.set(event.threadId, "waking");
-      else this.#workspaceStatuses.delete(event.threadId);
-      this.#workspaceStatusListeners
-        .get(event.threadId)
-        ?.forEach((listener) => {
-          listener();
-        });
+      const threadId = event.threadId;
+      if (event.status !== "waking") this.#clearWorkspaceStatus(threadId);
+      else if (!this.#workspaceStatuses.has(threadId)) {
+        // A wake already under way keeps its start, so a repeated `waking`
+        // does not restart the count.
+        this.#workspaceStatuses.set(threadId, "waking");
+        this.#slowWakeTimers.set(
+          threadId,
+          setTimeout(() => {
+            this.#slowWakeTimers.delete(threadId);
+            if (this.#workspaceStatuses.get(threadId) !== "waking") return;
+            this.#workspaceStatuses.set(threadId, "waking-slow");
+            this.#notifyWorkspaceStatus(threadId);
+          }, SLOW_WAKE_MS),
+        );
+      }
+      this.#notifyWorkspaceStatus(threadId);
     } else if (event.type === "presence.snapshot") {
       const threadId = event.topic.slice("thread:".length) as ThreadId;
       const previous = new Set(this.#presentUsers.get(threadId) ?? []);
@@ -350,10 +369,20 @@ export class RealtimeClient {
     }
     if (this.#workspaceStatuses.size === 0) return;
     const threadIds = [...this.#workspaceStatuses.keys()];
-    this.#workspaceStatuses.clear();
-    for (const threadId of threadIds)
-      this.#workspaceStatusListeners.get(threadId)?.forEach((listener) => {
-        listener();
-      });
+    for (const threadId of threadIds) this.#clearWorkspaceStatus(threadId);
+    for (const threadId of threadIds) this.#notifyWorkspaceStatus(threadId);
+  }
+
+  #clearWorkspaceStatus(threadId: ThreadId) {
+    this.#workspaceStatuses.delete(threadId);
+    const timer = this.#slowWakeTimers.get(threadId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.#slowWakeTimers.delete(threadId);
+  }
+
+  #notifyWorkspaceStatus(threadId: ThreadId) {
+    this.#workspaceStatusListeners.get(threadId)?.forEach((listener) => {
+      listener();
+    });
   }
 }

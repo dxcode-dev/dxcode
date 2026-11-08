@@ -376,19 +376,21 @@ export const transientDeployFailure = (output) => {
  * Runs `deploy` again, up to three runs in all, waiting longer before each,
  * while its failure is one `transientDeployFailure` recognizes. Any other
  * result returns. `wrangler deploy` is idempotent: a run after a failure
- * rebuilds from Docker's cache and finishes what the last one began.
+ * rebuilds from Docker's cache and finishes what the last one began. A
+ * `docker push` is too: it skips the layers the registry already has.
  */
 export const retryOrbWorkerDeploy = async ({
   deploy,
   wait = sleep,
   runs = 3,
   delayMilliseconds = 20_000,
+  label = "wrangler deploy",
 }) => {
   for (let run = 1; ; run += 1) {
     const started = Date.now();
     const result = await deploy();
     process.stderr.write(
-      `[OrbContainers] wrangler deploy run ${run} of ${runs} exited ${result.status ?? result.signal} after ${Math.round((Date.now() - started) / 1000)} s.\n`,
+      `[OrbContainers] ${label} run ${run} of ${runs} exited ${result.status ?? result.signal} after ${Math.round((Date.now() - started) / 1000)} s.\n`,
     );
     if (result.status === 0 || run === runs) return result;
     const reason = transientDeployFailure(`${result.stdout}${result.stderr}`);
@@ -494,14 +496,24 @@ export const orbImageRecipeHash = (workspaceRoot) => {
 };
 
 /**
- * The account's Cloudflare registry through its HTTP API, with credentials
- * Wrangler issues: the shared repository's tags, and a tag's digest.
+ * The repository a staging Orb Worker keeps its recipe-tagged images in
+ * (`recipeOrbImage`). Named `<Orb Worker name>-…`, so the stage's destroy
+ * removes it with the Worker's other images.
  */
-const previewImageRegistry = async ({
+export const orbWorkerImageRepository = (workerName) =>
+  `${workerName}-orb-image`;
+
+/**
+ * The account's Cloudflare registry through its HTTP API, with credentials
+ * Wrangler issues: one repository's recipe tags, a tag's digest, and the
+ * newest image for a recipe.
+ */
+const orbImageRegistry = async ({
   workspaceRoot,
   environment,
   signal,
   fetch = globalThis.fetch,
+  repository = PREVIEW_ORB_IMAGE_REPOSITORY,
 }) => {
   const issued = await wrangler(
     workspaceRoot,
@@ -524,7 +536,7 @@ const previewImageRegistry = async ({
       `Registry credentials failed (exit ${issued.status ?? issued.signal}).\n${issued.stderr.slice(-2000)}`,
     );
   const credentials = JSON.parse(issued.stdout);
-  const path = `${credentials.account_id}/${PREVIEW_ORB_IMAGE_REPOSITORY}`;
+  const path = `${credentials.account_id}/${repository}`;
   const request = (suffix, init) =>
     fetch(`https://${credentials.registry_host}/v2/${path}/${suffix}`, {
       ...init,
@@ -535,58 +547,99 @@ const previewImageRegistry = async ({
           "application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json",
       },
     });
-  return {
-    credentials,
-    repository: `${credentials.registry_host}/${path}`,
-    /** The shared tags, newest first. */
-    tags: async () => {
-      const response = await request("tags/list");
+  const digest = async (tag) => {
+    const response = await request(`manifests/${tag}`, { method: "HEAD" });
+    if (response.status === 404) return undefined;
+    const digest = response.headers.get("docker-content-digest") ?? "";
+    if (!response.ok || !/^sha256:[a-f0-9]{64}$/.test(digest))
+      throw new Error(`Reading ${path}:${tag} failed (${response.status}).`);
+    return digest;
+  };
+  /**
+   * The recipe tags, newest first. The registry lists a few hundred tags a
+   * page, in name order, and Threads' snapshot tags (`rootfs-…`) share the
+   * repository; recipe tags start with a hex digit, so they come first and
+   * the listing stops once a page has passed them. Its Link header repeats
+   * the query, so the next page is asked for by its last tag directly.
+   */
+  const tags = async () => {
+    const found = [];
+    for (let last, pages = 0; ; pages += 1) {
+      if (pages >= 100)
+        throw new Error(`Listing ${path} passed 100 pages of tags.`);
+      const response = await request(
+        `tags/list?n=1000${last === undefined ? "" : `&last=${encodeURIComponent(last)}`}`,
+      );
       if (response.status === 404) return [];
       if (!response.ok)
         throw new Error(`Listing ${path} failed (${response.status}).`);
-      return ((await response.json()).tags ?? [])
-        .filter((tag) => SHARED_TAG.test(tag))
-        .sort((a, b) => b.localeCompare(a));
-    },
-    digest: async (tag) => {
-      const response = await request(`manifests/${tag}`, { method: "HEAD" });
-      if (response.status === 404) return undefined;
-      const digest = response.headers.get("docker-content-digest") ?? "";
-      if (!response.ok || !/^sha256:[a-f0-9]{64}$/.test(digest))
-        throw new Error(`Reading ${path}:${tag} failed (${response.status}).`);
-      return digest;
+      const page = (await response.json()).tags ?? [];
+      found.push(...page);
+      const end = page.at(-1);
+      if (
+        end === undefined ||
+        end === last ||
+        end >= "g" ||
+        !response.headers.has("link")
+      )
+        break;
+      last = end;
+    }
+    return found
+      .filter((tag) => SHARED_TAG.test(tag))
+      .sort((a, b) => b.localeCompare(a));
+  };
+  return {
+    credentials,
+    repository: `${credentials.registry_host}/${path}`,
+    tags,
+    digest,
+    /** The newest image tagged for this recipe, pinned by digest. */
+    recipeImage: async (recipe) => {
+      for (const tag of (await tags()).filter((tag) =>
+        tag.startsWith(`${recipe}-`),
+      )) {
+        const found = await digest(tag);
+        if (found !== undefined)
+          return {
+            tag,
+            image: `${credentials.registry_host}/${path}@${found}`,
+          };
+      }
+      return undefined;
     },
   };
 };
 
 /**
- * The digest-pinned Orb image every branch preview with this image recipe
- * shares. The first preview with a new recipe builds and pushes it, tagged
- * `<recipe hash>-<time>` so a concurrent push never untags another's
- * digest; every later stage pins the newest such digest, so it skips the
- * build, the push, and Cloudflare's preparation of a new image (about 4
- * minutes of a new stage's first deploy).
+ * The digest-pinned Orb image for this image recipe in `repository`: every
+ * branch preview shares one (PREVIEW_ORB_IMAGE_REPOSITORY), and staging
+ * keeps its own (`orbWorkerImageRepository`). The first deploy with a new
+ * recipe builds and pushes it, tagged `<recipe hash>-<time>` so a concurrent
+ * push never untags another's digest; every later deploy pins the newest
+ * such digest, so it skips the build, the push, and Cloudflare's
+ * preparation of a new image (about 4 minutes of a new preview stage, and
+ * of a staging deploy that changes only the Orb Worker).
  */
-export const sharedPreviewOrbImage = async ({
+export const recipeOrbImage = async ({
   workspaceRoot,
   environment,
   signal,
+  repository,
 }) => {
   const recipe = orbImageRecipeHash(workspaceRoot).slice(0, 32);
-  const registry = await previewImageRegistry({
+  const registry = await orbImageRegistry({
     workspaceRoot,
     environment,
     signal,
+    repository,
   });
-  for (const tag of (await registry.tags()).filter((tag) =>
-    tag.startsWith(`${recipe}-`),
-  )) {
-    const digest = await registry.digest(tag);
-    if (digest === undefined) continue;
+  const existing = await registry.recipeImage(recipe);
+  if (existing !== undefined) {
     process.stderr.write(
-      `[OrbContainers] Using the shared preview Orb image ${tag} (${digest}); no build or push.\n`,
+      `[OrbContainers] Using the Orb image ${repository}:${existing.tag} (${existing.image}); no build or push.\n`,
     );
-    return `${registry.repository}@${digest}`;
+    return existing.image;
   }
   const docker = async (description, args, options = {}) => {
     const result = await runCommand("docker", args, {
@@ -615,7 +668,7 @@ export const sharedPreviewOrbImage = async ({
   const tag = `${recipe}-${started.toString(36)}`;
   const reference = `${registry.repository}:${tag}`;
   process.stderr.write(
-    `[OrbContainers] No shared preview Orb image for recipe ${recipe}; building and pushing ${reference}.\n`,
+    `[OrbContainers] No Orb image in ${repository} for recipe ${recipe}; building and pushing ${reference}.\n`,
   );
   await docker(
     "Orb image build",
@@ -631,12 +684,27 @@ export const sharedPreviewOrbImage = async ({
     ],
     { echo: true },
   );
-  await docker("Orb image push", ["push", reference], { echo: true });
+  // A large layer's upload can time out at Cloudflare's registry, as
+  // Wrangler's own push does (registry-push-timeout); push again.
+  const pushed = await retryOrbWorkerDeploy({
+    deploy: () =>
+      runCommand("docker", ["push", reference], {
+        env: environment,
+        signal,
+        echo: true,
+      }),
+    wait: (milliseconds) => sleep(milliseconds, undefined, { signal }),
+    label: "docker push",
+  });
+  if (pushed.status !== 0)
+    throw new Error(
+      `Orb image push failed (exit ${pushed.status ?? pushed.signal}).\n${pushed.stderr.slice(-2000)}`,
+    );
   const digest = await registry.digest(tag);
   if (digest === undefined)
     throw new Error(`The pushed image ${reference} is not in the registry.`);
   process.stderr.write(
-    `[OrbContainers] Built and pushed the shared preview Orb image ${tag} (${digest}) in ${Math.round((Date.now() - started) / 1000)} s.\n`,
+    `[OrbContainers] Built and pushed the Orb image ${repository}:${tag} (${digest}) in ${Math.round((Date.now() - started) / 1000)} s.\n`,
   );
   return `${registry.repository}@${digest}`;
 };
@@ -719,21 +787,13 @@ export const mirrorPreviewOrbImage = async ({
     environment,
     stateDirectory,
   });
-  const registry = await previewImageRegistry({
+  const registry = await orbImageRegistry({
     workspaceRoot,
     environment: dockerEnvironment,
     signal,
     fetch,
   });
-  let source;
-  for (const shared of (await registry.tags()).filter((name) =>
-    name.startsWith(`${recipe}-`),
-  )) {
-    const digest = await registry.digest(shared);
-    if (digest === undefined) continue;
-    source = `${registry.repository}@${digest}`;
-    break;
-  }
+  let source = (await registry.recipeImage(recipe))?.image;
   // A stage whose shared image push failed built its own; its Orb Worker
   // pins it.
   if (source === undefined && orbWorkerName !== undefined)
@@ -830,7 +890,7 @@ export const pruneSharedPreviewOrbImages = async ({
     cloudflareApi({ accountId, apiToken, fetch }, path, undefined, {
       missing: true,
     });
-  const registry = await previewImageRegistry({
+  const registry = await orbImageRegistry({
     workspaceRoot,
     environment,
     fetch,
@@ -898,19 +958,29 @@ export const deployOrbWorker = async ({
     stateDirectory,
   });
   await assertDockerReady(dockerEnvironment, { signal });
-  // A preview whose shared image fails builds its own, as before.
+  // Previews share one image per image recipe; staging keeps its own per
+  // recipe, so a change to the Worker alone redeploys without a build. A
+  // self-host lets Wrangler build. When the recipe image fails, Wrangler
+  // builds this stage's own, as before.
+  const repository =
+    environment.DX_DEPLOYMENT_ENVIRONMENT === "preview"
+      ? PREVIEW_ORB_IMAGE_REPOSITORY
+      : environment.DX_DEPLOYMENT_ENVIRONMENT === "staging"
+        ? orbWorkerImageRepository(workerName)
+        : undefined;
   let image;
-  if (environment.DX_DEPLOYMENT_ENVIRONMENT === "preview")
+  if (repository !== undefined)
     try {
-      image = await sharedPreviewOrbImage({
+      image = await recipeOrbImage({
         workspaceRoot,
         environment: dockerEnvironment,
         signal,
+        repository,
       });
     } catch (error) {
       signal?.throwIfAborted();
       process.stderr.write(
-        `[OrbContainers] The shared preview Orb image is unavailable, so Wrangler builds this stage's own: ${error.message}\n`,
+        `[OrbContainers] The Orb image in ${repository} is unavailable, so Wrangler builds this stage's own: ${error.message}\n`,
       );
     }
   const configPath = resolve(stateDirectory, "wrangler.json");

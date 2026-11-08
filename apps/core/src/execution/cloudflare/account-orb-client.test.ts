@@ -69,8 +69,8 @@ describe("account Orb client", () => {
       const opened = orb
         .open({ create: true, instance: "standard-2", idleMs: 300_000 })
         .catch((cause: unknown) => cause);
-      // Core's own open bound (`CLOUDFLARE_OPEN_TIMEOUT_MS`) is 180 s.
-      await vi.advanceTimersByTimeAsync(181_000);
+      // Core's own open bound (`CLOUDFLARE_OPEN_TIMEOUT_MS`) is 330 s.
+      await vi.advanceTimersByTimeAsync(331_000);
       expect(await statused).toBeInstanceOf(Error);
       expect(await opened).toBeInstanceOf(Error);
     } finally {

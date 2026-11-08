@@ -237,7 +237,7 @@ their own configuration, read only, and stores the registry login in that
 file instead of the OS keychain. The image is several GB, so it does not fit the `lite`
 instance type; Orb sizes start at `standard-1`.
 
-Branch previews share their images instead (`sharedPreviewOrbImage`): the
+Branch previews share their images instead (`recipeOrbImage`): the
 first preview with a new image recipe (this Dockerfile, its ignore file, and
 the files it copies) builds and pushes it once to the `dx-preview-orb-image`
 repository, tagged with the recipe's hash, and every preview stage pins
@@ -251,6 +251,14 @@ Cloudflare's 30-day TTL, and Preview cleanup
 ([`prune-preview-orb-images.mjs`](../../scripts/prune-preview-orb-images.mjs))
 deletes shared images older than 7 days that no Worker's active deployment
 pins.
+
+Staging does the same in a repository of its own
+(`orbWorkerImageRepository`, `<Orb Worker name>-orb-image`): it builds and
+pushes the image once per image recipe and pins it by digest, so a deploy
+that changes only the Orb Worker skips the build, the push, and Cloudflare's
+preparation. Staging never reuses a preview's image, and nothing prunes its
+repository, so its Threads' snapshots keep the older images they were taken
+on.
 
 Docker Cloud Sandboxes and Cloudflare connections in a person's own account
 boot only a public image, and the released one (`public-image.json`) can

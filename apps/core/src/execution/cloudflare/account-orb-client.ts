@@ -25,10 +25,10 @@ export class AccountOrbUnavailable extends Error {
 /** Waits this long for one call; `exec` adds its own command timeout. */
 const CALL_TIMEOUT_MS = 120_000;
 /**
- * An open may retry a stuck cold start (#1783), up to 155 s; Core bounds it
- * at `CLOUDFLARE_OPEN_TIMEOUT_MS` (180 s), and this call must not end first.
+ * An open may wait up to 300 s for a slow start (#1956); Core bounds it at
+ * `CLOUDFLARE_OPEN_TIMEOUT_MS` (330 s), and this call must not end first.
  */
-const OPEN_CALL_TIMEOUT_MS = 180_000;
+const OPEN_CALL_TIMEOUT_MS = 330_000;
 
 /**
  * One Thread's Orb container object in a person's or workspace's own
