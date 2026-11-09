@@ -5,14 +5,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import {
-  Building2,
-  MessageSquare,
-  Plus,
-  Settings,
-  SquarePen,
-  UserRound,
-} from "lucide-react";
+import { MessageSquare, Plus, Settings, SquarePen } from "lucide-react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
@@ -22,11 +15,13 @@ import { DocumentTitle } from "../../shared/ui/document-title.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
+import { personalAccountQueryOptions } from "../settings/account/personal-account-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import {
   sidebarProjectThreads,
   threadsQueryOptions,
 } from "../threads/thread-queries.js";
+import { OwnerMark } from "./owner-mark.js";
 import { projectQueryOptions } from "./project-queries.js";
 import { ProjectRepositoryIcon } from "./project-repository-icon.js";
 import {
@@ -51,6 +46,9 @@ export function ProjectPage() {
       sidebarProjectThreads(queryClient, identity.id, projectId),
   });
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
+  const accountQuery = useQuery(personalAccountQueryOptions(identity.id));
+  const personalAvatar = accountQuery.data?.avatarUrl;
+  const personalName = accountQuery.data?.displayName ?? identity.name;
   const project = projectQuery.data;
   const workspace = settingsQuery.data?.workspace;
   const ownerName =
@@ -85,15 +83,14 @@ export function ProjectPage() {
                 project?.workspaceId === undefined ? "personal" : "workspace",
             }}
           >
-            <span
-              className={`owner-mark ${project?.workspaceId === undefined ? "personal" : ""}`}
-            >
-              {project?.workspaceId === undefined ? (
-                <UserRound />
-              ) : (
-                <Building2 />
-              )}
-            </span>
+            <OwnerMark
+              personal={project?.workspaceId === undefined}
+              image={
+                project?.workspaceId === undefined
+                  ? personalAvatar
+                  : workspace?.avatarUrl
+              }
+            />
             <span className="project-detail-crumb-text">{ownerName}</span>
           </Link>
           {project === undefined ? null : (
@@ -212,39 +209,57 @@ export function ProjectPage() {
                     </button>
                   </div>
                 ) : (
-                  projectThreads.slice(0, 5).map((thread) => (
-                    <Link
-                      className="project-recent-row"
-                      to="/threads/$threadId"
-                      params={{ threadId: thread.id }}
-                      key={thread.id}
-                    >
-                      <span className="project-thread-avatar">
-                        {project.iconUrl ? (
-                          <img src={project.iconUrl} alt="" />
-                        ) : (
-                          ownerName.slice(0, 1).toUpperCase()
-                        )}
-                      </span>
-                      <span className="project-recent-copy">
-                        <strong>
-                          <ThreadTitleText thread={thread} />
-                        </strong>
-                        <small>{ownerName}</small>
-                      </span>
-                      <time
-                        dateTime={new Date(
-                          thread.lastActivityAt.epochMilliseconds,
-                        ).toISOString()}
+                  projectThreads.slice(0, 5).map((thread) => {
+                    // The Thread's owner: the listed owner of a shared
+                    // Thread, else the viewer, who owns their own Threads.
+                    const threadOwner =
+                      thread.participants?.find((person) => person.owner) ??
+                      (thread.access === undefined || thread.access === "owner"
+                        ? { name: personalName, image: personalAvatar }
+                        : undefined);
+                    return (
+                      <Link
+                        className="project-recent-row"
+                        to="/threads/$threadId"
+                        params={{ threadId: thread.id }}
+                        key={thread.id}
                       >
-                        <TimeText
-                          text={(now) =>
-                            formatRelativeTime(thread.lastActivityAt, now)
-                          }
-                        />
-                      </time>
-                    </Link>
-                  ))
+                        <span
+                          className="project-thread-avatar"
+                          title={threadOwner?.name}
+                        >
+                          {threadOwner?.image !== undefined ? (
+                            <img
+                              src={threadOwner.image}
+                              alt=""
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            (threadOwner?.name ?? ownerName)
+                              .slice(0, 1)
+                              .toUpperCase()
+                          )}
+                        </span>
+                        <span className="project-recent-copy">
+                          <strong>
+                            <ThreadTitleText thread={thread} />
+                          </strong>
+                          <small>{ownerName}</small>
+                        </span>
+                        <time
+                          dateTime={new Date(
+                            thread.lastActivityAt.epochMilliseconds,
+                          ).toISOString()}
+                        >
+                          <TimeText
+                            text={(now) =>
+                              formatRelativeTime(thread.lastActivityAt, now)
+                            }
+                          />
+                        </time>
+                      </Link>
+                    );
+                  })
                 )}
               </div>
             </section>

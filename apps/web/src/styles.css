@@ -13273,6 +13273,12 @@ body:has(.dx-app-shell) {
   width: 14px;
   height: 14px;
 }
+.owner-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: inherit;
+}
 .projects-title,
 .projects-title-owner {
   display: flex;
@@ -13303,6 +13309,9 @@ body:has(.dx-app-shell) {
   height: 18px;
   flex-basis: 18px;
   border-radius: 4px;
+}
+.projects-title-owner .owner-mark.personal {
+  border-radius: 999px;
 }
 .projects-title-owner .owner-mark svg {
   width: 10px;

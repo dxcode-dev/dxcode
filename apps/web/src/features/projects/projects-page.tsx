@@ -1,6 +1,6 @@
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { Building2, FolderGit2, Search, UserRound, Users } from "lucide-react";
+import { FolderGit2, Search, Users } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -9,8 +9,10 @@ import { Button } from "../../shared/ui/button.js";
 import { Input } from "../../shared/ui/input.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
+import { personalAccountQueryOptions } from "../settings/account/personal-account-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { NewProject } from "./new-project.js";
+import { OwnerMark } from "./owner-mark.js";
 import { projectsQueryOptions } from "./project-queries.js";
 
 const updatedText =
@@ -23,6 +25,8 @@ export function ProjectsPage() {
   const { identity } = useAuthenticatedIdentity();
   const projectsQuery = useInfiniteQuery(projectsQueryOptions(identity.id));
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
+  const accountQuery = useQuery(personalAccountQueryOptions(identity.id));
+  const personalAvatar = accountQuery.data?.avatarUrl;
   const search = useSearch({ from: "/_product/projects" });
   const navigate = useNavigate();
   const workspace = settingsQuery.data?.workspace;
@@ -56,11 +60,12 @@ export function ProjectsPage() {
           <strong>Projects</strong>
           <span aria-hidden="true">/</span>
           <strong className="projects-title-owner">
-            <span
-              className={`owner-mark ${owner === "personal" ? "personal" : ""}`}
-            >
-              {owner === "workspace" ? <Building2 /> : <UserRound />}
-            </span>
+            <OwnerMark
+              personal={owner === "personal"}
+              image={
+                owner === "workspace" ? workspace?.avatarUrl : personalAvatar
+              }
+            />
             {owner === "workspace" ? workspace?.displayName : identity.name}
           </strong>
         </div>
@@ -84,9 +89,7 @@ export function ProjectsPage() {
               type="button"
               onClick={() => selectOwner("workspace")}
             >
-              <span className="owner-mark">
-                <Building2 />
-              </span>
+              <OwnerMark personal={false} image={workspace.avatarUrl} />
               <span className="project-owner-copy">
                 <strong>{workspace.displayName}</strong>
                 <small>Workspace</small>
@@ -98,9 +101,7 @@ export function ProjectsPage() {
             type="button"
             onClick={() => selectOwner("personal")}
           >
-            <span className="owner-mark personal">
-              <UserRound />
-            </span>
+            <OwnerMark personal image={personalAvatar} />
             <span className="project-owner-copy">
               <strong>{identity.name}</strong>
               <small>Personal</small>
