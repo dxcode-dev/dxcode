@@ -1268,14 +1268,15 @@ export class OrbContainerController {
         outcome: outcome ?? "timed_out",
       });
     };
-    if (egress !== undefined) {
-      await step("https", () =>
-        this.#container.interceptOutboundHttps("*", egress),
-      );
-      await step("http", () =>
-        this.#container.interceptAllOutboundHttp(egress),
-      );
-    }
+    // Both at once: on production a stalled container answered neither,
+    // and each step waits its whole bound.
+    if (egress !== undefined)
+      await Promise.all([
+        step("https", () =>
+          this.#container.interceptOutboundHttps("*", egress),
+        ),
+        step("http", () => this.#container.interceptAllOutboundHttp(egress)),
+      ]);
   }
 
   /**

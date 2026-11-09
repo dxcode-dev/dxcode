@@ -15,8 +15,9 @@ import type { OrbContainerRuntime } from "./orb-container.js";
  * - the real `start()` happens only `startDelayMs` later (a slow start that
  *   does come up), or never, when `dropAfterMs` passes first (a stall that
  *   Cloudflare drops: `running` then reads false);
- * - until the real start, commands wait, and with `destroyHangs` a stop
- *   never settles.
+ * - until the real start, commands wait, and with `destroyHangs` neither a
+ *   stop nor a network intercept ever settles (on production, a stalled
+ *   container answered neither, thr_edc0a58e).
  *
  * With no plan the container is used as it is. Core sets a plan through
  * `POST /v1/threads/:threadId/orb/fault`, which answers only on a branch
@@ -68,6 +69,11 @@ export const faultyContainer = (
     const current = plan();
     return current !== undefined && now() < current.until ? current : undefined;
   };
+  /** A call a held start never answers, or undefined to make it. */
+  const stalled = () =>
+    held !== undefined && active()?.destroyHangs
+      ? new Promise<void>(() => {})
+      : undefined;
   return {
     get running() {
       return held !== undefined || container.running;
@@ -108,10 +114,10 @@ export const faultyContainer = (
     setInactivityTimeout: (durationMs) =>
       container.setInactivityTimeout(durationMs),
     interceptOutboundHttp: (address, binding) =>
-      container.interceptOutboundHttp(address, binding),
+      stalled() ?? container.interceptOutboundHttp(address, binding),
     interceptOutboundHttps: (address, binding) =>
-      container.interceptOutboundHttps(address, binding),
+      stalled() ?? container.interceptOutboundHttps(address, binding),
     interceptAllOutboundHttp: (binding) =>
-      container.interceptAllOutboundHttp(binding),
+      stalled() ?? container.interceptAllOutboundHttp(binding),
   };
 };

@@ -717,6 +717,18 @@ const openCloudflareWorkspaceTimed = async (
       await options.observeResidency(observed.running ? "running" : "paused");
     }
     let result = await open(false, true);
+    if (result.kind === "missing" && sandboxId !== rootSandboxId) {
+      // Followed a move the first object announced before Core adopted it
+      // in the next object (thr_edc0a58e): the first object hands it over,
+      // once its retirement ends, and the loop below adopts and follows it.
+      orbContainerLogger.warn("Orb move not adopted yet; asking its origin.", {
+        event: "orb_container_move_pending",
+        threadId: id,
+        to: sandboxId,
+      });
+      bind();
+      result = await open(false, true);
+    }
     // A stalled wake moves to the Thread's next container object with the
     // same snapshot, at most `MAX_START_OVERS` times per open; the last one
     // waits out its start (#1956). An object that had handed over earlier is
@@ -759,7 +771,9 @@ const openCloudflareWorkspaceTimed = async (
         });
     }
     if (result.kind !== "ready") {
-      await records.markLost(id);
+      // Only the Thread's first object can lose it: a moved-to object holds
+      // a handover its origin still has.
+      if (sandboxId === rootSandboxId) await records.markLost(id);
       throw unavailable(`container ${result.kind}`);
     }
     return handleFor(stub, idleMs, result.processesStartedAt);

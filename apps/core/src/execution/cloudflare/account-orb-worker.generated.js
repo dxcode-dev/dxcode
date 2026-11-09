@@ -3254,10 +3254,7 @@ var OrbContainerController = class {
 				outcome: outcome ?? "timed_out"
 			});
 		};
-		if (egress !== void 0) {
-			await step("https", () => this.#container.interceptOutboundHttps("*", egress));
-			await step("http", () => this.#container.interceptAllOutboundHttp(egress));
-		}
+		if (egress !== void 0) await Promise.all([step("https", () => this.#container.interceptOutboundHttps("*", egress)), step("http", () => this.#container.interceptAllOutboundHttp(egress))]);
 	}
 	/**
 	* Takes over a snapshot from the Thread's previous container object,
@@ -4247,6 +4244,8 @@ var faultyContainer = (container, plan, now = Date.now) => {
 		const current = plan();
 		return current !== void 0 && now() < current.until ? current : void 0;
 	};
+	/** A call a held start never answers, or undefined to make it. */
+	const stalled = () => held !== void 0 && active()?.destroyHangs ? new Promise(() => {}) : void 0;
 	return {
 		get running() {
 			return held !== void 0 || container.running;
@@ -4280,9 +4279,9 @@ var faultyContainer = (container, plan, now = Date.now) => {
 			return container.destroy(reason);
 		},
 		setInactivityTimeout: (durationMs) => container.setInactivityTimeout(durationMs),
-		interceptOutboundHttp: (address, binding) => container.interceptOutboundHttp(address, binding),
-		interceptOutboundHttps: (address, binding) => container.interceptOutboundHttps(address, binding),
-		interceptAllOutboundHttp: (binding) => container.interceptAllOutboundHttp(binding)
+		interceptOutboundHttp: (address, binding) => stalled() ?? container.interceptOutboundHttp(address, binding),
+		interceptOutboundHttps: (address, binding) => stalled() ?? container.interceptOutboundHttps(address, binding),
+		interceptAllOutboundHttp: (binding) => stalled() ?? container.interceptAllOutboundHttp(binding)
 	};
 };
 /**

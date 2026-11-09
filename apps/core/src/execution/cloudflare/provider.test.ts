@@ -784,6 +784,44 @@ describe("Cloudflare Containers Orb provider", () => {
     expect(world.object(`${threadId}~2`).adopt).not.toHaveBeenCalled();
   });
 
+  it("a wake that follows a move before Core adopted it gets the handover from the first object, and never marks the workspace lost (#1956, thr_edc0a58e)", async () => {
+    // On production a Files-tab read woke the Orb, its restore stalled, and
+    // the first object retired. A turn's wake read `movedTo` during the
+    // retirement, opened `~1` before the stalled open adopted it there, got
+    // "missing", and marked the workspace lost for good.
+    const row = wokenRow(threadId);
+    const world = bindObjects(row);
+    const first = world.object(threadId);
+    first.status.mockImplementation(async () => ({
+      running: false,
+      status: "paused",
+      movedTo: 1,
+    }));
+    first.open.mockImplementation(async () => ({
+      kind: "stalled",
+      handover: handover(0),
+      earlier: true,
+    }));
+    const next = world.object(`${threadId}~1`);
+    next.open
+      .mockImplementationOnce(async () => ({ kind: "missing" }))
+      .mockImplementation(async () => ({
+        kind: "ready",
+        sandboxId: `${threadId}~1`,
+        residency: "paused",
+      }));
+    await cloudflareExecutionProvider.workspace.create(
+      context,
+      { threadId },
+      {
+        authorize: async () => undefined,
+        observeResidency: () => undefined,
+      },
+    );
+    expect(next.adopt).toHaveBeenCalledWith(handover(0));
+    expect(row.state).toBe("initialized");
+  });
+
   it("moves at most twice in one open before it waits the last start out (#1956)", async () => {
     const row = wokenRow(threadId);
     const world = bindObjects(row);
