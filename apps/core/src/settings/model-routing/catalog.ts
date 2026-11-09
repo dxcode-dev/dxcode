@@ -2,10 +2,10 @@ import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER_ID } from "@dx/domain";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   getBuiltinModelDataGeneratedAt,
-  getBuiltinModels,
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all";
 import { Schema } from "effect";
+import { builtinModelsWithSuccessors } from "./newer-models.js";
 
 export const MODEL_CATALOG_SOURCE = "flue-2.3.0-pi-1.1.0" as const;
 
@@ -22,8 +22,6 @@ const PI_PROVIDER_IDS: Record<string, string> = {
 
 export const piCatalogProviderId = (providerId: string): string =>
   PI_PROVIDER_IDS[providerId] ?? providerId;
-
-type BuiltinProviderId = Parameters<typeof getBuiltinModels>[0];
 
 const currentWorkersAiModels: ReadonlyArray<Model<Api>> = [
   {
@@ -98,9 +96,7 @@ const withDisplayName = (providerId: string, model: Model<Api>): Model<Api> => {
 
 export const catalogProviderModels = (providerId: string) => {
   if (providerId === CLAUDE_CODE_PROVIDER_ID) return [...claudeCodeModels];
-  const models = getBuiltinModels(
-    piCatalogProviderId(providerId) as BuiltinProviderId,
-  );
+  const models = builtinModelsWithSuccessors(piCatalogProviderId(providerId));
   return (
     providerId === "cloudflare"
       ? [

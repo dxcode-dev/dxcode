@@ -1,8 +1,6 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import {
-  getBuiltinModelDataGeneratedAt,
-  getBuiltinModels,
-} from "@earendil-works/pi-ai/providers/all";
+import { getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
+import { builtinModelsWithSuccessors } from "../../model-routing/newer-models.js";
 
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot" as const;
 export const GITHUB_COPILOT_API_ORIGIN =
@@ -237,13 +235,13 @@ const RETAINED: ReadonlyArray<CopilotCatalogModel> = [
   }),
 ];
 
-const PI_COPILOT_MODELS = getBuiltinModels(GITHUB_COPILOT_PROVIDER_ID).flatMap(
-  fromPi,
-);
+const PI_COPILOT_MODELS = builtinModelsWithSuccessors(
+  GITHUB_COPILOT_PROVIDER_ID,
+).flatMap(fromPi);
 
 /**
- * Copilot models dx can serve: pi's pinned `github-copilot` catalog plus the
- * retained entries. Upgrading pi adds new Copilot models here. Unknown IDs
+ * Copilot models dx can serve: pi's pinned `github-copilot` catalog, models
+ * released after it (newer-models.ts), and the retained entries. Upgrading pi adds new Copilot models here. Unknown IDs
  * fail closed.
  */
 export const GITHUB_COPILOT_CATALOG: ReadonlyArray<CopilotCatalogModel> =
