@@ -954,11 +954,12 @@ function AgentComposer({
   };
   // One of Send or Stop: Stop only while the agent runs and the composer is
   // empty; otherwise Send, disabled until there is something to send, so the
-  // mic keeps its place.
+  // mic keeps its place. A message on its way (a dictation sent while
+  // recording, or a send not yet admitted) shows no Stop: it sends anyway.
   const composing =
     dictation.active || draft.trim() !== "" || images.length > 0;
-  const showStop = stopAvailable && (draftLocked || !composing);
-  const showSend = !dictation.hideSubmit && (draftLocked || !showStop);
+  const showStop = stopAvailable && !draftLocked && !composing;
+  const showSend = !dictation.hideSubmit && !showStop;
   return (
     <div className="agent-composer-dock" ref={dockRef}>
       {errorCard}

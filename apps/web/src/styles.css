@@ -3009,6 +3009,12 @@ a {
   background: var(--muted);
   opacity: 1;
 }
+/* A file the composer's box could not take, above the box. */
+.composer-slot-error {
+  margin: 0 0 6px;
+  color: var(--destructive);
+  font-size: 12px;
+}
 .composer-attachments {
   display: flex;
   gap: 6px;
@@ -8250,6 +8256,10 @@ a {
   width: max-content;
   min-width: 260px;
   max-width: min(380px, calc(100vw - 24px));
+  /* Many plans scroll inside the popover instead of running off screen. */
+  max-height: min(var(--available-height, 70dvh), calc(100dvh - 24px));
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 12px 14px;
   color: var(--popover-foreground);
   background: var(--popover);

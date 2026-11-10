@@ -1,25 +1,26 @@
+import { type MessageAttachment, withMessageAttachments } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { ArchiveRestore, ArrowUp } from "lucide-react";
+import { ArchiveRestore } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
-import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
-import { Button } from "../../../shared/ui/button.js";
+import type { ComposerSlot } from "../../../shared/composer/composer-slot.js";
 import { useSpacePeople } from "./space-people.js";
 import { postFailureText } from "./space-post-format.js";
 import { useCreateSpacePost } from "./space-posts-queries.js";
 
 /**
  * The Space's composer: what a person writes becomes a post every member
- * sees, and dx reads it from there. Enter sends; Shift+Enter breaks a line.
- * The text shows as a pending post until the server takes it.
+ * sees, and dx reads it from there. It is the Thread composer's box (the
+ * Thread route hands it over as `Composer`): files, the mic, and the same
+ * Enter key. The text shows as a pending post until the server takes it.
  */
 export function SpaceComposer({
   spaceThreadId,
-  dictation,
+  Composer,
 }: {
   readonly spaceThreadId: ThreadId;
-  readonly dictation?: DictationSlot;
+  readonly Composer: ComposerSlot;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const [draft, setDraft] = React.useState("");
@@ -41,71 +42,40 @@ export function SpaceComposer({
     box,
   });
   // Sent while another post is still sending, it waits its turn and shows
-  // as sending in the chat meanwhile.
-  const send = () => {
-    const text = draft.trim();
-    if (text === "") return;
-    setDraft("");
-    create.mutate({ text: mentions.post(text), draft: text });
-  };
-  const change = (value: string, caret: number) => {
-    setDraft(value);
-    mentions.track(value, caret);
-  };
+  // as sending in the chat meanwhile. Its files follow the text as the
+  // attachment block a Thread message carries.
+  const send = (text: string, attachments: ReadonlyArray<MessageAttachment>) =>
+    create
+      .mutateAsync({
+        text: withMessageAttachments(mentions.post(text.trim()), attachments),
+        draft: text.trim(),
+      })
+      .then(
+        () => true,
+        () => false,
+      );
   return (
-    <div className="agent-composer-dock space-composer-dock">
-      {create.isError ? (
-        <p className="space-composer-error" role="alert">
-          {postFailureText(create.error, "post")}
-        </p>
-      ) : null}
-      {mentions.menu}
-      <form
-        className="agent-composer space-composer"
-        onSubmit={(event) => {
-          event.preventDefault();
-          send();
-        }}
-      >
-        <textarea
-          ref={box}
-          aria-label="Post to Space"
-          value={draft}
-          onChange={(event) =>
-            change(
-              event.target.value,
-              event.target.selectionStart ?? event.target.value.length,
-            )
-          }
-          onKeyDown={(event) => {
-            if (mentions.onKeyDown(event)) return;
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              send();
-            }
-          }}
-        />
-        <div className="composer-actions">
-          <span className="composer-spacer" />
-          {dictation === undefined ? null : (
-            <dictation.Textarea textareaRef={box} onChange={setDraft} />
-          )}
-          <Button
-            type="submit"
-            size="icon-sm"
-            className="composer-submit"
-            aria-label="Send Post"
-            disabled={draft.trim() === ""}
-          >
-            <ArrowUp />
-          </Button>
-        </div>
-      </form>
-    </div>
+    <Composer
+      label="Post to Space"
+      sendLabel="Send Post"
+      className="space-composer-dock"
+      draft={draft}
+      onDraftChange={setDraft}
+      onSend={send}
+      textareaRef={box}
+      onTextInput={mentions.track}
+      onKeyDown={mentions.onKeyDown}
+      above={
+        <>
+          {create.isError ? (
+            <p className="space-composer-error" role="alert">
+              {postFailureText(create.error, "post")}
+            </p>
+          ) : null}
+          {mentions.menu}
+        </>
+      }
+    />
   );
 }
 

@@ -16,6 +16,7 @@ import {
   TEST_RUNNER_PROFILE_CATALOG,
 } from "../../src/testing/bindings.js";
 import { createThreadTools } from "../../src/threads/agent-tools.js";
+import { turnSpacesOn } from "./spaces-flag.js";
 
 /**
  * A person or an agent picks the Claude Pro/Max plan a new Claude Code
@@ -847,5 +848,94 @@ describe("Claude plan auto pick", () => {
     const automatedPlan = (await boundTo(automated))?.claude_connection_id;
     expect(automatedPlan).toBe(nearlyFull);
     expect(automatedPlan).not.toBe(resetsSoon);
+  });
+});
+
+describe("A new Space's Claude plan", () => {
+  // Ways it could go wrong: the picked plan is ignored and the Space takes
+  // the first (or Auto's) plan; a plan that is used up, disabled, or not the
+  // person's is bound anyway, or moves the Space to another plan; a refused
+  // plan still leaves a Space behind.
+  const space = async (
+    cookie: string,
+    projectId: string,
+    claudeConnectionId?: string,
+  ) => {
+    const response = await call("/v1/spaces", cookie, "POST", {
+      projectId,
+      name: "Plans Space",
+      sharing: "private",
+      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
+    });
+    return {
+      status: response.status,
+      body: (await response.json()) as {
+        data: {
+          space?: { threadId: string };
+          code?: string;
+          message?: string;
+        };
+      },
+    };
+  };
+  const spaces = async (userId: string) =>
+    (
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM space JOIN threads ON threads.id = space.thread_id WHERE threads.owner_user_id = ?",
+      )
+        .bind(userId)
+        .first<{ count: number }>()
+    )?.count;
+
+  it("binds the Space's Thread to the plan picked in Create Space", async () => {
+    const { cookie, userId } = await signup(
+      "claude-plan-pick-space@example.com",
+      191,
+    );
+    // Spaces on, with Auto's Space model (Opus), which Claude Code serves.
+    await turnSpacesOn([userId]);
+    await env.DB.prepare("DELETE FROM space_agent_model WHERE user_id = ?")
+      .bind(userId)
+      .run();
+    const first = await connect(cookie, "Claude Pro/Max", TOKENS[0]);
+    const second = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]);
+    const third = await connect(cookie, "Claude Pro/Max 3", TOKENS[2]);
+    await seedProject(userId, "prj_00000000-0000-4000-8000-0000000b1a51");
+    const projectId = "prj_00000000-0000-4000-8000-0000000b1a51";
+
+    const picked = await space(cookie, projectId, third);
+    expect(picked.status).toBe(201);
+    const threadId = picked.body.data.space?.threadId as string;
+    expect((await boundTo(threadId))?.claude_connection_id).toBe(third);
+
+    // Unpicked, a Space takes the first plan, as before.
+    const unpicked = await space(cookie, projectId);
+    expect(unpicked.status).toBe(201);
+    expect(
+      (await boundTo(unpicked.body.data.space?.threadId as string))
+        ?.claude_connection_id,
+    ).toBe(first);
+
+    // A used-up plan says why and leaves no Space; it never moves the Space
+    // to another plan.
+    const reset = now() + 2 * hour;
+    await reported(
+      second,
+      [{ id: "five_hour", utilization: 1, resetsAt: reset }],
+      { id: "five_hour", resetsAt: reset },
+    );
+    const before = await spaces(userId);
+    const usedUp = await space(cookie, projectId, second);
+    expect(usedUp.status).toBe(409);
+    expect(usedUp.body.data.code).toBe("SPACE_PLAN_UNAVAILABLE");
+    expect(usedUp.body.data.message).toContain("Claude Pro/Max 2 is used up");
+    const notMine = await space(
+      cookie,
+      projectId,
+      "mcon_00000000-0000-4000-8000-000000000000",
+    );
+    expect(notMine.status).toBe(409);
+    expect(notMine.body.data.code).toBe("SPACE_PLAN_UNAVAILABLE");
+    expect(await spaces(userId)).toBe(before);
   });
 });

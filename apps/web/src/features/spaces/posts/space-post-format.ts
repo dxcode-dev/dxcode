@@ -1,5 +1,35 @@
-import type { SpacePost, SpacePostReaction } from "@dx/api";
+import {
+  type MessageAttachment,
+  parseMessageAttachments,
+  type SpacePost,
+  type SpacePostReaction,
+} from "@dx/api";
 import { epochOf } from "../space-format.js";
+
+/**
+ * A post's words and files. A person's post carries its files as the
+ * attachment block Core wrote at its end; dx's posts are only Markdown.
+ */
+export const postContent = (
+  post: Pick<SpacePost, "author" | "text">,
+): {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<MessageAttachment>;
+} =>
+  post.author.kind === "user"
+    ? parseMessageAttachments(post.text)
+    : { text: post.text, attachments: [] };
+
+/** The same words and the same files, whatever URLs the blocks give. */
+const sameContent = (posted: string, text: string) => {
+  const a = parseMessageAttachments(posted);
+  const b = parseMessageAttachments(text);
+  return (
+    a.text.trimEnd() === b.text.trimEnd() &&
+    a.attachments.map(({ id }) => id).join() ===
+      b.attachments.map(({ id }) => id).join()
+  );
+};
 
 export const REACTION_EMOJI: Record<SpacePostReaction, string> = {
   thumbs_up: "👍",
@@ -66,7 +96,7 @@ export const stillSending = <
         !claimed.has(post.id) &&
         post.author.kind === "user" &&
         post.author.userId === viewerId &&
-        post.text === sending.posted &&
+        sameContent(sending.posted, post.text) &&
         postTime(post.createdAt) >= sending.submittedAt - CLOCK_SKEW_MS,
     );
     if (landed === undefined) return true;

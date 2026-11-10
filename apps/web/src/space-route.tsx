@@ -12,7 +12,9 @@ import {
   useThreadPresence,
   useThreadTyping,
 } from "./features/threads/realtime/realtime-provider.js";
+import { SlotComposer } from "./features/threads/slot-composer.js";
 import type { ThreadWorkspace } from "./features/threads/thread-workspace.js";
+import type { MessageFilesSlot } from "./shared/composer/composer-slot.js";
 import type { DictationSlot } from "./shared/dictation/dictation-slot.js";
 
 type ThreadWorkspaceProps = React.ComponentProps<typeof ThreadWorkspace>;
@@ -44,17 +46,22 @@ function SpaceCommentsOverlay({
  * A Space's page, composed here because features do not reach into each
  * other: the Spaces feature lays out the page and its chat of posts, the
  * realtime hub keeps the posts and comments live, and the Thread page
- * renders a thread the Space started in its tab. The Thread route hands
- * over its Thread page and the composer's mic, so this lazily loaded page
- * shares their code rather than splitting it out of the Thread page's
- * first load.
+ * renders a thread the Space started in its tab, and the Thread composer's
+ * box (files, mic, and Send) writes the chat's posts. The Thread route
+ * hands over its Thread page, the composer's mic, and the transcript's file
+ * views, so this lazily loaded
+ * page shares their code rather than splitting it out of the Thread page's
+ * first load; the box loads with this page, since only a Space uses it.
  */
 export function SpaceRoute({
   renderThread,
   dictation,
+  files,
 }: {
   readonly renderThread: (props: ThreadWorkspaceProps) => React.ReactNode;
   readonly dictation: DictationSlot | undefined;
+  /** The transcript's views of a message's files, for posts. */
+  readonly files?: MessageFilesSlot;
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const spaceThreadId = threadId as ThreadId;
@@ -75,6 +82,8 @@ export function SpaceRoute({
         />
       )}
       dictation={dictation}
+      Composer={SlotComposer}
+      files={files}
     />
   );
 }

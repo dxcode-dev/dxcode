@@ -1,6 +1,6 @@
 import { Dialog } from "@base-ui/react/dialog";
 import type { SpaceSharing, SpaceSuggestion } from "@dx/api";
-import type { ProjectId, UserId } from "@dx/domain";
+import type { ModelConnectionId, ProjectId, UserId } from "@dx/domain";
 import {
   useInfiniteQuery,
   useQuery,
@@ -9,6 +9,7 @@ import {
 import { useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Check, X } from "lucide-react";
 import * as React from "react";
+import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { Button } from "../../shared/ui/button.js";
 import { Input } from "../../shared/ui/input.js";
@@ -75,11 +76,14 @@ function SuggestionCard({
 export function CreateSpaceDialog({
   userId,
   dictation,
+  PlanPicker,
   onClose,
   onCreated,
 }: {
   readonly userId: UserId;
   readonly dictation?: DictationSlot;
+  /** The New Thread composer's Claude plan list, for the Agent row. */
+  readonly PlanPicker?: ClaudePlanPickerSlot;
   readonly onClose: () => void;
   readonly onCreated: () => void;
 }) {
@@ -107,6 +111,11 @@ export function CreateSpaceDialog({
   });
   const queryClient = useQueryClient();
   const [picking, setPicking] = React.useState(false);
+  // A plan picked from the Agent row's list; none is Auto, or the first
+  // plan, which Core picks the same way.
+  const [chosenPlan, setPlan] = React.useState<string>();
+  const plan =
+    agent.data?.route.kind === "claude-code" ? chosenPlan : undefined;
   const agentUnavailable = agent.data?.route.kind === "unavailable";
   // Until the person picks, the first Project and the workspace when there
   // is one.
@@ -142,6 +151,9 @@ export function CreateSpaceDialog({
         ...(goal.trim() === "" ? {} : { goal: goal.trim() }),
         projectId,
         sharing,
+        ...(plan === undefined
+          ? {}
+          : { claudeConnectionId: plan as ModelConnectionId }),
       },
       {
         // The route changed after the dialog read it (a plan disabled, the
@@ -285,7 +297,11 @@ export function CreateSpaceDialog({
                     <SpaceAgentField
                       id={`${fieldId}-agent`}
                       identity={userId}
+                      plan={chosenPlan}
+                      locked={create.isPending}
+                      PlanPicker={PlanPicker}
                       onChange={() => setPicking(true)}
+                      onPlanChange={setPlan}
                     />
                   </SpaceFieldRow>
                   {create.error === null ||

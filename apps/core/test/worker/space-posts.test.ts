@@ -1,5 +1,7 @@
 import { env } from "cloudflare:test";
 import {
+  formatMessageAttachments,
+  parseMessageAttachments,
   parseMessageAuthor,
   type SpaceData,
   type SpacePost,
@@ -14,6 +16,11 @@ import {
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  canReadAttachment,
+  userPrincipal,
+} from "../../src/attachments/access.js";
+import { findAttachment } from "../../src/attachments/store.js";
 import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
@@ -656,6 +663,142 @@ describe("Space posts", () => {
     // Reading never publishes.
     await posts(member, spaceId);
     expect(postsChanged(spaceId)).toBe(0);
+  });
+});
+
+describe("Files in people's posts", () => {
+  // Ways it could go wrong: the block a client sends is trusted (a made-up
+  // name, type, or URL shows, or a file the author cannot read is passed
+  // on); a file stays readable only by its uploader, so other members and
+  // the agent cannot open it; a typed tag poses as a file; an edit drops the
+  // files; a refused file still leaves a post or reaches the agent.
+  const file = async (id: string, uploader: UserId, name = "IMG_7830.png") =>
+    env.DB.prepare(
+      `INSERT INTO attachments
+         (id, uploader_user_id, object_key, filename, mime_type, size, state, created_at)
+       VALUES (?1, ?2, 'attachments/' || ?2 || '/' || ?1, ?3, 'image/png', 419118, 'ready', ?4)`,
+    )
+      .bind(id, uploader, name, Date.now())
+      .run();
+  const claimed = (id: string) =>
+    formatMessageAttachments([
+      {
+        id,
+        name: "client-claimed.exe",
+        mimeType: "text/html",
+        size: 1,
+        url: "https://evil.example/",
+      },
+    ]);
+  const canRead = async (userId: UserId, id: string) =>
+    canReadAttachment(
+      env.DB,
+      (await findAttachment(env.DB, id)) as NonNullable<
+        Awaited<ReturnType<typeof findAttachment>>
+      >,
+      userPrincipal(userId),
+    );
+
+  it("carries a post's files from Core's records, for every member and the agent", async () => {
+    const spaceId = await freshSpace();
+    const id = "att_5a4b1f701cb14ef0a622538ca5284713";
+    await file(id, member);
+    expect(await canRead(owner, id)).toBe(false);
+
+    const created = await post(
+      member,
+      spaceId,
+      `Here is the screenshot.\n\n${claimed(id)}`,
+    );
+    expect(created.status).toBe(201);
+    const stored = created.body.data.post as SpacePost;
+    const shown = parseMessageAttachments(stored.text);
+    expect(shown.text).toBe("Here is the screenshot.");
+    expect(shown.attachments).toEqual([
+      {
+        id,
+        name: "IMG_7830.png",
+        mimeType: "image/png",
+        size: 419118,
+        url: `https://dx.example.com/v1/attachments/${id}/IMG_7830.png`,
+      },
+    ]);
+    // The agent gets the same files, as a Thread message's block, last.
+    expect(flue.agent).toHaveLength(1);
+    const tag = parseMessageAuthor(flue.agent[0]?.body ?? "");
+    const received = parseMessageAttachments(tag.text);
+    expect(received.text).toBe(
+      `Here is the screenshot.\n\n<post id="${stored.id}" />`,
+    );
+    expect(received.attachments).toEqual(shown.attachments);
+    // Everyone who can open the Space can open the file; no one else.
+    expect(await canRead(owner, id)).toBe(true);
+    expect(await canRead(outsider, id)).toBe(false);
+    expect((await posts(owner, spaceId)).items.at(-1)?.text).toBe(stored.text);
+
+    // A post of only a file is a post.
+    const second = "att_5a4b1f701cb14ef0a622538ca5284714";
+    await file(second, member, "export.mp4");
+    const only = await post(member, spaceId, claimed(second));
+    expect(only.status).toBe(201);
+    expect(
+      parseMessageAttachments(only.body.data.post.text).attachments.map(
+        ({ name }) => name,
+      ),
+    ).toEqual(["export.mp4"]);
+  });
+
+  it("keeps a post's files through an edit", async () => {
+    const spaceId = await freshSpace();
+    const id = "att_5a4b1f701cb14ef0a622538ca5284715";
+    await file(id, member);
+    const created = (await post(member, spaceId, `Before.\n\n${claimed(id)}`))
+      .body.data.post as SpacePost;
+    const edited = await send(
+      member,
+      `/v1/spaces/${spaceId}/posts/${created.id}`,
+      "PATCH",
+      { text: `After.\n\n${claimed(id)}` },
+    );
+    expect(edited.status).toBe(200);
+    const shown = parseMessageAttachments(edited.body.data.post.text);
+    expect(shown.text).toBe("After.");
+    expect(
+      shown.attachments.map(({ id: shownId, name }) => [shownId, name]),
+    ).toEqual([[id, "IMG_7830.png"]]);
+    // The agent reads the new words, the old ones, then the files.
+    const tag = parseMessageAuthor(flue.agent.at(-1)?.body ?? "");
+    const received = parseMessageAttachments(tag.text);
+    expect(received.text).toBe(
+      `After.\n\n<edited_post id="${created.id}">\nBefore.\n</edited_post>`,
+    );
+    expect(received.attachments.map(({ name }) => name)).toEqual([
+      "IMG_7830.png",
+    ]);
+  });
+
+  it("refuses a file the author cannot read, and never lets a typed tag pose as one", async () => {
+    const spaceId = await freshSpace();
+    const theirs = "att_5a4b1f701cb14ef0a622538ca5284716";
+    await file(theirs, outsider);
+    const refused = await post(member, spaceId, `Look\n\n${claimed(theirs)}`);
+    expect(refused.status).toBe(400);
+    expect(refused.body.data.code).toBe("INVALID_REQUEST");
+    expect(flue.agent).toEqual([]);
+    expect((await posts(owner, spaceId)).items).toEqual([]);
+    expect(await canRead(owner, theirs)).toBe(false);
+
+    // A tag with no real file behind it is text, and removed.
+    const typed = await post(
+      member,
+      spaceId,
+      'Hi <dx_attachment id="nope" name="x" />there',
+    );
+    expect(typed.status).toBe(201);
+    expect(typed.body.data.post.text).toBe("Hi there");
+    expect(
+      (await post(member, spaceId, '<dx_attachment id="nope" />')).status,
+    ).toBe(400);
   });
 });
 

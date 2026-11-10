@@ -49,6 +49,7 @@ import { createQueryClient } from "../../shared/query/query-client.js";
 import { ThreadArchiveContext } from "../../shared/thread-archive.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { useOpenViewCommands } from "../threads/panes/thread-page-layout.js";
+import { SlotComposer } from "../threads/slot-composer.js";
 import { invalidateSpaceArtifacts } from "./space-cache-queries.js";
 import { spaceDetailsStorageKey } from "./space-details-store.js";
 import {
@@ -601,6 +602,7 @@ const mount = async (
           rendered.push(slots.threadId);
           return <ThreadPageStub key={slots.threadId} slots={slots} />;
         }}
+        Composer={SlotComposer}
       />
     ),
   });
@@ -770,7 +772,7 @@ it("lays the Space out with no title bar: the Space chat tab, its posts, and Spa
     "Launch the one-page checkout with Apple Pay by Friday.",
   );
   // A goal that fits offers nothing to expand.
-  expect(q("button.space-goal-text", panel)).toBeNull();
+  expect(has("Show More", panel)).toBe(false);
   expect(q(".space-project-chip", panel)?.textContent).toBe("storefront");
   expect(button("Huddle", panel).disabled).toBe(true);
   expect(button("Sharing", panel).disabled).toBe(false);
@@ -1038,7 +1040,7 @@ it("hides Space Details, remembers it on the next visit, and shows it again", as
   ).toEqual({ version: 1, hidden: false });
 });
 
-it("clamps a long goal, expands it on click, and shows no project chip without a project", async () => {
+it("clamps a long goal, expands it from Show More, and shows no project chip without a project", async () => {
   serve({
     project: false,
     goal: "Make the codebase modular so that it's easier to move from one runtime to another while the code stays fast, follows SOLID principles, and grows reusable TypeScript packages wherever it can without coupling to the infrastructure underneath.",
@@ -1047,18 +1049,23 @@ it("clamps a long goal, expands it on click, and shows no project chip without a
   await until(() => details() !== null && loaded());
   const panel = details() as HTMLElement;
   expect(q(".space-project-chip", panel)).toBeNull();
-  await until(() => q("button.space-goal-text", panel) !== null);
-  const goal = q("button.space-goal-text", panel) as HTMLElement;
-  expect(goal.getAttribute("aria-expanded")).toBe("false");
+  await until(() => has("Show More", panel));
+  const goal = q(".space-goal-text", panel) as HTMLElement;
+  expect(button("Show More", panel).getAttribute("aria-expanded")).toBe(
+    "false",
+  );
   expect(goal.scrollHeight).toBeGreaterThan(goal.clientHeight);
   await shot("space-goal-clamped-1440");
-  await userEvent.click(goal);
+  await userEvent.click(button("Show More", panel));
   await until(() => has("Show Less", panel));
-  const open = q(".space-goal-text", panel) as HTMLElement;
-  expect(open.scrollHeight).toBeLessThanOrEqual(open.clientHeight + 1);
+  // The same paragraph, unclamped: the text is never swapped for another
+  // element, so measuring it cannot flip it back and forth.
+  expect(q(".space-goal-text", panel)).toBe(goal);
+  expect(goal.scrollHeight).toBeLessThanOrEqual(goal.clientHeight + 1);
   await shot("space-goal-expanded-1440");
   await userEvent.click(button("Show Less", panel));
-  await until(() => q("button.space-goal-text", panel) !== null);
+  await until(() => has("Show More", panel));
+  expect(q(".space-goal-text", panel)).toBe(goal);
 });
 
 it("offers Unarchive to Continue in place of the composer in an archived Space", async () => {

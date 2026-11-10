@@ -1,4 +1,9 @@
 import { Popover } from "@base-ui/react/popover";
+import {
+  type MessageAttachment,
+  parseMessageAttachments,
+  withMessageAttachments,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { MessagesSquare, Pencil, SmilePlus } from "lucide-react";
@@ -21,7 +26,9 @@ import { useOpenMessageComments } from "../comments/message-comments.js";
 import { compactAge, dayLabel } from "../space-format.js";
 import { showLinkedPost } from "./focus-post.js";
 import { useSpacePeople } from "./space-people.js";
+import { SpacePostImages, SpacePostLinks } from "./space-post-files.js";
 import {
+  postContent,
   postFailureText,
   postTime,
   REACTION_EMOJI,
@@ -198,7 +205,7 @@ function Revisions({
                     `${compactAge(postTime(revision.createdAt), now)} ago`
                   }
                 />
-                <p>{revision.text}</p>
+                <p>{parseMessageAttachments(revision.text).text}</p>
               </li>
             ))}
         </ol>
@@ -212,12 +219,15 @@ function EditPostForm({
   spaceThreadId,
   postId,
   initialText,
+  attachments,
   onDone,
 }: {
   readonly spaceThreadId: ThreadId;
   readonly postId: string;
   /** The post's text when Edit was chosen: the draft starts from it. */
   readonly initialText: string;
+  /** The post's files, which stay with it. */
+  readonly attachments: ReadonlyArray<MessageAttachment>;
   readonly onDone: () => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
@@ -236,10 +246,15 @@ function EditPostForm({
     initialPicked: start.picked,
   });
   const posted = mentions.post(text.trim());
-  const changed = text.trim() !== "" && posted !== initialText.trim();
+  const changed =
+    (text.trim() !== "" || attachments.length > 0) &&
+    posted !== initialText.trim();
   const save = () => {
     if (!changed || edit.isPending) return;
-    edit.mutate({ postId, text: posted }, { onSuccess: () => onDone() });
+    edit.mutate(
+      { postId, text: withMessageAttachments(posted, attachments) },
+      { onSuccess: () => onDone() },
+    );
   };
   return (
     <form
@@ -383,6 +398,7 @@ function SpacePostRow({
   const reactions = post.reactions.filter(({ count }) => count > 0);
   const edited = post.editedAt !== undefined || post.revisionCount > 0;
   const kind = agent ? "agent" : mine ? "mine" : "other";
+  const content = postContent(post);
   return (
     <article
       ref={
@@ -417,7 +433,8 @@ function SpacePostRow({
           <EditPostForm
             spaceThreadId={spaceThreadId}
             postId={post.id}
-            initialText={post.text}
+            initialText={content.text}
+            attachments={content.attachments}
             onDone={() => setEditing(false)}
           />
         ) : agent ? (
@@ -427,11 +444,17 @@ function SpacePostRow({
             </ThreadReferenceContext.Provider>
           </div>
         ) : (
-          <div className="message-content">
-            <p className="user-message-text">
-              <CommentText text={post.text} people={people} />
-            </p>
-          </div>
+          <>
+            <SpacePostImages attachments={content.attachments} />
+            <div className="message-content">
+              {content.text.trim() === "" ? null : (
+                <p className="user-message-text">
+                  <CommentText text={content.text} people={people} />
+                </p>
+              )}
+              <SpacePostLinks attachments={content.attachments} />
+            </div>
+          </>
         )}
         {editing || !(permissions.react || permissions.comment) ? null : (
           <div className="space-post-actions" data-side={side}>

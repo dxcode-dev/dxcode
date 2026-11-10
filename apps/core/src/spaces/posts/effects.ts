@@ -1,4 +1,4 @@
-import { AGENT_MENTION } from "@dx/api";
+import { AGENT_MENTION, parseMessageAttachments } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
@@ -160,7 +160,10 @@ export const notifyPostMentions = async (
 ) => {
   const db = bindings.DB;
   if (db === undefined) return;
-  const mentioned = mentionsIn(input.text);
+  // A post's files are not words: no mention in a file name, no block in
+  // the notification.
+  const words = parseMessageAttachments(input.text).text;
+  const mentioned = mentionsIn(words);
   if (mentioned.userIds.size === 0 && mentioned.handles.size === 0) return;
   try {
     const audience = await spaceAudience(db, input.spaceThreadId);
@@ -177,7 +180,7 @@ export const notifyPostMentions = async (
     const already =
       input.previousText === undefined
         ? new Set<string>()
-        : named(mentionsIn(input.previousText));
+        : named(mentionsIn(parseMessageAttachments(input.previousText).text));
     const authorId = "userId" in input.author ? input.author.userId : undefined;
     const candidates = [...named(mentioned)].filter(
       (userId) => userId !== authorId && !already.has(userId),
@@ -197,7 +200,7 @@ export const notifyPostMentions = async (
         ? { actorName: "dx" }
         : { actorUserId: authorId as UserId }),
       // Picked mentions stay tokens, which the inbox shows as chips.
-      excerpt: input.text,
+      excerpt: words,
     });
   } catch (cause) {
     warn("mention", input.spaceThreadId, cause);

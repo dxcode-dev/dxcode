@@ -1403,7 +1403,7 @@ button.space-tab:hover,
   margin: 0 auto;
   padding: 0 16px 8px;
 }
-.space-composer > textarea {
+.space-composer-dock .agent-composer > textarea {
   min-height: 52px;
 }
 .space-unarchive {
@@ -1761,13 +1761,17 @@ button.space-goal-text {
   .space-create {
     border-radius: 0;
   }
+  /* One column that scrolls: blocks, so each pane is as tall as what it
+     holds. Grid rows in the screen-high body would shrink to fit it, and
+     the suggestions would run under the form. */
   .space-create-body {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto;
+    display: block;
     overflow-y: auto;
+    overscroll-behavior: contain;
   }
   .space-create-intro,
   .space-create-form-pane {
+    display: block;
     overflow: visible;
     padding: 20px 16px;
     border-right: 0;
@@ -1817,7 +1821,17 @@ button.space-goal-text {
   font-size: 13px;
   color: var(--text-muted, #a0a3ad);
 }
-.space-agent-field[data-route="unavailable"] > span {
+.space-agent-field {
+  flex-wrap: wrap;
+}
+.space-agent-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.space-agent-field[data-route="unavailable"] > span:first-child {
   color: var(--danger, #ff8a80);
 }
 .space-agent-change {

@@ -5,6 +5,7 @@ import { ChevronDown, Compass, Plus } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { ParticipantStack } from "../../shared/ui/avatar.js";
@@ -163,14 +164,17 @@ function SidebarSpaceRow({
 /**
  * The sidebar's Spaces section, above the Threads: the Spaces the person
  * created or joined, with Discover Spaces and New Space. `dictation` gives
- * New Space's goal the composer's mic.
+ * New Space's goal the composer's mic, and `PlanPicker` its Agent row the
+ * composer's Claude plan list.
  */
 export function SidebarSpacesSection({
   onNavigate,
   dictation,
+  PlanPicker,
 }: {
   readonly onNavigate: () => void;
   readonly dictation?: DictationSlot;
+  readonly PlanPicker?: ClaudePlanPickerSlot;
 }) {
   const userId = useAuthenticatedIdentity().identity.id;
   const spacesQuery = useQuery(joinedSpacesQueryOptions(userId));
@@ -271,6 +275,7 @@ export function SidebarSpacesSection({
           <CreateSpaceDialog
             userId={userId}
             dictation={dictation}
+            PlanPicker={PlanPicker}
             onClose={() => setDialog(undefined)}
             onCreated={() => {
               setDialog(undefined);

@@ -5,6 +5,7 @@ import {
   type MessageCommentListResponse,
   type MessageCommentResponse,
   type MessageCommentSummaryListResponse,
+  parseMessageAttachments,
   SPACE_POST_ID_PATTERN,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
@@ -170,7 +171,11 @@ const createMessageCommentRoutes = () => {
           message:
             post !== undefined
               ? {
-                  excerpt: post.text,
+                  // A person's post is quoted by its words, not its files.
+                  excerpt:
+                    post.author_kind === "user"
+                      ? parseMessageAttachments(post.text).text
+                      : post.text,
                   ...(post.author_user_id === null
                     ? {}
                     : { authorUserId: post.author_user_id }),

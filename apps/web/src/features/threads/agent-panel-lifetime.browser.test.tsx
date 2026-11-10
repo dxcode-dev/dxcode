@@ -401,9 +401,10 @@ describe("thread composer ownership", () => {
         '[aria-label="Send steering message"]',
       )?.disabled,
     ).toBe(true);
+    // The message is on its way and sends anyway: no Stop beside it.
     expect(
       mounted.container.querySelector('[aria-label="Stop agent"]'),
-    ).not.toBeNull();
+    ).toBeNull();
 
     await React.act(async () => {
       acceptFirst?.();
@@ -430,13 +431,17 @@ describe("thread composer ownership", () => {
       2,
       "Steer at the next tool boundary",
     );
-    expect(
-      mounted.container.querySelector('[aria-label="Stop agent"]'),
-    ).not.toBeNull();
+    // Once it is admitted the composer is empty again and the agent still
+    // works: Stop is back.
+    await vi.waitFor(() =>
+      expect(
+        mounted.container.querySelector('[aria-label="Stop agent"]'),
+      ).not.toBeNull(),
+    );
     await React.act(() => mounted.root.unmount());
   });
 
-  it("reissues Stop after a delayed prompt is admitted", async () => {
+  it("offers Stop only once a delayed prompt is admitted", async () => {
     let accept: (() => void) | undefined;
     const receipt = new Promise<void>((resolve) => {
       accept = resolve;
@@ -467,6 +472,17 @@ describe("thread composer ownership", () => {
       );
       await Promise.resolve();
     });
+    // The prompt sends anyway, so nothing offers to stop while it waits.
+    expect(
+      mounted.container.querySelector('[aria-label="Stop agent"]'),
+    ).toBeNull();
+    await React.act(async () => {
+      accept?.();
+      await receipt;
+    });
+    await vi.waitFor(() =>
+      expect(textarea.hasAttribute("aria-busy")).toBe(false),
+    );
     const stop = mounted.container.querySelector<HTMLButtonElement>(
       '[aria-label="Stop agent"]',
     );
@@ -475,16 +491,7 @@ describe("thread composer ownership", () => {
       stop.click();
       await Promise.resolve();
     });
-
     expect(abort).toHaveBeenCalledOnce();
-    await React.act(async () => {
-      accept?.();
-      await receipt;
-    });
-    await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() =>
-      expect(textarea.hasAttribute("aria-busy")).toBe(false),
-    );
     await React.act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
@@ -565,22 +572,17 @@ describe("thread composer ownership", () => {
     });
     expect(sendMessage).toHaveBeenCalledOnce();
 
-    const stop = replacement.container.querySelector<HTMLButtonElement>(
-      '[aria-label="Stop agent"]',
-    );
-    if (stop === null) throw new Error("Expected replacement Stop button.");
-    await React.act(async () => {
-      stop.click();
-      await Promise.resolve();
-    });
-    expect(agent.abort).toHaveBeenCalledOnce();
+    // Still on its way after the remount: no Stop beside it.
+    expect(
+      replacement.container.querySelector('[aria-label="Stop agent"]'),
+    ).toBeNull();
 
     await React.act(async () => {
       accept?.();
       await receipt;
     });
-    await vi.waitFor(() => expect(agent.abort).toHaveBeenCalledTimes(2));
-    expect(retainedPending).toBe(false);
+    await vi.waitFor(() => expect(retainedPending).toBe(false));
+    expect(agent.abort).not.toHaveBeenCalled();
     await React.act(() => replacement.root.unmount());
   });
 

@@ -1,17 +1,26 @@
 import type { SpaceData } from "@dx/api";
-import { parseCommentLinkId, SPACE_POST_ID_PATTERN } from "@dx/api";
+import {
+  parseCommentLinkId,
+  parseMessageAttachments,
+  SPACE_POST_ID_PATTERN,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
-import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
+import type { ComposerSlot } from "../../shared/composer/composer-slot.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../shared/ui/button.js";
 import { SpaceCatchUpCard } from "./cards/catch-up-card.js";
 import type { CommentableMessage } from "./comments/message-comments.js";
 import { SpaceComposer, UnarchiveToContinue } from "./posts/space-composer.js";
-import { postTime, stillSending } from "./posts/space-post-format.js";
+import { SpacePostImages, SpacePostLinks } from "./posts/space-post-files.js";
+import {
+  postContent,
+  postTime,
+  stillSending,
+} from "./posts/space-post-format.js";
 import { SpacePostList } from "./posts/space-post-list.js";
 import {
   flattenSpacePosts,
@@ -27,7 +36,7 @@ const commentable = (
 ): CommentableMessage => ({
   threadId: space.threadId,
   messageId: post.id,
-  text: post.text,
+  text: postContent(post).text,
   ...(post.author.kind === "user" && post.author.userId !== undefined
     ? { author: { userId: post.author.userId, name: post.author.name } }
     : {}),
@@ -81,13 +90,14 @@ export type RenderSpaceComments = (input: {
  */
 export function SpaceChat({
   space,
-  dictation,
+  Composer,
   renderComments,
   onUnarchive,
   unarchiving,
 }: {
   readonly space: SpaceData;
-  readonly dictation?: DictationSlot;
+  /** The Thread composer's box, from the Thread route. */
+  readonly Composer: ComposerSlot;
   readonly renderComments?: RenderSpaceComments;
   readonly onUnarchive?: () => void;
   readonly unarchiving: boolean;
@@ -174,22 +184,29 @@ export function SpaceChat({
             focusPostId={linkLoaded ? focusPostId : undefined}
             onFocused={() => setShownLink(focusPostId)}
           />
-          {pending.map(({ key, text }) => (
-            <article
-              key={key}
-              className="space-post user-message"
-              data-kind="mine"
-              data-pending=""
-              aria-busy="true"
-              aria-label="Posting"
-            >
-              <div className="space-post-body">
-                <div className="message-content">
-                  <p className="user-message-text">{text}</p>
+          {pending.map(({ key, text, posted }) => {
+            const files = parseMessageAttachments(posted).attachments;
+            return (
+              <article
+                key={key}
+                className="space-post user-message"
+                data-kind="mine"
+                data-pending=""
+                aria-busy="true"
+                aria-label="Posting"
+              >
+                <div className="space-post-body">
+                  <SpacePostImages attachments={files} />
+                  <div className="message-content">
+                    {text === "" ? null : (
+                      <p className="user-message-text">{text}</p>
+                    )}
+                    <SpacePostLinks attachments={files} />
+                  </div>
                 </div>
-              </div>
-            </article>
-          ))}
+              </article>
+            );
+          })}
           {archived ? null : (
             <SpaceCatchUpCard spaceThreadId={space.threadId} />
           )}
@@ -198,7 +215,7 @@ export function SpaceChat({
       {archived ? (
         <UnarchiveToContinue pending={unarchiving} onUnarchive={onUnarchive} />
       ) : (
-        <SpaceComposer spaceThreadId={space.threadId} dictation={dictation} />
+        <SpaceComposer spaceThreadId={space.threadId} Composer={Composer} />
       )}
       {renderComments?.({ findMessage })}
     </div>

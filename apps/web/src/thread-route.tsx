@@ -4,9 +4,14 @@ import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import { Monitor, SquareTerminal } from "lucide-react";
 import * as React from "react";
 import { useDictationSlot } from "./features/threads/dictation/use-dictation.js";
+import {
+  MessageFileLinks,
+  MessageImageTiles,
+} from "./features/threads/message-attachments-ui.js";
 import { threadQueryOptions } from "./features/threads/thread-queries.js";
 import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
 import { useAuthenticatedIdentity } from "./shared/auth/auth-context.js";
+import type { MessageFilesSlot } from "./shared/composer/composer-slot.js";
 import { DocumentTitle } from "./shared/ui/document-title.js";
 
 // The Terminal and Desktop load when their tab first shows, not with the
@@ -79,6 +84,12 @@ const SpaceRoute = lazyRouteComponent(
   "SpaceRoute",
 );
 
+/** The transcript's file views, for a Space's posts. */
+const MESSAGE_FILES: MessageFilesSlot = {
+  Images: MessageImageTiles,
+  Links: MessageFileLinks,
+};
+
 const renderSpaceThread = (
   props: React.ComponentProps<typeof ThreadWorkspace>,
 ) => (
@@ -104,6 +115,7 @@ function ThreadOrSpaceWorkspace() {
         key={threadId}
         renderThread={renderSpaceThread}
         dictation={dictation}
+        files={MESSAGE_FILES}
       />
     </React.Suspense>
   ) : (

@@ -1,4 +1,5 @@
 import {
+  ModelConnectionId,
   ProjectId,
   ThreadColor,
   ThreadId,
@@ -125,6 +126,12 @@ export const CreateSpaceRequestSchema = Schema.Struct({
   sharing: SpaceSharingSchema,
   /** Left out, dx picks one. */
   color: Schema.optional(ThreadColor),
+  /**
+   * The Claude Pro/Max plan a Space on Claude Code runs on, for its whole
+   * life. Left out, dx picks one as it does for a new Thread on Auto, or
+   * takes the first plan when the automatic pick is off.
+   */
+  claudeConnectionId: Schema.optional(ModelConnectionId),
 });
 
 export type CreateSpaceRequest = typeof CreateSpaceRequestSchema.Type;
@@ -189,6 +196,8 @@ export const SpaceErrorCodeSchema = Schema.Literals([
   "SPACE_READ_ONLY",
   "SPACE_AGENT_UNAVAILABLE",
   "SPACE_MODEL_UNAVAILABLE",
+  /** The Claude plan picked for a new Space cannot serve it now. */
+  "SPACE_PLAN_UNAVAILABLE",
 ]);
 
 export type SpaceErrorCode = typeof SpaceErrorCodeSchema.Type;

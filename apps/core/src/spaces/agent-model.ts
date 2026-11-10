@@ -71,14 +71,21 @@ export interface SpaceAgentResolution {
   };
 }
 
+/** A plan the person picked for their new Space cannot serve it. */
+export class SpacePlanRefused extends Error {}
+
 /**
  * Where a new Space of `userId`'s would run now. Each step asks Model
  * Routing exactly as a new Thread's creation does, so the answer is the one
- * the Space's Thread is created with.
+ * the Space's Thread is created with. `claudeConnectionId` is the plan the
+ * person picked, as a new Thread's plan list picks one; it applies only when
+ * the Space runs on Claude Code, and a picked plan that cannot serve throws
+ * `SpacePlanRefused` instead of moving the Space to another plan.
  */
 export const resolveSpaceAgentRoute = async (
   bindings: Bindings,
   userId: UserId,
+  claudeConnectionId?: string,
 ): Promise<SpaceAgentResolution> => {
   const db = bindings.DB;
   if (db === undefined) throw new Error("Model routing is not configured.");
@@ -106,6 +113,29 @@ export const resolveSpaceAgentRoute = async (
           selection,
           claudeConnectionId,
         );
+      if (claudeConnectionId !== undefined) {
+        try {
+          const resolved = await attempt(claudeConnectionId);
+          const connectionId =
+            resolved.claudeConnectionId ?? claudeConnectionId;
+          return {
+            route: {
+              kind: "claude-code",
+              model: claudeCode as never,
+              modelName: modelName(claudeCode),
+              thinking,
+              connectionName:
+                plans.find(({ id }) => id === connectionId)?.name ??
+                resolved.connection.name,
+            },
+            creation: { selection, claudeConnectionId: connectionId },
+          };
+        } catch (error) {
+          if (error instanceof ClaudePlanRefused)
+            throw new SpacePlanRefused(error.message);
+          throw error;
+        }
+      }
       try {
         let resolved: Awaited<ReturnType<typeof attempt>>;
         try {

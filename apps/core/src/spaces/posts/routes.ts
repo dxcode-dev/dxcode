@@ -1,6 +1,7 @@
 import {
   ListSpacePostsQuerySchema,
   ListSpacePostsResponseSchema,
+  parseMessageAttachments,
   SPACE_POSTS_DEFAULT_LIMIT,
   SpacePostReactionSchema,
   SpacePostResponseSchema,
@@ -8,10 +9,17 @@ import {
   SpacePostTextRequestSchema,
   spacePostEditForAgent,
   spacePostForAgent,
+  withMessageAttachments,
 } from "@dx/api";
 import type { Principal, ThreadId, UserId } from "@dx/domain";
 import { DateTime, Option, Schema } from "effect";
 import type { Context } from "hono";
+import {
+  linkMessageAttachments,
+  MessageAttachmentsRejected,
+  messageAttachmentBody,
+  resolveMessageAttachments,
+} from "../../attachments/message.js";
 import type { AppEnv } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
 import { ownerAgentInitialization } from "../../thread-sharing/middleware.js";
@@ -137,6 +145,51 @@ const deliverCreating = async (
     : deliver({ ...delivery, initialData });
 };
 
+/**
+ * A person's post with its files, as a Thread message carries them: each
+ * `<dx_attachment>` the client named must be a finished upload the author
+ * can read, the block is rewritten from Core's records (real name, type,
+ * size, download URL), and the files are recorded in the Space's Thread so
+ * everyone who can open the Space, and its agent, can open them. Tags a
+ * person typed never pose as files.
+ */
+const postBody = async (
+  context: Context<AppEnv>,
+  db: D1Database,
+  space: SpaceRow,
+  principal: Principal,
+  text: string,
+) => {
+  try {
+    const resolved = await resolveMessageAttachments(context.env, {
+      senderUserId: principal.userId,
+      body: text,
+    });
+    if (resolved.text.trim() === "" && resolved.rows.length === 0)
+      throw invalid();
+    await linkMessageAttachments(db, {
+      threadId: space.id,
+      senderUserId: principal.userId,
+      rows: resolved.rows,
+    });
+    const { body, attachments } = messageAttachmentBody(
+      context.env,
+      resolved,
+      context.req.url,
+    );
+    // The agent reads the files as a Thread message's: its block last.
+    return {
+      text: body,
+      forAgent: (wrap: (words: string) => string) =>
+        withMessageAttachments(wrap(resolved.text.trimEnd()), attachments),
+    };
+  } catch (cause) {
+    if (cause instanceof MessageAttachmentsRejected)
+      throw new SpaceError("INVALID_REQUEST", 400, cause.message);
+    throw cause;
+  }
+};
+
 const agentUnavailable = (status: number) => {
   spaceLogger.warn("A Space's agent refused a post.", {
     event: "space_post_refused",
@@ -210,13 +263,20 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
     principal: Principal,
     threadId: ThreadId,
   ) => {
-    const { text } = decode(
+    const request = decode(
       SpacePostTextRequestSchema,
       await context.req.json().catch(() => undefined),
     );
-    if (text.trim() === "") throw invalid();
+    if (request.text.trim() === "") throw invalid();
     const space = await deps.readSpace(db, principal, threadId);
     writable(space);
+    const { text, forAgent } = await postBody(
+      context,
+      db,
+      space,
+      principal,
+      request.text,
+    );
     const id = newSpacePostId();
     await insertSpacePost(db, {
       id,
@@ -231,7 +291,7 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
       delivered = await deliverCreating(context, deps, db, space, {
         actor: principal,
         threadId: space.id,
-        body: spacePostForAgent(id, text),
+        body: forAgent((words) => spacePostForAgent(id, words)),
         key: `space-post:${id}`,
         variables: { spacePost: { id, kind: "create" } },
       });
@@ -258,11 +318,11 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
     principal: Principal,
     threadId: ThreadId,
   ) => {
-    const { text } = decode(
+    const request = decode(
       SpacePostTextRequestSchema,
       await context.req.json().catch(() => undefined),
     );
-    if (text.trim() === "") throw invalid();
+    if (request.text.trim() === "") throw invalid();
     const space = await deps.readSpace(db, principal, threadId);
     writable(space);
     const post = await postOf(db, space, context.req.param("postId") ?? "");
@@ -272,12 +332,25 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
         403,
         "Only a post's author can edit it.",
       );
+    const { text, forAgent } = await postBody(
+      context,
+      db,
+      space,
+      principal,
+      request.text,
+    );
     if (post.text !== text) {
       const revision = (await listSpacePostRevisions(db, post)).length;
       const delivered = await deliverCreating(context, deps, db, space, {
         actor: principal,
         threadId: space.id,
-        body: spacePostEditForAgent(post.id, text, post.text),
+        body: forAgent((words) =>
+          spacePostEditForAgent(
+            post.id,
+            words,
+            parseMessageAttachments(post.text).text,
+          ),
+        ),
         key: `space-post-edit:${post.id}:${revision}`,
         variables: { spacePost: { id: post.id, kind: "edit" } },
       });

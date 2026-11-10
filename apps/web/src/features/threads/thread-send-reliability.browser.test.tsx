@@ -666,9 +666,9 @@ describe("a message shows as sent only once the server has it", () => {
       expect(panel.textarea().value).toBe("Held message");
       expect(panel.submitButton().disabled).toBe(true);
       if (file) expect(panel.preview("held.png")).not.toBeNull();
-      // Stop stays while the agent works; chat starts no run to stop.
-      if (steer) expect(stop()).not.toBeNull();
-      if (props.mentions !== undefined) expect(stop()).toBeNull();
+      // A held message sends anyway, so nothing offers to stop it, even
+      // while the agent works; chat starts no run to stop.
+      expect(stop()).toBeNull();
       await panel.pressEnter();
       await React.act(async () => {
         panel.container

@@ -6,12 +6,17 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
+import type {
+  ComposerSlot,
+  MessageFilesSlot,
+} from "../../shared/composer/composer-slot.js";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import { deleteThreadMutationOptions } from "../threads/thread-mutations.js";
 import { EditSpaceDialog } from "./edit-space-dialog.js";
+import { SpacePostFilesContext } from "./posts/space-post-files-context.js";
 import { type RenderSpaceComments, SpaceChat } from "./space-chat.js";
 import { useSpaceDetailsHidden } from "./space-details-store.js";
 import { SpacePanel } from "./space-panel.js";
@@ -34,6 +39,10 @@ import {
   useOpenSpaceThread,
 } from "./use-open-space-thread.js";
 import "./spaces.css";
+
+const noFiles = () => null;
+/** Posts show only their words without the transcript's file views. */
+const NO_FILES: MessageFilesSlot = { Images: noFiles, Links: noFiles };
 
 /** From this width Space Details is a column beside the panes. */
 const DETAILS_COLUMN_QUERY = "(min-width: 1024px)";
@@ -191,6 +200,7 @@ function SpacePage({
   renderThread,
   renderComments,
   dictation,
+  Composer,
 }: {
   readonly space: SpaceData;
   readonly threads: ReadonlyArray<SpaceThreadItem> | undefined;
@@ -202,6 +212,7 @@ function SpacePage({
   readonly renderThread: (slots: SpaceThreadSlots) => React.ReactNode;
   readonly renderComments?: RenderSpaceComments;
   readonly dictation?: DictationSlot;
+  readonly Composer: ComposerSlot;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const detailsColumnFits = useMediaQuery(DETAILS_COLUMN_QUERY);
@@ -296,7 +307,7 @@ function SpacePage({
           <div className="space-pane-body">
             <SpaceChat
               space={space}
-              dictation={dictation}
+              Composer={Composer}
               renderComments={renderComments}
               onUnarchive={onUnarchive}
               unarchiving={unarchiving}
@@ -391,10 +402,16 @@ export function SpaceWorkspace({
   renderThread,
   renderComments,
   dictation,
+  Composer,
+  files,
 }: {
   readonly renderThread: (slots: SpaceThreadSlots) => React.ReactNode;
   readonly renderComments?: RenderSpaceComments;
   readonly dictation?: DictationSlot;
+  /** The Thread composer's box for the Space's chat. */
+  readonly Composer: ComposerSlot;
+  /** The transcript's file views, for posts' files. */
+  readonly files?: MessageFilesSlot;
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const { identity } = useAuthenticatedIdentity();
@@ -438,26 +455,29 @@ export function SpaceWorkspace({
   if (space === undefined)
     return <DxLoading label="Loading Space…" variant="pane" />;
   return (
-    <SpaceThreadsContext
-      value={{
-        spaceThreadId,
-        childThreadIds,
-        reveal: () => setSpaceTabFor(undefined),
-      }}
-    >
-      <SpacePage
-        space={space}
-        threads={threads}
-        childThreadId={childThreadId}
-        spaceTabActive={
-          childThreadId !== undefined && spaceTabFor === childThreadId
-        }
-        onSelectSpaceTab={() => setSpaceTabFor(childThreadId)}
-        onSelectThreadTab={() => setSpaceTabFor(undefined)}
-        renderThread={renderThread}
-        renderComments={renderComments}
-        dictation={dictation}
-      />
-    </SpaceThreadsContext>
+    <SpacePostFilesContext value={files ?? NO_FILES}>
+      <SpaceThreadsContext
+        value={{
+          spaceThreadId,
+          childThreadIds,
+          reveal: () => setSpaceTabFor(undefined),
+        }}
+      >
+        <SpacePage
+          space={space}
+          threads={threads}
+          childThreadId={childThreadId}
+          spaceTabActive={
+            childThreadId !== undefined && spaceTabFor === childThreadId
+          }
+          onSelectSpaceTab={() => setSpaceTabFor(childThreadId)}
+          onSelectThreadTab={() => setSpaceTabFor(undefined)}
+          renderThread={renderThread}
+          renderComments={renderComments}
+          dictation={dictation}
+          Composer={Composer}
+        />
+      </SpaceThreadsContext>
+    </SpacePostFilesContext>
   );
 }

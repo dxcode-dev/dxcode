@@ -78,7 +78,10 @@ export const SpacePostCommentsSchema = Schema.Struct({
 export const SpacePostSchema = Schema.Struct({
   id: SpacePostIdSchema,
   author: SpacePostAuthorSchema,
-  /** Markdown, as its author last wrote it. */
+  /**
+   * Markdown, as its author last wrote it. A person's post with files ends
+   * with their `<dx_attachments>` block (`parseMessageAttachments`).
+   */
   text: Schema.String,
   createdAt: Timestamp,
   /** When it was last edited; absent when never. */
@@ -140,7 +143,10 @@ export type SpacePostRevisionsResponse =
 /**
  * `POST /v1/spaces/:threadId/posts` (a person posts; it reaches the agent)
  * and `PATCH /v1/spaces/:threadId/posts/:postId` (its author edits it; the
- * edit reaches the agent).
+ * edit reaches the agent). Files follow the text as the `<dx_attachments>`
+ * block a Thread message carries (`message-attachments`): Core checks each
+ * file, rewrites the block from its records, and stores it in the post's
+ * text, where clients read it to show the files.
  */
 export const SpacePostTextRequestSchema = Schema.Struct({
   text: SpacePostTextSchema,

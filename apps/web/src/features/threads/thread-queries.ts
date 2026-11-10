@@ -282,7 +282,11 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
       // A first message the agent has not admitted yet may still fail.
       query.state.data?.initialDispatch?.state === "pending"
         ? INITIAL_DISPATCH_POLL_INTERVAL_MS
-        : query.state.data?.executionWorkspace.ready === false ||
+        : // A Space's own Thread runs without an Orb, so its workspace never
+          // becomes ready: reading its readiness every few seconds would
+          // only cost requests for as long as the Space stays open.
+          (query.state.data?.executionWorkspace.ready === false &&
+              query.state.data.kind !== "space") ||
             query.state.data?.titlePending === true
           ? READINESS_FALLBACK_INTERVAL_MS
           : false,

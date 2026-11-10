@@ -32,7 +32,7 @@ import { userIdentity } from "../thread-sharing/service.js";
 import { readSpaceProject } from "./agent/prompt-data.js";
 import { buildSpaceSetupMessage } from "./agent/setup-message.js";
 import { deliverToSpaceAgent } from "./agent-delivery.js";
-import { resolveSpaceAgentRoute } from "./agent-model.js";
+import { resolveSpaceAgentRoute, SpacePlanRefused } from "./agent-model.js";
 import { dismissCatchUp, readCatchUp } from "./catch-up.js";
 import { createSpaceRootThread } from "./create-root-thread.js";
 import { spacePostHandlers } from "./posts/routes.js";
@@ -318,7 +318,19 @@ export const createSpaceRoutes = (
               "Join or create a workspace to share a Space.",
             );
           // The Space's route is picked once, now, and never changes.
-          const agent = await resolveSpaceAgentRoute(context.env, ownerUserId);
+          const agent = await resolveSpaceAgentRoute(
+            context.env,
+            ownerUserId,
+            body.claudeConnectionId,
+          ).catch((error: unknown) => {
+            if (error instanceof SpacePlanRefused)
+              throw new SpaceError(
+                "SPACE_PLAN_UNAVAILABLE",
+                409,
+                error.message,
+              );
+            throw error;
+          });
           if (agent.creation === undefined)
             throw new SpaceError(
               "SPACE_MODEL_UNAVAILABLE",

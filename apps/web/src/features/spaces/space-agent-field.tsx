@@ -3,6 +3,7 @@ import { isClaudeCodeModel, SPACE_AGENT_DEFAULT } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import * as React from "react";
+import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
 import { spaceRouteText } from "../../shared/space-agent-route.js";
 import { Button } from "../../shared/ui/button.js";
 import { modelRoutingChoicesQueryOptions } from "../settings/model-routing/model-routing-queries.js";
@@ -118,35 +119,71 @@ export function SpaceAgentPicker({
   );
 }
 
-/** Where a new Space will run, with a way to change it. */
+/**
+ * Where a new Space will run, with a way to change it. On Claude Code with
+ * several plans, the plan list and its limits, as the New Thread composer
+ * shows them.
+ */
 export function SpaceAgentField({
   id,
   identity,
+  plan,
+  locked,
+  PlanPicker,
   onChange,
+  onPlanChange,
 }: {
   readonly id: string;
   readonly identity: string;
+  /** The plan picked; undefined is Auto, or the first plan. */
+  readonly plan: string | undefined;
+  readonly locked: boolean;
+  /** The New Thread composer's plan list, from the application. */
+  readonly PlanPicker?: ClaudePlanPickerSlot;
   readonly onChange: () => void;
+  readonly onPlanChange: (connectionId: string | undefined) => void;
 }) {
   const query = useQuery(spaceAgentModelQueryOptions(identity));
+  const choices = useQuery(modelRoutingChoicesQueryOptions(identity)).data;
   const route = query.data?.route;
+  // The line names the plan picked; on Auto, the one dx would pick now.
+  const chosen = choices?.claudePlans.find(
+    ({ connectionId }) => connectionId === plan,
+  );
+  const shown =
+    route?.kind === "claude-code" && chosen !== undefined
+      ? { ...route, connectionName: chosen.name }
+      : route;
   return (
     <div className="space-agent-field" data-route={route?.kind}>
       <span role={route?.kind === "unavailable" ? "alert" : "status"}>
-        {route === undefined
+        {shown === undefined
           ? query.isError
             ? "The model for Spaces could not be loaded."
             : "Loading…"
-          : spaceRouteText(route)}
+          : spaceRouteText(shown)}
       </span>
-      <button
-        id={id}
-        type="button"
-        className="space-agent-change"
-        onClick={onChange}
-      >
-        Change
-      </button>
+      <span className="space-agent-actions">
+        {route?.kind === "claude-code" && PlanPicker !== undefined ? (
+          <React.Suspense fallback={null}>
+            <PlanPicker
+              choices={choices}
+              model={route.model}
+              plan={plan}
+              locked={locked}
+              onPlanChange={onPlanChange}
+            />
+          </React.Suspense>
+        ) : null}
+        <button
+          id={id}
+          type="button"
+          className="space-agent-change"
+          onClick={onChange}
+        >
+          Change
+        </button>
+      </span>
     </div>
   );
 }

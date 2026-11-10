@@ -392,14 +392,18 @@ export function SpacePanelMenu({
 type SpacePanelTab = "threads" | "comments" | "artifacts";
 
 /**
- * The goal, clamped to a few lines; when it runs longer the clamped text is
- * a button that shows all of it, and Show Less clamps it again.
+ * The goal, clamped to a few lines; when it runs longer Show More shows all
+ * of it, and Show Less clamps it again. The text is always the same
+ * paragraph: swapping it for another element as it measures would change
+ * what it measures (WebKit does not clamp a button), and the two would
+ * swap back and forth on every frame.
  */
 function SpaceGoal({ goal }: { readonly goal: string }) {
   const [expanded, setExpanded] = React.useState(false);
   const [overflows, setOverflows] = React.useState(false);
   // React calls a ref that returns cleanup with the node alone; the
-  // observer reports at once, then on every resize.
+  // observer reports at once, then on every resize, Show More and Show Less
+  // included. Expanded, the toggle stays whatever it measures.
   const measure = (node: HTMLElement | null) => {
     const observer = new ResizeObserver(() => {
       if (node !== null)
@@ -408,38 +412,21 @@ function SpaceGoal({ goal }: { readonly goal: string }) {
     if (node !== null) observer.observe(node);
     return () => observer.disconnect();
   };
-  if (expanded)
-    return (
-      <div className="space-goal" data-expanded="">
-        <p className="space-goal-text">{goal}</p>
+  return (
+    <div className="space-goal" data-expanded={expanded ? "" : undefined}>
+      <p ref={measure} className="space-goal-text">
+        {goal}
+      </p>
+      {expanded || overflows ? (
         <button
           type="button"
           className="space-goal-toggle"
-          aria-expanded="true"
-          onClick={() => setExpanded(false)}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
         >
-          Show Less
+          {expanded ? "Show Less" : "Show More"}
         </button>
-      </div>
-    );
-  return (
-    <div className="space-goal">
-      {overflows ? (
-        <button
-          ref={measure}
-          type="button"
-          className="space-goal-text"
-          aria-expanded="false"
-          title="Show All"
-          onClick={() => setExpanded(true)}
-        >
-          {goal}
-        </button>
-      ) : (
-        <p ref={measure} className="space-goal-text">
-          {goal}
-        </p>
-      )}
+      ) : null}
     </div>
   );
 }
