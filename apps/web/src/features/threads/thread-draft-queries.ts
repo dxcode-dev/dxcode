@@ -41,23 +41,68 @@ export const threadDraftQueryOptions = (userId: UserId, threadId: ThreadId) =>
   queryOptions({
     queryKey: threadDraftKeys.draft(userId, threadId),
     queryFn: async ({ signal }) => {
+      const key = unsavedKey(userId, threadId);
+      const before = writes.get(key);
+      const startedBefore = before?.started ?? 0;
+      const writingBefore = (before?.inFlight ?? 0) > 0;
       const saved = await getThreadDraft(threadId, signal);
-      return unsaved.get(unsavedKey(userId, threadId))?.text ?? saved;
+      const pending = unsaved.get(key);
+      if (pending !== undefined) return pending.text;
+      // A save crossed this read, so Core may have read before the save
+      // reached it: the text this page wrote last is newer.
+      const after = writes.get(key);
+      return after !== undefined &&
+        (writingBefore || after.started !== startedBefore)
+        ? after.text
+        : saved;
     },
     staleTime: 0,
     refetchOnWindowFocus: true,
     retry: 1,
   });
 
-const save = (key: string, draft: UnsavedDraft, keepalive = false) =>
-  putThreadDraft(draft.threadId, draft.text, { keepalive }).then(
-    () => {
-      if (unsaved.get(key) === draft) unsaved.delete(key);
-    },
-    () => {
-      // Kept as unsaved: the next edit, or the page hiding, tries again.
-    },
-  );
+/** The saves this page started for one person and Thread. */
+interface DraftWrites {
+  /** How many started; a read that sees this change crossed a save. */
+  started: number;
+  /** How many have not finished. */
+  inFlight: number;
+  /** What the latest one wrote. */
+  text: string;
+  /** The latest one; the next waits for it, so Core gets them in order. */
+  last: Promise<void>;
+}
+
+const writes = new Map<string, DraftWrites>();
+
+const save = (key: string, draft: UnsavedDraft, keepalive = false) => {
+  let thread = writes.get(key);
+  if (thread === undefined) {
+    thread = { started: 0, inFlight: 0, text: "", last: Promise.resolve() };
+    writes.set(key, thread);
+  }
+  const current = thread;
+  current.started += 1;
+  current.inFlight += 1;
+  current.text = draft.text;
+  const put = () =>
+    putThreadDraft(draft.threadId, draft.text, { keepalive })
+      .then(
+        () => {
+          if (unsaved.get(key) === draft) unsaved.delete(key);
+        },
+        () => {
+          // Kept as unsaved: the next edit, or the page hiding, tries again.
+        },
+      )
+      .finally(() => {
+        current.inFlight -= 1;
+      });
+  // A save as the page unloads cannot wait its turn; it carries the latest
+  // text, sent after any save still in flight.
+  current.last = keepalive ? put() : current.last.then(put);
+  return current.last;
+};
 
 /** Writes every unsaved draft now; the page may be about to unload. */
 const flushUnsaved = () => {
@@ -78,8 +123,8 @@ if (typeof document !== "undefined") {
 
 /**
  * Sets the Thread's draft and schedules the write. `""`, as when the message
- * is sent, removes it from Core at once. A load still in flight is cancelled
- * so it cannot replace what the person typed.
+ * is sent, removes it from Core as soon as earlier saves finish. A load still
+ * in flight is cancelled so it cannot replace what the person typed.
  */
 export const setThreadDraft = (
   client: QueryClient,
@@ -111,6 +156,7 @@ export const discardUnsavedThreadDrafts = () => {
   for (const draft of unsaved.values())
     if (draft.timer !== undefined) clearTimeout(draft.timer);
   unsaved.clear();
+  writes.clear();
 };
 
 const values = new WeakMap<

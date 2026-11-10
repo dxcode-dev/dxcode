@@ -86,6 +86,15 @@ const TOOL_OUTPUT_CHARS = Number(params.get("tool") ?? 2_000);
 const CHANGED_FILES = Number(params.get("changes") ?? 0);
 // `portal=1` gives the workspace a Portal domain, so Preview is a tool.
 const PORTAL = params.get("portal") === "1";
+// Draft request timing, for proofs of how the composer's draft survives
+// requests that cross on the way to Core. `draftReadLag=ms` reads a draft
+// when the request arrives but answers ms later; `draftSaveLag=ms` delivers a
+// save that carries text ms after it was sent, and `draftClearLag=ms` a clear.
+const DRAFT_READ_LAG_MS = Number(params.get("draftReadLag") ?? 0);
+const DRAFT_SAVE_LAG_MS = Number(params.get("draftSaveLag") ?? 0);
+const DRAFT_CLEAR_LAG_MS = Number(params.get("draftClearLag") ?? 0);
+// `quickActions=1` turns on the composer's quick-action row (experimental).
+const QUICK_ACTIONS = params.get("quickActions") === "1";
 
 const userId = "usr_perf" as UserId;
 const projectId = "prj_00000000-0000-4000-8000-000000000147" as ProjectId;
@@ -645,16 +654,29 @@ const answer = (input: RequestInfo | URL, init?: RequestInit) => {
   // Core's per-person Thread drafts, kept in this browser's storage so they
   // outlive a reload the way D1 does.
   if (thread !== null && thread[2] === "/draft") {
-    const drafts = JSON.parse(
-      localStorage.getItem("thread-page-stress:drafts") ?? "{}",
-    ) as Record<string, string>;
+    const id = thread[1];
+    const stored = () =>
+      JSON.parse(
+        localStorage.getItem("thread-page-stress:drafts") ?? "{}",
+      ) as Record<string, string>;
     if (method === "PUT") {
-      drafts[thread[1]] = (
-        JSON.parse(String(init?.body)) as { text: string }
-      ).text;
-      localStorage.setItem("thread-page-stress:drafts", JSON.stringify(drafts));
+      const { text } = JSON.parse(String(init?.body)) as { text: string };
+      const write = () => {
+        const drafts = stored();
+        drafts[id] = text;
+        localStorage.setItem(
+          "thread-page-stress:drafts",
+          JSON.stringify(drafts),
+        );
+        return json({ status: "success", data: { text } });
+      };
+      const lag = text === "" ? DRAFT_CLEAR_LAG_MS : DRAFT_SAVE_LAG_MS;
+      return lag === 0 ? write() : sleep(lag).then(write);
     }
-    return json({ status: "success", data: { text: drafts[thread[1]] ?? "" } });
+    const text = stored()[id] ?? "";
+    const answer = () => json({ status: "success", data: { text } });
+    if (DRAFT_READ_LAG_MS === 0) return answer();
+    return sleep(DRAFT_READ_LAG_MS).then(answer);
   }
   if (thread !== null && method === "GET") {
     const [, id, rest] = thread as unknown as [string, ThreadId, string?];
@@ -862,6 +884,7 @@ queryClient.setQueryData(projectKeys.lists(userId), page([project]));
 queryClient.setQueryData(settingsContextQueryOptions(userId).queryKey, {
   dictationAvailable: false,
   ...(PORTAL ? { portalDomain: "ondx.test" } : {}),
+  ...(QUICK_ACTIONS ? { composerQuickActions: true } : {}),
 } as never);
 // The New Thread composer opens once remembered composer choices resolve.
 queryClient.setQueryData(composerDefaultsQueryOptions(userId).queryKey, {
