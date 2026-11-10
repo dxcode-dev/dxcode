@@ -1,42 +1,22 @@
 import type { ClaudePlanData, ConnectionData } from "@dx/api";
 import {
-  type ClaudePlanWindow,
   claudePlanBlockedUntil,
   claudePlanExtraUsage,
   claudePlanExtraUsageOffReason,
   claudePlanWindowFamily,
-  claudePlanWindowName,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useNowMinute } from "../../../shared/hooks/use-clock.js";
+import { claudePlanWhen } from "../../../shared/ui/claude-plan-when.js";
+import { ClaudePlanWindows } from "../../../shared/ui/claude-plan-windows.js";
 import {
   apiMessage,
   connectionMutationOptions,
 } from "./model-routing-mutations.js";
 import { claudePlanRefreshQueryOptions } from "./model-routing-queries.js";
-
-const time = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-});
-const dayAndTime = new Intl.DateTimeFormat(undefined, {
-  weekday: "short",
-  month: "short",
-  day: "numeric",
-  hour: "numeric",
-  minute: "2-digit",
-});
-
-/** A time today shows only the clock; any other day names the day too. */
-const when = (seconds: number, now: Date) => {
-  const date = new Date(seconds * 1000);
-  return date.toDateString() === now.toDateString()
-    ? time.format(date)
-    : dayAndTime.format(date);
-};
 
 const EXTRA_USAGE_OPTIONS = [
   {
@@ -52,41 +32,6 @@ const EXTRA_USAGE_OPTIONS = [
       "Keep Claude Code working on paid extra usage from your Claude account.",
   },
 ] as const;
-
-const level = (utilization: number) =>
-  utilization >= 1 ? "full" : utilization >= 0.8 ? "high" : undefined;
-
-const WindowRow = ({
-  window,
-  now,
-}: {
-  readonly window: ClaudePlanWindow;
-  readonly now: Date;
-}) => {
-  const name = claudePlanWindowName(window.id);
-  // A window past its reset has started over; its last reading is stale.
-  const reset = window.resetsAt * 1000 <= now.getTime();
-  const percent = Math.round(window.utilization * 100);
-  return (
-    <li className="claude-plan-window">
-      <span className="claude-plan-window-name">{name}</span>
-      {/* The percent beside it carries the value for assistive tech. */}
-      <span
-        className="claude-plan-meter"
-        aria-hidden="true"
-        data-level={reset ? undefined : level(window.utilization)}
-      >
-        <span style={{ width: `${reset ? 0 : Math.min(percent, 100)}%` }} />
-      </span>
-      <span className="claude-plan-window-percent">
-        {reset ? "–" : `${percent}%`}
-      </span>
-      <span className="claude-plan-window-reset">
-        {reset ? "Reset" : "Resets"} {when(window.resetsAt, now)}
-      </span>
-    </li>
-  );
-};
 
 const EXTRA_USAGE_LABELS = {
   "in-use": "In use",
@@ -156,7 +101,7 @@ export const ClaudePlanPanel = ({
         <div className="claude-plan-heading">
           <h3 id={`${name}-usage`}>Plan Usage</h3>
           {usage === undefined ? null : (
-            <span>As of {when(usage.observedAt, now)}</span>
+            <span>As of {claudePlanWhen(usage.observedAt, now)}</span>
           )}
           <button
             type="button"
@@ -184,30 +129,26 @@ export const ClaudePlanPanel = ({
               : "Limits show after Claude Code's first run."}
           </p>
         ) : (
-          <ul className="claude-plan-windows">
-            {usage.windows.map((window) => (
-              <WindowRow key={window.id} window={window} now={now} />
-            ))}
-          </ul>
+          <ClaudePlanWindows windows={usage.windows} now={now} />
         )}
         {extraUsage === undefined ? null : (
           <p className="claude-plan-note">
             Extra usage on your Claude account: {EXTRA_USAGE_LABELS[extraUsage]}
             {extraUsage === "used-up" && usage?.extraUsage.resetsAt
-              ? ` until ${when(usage.extraUsage.resetsAt, now)}`
+              ? ` until ${claudePlanWhen(usage.extraUsage.resetsAt, now)}`
               : ""}
           </p>
         )}
         {blockedUntil === undefined ? null : (
           <p className="claude-plan-blocked" role="status">
-            Claude Code is paused until {when(blockedUntil, now)}.
+            Claude Code is paused until {claudePlanWhen(blockedUntil, now)}.
           </p>
         )}
         {familyBlockedUntil === undefined || family === undefined ? null : (
           <p className="claude-plan-blocked" role="status">
             Claude Code on {family[0]?.toUpperCase()}
             {family.slice(1)} models is paused until{" "}
-            {when(familyBlockedUntil, now)}.
+            {claudePlanWhen(familyBlockedUntil, now)}.
           </p>
         )}
       </section>

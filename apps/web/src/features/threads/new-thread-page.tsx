@@ -23,7 +23,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -61,10 +61,11 @@ import { settingsContextQueryOptions } from "../settings/settings-context-querie
 import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { attachmentsUploading } from "./image-attachments.js";
+import { InsertCurrentThreadButton } from "./insert-current-thread.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
-import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { useDraftImages } from "./new-thread-draft-images.js";
 import { getBrowserNewThreadDraftStore } from "./new-thread-draft-store.js";
+import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { submitNewThread } from "./new-thread-submission.js";
 import { NewThreadToasts } from "./new-thread-toasts.js";
 import { createThreadMutationOptions } from "./thread-mutations.js";
@@ -216,10 +217,26 @@ const useNewThreadDraft = (
   };
 };
 
-function NewThreadModalHeader() {
+/** Close, and over an open Thread, Insert Current Thread. */
+function NewThreadModalHeader(
+  props: Omit<
+    React.ComponentProps<typeof InsertCurrentThreadButton>,
+    "threadId"
+  >,
+) {
+  // The Thread open behind the dialog, if any: its URL can go in the prompt.
+  const threadId = useRouterState({
+    select: (state) =>
+      state.matches
+        .map(({ params }) => (params as { threadId?: string }).threadId)
+        .find((id) => id !== undefined),
+  });
   return (
     <ModalSurfaceHeader>
       <ModalSurfaceClose />
+      {threadId === undefined ? null : (
+        <InsertCurrentThreadButton threadId={threadId} {...props} />
+      )}
     </ModalSurfaceHeader>
   );
 }
@@ -614,7 +631,12 @@ function ScopedNewThreadModal({
         initialFocus={textareaRef}
         finalFocus={finalFocus}
       >
-        <NewThreadModalHeader />
+        <NewThreadModalHeader
+          prompt={prompt}
+          textareaRef={textareaRef}
+          disabled={submitting}
+          onPromptChange={draftStore.setText}
+        />
         <NewThreadComposer
           prompt={prompt}
           images={images}

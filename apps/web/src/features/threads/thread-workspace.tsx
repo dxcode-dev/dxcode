@@ -115,6 +115,7 @@ import {
   type ThreadSessionRegistry,
 } from "./thread-session-registry.js";
 import type { TranscriptFocus } from "./thread-transcript.js";
+import { ToolMediaSourceContext } from "./tool-output-media-model.js";
 import { createTranscriptAccess } from "./transcript-access.js";
 import {
   absolutePathFor,
@@ -1177,30 +1178,36 @@ function ThreadSessionContent({
     onWorkspaceStatusChange: setLiveWorkspaceStatus,
     openFile: fileTabs.openFile,
   });
+  // An image a tool returned is an attachment of the Thread's conversation,
+  // which its agent URL serves to everyone who can read the Thread.
+  const toolMediaSource = (attachmentId: string) =>
+    `${thread.agentUrl}/attachments/${encodeURIComponent(attachmentId)}`;
   const agent = (active: boolean) => (
-    <ThreadAgentPanel
-      {...retainedImageProps}
-      source={agentSource}
-      onOpenModelRouting={archived ? undefined : openModelRouting}
-      archived={archived}
-      showArchivedNotice={archived}
-      projectDeleted={thread.projectDeleted === true}
-      dictationAvailable={dictationAvailable}
-      active={active}
-      transcriptAccess={transcriptAccess}
-      {...(archived ? {} : { draft })}
-      workspaceReady={thread.executionWorkspace.ready}
-      workspaceStatus={workspaceStatus}
-      composerNotice={composerNotice}
-      {...(quickActions === undefined ? {} : { quickActions })}
-      optimisticCreation={optimisticCreation}
-      onInitialSubmissionObserved={onInitialSubmissionObserved}
-      initialDispatch={thread.initialDispatch}
-      onRetryInitialDispatch={() =>
-        retryInitialThreadDispatch(queryClient, identity.id, thread.id)
-      }
-      {...sharedPanelProps}
-    />
+    <ToolMediaSourceContext value={toolMediaSource}>
+      <ThreadAgentPanel
+        {...retainedImageProps}
+        source={agentSource}
+        onOpenModelRouting={archived ? undefined : openModelRouting}
+        archived={archived}
+        showArchivedNotice={archived}
+        projectDeleted={thread.projectDeleted === true}
+        dictationAvailable={dictationAvailable}
+        active={active}
+        transcriptAccess={transcriptAccess}
+        {...(archived ? {} : { draft })}
+        workspaceReady={thread.executionWorkspace.ready}
+        workspaceStatus={workspaceStatus}
+        composerNotice={composerNotice}
+        {...(quickActions === undefined ? {} : { quickActions })}
+        optimisticCreation={optimisticCreation}
+        onInitialSubmissionObserved={onInitialSubmissionObserved}
+        initialDispatch={thread.initialDispatch}
+        onRetryInitialDispatch={() =>
+          retryInitialThreadDispatch(queryClient, identity.id, thread.id)
+        }
+        {...sharedPanelProps}
+      />
+    </ToolMediaSourceContext>
   );
   const contents: PaneContents = {
     agent,

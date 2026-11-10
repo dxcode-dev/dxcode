@@ -2445,6 +2445,21 @@ a {
   border: 0;
   background: transparent;
 }
+/* What a tool returned with an image: its text, then the image as a tile. */
+.transcript-media-output {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 4px 12px;
+  color: color-mix(in srgb, var(--foreground) 75%, transparent);
+}
+.transcript-media-output > .transcript-read-output {
+  margin: 0;
+}
+.message-image-tiles.tool-output-images {
+  justify-content: flex-start;
+  max-width: none;
+  margin: 0;
+}
 .transcript-code-preview {
   max-height: min(75vh, 360px);
   margin: 0 0 4px 12px;
@@ -8005,29 +8020,39 @@ a {
 }
 .new-thread-claude-plan {
   position: relative;
-  min-width: 0;
-  padding: 0;
-}
-.new-thread-claude-plan select {
-  height: 100%;
-  min-width: 0;
-  max-width: 280px;
-  padding: 0 26px 0 10px;
-  overflow: hidden;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-overflow: ellipsis;
+  flex: none;
+  padding: 6px 24px 6px 10px;
   white-space: nowrap;
-  appearance: none;
-  cursor: pointer;
 }
 .new-thread-claude-plan svg {
   position: absolute;
-  right: 9px;
+  right: 8px;
   pointer-events: none;
+}
+/* The native select lies over the pill, transparent: it opens the list. */
+.new-thread-claude-plan select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  appearance: none;
+  cursor: pointer;
+}
+.new-thread-claude-plan:has(select:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.new-thread-claude-plan:has(select:disabled) {
+  opacity: 0.5;
+}
+.new-thread-claude-plan:has(select:disabled) select {
+  cursor: default;
+}
+.claude-plan-limits-plan h4 small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 400;
 }
 .new-thread-project > span:last-child {
   min-width: 0;
@@ -8099,6 +8124,79 @@ a {
   margin-left: auto;
   padding-left: 16px;
   color: var(--muted-foreground);
+}
+/* A Claude Code Thread's plan limits: an info button beside the plan list. */
+.new-thread-claude-limits {
+  flex: none;
+  border-radius: 50%;
+  color: var(--muted-foreground);
+}
+.new-thread-claude-limits[data-popup-open] {
+  color: var(--foreground);
+}
+.claude-plan-limits {
+  display: grid;
+  gap: 12px;
+  width: max-content;
+  min-width: 260px;
+  max-width: min(380px, calc(100vw - 24px));
+  padding: 12px 14px;
+  color: var(--popover-foreground);
+  background: var(--popover);
+  border-radius: 10px;
+  box-shadow:
+    0 0 0 1px var(--outline),
+    0 10px 24px -6px rgb(0 0 0 / 80%),
+    0 2px 8px -2px rgb(0 0 0 / 60%);
+  outline: none;
+  font-size: 12px;
+}
+.claude-plan-limits-title {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-weight: 500;
+}
+.claude-plan-limits-auto,
+.claude-plan-limits-empty,
+.claude-plan-limits-used-up {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+.claude-plan-limits-used-up {
+  color: var(--destructive);
+}
+.claude-plan-limits-plan {
+  display: grid;
+  gap: 8px;
+}
+.claude-plan-limits-plan h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+.claude-plan-limits-plan h4 svg {
+  width: 13px;
+  height: 13px;
+}
+/* An Orb provider's logo on the Orb chip and its menu rows; a light tile
+   keeps dark logos (Freestyle) readable in dark mode. */
+img.orb-provider-logo {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  padding: 1px;
+  border-radius: 3px;
+  background: #fff;
+  object-fit: contain;
+}
+.orb-picker-provider img.orb-provider-logo {
+  width: 15px;
+  height: 15px;
 }
 .reasoning-positioner,
 .thread-context-positioner {
@@ -8900,18 +8998,22 @@ div.claude-code-mode-main {
     padding-inline: 12px;
   }
   /*
-   * Each chip keeps a compact label of what is selected. The Orb shortens
-   * fastest, then the project; a mode is one short word, but a pinned model
-   * name shortens too.
+   * Each chip keeps a compact label of what is selected. The Orb chip
+   * names only a short size beside its provider's logo, so it keeps its
+   * width up to 40% of the row and the project shortens instead. A mode is
+   * one short word, but a pinned model name shortens too.
+   * The Orb chip has its own rule: the build wraps a selector list holding
+   * :has() in :is(), which gives every chip in it :has()'s specificity.
    */
-  .new-thread-orb-size,
+  .new-thread-orb-size {
+    flex: none;
+    min-width: 0;
+    max-width: 40%;
+  }
   .new-thread-project,
   .new-thread-mode:has(.new-thread-mode-value) {
     flex: 0 1 auto;
     min-width: 0;
-  }
-  .new-thread-orb-size {
-    flex-shrink: 2;
   }
   .new-thread-mode {
     flex: none;
@@ -8924,7 +9026,7 @@ div.claude-code-mode-main {
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .new-thread-orb-size > svg,
+  /* The Orb's provider logo stays: the chip names only the size. */
   .new-thread-project > svg {
     display: none;
   }
@@ -8943,6 +9045,64 @@ div.claude-code-mode-main {
   .new-thread-dialog footer {
     gap: 6px;
   }
+  /*
+   * One row always. With Claude Code the plan list and its limits join the
+   * row, so the Orb and project chips show only their icons (their labels
+   * name them), the plan pill drops its arrow, and the gaps tighten; the
+   * model chip and plan list keep their words.
+   */
+  .new-thread-dialog footer:has(.new-thread-claude-limits) {
+    gap: 2px;
+    padding-inline: 8px;
+  }
+  .new-thread-dialog
+    footer:has(.new-thread-claude-limits)
+    :is(.new-thread-orb-size, .new-thread-project) {
+    flex: none;
+    justify-content: center;
+    width: 36px;
+    min-width: 36px;
+    padding: 0;
+  }
+  .new-thread-dialog
+    footer:has(.new-thread-claude-limits)
+    .new-thread-orb-size
+    > span,
+  .new-thread-dialog
+    footer:has(.new-thread-claude-limits)
+    .new-thread-project
+    > span {
+    display: none;
+  }
+  .new-thread-dialog
+    footer:has(.new-thread-claude-limits)
+    .new-thread-project
+    > svg {
+    display: block;
+  }
+  .new-thread-dialog footer:has(.new-thread-claude-limits) .new-thread-mode {
+    flex: 0 1 auto;
+    min-width: 44px;
+  }
+  .new-thread-claude-plan,
+  .new-thread-claude-limits {
+    flex: none;
+  }
+  .new-thread-claude-plan {
+    padding-right: 10px;
+  }
+  .new-thread-claude-plan > svg {
+    display: none;
+  }
+  .new-thread-claude-limits {
+    width: 24px;
+  }
+}
+/* Phones show no keycaps: there is no keyboard to press them on. */
+@media (max-width: 600px), (pointer: coarse) {
+  .new-thread-header-action .shortcut-keycaps {
+    display: none;
+  }
 }
 /* On touch, each chip takes taps 44px tall and wide. */
 @media (pointer: coarse) {
@@ -8959,6 +9119,12 @@ div.claude-code-mode-main {
     position: absolute;
     /* From the padding box: 6px past the 32px chip and its 1px border. */
     inset: -7px -1px;
+  }
+  /* The 36px icon chips beside the Claude plan list: taps 44px wide. */
+  .new-thread-dialog
+    footer:has(.new-thread-claude-limits)
+    :is(.new-thread-orb-size, .new-thread-project)::after {
+    inset: -7px -4px;
   }
 }
 

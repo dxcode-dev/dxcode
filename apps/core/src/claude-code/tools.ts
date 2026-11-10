@@ -1,4 +1,12 @@
-import { defineTool, type Sandbox, type ToolDefinition } from "@flue/runtime";
+import { Type } from "@earendil-works/pi-ai";
+import {
+  defineTool,
+  type FlueHarness,
+  type FlueLogger,
+  type Sandbox,
+  type SandboxToolFactory,
+  type ToolDefinition,
+} from "@flue/runtime";
 import * as v from "valibot";
 import { isClaudeCodeDxTool, runClaudeCodeSubagentDxCall } from "./dx-tools.js";
 import { claudeCodeRuns } from "./runs.js";
@@ -56,6 +64,14 @@ export const mirroredToolCall = (
     ? { name, arguments: input }
     : { name: CLAUDE_CODE_OTHER_TOOL, arguments: { tool: name, input } };
 
+type AgentTool = ReturnType<SandboxToolFactory>[number];
+
+/** Claude Code's Read, the mirror whose result can hold an image. */
+const READ_TOOL = "Read";
+
+const description = (name: string) =>
+  `Claude Code's ${name} tool. Claude Code runs it in the workspace.`;
+
 /** Claude Code tools that run a subagent. */
 const SUBAGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
 
@@ -86,60 +102,82 @@ const pendingSubagentDxCalls = (
       : [],
   );
 
+/**
+ * Waits for Claude's result of one call and returns it; an Agent or Task
+ * call runs its subagent's dx calls meanwhile.
+ */
+const claudeCodeResult = async (
+  threadId: string,
+  name: string,
+  context: {
+    readonly toolCallId: string;
+    readonly signal: AbortSignal | undefined;
+    readonly harness: FlueHarness;
+    readonly log: FlueLogger;
+  },
+) => {
+  const { toolCallId, signal, harness, log } = context;
+  const sandbox = harness.sandbox as Sandbox;
+  const run = await claudeCodeRuns.forToolCall(
+    threadId,
+    toolCallId,
+    sandbox,
+    signal,
+  );
+  if (run === undefined)
+    throw new Error(`Claude Code has no record of ${name} call ${toolCallId}.`);
+  try {
+    // A subagent's dx tool calls never reach a Flue segment; the Agent
+    // call that waits on the subagent runs them.
+    const answered = new Set<string>();
+    for (;;) {
+      await run.waitFor(
+        () =>
+          run.stream.toolResults.has(toolCallId) ||
+          (SUBAGENT_TOOLS.has(name) &&
+            pendingSubagentDxCalls(run, toolCallId, answered).length > 0),
+        signal,
+      );
+      if (run.stream.toolResults.has(toolCallId)) break;
+      const calls = SUBAGENT_TOOLS.has(name)
+        ? pendingSubagentDxCalls(run, toolCallId, answered)
+        : [];
+      if (calls.length === 0) break;
+      for (const call of calls) {
+        answered.add(call.id);
+        await runClaudeCodeSubagentDxCall(threadId, call, {
+          ...(signal === undefined ? {} : { signal }),
+          log,
+          harness,
+        });
+      }
+    }
+  } catch (error) {
+    // Stop while Claude runs a tool ends the CLI run, not only the wait.
+    if (signal?.aborted) await run.stop();
+    throw error;
+  }
+  const result = run.stream.toolResults.get(toolCallId);
+  if (MUTATING.has(name)) await run.syncChanges();
+  if (result === undefined)
+    throw new Error(`Claude Code ended before ${name} returned a result.`);
+  if (result.isError) throw new Error(result.text || `${name} failed.`);
+  return { run, result };
+};
+
 const definition = (threadId: string, name: string) =>
   defineTool({
     name,
-    description: `Claude Code's ${name} tool. Claude Code runs it in the workspace.`,
+    description: description(name),
     input: v.looseObject({}),
     harness: true,
     async run({ toolCallId, signal, harness, log }) {
-      const sandbox = harness.sandbox as Sandbox;
-      const run = await claudeCodeRuns.forToolCall(
-        threadId,
+      const { run, result } = await claudeCodeResult(threadId, name, {
         toolCallId,
-        sandbox,
         signal,
-      );
-      if (run === undefined)
-        throw new Error(
-          `Claude Code has no record of ${name} call ${toolCallId}.`,
-        );
-      try {
-        // A subagent's dx tool calls never reach a Flue segment; the Agent
-        // call that waits on the subagent runs them.
-        const answered = new Set<string>();
-        for (;;) {
-          await run.waitFor(
-            () =>
-              run.stream.toolResults.has(toolCallId) ||
-              (SUBAGENT_TOOLS.has(name) &&
-                pendingSubagentDxCalls(run, toolCallId, answered).length > 0),
-            signal,
-          );
-          if (run.stream.toolResults.has(toolCallId)) break;
-          const calls = SUBAGENT_TOOLS.has(name)
-            ? pendingSubagentDxCalls(run, toolCallId, answered)
-            : [];
-          if (calls.length === 0) break;
-          for (const call of calls) {
-            answered.add(call.id);
-            await runClaudeCodeSubagentDxCall(threadId, call, {
-              ...(signal === undefined ? {} : { signal }),
-              log,
-              harness,
-            });
-          }
-        }
-      } catch (error) {
-        // Stop while Claude runs a tool ends the CLI run, not only the wait.
-        if (signal?.aborted) await run.stop();
-        throw error;
-      }
-      const result = run.stream.toolResults.get(toolCallId);
-      if (MUTATING.has(name)) await run.syncChanges();
-      if (result === undefined)
-        throw new Error(`Claude Code ended before ${name} returned a result.`);
-      if (result.isError) throw new Error(result.text || `${name} failed.`);
+        harness,
+        log,
+      });
       // A subagent's call records the subagent: its report and its steps.
       if (SUBAGENT_TOOLS.has(name) && result.subagent !== undefined)
         return {
@@ -155,9 +193,49 @@ const definition = (threadId: string, name: string) =>
     },
   });
 
+/** Logs nothing: Read has no subagent calls to log. */
+const silent: FlueLogger = { info() {}, warn() {}, error() {} };
+
+/**
+ * Claude Code's Read as a sandbox tool, because only those can record an
+ * image block; Flue stores each image as an attachment of the conversation,
+ * so the transcript shows what Claude saw. Text stays one block, which Flue
+ * records as a plain string, as for the other mirrors.
+ */
+export const claudeCodeReadTool = (
+  threadId: string,
+  sandbox: Sandbox,
+): AgentTool => ({
+  name: READ_TOOL,
+  label: READ_TOOL,
+  description: description(READ_TOOL),
+  parameters: Type.Unsafe<Record<string, unknown>>({ type: "object" }),
+  async execute(toolCallId, _input, signal) {
+    const { result } = await claudeCodeResult(threadId, READ_TOOL, {
+      toolCallId,
+      signal,
+      harness: { sandbox } as FlueHarness,
+      log: silent,
+    });
+    const images = result.images ?? [];
+    const text =
+      images.length > 0 && result.text.trim() === "[image]" ? "" : result.text;
+    return {
+      content: [
+        ...(text === "" && images.length > 0
+          ? []
+          : [{ type: "text" as const, text }]),
+        ...images.map((image) => ({ type: "image" as const, ...image })),
+      ],
+      details: {},
+    };
+  },
+});
+
+/** The mirrors Flue runs as custom tools: every one but Read. */
 export const claudeCodeMirrorTools = (
   threadId: string,
 ): ReadonlyArray<ToolDefinition> =>
-  [...CLAUDE_CODE_MIRROR_TOOLS, CLAUDE_CODE_OTHER_TOOL].map(
-    (name) => definition(threadId, name) as ToolDefinition,
-  );
+  [...CLAUDE_CODE_MIRROR_TOOLS, CLAUDE_CODE_OTHER_TOOL]
+    .filter((name) => name !== READ_TOOL)
+    .map((name) => definition(threadId, name) as ToolDefinition);

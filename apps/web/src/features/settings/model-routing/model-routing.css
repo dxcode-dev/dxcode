@@ -644,49 +644,6 @@ a.model-routing-scope-content:focus-visible {
 .claude-plan-blocked {
   color: var(--destructive);
 }
-.claude-plan-windows {
-  display: grid;
-  grid-template-columns: auto minmax(80px, 1fr) 3.5em auto;
-  align-items: center;
-  gap: 8px 12px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  font-size: 12px;
-}
-.claude-plan-window {
-  display: contents;
-}
-.claude-plan-window-name {
-  color: var(--foreground);
-}
-.claude-plan-window-percent {
-  color: var(--foreground);
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-.claude-plan-window-reset {
-  color: var(--muted-foreground);
-}
-.claude-plan-meter {
-  display: block;
-  height: 6px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: color-mix(in srgb, var(--foreground) 10%, transparent);
-}
-.claude-plan-meter > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--primary);
-}
-.claude-plan-meter[data-level="high"] > span {
-  background: var(--warning, #d6a038);
-}
-.claude-plan-meter[data-level="full"] > span {
-  background: var(--destructive);
-}
 .claude-plan-option {
   display: flex;
   align-items: flex-start;
@@ -716,15 +673,6 @@ a.model-routing-scope-content:focus-visible {
 .claude-plan-choice:disabled .claude-plan-option {
   cursor: default;
   opacity: 0.5;
-}
-@media (max-width: 639px) {
-  .claude-plan-windows {
-    grid-template-columns: auto minmax(60px, 1fr) 3em;
-  }
-  .claude-plan-window-reset {
-    grid-column: 1 / -1;
-    margin-top: -6px;
-  }
 }
 .model-routing-connection-list > li.claude-plan-tabs {
   display: flex;

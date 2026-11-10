@@ -35,37 +35,60 @@ const shown = (attachments: ReadonlyArray<MessageAttachment>) =>
 const isImage = (attachment: MessageAttachment) =>
   attachmentPreviewKind(attachment.mimeType) === "image";
 
-/** A sent message's images, as square tiles above its bubble. */
-export function MessageImageTiles({
-  attachments,
+/** One image a tile shows, by a same-origin URL. */
+export interface TileImage {
+  readonly key: string;
+  readonly url: string;
+  readonly name: string;
+  readonly downloadUrl?: string;
+}
+
+/**
+ * Images as small square tiles; clicking one opens it in the full-window
+ * viewer, stepping through the rest.
+ */
+export function ImageTiles({
+  images,
+  label,
+  className,
 }: {
-  readonly attachments: ReadonlyArray<MessageAttachment>;
+  readonly images: ReadonlyArray<TileImage>;
+  readonly label: string;
+  readonly className?: string;
 }) {
   const [open, setOpen] = React.useState<number>();
-  const images = shown(attachments).filter(isImage);
   if (images.length === 0) return null;
   return (
-    <section className="message-image-tiles" aria-label="Attached images">
+    <section
+      className={
+        className === undefined
+          ? "message-image-tiles"
+          : `message-image-tiles ${className}`
+      }
+      aria-label={label}
+    >
       {images.map((image, index) => (
         <button
           type="button"
           className="message-image-tile"
           aria-label={`View ${image.name}`}
           title={image.name}
-          key={image.id}
+          key={image.key}
           onClick={() => setOpen(index)}
         >
-          <img src={image.href} alt="" loading="lazy" />
+          <img src={image.url} alt="" loading="lazy" />
         </button>
       ))}
       {open === undefined ? null : (
         <MediaViewer
           items={images.map((image) => ({
-            key: image.id,
-            url: image.href,
+            key: image.key,
+            url: image.url,
             name: image.name,
             kind: "image",
-            downloadUrl: `${image.href}?download=1`,
+            ...(image.downloadUrl === undefined
+              ? {}
+              : { downloadUrl: image.downloadUrl }),
           }))}
           index={open}
           onIndexChange={setOpen}
@@ -74,6 +97,27 @@ export function MessageImageTiles({
       )}
     </section>
   );
+}
+
+/** A sent message's images, as square tiles above its bubble. */
+export function MessageImageTiles({
+  attachments,
+}: {
+  readonly attachments: ReadonlyArray<MessageAttachment>;
+}) {
+  const images = shown(attachments).flatMap((image) =>
+    isImage(image)
+      ? [
+          {
+            key: image.id,
+            url: image.href,
+            name: image.name,
+            downloadUrl: `${image.href}?download=1`,
+          },
+        ]
+      : [],
+  );
+  return <ImageTiles images={images} label="Attached images" />;
 }
 
 function FileLink({ attachment }: { readonly attachment: ShownAttachment }) {

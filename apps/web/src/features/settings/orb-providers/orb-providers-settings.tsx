@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
-import { OrbIcon } from "../../../shared/ui/orb-icon.js";
+import { OrbProviderLogo } from "../../../shared/ui/orb-provider-logo.js";
 import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
@@ -40,16 +40,6 @@ type Run = (
   action: OrbProviderAction,
   success: string,
 ) => Promise<string | undefined>;
-
-const LOGOS = import.meta.glob<string>("./provider-logos/*.{svg,png}", {
-  eager: true,
-  query: "?url",
-  import: "default",
-});
-
-/** The provider's bundled logo URL, when dx has one. */
-const providerLogo = (id: string): string | undefined =>
-  LOGOS[`./provider-logos/${id}.svg`] ?? LOGOS[`./provider-logos/${id}.png`];
 
 /**
  * The row's action: Manage an own connection, Connect a provider nothing
@@ -87,16 +77,11 @@ function OrbProviderRow({
   readonly provider: OrbProviderData;
   readonly onOpen: (trigger: HTMLButtonElement) => void;
 }) {
-  const logo = providerLogo(provider.id);
   const action = rowAction(provider);
   return (
     <div className="orb-provider-row" data-provider={provider.id}>
       <span className="orb-provider-mark">
-        {logo === undefined ? (
-          <OrbIcon aria-hidden="true" />
-        ) : (
-          <img src={logo} alt="" width={16} height={16} />
-        )}
+        <OrbProviderLogo providerId={provider.id} />
       </span>
       <div className="orb-provider-copy">
         <strong>

@@ -11,7 +11,7 @@ import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js
 // - #1119: at 360x740 the mode menu ran 42px past the bottom of the screen,
 //   so "low" could not be chosen;
 // - #1175: the Orb and mode chips shrank to bare icons, hiding the selected
-//   Orb provider, size, and mode.
+//   Orb provider, size, and mode. The provider now shows as its logo.
 // The strip sits where the phone /new page puts it: y=282 at 390x844 and
 // y=269 at 360x740, measured on the local app.
 
@@ -187,8 +187,15 @@ describe.each(PHONES)(
         expect(label, `"${text}" shows on its chip`).toBeDefined();
         return label as HTMLElement;
       };
-      const orbLabel = visibleLabel(orb, "Cloudflare · standard-2");
+      // The provider shows as its logo beside the size (#1175 kept it named).
+      const orbLabel = visibleLabel(orb, "standard-2");
       expect(box(orbLabel).width).toBeGreaterThanOrEqual(56);
+      expect(orbLabel.scrollWidth).toBeLessThanOrEqual(orbLabel.clientWidth);
+      const orbLogo = orb.querySelector(
+        'img[data-orb-provider-logo="cloudflare"]',
+      ) as HTMLElement;
+      expect(getComputedStyle(orbLogo).display).not.toBe("none");
+      expect(box(orbLogo).width).toBeGreaterThan(0);
       const modeLabel = visibleLabel(mode, "medium");
       expect(modeLabel.scrollWidth).toBeLessThanOrEqual(modeLabel.clientWidth);
       visibleLabel(project, "qa-nt-scratch");

@@ -29,12 +29,12 @@ import { settingsInstructions } from "../agents/dx-agent-prompt.js";
 import { classifyRunFailure } from "../runtime/run-failure.js";
 import type { ExecutionEnvironmentSnapshot } from "../settings/environment-variables/execution.js";
 import { withExecutionEnvironment } from "../settings/environment-variables/sandbox.js";
-import { claudeCodeDxTools } from "./dx-tools.js";
+import { claudeCodeDxSandboxTool, claudeCodeDxTools } from "./dx-tools.js";
 import * as claudeCodeProvider from "./provider.js";
 import { createClaudeCodeProvider } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
 import { ClaudeCodeStream } from "./stream.js";
-import { claudeCodeMirrorTools } from "./tools.js";
+import { claudeCodeMirrorTools, claudeCodeReadTool } from "./tools.js";
 import { createClaudeCodeViewMediaTool } from "./view-media.js";
 import { claudeCodeAnswer } from "./workspace-run.js";
 
@@ -677,6 +677,120 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       { type: "text", text: "What color is it?" },
     ]);
     expect(await guest.filesHolding(token)).toEqual([]);
+  });
+
+  it("records the image Claude's Read returned, so the transcript can show it, and a text file's lines as text", async () => {
+    const guest = await createGuest();
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUg==", "base64").toString(
+      "base64",
+    );
+    await guest.script([
+      init(),
+      ...response("m1", [
+        {
+          id: "toolu_png",
+          name: "Read",
+          input: { file_path: `${GUEST_HOME}/workspace/repo/shot.png` },
+        },
+        {
+          id: "toolu_txt",
+          name: "Read",
+          input: { file_path: `${GUEST_HOME}/workspace/repo/notes.txt` },
+        },
+      ]),
+      // Claude Code hands an image file to the model as an image block.
+      line({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_png",
+              content: [
+                {
+                  type: "image",
+                  source: {
+                    type: "base64",
+                    media_type: "image/png",
+                    data: png,
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      }),
+      toolResult("toolu_txt", "     1\tfirst line"),
+      ...response("m2", [{ text: "Seen." }]),
+      result("Seen."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const read = claudeCodeReadTool(claude.threadId, guest.sandbox);
+    expect(
+      claudeCodeMirrorTools(claude.threadId).map(({ name }) => name),
+    ).not.toContain("Read");
+    expect(
+      await claude.answer({
+        messages: [user("Look at both files", 80)],
+        tools: [
+          ...claudeCodeMirrorTools(claude.threadId),
+          { name: read.name, description: read.description },
+        ].map(({ name, description }) => ({
+          name,
+          description: description ?? "",
+          parameters: { type: "object" } as never,
+        })),
+      }),
+    ).toMatchObject({ type: "done", reason: "toolUse" });
+    const signal = AbortSignal.timeout(10_000);
+    // Flue stores an image block as an attachment of the conversation.
+    expect((await read.execute("toolu_png", {}, signal)).content).toEqual([
+      { type: "image", data: png, mimeType: "image/png" },
+    ]);
+    // A text file stays one text block, which Flue records as a string.
+    expect((await read.execute("toolu_txt", {}, signal)).content).toEqual([
+      { type: "text", text: "     1\tfirst line" },
+    ]);
+  });
+
+  it("records the image view_media showed Claude beside its text, and still answers Claude with both", async () => {
+    const guest = await createGuest();
+    const { encode } = await import("fast-png");
+    await guest.sandbox.writeFile(
+      `${GUEST_HOME}/workspace/repo/small.png`,
+      encode({
+        width: 40,
+        height: 20,
+        channels: 3,
+        data: new Uint8Array(40 * 20 * 3).fill(200),
+      }),
+    );
+    const viewMedia = createClaudeCodeViewMediaTool({
+      deps: { githubToken: async () => undefined },
+      token: async () => "plan-token",
+    });
+    claudeCodeDxTools("thr_view_media_record", [viewMedia]);
+    const tool = claudeCodeDxSandboxTool(
+      "thr_view_media_record",
+      viewMedia,
+      guest.sandbox,
+    );
+    expect(tool.name).toBe("mcp__dx__view_media");
+    const { content } = await tool.execute(
+      "toolu_small",
+      { path: "small.png" },
+      AbortSignal.timeout(20_000),
+    );
+    const text = `${GUEST_HOME}/workspace/repo/small.png: PNG, 40×20.`;
+    expect(content).toEqual([
+      { type: "text", text },
+      { type: "image", mimeType: "image/png", data: expect.any(String) },
+    ]);
+    expect(
+      JSON.parse(guest.file(`${STATE}/mcp/results/toolu_small.json`) ?? "null"),
+    ).toEqual({ isError: false, content });
   });
 
   it("launches with a prompt too large for one command line", async () => {

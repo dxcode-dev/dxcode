@@ -1,8 +1,9 @@
-import { type Context, getCurrentTools } from "@earendil-works/pi-ai";
+import { type Context, getCurrentTools, Type } from "@earendil-works/pi-ai";
 import type {
   FlueHarness,
   FlueLogger,
   Sandbox,
+  SandboxToolFactory,
   ToolDefinition,
 } from "@flue/runtime";
 import { toJsonSchema } from "@valibot/to-json-schema";
@@ -47,14 +48,20 @@ export const showClaudeCodeToolImage = (
   toolImages.set(toolCallId, image);
 };
 
+/** The image a dx tool showed for this call, taken once. */
+const takeImage = (toolCallId: string) => {
+  const image = toolImages.get(toolCallId);
+  toolImages.delete(toolCallId);
+  return image;
+};
+
 const answer = async (
   sandbox: Sandbox,
   toolCallId: string,
   text: string,
   isError: boolean,
+  image?: { readonly data: string; readonly mimeType: string },
 ) => {
-  const image = toolImages.get(toolCallId);
-  toolImages.delete(toolCallId);
   // A sandbox write creates missing parent directories.
   await sandbox.writeFile(
     claudeCodeToolResultPath(toolCallId),
@@ -118,6 +125,7 @@ const execute = async (
       throw new Error(`${tool.name} cannot run outside dx's own tool loop.`);
     result = await tool.run({ ...context, data } as never);
   } catch (error) {
+    takeImage(context.toolCallId);
     await answer(
       sandbox,
       context.toolCallId,
@@ -130,8 +138,9 @@ const execute = async (
     ).catch(() => undefined);
     throw error;
   }
-  await answer(sandbox, context.toolCallId, resultText(result), false);
-  return result;
+  const image = takeImage(context.toolCallId);
+  await answer(sandbox, context.toolCallId, resultText(result), false, image);
+  return { result, image };
 };
 
 /**
@@ -153,6 +162,49 @@ const RERUNNABLE: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Runs a dx tool for Claude's call, as Flue reaches it. Claude waits on
+ * this call, and in a batch of only dx tools no mirror reads the run
+ * meanwhile; reading it keeps writing the run's keep-alive, so the
+ * workspace does not sleep under Claude.
+ */
+const runForClaude = async (
+  threadId: string,
+  tool: ToolDefinition,
+  context: CallContext & { readonly data: unknown },
+) => {
+  const watching = new AbortController();
+  const watched = claudeCodeRuns
+    .forToolCall(
+      threadId,
+      context.toolCallId,
+      context.harness.sandbox as Sandbox,
+      watching.signal,
+    )
+    .then((run) => run?.waitFor(() => false, watching.signal))
+    .catch(() => undefined);
+  try {
+    return await execute(tool, context.data, context);
+  } catch (error) {
+    // Stop during a batch of only dx tools must also stop Claude,
+    // which no mirror is waiting on to stop it.
+    if (context.signal?.aborted) {
+      const run = await claudeCodeRuns
+        .forToolCall(
+          threadId,
+          context.toolCallId,
+          context.harness.sandbox as Sandbox,
+        )
+        .catch(() => undefined);
+      await run?.stop();
+    }
+    throw error;
+  } finally {
+    watching.abort();
+    await watched;
+  }
+};
+
+/**
  * dx's own tools for a Claude Code Thread. Claude calls them through the
  * `dx` MCP server in the workspace; Flue runs the real tool when it reaches
  * the call, exactly as for any other model, so metering, Stop, and the
@@ -172,44 +224,49 @@ export const claudeCodeDxTools = (
         input: v.looseObject({}),
         harness: true,
         durable: RERUNNABLE.has(tool.name),
-        run: async (context: CallContext & { readonly data: unknown }) => {
-          // Claude waits on this call, and in a batch of only dx tools no
-          // mirror reads the run meanwhile; reading it keeps writing the
-          // run's keep-alive, so the workspace does not sleep under Claude.
-          const watching = new AbortController();
-          const watched = claudeCodeRuns
-            .forToolCall(
-              threadId,
-              context.toolCallId,
-              context.harness.sandbox as Sandbox,
-              watching.signal,
-            )
-            .then((run) => run?.waitFor(() => false, watching.signal))
-            .catch(() => undefined);
-          try {
-            return await execute(tool, context.data, context);
-          } catch (error) {
-            // Stop during a batch of only dx tools must also stop Claude,
-            // which no mirror is waiting on to stop it.
-            if (context.signal?.aborted) {
-              const run = await claudeCodeRuns
-                .forToolCall(
-                  threadId,
-                  context.toolCallId,
-                  context.harness.sandbox as Sandbox,
-                )
-                .catch(() => undefined);
-              await run?.stop();
-            }
-            throw error;
-          } finally {
-            watching.abort();
-            await watched;
-          }
-        },
+        run: async (context: CallContext & { readonly data: unknown }) =>
+          (await runForClaude(threadId, tool, context)).result,
       }) as ToolDefinition,
   );
 };
+
+type AgentTool = ReturnType<SandboxToolFactory>[number];
+
+/** Logs nothing; the tools that show images do not log. */
+const silent: FlueLogger = { info() {}, warn() {}, error() {} };
+
+/**
+ * A dx tool that shows Claude an image, as a sandbox tool: only those can
+ * record an image block, which Flue stores as an attachment of the
+ * conversation, so the transcript shows the image Claude saw beside the
+ * text. `claudeCodeDxTools` must list the tool too, for the MCP server.
+ */
+export const claudeCodeDxSandboxTool = (
+  threadId: string,
+  tool: ToolDefinition,
+  sandbox: Sandbox,
+): AgentTool => ({
+  name: `${CLAUDE_CODE_DX_TOOL_PREFIX}${tool.name}`,
+  label: tool.name,
+  description: tool.description,
+  parameters: Type.Unsafe<Record<string, unknown>>({ type: "object" }),
+  async execute(toolCallId, data, signal) {
+    const { result, image } = await runForClaude(threadId, tool, {
+      toolCallId,
+      data,
+      ...(signal === undefined ? {} : { signal }),
+      log: silent,
+      harness: { sandbox } as FlueHarness,
+    });
+    return {
+      content: [
+        { type: "text" as const, text: resultText(result) },
+        ...(image === undefined ? [] : [{ type: "image" as const, ...image }]),
+      ],
+      details: {},
+    };
+  },
+});
 
 /**
  * A dx tool call one of Claude's subagents made. It never reaches a Flue

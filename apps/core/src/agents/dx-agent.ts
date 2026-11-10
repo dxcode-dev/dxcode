@@ -22,13 +22,19 @@ import {
 import { createAutomationTools } from "../automations/agent-tools.js";
 import { githubToken } from "../automations/github.js";
 import { createBugReportTools } from "../bug-reports/agent-tools.js";
-import { claudeCodeDxTools } from "../claude-code/dx-tools.js";
+import {
+  claudeCodeDxSandboxTool,
+  claudeCodeDxTools,
+} from "../claude-code/dx-tools.js";
 import {
   rememberClaudeCodePrompt,
   resetClaudeCodeThreadState,
 } from "../claude-code/provider.js";
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
-import { claudeCodeMirrorTools } from "../claude-code/tools.js";
+import {
+  claudeCodeMirrorTools,
+  claudeCodeReadTool,
+} from "../claude-code/tools.js";
 import { createClaudeCodeViewMediaTool } from "../claude-code/view-media.js";
 import {
   ADDITIONAL_REPOSITORIES_SIGNAL,
@@ -327,6 +333,24 @@ const withViewMedia = (
   },
 });
 
+/**
+ * A Claude Code Thread's workspace tools plus the calls whose results can
+ * hold an image, Claude's Read and dx's view_media, which only sandbox tools
+ * can record.
+ */
+const withClaudeCodeImageTools = (
+  factory: SandboxFactory,
+  threadId: string,
+  viewMedia: ToolDefinition,
+): SandboxFactory => ({
+  ...factory,
+  tools: (sandbox, options) => [
+    ...(factory.tools?.(sandbox, options) ?? []),
+    claudeCodeReadTool(threadId, sandbox),
+    claudeCodeDxSandboxTool(threadId, viewMedia, sandbox),
+  ],
+});
+
 /** `view_media` for a Claude Code Thread, on the submission's plan route. */
 const claudeCodeViewMedia = (
   threadId: string,
@@ -524,19 +548,28 @@ export function DxAgent(props: AgentProps) {
       agentSandbox as SandboxFactory,
       settingsSkillNames,
     );
-    useSandbox(claudeCode ? sandbox : withViewMedia(sandbox, props.id));
+    const claudeViewMedia = claudeCode
+      ? claudeCodeViewMedia(props.id, promptData)
+      : undefined;
+    useSandbox(
+      claudeViewMedia === undefined
+        ? withViewMedia(sandbox, props.id)
+        : withClaudeCodeImageTools(sandbox, props.id, claudeViewMedia),
+    );
     usePluginLifecycle(props.id, plugins, skills);
     // Claude Code mode: the CLI in the workspace runs the loop and its own
     // tools; Flue records each call through a mirror of the same name. dx's
     // own tools reach Claude through the dx MCP server, except web search
     // and page reading, which Claude Code has itself.
-    if (claudeCode) {
+    if (claudeViewMedia !== undefined) {
       for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
+      // view_media runs as a sandbox tool, which can record its image; the
+      // MCP server still lists it among the dx tools.
       for (const tool of claudeCodeDxTools(props.id, [
         ...dxTools(props.id, initialData, promptData, ["search"]),
-        claudeCodeViewMedia(props.id, promptData),
+        claudeViewMedia,
       ]))
-        useTool(tool);
+        if (tool.name !== `mcp__dx__${claudeViewMedia.name}`) useTool(tool);
       // Each delivered message starts on fresh Claude Code state: nothing a
       // failed submission cached may fail it.
       useAgentStart(({ harness }) => {

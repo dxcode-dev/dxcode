@@ -93,8 +93,16 @@ export interface ClaudeCodeSubagentResult {
   readonly durationMs?: number;
 }
 
+/** An image a tool returned to Claude, as base64. */
+export interface ClaudeCodeToolImage {
+  readonly data: string;
+  readonly mimeType: string;
+}
+
 export interface ClaudeCodeToolResult {
   readonly text: string;
+  /** Images the result held; its text stands in for each with `[image]`. */
+  readonly images?: ReadonlyArray<ClaudeCodeToolImage>;
   readonly isError: boolean;
   readonly subagent?: ClaudeCodeSubagentResult;
 }
@@ -159,6 +167,21 @@ const toolResultText = (content: unknown): string => {
     .filter((part) => part !== "")
     .join("\n");
 };
+
+/** A tool result's base64 image blocks, such as Read of an image file. */
+const toolResultImages = (content: unknown): ClaudeCodeToolImage[] =>
+  Array.isArray(content)
+    ? content.flatMap((block) => {
+        const item = record(block);
+        const source = record(item?.source);
+        return item?.type === "image" &&
+          source?.type === "base64" &&
+          typeof source.data === "string" &&
+          typeof source.media_type === "string"
+          ? [{ data: source.data, mimeType: source.media_type }]
+          : [];
+      })
+    : [];
 
 const subagentResult = (
   value: unknown,
@@ -476,8 +499,10 @@ export class ClaudeCodeStream {
       const item = record(block);
       if (item?.type !== "tool_result" || typeof item.tool_use_id !== "string")
         continue;
+      const images = toolResultImages(item.content);
       this.toolResults.set(item.tool_use_id, {
         text: toolResultText(item.content),
+        ...(images.length === 0 ? {} : { images }),
         isError: item.is_error === true,
         ...(subagent === undefined ? {} : { subagent }),
       });

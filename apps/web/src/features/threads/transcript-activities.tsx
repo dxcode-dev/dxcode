@@ -20,6 +20,11 @@ import {
 import { SubagentActivity } from "./subagent-activity.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
 import { ThreadToolDetail, ThreadToolLabel } from "./thread-tool-activity.js";
+import { ToolOutputImages, useToolImages } from "./tool-output-media.js";
+import {
+  toolContentBlocks,
+  toolContentText,
+} from "./tool-output-media-model.js";
 import { presentTool } from "./tool-presentation.js";
 import {
   categoryForPart,
@@ -92,16 +97,15 @@ const outputFor = (part: ToolPart) => {
 const textualOutputFor = (part: ToolPart) => {
   if (part.state !== "output-available") return undefined;
   if (typeof part.output === "string") return part.output;
-  const content = record(part.output)?.content;
-  if (!Array.isArray(content)) return undefined;
-  const text = content.flatMap((item) => {
-    const block = record(item);
-    return block?.type === "text" && typeof block.text === "string"
-      ? [block.text]
-      : [];
-  });
-  return text.length > 0 ? text.join("\n") : undefined;
+  return toolContentText(part.output);
 };
+
+/** Whether a finished call returned an image, stored or not. */
+const returnedImage = (part: ToolPart) =>
+  part.state === "output-available" &&
+  (toolContentBlocks(part.output) ?? []).some(
+    (block) => block.type === "image",
+  );
 
 const lineRange = (part: ToolPart) => {
   const start = numberField(part.input, "startLine", "start_line", "offset");
@@ -255,11 +259,36 @@ function ToolOutput({
   readonly category: ToolCategory;
   readonly part: ToolPart;
 }) {
+  const images = useToolImages(part);
   const output =
     part.toolName === "edit_file" || part.toolName.startsWith("shell_command")
       ? (textualOutputFor(part) ?? outputFor(part))
       : outputFor(part);
   if (output === undefined) return null;
+  // What view_media saw or answered, as prose, with the image it returned.
+  if (part.toolName === "view_media" && part.state === "output-available") {
+    const text = textualOutputFor(part);
+    return (
+      <div className="transcript-media-output">
+        {text === undefined ? null : (
+          <TranscriptMarkdown>{text}</TranscriptMarkdown>
+        )}
+        <ToolOutputImages images={images} />
+      </div>
+    );
+  }
+  // Any other call that returned an image, such as Claude Code's Read of one.
+  if (returnedImage(part)) {
+    const text = textualOutputFor(part);
+    return (
+      <div className="transcript-media-output">
+        {text === undefined ? null : (
+          <pre className="transcript-read-output">{text}</pre>
+        )}
+        <ToolOutputImages images={images} />
+      </div>
+    );
+  }
   if (category === "thread")
     return <ThreadToolDetail part={part} output={output} />;
   if (category === "skill")

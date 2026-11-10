@@ -43,6 +43,7 @@ import {
 } from "../../shared/ui/mode-dial-geometry.js";
 import { ModeDialPlate } from "../../shared/ui/mode-dial-plate.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
+import { OrbProviderLogo } from "../../shared/ui/orb-provider-logo.js";
 import { playUiSound } from "../../shared/ui/ui-sounds.js";
 import {
   ClaudeCodeDialControls,
@@ -50,6 +51,7 @@ import {
   ClaudePlanPicker,
 } from "./claude-code-mode.js";
 import {
+  claudeCodeChipLabel,
   claudeCodeDial,
   claudeCodeEffortLabel,
 } from "./claude-code-mode-options.js";
@@ -446,7 +448,7 @@ function ModePicker({
         )}
         {claudeCode ? (
           <span className="new-thread-mode-value">
-            Claude Code · {modelName(model)} · {claudeCodeEffortLabel(effort)}
+            {claudeCodeChipLabel(modelName(model), effort)}
           </span>
         ) : model === undefined ? (
           <>
@@ -862,7 +864,6 @@ const formatOrbResources = ({ resources }: RunnerProfile) =>
 function OrbPicker({
   groups,
   selectedProfile,
-  selectedProviderName,
   selectedName,
   disabled,
   isProfileAllowed,
@@ -870,8 +871,6 @@ function OrbPicker({
 }: {
   readonly groups: ReturnType<typeof runnerProfileGroups> | undefined;
   readonly selectedProfile: RunnerProfile;
-  /** The selected size's provider as the picker names it. */
-  readonly selectedProviderName: string | undefined;
   readonly selectedName: string;
   readonly disabled: boolean;
   readonly isProfileAllowed: (profile: RunnerProfile) => boolean;
@@ -892,14 +891,14 @@ function OrbPicker({
         {groups === undefined ? (
           <LoaderCircle className="spin" aria-hidden="true" />
         ) : (
-          <OrbIcon aria-hidden="true" />
+          // The provider shows as its logo; the menu and label name it.
+          <OrbProviderLogo
+            providerId={selectedProfile.adapter}
+            className="orb-provider-logo"
+          />
         )}
         <span>
-          {groups === undefined
-            ? "Loading Orbs…"
-            : selectedProviderName === undefined
-              ? selectedProfile.label
-              : `${selectedProviderName} · ${selectedProfile.label}`}
+          {groups === undefined ? "Loading Orbs…" : selectedProfile.label}
         </span>
       </Menu.Trigger>
       <Menu.Portal>
@@ -922,7 +921,10 @@ function OrbPicker({
                       pauseResumeNote(group.provider?.pauseResume ?? null)
                     }
                   >
-                    <OrbIcon aria-hidden="true" />
+                    <OrbProviderLogo
+                      providerId={group.adapter}
+                      className="orb-provider-logo"
+                    />
                     <span className="orb-picker-provider-name">
                       {group.orb?.displayName ??
                         (group.provider === undefined
@@ -1186,7 +1188,6 @@ export function NewThreadConfigurationStrip({
         <OrbPicker
           groups={runnerGroups}
           selectedProfile={selectedRunnerProfile}
-          selectedProviderName={selectedProviderName}
           selectedName={selectedOrbName}
           disabled={locked || onRunnerProfileChange === undefined}
           isProfileAllowed={(runnerProfile) =>

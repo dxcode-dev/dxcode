@@ -173,7 +173,7 @@ describe("new thread configuration strip accessibility", () => {
     );
   });
 
-  it("falls back to the provider's display name from a Core without short names", () => {
+  it("names the provider in the label from a Core without short names, and shows its logo on the chip", () => {
     const markup = renderStrip({
       runnerProfiles: [
         {
@@ -206,7 +206,9 @@ describe("new thread configuration strip accessibility", () => {
     expect(markup).toContain(
       'aria-label="Orb: Cloudflare Containers standard-2"',
     );
-    expect(markup).toContain(">Cloudflare Containers · standard-2<");
+    expect(markup).toContain('data-orb-provider-logo="cloudflare"');
+    expect(markup).toContain(">standard-2<");
+    expect(markup).not.toContain("Cloudflare Containers ·");
   });
 
   it("names whose key the Orb runs on when it is not the deployment's", () => {
@@ -765,7 +767,7 @@ describe("new thread Orb picker", () => {
     };
   };
 
-  it("shows the provider's short name and the size on a compact trigger", async () => {
+  it("shows the provider's logo and the size on a compact trigger", async () => {
     const picker = await mountPicker([
       {
         providerId: "cloudflare",
@@ -776,7 +778,12 @@ describe("new thread Orb picker", () => {
       },
     ]);
     try {
-      expect(picker.trigger?.textContent).toBe("Cloudflare · standard-1");
+      expect(picker.trigger?.textContent).toBe("standard-1");
+      expect(
+        picker.trigger?.querySelector(
+          'img[data-orb-provider-logo="cloudflare"]',
+        ),
+      ).not.toBeNull();
       expect(picker.trigger?.getAttribute("aria-haspopup")).toBe("menu");
       expect(picker.trigger?.getAttribute("aria-label")).toBe(
         "Orb: Cloudflare standard-1",
