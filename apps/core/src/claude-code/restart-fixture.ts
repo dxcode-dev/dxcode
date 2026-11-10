@@ -1,6 +1,6 @@
 /**
  * One process of the restart test in claude-code.test.ts: a Flue runtime over
- * a SQLite file whose agent has Claude Code's `mcp__dx__wait_for_threads`.
+ * a SQLite file whose agent has Claude Code's `wait_for_threads`.
  * `start` sends a message whose answer calls the tool and prints the receipt
  * once the call runs, which never finishes; the test kills the process there,
  * as a Durable Object restart ends an attempt. `resume` starts a runtime over
@@ -69,7 +69,7 @@ faux.setResponses(
         fauxAssistantMessage(
           [
             fauxToolCall(
-              "mcp__dx__wait_for_threads",
+              "wait_for_threads",
               { threads: ["thr_child"] },
               { id: "toolu_wait" },
             ),

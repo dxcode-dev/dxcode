@@ -4,11 +4,15 @@ import * as React from "react";
 export interface ThreadArchiveController {
   readonly pendingArchived?: boolean;
   readonly pendingThreadId?: ThreadId;
-  /** `includeChildren` also archives or restores the Thread's children. */
+  /**
+   * `includeChildren` also archives or restores the Thread's children.
+   * `reason: "ship"` archives it from its Ship outcome: its work shipped.
+   */
   readonly setArchived: (
     threadId: ThreadId,
     archived: boolean,
     includeChildren?: boolean,
+    reason?: "ship",
   ) => void;
   /** Archives these Threads together, with one notice and one Undo. */
   readonly archiveMany?: (threadIds: ReadonlyArray<ThreadId>) => void;

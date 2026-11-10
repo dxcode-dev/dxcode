@@ -21,9 +21,16 @@ import {
   createFlueClient,
   type FlueClient,
 } from "@flue/sdk";
-import { type QueryClient, QueryObserver } from "@tanstack/react-query";
+import {
+  hashKey,
+  type QueryClient,
+  QueryObserver,
+} from "@tanstack/react-query";
 import { Option, Schema } from "effect";
-import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
+import {
+  absentHistoryResponse,
+  sameOriginFetch,
+} from "../../shared/same-origin-fetch.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
 import { existingAgentUid } from "./existing-agent-uid.js";
@@ -76,6 +83,44 @@ const agentStartFetch =
       await response.body?.cancel().catch(() => undefined);
       await new Promise((resolve) => setTimeout(resolve, AGENT_START_POLL_MS));
     }
+  };
+
+/**
+ * Whether the agent's conversation is known not to exist yet: its history
+ * answered 404 while no first message was on its way, as a new Space's does
+ * until someone writes in it. Flue's session then re-reads history on a
+ * backoff; those reads answer here without the network until a send from
+ * this page, or `recheck` when the Thread changed, lets one through.
+ */
+export interface AbsentConversation {
+  absent: boolean;
+}
+
+/** `fetch` that keeps a known-absent conversation's history reads local. */
+const absentConversationFetch =
+  (
+    conversation: AbsentConversation,
+    awaitingAgent: () => boolean,
+    inner: typeof fetch,
+  ): typeof fetch =>
+  async (input, init) => {
+    const method = (
+      init?.method ?? (input instanceof Request ? input.method : "GET")
+    ).toUpperCase();
+    const url = new URL(
+      input instanceof Request ? input.url : String(input),
+      window.location.href,
+    );
+    if (method !== "GET" || url.searchParams.get("view") !== "history") {
+      const response = await inner(input, init);
+      if (method === "POST" && response.ok) conversation.absent = false;
+      return response;
+    }
+    if (conversation.absent && !awaitingAgent()) return absentHistoryResponse();
+    const response = await inner(input, init);
+    if (response.status === 404) conversation.absent = !awaitingAgent();
+    else if (response.ok) conversation.absent = false;
+    return response;
   };
 
 const AdmissionLookupSchema = Schema.Struct({
@@ -164,6 +209,34 @@ const observedSubmission = (
   });
 
 /**
+ * A Thread's Flue client that also names the message Flue recorded for a
+ * submission. Flue's session shows a message sent from this page under the
+ * browser's local id (`local:1`) for good; comments and links need Flue's.
+ */
+export type ThreadAgentClient = FlueClient & {
+  readonly admittedMessageId: (submissionId: string) => string | undefined;
+  /**
+   * Opens the live stream again from where it is, without reading history
+   * again. Flue's stream loop hears new messages only on the agent instance
+   * that wrote them; a connection held across the agent's Durable Object
+   * starting again stays open but answers only at its 30 s idle tick.
+   */
+  readonly followAgain: () => void;
+  /**
+   * Where the live stream is, changing with everything it delivers;
+   * undefined while it is not live.
+   */
+  readonly streamPosition: () => string | undefined;
+};
+
+/**
+ * How long a live stream gets to deliver what the realtime hub announced
+ * before it counts as deaf and opens again. The hub is usually a moment
+ * ahead of a healthy stream; this keeps a deaf one's updates within ~3 s.
+ */
+export const QUIET_STREAM_MS = 1_500;
+
+/**
  * Sends create the agent with `initialData` until its instance is known to
  * exist. A send whose outcome is unknown asks Flue whether it admitted the
  * key before trying again, so a lost 202 never becomes a failed send. The
@@ -176,10 +249,15 @@ export const createThreadAgentClient = (
   instanceObserved: () => boolean = () => false,
   /** The Thread's first message has not reached its agent yet. */
   awaitingAgent: () => boolean = () => false,
-): FlueClient => {
+  conversation: AbsentConversation = { absent: false },
+): ThreadAgentClient => {
   const client = createFlueClient({
     url: agentUrl,
-    fetch: agentStartFetch(awaitingAgent),
+    fetch: absentConversationFetch(
+      conversation,
+      awaitingAgent,
+      agentStartFetch(awaitingAgent),
+    ),
   });
   const send = client.send.bind(client);
   const observe = client.observe;
@@ -266,7 +344,32 @@ export const createThreadAgentClient = (
       received.abort();
     }
   };
-  return client;
+  // The session reads the same observation, so a message it shows as
+  // admitted is already in this conversation.
+  const admittedMessageId = (submissionId: string) =>
+    observation
+      ?.getSnapshot()
+      .conversation?.messages.findLast(
+        (message) =>
+          message.role === "user" && message.submissionId === submissionId,
+      )?.id;
+  const followAgain = () => {
+    const observed = observation?.getSnapshot();
+    if (observed?.phase !== "live" || observed.loadingOlder === true) return;
+    observation?.stop();
+    observation?.start();
+  };
+  const streamPosition = () => {
+    const observed = observation?.getSnapshot();
+    return observed?.phase === "live"
+      ? `${observed.incarnation ?? ""}:${observed.offset ?? ""}`
+      : undefined;
+  };
+  return Object.assign(client, {
+    admittedMessageId,
+    followAgain,
+    streamPosition,
+  });
 };
 
 export const isAuthorizationError = (error: unknown): boolean =>
@@ -285,8 +388,9 @@ export interface RetainedThread {
   readonly id: ThreadId;
   /** Set from the Thread detail, which loads alongside the history. */
   agentInitialization?: ThreadAgentInitializationData;
-  readonly client: FlueClient;
+  readonly client: ThreadAgentClient;
   readonly session: FlueAgentSession;
+  readonly conversation: AbsentConversation;
   readonly dictation: DictationRecoverySession;
   readonly presentation: Map<string, unknown>;
   readonly presentationListeners: Set<() => void>;
@@ -345,6 +449,12 @@ export class ThreadSessionRegistry {
   private creationSnapshot: ReadonlyArray<OptimisticThreadCreation> = [];
   private active: { entry: RetainedThread; generation: number } | undefined;
   private generation = 0;
+  /**
+   * Threads shown beside the page's own, such as a Space's child next to
+   * the Space's chat: live alongside the active Thread, by how many views
+   * show each.
+   */
+  private readonly alongside = new Map<RetainedThread, number>();
 
   constructor(
     private readonly queryClient: QueryClient,
@@ -415,6 +525,7 @@ export class ThreadSessionRegistry {
   prepare(id: ThreadId, agentUrl: string = threadAgentUrl(id)): RetainedThread {
     const existing = this.entries.get(id);
     if (existing !== undefined) return existing;
+    const conversation: AbsentConversation = { absent: false };
     const client = createThreadAgentClient(
       agentUrl,
       () => entry.agentInitialization,
@@ -424,10 +535,12 @@ export class ThreadSessionRegistry {
         this.queryClient.getQueryData<ThreadDetailData>(
           threadKeys.detail(this.userId, id),
         )?.initialDispatch?.state === "pending",
+      conversation,
     );
     const entry: RetainedThread = {
       id,
       client,
+      conversation,
       session: createFlueAgentSession({
         client,
         live: "sse",
@@ -442,11 +555,49 @@ export class ThreadSessionRegistry {
     return entry;
   }
 
-  activate(entry: RetainedThread): () => void {
+  /**
+   * Makes the Thread the page's live one, stopping the one before it, or,
+   * with `alongside`, keeps it live beside the page's own Thread, as an
+   * embedded Thread is, until its view lets go.
+   */
+  activate(
+    entry: RetainedThread,
+    { alongside = false }: { readonly alongside?: boolean } = {},
+  ): () => void {
     if (entry.disposed) return () => {};
-    this.active?.entry.session.stop();
+    this.retain(entry);
+    if (alongside) {
+      const views = this.alongside.get(entry) ?? 0;
+      this.alongside.set(entry, views + 1);
+      entry.session.start();
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const left = (this.alongside.get(entry) ?? 1) - 1;
+        if (left > 0) {
+          this.alongside.set(entry, left);
+          return;
+        }
+        this.alongside.delete(entry);
+        if (this.active?.entry !== entry) entry.session.stop();
+      };
+    }
+    const previous = this.active?.entry;
+    if (previous !== undefined && !this.alongside.has(previous))
+      previous.session.stop();
     const generation = ++this.generation;
     this.active = { entry, generation };
+    entry.session.start();
+    return () => {
+      if (this.active?.generation !== generation) return;
+      if (!this.alongside.has(entry)) entry.session.stop();
+      this.active = undefined;
+    };
+  }
+
+  /** Keeps the Thread among the eight most recent, watching its access. */
+  private retain(entry: RetainedThread): void {
     const retained = this.entries.has(entry.id);
     this.entries.delete(entry.id);
     this.entries.set(entry.id, entry);
@@ -474,32 +625,71 @@ export class ThreadSessionRegistry {
             revoke(result.error);
         });
       };
+      let detail = thread.getCurrentResult().data;
       const releaseThread = thread.subscribe((result) => {
         watchProject(result.data?.projectId);
         revoke(result.error);
+        // The Thread changed while its conversation was absent, as when
+        // someone writes a new Space's first message: read it once more.
+        // Its first load comes with the history read it would repeat.
+        const previous = detail;
+        detail = result.data;
+        if (
+          previous === undefined ||
+          result.data === previous ||
+          !entry.conversation.absent
+        )
+          return;
+        entry.conversation.absent = false;
+        entry.session.refresh();
       });
       watchProject(thread.getCurrentResult().data?.projectId);
+      // The realtime hub says on time that the Thread changed, and the
+      // Thread's detail is read again. A live stream that delivers nothing
+      // within QUIET_STREAM_MS may have stopped hearing new messages: it
+      // opens again, so they show as on a new page. One that delivers stays.
+      const detailHash = hashKey(threadKeys.detail(this.userId, entry.id));
+      const shown = () =>
+        !entry.disposed &&
+        (this.active?.entry === entry || this.alongside.has(entry));
+      let quietCheck: ReturnType<typeof setTimeout> | undefined;
+      const releaseInvalidation = this.queryClient
+        .getQueryCache()
+        .subscribe((event) => {
+          if (
+            event.type !== "updated" ||
+            event.action.type !== "invalidate" ||
+            event.query.queryHash !== detailHash ||
+            quietCheck !== undefined ||
+            !shown()
+          )
+            return;
+          const position = entry.client.streamPosition();
+          if (position === undefined) return;
+          quietCheck = setTimeout(() => {
+            quietCheck = undefined;
+            if (shown() && entry.client.streamPosition() === position)
+              entry.client.followAgain();
+          }, QUIET_STREAM_MS);
+        });
       this.releases.set(entry.id, () => {
         releaseThread();
         releaseProject?.();
+        releaseInvalidation();
+        clearTimeout(quietCheck);
       });
     }
     while (this.entries.size > 8) {
       const oldest = this.entries.keys().next().value;
       if (oldest !== undefined) this.remove(oldest);
     }
-    entry.session.start();
-    return () => {
-      if (this.active?.generation !== generation) return;
-      entry.session.stop();
-      this.active = undefined;
-    };
   }
 
   remove(id: ThreadId): void {
     const entry = this.entries.get(id);
     if (entry === undefined) return;
     if (this.active?.entry === entry) this.active = undefined;
+    this.alongside.delete(entry);
     entry.disposed = true;
     this.entries.delete(id);
     this.releases.get(id)?.();

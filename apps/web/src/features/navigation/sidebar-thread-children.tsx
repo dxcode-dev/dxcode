@@ -85,15 +85,9 @@ export function SidebarChildThreadRows({
   const children = (pages?.flatMap((page) => page.items) ?? loaded).filter(
     (thread) => listed?.has(thread.id) !== true,
   );
-  // The root counts its whole family; each loaded child counts the Threads
-  // below it, so the rest are children still to page.
   const hasMore =
     pages === undefined
-      ? (parent.childCount ?? 0) >
-        loaded.reduce(
-          (total, thread) => total + 1 + (thread.startedCount ?? 0),
-          0,
-        )
+      ? (parent.childCount ?? 0) > loaded.length
       : paged.hasNextPage;
   const loadMore = () => {
     if (pages !== undefined) return void paged.fetchNextPage();

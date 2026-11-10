@@ -10,8 +10,8 @@ import {
 } from "../orb-disk/guard.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import { environmentMaskerOf } from "../settings/environment-variables/sandbox.js";
-import { CLAUDE_CODE_MCP_SERVER } from "./mcp-server.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
+import { CLAUDE_CODE_TOOL_BRIDGE } from "./tool-bridge.js";
 
 /**
  * One attempt at answering one user turn with the Claude Code CLI in the
@@ -217,9 +217,20 @@ export interface ClaudeCodeLaunch {
    */
   readonly personalInstructions?: string;
   readonly input: ReadonlyArray<ClaudeCodeInputBlock>;
+  /**
+   * The input when no session is resumed: the conversation so far, then the
+   * turn's input, so a new session knows what came before. Absent for a
+   * Thread's first turn.
+   */
+  readonly freshInput?: ReadonlyArray<ClaudeCodeInputBlock>;
   readonly token: string;
   /** dx's own tools, served to Claude by the \`dx\` MCP server. */
   readonly tools: ReadonlyArray<ClaudeCodeDxTool>;
+  /**
+   * Claude's own tools to offer (\`--tools\`), or all of them when absent.
+   * A Thread on its Claude host has no workspace for Bash or the file tools.
+   */
+  readonly builtInTools?: ReadonlyArray<string>;
 }
 
 export const claudeCodeRunKey = (value: string) =>
@@ -327,6 +338,9 @@ const launchScript = (
     CLAUDE_CODE_DISALLOWED_TOOLS.join(","),
     "--settings",
     CLI_SETTINGS,
+    ...(launch.builtInTools === undefined
+      ? []
+      : ["--tools", launch.builtInTools.join(",")]),
   ]
     .map(quote)
     .join(" ");
@@ -394,8 +408,34 @@ if ! current "$CLAUDE"; then
     exit 3
   fi
 fi
+# The session pointer names the session to resume, or a session and one of
+# its messages: an edit forks that session at the message, so the
+# conversation up to it reaches Claude as it was sent before and its prompt
+# cache still holds. A fork whose session file is gone starts a new session.
+mkdir -p "$S/turns"
 RESUME=""
-if [ -s "$S/session" ]; then RESUME="--resume $(cat "$S/session")"; : > "$D/resumed"; fi
+SESSION_PATH=new
+SID=""
+AT=""
+if [ -s "$S/session" ]; then read -r SID AT < "$S/session" || true; fi
+if [ -n "$SID" ] && [ -n "$AT" ]; then
+  if compgen -G "$HOME/.claude/projects/*/$SID.jsonl" > /dev/null; then
+    RESUME="--resume $SID --resume-session-at $AT --fork-session"
+    SESSION_PATH=fork
+  else
+    : > "$S/session"
+    SESSION_PATH=fork-session-gone
+  fi
+elif [ -n "$SID" ]; then
+  RESUME="--resume $SID"
+  SESSION_PATH=resume
+fi
+if [ -n "$RESUME" ]; then : > "$D/resumed"
+# A new session gets the conversation so far ahead of the turn's input.
+elif [ -f "$D/input-fresh.jsonl" ]; then
+  mv -f "$D/input-fresh.jsonl" "$D/input.jsonl"
+  [ "$SESSION_PATH" = new ] && SESSION_PATH=seeded
+fi
 # The person's instructions from dx Settings are Claude Code's user-level
 # instructions; it reads the repository's AGENTS.md or CLAUDE.md itself.
 if [ -f "$D/user-instructions.md" ]; then
@@ -434,6 +474,7 @@ TOKEN=${quote(tokenFile)}
 setsid nohup bash "$D/runner.sh" "$CLAUDE" "$TOKEN" ${args} $RESUME > /dev/null 2>&1 < /dev/null &
 echo $! > "$D/pid"
 launched=1
+echo "session=$SESSION_PATH"
 echo started`;
 };
 
@@ -585,25 +626,27 @@ if [ "$HOME" != "$GUEST" ] && unshare --user --map-root-user --mount true 2>/dev
   fi
   SEEN="$GUEST\${D#"$HOME"}"
 fi
-# dx's own tools, through the dx MCP server. Inside the local runtime's
-# namespace the developer's home is hidden, so its Python is skipped.
-MCP=()
+# dx's own tools, through the dx tool bridge (tool-bridge.ts): it runs
+# beside the CLI, outside the local runtime's namespace, so it reads the
+# run's files by their real paths.
 PYTHON=""
 for candidate in /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 || true)"; do
   [ -n "$candidate" ] || continue
-  if [ "$SEEN" != "$D" ]; then case "$candidate" in "$GUEST"/*) continue ;; esac; fi
   if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
 done
+BRIDGE=""
+NO_PREFIX=""
 if [ -s "$D/dx-tools.json" ] && [ -n "$PYTHON" ]; then
-  STATE="\${SEEN%/runs/*}"
-  printf '{"mcpServers":{"dx":{"type":"stdio","command":"%s","args":["-I","%s/dx-mcp.py","%s/dx-tools.json","%s/mcp"],"alwaysLoad":true}}}' \\
-    "$PYTHON" "$SEEN" "$SEEN" "$STATE" > "$D/mcp.json"
-  MCP=(--mcp-config "$SEEN/mcp.json")
+  rm -f "$D/control"
+  mkfifo -m 600 "$D/control"
+  BRIDGE=1
+  # dx's tools keep the names dx's own loop uses: no mcp__dx__ prefix.
+  NO_PREFIX=1
 fi
 if [ "$SEEN" != "$D" ]; then
   PROMPT="$SEEN/prompt.txt"
   run() {
-    CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 unshare --user --map-root-user --mount bash -c '
+    CLAUDE_AGENT_SDK_MCP_NO_PREFIX="$NO_PREFIX" CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 unshare --user --map-root-user --mount bash -c '
       bin="$HOME/.local/state/dx-claude-code/bin" &&
         mkdir -p "$bin" &&
         { [ -f "$bin/claude" ] || : > "$bin/claude"; } &&
@@ -615,7 +658,7 @@ if [ "$SEEN" != "$D" ]; then
     ' "$(readlink -f "$CLAUDE")" "$@" --append-system-prompt-file "$PROMPT"
   }
 else
-  run() { CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 "$CLAUDE" "$@" --append-system-prompt-file "$D/prompt.txt"; }
+  run() { CLAUDE_AGENT_SDK_MCP_NO_PREFIX="$NO_PREFIX" CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR=3 "$CLAUDE" "$@" --append-system-prompt-file "$D/prompt.txt"; }
 fi
 # mawk, the sandbox image's awk, reads a pipe in large blocks unless
 # interactive; Claude's output would then arrive only when the run exits.
@@ -623,13 +666,89 @@ fi
 # line can fail the version command with SIGPIPE and miss mawk.
 AWK=(awk)
 case "$(awk -W version 2>&1)" in *mawk*) AWK=(awk -W interactive) ;; esac
-run "$@" "\${MCP[@]}" < "$D/input.jsonl" 2> "$D/stderr.log" |
+chunks() {
   "\${AWK[@]}" -v dir="$D" -v end='${CHUNK_END_LINE}' 'BEGIN { n = 0; size = 0; f = sprintf("%s/c%06d", dir, n) }
     { print > f; fflush(f); size += length($0) + 1
       if (size >= ${CHUNK_BYTES}) { print end > f; close(f); n++; size = 0; f = sprintf("%s/c%06d", dir, n) } }' 3<&-
+}
+if [ -n "$BRIDGE" ]; then
+  # Claude reads its input and dx's answers from the control pipe, which
+  # the bridge writes; the bridge passes Claude's own output on.
+  run "$@" < "$D/control" 2> "$D/stderr.log" |
+    "$PYTHON" -I "$D/dx-bridge.py" "$D/dx-tools.json" "\${D%/runs/*}/mcp" "$D/input.jsonl" 4> "$D/control" 3<&- |
+    chunks
+else
+  run "$@" < "$D/input.jsonl" 2> "$D/stderr.log" | chunks
+fi
 echo $? > "$D/exit.tmp"
 mv "$D/exit.tmp" "$D/exit"
 `;
+
+/** One stream-json user line: the CLI's input. */
+const inputLine = (content: ReadonlyArray<ClaudeCodeInputBlock>) =>
+  `${JSON.stringify({
+    type: "user",
+    message: { role: "user", content },
+    parent_tool_use_id: null,
+    session_id: "",
+  })}\n`;
+
+/**
+ * Forgets the Thread's Claude session, so the next run starts a new one.
+ * An edit of the Thread's first message does this: the session remembers
+ * only turns the edit removed.
+ */
+export const forgetClaudeCodeSession = (sandbox: Sandbox) =>
+  sandbox.writeFile(`${STATE_ROOT}/session`, "");
+
+/**
+ * Where Claude's session stood when a turn ended: the session and the uuid
+ * of its last message. One small file per turn, kept with the session (the
+ * executor saves it too), since run directories are pruned.
+ */
+export interface ClaudeCodeTurnEnd {
+  readonly session: string;
+  readonly message: string;
+}
+
+const turnEndPath = (turn: string) => `${STATE_ROOT}/turns/${turn}`;
+const SESSION_ID = /^[A-Za-z0-9-]{1,128}$/;
+
+/** The turn's end, when a run of it finished and Claude named both. */
+export const claudeCodeTurnEnd = async (
+  sandbox: Sandbox,
+  turn: string,
+): Promise<ClaudeCodeTurnEnd | undefined> => {
+  const recorded = await sandbox
+    .readFile(turnEndPath(turn))
+    .catch(() => undefined);
+  const [session, message] = recorded?.trim().split(" ") ?? [];
+  return session !== undefined &&
+    message !== undefined &&
+    SESSION_ID.test(session) &&
+    SESSION_ID.test(message)
+    ? { session, message }
+    : undefined;
+};
+
+/**
+ * Points the Thread's next run at a fork of `at.session` that keeps its
+ * messages up to and including `at.message`: what an edit keeps of the
+ * conversation. The run's own session replaces the pointer once Claude
+ * names it; a fork Claude cannot make leaves a new session instead.
+ */
+export const forkClaudeCodeSession = (
+  sandbox: Sandbox,
+  at: ClaudeCodeTurnEnd,
+) => sandbox.writeFile(`${STATE_ROOT}/session`, `${at.session} ${at.message}`);
+
+/** How a launch's session started, as its launch script reports it. */
+export type ClaudeCodeSessionPath =
+  | "new"
+  | "resume"
+  | "fork"
+  | "seeded"
+  | "fork-session-gone";
 
 export class ClaudeCodeRun {
   readonly stream = new ClaudeCodeStream();
@@ -641,6 +760,7 @@ export class ClaudeCodeRun {
   #exited = false;
   #dead = false;
   #sessionRecorded = false;
+  #endRecorded = false;
   #polling: Promise<boolean> | undefined;
   #beat: string | undefined;
   #beatChangedAt = Date.now();
@@ -711,9 +831,13 @@ export class ClaudeCodeRun {
 
   /**
    * Writes the attempt's files and starts the CLI in one command; an attempt
-   * an earlier call already launched is left alone.
+   * an earlier call already launched is left alone. Returns how the started
+   * run's session began, or undefined when it started none.
    */
-  async launch(launch: ClaudeCodeLaunch, signal?: AbortSignal) {
+  async launch(
+    launch: ClaudeCodeLaunch,
+    signal?: AbortSignal,
+  ): Promise<ClaudeCodeSessionPath | undefined> {
     let files: string | undefined = launchFiles({
       base: String(this.#base ?? 0),
       "prompt.txt": launch.systemPrompt,
@@ -724,15 +848,13 @@ export class ClaudeCodeRun {
       ...(launch.tools.length > 0
         ? {
             "dx-tools.json": JSON.stringify(launch.tools),
-            "dx-mcp.py": CLAUDE_CODE_MCP_SERVER,
+            "dx-bridge.py": CLAUDE_CODE_TOOL_BRIDGE,
           }
         : {}),
-      "input.jsonl": `${JSON.stringify({
-        type: "user",
-        message: { role: "user", content: launch.input },
-        parent_tool_use_id: null,
-        session_id: "",
-      })}\n`,
+      "input.jsonl": inputLine(launch.input),
+      ...(launch.freshInput === undefined
+        ? {}
+        : { "input-fresh.jsonl": inputLine(launch.freshInput) }),
     });
     if (files.length > INLINE_LAUNCH_BYTES) {
       await this.#sandbox.writeFile(`${this.dir}/${LAUNCH_FILES}`, files);
@@ -760,8 +882,12 @@ export class ClaudeCodeRun {
     }
     // A launch that found its attempt already running or stopped started no
     // runner to take the token.
-    if (/^started$/m.test(result.stdout) && signal?.aborted !== true)
+    if (!/^started$/m.test(result.stdout)) return undefined;
+    if (signal?.aborted !== true)
       await this.#sandbox.writeFile(tokenFile, token);
+    return /^session=([a-z-]+)$/m.exec(result.stdout)?.[1] as
+      | ClaudeCodeSessionPath
+      | undefined;
   }
 
   async #read(path: string) {
@@ -831,6 +957,25 @@ export class ClaudeCodeRun {
         .writeFile(`${STATE_ROOT}/session`, this.stream.sessionId)
         .catch(() => {
           this.#sessionRecorded = false;
+        });
+    }
+    const { sessionId, lastMessageUuid, result } = this.stream;
+    if (
+      !this.#endRecorded &&
+      result?.isError === false &&
+      sessionId !== undefined &&
+      lastMessageUuid !== undefined &&
+      SESSION_ID.test(sessionId) &&
+      SESSION_ID.test(lastMessageUuid)
+    ) {
+      this.#endRecorded = true;
+      await this.#sandbox
+        .writeFile(
+          turnEndPath(this.key.slice(0, this.key.lastIndexOf("."))),
+          `${sessionId} ${lastMessageUuid}`,
+        )
+        .catch(() => {
+          this.#endRecorded = false;
         });
     }
     return progressed;

@@ -23,8 +23,8 @@ import { ThreadArchiveContext } from "../../shared/thread-archive.js";
 import { ThreadEditingContext } from "../../shared/thread-editing.js";
 import { ThreadSnoozeContext } from "../../shared/thread-snooze.js";
 import { orbMemoryKeys } from "./orb-memory/orb-memory-queries.js";
-import { threadCostQueryOptions } from "./thread-cost-queries.js";
 import { ThreadMenu } from "./thread-menu.js";
+import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
 // The menu's widths live in the app stylesheet.
 import "../../styles.css";
 
@@ -100,18 +100,19 @@ for (const shown of [thread, child, claudeCode]) {
     processes: [],
   });
   queryClient.setQueryData(
-    threadCostQueryOptions(
-      auth.identity.id,
-      shown.id,
-      DateTime.toEpochMillis(shown.createdAt),
-    ).queryKey,
+    threadUsageQueryOptions(auth.identity.id, shown.id).queryKey,
     {
-      amountMicros: 6_390_000,
-      currency: "USD",
-      estimated: true,
-      knownEvents: 12,
-      unknownEvents: 0,
-      since: undefined,
+      claudeCode: shown === claudeCode,
+      totalMicros: 6_390_000,
+      byokListPriceMicros: 0,
+      creditsMicros: 6_390_000,
+      listPriceMicros: 6_390_000,
+      tokens: { input: 1_000, cacheRead: 0, cacheWrite: 0, output: 100 },
+      requests: 12,
+      routes: [],
+      models: [],
+      orb: null,
+      context: { available: false, reason: "not-loaded" },
     },
   );
 }
@@ -190,7 +191,7 @@ const openMenu = async (shown: ThreadDetailData, showDetails: boolean) => {
 // submenu a test had just opened. The chunk itself, served on first import,
 // has also taken longer than a 1 s wait below.
 beforeAll(async () => {
-  await import("./thread-menu-details.js");
+  await import("./thread-menu-chunk.js");
   await openMenu(thread, false);
   await vi.waitFor(() => expect(menuLabels()).toContain("OrbPaused"));
   for (const root of roots.splice(0)) await React.act(() => root.unmount());
@@ -224,12 +225,11 @@ describe("More Actions", () => {
             ...(shown === child
               ? [expect.stringMatching(/Open Source Thread$/)]
               : ["Snooze"]),
-            "Open Thread Tree",
             expect.stringMatching(/^Copy Thread URL.*C$/),
             "Copy Thread ID",
             "Export",
             "OrbPaused",
-            "$6.39",
+            "$6.39Credits",
             ...(shown === claudeCode ? ["Claude Code Costs Not Tracked"] : []),
             "Share…",
             "Pin",
@@ -279,4 +279,45 @@ describe("More Actions", () => {
       );
     });
   }
+
+  it("downloads the Thread as Markdown from Export", async () => {
+    const saved: { name?: string; blob?: Blob } = {};
+    const createUrl = vi
+      .spyOn(URL, "createObjectURL")
+      .mockImplementation((blob) => {
+        saved.blob = blob as Blob;
+        return "blob:thread-export";
+      });
+    const revokeUrl = vi
+      .spyOn(URL, "revokeObjectURL")
+      .mockImplementation(() => undefined);
+    const click = vi
+      .spyOn(HTMLAnchorElement.prototype, "click")
+      .mockImplementation(function (this: HTMLAnchorElement) {
+        saved.name = this.download;
+      });
+    // An exported Thread names when it was last updated too.
+    await openMenu(
+      {
+        ...thread,
+        updatedAt: DateTime.makeUnsafe("2026-11-01T00:00:00.000Z"),
+      } as ThreadDetailData,
+      false,
+    );
+    const item = (name: string, selector = ".thread-actions-menu") =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(`${selector} .thread-menu-item`),
+      ).find((entry) => entry.textContent?.trim() === name);
+    await React.act(() => item("Export")?.click());
+    await vi.waitFor(() =>
+      expect(item("Markdown", ".thread-actions-submenu")).toBeDefined(),
+    );
+    await React.act(() => item("Markdown", ".thread-actions-submenu")?.click());
+    await vi.waitFor(() => expect(saved.name).toMatch(/\.md$/));
+    expect(saved.blob?.type).toBe("text/markdown;charset=utf-8");
+    expect(await saved.blob?.text()).toContain(thread.title);
+    createUrl.mockRestore();
+    revokeUrl.mockRestore();
+    click.mockRestore();
+  });
 });

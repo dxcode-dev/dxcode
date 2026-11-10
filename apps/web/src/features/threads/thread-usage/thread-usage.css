@@ -1,0 +1,640 @@
+/* A Thread's Cost & Usage: a top-aligned modal of section cards, or a
+   bottom sheet on a phone. */
+.modal-surface-popup.thread-usage-dialog {
+  width: min(768px, 100%);
+  max-height: calc(100dvh - 112px);
+  margin-top: 44px;
+  overflow: hidden;
+}
+.thread-usage-header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  height: 44px;
+  padding: 0 10px 0 24px;
+  border-bottom: 1px solid var(--divider);
+}
+.thread-usage-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-usage-title > span {
+  color: var(--muted-foreground);
+}
+.thread-usage-close {
+  display: grid;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+.thread-usage-close:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.thread-usage-close svg {
+  width: 15px;
+  height: 15px;
+}
+.thread-usage-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 20px;
+  min-height: 0;
+  padding: 24px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  outline: none;
+}
+.thread-usage-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0;
+  padding: 48px 16px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+
+/* Section cards: Settings cards with the title over the content. */
+.thread-usage-dialog .settings-card {
+  flex: none;
+  max-width: none;
+  margin: 0;
+}
+.thread-usage-card > .settings-card-header {
+  min-height: 0;
+  padding: 14px 16px 0;
+  border-bottom: 0;
+}
+.thread-usage-cost > .settings-card-header {
+  justify-content: flex-start;
+  gap: 5px;
+}
+.thread-usage-info {
+  display: inline-flex;
+  color: var(--muted-foreground);
+  cursor: help;
+}
+.thread-usage-info svg {
+  width: 12px;
+  height: 12px;
+}
+.thread-usage-section {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 8px 16px 16px;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 18px;
+}
+.thread-usage-section > p {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17.875px;
+}
+.thread-usage-section a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.thread-usage-section a:hover {
+  color: var(--foreground);
+}
+.thread-usage-section > p.thread-usage-unavailable {
+  padding: 4px 0;
+  color: var(--foreground);
+  font-size: 12px;
+}
+
+/* Claude Code: what dx does not see. */
+.thread-usage-notice {
+  display: grid;
+  flex: none;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
+}
+.thread-usage-notice > svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 1px;
+  color: var(--muted-foreground);
+}
+.thread-usage-notice strong {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+}
+.thread-usage-notice p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* Cost. */
+.thread-usage-total-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+.thread-usage-total {
+  font-size: 24px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+  line-height: 32px;
+}
+.thread-usage-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  color: var(--thread-color-blue);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--thread-color-blue) 13%, transparent);
+  font-size: 12px;
+  line-height: 16px;
+}
+.thread-usage-pill svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.thread-usage-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+}
+.thread-usage-toggle .settings-toggle {
+  flex: none;
+}
+.thread-usage-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px 24px;
+  margin: 0;
+  padding: 16px;
+  border-top: 1px solid var(--divider);
+}
+.thread-usage-stat {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-width: 0;
+}
+.thread-usage-stat dt {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 16px;
+}
+.thread-usage-stat dd {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17.875px;
+}
+.thread-usage-stat dd:first-of-type {
+  color: var(--foreground);
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+  line-height: 28px;
+}
+
+/* Model Routing. */
+.thread-usage-routes {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.thread-usage-route {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+.thread-usage-route > svg {
+  width: 16px;
+  height: 16px;
+  color: var(--foreground);
+}
+.thread-usage-route-copy,
+.thread-usage-route-price {
+  display: grid;
+  min-width: 0;
+}
+.thread-usage-route-copy span,
+.thread-usage-route-price span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17px;
+}
+.thread-usage-route strong {
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.thread-usage-route-price {
+  justify-items: end;
+  font-variant-numeric: tabular-nums;
+}
+.thread-usage-dotted {
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  cursor: help;
+}
+
+/* By Model and By Tool: Usage settings' expandable rows. */
+.thread-usage-table-scroll {
+  overflow-x: auto;
+}
+.thread-usage-table {
+  margin-top: 4px;
+}
+.thread-usage-models {
+  min-width: 520px;
+}
+.thread-usage-table th {
+  white-space: nowrap;
+}
+.thread-usage-table th.usage-list-number,
+.thread-usage-table td.usage-list-number {
+  white-space: nowrap;
+}
+.thread-usage-table tr[data-open],
+.thread-usage-table tr.usage-list-detail {
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.thread-usage-table td {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+.thread-usage-name {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.thread-usage-name strong {
+  font-weight: 400;
+}
+.thread-usage-name code {
+  color: var(--muted-foreground);
+  font-family: var(--font-mono-family);
+  font-size: 10px;
+  line-height: 14px;
+}
+.thread-usage-name > span:not(:first-child),
+.thread-usage-name small {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 15px;
+}
+.usage-list-detail .thread-usage-name > span:first-child {
+  font-size: 11px;
+}
+.thread-usage-muted {
+  color: var(--muted-foreground);
+}
+.thread-usage-more {
+  padding: 0;
+  color: var(--foreground);
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.thread-usage-more:disabled {
+  color: var(--muted-foreground);
+  text-decoration: none;
+  cursor: progress;
+}
+.thread-usage-table .thread-usage-page-row td:last-child {
+  text-align: left;
+}
+
+/* Orb System Metrics. */
+.thread-usage-metrics > .settings-card-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--divider);
+}
+.thread-usage-metrics .thread-usage-section {
+  padding-top: 14px;
+}
+.thread-usage-orb-id {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.thread-usage-orb-id code {
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+  color: var(--foreground);
+  border-radius: 4px;
+  background: var(--muted);
+  font-family: var(--font-mono-family);
+  font-size: 10px;
+}
+.thread-usage-boxes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+.thread-usage-box {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+.thread-usage-box span {
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 15px;
+}
+.thread-usage-box strong {
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.thread-usage-chart {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--divider);
+  border-radius: 6px;
+}
+.thread-usage-plot {
+  position: relative;
+  height: 84px;
+  margin: 6px 0 4px 34px;
+}
+.thread-usage-plot svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.thread-usage-axis {
+  position: absolute;
+  left: -34px;
+  width: 28px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  line-height: 1;
+  text-align: right;
+  transform: translateY(-50%);
+}
+.thread-usage-grid {
+  stroke: var(--divider);
+  stroke-width: 1px;
+}
+.thread-usage-line {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.thread-usage-chart [data-series="cpu"] {
+  --series: var(--thread-color-orange);
+}
+.thread-usage-chart [data-series="memory"] {
+  --series: var(--thread-color-cyan);
+}
+.thread-usage-chart [data-series="disk"] {
+  --series: var(--thread-color-purple);
+}
+.thread-usage-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 0;
+  padding: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  list-style: none;
+}
+.thread-usage-chart-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.thread-usage-chart-legend li::before {
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--series);
+  content: "";
+}
+
+/* Current Context Window. */
+.thread-usage-context-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.thread-usage-context-used,
+.thread-usage-context-model {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.thread-usage-context-used strong {
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.thread-usage-context-model {
+  display: grid;
+  justify-items: end;
+  text-align: right;
+}
+.thread-usage-context-bar {
+  display: flex;
+  height: 14px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--muted);
+}
+.thread-usage-context-bar > span {
+  height: 100%;
+  background: var(--part);
+}
+.thread-usage-section [data-part="system"] {
+  --part: var(--thread-color-blue);
+}
+.thread-usage-section [data-part="builtin"] {
+  --part: var(--thread-color-red);
+}
+.thread-usage-section [data-part="mcp"] {
+  --part: var(--thread-color-pink);
+}
+.thread-usage-section [data-part="messages"] {
+  --part: color-mix(in srgb, var(--foreground) 72%, transparent);
+}
+.thread-usage-section [data-part="free"] {
+  --part: var(--muted);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.thread-usage-legend {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 32px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.thread-usage-legend-item {
+  display: grid;
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-width: 0;
+}
+.thread-usage-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: var(--part);
+}
+.thread-usage-legend-value {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.thread-usage-legend-value small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.thread-usage-legend-servers {
+  display: grid;
+  grid-column: 2 / -1;
+  gap: 2px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.thread-usage-legend-servers li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.thread-usage-legend-servers code {
+  font-family: var(--font-mono-family);
+  font-size: 10px;
+}
+
+/* A phone: a bottom sheet that scrolls inside. */
+@media (max-width: 640px) {
+  .modal-surface-viewport:has(> .thread-usage-dialog) {
+    place-items: end center;
+    padding: 0;
+  }
+  .modal-surface-popup.thread-usage-dialog {
+    width: 100%;
+    max-height: 92dvh;
+    margin-top: 0;
+    border-radius: 18px 18px 0 0;
+  }
+  .thread-usage-header {
+    padding: 0 8px 0 16px;
+  }
+  .thread-usage-body {
+    gap: 16px;
+    padding: 16px 12px calc(24px + env(safe-area-inset-bottom));
+  }
+  .thread-usage-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .thread-usage-stat:first-child {
+    grid-column: 1 / -1;
+  }
+  .thread-usage-boxes {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .thread-usage-legend {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .thread-usage-route {
+    gap: 10px;
+    padding: 10px 12px;
+  }
+  /* Every column fits: the cached share wraps under the input, and the
+     headings wrap. */
+  .thread-usage-models {
+    min-width: 0;
+  }
+  .usage-list.thread-usage-table th:is(:last-child, .usage-list-number) {
+    white-space: normal;
+  }
+  .thread-usage-table {
+    font-size: 11px;
+  }
+  .thread-usage-table :is(th, td) {
+    padding-right: 3px;
+    padding-left: 3px;
+  }
+  .thread-usage-table :is(th, td):first-child {
+    width: 18px;
+    padding-left: 6px;
+  }
+  .thread-usage-table :is(th, td):last-child {
+    padding-right: 10px;
+  }
+  .thread-usage-cached {
+    display: block;
+    color: var(--muted-foreground);
+    font-size: 10px;
+  }
+  .thread-usage-models td:nth-child(2) {
+    min-width: 96px;
+  }
+  .thread-usage-name code {
+    overflow-wrap: anywhere;
+  }
+}

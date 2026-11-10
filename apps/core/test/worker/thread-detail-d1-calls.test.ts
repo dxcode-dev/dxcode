@@ -92,11 +92,11 @@ beforeEach(async () => {
   );
 });
 
-const get = async (cookie: string) => {
+const get = async (cookie: string, path = `/v1/threads/${threadId}`) => {
   const pending: Array<Promise<unknown>> = [];
   counter.reset();
   const response = await app.request(
-    `/v1/threads/${threadId}`,
+    path,
     { headers: { origin, cookie } },
     bindings,
     {
@@ -137,6 +137,51 @@ describe("GET /v1/threads/:threadId round trips", () => {
     // The page waits on this read, so its D1 rounds are the floor of its
     // first paint. A token-only session adds its own lookup's two.
     expect(summary.sequential).toBeLessThanOrEqual(jar === "cached" ? 4 : 6);
+  });
+
+  // The Spaces gate needs each Thread's kind (spaces/gate.ts). It never
+  // changes, so an isolate keeps it from any Thread row it reads, such as
+  // the sidebar's list, and reads it at most once per Thread otherwise.
+  it("reads a Thread's kind for the Spaces gate once per isolate, and not at all after a list", async () => {
+    await get(jars.cached);
+    const unseen = () =>
+      `thr_00000000-0000-4000-8000-${crypto.randomUUID().slice(-12)}`;
+    const insert = (id: string) =>
+      runRepositories(
+        Effect.gen(function* () {
+          yield* (yield* ThreadRepository).insert(
+            thread(id, projectId as never, ownerId),
+          );
+        }),
+      );
+    const kindReads = (calls: ReadonlyArray<D1Call>) =>
+      calls.filter((call) =>
+        call.sql.some((sql) =>
+          // The gate's read also takes the execution mode (orb-free.ts).
+          sql.includes("SELECT kind, execution_mode FROM threads"),
+        ),
+      ).length;
+
+    // Listed first, as the sidebar does: no kind read, rounds unchanged.
+    const listed = unseen();
+    await insert(listed);
+    await get(jars.cached, "/v1/threads?roots=true");
+    const afterList = await get(jars.cached, `/v1/threads/${listed}`);
+    expect(afterList.status).toBe(200);
+    expect(kindReads(afterList.calls)).toBe(0);
+    expect(summarizeD1Calls(afterList.calls).sequential).toBeLessThanOrEqual(4);
+
+    // Opened by link in an isolate that never read it: one kind read, one
+    // round more, and none the next time.
+    const linked = unseen();
+    await insert(linked);
+    const first = await get(jars.cached, `/v1/threads/${linked}`);
+    expect(first.status).toBe(200);
+    expect(kindReads(first.calls)).toBe(1);
+    expect(summarizeD1Calls(first.calls).sequential).toBeLessThanOrEqual(5);
+    const again = await get(jars.cached, `/v1/threads/${linked}`);
+    expect(kindReads(again.calls)).toBe(0);
+    expect(summarizeD1Calls(again.calls).sequential).toBeLessThanOrEqual(4);
   });
 
   it("records the counts when asked", async () => {

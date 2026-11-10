@@ -29,6 +29,7 @@ import { ApiError } from "../../shared/api/client.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Toaster } from "../../shared/ui/sonner.js";
 import { ThreadArchiveProvider } from "./thread-archive.js";
+import { threadKeys } from "./thread-queries.js";
 
 const threadId = "thr_00000000-0000-4000-8000-000000000071" as ThreadId;
 const childId = "thr_00000000-0000-4000-8000-000000000072" as ThreadId;
@@ -80,10 +81,11 @@ const click = (element: Element | undefined | null) =>
     element?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
   );
 
-const render = async () => {
+const render = async (seed?: (client: QueryClient) => void) => {
   const queryClient = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   });
+  seed?.(queryClient);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -107,6 +109,25 @@ afterEach(async () => {
 });
 
 describe("Thread archive notices", () => {
+  it("names a Space a Space when it is archived and unarchived", async () => {
+    archiveMutation.execute.mockResolvedValue({
+      thread: { id: threadId, lifecycleState: "archived" } as ThreadData,
+    });
+    const { container, root } = await render((client) =>
+      client.setQueryData(
+        threadKeys.detail("archive-user" as never, threadId),
+        { id: threadId, kind: "space", lifecycleState: "active" },
+      ),
+    );
+    await click(buttonIn(container, "Archive from touchpoint"));
+    await vi.waitFor(() => expect(titleOf(onlyToast())).toBe("Archived Space"));
+    await click(buttonIn(onlyToast(), "Undo"));
+    await vi.waitFor(() =>
+      expect(titleOf(onlyToast())).toBe("Unarchived Space"),
+    );
+    await React.act(() => root.unmount());
+  });
+
   it("confirms an archive at once, and Undo before it returns unarchives in the same toast", async () => {
     let resolveArchive:
       | ((archived: { thread: ThreadData }) => void)

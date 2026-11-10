@@ -8,10 +8,16 @@ import {
   UsageRouteAttribution,
 } from "@dx/domain";
 import type { FlueEventContext, FlueObservation } from "@flue/runtime";
-import { Effect, Option, Schema } from "effect";
+import { DateTime, Effect, Option, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import {
+  contextWindowStatement,
+  observeTurnRequest,
+  settleContext,
+  takeTurnComposition,
+} from "../../thread-usage/context-window.js";
 import { catalogUsagePrice } from "./pricing.js";
 import { UsageRepositoryD1 } from "./repository-d1.js";
 
@@ -133,10 +139,48 @@ const record = (bindings: Bindings, event: UsageEventInputType) =>
     }).pipe(Effect.provide(UsageRepositoryD1(db)));
   });
 
+/**
+ * The Thread's context window after an agent turn whose request this
+ * isolate saw (thread-usage/context-window.ts), beside its usage event.
+ */
+const recordContextWindow = (
+  bindings: Bindings,
+  input: UsageEventInputType,
+  route: { readonly providerId: string; readonly modelId: string } | undefined,
+) => {
+  if (input.kind !== "model" || input.purpose !== "agent") return;
+  const composition = takeTurnComposition(input.threadId, input.turnId);
+  if (composition === undefined || input.outcome !== "success") return;
+  const db = bindings.DB;
+  if (db === undefined) return;
+  return contextWindowStatement(db, {
+    threadId: input.threadId,
+    providerId: route?.providerId ?? input.observedProviderId,
+    modelId: route?.modelId ?? input.observedModelId,
+    measuredAt: DateTime.formatIso(input.occurredAt),
+    composition: settleContext(
+      composition,
+      (input.inputTokens ?? 0) +
+        (input.cacheReadTokens ?? 0) +
+        (input.cacheWriteTokens ?? 0),
+      input.outputTokens ?? 0,
+    ),
+  })
+    .run()
+    .catch((error: unknown) => {
+      settingsPersistenceLogger.warn("Context window could not be recorded.", {
+        event: "context_window_record_failed",
+        threadId: input.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+};
+
 export const recordFlueUsage = (
   event: FlueObservation,
   context: FlueEventContext,
 ): Promise<void> => {
+  observeTurnRequest(event);
   const input = usageEventFromFlue(event);
   if (input === undefined) return Promise.resolve();
   const bindings = context.env as Bindings;
@@ -158,17 +202,23 @@ export const recordFlueUsage = (
         );
         return undefined;
       });
-      await Effect.runPromise(
-        record(
-          bindings,
-          routeAttribution === undefined
-            ? input
-            : { ...input, routeAttribution },
+      await Promise.all([
+        Effect.runPromise(
+          record(
+            bindings,
+            routeAttribution === undefined
+              ? input
+              : { ...input, routeAttribution },
+          ),
         ),
-      );
+        recordContextWindow(bindings, input, routeAttribution),
+      ]);
       return;
     }
-    await Effect.runPromise(record(bindings, input));
+    await Promise.all([
+      Effect.runPromise(record(bindings, input)),
+      recordContextWindow(bindings, input, undefined),
+    ]);
   })();
 };
 

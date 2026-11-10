@@ -88,7 +88,15 @@ export * from "./settings/workspace-usage.js";
 export * from "./source-control/bitbucket.js";
 export * from "./source-control/errors.js";
 export * from "./source-control/github.js";
+export * from "./spaces/message-comments.js";
+export * from "./spaces/posts.js";
+export * from "./spaces/progress.js";
+export * from "./spaces/space-artifacts.js";
+export * from "./spaces/space-agent-model.js";
+export * from "./spaces/space-cards.js";
+export * from "./spaces/space-data.js";
 export * from "./thread-storage/index.js";
+export * from "./threads/agent-history.js";
 export * from "./threads/archive-thread.js";
 export * from "./threads/artifacts.js";
 export * from "./threads/automations.js";
@@ -100,9 +108,9 @@ export * from "./threads/files.js";
 export * from "./threads/get-thread.js";
 export * from "./threads/get-thread-list-item.js";
 export * from "./threads/get-thread-readiness.js";
-export * from "./threads/get-thread-tree.js";
 export * from "./threads/github-delivery.js";
 export * from "./threads/list-threads.js";
+export * from "./threads/edit-message.js";
 export * from "./threads/mark-thread-seen.js";
 export * from "./threads/message-author.js";
 export * from "./threads/orb-disk.js";
@@ -117,6 +125,7 @@ export * from "./threads/terminal.js";
 export * from "./threads/thread-chat.js";
 export * from "./threads/thread-data.js";
 export * from "./threads/thread-draft.js";
+export * from "./threads/thread-usage.js";
 export {
   type ThreadNotFoundResponse,
   ThreadNotFoundResponseSchema,

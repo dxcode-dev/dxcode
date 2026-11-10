@@ -176,16 +176,14 @@ const notServedReason = (
 };
 
 /**
- * A Claude Code pin carries its effort; any other raw model runs at the
- * neutral default, whatever an API client sent.
+ * A pin runs at the effort it names, such as a Claude Code pin's or a
+ * Space's (Opus 5.5 at medium by default); a pin that names none runs at
+ * the neutral default.
  */
 export const pinThinking = (selection: {
   readonly model: string;
   readonly thinking?: ThinkingLevel | undefined;
-}): ThinkingLevel =>
-  isClaudeCodeModel(selection.model)
-    ? (selection.thinking ?? RAW_MODEL_THINKING)
-    : RAW_MODEL_THINKING;
+}): ThinkingLevel => selection.thinking ?? RAW_MODEL_THINKING;
 
 /** Raw-model pins without an effort use a neutral default. */
 export const RAW_MODEL_THINKING = "high" as const;

@@ -39,11 +39,6 @@ import {
   GetThreadReadinessPersistenceUnavailableResponseSchema,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
-  GetThreadTreeInvalidRequestResponseSchema,
-  GetThreadTreeNotFoundResponseSchema,
-  GetThreadTreeParamsSchema,
-  GetThreadTreePersistenceUnavailableResponseSchema,
-  GetThreadTreeResponseSchema,
   ListThreadsInvalidRequestResponseSchema,
   ListThreadsPersistenceUnavailableResponseSchema,
   ListThreadsQuerySchema,
@@ -70,7 +65,6 @@ import {
   SnoozeThreadUnavailableResponseSchema,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
-  THREAD_TREE_MAX_ITEMS,
   type ThreadData,
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
@@ -117,6 +111,7 @@ import { Hono } from "hono";
 import * as v from "valibot";
 import { DxAgent } from "../agents/dx-agent.js";
 import { DxAgentInitialDataSchema } from "../agents/dx-agent-initial-data.js";
+import { runsWithoutOrb } from "../agents/orb-free.js";
 import {
   linkMessageAttachments,
   MessageAttachmentsRejected,
@@ -177,6 +172,8 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
+import { spacesEnabledFor, spaceThreadIds } from "../spaces/gate.js";
+import { markThreadsShipped } from "../spaces/progress/shipped.js";
 import { isDeletedThread } from "../thread-deletion/tombstone.js";
 import { scheduleThreadSearchIndex } from "../thread-search/enqueue.js";
 import {
@@ -193,6 +190,7 @@ import {
   threadSharingDetail,
   userIdentity,
 } from "../thread-sharing/service.js";
+import { recordAdmittedThreadSubmission } from "./activity.js";
 import { childActivityField, markThreadOpened } from "./attention-d1.js";
 import {
   type DxTitleAgentRunner,
@@ -215,11 +213,8 @@ import {
   readInboundMessages,
   readParentColors,
   readThreadChildCounts,
-  readThreadFamily,
   readThreadListItem,
   readThreadListProjection,
-  readThreadStartedCounts,
-  startedCountField,
   threadListItem,
 } from "./list-projection-d1.js";
 import { ThreadRepositoryD1 } from "./repository-d1.js";
@@ -329,6 +324,22 @@ const childCountFields = (
 
 const CHILDREN_PER_ROOT = 100;
 
+/** What an in-process caller asks a creation to record; see `Variables`. */
+const threadCreationOptions = (
+  creation: AppEnv["Variables"]["threadCreation"],
+) =>
+  creation === undefined
+    ? undefined
+    : {
+        ...(creation.kind === undefined ? {} : { kind: creation.kind }),
+        ...(creation.executionMode === undefined
+          ? {}
+          : { executionMode: creation.executionMode }),
+        ...(creation.requestedByUserId === undefined
+          ? {}
+          : { requestedByUserId: creation.requestedByUserId as UserId }),
+      };
+
 const parentColorField = (
   parentColors: ReadonlyMap<ThreadId, ThreadColor>,
   thread: Pick<Thread, "parentThreadId">,
@@ -361,6 +372,7 @@ const threadData = (thread: Thread): ThreadData => ({
   ...(thread.startedByThreadId === undefined
     ? {}
     : { startedByThreadId: thread.startedByThreadId }),
+  ...(thread.kind === "space" ? { kind: "space" as const } : {}),
 });
 
 /**
@@ -833,6 +845,10 @@ export const createThreadRoutes = (
       const serviceLayer = threadServiceLayer(db);
       const requestedThreadId = input.threadId;
       const initialMessage = input.initialMessage;
+      // A Space starts a Thread on someone's behalf: its first message is
+      // theirs, as the person who asked the Space.
+      const requesterUserId = context.get("threadCreation")
+        ?.requestedByUserId as UserId | undefined;
       // These reads are independent: the first message's files, checked
       // before anything is created so a refused file never leaves an empty
       // Thread behind; the Thread an earlier attempt of this request made;
@@ -867,7 +883,8 @@ export const createThreadRoutes = (
           initialMessage === undefined
             ? Effect.succeed(undefined)
             : Effect.tryPromise({
-                try: () => userIdentity(db, principal.userId),
+                try: () =>
+                  userIdentity(db, requesterUserId ?? principal.userId),
                 catch: () => new ThreadInitialAdmissionUnavailable(),
               }),
         ] as const,
@@ -1055,34 +1072,43 @@ export const createThreadRoutes = (
               const thread = Effect.gen(function* () {
                 const project = yield* projectSelection;
                 // The Thread pins its Orb (provider, size, and whose key pays)
-                // in the same write; the provider set resolves only here.
-                const executionPin = Effect.tryPromise({
-                  try: () =>
-                    resolveThreadExecutionPin({
-                      db,
-                      bindings: context.env,
-                      userId: principal.userId,
-                      hiddenProviders: () =>
-                        hiddenOrbProviders(context.env, principal),
-                      projectId:
-                        project.kind === "project" ? project.projectId : null,
-                      runnerProfileId: requestedRunnerProfileId,
-                      connectors: orbProviderConnectors,
-                      ...(project.kind === "projectless"
-                        ? {
-                            projectlessRunnerProfileId:
-                              project.snapshot.configuration.runnerProfileId,
-                          }
-                        : {}),
-                    }),
-                  catch: (cause) =>
-                    cause instanceof OrbUnavailable
-                      ? cause
-                      : PersistenceUnavailable.new(
-                          { operation: "thread.resolveOrb" },
-                          cause,
-                        ),
-                }).pipe(createPhase("orb-pin"));
+                // in the same write; the provider set resolves only here. A
+                // Thread in executor mode has no Orb, so it pins none and
+                // needs no Orb provider.
+                const executorMode =
+                  context.get("threadCreation")?.executionMode === "executor";
+                const executionPin = executorMode
+                  ? Effect.succeed(undefined)
+                  : Effect.tryPromise({
+                      try: () =>
+                        resolveThreadExecutionPin({
+                          db,
+                          bindings: context.env,
+                          userId: principal.userId,
+                          hiddenProviders: () =>
+                            hiddenOrbProviders(context.env, principal),
+                          projectId:
+                            project.kind === "project"
+                              ? project.projectId
+                              : null,
+                          runnerProfileId: requestedRunnerProfileId,
+                          connectors: orbProviderConnectors,
+                          ...(project.kind === "projectless"
+                            ? {
+                                projectlessRunnerProfileId:
+                                  project.snapshot.configuration
+                                    .runnerProfileId,
+                              }
+                            : {}),
+                        }),
+                      catch: (cause) =>
+                        cause instanceof OrbUnavailable
+                          ? cause
+                          : PersistenceUnavailable.new(
+                              { operation: "thread.resolveOrb" },
+                              cause,
+                            ),
+                    }).pipe(createPhase("orb-pin"));
                 const [pin, prepared] = yield* Effect.all(
                   [
                     executionPin,
@@ -1099,6 +1125,7 @@ export const createThreadRoutes = (
                         sharedWorkspaceId === undefined
                           ? undefined
                           : "workspace",
+                        threadCreationOptions(context.get("threadCreation")),
                       )
                       .pipe(
                         // Only the parent lookup reports a missing Thread here.
@@ -1249,8 +1276,12 @@ export const createThreadRoutes = (
                 body: withMessageAuthor(
                   {
                     author: {
-                      role: "owner",
-                      userId: forThread.ownerUserId,
+                      role:
+                        requesterUserId === undefined ||
+                        requesterUserId === forThread.ownerUserId
+                          ? "owner"
+                          : "contributor",
+                      userId: requesterUserId ?? forThread.ownerUserId,
                       ...author,
                     },
                     // Set only by the in-process Thread tools.
@@ -1374,7 +1405,8 @@ export const createThreadRoutes = (
       // behind the same checks as its run; the run's activation finds it
       // starting or up.
       const startOrb = () =>
-        insertedThread
+        insertedThread &&
+        !runsWithoutOrb({ executionMode: thread.executionMode ?? "orb" })
           ? initialOrb.start(thread.id).catch((cause: unknown) => {
               threadPersistenceLogger.warn(
                 "The new Thread's Orb did not start early.",
@@ -1409,6 +1441,17 @@ export const createThreadRoutes = (
                 threadId,
                 "thread.invalidated",
               ),
+            // A Space's child shows working on its card from admission;
+            // other Threads wait for Flue's own observation and pay nothing.
+            ...(requesterUserId === undefined
+              ? {}
+              : {
+                  recordAdmission: (
+                    admitted: Parameters<
+                      typeof recordAdmittedThreadSubmission
+                    >[1],
+                  ) => recordAdmittedThreadSubmission(context.env, admitted),
+                }),
             afterFailure: async () => {
               if (await orbStarted) await initialOrb.stop(thread.id);
             },
@@ -2044,21 +2087,6 @@ export const createThreadRoutes = (
               new Map(),
             ]
           : yield* decorate(children.map(({ id }) => id));
-      // Each child Thread counts what sits below it unlisted, for the tree.
-      const startedCounts = yield* Effect.tryPromise({
-        try: () =>
-          readThreadStartedCounts(
-            db,
-            [...page.items, ...children].flatMap((thread) =>
-              thread.parentThreadId === undefined ? [] : [thread.id],
-            ),
-          ),
-        catch: (cause) =>
-          PersistenceUnavailable.new(
-            { operation: "thread.listProjection" },
-            cause,
-          ),
-      });
       // A child's parent is a root on this page.
       const rootColors = new Map(
         page.items.flatMap((thread) =>
@@ -2077,7 +2105,6 @@ export const createThreadRoutes = (
             ...projection.attention.get(thread.id),
             ...childCountFields(childCounts.get(thread.id)),
             ...parentColorField(parentColors, thread),
-            ...startedCountField(startedCounts.get(thread.id)),
           })),
           ...(query.roots === undefined
             ? {}
@@ -2091,7 +2118,6 @@ export const createThreadRoutes = (
                   ...childSharing.get(thread.id),
                   ...childProjection.attention.get(thread.id),
                   ...parentColorField(rootColors, thread),
-                  ...startedCountField(startedCounts.get(thread.id)),
                 })),
               }),
           nextCursor: page.nextCursor,
@@ -2521,6 +2547,9 @@ export const createThreadRoutes = (
         ArchiveThreadRequestSchema,
         () => new InvalidThreadRequest(),
       );
+      // Only an archive comes from a Ship run's outcome.
+      if (body.reason === "ship" && !body.archived)
+        return yield* new InvalidThreadRequest();
       const db = yield* decodeD1Binding(context.env.DB);
       const principal = context.get("principal");
       // A Thread kept from a deleted Project stays archived for good.
@@ -2606,6 +2635,18 @@ export const createThreadRoutes = (
         const failed = results.some((result) => result.failed);
         return [parent, changed, failed] as const;
       }).pipe(Effect.provide(threadServiceLayer(db)));
+      // Archived from its Ship outcome, its work shipped; the first way it
+      // shipped stays.
+      if (body.reason === "ship")
+        yield* Effect.tryPromise({
+          try: () =>
+            markThreadsShipped(db, [thread.id], "ship_archived", Date.now()),
+          catch: (cause) =>
+            PersistenceUnavailable.new(
+              { operation: "thread.archive.shipped" },
+              cause,
+            ),
+        });
       for (const changed of [thread, ...children])
         yield* Effect.promise(() =>
           scheduleRealtimeInvalidation(
@@ -2782,102 +2823,6 @@ export const createThreadRoutes = (
 
   // One sidebar row, so a realtime hint patches it instead of refetching
   // every loaded list.
-  // The Thread's family as the requester may read it, for its tree page.
-  threadRoutes.get("/:threadId/tree", async (context) => {
-    const requestId = context.get("requestId");
-    const operation = Effect.gen(function* () {
-      const params = yield* decodeRequestInput(
-        GetThreadTreeParamsSchema,
-        { threadId: context.req.param("threadId") },
-        () => new InvalidThreadRequest(),
-      );
-      const db = yield* decodeD1Binding(context.env.DB);
-      const principal = context.get("principal");
-      const family = yield* Effect.tryPromise({
-        try: () =>
-          readThreadFamily(
-            db,
-            params.threadId,
-            {
-              userId: principal.userId as UserId,
-              ...(principal.application === undefined
-                ? {}
-                : { workspaceId: principal.application.workspaceId }),
-              sharedThreads: canUseSharedThreads(principal),
-            },
-            THREAD_TREE_MAX_ITEMS,
-          ),
-        catch: (cause) =>
-          PersistenceUnavailable.new({ operation: "thread.family" }, cause),
-      });
-      if (family === undefined)
-        return yield* Effect.fail(
-          new ThreadNotFound({ threadId: params.threadId }),
-        );
-      return yield* Schema.encodeUnknownEffect(GetThreadTreeResponseSchema)({
-        status: "success",
-        data: {
-          rootThreadId: family.rootThreadId,
-          items: family.items,
-          ...(family.truncated ? { truncated: true } : {}),
-        },
-      });
-    });
-    const result = await Effect.runPromise(Effect.result(operation));
-    if (Result.isSuccess(result)) return context.json(result.success, 200);
-    return Match.value(result.failure).pipe(
-      Match.tags({
-        InvalidThreadRequest: () =>
-          context.json(
-            Schema.encodeUnknownSync(GetThreadTreeInvalidRequestResponseSchema)(
-              {
-                status: "error",
-                data: {
-                  code: "INVALID_REQUEST",
-                  message: "Request validation failed.",
-                  requestId,
-                },
-              },
-            ),
-            400,
-          ),
-        ThreadNotFound: () =>
-          context.json(
-            Schema.encodeUnknownSync(GetThreadTreeNotFoundResponseSchema)({
-              status: "error",
-              data: {
-                code: "THREAD_NOT_FOUND",
-                message: "Thread not found.",
-                requestId,
-              },
-            }),
-            404,
-          ),
-        PersistenceUnavailable: () =>
-          context.json(
-            Schema.encodeUnknownSync(
-              GetThreadTreePersistenceUnavailableResponseSchema,
-            )({
-              status: "error",
-              data: {
-                code: "PERSISTENCE_UNAVAILABLE",
-                message: "Persistence is temporarily unavailable.",
-                requestId,
-              },
-            }),
-            503,
-          ),
-        D1BindingUnavailable: (error) => {
-          throw error;
-        },
-        SchemaError: (error) => {
-          throw error;
-        },
-      }),
-      Match.exhaustive,
-    );
-  });
-
   threadRoutes.get("/:threadId/list-item", async (context) => {
     const requestId = context.get("requestId");
     const operation = Effect.gen(function* () {
@@ -2997,6 +2942,8 @@ export const createThreadRoutes = (
           }),
         invalidate: (id) =>
           publishRealtimeInvalidation(context.env, id, "thread.invalidated"),
+        recordAdmission: (admitted) =>
+          recordAdmittedThreadSubmission(context.env, admitted),
         retryDelaysMs: INITIAL_DISPATCH_RETRY_DELAYS_MS,
       },
       threadId.value,
@@ -3225,6 +3172,8 @@ export const createThreadRoutes = (
         () => new InvalidThreadRequest(),
       );
       const db = yield* decodeD1Binding(context.env.DB);
+      const viewerUserId = (context.get("actor") ?? context.get("principal"))
+        .userId;
       const thread = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
         return yield* service.get(context.get("principal"), params.threadId);
@@ -3251,8 +3200,8 @@ export const createThreadRoutes = (
           ),
         ),
       );
-      // Independent reads: the page waits on both, so they run at once.
-      const [detail, sharing] = yield* Effect.all(
+      // Independent reads: the page waits on all, so they run at once.
+      const [detail, sharing, spaceParent] = yield* Effect.all(
         [
           threadDetailData(context.env.DB, db, thread),
           Effect.tryPromise({
@@ -3271,17 +3220,27 @@ export const createThreadRoutes = (
                 cause,
               ),
           }),
+          // Spaces off for the viewer: a thread a Space started is a root.
+          Effect.promise(async () =>
+            thread.parentThreadId !== undefined &&
+            (await spaceThreadIds(db, [thread.parentThreadId])).size > 0
+              ? !(await spacesEnabledFor(context.env, viewerUserId))
+              : false,
+          ),
         ],
         { concurrency: "unbounded" },
       );
+      const shown =
+        sharing.access === "owner" ? detail : withoutOwnerConfiguration(detail);
+      const {
+        parentThreadId: _parent,
+        startedByThreadId: _starter,
+        parentColor: _parentColor,
+        ...asRoot
+      } = shown;
       return yield* Schema.encodeUnknownEffect(GetThreadResponseSchema)({
         status: "success",
-        data: {
-          ...(sharing.access === "owner"
-            ? detail
-            : withoutOwnerConfiguration(detail)),
-          ...sharing,
-        },
+        data: { ...(spaceParent ? asRoot : shown), ...sharing },
       });
     });
 

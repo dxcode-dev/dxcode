@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -325,6 +326,39 @@ describe("thread composer ownership", () => {
     await React.act(() => mounted.root.unmount());
   });
 
+  it("keeps every key the viewer types right after a send, and sends the pending message once", async () => {
+    let accept: (() => void) | undefined;
+    const receipt = new Promise<void>((resolve) => {
+      accept = resolve;
+    });
+    const sendMessage = vi.fn().mockReturnValue(receipt);
+    const mounted = await mountPanel({ status: "idle", sendMessage });
+    const textarea = mounted.container.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Message"]',
+    );
+    if (textarea === null) throw new Error("Expected thread composer.");
+    await userEvent.click(textarea);
+    await userEvent.keyboard("First message");
+    await userEvent.keyboard("{Enter}");
+    // Typing on at once, while the server has not taken the first message.
+    await userEvent.keyboard("typed right after");
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" send");
+    expect(document.activeElement).toBe(textarea);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("First message");
+
+    await React.act(async () => {
+      accept?.();
+      await receipt;
+    });
+    await vi.waitFor(() =>
+      expect(textarea.value).toBe("typed right after send"),
+    );
+    expect(document.activeElement).toBe(textarea);
+    expect(sendMessage).toHaveBeenCalledExactlyOnceWith("First message");
+    await React.act(() => mounted.root.unmount());
+  });
+
   it("unlocks after admission for one steering prompt while the agent streams", async () => {
     let acceptFirst: (() => void) | undefined;
     const firstReceipt = new Promise<void>((resolve) => {
@@ -361,7 +395,7 @@ describe("thread composer ownership", () => {
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "First prompt awaiting admission",
     );
-    expect(textarea.disabled).toBe(true);
+    expect(textarea.getAttribute("aria-busy")).toBe("true");
     expect(
       mounted.container.querySelector<HTMLButtonElement>(
         '[aria-label="Send steering message"]',
@@ -375,7 +409,9 @@ describe("thread composer ownership", () => {
       acceptFirst?.();
       await firstReceipt;
     });
-    await vi.waitFor(() => expect(textarea.disabled).toBe(false));
+    await vi.waitFor(() =>
+      expect(textarea.hasAttribute("aria-busy")).toBe(false),
+    );
 
     await React.act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
@@ -446,7 +482,9 @@ describe("thread composer ownership", () => {
       await receipt;
     });
     await vi.waitFor(() => expect(abort).toHaveBeenCalledTimes(2));
-    await vi.waitFor(() => expect(textarea.disabled).toBe(false));
+    await vi.waitFor(() =>
+      expect(textarea.hasAttribute("aria-busy")).toBe(false),
+    );
     await React.act(async () => {
       const setValue = Object.getOwnPropertyDescriptor(
         HTMLTextAreaElement.prototype,
@@ -518,7 +556,7 @@ describe("thread composer ownership", () => {
     const replacementForm = replacement.container.querySelector("form");
     if (replacementTextarea === null || replacementForm === null)
       throw new Error("Expected replacement thread composer form.");
-    expect(replacementTextarea.disabled).toBe(true);
+    expect(replacementTextarea.getAttribute("aria-busy")).toBe("true");
     await React.act(async () => {
       replacementForm.dispatchEvent(
         new Event("submit", { bubbles: true, cancelable: true }),
@@ -686,7 +724,7 @@ describe("thread composer ownership", () => {
       "Steering admission failed",
     );
     expect(mounted.container.querySelector(".error-notice")).toBeNull();
-    expect(textarea.disabled).toBe(false);
+    expect(textarea.hasAttribute("aria-busy")).toBe(false);
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "Failed steering prompt",
     );

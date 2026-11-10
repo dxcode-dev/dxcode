@@ -35,3 +35,29 @@ export const stopThreadAgent = async (threadId: string, env: Bindings) => {
   if (!response.ok)
     throw new Error(`Stopping the Thread's agent failed (${response.status}).`);
 };
+
+/**
+ * Rewinds a Thread's agent to just before one of its user messages, so an
+ * edited message can replace it. It bypasses admission: the message edit
+ * route authorizes the editor and checks the sender first. Answers Flue's
+ * response: 409 while a turn or queued message has not settled, 400 when
+ * the message is not in the current history or no longer has `expectText`.
+ */
+export const rewindThreadAgent = (
+  threadId: string,
+  input: {
+    readonly entryId: string;
+    readonly idempotencyKey: string;
+    readonly expectText: string;
+  },
+  env: Bindings,
+) =>
+  flue.request(
+    `/${encodeURIComponent(threadId)}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ kind: "rewind", ...input }),
+    },
+    env,
+  );

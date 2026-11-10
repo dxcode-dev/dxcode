@@ -16,6 +16,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Schema, SchemaTransformation } from "effect";
 import { SqlClient } from "effect/sql/SqlClient";
+import { rememberThreadKind } from "../agents/orb-free.js";
 import { threadPersistenceLogger } from "../logging.js";
 
 const ThreadRow = Schema.Struct({
@@ -41,24 +42,13 @@ const ThreadRow = Schema.Struct({
   title_pending_until: Schema.optional(Schema.NullOr(Schema.String)),
   parent_thread_id: Schema.optional(Schema.NullOr(Schema.String)),
   started_by_thread_id: Schema.optional(Schema.NullOr(Schema.String)),
+  kind: Schema.optional(Schema.NullOr(Schema.String)),
+  execution_mode: Schema.optional(Schema.NullOr(Schema.String)),
+  requested_by_user_id: Schema.optional(Schema.NullOr(Schema.String)),
   snoozed_until: Schema.optional(Schema.NullOr(Schema.String)),
   snoozed_at: Schema.optional(Schema.NullOr(Schema.String)),
   snooze_woke_at: Schema.optional(Schema.NullOr(Schema.String)),
 });
-
-/**
- * SQL predicate over a child Thread aliased `thread`: the sidebar lists it
- * directly under its root. A child whose starter is another child listed
- * with it (same lifecycle state, unpinned) sits under that starter instead,
- * which the sidebar shows as a count and the tree page in full.
- */
-export const listedUnderRootSql = `NOT EXISTS (
-  SELECT 1 FROM threads AS starter
-   WHERE starter.id = thread.started_by_thread_id
-     AND starter.parent_thread_id = thread.parent_thread_id
-     AND starter.owner_user_id = thread.owner_user_id
-     AND starter.lifecycle_state = thread.lifecycle_state
-     AND starter.pinned_at IS NULL)`;
 
 type ThreadRow = typeof ThreadRow.Type;
 type ThreadObservationError =
@@ -77,6 +67,8 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
       Effect.all(
         decoded.map((row) =>
           Effect.gen(function* () {
+            // A Thread's kind never changes; the Spaces gate reuses it.
+            rememberThreadKind(row.id, row.kind, row.execution_mode);
             const selection = yield* Effect.try({
               try: () => JSON.parse(row.model_selection) as unknown,
               catch: (cause) =>
@@ -138,6 +130,14 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
               row.started_by_thread_id === undefined
                 ? {}
                 : { startedByThreadId: row.started_by_thread_id }),
+              ...(row.kind === "space" ? { kind: "space" } : {}),
+              ...(row.execution_mode === "executor"
+                ? { executionMode: "executor" }
+                : {}),
+              ...(row.requested_by_user_id === null ||
+              row.requested_by_user_id === undefined
+                ? {}
+                : { requestedByUserId: row.requested_by_user_id }),
               ...(row.snoozed_until === null || row.snoozed_until === undefined
                 ? {}
                 : { snoozedUntil: row.snoozed_until }),
@@ -287,6 +287,9 @@ export const ThreadRepositoryD1 = Layer.effect(
                   title_pending_until,
                   parent_thread_id,
                   started_by_thread_id,
+                  kind,
+                  execution_mode,
+                  requested_by_user_id,
                   created_at,
                   updated_at
                 )
@@ -310,6 +313,9 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.titlePendingUntil ?? null},
                   ${encoded.parentThreadId ?? null},
                   ${encoded.startedByThreadId ?? null},
+                  ${encoded.kind ?? "thread"},
+                  ${encoded.executionMode ?? "orb"},
+                  ${encoded.requestedByUserId ?? null},
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
@@ -612,6 +618,9 @@ export const ThreadRepositoryD1 = Layer.effect(
               color,
               parent_thread_id,
               started_by_thread_id,
+              kind,
+              execution_mode,
+              requested_by_user_id,
               snoozed_until,
               snoozed_at,
               snooze_woke_at
@@ -671,6 +680,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
+                kind, execution_mode, requested_by_user_id,
                 snoozed_until, snoozed_at, snooze_woke_at
               FROM threads
               WHERE id = ${threadId}
@@ -726,6 +736,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
+                kind, execution_mode, requested_by_user_id,
                 snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -769,6 +780,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
+                kind, execution_mode, requested_by_user_id,
                 snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -805,6 +817,19 @@ export const ThreadRepositoryD1 = Layer.effect(
                     WHEN ${lifecycleState} = 'archived' THEN NULL
                     ELSE snoozed_at
                   END,
+                  -- Archiving again keeps the first time; restoring clears it.
+                  archived_at = CASE
+                    WHEN ${lifecycleState} = 'archived'
+                      THEN COALESCE(archived_at, ${Date.parse(updatedAt)})
+                    ELSE NULL
+                  END,
+                  -- When it last came back from the archive.
+                  restored_at = CASE
+                    WHEN ${lifecycleState} = 'active'
+                      AND lifecycle_state = 'archived'
+                      THEN ${Date.parse(updatedAt)}
+                    ELSE restored_at
+                  END,
                   updated_at = ${updatedAt}
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
@@ -821,6 +846,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 visibility, created_at, updated_at,
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
+                kind, execution_mode, requested_by_user_id,
                 snoozed_until, snoozed_at, snooze_woke_at
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
@@ -849,16 +875,33 @@ export const ThreadRepositoryD1 = Layer.effect(
             // reachable; otherwise it lists as a root, so a pinned child
             // sits with the other pinned Threads. Pages ordered by the pin
             // snapshot judge pinning by that snapshot too.
+            // The reader's `spaces` flag (spaces/gate.ts), decided in the
+            // same statement so the list costs no extra read. Off, Spaces
+            // never list and the threads a Space started are roots.
+            const spacesOn = sql`EXISTS (
+              SELECT 1 FROM personal_experimental_feature_preferences AS spaces_flag,
+                     json_each(spaces_flag.preferences) AS spaces_preference
+               WHERE spaces_flag.user_id = ${reader.userId}
+                 AND json_extract(spaces_preference.value, '$.id') = 'spaces'
+                 AND json_extract(spaces_preference.value, '$.enabled') = 1)`;
             const treeFilterFor = (
               pinnedAt: "thread.pinned_at" | "thread.snapshot_pinned_at",
             ) =>
               request.tree === undefined
                 ? sql`1 = 1`
                 : request.tree.kind === "children"
-                  ? sql`(thread.parent_thread_id = ${request.tree.parentThreadId} AND ${sql.literal(pinnedAt)} IS NULL AND ${sql.literal(listedUnderRootSql)})`
-                  : sql`(thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
+                  ? sql`(thread.parent_thread_id = ${request.tree.parentThreadId} AND ${sql.literal(pinnedAt)} IS NULL)`
+                  : // Active Spaces list in the sidebar's own Spaces
+                    // section; archived ones list with the archived Threads.
+                    // The threads a Space started list only in that Space.
+                    // With Spaces off, those threads list as roots.
+                    sql`((${spacesOn} AND ${request.lifecycleState === "archived" ? sql`thread.kind IN ('thread', 'space')` : sql`thread.kind = 'thread'`} AND NOT EXISTS (
+                      SELECT 1 FROM threads AS space
+                       WHERE space.id = thread.parent_thread_id
+                         AND space.kind = 'space')) OR NOT ${spacesOn}) AND (thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
                       SELECT 1 FROM threads AS parent
                        WHERE parent.id = thread.parent_thread_id
+                         AND parent.kind = 'thread'
                          AND parent.owner_user_id = thread.owner_user_id
                          AND parent.lifecycle_state = thread.lifecycle_state
                          AND ${inReachableScope("parent", reader)}))`;
@@ -912,21 +955,32 @@ export const ThreadRepositoryD1 = Layer.effect(
                 : 1;
             // The listed Thread columns besides its activity and pin, which
             // a page reads as of its snapshot.
-            const listedColumns = sql.literal(`
+            // With Spaces off, a thread a Space started names no parent.
+            const parentShown = sql`(thread.parent_thread_id IS NULL OR ${spacesOn} OR NOT EXISTS (
+              SELECT 1 FROM threads AS space_parent
+               WHERE space_parent.id = thread.parent_thread_id
+                 AND space_parent.kind = 'space'))`;
+            const listedColumns = sql`
               thread.id, thread.title, thread.project_id, thread.owner_user_id,
               thread.agent_instructions, thread.agent_instructions_revision,
               thread.agent_instructions_version, thread.model_selection,
               thread.runner_profile_id, thread.title_pending_until, thread.color,
               thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-              thread.parent_thread_id, thread.started_by_thread_id,
+              CASE WHEN ${parentShown} THEN thread.parent_thread_id END AS parent_thread_id,
+              CASE WHEN ${parentShown} THEN thread.started_by_thread_id END AS started_by_thread_id,
+              thread.kind, thread.requested_by_user_id,
               thread.plugin_snapshot_json, thread.skill_snapshot_json,
               thread.visibility, thread.created_at,
-              thread.updated_at, thread.activity_status, thread.lifecycle_state`);
+              thread.updated_at, thread.activity_status, thread.lifecycle_state`;
             const listedFilter = sql`thread.owner_user_id = ${reader.userId}
                 AND ${inReachableScope("thread", reader)}
                 AND ${projectId ? sql`thread.project_id = ${projectId}` : sql`1 = 1`}
                 AND thread.lifecycle_state != 'deleted'
-                AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})`;
+                AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
+                AND (${spacesOn} OR (thread.kind = 'thread' AND NOT EXISTS (
+                  SELECT 1 FROM threads AS space
+                   WHERE space.id = ${request.tree?.kind === "children" ? request.tree.parentThreadId : null}
+                     AND space.kind = 'space')))`;
             const rows = yield* (
               cursor === undefined
                 ? // The first page's snapshot is now, so each Thread's
@@ -1075,6 +1129,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   agent_instructions_revision, agent_instructions_version,
                   model_selection, runner_profile_id, title_pending_until, color,
                   parent_thread_id, started_by_thread_id,
+                  kind, execution_mode, requested_by_user_id,
                   plugin_snapshot_json, skill_snapshot_json,
                   visibility, created_at, updated_at, last_activity_at,
                   activity_status, lifecycle_state, pinned_at,
@@ -1086,7 +1141,6 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ) AS position
                   FROM threads AS thread
                   WHERE ${sql.in("thread.parent_thread_id", parents)}
-                    AND ${sql.literal(listedUnderRootSql)}
                     -- Unary + keeps the planner on threads_parent_idx: the
                     -- owner's index would walk every Thread they own (#1490).
                     AND +thread.owner_user_id = ${reader.userId}

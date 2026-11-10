@@ -701,9 +701,12 @@ export const setThreadArchivedMutationOptions = (
       threadId,
       archived,
       children,
+      reason,
     }: {
       threadId: ThreadId;
       archived: boolean;
+      /** `ship`: archived from its Ship outcome; its work shipped. */
+      reason?: "ship";
       /**
        * True for every child, or the exact children to change. An Undo
        * chosen before its archive returned passes the archive's answer,
@@ -713,7 +716,7 @@ export const setThreadArchivedMutationOptions = (
         | true
         | ReadonlyArray<ThreadId>
         | Promise<ReadonlyArray<ThreadId> | undefined>;
-    }) => setThreadArchived(threadId, archived, await children),
+    }) => setThreadArchived(threadId, archived, await children, reason),
     onMutate: async ({ threadId, archived }) => {
       const { previousDetails, previousLists } = await showArchived(
         queryClient,

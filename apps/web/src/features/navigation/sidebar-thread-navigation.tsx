@@ -10,6 +10,7 @@ import type { ThreadSection } from "./sidebar-thread-utils.js";
 
 export function SidebarThreadNavigation({
   archiveContent,
+  leadingContent,
   activeThreadId,
   childThreads,
   collapsedGroups,
@@ -37,6 +38,8 @@ export function SidebarThreadNavigation({
   pinningThreadId,
 }: {
   readonly archiveContent?: ReactNode;
+  /** Shown above the Threads, such as the Spaces section. */
+  readonly leadingContent?: ReactNode;
   readonly activeThreadId?: string;
   readonly childThreads?: ReadonlyMap<
     ThreadData["id"],
@@ -98,6 +101,7 @@ export function SidebarThreadNavigation({
         expanded={expandedThreads}
         toggle={onToggleThread}
       >
+        {leadingContent}
         {empty ? (
           query.length === 0 ? (
             <div className="sidebar-first-thread">

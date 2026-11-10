@@ -37,6 +37,7 @@ import {
 } from "prosemirror-view";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { SuggestMenu } from "../../../shared/comments/suggest-menu.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
@@ -83,7 +84,6 @@ import { ExportMenu } from "./export-menu.js";
 import { FindBar, useFindOpener } from "./find-bar.js";
 import { NotifyAgentButton } from "./notify-agent-button.js";
 import { SelectionToolbar } from "./selection-toolbar.js";
-import { SuggestMenu } from "./suggest-menu.js";
 import { TableCellTools } from "./table-cell-tools.js";
 import "prosemirror-view/style/prosemirror.css";
 import "prosemirror-tables/style/tables.css";

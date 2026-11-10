@@ -35,6 +35,12 @@ export const NotificationActorSchema = Schema.Struct({
   image: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
 });
 
+/** dx's own agent, as the sender of a notification no person sent. */
+export const NotificationAgentActorSchema = Schema.Struct({
+  kind: Schema.Literal("agent"),
+  name: Schema.Literal("dx"),
+});
+
 export const NotificationDataSchema = Schema.Struct({
   id: NotificationIdSchema,
   topic: NotificationTopicSchema,
@@ -42,7 +48,10 @@ export const NotificationDataSchema = Schema.Struct({
   threadTitle: Schema.String.check(Schema.isMaxLength(256)),
   /** The message to open the Thread at (`?message=`), from its author tag. */
   messageId: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
-  actor: Schema.optional(NotificationActorSchema),
+  /** A person, or dx's agent (`kind: "agent"`); absent when unknown. */
+  actor: Schema.optional(
+    Schema.Union([NotificationActorSchema, NotificationAgentActorSchema]),
+  ),
   excerpt: Schema.String.check(Schema.isMaxLength(512)),
   createdAt: Schema.String,
   readAt: Schema.optional(Schema.String),

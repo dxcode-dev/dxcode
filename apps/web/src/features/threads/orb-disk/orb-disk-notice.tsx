@@ -10,7 +10,10 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../../shared/ui/button.js";
-import { After } from "../orb-memory/orb-memory-notice.js";
+import {
+  After,
+  useThreadOrbReadable,
+} from "../orb-memory/orb-memory-notice.js";
 import {
   deleteRefusal,
   threadOrbDiskQueryOptions,
@@ -30,12 +33,12 @@ const MIB = 1_024 ** 2;
 
 const formatSize = (bytes: number) =>
   bytes >= GIB
-    ? `${(bytes / GIB).toFixed(1)} GB`
+    ? `${(bytes / GIB).toFixed(1)} GiB`
     : `${Math.max(1, Math.round(bytes / MIB))} MB`;
 
-/** The size people know their Orb by: `20 GB`. */
+/** The size people know their Orb by: `20 GiB`. */
 const formatTotal = (bytes: number) =>
-  bytes >= 10 * GIB ? `${Math.round(bytes / GIB)} GB` : formatSize(bytes);
+  bytes >= 10 * GIB ? `${Math.round(bytes / GIB)} GiB` : formatSize(bytes);
 
 type Disk = NonNullable<ThreadOrbDiskData["disk"]>;
 
@@ -106,7 +109,11 @@ function OrbFolderRow({
 }
 
 function OrbFolders({ threadId }: { readonly threadId: ThreadId }) {
-  const { data, isPending } = useQuery(threadOrbFoldersQueryOptions(threadId));
+  const orbReadable = useThreadOrbReadable(threadId);
+  const { data, isPending } = useQuery({
+    ...threadOrbFoldersQueryOptions(threadId),
+    enabled: orbReadable,
+  });
   const folders = data?.folders;
   if (folders === undefined)
     return isPending ? (
@@ -144,7 +151,11 @@ export function OrbDiskNotice({
   readonly onAskAgent?: (message: string) => void;
   readonly onOpenTerminal?: () => void;
 }) {
-  const { data } = useQuery(threadOrbDiskQueryOptions(threadId));
+  const orbReadable = useThreadOrbReadable(threadId);
+  const { data } = useQuery({
+    ...threadOrbDiskQueryOptions(threadId),
+    enabled: orbReadable,
+  });
   const disk = data?.disk;
   const pressure = disk?.pressure === true;
   const [phase, setPhase] = React.useState<Phase>("hidden");

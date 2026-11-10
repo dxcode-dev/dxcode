@@ -1,5 +1,9 @@
 import type { ThreadId, UserId } from "@dx/domain";
-import type { InfiniteData, QueryClient } from "@tanstack/react-query";
+import {
+  hashKey,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import {
   markThreadSeen,
   type ThreadListClientItem,
@@ -95,8 +99,40 @@ export const openThreadSeen = (
     client.getQueryData(threadKeys.detail(userId, threadId)) !== undefined
   )
     return;
-  expectSeenEcho(threadId);
-  void markThreadSeen(threadId).catch(() =>
-    invalidateThreadLists(client, userId),
-  );
+  const mark = () => {
+    expectSeenEcho(threadId);
+    void markThreadSeen(threadId).catch(() =>
+      invalidateThreadLists(client, userId),
+    );
+  };
+  if (row !== undefined) return mark();
+  // Known to no list yet, such as a URL loaded fresh: marked once the
+  // Thread loads, so one that does not exist, or is hidden, is never sent.
+  markWhenLoaded(client, userId, threadId, mark);
+};
+
+/** How long to wait for an opened Thread to load before giving up. */
+const SEEN_WAIT_MS = 60_000;
+
+const markWhenLoaded = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+  mark: () => void,
+) => {
+  const hash = hashKey(threadKeys.detail(userId, threadId));
+  const cache = client.getQueryCache();
+  let unsubscribe = () => {};
+  const timer = setTimeout(() => unsubscribe(), SEEN_WAIT_MS);
+  unsubscribe = cache.subscribe(({ query }) => {
+    if (query.queryHash !== hash) return;
+    if (query.state.status === "success") {
+      unsubscribe();
+      clearTimeout(timer);
+      mark();
+    } else if (query.state.status === "error") {
+      unsubscribe();
+      clearTimeout(timer);
+    }
+  });
 };

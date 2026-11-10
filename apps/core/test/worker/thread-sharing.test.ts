@@ -794,7 +794,7 @@ describe("Thread families share as one unit", () => {
   });
 });
 
-describe("A family tree shows only the Threads the requester may read", () => {
+describe("A shared family lists only the Threads the requester may read", () => {
   // sharedThread ─ starter ─ middle ─ gone (deleted)
   //                        └ hidden (not shared)
   const starter = thread(
@@ -878,29 +878,44 @@ describe("A family tree shows only the Threads the requester may read", () => {
     );
   });
 
-  const treeOf = async (
-    userId: UserId,
-    threadId: string,
-    viaApplication = false,
-  ) => {
+  const read = async (userId: UserId, path: string, viaApplication = false) => {
     const response = await createApp(userId, viaApplication).request(
-      `/threads/${threadId}/tree`,
-      {},
+      path,
+      { headers: { cookie: "dx-test=1" } },
       bindings,
     );
     if (response.status !== 200) return response.status;
-    const { data } = await response.json<{
-      data: {
-        rootThreadId: string;
-        items: Array<{
-          id: string;
+    return (
+      await response.json<{
+        data: {
           access?: string;
           pinnedAt?: string;
-          startedByThreadId?: string;
-        }>;
-      };
-    }>();
-    return data;
+          items?: Array<{
+            id: string;
+            access?: string;
+            pinnedAt?: string;
+            startedByThreadId?: string;
+          }>;
+        };
+      }>()
+    ).data;
+  };
+  const accessOf = async (userId: UserId, threadId: string) => {
+    const seen = await read(userId, `/threads/${threadId}`);
+    return typeof seen === "number" ? seen : seen.access;
+  };
+  const childrenOf = async (
+    userId: UserId,
+    parentThreadId: string,
+    viaApplication = false,
+  ) => {
+    const seen = await read(
+      userId,
+      `/threads?lifecycleState=active&parentThreadId=${parentThreadId}`,
+      viaApplication,
+    );
+    if (typeof seen === "number") throw new Error(`List failed: ${seen}`);
+    return (seen.items ?? []).map(({ id }) => id);
   };
 
   it("lists for a member the shared, live family members and nothing else", async () => {
@@ -931,44 +946,64 @@ describe("A family tree shows only the Threads the requester may read", () => {
       .bind("2026-08-21T00:00:00.000Z", sharedThread.id)
       .run();
 
-    const seen = await treeOf(member, middle.id);
-    if (typeof seen === "number") throw new Error(`Tree failed: ${seen}`);
-    expect(seen.rootThreadId).toBe(sharedThread.id);
-    expect(seen.items).toEqual([
-      expect.objectContaining({ id: sharedThread.id, access: "contribute" }),
-      expect.objectContaining({
-        id: starter.id,
-        access: "contribute",
-        startedByThreadId: sharedThread.id,
-      }),
-      expect.objectContaining({
-        id: middle.id,
-        access: "contribute",
-        startedByThreadId: starter.id,
-      }),
-    ]);
-    expect(seen.items.every((item) => item.pinnedAt === undefined)).toBe(true);
-    // The Thread the member may not read has no tree for them.
-    expect(await treeOf(member, hidden.id)).toBe(404);
-    expect(await treeOf(member, gone.id)).toBe(404);
+    // A member reads the shared, live members, and lists those they follow.
+    for (const id of [sharedThread.id, starter.id, middle.id])
+      expect(await accessOf(member, id)).toBe("contribute");
+    expect(await accessOf(member, hidden.id)).toBe(404);
+    expect(await accessOf(member, gone.id)).toBe(404);
+    for (const id of [sharedThread.id, starter.id, middle.id])
+      expect((await send(member, `/threads/${id}/follow`, "PUT")).status).toBe(
+        200,
+      );
+    expect(
+      (await send(member, `/threads/${hidden.id}/follow`, "PUT")).status,
+    ).toBe(404);
+    const shared = await read(member, "/shared-threads");
+    if (typeof shared === "number") throw new Error(`List failed: ${shared}`);
+    expect(shared.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: sharedThread.id, access: "contribute" }),
+        expect.objectContaining({
+          id: starter.id,
+          access: "contribute",
+          startedByThreadId: sharedThread.id,
+        }),
+        expect.objectContaining({
+          id: middle.id,
+          access: "contribute",
+          startedByThreadId: starter.id,
+        }),
+      ]),
+    );
+    expect(shared.items?.map(({ id }) => id).sort()).toEqual(
+      [sharedThread.id, starter.id, middle.id].sort(),
+    );
+    expect(shared.items?.every((item) => item.pinnedAt === undefined)).toBe(
+      true,
+    );
+    // The owner's pin stays the owner's.
+    const memberRow = await read(
+      member,
+      `/threads/${sharedThread.id}/list-item`,
+    );
+    if (typeof memberRow === "number")
+      throw new Error(`Row failed: ${memberRow}`);
+    expect(memberRow).toMatchObject({ access: "contribute" });
+    expect(memberRow.pinnedAt).toBeUndefined();
 
-    // The owner sees every live member, with the pin.
-    const own = await treeOf(owner, middle.id);
-    if (typeof own === "number") throw new Error(`Tree failed: ${own}`);
-    expect(own.items.map(({ id }) => id)).toEqual([
-      sharedThread.id,
-      starter.id,
-      middle.id,
-      hidden.id,
-    ]);
-    expect(own.items[0]).toMatchObject({
-      pinnedAt: "2026-08-21T00:00:00.000Z",
-    });
-    expect(own.items.every((item) => item.access === undefined)).toBe(true);
+    // The owner lists every live member, and sees the pin.
+    expect((await childrenOf(owner, sharedThread.id)).sort()).toEqual(
+      [starter.id, middle.id, hidden.id].sort(),
+    );
+    const ownRow = await read(owner, `/threads/${sharedThread.id}/list-item`);
+    if (typeof ownRow === "number") throw new Error(`Row failed: ${ownRow}`);
+    expect(ownRow).toMatchObject({ pinnedAt: "2026-08-21T00:00:00.000Z" });
+    expect(ownRow.access).toBeUndefined();
 
     // Other workspaces and the owner's unshared Threads stay hidden.
-    expect(await treeOf(outsider, middle.id)).toBe(404);
-    expect(await treeOf(member, lonerThread.id)).toBe(404);
+    expect(await accessOf(outsider, middle.id)).toBe(404);
+    expect(await read(outsider, "/shared-threads")).toEqual({ items: [] });
+    expect(await accessOf(member, lonerThread.id)).toBe(404);
   });
 
   it("holds an External API App to its workspace's Projects and the owner's own Threads", async () => {
@@ -976,17 +1011,24 @@ describe("A family tree shows only the Threads the requester may read", () => {
       workspaceAccess: "view",
     });
     // The owner's personal Project is outside the App's workspace.
-    expect(await treeOf(owner, middle.id, true)).toBe(404);
+    expect(await childrenOf(owner, sharedThread.id, true)).toEqual([]);
+    expect((await childrenOf(owner, sharedThread.id)).sort()).toEqual(
+      [starter.id, middle.id, hidden.id, gone.id].sort(),
+    );
     // A Project of that workspace is inside it.
-    const inWorkspace = await treeOf(owner, workspaceChild.id, true);
-    if (typeof inWorkspace === "number")
-      throw new Error(`Tree failed: ${inWorkspace}`);
-    expect(inWorkspace.items.map(({ id }) => id)).toEqual([
-      workspaceRoot.id,
+    expect(await childrenOf(owner, workspaceRoot.id, true)).toEqual([
       workspaceChild.id,
     ]);
     // An App never reads another member's shared Threads.
-    expect(await treeOf(member, middle.id, true)).toBe(404);
-    expect(typeof (await treeOf(member, middle.id))).toBe("object");
+    expect(
+      (await send(member, `/threads/${middle.id}/follow`, "PUT")).status,
+    ).toBe(200);
+    expect(await read(member, "/shared-threads", true)).toEqual({ items: [] });
+    expect(await read(member, `/threads/${middle.id}/list-item`, true)).toBe(
+      404,
+    );
+    expect(await read(member, `/threads/${middle.id}/list-item`)).toMatchObject(
+      { id: middle.id, access: "view" },
+    );
   });
 });

@@ -325,6 +325,8 @@ async fn register(socket: &mut Socket) -> String {
     let heartbeat = next_text(socket).await;
     assert_eq!(heartbeat["type"], "heartbeat");
     assert_eq!(heartbeat["generation"], generation);
+    // A session's first heartbeat has no earlier reading to compare.
+    assert!(heartbeat.get("cpu").is_none(), "{heartbeat}");
     generation
 }
 
@@ -2298,6 +2300,12 @@ async fn real_daemon_reports_memory_and_stops_listed_processes() {
         .as_u64()
         .expect("totalBytes");
     assert!(total > 0 && used <= total, "{heartbeat}");
+    // Every later heartbeat carries the busy share since the one before.
+    let cpu = heartbeat["cpu"].as_object().expect("cpu");
+    assert_eq!(cpu.len(), 1, "{heartbeat}");
+    let busy = cpu["busyPercent"].as_f64().expect("busyPercent");
+    assert!((0.0..=100.0).contains(&busy), "{heartbeat}");
+    assert_eq!((busy * 10.0).round() / 10.0, busy, "{heartbeat}");
 
     // About 48 MiB held in a shell that ignores SIGTERM, a plain sleeper,
     // and a stand-in Claude Code run: the runner and the CLI it starts.

@@ -1015,6 +1015,11 @@ export default Alchemy.Stack(
                 className: "OrbContainerObject",
                 scriptName: orbContainers.workerName,
               }),
+              // Executor-mode Threads' agent containers (no Orb).
+              THREAD_EXECUTOR: Cloudflare.DurableObject("THREAD_EXECUTOR", {
+                className: "ThreadExecutorObject",
+                scriptName: orbContainers.workerName,
+              }),
             }),
       },
     });

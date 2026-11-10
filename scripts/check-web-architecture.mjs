@@ -482,7 +482,8 @@ export const inspectWebArchitecture = ({
       displayPath.endsWith(
         "/features/settings/model-routing/claude-code-notice-store.ts",
       ) ||
-      displayPath.endsWith("/features/install-app/install-app-store.ts");
+      displayPath.endsWith("/features/install-app/install-app-store.ts") ||
+      displayPath.endsWith("/features/spaces/space-details-store.ts");
     if (!persistenceOwner)
       for (const { index, text } of indices(
         source,

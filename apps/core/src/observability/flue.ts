@@ -14,6 +14,8 @@ import {
 import { notifyTurnCompleted } from "../notifications/turn-completed.js";
 import { pickQuickActionsAtTurnEnd } from "../quick-actions/turn-ended.js";
 import { recordFlueUsage } from "../settings/usage/recorder.js";
+import { clearSpaceEyesOnSettle } from "../spaces/posts/eyes.js";
+import { recordSpaceStatusLine } from "../spaces/status-line.js";
 import { enqueueThreadSearchIndex } from "../thread-search/enqueue.js";
 import { recordFlueThreadActivity } from "../threads/activity.js";
 import {
@@ -155,6 +157,19 @@ export const observeFlueEvent = (
         threadActivityDeliveries.delete(threadId);
     });
   }
+  // A Space child's card line follows its activity, so it is written once
+  // the activity it describes is.
+  const statusLineDelivery =
+    event.type === "submission_running" ||
+    event.type === "submission_settled" ||
+    event.type === "turn"
+      ? activityDelivery.then(() =>
+          Promise.all([
+            recordSpaceStatusLine(bindings, event),
+            clearSpaceEyesOnSettle(bindings, event),
+          ]),
+        )
+      : Promise.resolve();
   const searchIndexDelivery =
     event.type === "submission_settled" && event.instanceId !== undefined
       ? enqueueThreadSearchIndex(bindings, event.instanceId)
@@ -195,6 +210,7 @@ export const observeFlueEvent = (
     searchIndexDelivery,
     turnNotification,
     quickActions,
+    statusLineDelivery,
     startupDelivery.catch(() => {
       settingsPersistenceLogger.warn(
         "Startup phase observation could not be delivered.",

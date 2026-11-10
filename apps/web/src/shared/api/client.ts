@@ -94,11 +94,11 @@ import {
   GetSettingsContextErrorResponseSchema,
   GetSettingsContextResponseSchema,
   GetSigningKeysResponseSchema,
+  GetSpaceAgentModelResponseSchema,
   GetThreadListItemResponseSchema,
   GetThreadMembersResponseSchema,
   GetThreadReadinessResponseSchema,
   GetThreadResponseSchema,
-  GetThreadTreeResponseSchema,
   GetWorkspacePolicyResponseSchema,
   GetWorkspaceProfileResponseSchema,
   GetWorkspaceUsageResponseSchema,
@@ -229,6 +229,7 @@ import {
   SnoozeThreadResponseSchema,
   SourceControlDeniedResponseSchema,
   SourceControlProviderFailureResponseSchema,
+  SpaceErrorResponseSchema,
   type ThreadData,
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
@@ -267,6 +268,7 @@ import {
   UpdateProjectResponseSchema,
   UpdateSkillStateResponseSchema,
   UpdateSkillWorkspacePolicyResponseSchema,
+  type UpdateSpaceAgentModelRequestSchema,
   type UpdateThreadRequest,
   UpdateThreadResponseSchema,
   type UpdateThreadSharingRequest,
@@ -360,15 +362,27 @@ export class ApiError extends Error {
   }
 }
 
+/** A feature's own error answers, which `request` reads before the shared ones. */
+type RefusalSchema = Schema.ConstraintDecoder<{
+  readonly data: { readonly code: string; readonly message: string };
+}>;
+
 export const request = async <
   SchemaType extends Schema.ConstraintDecoder<unknown>,
 >(
   path: string,
   schema: SchemaType,
   init?: RequestInit,
+  /**
+   * The route's own errors, for a feature that loads its schemas lazily
+   * instead of adding them to the shared list below.
+   */
+  refusals?: RefusalSchema,
 ): Promise<SchemaType["Type"]> => {
   // The first read of a boot path takes the answer read at boot; one that
-  // does not decode is read again.
+  // does not decode is read again. A 404 read at boot is the answer too:
+  // the Thread is not there, and reading it again only delays saying so.
+  let bootNotFound: Response | undefined;
   if ((init?.method ?? "GET") === "GET") {
     const prefetched = await takeBootRead(path);
     if (prefetched?.status === 200) {
@@ -380,23 +394,46 @@ export const request = async <
       );
       if (decoded !== undefined) return decoded.value;
     }
+    if (prefetched?.status === 404)
+      bootNotFound = new Response(prefetched.text, {
+        status: 404,
+        headers: { "content-type": prefetched.contentType },
+      });
   }
-  const response = await observeRequest(path, init?.method, () =>
-    fetch(path, {
-      ...init,
-      credentials: "same-origin",
-      headers: {
-        accept: "application/json",
-        ...(init?.body === undefined
-          ? {}
-          : { "content-type": "application/json" }),
-        ...init?.headers,
-      },
-    }),
-  );
+  const response =
+    bootNotFound ??
+    (await observeRequest(path, init?.method, () =>
+      fetch(path, {
+        ...init,
+        credentials: "same-origin",
+        headers: {
+          accept: "application/json",
+          ...(init?.body === undefined
+            ? {}
+            : { "content-type": "application/json" }),
+          ...init?.headers,
+        },
+      }),
+    ));
   noticeUnauthenticated(response);
   if (!response.ok) {
     const body: unknown = await response.json().catch(() => undefined);
+    const refusal =
+      refusals === undefined
+        ? undefined
+        : await Schema.decodeUnknownPromise(refusals)(body).catch(
+            () => undefined,
+          );
+    if (refusal !== undefined)
+      throw new ApiError(
+        response.status,
+        refusal.data.message,
+        refusal.data.code,
+        undefined,
+        undefined,
+        true,
+        refusal.data,
+      );
     const settingsError = await Schema.decodeUnknownPromise(
       Schema.Union([
         GetSettingsContextErrorResponseSchema,
@@ -472,6 +509,7 @@ export const request = async <
         ThreadOrbProcessErrorResponseSchema,
         SearchThreadsInvalidRequestResponseSchema,
         SearchThreadsUnavailableResponseSchema,
+        SpaceErrorResponseSchema,
       ]),
     )(body).catch(() => undefined);
     if (settingsError !== undefined) {
@@ -511,7 +549,6 @@ export type ThreadListClientItem = ThreadData &
       | "mode"
       | "changes"
       | "childCount"
-      | "startedCount"
       | "unread"
       | "turnFailed"
       | "childActivity"
@@ -1795,27 +1832,30 @@ export interface ArchivedThread {
 
 /**
  * `children`: true for every child in the parent's former state, or the
- * exact children to change, as an Undo restores them.
+ * exact children to change, as an Undo restores them. `reason: "ship"`
+ * archives it from its Ship outcome, so its work counts as shipped.
  */
 export const setThreadArchived = async (
   threadId: ThreadId,
   archived: boolean,
   children?: true | ReadonlyArray<ThreadId>,
+  reason?: "ship",
 ): Promise<ArchivedThread> => {
   const response = await request(
     `/v1/threads/${encodeURIComponent(threadId)}/archive`,
     ArchiveThreadResponseSchema,
     {
       method: "PATCH",
-      body: JSON.stringify(
-        children === undefined
-          ? { archived }
+      body: JSON.stringify({
+        archived,
+        ...(children === undefined
+          ? {}
           : {
-              archived,
               includeChildren: true,
               ...(children === true ? {} : { childThreadIds: children }),
-            },
-      ),
+            }),
+        ...(reason === undefined ? {} : { reason }),
+      }),
     },
   );
   return {
@@ -1854,16 +1894,6 @@ export const getThreadListItem = async (
     await request(
       `/v1/threads/${encodeURIComponent(threadId)}/list-item`,
       GetThreadListItemResponseSchema,
-      { signal },
-    )
-  ).data;
-
-/** The Thread's family as the requester may read it, for its tree page. */
-export const getThreadTree = async (threadId: ThreadId, signal?: AbortSignal) =>
-  (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/tree`,
-      GetThreadTreeResponseSchema,
       { signal },
     )
   ).data;
@@ -1959,6 +1989,28 @@ export const resetProfileMode = async (mode: string) =>
       `/v1/settings/personal/model-routing/profile/modes/${encodeURIComponent(mode)}`,
       ProfileResponseSchema,
       { method: "DELETE" },
+    )
+  ).data;
+
+/** Settings → Mode Dial → Space: the model new Spaces run on, and its route. */
+export const getSpaceAgentModel = async (signal?: AbortSignal) =>
+  (
+    await request(
+      "/v1/settings/personal/space-agent-model",
+      GetSpaceAgentModelResponseSchema,
+      { signal },
+    )
+  ).data;
+
+/** `null` returns new Spaces to Auto (Claude Opus 5.5, medium). */
+export const putSpaceAgentModel = async (
+  pin: (typeof UpdateSpaceAgentModelRequestSchema.Encoded)["pin"],
+) =>
+  (
+    await request(
+      "/v1/settings/personal/space-agent-model",
+      GetSpaceAgentModelResponseSchema,
+      { method: "PUT", body: JSON.stringify({ pin }) },
     )
   ).data;
 

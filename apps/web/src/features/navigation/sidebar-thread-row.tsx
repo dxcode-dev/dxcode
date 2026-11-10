@@ -11,6 +11,7 @@ import {
   Bookmark,
   ChevronDown,
   CornerDownRight,
+  Orbit,
   Pin,
 } from "lucide-react";
 import * as React from "react";
@@ -41,11 +42,7 @@ import {
   focusSidebarCommandItem,
   noteSidebarContextPress,
 } from "./sidebar-command-focus.js";
-import {
-  countControlAttributes,
-  startedCountOf,
-} from "./sidebar-thread-count.js";
-import { SidebarThreadStartedCount } from "./sidebar-thread-started-count.js";
+import { countControlAttributes } from "./sidebar-thread-count.js";
 import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";
 
@@ -332,7 +329,6 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
     ? childActivity(thread, childCount)
     : undefined;
   const parentThreadId = thread.parentThreadId;
-  const startedCount = startedCountOf(thread);
   const sharedWithMe = thread.access !== undefined && thread.access !== "owner";
   const owner = thread.participants?.find((person) => person.owner);
   // A shared Thread shows only its owner at the row's end; hover actions
@@ -422,9 +418,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
         className="thread-row-shell"
         data-avatars={avatars === null ? undefined : ""}
         data-actions={actionCount === 0 ? undefined : actionCount}
-        {...countControlAttributes(
-          childStatus?.text ?? (startedCount > 0 ? `${startedCount}` : ""),
-        )}
+        {...countControlAttributes(childStatus?.text ?? "")}
         data-child={child ? "" : undefined}
         data-snooze={snoozed ? "snoozed" : woke ? "woke" : undefined}
         data-error={failed && !snoozed && !woke ? "" : undefined}
@@ -464,19 +458,29 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
             <CornerDownRight className="thread-child-marker" aria-hidden />
           ) : null}
           <span className="thread-executor-icon">
-            <OrbIcon
-              staticWhenIdle
-              activityStatus={activityStatus}
-              unread={unread}
-              aria-hidden="false"
-              aria-label={`${
-                thread.lifecycleState === "archived"
-                  ? `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} paused`
-                  : activityStatus === "working"
-                    ? `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} working`
-                    : `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} idle`
-              }${unread ? ", unread" : ""}`}
-            />
+            {thread.kind === "space" ? (
+              // A Space (listed here once archived) runs no Orb: its mark.
+              <Orbit
+                className="thread-space-icon"
+                data-thread-color={thread.color}
+                aria-label="Space"
+                role="img"
+              />
+            ) : (
+              <OrbIcon
+                staticWhenIdle
+                activityStatus={activityStatus}
+                unread={unread}
+                aria-hidden="false"
+                aria-label={`${
+                  thread.lifecycleState === "archived"
+                    ? `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} paused`
+                    : activityStatus === "working"
+                      ? `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} working`
+                      : `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} idle`
+                }${unread ? ", unread" : ""}`}
+              />
+            )}
             {parentThreadId === undefined ? null : (
               <SubthreadIcon
                 className="thread-child-badge"
@@ -509,9 +513,7 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
             expanded={expanded}
             onToggle={() => onToggleChildren(thread.id)}
           />
-        ) : (
-          <SidebarThreadStartedCount thread={thread} />
-        )}
+        ) : null}
         {sharedWithMe ? (
           onUnfollow === undefined ? null : (
             <span className="thread-hover-actions">

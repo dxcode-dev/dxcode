@@ -1,3 +1,7 @@
+import {
+  ABSENT_CONVERSATION_REQUEST_HEADER,
+  ABSENT_CONVERSATION_RESPONSE_HEADER,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { dispatch, getAgentInstance } from "@flue/runtime";
 import type { Hono, MiddlewareHandler } from "hono";
@@ -6,6 +10,7 @@ import { linkMessageAttachments } from "../attachments/message.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { threadPersistenceLogger } from "../logging.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { recordAdmittedThreadSubmission } from "./activity.js";
 import {
   deliverInitialDispatch,
   readPendingInitialDispatch,
@@ -31,6 +36,9 @@ const initialDispatchDelivery = (bindings: Bindings) => {
       }),
     invalidate: (threadId: ThreadId) =>
       publishRealtimeInvalidation(bindings, threadId, "thread.invalidated"),
+    recordAdmission: (
+      admitted: Parameters<typeof recordAdmittedThreadSubmission>[1],
+    ) => recordAdmittedThreadSubmission(bindings, admitted),
   };
 };
 
@@ -172,7 +180,28 @@ export const answerReadsWhileFirstMessagePending =
         agent = await agentStarted(threadId).catch(() => "error" as const);
       // A failed lookup is not a reason to wait.
       const waiting = state === "pending" || agent === true;
-      if (!waiting) return report("not-waiting");
+      if (!waiting) {
+        // No conversation and none on its way, as a new Space before anyone
+        // writes: the page that asks hears so without an error status.
+        if (
+          state === undefined &&
+          agent === false &&
+          context.req.query("view") === "history" &&
+          context.req.path.endsWith(`/${threadId}`) &&
+          context.req.header(ABSENT_CONVERSATION_REQUEST_HEADER) !== undefined
+        ) {
+          context.res = undefined;
+          context.res = new Response(null, {
+            status: 204,
+            headers: {
+              [ABSENT_CONVERSATION_RESPONSE_HEADER]: "absent",
+              "cache-control": "no-store",
+            },
+          });
+          return report("absent");
+        }
+        return report("not-waiting");
+      }
       // The same read again: Flue's router serves its own paths from the
       // Thread ID on.
       const url = new URL(context.req.url);

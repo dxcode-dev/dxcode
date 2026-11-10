@@ -11,9 +11,11 @@ import {
   orbProviderBetaFeature,
   pickClaudePlan,
   type RunnerProfileCatalog,
+  shipPromptFor,
   THREAD_COLORS,
   type ThreadId,
   type ThreadModelSelection,
+  type UserId,
 } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import { Effect, Result, Schema } from "effect";
@@ -25,6 +27,12 @@ import type { Bindings } from "../http/types.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { listenForThreadHints } from "../realtime/thread-hints.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import {
+  SPACE_CREATE_THREAD_DESCRIPTION,
+  SPACE_TOOL_PARAMETER_DESCRIPTIONS,
+} from "../spaces/agent/tool-descriptions.js";
+import { spacesEnabledFor } from "../spaces/gate.js";
+import { readSpacePost } from "../spaces/posts/store.js";
 import { createThreadSearchTools } from "../thread-search/agent-tools.js";
 import { resolveOrbChoice } from "./agent-orbs.js";
 import { type CallingThread, readCallingThread } from "./calling-thread.js";
@@ -292,7 +300,23 @@ export const createThreadTools = (
   submissionId?: string,
   /** Claude Code mode: read_thread returns material instead of an answer. */
   claudeCode = false,
+  /**
+   * The person whose message this turn answers, from its author tag; absent
+   * when another Thread, an automation, or no one wrote it. A Space's child
+   * records them as its requester, else the Space's owner.
+   */
+  requesterUserId?: UserId,
+  /**
+   * A Space's main thread: create_thread takes the post that asked for the
+   * work (`request_post_id`) and a Project by name, in the Space's words.
+   */
+  options?: { readonly space?: true },
 ): ToolDefinition[] => {
+  const space = options?.space === true;
+  const spaceParameter = (name: string, fallback: string) =>
+    space
+      ? (SPACE_TOOL_PARAMETER_DESCRIPTIONS.create_thread?.[name] ?? fallback)
+      : fallback;
   /**
    * What a tool call's Thread IDs and message keys derive from, so a retry
    * of the call reuses them. Providers may repeat or omit tool call IDs
@@ -304,8 +328,17 @@ export const createThreadTools = (
       ? `${callingThreadId}:${crypto.randomUUID()}`
       : `${callingThreadId}:${submissionId ?? ""}:${toolCallId}`;
 
-  const callingThread = (context: ThreadToolsContext) =>
-    readCallingThread(context.db, callingThreadId);
+  /**
+   * The calling Thread, as a Space only while Spaces is on for its owner:
+   * otherwise it and every Space Thread are out of the tools' reach.
+   */
+  const callingThread = async (
+    context: ThreadToolsContext,
+  ): Promise<CallingThread> => {
+    const thread = await readCallingThread(context.db, callingThreadId);
+    const spaces = await spacesEnabledFor(context.bindings, thread.ownerUserId);
+    return { ...thread, space: thread.space && spaces, spaces };
+  };
 
   /** The owner's Threads among `threadIds`; others are absent. */
   const readThreads = async (
@@ -321,7 +354,9 @@ export const createThreadTools = (
            (SELECT resets_at FROM thread_plan_wait
              WHERE thread_id = threads.id) AS plan_resets_at
          FROM threads
-         WHERE owner_user_id = ? AND lifecycle_state != 'deleted'
+         WHERE owner_user_id = ? AND lifecycle_state != 'deleted'${
+           owner.spaces === true ? "" : " AND kind = 'thread'"
+}
            AND id IN (${threadIds.map(() => "?").join(", ")})${
              owner.sharedFamilyRoot === undefined
                ? ""
@@ -393,6 +428,7 @@ export const createThreadTools = (
     method: "GET" | "POST" | "PATCH",
     path: string,
     body?: unknown,
+    requestedByUserId?: UserId,
   ) =>
     requestAsOwner(
       {
@@ -403,6 +439,7 @@ export const createThreadTools = (
         ...(context.waitUntil === undefined
           ? {}
           : { waitUntil: context.waitUntil }),
+        ...(requestedByUserId === undefined ? {} : { requestedByUserId }),
       },
       method,
       path,
@@ -520,25 +557,110 @@ export const createThreadTools = (
       throw new Error("This deployment's Orb catalog is unavailable.");
     return loaded.success.publicCatalog;
   };
+  /**
+   * A Project the owner can reach, by ID or by name (ignoring case): a
+   * Space without a Project names one for code work.
+   */
+  const projectIdOrName = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+    value: string,
+  ) => {
+    const found = await context.db
+      .prepare(
+        `SELECT project.id FROM projects AS project
+          WHERE project.deleted_at IS NULL
+            AND (project.id = ?2 OR lower(project.name) = lower(?2))
+            AND ${threadProjectReachableSql("project", "?1")}
+          ORDER BY project.id = ?2 DESC, project.created_at
+          LIMIT 1`,
+      )
+      .bind(owner.ownerUserId, value.trim())
+      .first<string>("id");
+    if (found === null)
+      throw new Error(
+        `No Project named or with ID "${value}" is reachable for this Space's owner.`,
+      );
+    return found;
+  };
+  const shipInput = v.optional(
+    v.pipe(
+      v.boolean(),
+      v.description(
+        SPACE_TOOL_PARAMETER_DESCRIPTIONS.send_thread_message?.ship ?? "",
+      ),
+    ),
+  );
+  /** The project's Ship Behavior prompt for a thread, as its Ship sends it. */
+  const shipPromptOf = async (
+    context: ThreadToolsContext,
+    threadId: string,
+  ) => {
+    const row = await context.db
+      .prepare(
+        `SELECT project.ship_behavior, project.ship_prompt,
+                snapshot.default_branch
+           FROM threads AS thread
+           JOIN projects AS project ON project.id = thread.project_id
+           LEFT JOIN thread_source_snapshot AS snapshot
+             ON snapshot.thread_id = thread.id
+          WHERE thread.id = ?1`,
+      )
+      .bind(threadId)
+      .first<{
+        ship_behavior: "ship" | "push" | "custom";
+        ship_prompt: string | null;
+        default_branch: string | null;
+      }>();
+    if (row === null) throw new Error(`Thread ${threadId} was not found.`);
+    return shipPromptFor(
+      {
+        shipAction: row.ship_behavior,
+        ...(row.ship_prompt === null ? {} : { shipPrompt: row.ship_prompt }),
+      },
+      row.default_branch ?? undefined,
+    );
+  };
+  const requestPostIdInput = v.optional(
+    v.pipe(
+      v.string(),
+      v.regex(/^pst_[0-9a-z]{26}$/),
+      v.description(
+        spaceParameter(
+          "request_post_id",
+          "The ID of the post that asked for this work.",
+        ),
+      ),
+    ),
+  );
   return [
     defineTool({
       name: "create_thread",
-      description: description([
-        "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, lists under this Thread in their sidebar, and has this Thread's sharing: private while this Thread is private, and open to the same people with the same access while it is shared, so they can read its prompt and work.",
-        "Use a child Thread for a self-contained task that can run on its own or in parallel with yours, or that needs a separate Orb. Do the work yourself when it is small, when you need its result immediately, or when it depends on files you changed here.",
-        "Files do not transfer on their own. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt and push any commits it must build on first; for unpushed work, tell the child to copy it from this Thread with download_thread_changes or download_thread_file, naming the repository and branch.",
-        "Returns the child's thread ID. The child sends its result to this Thread as a message when it finishes, and that message starts a new turn here. Use send_thread_message for follow-ups.",
-        "Before choosing an Orb or a mode, call list_orbs for the providers and sizes the owner can start, and list_agent_modes for the modes and the models they run. Omit them to use the project's Orb and this Thread's mode.",
-        "To investigate a bug report (when asked to \"investigate bug_...\"), pass bug_report instead of prompt. A report has at most one investigating Thread: if it already has one, you get that Thread instead of a new one. dx writes its first message, which has the child load the report with read_bug_report; never copy a report's text into a prompt. Like any child, it starts in this Thread's Project unless you pass project_id.",
-      ]),
+      description: space
+        ? SPACE_CREATE_THREAD_DESCRIPTION
+        : description([
+            "Start a child Thread: a new dx Thread with its own agent and its own Orb that works on a task while you continue. It belongs to this Thread's owner, lists under this Thread in their sidebar, and has this Thread's sharing: private while this Thread is private, and open to the same people with the same access while it is shared, so they can read its prompt and work.",
+            "Use a child Thread for a self-contained task that can run on its own or in parallel with yours, or that needs a separate Orb. Do the work yourself when it is small, when you need its result immediately, or when it depends on files you changed here.",
+            "Files do not transfer on their own. The child starts from its project's repository, not from this Orb, so uncommitted changes here are invisible to it. Put everything it needs in the prompt and push any commits it must build on first; for unpushed work, tell the child to copy it from this Thread with download_thread_changes or download_thread_file, naming the repository and branch.",
+            "Returns the child's thread ID. The child sends its result to this Thread as a message when it finishes, and that message starts a new turn here. Use send_thread_message for follow-ups.",
+            "Before choosing an Orb or a mode, call list_orbs for the providers and sizes the owner can start, and list_agent_modes for the modes and the models they run. Omit them to use the project's Orb and this Thread's mode.",
+            "To investigate a bug report (when asked to \"investigate bug_...\"), pass bug_report instead of prompt. A report has at most one investigating Thread: if it already has one, you get that Thread instead of a new one. dx writes its first message, which has the child load the report with read_bug_report; never copy a report's text into a prompt. Like any child, it starts in this Thread's Project unless you pass project_id.",
+          ]),
       input: v.object({
+        // Only a Space's create_thread has it; elsewhere it is absent.
+        ...((space ? { request_post_id: requestPostIdInput } : {}) as {
+          readonly request_post_id: typeof requestPostIdInput;
+        }),
         prompt: v.optional(
           v.pipe(
             v.string(),
             v.minLength(1),
             v.maxLength(MESSAGE_MAX_CHARS),
             v.description(
-              "The complete task for the child's agent. It cannot see this conversation. Required unless bug_report is set.",
+              spaceParameter(
+                "prompt",
+                "The complete task for the child's agent. It cannot see this conversation. Required unless bug_report is set.",
+              ),
             ),
           ),
         ),
@@ -558,7 +680,10 @@ export const createThreadTools = (
             v.minLength(1),
             v.maxLength(256),
             v.description(
-              "Title for the child Thread in the sidebar; kept as given. Omit to have one generated.",
+              spaceParameter(
+                "title",
+                "Title for the child Thread in the sidebar; kept as given. Omit to have one generated.",
+              ),
             ),
           ),
         ),
@@ -566,7 +691,10 @@ export const createThreadTools = (
           v.pipe(
             v.string(),
             v.description(
-              "Project ID for the child Thread. Defaults to this Thread's project.",
+              spaceParameter(
+                "project_id",
+                "Project ID for the child Thread. Defaults to this Thread's project.",
+              ),
             ),
           ),
         ),
@@ -624,7 +752,31 @@ export const createThreadTools = (
                   data.orb_provider,
                   data.orb_size,
                 );
-          const projectId = data.project_id ?? defaultProjectId(owner);
+          const projectId =
+            data.project_id === undefined
+              ? defaultProjectId(owner)
+              : space
+                ? await projectIdOrName(context, owner, data.project_id)
+                : data.project_id;
+          // A Space's child is requested by the author of the post that
+          // asked for it.
+          const requestPost =
+            space && data.request_post_id !== undefined
+              ? await readSpacePost(
+                  context.db,
+                  callingThreadId,
+                  data.request_post_id,
+                )
+              : undefined;
+          if (requestPost === null)
+            throw new Error(
+              `Post ${data.request_post_id} was not found in this Space.`,
+            );
+          const requester =
+            requestPost?.author_kind === "user" &&
+            requestPost.author_user_id !== null
+              ? (requestPost.author_user_id as UserId)
+              : requesterUserId;
           // A retried tool call reuses its Thread.
           const threadId = await idempotentThreadId(callSeed(toolCallId));
           if (data.bug_report !== undefined) {
@@ -714,6 +866,8 @@ export const createThreadTools = (
                 : { claudeConnectionId: data.claude_plan }),
               initialMessage: { body: data.prompt ?? "", attachments: [] },
             },
+            // A Space's child is requested by whoever asked the Space.
+            owner.space ? (requester ?? owner.ownerUserId) : undefined,
           );
           const created = payload?.data as
             | { readonly id?: string; readonly projectId?: string }
@@ -723,6 +877,13 @@ export const createThreadTools = (
             | undefined;
           if (!response.ok || created?.id === undefined)
             throw routeFailure("create_thread", response.status, payload);
+          if (requestPost !== undefined)
+            await context.db
+              .prepare(
+                "UPDATE threads SET request_post_id = ?2 WHERE id = ?1 AND parent_thread_id = ?3",
+              )
+              .bind(created.id, requestPost.id, callingThreadId)
+              .run();
           // The child counts as working until its activity shows, so the
           // call returns without waiting for that record.
           if (submission?.submissionId !== undefined) {
@@ -755,6 +916,10 @@ export const createThreadTools = (
           v.maxLength(MESSAGE_MAX_CHARS),
           v.description("The message to deliver. Write it in full."),
         ),
+        // Only a Space's send_thread_message has it; elsewhere it is absent.
+        ...((space ? { ship: shipInput } : {}) as {
+          readonly ship: typeof shipInput;
+        }),
       }),
       run: async ({ data, toolCallId, signal }) =>
         withContext(async (context, owner) => {
@@ -772,7 +937,10 @@ export const createThreadTools = (
             `/v1/agents/dx/${encodeURIComponent(data.thread)}`,
             {
               kind: "user",
-              body: data.message,
+              body:
+                space && data.ship === true
+                  ? `${await shipPromptOf(context, data.thread)}\n\n${data.message}`
+                  : data.message,
               idempotencyKey: await sha256Hex(`${callSeed(toolCallId)}:send`),
             },
           );
@@ -955,7 +1123,12 @@ export const createThreadTools = (
       }),
       run: async ({ data }) =>
         withContext(async (context, owner) => {
-          const projectId = data.project_id ?? defaultProjectId(owner);
+          const projectId =
+            data.project_id === undefined
+              ? defaultProjectId(owner)
+              : space
+                ? await projectIdOrName(context, owner, data.project_id)
+                : data.project_id;
           const query =
             projectId === undefined
               ? ""

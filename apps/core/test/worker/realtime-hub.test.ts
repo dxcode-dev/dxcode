@@ -238,6 +238,144 @@ describe("RealtimeHub", () => {
     outsiderSocket.socket.close();
   });
 
+  it("relays comment typing only to others present on the Thread, storing nothing", async () => {
+    const audience = `workspace:${workspace}`;
+    const ownerSocket = await connect(audience, owner, client(21));
+    const memberSocket = await connect(audience, member, client(22));
+    const absentSocket = await connect(audience, member, client(23));
+    const [, memberReady] = (await Promise.all([
+      ownerSocket.first,
+      memberSocket.first,
+      absentSocket.first,
+    ])) as Array<{ revision: number }>;
+    for (const socket of [ownerSocket.socket, memberSocket.socket]) {
+      const joined = nextMessage(socket);
+      socket.send(
+        JSON.stringify({ type: "presence.join", topic: `thread:${threadId}` }),
+      );
+      await joined;
+    }
+    const ownerSeen: Array<Record<string, unknown>> = [];
+    const absentSeen: unknown[] = [];
+    ownerSocket.socket.addEventListener(
+      "message",
+      (event) => void ownerSeen.push(JSON.parse(event.data as string)),
+    );
+    absentSocket.socket.addEventListener(
+      "message",
+      (event) => void absentSeen.push(JSON.parse(event.data as string)),
+    );
+    const memberSeen: unknown[] = [];
+    memberSocket.socket.addEventListener(
+      "message",
+      (event) => void memberSeen.push(JSON.parse(event.data as string)),
+    );
+
+    memberSocket.socket.send(
+      JSON.stringify({
+        type: "presence.typing",
+        topic: `thread:${threadId}`,
+        scope: "msg-1",
+      }),
+    );
+    // A scope that is not a message id, and typing from a socket that never
+    // joined the Thread, are dropped.
+    memberSocket.socket.send(
+      JSON.stringify({
+        type: "presence.typing",
+        topic: `thread:${threadId}`,
+        scope: "<script>",
+      }),
+    );
+    absentSocket.socket.send(
+      JSON.stringify({
+        type: "presence.typing",
+        topic: `thread:${threadId}`,
+        scope: "msg-2",
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(ownerSeen.filter(({ type }) => type === "presence.typing")).toEqual([
+      {
+        type: "presence.typing",
+        topic: `thread:${threadId}`,
+        userId: member,
+        clientId: client(22),
+        scope: "msg-1",
+      },
+    ]);
+    expect(memberSeen).toEqual([]);
+    expect(
+      absentSeen.filter(
+        (event) => (event as { type: string }).type === "presence.typing",
+      ),
+    ).toEqual([]);
+
+    // Typing advances no one's revision: the next invalidation follows on.
+    const memberEvent = nextMessage(memberSocket.socket);
+    await publishRealtimeInvalidation(
+      { DB: env.DB, REALTIME_HUB: env.REALTIME_HUB },
+      threadId,
+      "comments.invalidated",
+    );
+    await expect(memberEvent).resolves.toEqual({
+      type: "comments.invalidated",
+      threadId,
+      revision: (memberReady?.revision ?? 0) + 1,
+    });
+    ownerSocket.socket.close();
+    memberSocket.socket.close();
+    absentSocket.socket.close();
+  });
+
+  it("tells members present on a Space when a thread it started changes its artifacts", async () => {
+    const audience = `workspace:${workspace}`;
+    const space = thread(911);
+    const child = thread(912);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO threads (id, project_id, owner_user_id, kind, visibility, workspace_access, shared_workspace_id, created_at, updated_at) VALUES (?, ?, ?, 'space', 'workspace', 'contribute', ?, ?, ?)",
+      ).bind(space, project, owner, workspace, "2026-11-10", "2026-11-10"),
+      env.DB.prepare(
+        "INSERT OR IGNORE INTO threads (id, project_id, owner_user_id, parent_thread_id, visibility, workspace_access, shared_workspace_id, created_at, updated_at) VALUES (?, ?, ?, ?, 'workspace', 'contribute', ?, ?, ?)",
+      ).bind(
+        child,
+        project,
+        owner,
+        space,
+        workspace,
+        "2026-11-10",
+        "2026-11-10",
+      ),
+    ]);
+    const memberSocket = await connect(audience, member, client(31));
+    await memberSocket.first;
+    const joined = nextMessage(memberSocket.socket);
+    memberSocket.socket.send(
+      JSON.stringify({ type: "presence.join", topic: `thread:${space}` }),
+    );
+    await joined;
+    const seen: Array<Record<string, unknown>> = [];
+    memberSocket.socket.addEventListener(
+      "message",
+      (event) => void seen.push(JSON.parse(event.data as string)),
+    );
+
+    await publishRealtimeInvalidation(
+      { DB: env.DB, REALTIME_HUB: env.REALTIME_HUB },
+      child,
+      "artifacts.invalidated",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Not present on the child, the member hears it through the Space.
+    expect(
+      seen
+        .filter(({ type }) => type === "artifacts.invalidated")
+        .map(({ threadId: id }) => id),
+    ).toEqual([space]);
+    memberSocket.socket.close();
+  });
+
   it("rejects payloads that could carry conversation or terminal content", async () => {
     const audience = `workspace:${workspace}`;
     const response = await env.REALTIME_HUB.getByName(audience).fetch(

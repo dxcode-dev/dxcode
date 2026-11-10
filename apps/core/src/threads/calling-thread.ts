@@ -21,6 +21,13 @@ export interface CallingThread {
    * so a child it starts is projectless too.
    */
   readonly projectless: boolean;
+  /** The Thread is a Space: the children it starts record who asked. */
+  readonly space: boolean;
+  /**
+   * Spaces is on for the owner (spaces/gate.ts), so their tools may reach
+   * Space Threads; set by the Thread tools, absent (off) otherwise.
+   */
+  readonly spaces?: boolean;
 }
 
 /** Reads the calling Thread; every Thread tool acts as its owner. */
@@ -31,7 +38,7 @@ export const readCallingThread = async (
   const row = await db
     .prepare(
       `SELECT t.owner_user_id, t.project_id, t.model_selection,
-         t.parent_thread_id, t.workspace_access,
+         t.parent_thread_id, t.workspace_access, t.kind,
          p.name = ? AND p.owner_user_id = t.owner_user_id AS projectless
        FROM threads t LEFT JOIN projects p ON p.id = t.project_id
        WHERE t.id = ? LIMIT 1`,
@@ -43,6 +50,7 @@ export const readCallingThread = async (
       model_selection: string;
       parent_thread_id: string | null;
       workspace_access: string | null;
+      kind: string | null;
       projectless: number | null;
     }>();
   if (row === null) throw new Error("This Thread is unavailable.");
@@ -61,5 +69,6 @@ export const readCallingThread = async (
     selection,
     ...(shared ? { sharedFamilyRoot: row.parent_thread_id ?? threadId } : {}),
     projectless: row.projectless === 1,
+    space: row.kind === "space",
   };
 };

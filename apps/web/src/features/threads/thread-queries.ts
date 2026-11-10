@@ -4,6 +4,7 @@ import {
   type InfiniteData,
   type InvalidateOptions,
   infiniteQueryOptions,
+  type MutationFilters,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
@@ -16,6 +17,7 @@ import {
   type ThreadListTree,
   type ThreadPage,
 } from "../../shared/api/client.js";
+import { retryOnMountQuery } from "../../shared/query/query-retry.js";
 import { prefetchThreadHistory } from "../../shared/same-origin-fetch.js";
 
 const staleTime = 30_000;
@@ -55,15 +57,38 @@ export const threadKeys = {
    */
   members: (userId: UserId, threadId: ThreadId) =>
     [...threadKeys.detail(userId, threadId), "members"] as const,
-  /** The family tree of a Thread, as its tree page shows it. */
-  tree: (userId: UserId, threadId: ThreadId) =>
-    [...threadKeys.all(userId), "tree", threadId] as const,
   /** Threads other workspace members shared with this user. */
   shared: (userId: UserId) => [...threadKeys.all(userId), "shared"] as const,
   /** One Thread search query's pages. */
   search: (userId: UserId, query: string) =>
     [...threadKeys.all(userId), "search", query] as const,
 };
+
+/**
+ * An archive or restore of the Thread the server has not answered yet.
+ * Until it answers, the cached lifecycle is only what the page expects.
+ */
+export const threadArchiveInFlight = (
+  userId: UserId,
+  threadId: ThreadId,
+): MutationFilters => ({
+  mutationKey: threadKeys.all(userId),
+  status: "pending",
+  predicate: (mutation) => {
+    const kind = mutation.options.mutationKey?.[2];
+    const variables = mutation.state.variables as
+      | {
+          readonly threadId?: ThreadId;
+          readonly threadIds?: ReadonlyArray<ThreadId>;
+        }
+      | undefined;
+    return (
+      (kind === "archive" || kind === "archive-many") &&
+      (variables?.threadId === threadId ||
+        variables?.threadIds?.includes(threadId) === true)
+    );
+  },
+});
 
 export const invalidateAllThreadQueries = (
   client: QueryClient,
@@ -263,6 +288,9 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
           : false,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
+    // A Thread the server refused while the page booted (hidden or missing)
+    // is not read again when the page mounts.
+    retryOnMount: retryOnMountQuery,
   });
 
 /**

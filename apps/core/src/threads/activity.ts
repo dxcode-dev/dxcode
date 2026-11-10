@@ -278,3 +278,32 @@ export const recordFlueThreadActivity = (
         record(context.env as Bindings, activity).pipe(Effect.asVoid),
       );
 };
+
+/**
+ * Records a submission dx saw admitted, such as a new Thread's first
+ * message, as Flue's `submission_queued` would: the Thread shows working from
+ * then, not only once Flue's own observation lands. Flue's later
+ * observations of the same submission change nothing, and a settlement
+ * observed first keeps it settled.
+ */
+export const recordAdmittedThreadSubmission = (
+  bindings: Bindings,
+  admitted: {
+    readonly threadId: string;
+    readonly submissionId: string;
+    readonly admittedAt: number;
+  },
+): Promise<void> => {
+  const activity = Option.getOrUndefined(
+    Schema.decodeOption(ThreadActivityInput)({
+      threadId: admitted.threadId,
+      submissionId: admitted.submissionId,
+      kind: "submitted",
+      state: "working",
+      occurredAt: new Date(admitted.admittedAt).toISOString(),
+    }),
+  );
+  return activity === undefined
+    ? Promise.resolve()
+    : Effect.runPromise(record(bindings, activity).pipe(Effect.asVoid));
+};

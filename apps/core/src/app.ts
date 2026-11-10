@@ -1,5 +1,9 @@
 import { Hono } from "hono";
-import { dxAgentRoutes } from "./agents/routes.js";
+import {
+  dxAgentRoutes,
+  rewindThreadAgent,
+  stopThreadAgent,
+} from "./agents/routes.js";
 import { LOCAL_R2_BUCKET, localR2Routes } from "./attachments/local-r2.js";
 import { attachmentRoutes } from "./attachments/routes.js";
 import { authenticate } from "./auth/authenticate.js";
@@ -55,6 +59,9 @@ import {
   githubControlPlaneRoutes,
   githubWebhookRoutes,
 } from "./source-control/github/routes.js";
+import { prefetchThreadKind, useSpacesGate } from "./spaces/gate.js";
+import { messageCommentRoutes } from "./spaces/message-comments/routes.js";
+import { spaceRoutes } from "./spaces/routes.js";
 import { threadArtifactRoutes } from "./thread-artifacts/routes.js";
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadDeletionRoutes } from "./thread-deletion/routes.js";
@@ -69,11 +76,13 @@ import {
   threadSharingRoutes,
 } from "./thread-sharing/routes.js";
 import { threadStorageRoutes } from "./thread-storage/routes.js";
+import { threadUsageRoutes } from "./thread-usage/routes.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
 import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
 import { threadDraftRoutes } from "./threads/thread-draft-route.js";
+import { createThreadMessageEditRoutes } from "./threads/message-edit-route.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
 
 installRuntimeTracing();
@@ -107,8 +116,14 @@ app.route("/v1/integrations/github", githubWebhookRoutes);
 app.route("/v1", threadDaemonRoutes);
 // Navigated to, not fetched: it redirects to sign-in instead of answering 401.
 app.route("/v1/portal-auth", portalAuthRoutes);
+// Whether a route's Thread is a Space, read while the request authenticates
+// so the Spaces gate below adds no round trip; see spaces/gate.ts.
+app.use("/v1/threads/:threadId/*", prefetchThreadKind);
+app.use("/v1/agents/dx/:threadId/*", prefetchThreadKind);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
+// Spaces only for people whose `spaces` flag is on; see spaces/gate.ts.
+useSpacesGate(app);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);
@@ -124,6 +139,7 @@ app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);
 app.route("/v1/shell", shellRoutes);
 app.route("/v1/sidebar-layout", sidebarLayoutRoutes);
+app.route("/v1/spaces", spaceRoutes);
 app.route("/v1/thread-search", threadSearchRoutes);
 app.use("/v1/threads/:threadId", shareThreadReads);
 app.use("/v1/threads/:threadId/readiness", shareThreadReads);
@@ -152,6 +168,9 @@ app.route("/v1/threads", threadStorageRoutes);
 // Artifacts outlive the Orb too. `/artifacts/*` also matches `/artifacts`.
 app.use("/v1/threads/:threadId/artifacts/*", authorizeThread);
 app.route("/v1/threads", threadArtifactRoutes);
+// A Space's message comments; `/message-comments/*` also matches the list.
+app.use("/v1/threads/:threadId/message-comments/*", authorizeThread);
+app.route("/v1/threads", messageCommentRoutes);
 // `/terminal/*` also matches `/terminal`: the attach and its warm-up.
 app.use("/v1/threads/:threadId/terminal/*", authorizeThread);
 app.use("/v1/threads/:threadId/terminal/*", enforceThreadActive);
@@ -163,6 +182,10 @@ app.route("/v1/threads", threadPortalRoutes);
 // `/memory/*` also matches `/memory`; see Portals above.
 app.use("/v1/threads/:threadId/memory/*", authorizeThread);
 app.route("/v1/threads", threadOrbMemoryRoutes);
+// Cost & Usage; `/usage/*` also matches `/usage`. Whoever may open the
+// Thread may read it.
+app.use("/v1/threads/:threadId/usage/*", authorizeThread);
+app.route("/v1/threads", threadUsageRoutes);
 app.use("/v1/threads/:threadId/disk/*", authorizeThread);
 app.route("/v1/threads", threadOrbDiskRoutes);
 // The fault route below checks the access authorizeThread sets.
@@ -172,6 +195,17 @@ app.route("/v1/threads", threadOrbFaultRoutes);
 // `/automations/*` also matches `/automations`; see Portals above.
 app.use("/v1/threads/:threadId/automations/*", authorizeThread);
 app.route("/v1/threads", threadAutomationRoutes);
+// A person edits one of their earlier messages: the agent goes back to it.
+app.use("/v1/threads/:threadId/messages/*", authorizeThread);
+app.route(
+  "/v1/threads",
+  createThreadMessageEditRoutes({
+    // Read at call time: worker tests replace the agent routes module.
+    stop: (threadId, env) => stopThreadAgent(threadId, env),
+    rewind: (threadId, input, env) => rewindThreadAgent(threadId, input, env),
+    routes: async () => dxAgentRoutes,
+  }),
+);
 app.use("/v1/threads/:threadId/quick-actions", authorizeThread);
 app.route("/v1/threads", threadQuickActionsRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);

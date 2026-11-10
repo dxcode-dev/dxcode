@@ -39,6 +39,25 @@ export const ThreadColor = Schema.Literals(THREAD_COLORS);
 
 export type ThreadColor = typeof ThreadColor.Type;
 
+/**
+ * A plain Thread, or a Space: a root Thread whose agent coordinates work for
+ * a goal and starts one child Thread per piece of it.
+ */
+export const ThreadKind = Schema.Literals(["thread", "space"]);
+
+export type ThreadKind = typeof ThreadKind.Type;
+
+/**
+ * Where a Thread's agent runs. `orb`: in or beside the Thread's Orb, as every
+ * Thread did before. `executor`: no Orb; the dx agent runs in its Durable
+ * Object only, and Claude Code in the Thread's executor container. The
+ * server sets it at creation and it never changes; it is independent of the
+ * Thread's kind (wiki/runtime-architecture.md#execution-modes).
+ */
+export const ThreadExecutionMode = Schema.Literals(["orb", "executor"]);
+
+export type ThreadExecutionMode = typeof ThreadExecutionMode.Type;
+
 export const Thread = Schema.Struct({
   id: ThreadId,
   title: ThreadTitle,
@@ -75,6 +94,12 @@ export const Thread = Schema.Struct({
    * recorded it or whose starter was deleted; that child sits under the root.
    */
   startedByThreadId: Schema.optional(ThreadId),
+  /** Absent means `thread`. */
+  kind: Schema.optional(ThreadKind),
+  /** Absent means `orb`. */
+  executionMode: Schema.optional(ThreadExecutionMode),
+  /** The person whose message made a Space's agent start this Thread. */
+  requestedByUserId: Schema.optional(UserId),
 });
 
 export type Thread = typeof Thread.Type;
@@ -98,6 +123,9 @@ export const CreateThreadInput = Schema.Struct({
   titlePending: Schema.optional(Schema.Boolean),
   parentThreadId: Schema.optional(ThreadId),
   startedByThreadId: Schema.optional(ThreadId),
+  kind: Schema.optional(ThreadKind),
+  executionMode: Schema.optional(ThreadExecutionMode),
+  requestedByUserId: Schema.optional(UserId),
 });
 
 export type CreateThreadInput = typeof CreateThreadInput.Type;

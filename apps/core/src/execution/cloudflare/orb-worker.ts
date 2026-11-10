@@ -12,6 +12,8 @@
  * `wrangler deploy` is what builds, prepares, and binds a `durable_object`
  * container image; see `deploy/orb/containers.mjs`.
  */
+// One small agent container per Thread in executor execution mode.
+export { ThreadExecutorObject } from "../../executor/executor-object.js";
 export {
   OrbContainerObject,
   OrbRetiredEgress,

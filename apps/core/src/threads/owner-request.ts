@@ -1,6 +1,7 @@
 import type { Principal, UserId } from "@dx/domain";
 import { Hono } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
+import { useSpacesGate } from "../spaces/gate.js";
 
 let ownerRouteModules:
   | Promise<
@@ -34,6 +35,8 @@ export interface OwnerRequestContext {
   readonly automation?: "schedule" | "github" | "artifact";
   /** Keeps work a route starts, such as title generation, running. */
   readonly waitUntil?: (promise: Promise<unknown>) => void;
+  /** A Space's child Thread records the person it was started for. */
+  readonly requestedByUserId?: UserId;
 }
 
 /**
@@ -61,8 +64,14 @@ export const ownerRequest = async (
       honoContext.set("messageSourceThreadId", context.sourceThreadId);
     if (context.automation !== undefined)
       honoContext.set("messageAutomation", context.automation);
+    if (context.requestedByUserId !== undefined)
+      honoContext.set("threadCreation", {
+        requestedByUserId: context.requestedByUserId,
+      });
     await next();
   });
+  // The owner's tools reach Spaces only while Spaces is on for the owner.
+  useSpacesGate(app);
   app.route("/v1/threads", threadRoutes);
   app.route("/v1/agents/dx", dxAgentRoutes);
   app.route("/v1/settings", settingsRoutes);

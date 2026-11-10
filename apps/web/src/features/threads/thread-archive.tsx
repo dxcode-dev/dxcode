@@ -13,7 +13,7 @@ import {
   setThreadArchivedMutationOptions,
   setThreadsArchivedMutationOptions,
 } from "./thread-mutations.js";
-import { threadSeenWorking } from "./thread-queries.js";
+import { threadKeys, threadSeenWorking } from "./thread-queries.js";
 
 /** "Stop and archive?", loaded the first time a working Thread is archived. */
 const ConfirmDialog = React.lazy(() =>
@@ -68,14 +68,21 @@ export function ThreadArchiveProvider({
     threadId: ThreadId,
     archived: boolean,
     children?: true | Promise<ReadonlyArray<ThreadId> | undefined>,
+    reason?: "ship",
   ) => {
     const includeChildren = children !== undefined;
     let undone = false;
-    const request = mutateAsync(
-      children === undefined
-        ? { threadId, archived }
-        : { threadId, archived, children },
-    );
+    const request = mutateAsync({
+      threadId,
+      archived,
+      ...(children === undefined ? {} : { children }),
+      ...(reason === undefined ? {} : { reason }),
+    });
+    // A Space says so; its page has its Thread cached.
+    const space =
+      queryClient.getQueryData<{ readonly kind?: string }>(
+        threadKeys.detail(identity.id, threadId),
+      )?.kind === "space";
     // Every call names each option, because a toast updated in place
     // keeps any option the new one leaves out.
     const notify = (description: string | undefined) =>
@@ -83,8 +90,12 @@ export function ThreadArchiveProvider({
         archived
           ? includeChildren
             ? "Archived threads"
-            : "Archived thread"
-          : "Unarchived thread",
+            : space
+              ? "Archived Space"
+              : "Archived thread"
+          : space
+            ? "Unarchived Space"
+            : "Unarchived thread",
         {
           id: ARCHIVE_TOAST_ID,
           duration: ARCHIVE_TOAST_DURATION,
@@ -131,8 +142,8 @@ export function ThreadArchiveProvider({
       toast.error(
         archiveFailureReason(cause) ??
           (archived
-            ? "The thread could not be archived."
-            : "The thread could not be unarchived."),
+            ? `The ${space ? "Space" : "thread"} could not be archived.`
+            : `The ${space ? "Space" : "thread"} could not be unarchived.`),
         {
           id: ARCHIVE_TOAST_ID,
           duration: ARCHIVE_TOAST_DURATION,
@@ -148,9 +159,15 @@ export function ThreadArchiveProvider({
     threadId: ThreadId,
     archived: boolean,
     includeChildren = false,
+    reason?: "ship",
   ) => {
     const change = () =>
-      changeArchived(threadId, archived, includeChildren ? true : undefined);
+      changeArchived(
+        threadId,
+        archived,
+        includeChildren ? true : undefined,
+        reason,
+      );
     if (archived) archiveAfterAsking([threadId], change);
     else change();
   };

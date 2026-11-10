@@ -12,6 +12,7 @@ import type {
   DxdStorageImportOperation,
 } from "../execution/dxd/protocol.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { spacesEnabledFor } from "../spaces/gate.js";
 import { loadThreadChangesIndex } from "../thread-changes/capture.js";
 import { makeThreadChangesRepository } from "../thread-changes/repository-d1.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
@@ -106,10 +107,14 @@ export const createThreadStorageTools = (
     threadId: ThreadId,
   ) => {
     const family = owner.sharedFamilyRoot;
+    // A Space only while Spaces is on for the owner (spaces/gate.ts).
+    const spaces = await spacesEnabledFor(context.bindings, owner.ownerUserId);
     const row = await context.db
       .prepare(
         `SELECT id, lifecycle_state FROM threads
           WHERE id = ? AND owner_user_id = ? AND lifecycle_state != 'deleted'${
+            spaces ? "" : " AND kind = 'thread'"
+          }${
             family === undefined ? "" : " AND (id = ? OR parent_thread_id = ?)"
           }`,
       )

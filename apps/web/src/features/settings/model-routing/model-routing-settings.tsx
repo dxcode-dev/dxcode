@@ -1,3 +1,4 @@
+import { spaceAgentModelQueryOptions } from "../../spaces/space-agent-model-queries.js";
 import "./model-routing.css";
 import type { ConnectionData } from "@dx/api";
 import {
@@ -468,6 +469,12 @@ export const ModelRoutingSettings = ({
   const settingsContext = useQuery(
     settingsContextQueryOptions(identity.id, target),
   );
+  // Where a new Space would run, while Spaces is on: personal only.
+  const spaceAgent = useQuery({
+    ...spaceAgentModelQueryOptions(identity.id),
+    enabled:
+      workspaceSlug === undefined && settingsContext.data?.spaces === true,
+  });
 
   const options = connectionMutationOptions(queryClient, target);
   const createMutation = useMutation(options.create);
@@ -657,6 +664,7 @@ export const ModelRoutingSettings = ({
               ? settingsContext.data.dictation
               : undefined
           }
+          space={spaceAgent.data?.route}
           onConnectionClick={(id) => {
             void navigate({ hash: id, replace: true, resetScroll: false });
             setExpanded((current) =>

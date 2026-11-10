@@ -1,0 +1,210 @@
+/* A Space's thread cards, chips, reports, and catch-up card. */
+
+.markdown-thread-cards {
+  display: grid;
+  gap: 8px;
+  max-width: 590px;
+  margin: 10px 0;
+}
+.markdown-thread-cards + p,
+.transcript-markdown p + .markdown-thread-cards {
+  margin-top: 12px;
+}
+
+.space-thread-state-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.space-thread-card {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto 22px;
+  align-items: center;
+  column-gap: 12px;
+  width: 100%;
+  max-width: 590px;
+  min-height: 58px;
+  padding: 9px 14px;
+  color: var(--chat-foreground, var(--foreground));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out;
+}
+.space-thread-card:hover {
+  background: color-mix(in srgb, var(--foreground) 4%, var(--card));
+}
+.space-thread-card[data-selected] {
+  border-color: color-mix(in srgb, var(--foreground) 22%, transparent);
+  background: color-mix(in srgb, var(--foreground) 7%, var(--card));
+}
+.space-thread-card:focus-visible,
+.space-thread-chip:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.space-thread-card > .space-thread-state-icon {
+  align-self: start;
+  margin-top: 2px;
+}
+[data-state="needs_you"] > .space-thread-state-icon {
+  color: oklch(70% 0.15 70);
+}
+[data-state="failed"] > .space-thread-state-icon {
+  color: var(--destructive);
+}
+[data-state="ready_to_ship"] > .space-thread-state-icon {
+  color: oklch(62% 0.13 150);
+}
+[data-state="shipped"] > .space-thread-state-icon {
+  color: oklch(60% 0.12 150);
+}
+.space-thread-card-text {
+  display: grid;
+  min-width: 0;
+  gap: 1px;
+}
+.space-thread-card-title {
+  overflow: hidden;
+  font-size: 1em;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-thread-card-line {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 0.93em;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+[data-state="needs_you"] .space-thread-card-state {
+  color: oklch(62% 0.15 60);
+}
+[data-state="failed"] .space-thread-card-state {
+  color: var(--destructive);
+}
+.space-thread-card-time {
+  color: var(--muted-foreground);
+  font-size: 0.93em;
+  font-variant-numeric: tabular-nums;
+}
+.space-thread-card-requester {
+  display: inline-flex;
+  justify-content: center;
+}
+.space-thread-card-requester > .dx-avatar {
+  width: 22px;
+  height: 22px;
+  font-size: 9px;
+}
+.space-thread-card-placeholder {
+  display: block;
+  height: 12px;
+  border-radius: 4px;
+  background: var(--muted);
+}
+.space-thread-card-title.space-thread-card-placeholder {
+  width: 45%;
+  margin-bottom: 6px;
+}
+.space-thread-card-line.space-thread-card-placeholder {
+  width: 65%;
+}
+
+.space-thread-chip {
+  display: inline-flex;
+  /* The title, not the icon, sets the baseline the chip sits on. */
+  align-items: baseline;
+  gap: 5px;
+  max-width: 100%;
+  margin: 0 1px;
+  padding: 0 7px 0 5px;
+  vertical-align: baseline;
+  color: var(--chat-foreground, var(--foreground));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  font: inherit;
+  font-size: 0.94em;
+  line-height: 1.55;
+  cursor: pointer;
+}
+.space-thread-chip:hover {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.space-thread-chip > .space-thread-state-icon {
+  align-self: center;
+  width: 13px;
+  height: 13px;
+}
+.space-thread-chip-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* "Since you've been gone", at the end of a Space's chat. */
+.space-catch-up {
+  display: grid;
+  gap: 10px;
+  max-width: 760px;
+  margin: 20px 0 8px;
+  /* Brought into view clear of the composer floating over the chat's end. */
+  scroll-margin-bottom: calc(var(--agent-composer-dock-height, 132px) + 16px);
+}
+.space-catch-up::before {
+  content: "";
+  width: 56px;
+  height: 1px;
+  margin-bottom: 8px;
+  background: var(--border);
+}
+.space-catch-up-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.space-catch-up-header > h3 {
+  flex: 1;
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.space-catch-up-header > small {
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+}
+.space-catch-up-dismiss {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+.space-catch-up-dismiss:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-catch-up-dismiss > svg {
+  width: 14px;
+  height: 14px;
+}
+.space-catch-up-body {
+  color: var(--chat-foreground, var(--foreground));
+  font-size: 14px;
+  line-height: 1.7;
+}

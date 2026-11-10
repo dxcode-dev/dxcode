@@ -1,7 +1,7 @@
 "use agent";
 
 import { MAX_IMAGES_PER_MESSAGE } from "@dx/api";
-import { isClaudeCodeModel, type PluginToolSet } from "@dx/domain";
+import { isClaudeCodeModel, type PluginToolSet, type UserId } from "@dx/domain";
 import {
   type AgentProps,
   type DeliveredMessage,
@@ -11,6 +11,7 @@ import {
   type ToolDefinition,
   useAgentFinish,
   useAgentStart,
+  useDelivery,
   useInitialData,
   useModel,
   usePromptData,
@@ -42,6 +43,11 @@ import {
 } from "../execution/additional-repository-note.js";
 import { takeDxFilesSandbox } from "../execution/dx-files-sandbox.js";
 import { withoutRepositorySkills } from "../execution/workspace-context.js";
+import {
+  executorAvailable,
+  executorSandbox,
+  runClaudeCodeOnExecutor,
+} from "../executor/sandbox.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
   takeWorkspaceDisk,
@@ -68,7 +74,10 @@ import {
   agentPluginHostContext,
   agentThreadToolsContext,
   resolveAgentBugReportReader,
+  resolveAgentOrbThreadState,
   resolveAgentPluginTools,
+  resolveAgentSpace,
+  resolveAgentStartingSpace,
   resolveAgentWorkspaceInstructions,
 } from "../plugins/agent-context.js";
 import { analyzeOnThreadRoute } from "../plugins/execution/media/analysis.js";
@@ -87,6 +96,14 @@ import {
 import type { McpAgentConnectionData } from "../settings/mcp-servers/execution.js";
 import { invokePluginLive } from "../settings/plugins/execution.js";
 import { createPluginTool } from "../settings/plugins/flue.js";
+import {
+  SPACE_CLAUDE_CODE_PREFACE,
+  spaceAgentProfile,
+  spaceProfileTools,
+} from "../spaces/agent/profile.js";
+import type { SpaceSystemPromptInput } from "../spaces/agent/system-prompt.js";
+import { createSpaceTools } from "../spaces/agent/tools.js";
+import { deliveryRequester } from "../spaces/agent-prompt.js";
 import {
   ARTIFACTS_EDITED_SIGNAL,
   artifactsEditedByPeopleNote,
@@ -107,8 +124,11 @@ import {
   composeClaudeCodePrompt,
   composeDxAgentPrompt,
   dxWorkspaceSkill,
+  type StartingSpacePromptData,
   settingsInstructions,
+  settingsInstructionsPrompt,
 } from "./dx-agent-prompt.js";
+import { runsWithoutOrb } from "./orb-free.js";
 import {
   installSettingsSkills,
   settingsSkillDefinitions,
@@ -127,6 +147,15 @@ interface DxAgentPromptData {
   readonly bugReportReader?: true;
   /** The AGENTS.md of the owner's workspace, as of this submission. */
   readonly workspaceInstructions?: string;
+  /**
+   * The Space this Thread is, as of this submission: it runs the Space
+   * agent profile, with no Orb.
+   */
+  readonly space?: SpaceSystemPromptInput;
+  /** The Space that started this Thread. */
+  readonly startingSpace?: StartingSpacePromptData;
+  /** The Thread runs without an Orb (`runsWithoutOrb`, from D1). */
+  readonly orbFree?: true;
 }
 
 const localModelPreviewPrompt = `You are dx, a coding assistant running in a local UI preview.
@@ -160,7 +189,7 @@ const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
  * MCP servers come from the submission's resolved set, never from Thread
  * creation data; providers and keys resolve again on every call. Every tool
  * DxAgent offers belongs here: Claude Code mode serves this same list to
- * Claude as `mcp__dx__<name>`, so a tool mounted anywhere else would be
+ * Claude under the same names, so a tool mounted anywhere else would be
  * missing there (wiki/claude-code-tool-parity.md).
  */
 const dxTools = (
@@ -168,16 +197,23 @@ const dxTools = (
   initialData: DxAgentInitialData | undefined,
   promptData: DxAgentPromptData | undefined,
   withoutPlugins: ReadonlyArray<string> = [],
+  /** The person whose message this turn answers; see `deliveryRequester`. */
+  requesterUserId?: UserId,
 ): ToolDefinition[] => {
   const tools: ToolDefinition[] = [];
+  const space = promptData?.space !== undefined;
   // Built in, not a plugin: the owner's other Threads are always in reach.
-  for (const tool of createThreadTools(
+  const threadToolArguments = [
     threadId,
     agentThreadToolsContext,
     promptData?.plugins?.submissionId,
     promptData?.route !== undefined &&
       isClaudeCodeModel(promptData.route.model),
-  ))
+    requesterUserId,
+  ] as const;
+  for (const tool of space
+    ? createThreadTools(...threadToolArguments, { space: true })
+    : createThreadTools(...threadToolArguments))
     tools.push(withToolFailureMessage(tool));
   // Files between the owner's Threads, and temporary links, through
   // Thread storage.
@@ -224,7 +260,7 @@ const dxTools = (
       pluginTools.mcpConnections,
     ))
       tools.push(withToolFailureMessage(tool));
-  for (const plugin of initialData?.plugins ?? [])
+  for (const plugin of space ? [] : (initialData?.plugins ?? []))
     for (const tool of plugin.tools)
       tools.push(
         withToolFailureMessage(
@@ -236,9 +272,22 @@ const dxTools = (
           }),
         ),
       );
+  // A Space's main thread has the Space agent profile's tools: its own,
+  // then the dx tools it keeps.
+  const mounted = space
+    ? spaceProfileTools(
+        createSpaceTools(
+          threadId,
+          agentThreadToolsContext,
+          promptData?.plugins?.submissionId,
+          requesterUserId,
+        ).map(withToolFailureMessage),
+        tools,
+      )
+    : tools;
   // A tool outside the Orb can still return a secret, so each result and
   // failure is masked as the Thread's sandbox masks its reads.
-  return tools.map((tool) =>
+  return mounted.map((tool) =>
     withMaskedToolResults(tool, () => threadEnvironmentMasker(threadId)),
   );
 };
@@ -528,6 +577,18 @@ const usePluginLifecycle = (
     useAgentFinish(hook("agent-finish"));
 };
 
+/**
+ * The person whose message the response answers, read from the delivered
+ * message's author tag. A render outside a delivery (tooling) has none.
+ */
+const currentRequester = (): UserId | undefined => {
+  try {
+    return deliveryRequester(useDelivery());
+  } catch {
+    return undefined;
+  }
+};
+
 export function DxAgent(props: AgentProps) {
   const initialData = useInitialData<DxAgentInitialData | undefined>();
   const promptData = usePromptData<DxAgentPromptData | undefined>();
@@ -536,9 +597,65 @@ export function DxAgent(props: AgentProps) {
   useResponseStart(() => ({
     dxResponseStartedAt: new Date().toISOString(),
   }));
+  const requesterUserId = currentRequester();
   const skills = initialData?.skills ?? [];
   const settingsSkillNames = new Set(skills.map(({ name }) => name));
   const plugins = initialData?.plugins ?? [];
+  const space = promptData?.space;
+  if (
+    agentRuntimeComposition.capabilities === "workspace" &&
+    promptData?.orbFree === true
+  ) {
+    // Executor mode (wiki/runtime-architecture.md#execution-modes): no Orb,
+    // so no shell, file, or Git tools, and nothing installed into a
+    // workspace at agent start. Only a Space's main Thread runs in executor
+    // mode today, with the Space agent profile.
+    if (space === undefined) throw new Error("This Space is unavailable.");
+    const profile = spaceAgentProfile({
+      space,
+      instructions: settingsInstructionsPrompt(
+        promptData?.workspaceInstructions ?? "",
+        initialData?.personalInstructions ?? "",
+      ),
+      tools: dxTools(props.id, initialData, promptData, [], requesterUserId),
+    });
+    if (
+      promptData.route !== undefined &&
+      isClaudeCodeModel(promptData.route.model)
+    ) {
+      // Claude Code runs on the Thread's executor container: Claude keeps
+      // only the profile's built-in tools, and the profile's dx tools reach
+      // it through the dx tool bridge. Flue records each call as in an Orb.
+      if (!executorAvailable())
+        throw new Error(
+          "This deployment does not run dx's executor, so a Space cannot run on Claude Code here.",
+        );
+      runClaudeCodeOnExecutor(props.id, profile.claudeCodeBuiltInTools);
+      useSandbox({ createSandbox: async ({ id }) => executorSandbox(id) });
+      for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
+      for (const tool of claudeCodeDxTools(props.id, profile.tools))
+        useTool(tool);
+      useAgentStart(({ harness }) => {
+        resetClaudeCodeThreadState(props.id);
+        rememberClaudeCodeSandbox(props.id, harness.sandbox);
+      });
+      // Appended to Claude Code's own prompt, as for every Claude Code
+      // Thread; the profile already carries the workspace's and the
+      // owner's instructions, so ~/.claude/CLAUDE.md stays empty.
+      rememberClaudeCodePrompt(
+        props.id,
+        `${SPACE_CLAUDE_CODE_PREFACE}\n\n${profile.prompt}`,
+        "",
+      );
+      return profile.prompt;
+    }
+    for (const tool of profile.tools) useTool(tool);
+    // Declared skills load on demand without a workspace.
+    for (const skill of builtInSkillDefinitions)
+      if (!settingsSkillNames.has(skill.name)) useSkill(skill);
+    for (const skill of settingsSkillDefinitions(skills)) useSkill(skill);
+    return profile.prompt;
+  }
   if (agentRuntimeComposition.capabilities === "workspace") {
     const claudeCode =
       promptData?.route !== undefined &&
@@ -564,12 +681,18 @@ export function DxAgent(props: AgentProps) {
     if (claudeViewMedia !== undefined) {
       for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
       // view_media runs as a sandbox tool, which can record its image; the
-      // MCP server still lists it among the dx tools.
+      // dx tool bridge still lists it among the dx tools.
       for (const tool of claudeCodeDxTools(props.id, [
-        ...dxTools(props.id, initialData, promptData, ["search"]),
+        ...dxTools(
+          props.id,
+          initialData,
+          promptData,
+          ["search"],
+          requesterUserId,
+        ),
         claudeViewMedia,
       ]))
-        if (tool.name !== `mcp__dx__${claudeViewMedia.name}`) useTool(tool);
+        if (tool.name !== claudeViewMedia.name) useTool(tool);
       // Each delivered message starts on fresh Claude Code state: nothing a
       // failed submission cached may fail it.
       useAgentStart(({ harness }) => {
@@ -579,6 +702,7 @@ export function DxAgent(props: AgentProps) {
       const prompt = composeClaudeCodePrompt(
         threadPortalPrompt(props.id),
         initialData?.startedByThreadId,
+        promptData?.startingSpace,
       );
       // Claude Code gets this prompt itself, not Flue's composition of it,
       // and the workspace's and the person's instructions as its own
@@ -593,7 +717,13 @@ export function DxAgent(props: AgentProps) {
       );
       return prompt;
     }
-    for (const tool of dxTools(props.id, initialData, promptData))
+    for (const tool of dxTools(
+      props.id,
+      initialData,
+      promptData,
+      [],
+      requesterUserId,
+    ))
       useTool(tool);
     // Flue lists them in the Available Skills catalog and loads each on
     // demand through activate_skill, like a repository's .agents/skills. A
@@ -611,6 +741,7 @@ export function DxAgent(props: AgentProps) {
       : "",
     initialData?.startedByThreadId,
     promptData?.workspaceInstructions,
+    promptData?.startingSpace,
   );
 }
 
@@ -629,41 +760,80 @@ DxAgent.resolvePromptData = async (
   context: ModelResolutionContext,
 ): Promise<DxAgentPromptData | undefined> => {
   const scope = context.scope;
-  const activation = startActivation(context.instanceId);
-  const [route, plugins, bugReportReader, workspaceInstructions] =
-    await traceSpan(
-      "agent.resolvePromptData",
-      "phase",
-      {
-        "dx.thread_id": context.instanceId,
-        "dx.submission_id":
-          scope?.kind === "prompt" ? scope.submissionId : undefined,
-      },
-      () =>
-        Promise.all([
-          agentRuntimeComposition.model.resolvePromptData(context),
-          agentRuntimeComposition.capabilities === "workspace" &&
-          scope?.kind === "prompt"
-            ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
-            : Promise.resolve(undefined),
-          agentRuntimeComposition.capabilities === "workspace" &&
-          scope?.kind === "prompt"
-            ? resolveAgentBugReportReader(context.instanceId)
-            : Promise.resolve(false),
-          agentRuntimeComposition.capabilities === "workspace"
-            ? resolveAgentWorkspaceInstructions(context.instanceId)
-            : Promise.resolve(""),
-        ]),
-    ).catch((error: unknown) => {
-      if (startedActivations.get(context.instanceId) === activation)
-        startedActivations.delete(context.instanceId);
-      throw error;
-    });
+  // A Thread in executor mode never activates an Orb. Its execution mode is
+  // the server's, read from D1, never the creation data a client sent; any
+  // other Thread's activation starts as soon as that read answers, still
+  // overlapping model routing.
+  let activation: Promise<AgentSandbox> | undefined;
+  const threadState = (
+    agentRuntimeComposition.capabilities === "workspace"
+      ? resolveAgentOrbThreadState(context.instanceId)
+      : Promise.resolve({ kind: "thread", executionMode: "orb" } as const)
+  ).then((state) => {
+    if (!runsWithoutOrb(state))
+      activation = startActivation(context.instanceId);
+    return state;
+  });
+  const orbDecision = threadState.then(runsWithoutOrb);
+  const [
+    orbFree,
+    route,
+    plugins,
+    bugReportReader,
+    workspaceInstructions,
+    space,
+    startingSpace,
+  ] = await traceSpan(
+    "agent.resolvePromptData",
+    "phase",
+    {
+      "dx.thread_id": context.instanceId,
+      "dx.submission_id":
+        scope?.kind === "prompt" ? scope.submissionId : undefined,
+    },
+    () =>
+      Promise.all([
+        orbDecision,
+        agentRuntimeComposition.model.resolvePromptData(context),
+        agentRuntimeComposition.capabilities === "workspace" &&
+        scope?.kind === "prompt"
+          ? resolveAgentPluginTools(context.instanceId, scope.submissionId)
+          : Promise.resolve(undefined),
+        agentRuntimeComposition.capabilities === "workspace" &&
+        scope?.kind === "prompt"
+          ? resolveAgentBugReportReader(context.instanceId)
+          : Promise.resolve(false),
+        agentRuntimeComposition.capabilities === "workspace"
+          ? resolveAgentWorkspaceInstructions(context.instanceId)
+          : Promise.resolve(""),
+        // Only a Space reads its prompt data: the kind read decides.
+        threadState.then((state) =>
+          state.kind === "space"
+            ? resolveAgentSpace(context.instanceId)
+            : undefined,
+        ),
+        agentRuntimeComposition.capabilities === "workspace"
+          ? resolveAgentStartingSpace(context.instanceId)
+          : Promise.resolve(undefined),
+      ]),
+  ).catch(async (error: unknown) => {
+    // A failed read leaves no started sandbox behind.
+    await orbDecision.catch(() => undefined);
+    if (
+      activation !== undefined &&
+      startedActivations.get(context.instanceId) === activation
+    )
+      startedActivations.delete(context.instanceId);
+    throw error;
+  });
   if (
     route === undefined &&
     plugins === undefined &&
     !bugReportReader &&
-    workspaceInstructions.length === 0
+    workspaceInstructions.length === 0 &&
+    space === undefined &&
+    startingSpace === undefined &&
+    !orbFree
   )
     return undefined;
   return {
@@ -671,6 +841,9 @@ DxAgent.resolvePromptData = async (
     ...(plugins === undefined ? {} : { plugins }),
     ...(bugReportReader ? { bugReportReader: true as const } : {}),
     ...(workspaceInstructions.length === 0 ? {} : { workspaceInstructions }),
+    ...(space === undefined ? {} : { space }),
+    ...(startingSpace === undefined ? {} : { startingSpace }),
+    ...(orbFree ? { orbFree: true as const } : {}),
   };
 };
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {

@@ -9,9 +9,14 @@ import type { ThreadId, UserId } from "@dx/domain";
 import { DateTime } from "effect";
 import { userImageSql } from "../avatars/storage.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import { spacesOnSql } from "../spaces/gate.js";
 import { threadUnreadSql } from "../threads/attention-d1.js";
 import { pruneUnreadableThreadDrafts } from "../threads/thread-draft-store.js";
-import { sharedThreadAccessSql, sharedThreadVisibleSql } from "./access.js";
+import {
+  CONTRIBUTE_WITHOUT_END,
+  sharedThreadAccessSql,
+  sharedThreadVisibleSql,
+} from "./access.js";
 
 export class ThreadSharingError extends Error {
   constructor(
@@ -119,10 +124,12 @@ const sharingData = (
   return row.workspace_access === "contribute" &&
     until !== undefined &&
     until.getTime() > now.getTime()
-    ? {
-        workspaceAccess: "contribute",
-        contributeUntil: DateTime.makeUnsafe(until),
-      }
+    ? row.contribute_until === CONTRIBUTE_WITHOUT_END
+      ? { workspaceAccess: "contribute" }
+      : {
+          workspaceAccess: "contribute",
+          contributeUntil: DateTime.makeUnsafe(until),
+        }
     : { workspaceAccess: "view" };
 };
 
@@ -418,6 +425,12 @@ export const updateThreadSharing = async (
  * Thread rows other members shared with `userId` that `userId` follows, most
  * recent first, with the name of each Thread's Project.
  */
+/** With the reader's (?1) spaces flag off, a thread a Space started names no parent. */
+const spaceParentShownSql = `(thread.parent_thread_id IS NULL OR ${spacesOnSql("?1")} OR NOT EXISTS (
+  SELECT 1 FROM threads AS space_parent
+   WHERE space_parent.id = thread.parent_thread_id
+     AND space_parent.kind = 'space'))`;
+
 export const listSharedThreadRows = async (
   db: D1Database,
   userId: UserId,
@@ -439,7 +452,9 @@ export const listSharedThreadRows = async (
                 thread.agent_instructions, thread.agent_instructions_revision,
                 thread.agent_instructions_version, thread.model_selection,
                 thread.runner_profile_id, thread.title_pending_until, thread.color,
-                thread.parent_thread_id, thread.started_by_thread_id,
+                CASE WHEN ${spaceParentShownSql} THEN thread.parent_thread_id END AS parent_thread_id,
+                CASE WHEN ${spaceParentShownSql} THEN thread.started_by_thread_id END AS started_by_thread_id,
+                thread.kind,
                 thread.plugin_snapshot_json, thread.skill_snapshot_json,
                 thread.visibility, thread.created_at, thread.updated_at,
                 COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,
@@ -453,6 +468,13 @@ export const listSharedThreadRows = async (
            JOIN projects AS project ON project.id = thread.project_id
           WHERE follower.user_id = ?1
             AND thread.lifecycle_state = 'active'
+            -- Spaces list in the sidebar's own Spaces section, and the
+            -- threads a Space started only in that Space, while the
+            -- reader's spaces flag is on; off, those list as roots.
+            AND thread.kind = 'thread'
+            AND (NOT ${spacesOnSql("?1")} OR NOT EXISTS (SELECT 1 FROM threads AS space
+                             WHERE space.id = thread.parent_thread_id
+                               AND space.kind = 'space'))
             AND ${sharedThreadVisibleSql("thread", "project", "?1")}
           ORDER BY COALESCE(thread.last_activity_at, thread.updated_at) DESC, thread.id DESC
           LIMIT 100`,

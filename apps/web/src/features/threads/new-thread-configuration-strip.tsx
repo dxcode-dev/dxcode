@@ -853,7 +853,7 @@ const orbProviderName = (provider: RunnerProviderPresentation) =>
   provider.shortName ?? provider.displayName;
 
 const formatOrbResources = ({ resources }: RunnerProfile) =>
-  `${resources.cpuCores} CPU · ${Number((resources.memoryMb / 1024).toFixed(1))} GB`;
+  `${resources.cpuCores} CPU · ${Number((resources.memoryMb / 1024).toFixed(1))} GiB`;
 
 /**
  * The new-Thread Orb picker: one row per provider in the resolved set, each

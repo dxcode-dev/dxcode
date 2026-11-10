@@ -1,9 +1,9 @@
+import { builtInShipPrompt, type ThreadId } from "@dx/domain";
 import type {
   FlueConversationMessage,
   FlueConversationSettlement,
   UseFlueAgentResult,
 } from "@flue/react";
-import { builtInShipPrompt, type ThreadId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
@@ -122,7 +122,12 @@ describe("what Ship and Push to Branch leave above the composer", () => {
     const archive = panel.archive();
     expect(archive).toBeDefined();
     await React.act(async () => archive?.click());
-    expect(panel.setArchived).toHaveBeenCalledWith(threadId, true);
+    expect(panel.setArchived).toHaveBeenCalledWith(
+      threadId,
+      true,
+      false,
+      "ship",
+    );
     await React.act(() => panel.root.unmount());
   });
 

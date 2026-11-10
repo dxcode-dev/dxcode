@@ -29,6 +29,7 @@ interface ThreadAuthorizationResult {
   readonly threadId?: ThreadId;
   readonly lifecycleState?: ThreadLifecycleState;
   readonly snoozed?: boolean;
+  readonly space?: boolean;
   readonly access?: "owner" | "contribute" | "view";
   readonly ownerUserId?: string;
 }
@@ -61,6 +62,7 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
         threadId,
         lifecycleState: owned.lifecycleState,
         snoozed: owned.snoozedUntil !== undefined,
+        space: owned.kind === "space",
         access: "owner",
         ownerUserId: principal.userId,
       } satisfies ThreadAuthorizationResult;
@@ -77,6 +79,7 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
             threadId,
             lifecycleState: grant.lifecycleState,
             snoozed: grant.snoozed,
+            space: grant.space,
             access: grant.access,
             ownerUserId: grant.ownerUserId,
           }
@@ -209,5 +212,6 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
     result.lifecycleState as ThreadLifecycleState,
   );
   context.set("threadSnoozed", result.snoozed === true);
+  context.set("threadKind", result.space === true ? "space" : "thread");
   await next();
 };

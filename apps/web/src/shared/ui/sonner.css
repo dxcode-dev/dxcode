@@ -90,8 +90,10 @@
 
 /* Where toasts rest: below the title bar (36px on desktop, 44px for touch
    and in the phone layout), and on a Thread page below its view row too
-   (the 32px pane strip, or the phone layout's 44px view row). */
+   (the 32px pane strip, or the phone layout's 44px view row); 16px from the
+   right unless a page keeps a column there (`--dx-toast-right`). */
 .dx-toaster[data-sonner-toaster] {
+  --dx-toast-right: 16px;
   --dx-toast-top: calc(36px + 8px);
   --dx-toast-top-thread: calc(36px + var(--pane-strip-height, 32px) + 8px);
 }

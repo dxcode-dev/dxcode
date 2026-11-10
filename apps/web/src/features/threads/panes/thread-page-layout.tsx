@@ -3,7 +3,10 @@ import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
-import { THREAD_OPEN_VIEW_EVENT } from "../../../shared/commands/command-provider.js";
+import {
+  THREAD_OPEN_VIEW_EVENT,
+  takeThreadViewRequest,
+} from "../../../shared/commands/thread-open-view-event.js";
 import { RestoredTerminalsContext } from "../../../shared/terminal-session.js";
 import { threadQueryOptions } from "../thread-queries.js";
 import {
@@ -30,13 +33,26 @@ const isViewKind = (value: unknown): value is PaneViewKind =>
 
 const eventSnapshot = () => 0;
 
-/** Runs `open` for each view a Thread command asks to open. */
-const useOpenViewCommands = (open: (view: PaneViewKind) => void) => {
+/**
+ * Runs `open` for each view a Thread command asks this Thread's page to
+ * open, and for one asked of it just before it opened.
+ */
+export const useOpenViewCommands = (
+  threadId: ThreadId,
+  open: (view: PaneViewKind) => void,
+) => {
   const subscribe = (_notify: () => void) => {
     const listener = (event: Event) => {
-      const view = (event as CustomEvent<{ view?: unknown }>).detail?.view;
-      if (isViewKind(view)) open(view);
+      const detail = (
+        event as CustomEvent<{ view?: unknown; threadId?: unknown }>
+      ).detail;
+      if (detail?.threadId !== undefined && detail.threadId !== threadId)
+        return;
+      if (detail?.threadId !== undefined) takeThreadViewRequest(threadId);
+      if (isViewKind(detail?.view)) open(detail.view);
     };
+    const requested = takeThreadViewRequest(threadId);
+    if (isViewKind(requested)) open(requested);
     document.addEventListener(THREAD_OPEN_VIEW_EVENT, listener);
     return () => document.removeEventListener(THREAD_OPEN_VIEW_EVENT, listener);
   };
@@ -120,7 +136,7 @@ export function ThreadPageLayout({
     if (contents.views[view] === undefined) return;
     React.startTransition(() => dispatch({ type: "open-view", view }));
   };
-  useOpenViewCommands(openView);
+  useOpenViewCommands(threadId, openView);
   const page = mode.stacked ? (
     <div className="mobile-thread-region thread-page" data-stacked="">
       {renderTitleBar({ views: null, stacked: true })}

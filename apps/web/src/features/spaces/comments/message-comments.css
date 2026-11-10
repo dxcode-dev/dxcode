@@ -1,0 +1,437 @@
+/* A Space's message comments, after the reference Spaces (captures of 2026-11-07):
+   a Comment action beside ⋯, a replies row under a commented message, and
+   a Comments panel over the chat column. */
+
+/* Comment beside ⋯: on the left the pair sits in the gutter, clear of the
+   text; on the right it grows leftwards from the bubble's corner. */
+.message-actions-controls:has(> .message-comment-action) {
+  gap: 4px;
+}
+.message-actions-anchor:not([data-side="right"])
+  > .message-actions-controls:has(> .message-comment-action) {
+  left: calc(-8px - 2 * var(--message-actions-size));
+}
+
+/* Under a commented message: who commented and how many replies. */
+.message-comment-replies {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 20px;
+}
+/* The viewer's own bubble sits on the right, and its replies row starts at
+   the bubble's left edge, as the reference's: one column as wide as the bubble. */
+.user-message:has(> .message-comment-replies:not([data-side="left"])) {
+  display: grid;
+  grid-template-columns: fit-content(min(85%, 42rem));
+  justify-content: end;
+}
+.message-comments-quote .message-content {
+  max-width: min(85%, 42rem);
+}
+.user-message:has(> .message-comment-replies:not([data-side="left"]))
+  > .message-content {
+  max-width: none;
+}
+.message-comment-replies > button {
+  padding: 0;
+  color: var(--link, light-dark(#2563eb, #7aa7ff));
+  border: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+.message-comment-replies > button:hover,
+.message-comment-replies > button:focus-visible {
+  text-decoration: underline;
+}
+
+/* The panel over the chat column, as the reference opens it. */
+.message-comments-panel {
+  position: absolute;
+  z-index: 6;
+  top: 8px;
+  right: 12px;
+  bottom: 12px;
+  display: flex;
+  width: min(820px, calc(100% - 24px));
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  color: var(--chat-foreground, var(--foreground));
+  border: 1px solid var(--outline);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 0.04),
+    0 12px 32px rgb(0 0 0 / 0.1);
+}
+.message-comments-header {
+  display: flex;
+  flex: none;
+  height: 52px;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 0 18px;
+  border-bottom: 1px solid var(--outline);
+}
+.message-comments-header > svg {
+  width: 18px;
+  height: 18px;
+  margin-right: 6px;
+  color: var(--foreground);
+}
+.message-comments-header > h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+  font-weight: 500;
+}
+.message-comments-header > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.message-comments-header > button:hover:not(:disabled),
+.message-comments-header > button:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.message-comments-header > button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.message-comments-header > button > svg {
+  width: 16px;
+  height: 16px;
+}
+.message-comments-divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 6px;
+  background: var(--outline);
+}
+.message-comments-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 20px 0 8px;
+}
+/* The message, then a rule across the panel, as the reference quotes it. */
+.message-comments-body > .message-comments-quote {
+  flex: none;
+  margin: 0 0 20px;
+  padding: 0 24px 20px;
+  border-bottom: 1px solid var(--outline);
+}
+.message-comments-list {
+  padding: 0 24px;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.message-comments-empty {
+  margin: auto;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+.message-comment {
+  margin: 0 0 18px;
+  font-size: 14px;
+  line-height: 21px;
+}
+.message-comment.user-message {
+  padding: 0;
+}
+.message-comment-author {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.message-comment-author .dx-avatar {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  font-size: 8px;
+}
+.message-comment-author strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.message-comment-author time {
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.message-comment-text {
+  margin: 2px 0 0 28px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.message-comments-quote.message-comment .message-comment-text {
+  font-size: 14px;
+}
+.message-comment-dots {
+  display: inline-flex;
+  gap: 3px;
+  margin: 6px 0 0 28px;
+}
+.message-comment-dots > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--muted-foreground);
+  animation: message-comment-typing 1.2s infinite ease-in-out;
+}
+.message-comment-dots > span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+.message-comment-dots > span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+@keyframes message-comment-typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-comment-dots > span {
+    animation: none;
+  }
+}
+
+/* The box at the bottom, as the chat composer: placeholder "Comment", the
+   mic, and send. Asking @dx shows where dx will answer above it. */
+.message-comments-composer {
+  position: relative;
+  flex: none;
+  padding: 8px 16px 16px;
+}
+.message-comments-agent {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 -1px;
+  padding: 10px 18px 18px;
+  border: 1px solid var(--outline);
+  border-bottom: 0;
+  border-radius: 14px 14px 0 0;
+  font-size: 14px;
+  line-height: 20px;
+}
+.message-comments-agent > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: light-dark(#b7791f, #e0a64a);
+}
+.message-comments-box {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--outline);
+  border-radius: 14px;
+  background: var(--background);
+}
+.message-comments-agent + .message-comments-box {
+  margin-top: -10px;
+}
+.message-comments-box > textarea {
+  min-height: 56px;
+  max-height: 200px;
+  padding: 14px 16px 4px;
+  color: inherit;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font: inherit;
+  font-size: 15px;
+  line-height: 22px;
+  resize: none;
+}
+.message-comments-box > textarea::placeholder {
+  color: var(--muted-foreground);
+}
+.message-comments-box-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 6px 8px 8px;
+}
+.message-comments-send {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  color: var(--background);
+  border: 0;
+  border-radius: 999px;
+  background: var(--foreground);
+  cursor: pointer;
+}
+.message-comments-send:disabled {
+  background: color-mix(in srgb, var(--foreground) 45%, transparent);
+  cursor: default;
+}
+.message-comments-send > svg {
+  width: 16px;
+  height: 16px;
+}
+.message-comments-error {
+  margin: 6px 4px 0;
+  color: var(--destructive);
+  font-size: 13px;
+}
+.message-comments-composer .artifact-comment-suggest {
+  margin-bottom: 0;
+}
+
+@media (max-width: 640px) {
+  .message-comments-panel {
+    inset: 0;
+    width: auto;
+    border: 0;
+    border-radius: 0;
+  }
+  .message-comments-body {
+    padding-top: 16px;
+  }
+  .message-comments-body > .message-comments-quote {
+    margin-bottom: 16px;
+    padding: 0 16px 16px;
+  }
+  .message-comments-list {
+    padding: 0 16px;
+  }
+  .message-comments-composer {
+    padding: 8px 12px 12px;
+  }
+}
+
+/* The Space panel's Comments tab. */
+.space-comments-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+}
+.space-comments-row {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 8px 8px;
+  color: inherit;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.space-comments-row:hover,
+.space-comments-row:focus-visible {
+  background: var(--accent);
+}
+.space-comments-row > svg {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  color: var(--muted-foreground);
+}
+.space-comments-row-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.space-comments-row-message,
+.space-comments-row-last {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-comments-row-message {
+  font-size: 14px;
+  line-height: 20px;
+}
+.space-comments-row-last {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 18px;
+}
+.space-comments-row > .dx-avatar {
+  width: 20px;
+  height: 20px;
+  margin-top: 2px;
+  font-size: 8px;
+}
+.space-comments-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 32px 16px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+  text-align: center;
+}
+.space-comments-empty > strong {
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+/* The replies row's commenters, smaller than a list's avatars. */
+.message-comment-replies .participant-stack .dx-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+/* dx's quoted post renders as Markdown, which keeps its own line breaks. */
+.message-comments-quote-markdown {
+  white-space: normal;
+}
+.message-comments-quote-markdown .markdown > :first-child {
+  margin-top: 0;
+}
+.message-comments-quote-markdown .markdown > :last-child {
+  margin-bottom: 0;
+}
+/* A comment a mention's link opened the panel at flashes, as a linked
+   message does. */
+.message-comment[data-notification-target] {
+  border-radius: 10px;
+  animation: notification-target-flash 2.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .message-comment[data-notification-target] {
+    animation: none;
+    outline: 2px solid var(--chat-mention-foreground);
+    outline-offset: 4px;
+  }
+}

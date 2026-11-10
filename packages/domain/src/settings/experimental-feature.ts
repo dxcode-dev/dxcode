@@ -426,6 +426,31 @@ export const productionExperimentalFeatureRegistry =
             "Retire the flag as removed and drop the provider's descriptor, connector, and sizes.",
         },
       },
+      {
+        id: "spaces",
+        title: "Spaces",
+        description:
+          "Adds Spaces to the sidebar: a shared chat whose agent works toward a goal and starts a Thread for each piece of it.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/spaces" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration:
+            "Spaces and their threads stay in D1; turning the flag off hides Spaces, including those shared with you, and lists the threads they started as ordinary Threads until it is on again.",
+          graduation:
+            "Drop the flag checks in apps/core/src/spaces/gate.ts and the sidebar, then retire the flag as graduated.",
+          removal:
+            "Retire the flag as removed, delete the Spaces routes, pages, and agent prompt, and drop the Space tables.",
+        },
+      },
     ],
     migrations: [
       { kind: "retire", id: "needs-you-prioritize", outcome: "removed" },

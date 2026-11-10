@@ -60,6 +60,24 @@ export const RealtimeInvalidationEvent = Schema.Union([
     threadId: ThreadId,
     revision: Revision,
   }),
+  /**
+   * Comments on a Space's messages changed. Content-free; refetch the
+   * Space's commented messages and any open comments.
+   */
+  Schema.Struct({
+    type: Schema.Literal("comments.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
+  /**
+   * A Space's posts changed: one was posted or edited, or its reactions
+   * changed. Content-free; refetch the Space's posts.
+   */
+  Schema.Struct({
+    type: Schema.Literal("space.posts.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
   /** The Thread's Orb disk is filling up; refetch its disk. */
   Schema.Struct({
     type: Schema.Literal("disk.invalidated"),
@@ -88,6 +106,19 @@ export const RealtimePresenceSnapshotEvent = Schema.Struct({
   ),
 });
 
+/**
+ * Someone with the Thread open is typing a comment on one of its messages
+ * (`scope`, the message's id). Ephemeral: never stored, never revisioned;
+ * it lapses unless repeated.
+ */
+export const RealtimeTypingEvent = Schema.Struct({
+  type: Schema.Literal("presence.typing"),
+  topic: PresenceTopic,
+  userId: UserId,
+  clientId: ClientId,
+  scope: Schema.String.check(Schema.isPattern(/^[\w.-]{1,160}$/)),
+});
+
 export const RealtimeWorkspaceStatusEvent = Schema.Struct({
   type: Schema.Literal("workspace.status"),
   threadId: ThreadId,
@@ -103,6 +134,7 @@ export const RealtimeServerEvent = Schema.Union([
   RealtimeNotificationsEvent,
   RealtimeSidebarLayoutEvent,
   RealtimePresenceSnapshotEvent,
+  RealtimeTypingEvent,
   Schema.Struct({
     type: Schema.Literal("presence.heartbeat"),
     topic: PresenceTopic,

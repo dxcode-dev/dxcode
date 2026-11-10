@@ -53,3 +53,30 @@ describe("workspace guidance", () => {
     workspaceFacts(prompt, "Bash");
   });
 });
+
+// A Space's agent reads its children's reports and decides what people see,
+// so a child must not think its report is posted in the Space's chat.
+describe("A thread a Space started", () => {
+  const parent = "thr_00000000-0000-4000-8000-000000000001";
+  const space = { name: "Checkout v2" };
+
+  it("sends its report to the Space's coordinator, in both loops", () => {
+    for (const prompt of [
+      composeDxAgentPrompt("", "", parent, "", space),
+      composeClaudeCodePrompt("", parent, space),
+    ]) {
+      expect(prompt).toContain(
+        "Your report goes to the Space's coordinator, not to people: it decides what to post in the Space",
+      );
+      expect(prompt).not.toContain("Space's chat");
+    }
+  });
+
+  it("leaves an ordinary child's report line as it was", () => {
+    const prompt = composeDxAgentPrompt("", "", parent);
+    expect(prompt).toContain(
+      `The agent of Thread ${parent} started this Thread.`,
+    );
+    expect(prompt).not.toContain("coordinator");
+  });
+});

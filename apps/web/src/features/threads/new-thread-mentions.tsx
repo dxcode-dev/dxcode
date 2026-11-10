@@ -6,8 +6,8 @@ import {
 } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
-import { workspaceMembersQueryOptions } from "../settings/members/members-queries.js";
 import { Avatar } from "../../shared/ui/avatar.js";
+import { workspaceMembersQueryOptions } from "../settings/members/members-queries.js";
 import "./sharing/thread-sharing.css";
 
 // The matching below follows `sharing/thread-chat.ts`, which the Thread page

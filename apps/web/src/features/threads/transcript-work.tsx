@@ -72,10 +72,11 @@ function TranscriptTurnContent({
   const active = turn.status === "active";
   const collapsedIds = new Set(turn.workDisclosure?.collapsedRowIds);
   const retainedIds = new Set(turn.workDisclosure?.retainedRowIds);
-  const collapsed = visibleIntermediate.filter((row) =>
-    collapsedIds.has(row.id),
+  const inView = (row: TranscriptRow) => retainedIds.has(row.id);
+  const collapsed = visibleIntermediate.filter(
+    (row) => collapsedIds.has(row.id) && !inView(row),
   );
-  const retained = visibleIntermediate.filter((row) => retainedIds.has(row.id));
+  const retained = visibleIntermediate.filter(inView);
   const pinnedIds = new Set(turn.workDisclosure?.pinnedRowIds);
   const pinned = visibleIntermediate.filter((row) => pinnedIds.has(row.id));
   return (

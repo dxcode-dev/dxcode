@@ -67,7 +67,7 @@ export function RunnerProfileCard({
           <span className="orb-size-card-resources">
             <span>{profile.resources.cpuCores} CPU</span>
             <span>
-              {Number((profile.resources.memoryMb / 1024).toFixed(1))}GB memory
+              {Number((profile.resources.memoryMb / 1024).toFixed(1))}GiB memory
             </span>
             <span>{profile.resources.diskGb}GB disk</span>
           </span>

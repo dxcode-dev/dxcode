@@ -50,8 +50,15 @@ export type TranscriptRow =
       readonly sourceThreadId?: string;
       /** The Thread's schedule or a GitHub subscription delivered it. */
       readonly automation?: MessageAutomation;
+      /** A person's comment on this Flue message, sent to the agent. */
+      readonly commentOn?: string;
       /** dx's name for a message that tags someone; notifications link to it. */
       readonly dxMessageId?: string;
+      /**
+       * Flue's id for a message sent from this page, which Flue's session
+       * keeps showing under the browser's local id (`messageId`).
+       */
+      readonly flueMessageId?: string;
     } & TranscriptRowBase &
       SourcePart)
   | ({
@@ -151,6 +158,11 @@ export interface DeriveTranscriptViewModelInput {
    * they wrote. Chat starts no run, so its local echo is not shown as one.
    */
   readonly chatEcho?: (text: string) => boolean;
+  /**
+   * Flue's id for the message of a submission, for a message sent from this
+   * page that Flue's session shows under its local id.
+   */
+  readonly admittedMessageId?: (submissionId: string) => string | undefined;
 }
 
 type TranscriptToolRow = Extract<
@@ -231,6 +243,7 @@ const messageRows = (
   message: FlueConversationMessage,
   turnId: TranscriptTurnId,
   chat: boolean,
+  admittedMessageId: DeriveTranscriptViewModelInput["admittedMessageId"],
 ): ReadonlyArray<TranscriptRow> => {
   const cached = messageRowsCache.get(message);
   if (cached !== undefined && cached.turnId === turnId && cached.chat === chat)
@@ -253,13 +266,23 @@ const messageRows = (
     if (part.type === "text") {
       if (message.role === "user") {
         const parsedAuthor = parseMessageAuthor(part.text);
-        const { author, mentions, sourceThreadId, messageId, automation } =
-          parsedAuthor;
+        const {
+          author,
+          mentions,
+          sourceThreadId,
+          messageId,
+          automation,
+          commentOn,
+        } = parsedAuthor;
         const { attachments, text } = parseMessageAttachments(
           parsedAuthor.text,
         );
         if (!text.trim() && attachments.length === 0) continue;
         const sentAt = authoritativeTimestamp(message);
+        const flueMessageId =
+          message.submissionId === undefined
+            ? undefined
+            : admittedMessageId?.(message.submissionId);
         rows.push({
           ...source,
           kind: "user-prompt",
@@ -269,7 +292,11 @@ const messageRows = (
           ...(mentions === undefined ? {} : { mentions }),
           ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
           ...(automation === undefined ? {} : { automation }),
+          ...(commentOn === undefined ? {} : { commentOn }),
           ...(messageId === undefined ? {} : { dxMessageId: messageId }),
+          ...(flueMessageId === undefined || flueMessageId === message.id
+            ? {}
+            : { flueMessageId }),
           admitted: message.submissionId !== undefined,
           ...(sentAt === undefined ? {} : { sentAt }),
           ...(chat ? { chat: true as const } : {}),
@@ -733,7 +760,12 @@ const deriveFrom = (
     )
       latest = undefined;
     turnMessages.get(turnId)?.push(message);
-    for (const row of messageRows(message, turnId, chat)) {
+    for (const row of messageRows(
+      message,
+      turnId,
+      chat,
+      input.admittedMessageId,
+    )) {
       rowIndexById.set(row.id, rows.length);
       rows.push(row);
       targetRows.push(row);
@@ -1033,6 +1065,7 @@ export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
       a.continued !== b.continued ||
       a.sourceThreadId !== b.sourceThreadId ||
       a.automation !== b.automation ||
+      a.commentOn !== b.commentOn ||
       a.mentions?.length !== b.mentions?.length)
   )
     return false;

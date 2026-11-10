@@ -26,6 +26,12 @@ export const sharedThreadVisibleSql = (
   AND ${activeMemberSql(`${thread}.shared_workspace_id`, `${thread}.owner_user_id`)}
   AND ${threadProjectReachableSql(project, `${thread}.owner_user_id`)})`;
 
+/**
+ * `contribute_until` for Contribute that never ends: a Space shared with its
+ * workspace lets every member chat in it for as long as it stays shared.
+ */
+export const CONTRIBUTE_WITHOUT_END = "9999-12-31T23:59:59.999Z";
+
 /** SQL expression: the effective member access at `now` (ISO placeholder). */
 export const sharedThreadAccessSql = (thread: string, now: string) => `
   CASE WHEN ${thread}.workspace_access = 'contribute'
@@ -38,6 +44,8 @@ export interface SharedThreadGrant {
   readonly lifecycleState: "active" | "archived";
   /** The owner snoozed the Thread; a member's message wakes it too. */
   readonly snoozed: boolean;
+  /** The Thread is a Space. */
+  readonly space: boolean;
   readonly access: SharedThreadAccess;
 }
 
@@ -52,6 +60,7 @@ export const findSharedThreadGrant = async (
     .prepare(
       `SELECT thread.owner_user_id, thread.lifecycle_state,
               thread.snoozed_until IS NOT NULL AS snoozed,
+              thread.kind,
               ${sharedThreadAccessSql("thread", "?3")} AS access
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
@@ -64,6 +73,7 @@ export const findSharedThreadGrant = async (
       owner_user_id: string;
       lifecycle_state: "active" | "archived";
       snoozed: number;
+      kind: string;
       access: SharedThreadAccess;
     }>();
   return row === null
@@ -72,6 +82,7 @@ export const findSharedThreadGrant = async (
         ownerUserId: row.owner_user_id as UserId,
         lifecycleState: row.lifecycle_state,
         snoozed: row.snoozed === 1,
+        space: row.kind === "space",
         access: row.access,
       };
 };

@@ -754,6 +754,11 @@ export {
   type SkillRepositoryShape,
 } from "./settings/skill-repository.js";
 export {
+  claudeCodeModelFor,
+  SPACE_AGENT_DEFAULT,
+  SpaceAgentModel,
+} from "./settings/space-agent-model.js";
+export {
   AvatarKey,
   CreateWorkspaceInput,
   normalizeWorkspaceDisplayName,
@@ -880,6 +885,8 @@ export {
   Thread,
   ThreadActivityStatus,
   ThreadColor,
+  ThreadExecutionMode,
+  ThreadKind,
   ThreadLifecycleState,
   ThreadVisibility,
 } from "./threads/thread.js";

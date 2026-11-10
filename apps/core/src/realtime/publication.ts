@@ -14,6 +14,8 @@ export type RealtimeThreadEventType =
   | "memory.invalidated"
   | "disk.invalidated"
   | "artifacts.invalidated"
+  | "comments.invalidated"
+  | "space.posts.invalidated"
   | "workspace.status";
 export type InvalidationType = Exclude<
   RealtimeThreadEventType,
@@ -57,16 +59,29 @@ const threadAudience = async (
   db: D1Database,
   threadId: ThreadId,
 ): Promise<
-  { readonly audience: AudienceKey; readonly ownerUserId: UserId } | undefined
+  | {
+      readonly audience: AudienceKey;
+      readonly ownerUserId: UserId;
+      /** The Space that started the Thread, whose cards and chart show it. */
+      readonly spaceThreadId: ThreadId | undefined;
+    }
+  | undefined
 > => {
   const row = await db
-    .prepare("SELECT owner_user_id AS ownerUserId FROM threads WHERE id = ?")
+    .prepare(
+      `SELECT thread.owner_user_id AS ownerUserId, space.id AS spaceThreadId
+         FROM threads AS thread
+         LEFT JOIN threads AS space
+           ON space.id = thread.parent_thread_id AND space.kind = 'space'
+        WHERE thread.id = ?`,
+    )
     .bind(threadId)
-    .first<{ ownerUserId: UserId }>();
+    .first<{ ownerUserId: UserId; spaceThreadId: ThreadId | null }>();
   if (row === null) return undefined;
   return {
     ownerUserId: row.ownerUserId,
     audience: await homeAudienceForUser(db, row.ownerUserId),
+    spaceThreadId: row.spaceThreadId ?? undefined,
   };
 };
 
@@ -183,6 +198,18 @@ const publishRealtimeThreadEvent = async (
     });
     if (!response.ok)
       throw new Error(`Realtime hub returned ${response.status}.`);
+    // A Space's child shows on the Space's cards, panel, and chart, and
+    // its artifacts in the Space's Artifacts tab, whose viewers are present
+    // on the Space, not the child: they hear it too.
+    if (
+      ((event.type === "thread.invalidated" &&
+        event.recipients !== "audience") ||
+        event.type === "artifacts.invalidated") &&
+      target.spaceThreadId !== undefined
+    )
+      await publishRealtimeThreadEvent(bindings, target.spaceThreadId, {
+        type: event.type,
+      });
   } catch (cause) {
     realtimeLogger.warn("Realtime Thread event publication failed.", {
       event: "realtime_thread_event_publication_failed",

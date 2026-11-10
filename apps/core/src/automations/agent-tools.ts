@@ -2,6 +2,7 @@ import type { ThreadId, UserId } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
 import { publishNotification } from "../notifications/publish.js";
+import { spacesEnabledFor } from "../spaces/gate.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
 import { agentModeSelection, sha256Hex } from "../threads/agent-tools.js";
 import {
@@ -125,10 +126,14 @@ export const createAutomationTools = (
   ) => {
     const id = threadId ?? callingThreadId;
     if (id === callingThreadId) return id;
+    // A Space only while Spaces is on for the owner (spaces/gate.ts).
+    const spaces = await spacesEnabledFor(context.bindings, owner.ownerUserId);
     const row = await context.db
       .prepare(
         `SELECT id, parent_thread_id FROM threads
-          WHERE id = ? AND owner_user_id = ? AND lifecycle_state != 'deleted'`,
+          WHERE id = ? AND owner_user_id = ? AND lifecycle_state != 'deleted'${
+            spaces ? "" : " AND kind = 'thread'"
+          }`,
       )
       .bind(id, owner.ownerUserId)
       .first<{ id: string; parent_thread_id: string | null }>();

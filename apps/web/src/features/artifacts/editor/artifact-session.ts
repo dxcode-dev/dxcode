@@ -26,6 +26,14 @@ import {
 } from "prosemirror-state";
 import { selectedRect } from "prosemirror-tables";
 import type { EditorView } from "prosemirror-view";
+import {
+  type PersonItem,
+  peopleItems,
+} from "../../../shared/comments/mention-items.js";
+import type {
+  SuggestMenuRow,
+  SuggestMenuState,
+} from "../../../shared/comments/suggest-menu.js";
 import { threadKeys } from "../../threads/thread-queries.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
 import {
@@ -88,16 +96,10 @@ import {
   selectionMarks,
   toggleSelectionMark,
 } from "./selection-format.js";
-import {
-  type PersonItem,
-  peopleItems,
-  type SlashItem,
-  slashItems,
-} from "./suggest-items.js";
+import { type SlashItem, slashItems } from "./suggest-items.js";
 import {
   type SuggestHost,
   type SuggestItem,
-  type SuggestKind,
   type SuggestMatch,
   suggestions,
   suggestKey,
@@ -146,32 +148,10 @@ export interface ArtifactSessionSnapshot {
 }
 
 /** One row of the open menu, as it shows. */
-export interface ArtifactSuggestRow {
-  readonly id: string;
-  readonly label: string;
-  readonly hint?: string;
-  /** The `/` menu's heading the row sits under. */
-  readonly group?: string;
-  readonly shortcut?: string;
-  /** A person's picture; a person has a `userId`, and dx has none. */
-  readonly userId?: string;
-  readonly image?: string;
-}
+export type ArtifactSuggestRow = SuggestMenuRow;
 
-export interface ArtifactSuggestMenu {
-  readonly kind: SuggestKind;
-  readonly items: ReadonlyArray<ArtifactSuggestRow>;
-  readonly active: number;
-  /**
-   * In the page's coordinates: the menu's top edge under the trigger, or,
-   * when it opens `above` (no room below), its bottom edge over the trigger.
-   */
-  readonly top: number;
-  readonly left: number;
-  readonly above: boolean;
-  /** The room it has, so it scrolls instead of leaving the editor. */
-  readonly maxHeight: number;
-}
+/** The open `/` or `@` menu. */
+export type ArtifactSuggestMenu = SuggestMenuState;
 
 /** The menu's width and tallest height, and a row's and a heading's height. */
 const SUGGEST_WIDTH = 260;

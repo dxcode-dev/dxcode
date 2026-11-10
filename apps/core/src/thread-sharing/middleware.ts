@@ -24,6 +24,8 @@ import {
   publishRealtimeInvalidation,
   scheduleRealtimeInvalidation,
 } from "../realtime/publication.js";
+import { admitSpaceMessage } from "../spaces/posts/admission.js";
+import { joinSpace } from "../spaces/repository-d1.js";
 import { ThreadRepositoryD1 } from "../threads/repository-d1.js";
 import { threadDetailData } from "../threads/routes.js";
 import { wakeSnoozedThread } from "../threads/snooze.js";
@@ -34,11 +36,10 @@ import {
 } from "./access.js";
 import {
   classifyMessage,
-  conversationMode,
   followThread,
   messageIdFor,
+  sharedThreadConversation,
   switchConversationMode,
-  threadMembers,
 } from "./members.js";
 import { recordParticipant, userIdentity } from "./service.js";
 
@@ -94,7 +95,7 @@ export const shareThreadReads: MiddlewareHandler<AppEnv> = async (
  * (Thread detail hides the owner's instructions), so when a member's send
  * would create the Flue instance the server supplies the real one.
  */
-const ownerAgentInitialization = (
+export const ownerAgentInitialization = (
   bindings: AppEnv["Bindings"],
   db: D1Database,
   threadId: ThreadId,
@@ -179,18 +180,23 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   const access = context.get("threadAccess");
   const sourceThreadId = context.get("messageSourceThreadId");
   const automation = context.get("messageAutomation");
+  const commentOn = context.get("messageCommentOn");
+  const edit = context.get("messageEdit") === true;
   const delivered: unknown = await context.req.raw
     .clone()
     .json()
     .catch(() => undefined);
   // Flue renders a signal's tag and attributes verbatim, so a signal could
   // pose as any sender, and a chat delivery would skip the author tag. dx
-  // never sends either over HTTP.
+  // never sends either over HTTP. A rewind comes only from the message edit
+  // route, which checks who sent the message first.
   if (
     typeof delivered === "object" &&
     delivered !== null &&
     "kind" in delivered &&
-    (delivered.kind === "signal" || delivered.kind === "chat")
+    (delivered.kind === "signal" ||
+      delivered.kind === "chat" ||
+      delivered.kind === "rewind")
   )
     return rejectDelivery(
       context,
@@ -208,9 +214,12 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   let mentioned: ReadonlyArray<UserId> = [];
   let mention: { messageId: string; excerpt: string } | undefined;
   let switchTo: ThreadConversationMode | undefined;
+  /** A Space: a member who writes in it joins it. */
+  let space = false;
   let attachments: ResolvedMessageAttachments | undefined;
+  let afterSpaceMessage: ((response: Response) => Promise<void>) | undefined;
   if (userMessage !== undefined) {
-    const [identity, initialData, members] = await Promise.all([
+    const [identity, initialData, shared] = await Promise.all([
       userIdentity(db, actor.userId as UserId),
       access !== "owner" && "initialData" in userMessage
         ? ownerAgentInitialization(
@@ -220,8 +229,9 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
             context.get("threadOwnerUserId") as UserId,
           ).then((owner) => ({ initialData: owner }))
         : Promise.resolve({}),
-      threadMembers(db, threadId.value),
+      sharedThreadConversation(db, threadId.value),
     ]);
+    const { members } = shared;
     // Members are listed only while the Thread is shared; a private Thread
     // is always in agent mode. Tags count only in the text the message
     // keeps: the forged tags it strips can hide text.
@@ -236,24 +246,29 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
             actor.userId,
           );
     const { mentions } = classified;
+    // A shared Thread's kind and current mode. A Space is always in agent
+    // mode, so tags never switch it.
+    const conversation =
+      sourceThreadId !== undefined || automation !== undefined
+        ? undefined
+        : shared.conversation;
+    space = conversation?.space === true;
     // Another Thread's agent always addresses this Thread's agent, and its
     // tags never switch the members' mode.
+    // An edit replaces a message the agent answered, so it goes to the
+    // agent again and never switches the members' mode.
     switchTo =
-      sourceThreadId === undefined && automation === undefined
-        ? classified.mode
-        : undefined;
+      conversation === undefined || conversation.space || edit
+        ? undefined
+        : classified.mode;
     // The switch is recorded once Flue admits the message, so a refused
     // message never changes the mode.
     const mode =
-      members.length === 0 ||
-      sourceThreadId !== undefined ||
-      automation !== undefined
-        ? "agent"
-        : (switchTo ?? (await conversationMode(db, threadId.value)));
+      conversation === undefined ? "agent" : (switchTo ?? conversation.mode);
     mentioned = mentions.flatMap(({ userId }) =>
       userId === actor.userId ? [] : [userId as UserId],
     );
-    const chat = mode === "chat";
+    const chat = !edit && mode === "chat";
     if (
       chat &&
       (parseMessageAttachments(userMessage.body).attachments.length > 0 ||
@@ -276,11 +291,6 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         return rejectDelivery(context, cause.message);
       throw cause;
     }
-    const admittedBody = messageAttachmentBody(
-      context.env,
-      attachments,
-      context.req.url,
-    ).body;
     // Flue names a chat message by its key, so a retry converges on it.
     const deliveryKey =
       "idempotencyKey" in userMessage &&
@@ -290,8 +300,32 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         : chat
           ? crypto.randomUUID()
           : undefined;
+    const attachedBody = messageAttachmentBody(
+      context.env,
+      attachments,
+      context.req.url,
+    ).body;
+    // A Space's agent reads people's messages as posts and other Threads'
+    // as worker reports.
+    const spaceMessage =
+      context.get("threadKind") === "space" && !chat
+        ? await admitSpaceMessage(context, {
+            db,
+            threadId: threadId.value,
+            actorUserId: actor.userId,
+            body: attachedBody,
+            sent: userMessage.body,
+            ...(deliveryKey === undefined
+              ? {}
+              : { idempotencyKey: deliveryKey }),
+          })
+        : undefined;
+    afterSpaceMessage = spaceMessage?.after;
+    const admittedBody = spaceMessage?.body ?? attachedBody;
+    // A Space notifies the people a post mentions from the post itself
+    // (spaces/posts/effects.ts), linking to it.
     const messageId =
-      mentioned.length === 0
+      mentioned.length === 0 || context.get("threadKind") === "space"
         ? undefined
         : await messageIdFor(
             threadId.value,
@@ -317,6 +351,8 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
         ...(automation === undefined ? {} : { automation }),
         ...(messageId === undefined ? {} : { messageId }),
+        ...(commentOn === undefined ? {} : { commentOn }),
+        ...(edit ? { edited: true } : {}),
       },
       admittedBody,
     );
@@ -348,6 +384,12 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     });
   }
   await next();
+  await afterSpaceMessage?.(context.res).catch((cause) =>
+    threadSharingLogger.warn("A Space post was not settled.", {
+      event: "space_post_admission_failed",
+      cause,
+    }),
+  );
   if (context.res.status !== 202) return;
   // Awaited, so the 202 means every reader of the Thread can open the files
   // and the next message is classified in the mode this one chose.
@@ -425,6 +467,10 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         ? recordParticipant(db, threadId.value, actor.userId as UserId, {
             message: true,
           })
+        : undefined,
+      // Writing in a Space joins it, so it lists in the writer's sidebar.
+      space && access === "contribute"
+        ? joinSpace(db, threadId.value, actor.userId as UserId)
         : undefined,
     ])
       .catch((cause) =>

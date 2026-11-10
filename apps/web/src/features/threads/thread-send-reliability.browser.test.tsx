@@ -5,7 +5,11 @@
  * submission row per idempotency key, `uid` conditions, and the admission
  * lookup at `GET <agent>?view=admission&idempotencyKey=K`.
  */
-import type { ThreadAgentInitializationData } from "@dx/api";
+import {
+  ABSENT_CONVERSATION_REQUEST_HEADER,
+  ABSENT_CONVERSATION_RESPONSE_HEADER,
+  type ThreadAgentInitializationData,
+} from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { FlueAgentSession } from "@flue/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -75,6 +79,7 @@ vi.mock("./attachment-upload.js", async (importOriginal) => ({
 
 import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import type { ComposerMentions } from "./sharing/chat-composer.js";
+import { threadKeys } from "./thread-queries.js";
 import { ThreadSessionRegistry } from "./thread-session-registry.js";
 import { useFrameCoalescedAgentSource } from "./use-frame-coalesced-agent-session.js";
 
@@ -149,6 +154,8 @@ const createAgentServer = ({ exists }: { readonly exists: boolean }) => {
   }> = [];
   /** Core builds the stored body: its author tag can change between tries. */
   let authorName = "Ada";
+  /** The status of each history read, as the network answered it. */
+  const historyStatuses: number[] = [];
   let holdHistory = false;
   let disconnected = false;
   /** While set, a send waits here before the server reads it. */
@@ -327,8 +334,22 @@ const createAgentServer = ({ exists }: { readonly exists: boolean }) => {
     }
     if (view === "history") {
       if (holdHistory) return hang(init?.signal);
-      if (!created)
+      // dx answers a page that asks without an error status, as Core does.
+      if (
+        !created &&
+        new Headers(init?.headers).has(ABSENT_CONVERSATION_REQUEST_HEADER)
+      ) {
+        historyStatuses.push(204);
+        return new Response(null, {
+          status: 204,
+          headers: { [ABSENT_CONVERSATION_RESPONSE_HEADER]: "absent" },
+        });
+      }
+      if (!created) {
+        historyStatuses.push(404);
         return json({ error: { type: "agent_not_found", message: "" } }, 404);
+      }
+      historyStatuses.push(200);
       return json({
         v: 1,
         conversationId: threadId,
@@ -367,6 +388,7 @@ const createAgentServer = ({ exists }: { readonly exists: boolean }) => {
     fetch,
     faults,
     requests,
+    historyStatuses,
     submissions,
     holdHistory: (hold: boolean) => {
       holdHistory = hold;
@@ -464,7 +486,9 @@ const open = async (
       await Promise.resolve();
     });
   const send = async (text: string) => {
-    await vi.waitFor(() => expect(textarea().disabled).toBe(false));
+    await vi.waitFor(() =>
+      expect(textarea().hasAttribute("aria-busy")).toBe(false),
+    );
     await React.act(async () => {
       write(text);
       container
@@ -477,7 +501,7 @@ const open = async (
   };
   /** Waits until the composer accepted or gave up on the send. */
   const settled = () =>
-    vi.waitFor(() => expect(textarea().disabled).toBe(false), {
+    vi.waitFor(() => expect(textarea().hasAttribute("aria-busy")).toBe(false), {
       timeout: 5_000,
     });
   const card = () =>
@@ -557,6 +581,7 @@ const open = async (
     registry.clear();
   };
   return {
+    queryClient,
     container,
     textarea,
     type,
@@ -635,8 +660,10 @@ describe("a message shows as sent only once the server has it", () => {
       expect(server.sends()).toHaveLength(sendsBefore + 1);
       expect(panel.userRows("Held message")).toBe(0);
       expect(panel.textarea().value).toBe("Held message");
-      expect(panel.textarea().readOnly).toBe(true);
-      expect(panel.textarea().disabled).toBe(true);
+      expect(panel.textarea().getAttribute("aria-busy")).toBe("true");
+      // The message being sent cannot be edited while it is held.
+      await panel.type("Edited while held");
+      expect(panel.textarea().value).toBe("Held message");
       expect(panel.submitButton().disabled).toBe(true);
       if (file) expect(panel.preview("held.png")).not.toBeNull();
       // Stop stays while the agent works; chat starts no run to stop.
@@ -1072,6 +1099,78 @@ describe("first follow-up cost", () => {
       uid: null,
       initialData: agentInitialization,
     });
+    expect(server.submissions.size).toBe(1);
+    await panel.close();
+  });
+});
+
+describe("a Thread whose agent has no conversation yet, such as a new Space", () => {
+  const historyReads = (server: ReturnType<typeof createAgentServer>) =>
+    server.requests.filter(({ view }) => view === "history").length;
+  const wait = (ms: number) =>
+    React.act(() => new Promise((resolve) => setTimeout(resolve, ms)));
+
+  it("reads its missing history once, then waits for a sign that it started", async () => {
+    const server = createAgentServer({ exists: false });
+    const panel = await open(server);
+    const detail = (activityStatus: string) =>
+      React.act(async () => {
+        panel.queryClient.setQueryData(
+          threadKeys.detail("usr_1" as UserId, threadId),
+          { id: threadId, activityStatus },
+        );
+      });
+    await detail("idle");
+    await vi.waitFor(() => expect(historyReads(server)).toBe(1));
+
+    // Nobody has written yet: the page does not keep asking the server.
+    await wait(3_500);
+    expect(historyReads(server)).toBe(1);
+
+    // Someone else writes the first message; the Thread's detail changes,
+    // and the page reads the conversation once.
+    await server.fetch(agentUrl, {
+      method: "POST",
+      body: JSON.stringify({
+        idempotencyKey: "from-ben",
+        kind: "user",
+        body: "From Ben",
+        uid: null,
+        initialData: agentInitialization,
+      }),
+    });
+    await detail("working");
+    await vi.waitFor(() => expect(panel.userRows("From Ben")).toBe(1));
+    expect(historyReads(server)).toBe(2);
+    await panel.close();
+  });
+
+  it("reads a new Space's missing history without an error status the browser logs", async () => {
+    const server = createAgentServer({ exists: false });
+    const panel = await open(server);
+    await vi.waitFor(() => expect(historyReads(server)).toBe(1));
+    await wait(1_500);
+    // Answered as absent, not 404, and not read again.
+    expect(server.historyStatuses).toEqual([204]);
+    expect(historyReads(server)).toBe(1);
+
+    // The page can still write the first message and see it.
+    await panel.send("Hello");
+    await panel.settled();
+    await vi.waitFor(() => expect(panel.userRows("Hello")).toBe(1));
+    expect(server.historyStatuses).not.toContain(404);
+    await panel.close();
+  });
+
+  it("shows the first message sent from the page itself", async () => {
+    const server = createAgentServer({ exists: false });
+    const panel = await open(server);
+    await vi.waitFor(() => expect(historyReads(server)).toBe(1));
+    await wait(1_500);
+
+    await panel.send("Hello");
+    await panel.settled();
+    await vi.waitFor(() => expect(panel.userRows("Hello")).toBe(1));
     expect(server.submissions.size).toBe(1);
     await panel.close();
   });

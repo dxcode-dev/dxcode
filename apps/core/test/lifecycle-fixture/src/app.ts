@@ -1,3 +1,5 @@
+import { parseMessageAuthor } from "@dx/api";
+import type { Context } from "@earendil-works/pi-ai";
 import {
   fauxAssistantMessage,
   fauxProvider,
@@ -24,6 +26,8 @@ import type { AppEnv } from "../../../src/http/types.js";
 import { installFlueObservation } from "../../../src/observability/flue.js";
 import { projectRoutes } from "../../../src/projects/routes.js";
 import { settingsRoutes } from "../../../src/settings/routes.js";
+import { attributeSubmission } from "../../../src/thread-sharing/middleware.js";
+import { createThreadMessageEditRoutes } from "../../../src/threads/message-edit-route.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
 import { FixtureLifecycleAgent } from "./agents/fixture-lifecycle-agent.js";
 import { FixturePlanAgent } from "./agents/fixture-plan-agent.js";
@@ -32,10 +36,10 @@ import { heavyTurnResponses } from "./heavy-history.js";
 import { planLimitRoutes } from "./plan-limit.js";
 import { recoveryWakes } from "./recovery-probe.js";
 import {
+  commandRuns,
   failNextActivation,
   hangNextActivation,
   isHoldingTurn,
-  commandRuns,
   settleDelayedCommand,
 } from "./sandbox.js";
 
@@ -87,6 +91,77 @@ configureRetryPolicy({
   recoveryRetryPolicy: ({ attempt }) =>
     attempt <= 3 ? 1_000 * 2 ** (attempt - 1) : undefined,
 });
+
+/** An answer listing the user messages the model was given, tags removed. */
+const seenMessages = (context: {
+  readonly messages: ReadonlyArray<{ role: string; content: unknown }>;
+}) =>
+  fauxAssistantMessage(
+    `seen: ${context.messages
+      .flatMap((message) =>
+        message.role !== "user"
+          ? []
+          : [
+              parseMessageAuthor(
+                typeof message.content === "string"
+                  ? message.content
+                  : (message.content as Array<{ type: string; text?: string }>)
+                      .filter((block) => block.type === "text")
+                      .map((block) => block.text ?? "")
+                      .join(""),
+              ).text,
+            ],
+      )
+      .join(" | ")}`,
+  );
+
+/**
+ * What each model call of the edit-cache scenario was given: the parts of
+ * the request a provider's prompt cache keys on.
+ */
+const modelRequests: Array<{
+  readonly systemPrompt: string | undefined;
+  readonly tools: string;
+  readonly messages: ReadonlyArray<string>;
+}> = [];
+/** JSON with object keys in one order, so equal values print equal. */
+const canonical = (value: unknown): string =>
+  JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner).sort(([left], [right]) =>
+            left < right ? -1 : left > right ? 1 : 0,
+          ),
+        )
+      : inner,
+  );
+/**
+ * A message as a provider receives it: its role and content, and a tool
+ * result's call and outcome. Timestamps, usage and durations stay in dx.
+ */
+const sentToProvider = (message: Context["messages"][number]) =>
+  canonical({
+    role: message.role,
+    content: message.content,
+    ...("toolsAdded" in message ? { toolsAdded: message.toolsAdded } : {}),
+    ...(message.role === "toolResult"
+      ? {
+          toolCallId: message.toolCallId,
+          toolName: message.toolName,
+          isError: message.isError,
+        }
+      : {}),
+  });
+const recorded =
+  (answer: (context: Context) => ReturnType<typeof fauxAssistantMessage>) =>
+  (context: Context) => {
+    modelRequests.push({
+      systemPrompt: context.systemPrompt,
+      tools: canonical(context.tools ?? []),
+      messages: context.messages.map(sentToProvider),
+    });
+    return answer(context);
+  };
 
 /** The long Thread of the recovery-loop scenario: steps × parallel calls. */
 const RECOVERY_HISTORY_STEPS = 20;
@@ -162,6 +237,44 @@ const scenarioResponses = {
   unready: () => [
     fauxAssistantMessage("unready-first-complete"),
     fauxAssistantMessage("unready-follow-up-complete"),
+  ],
+  // An edit's first model call, against the original call it replaces. The
+  // second turn writes a file at the workspace root, a side effect the edit
+  // keeps; every call is recorded.
+  "edit-cache": () => [
+    recorded(seenMessages),
+    recorded(() =>
+      fauxAssistantMessage(
+        [
+          fauxToolCall("write", {
+            path: "/home/user/edit-cache-kept.txt",
+            content: "kept",
+          }),
+        ],
+        { stopReason: "toolUse" },
+      ),
+    ),
+    recorded(seenMessages),
+    recorded(seenMessages),
+    recorded(seenMessages),
+  ],
+  // Editing an earlier message: each answer names the user messages the
+  // model was given, so the test sees what the rewind left in its context.
+  // The second turn runs a command, a side effect the edit does not undo;
+  // the last turn holds until the edit stops it.
+  "edit-rewind": () => [
+    seenMessages,
+    fauxAssistantMessage(
+      [fauxToolCall("bash", { command: "fixture-count edit-side-effect" })],
+      { stopReason: "toolUse" },
+    ),
+    seenMessages,
+    seenMessages,
+    seenMessages,
+    fauxAssistantMessage([fauxToolCall("bash", { command: "hold-turn" })], {
+      stopReason: "toolUse",
+    }),
+    seenMessages,
   ],
 };
 
@@ -350,11 +463,13 @@ app.post("/__fixture/scenario/:name", (context) => {
   )
     return context.json({ pending: faux.getPendingResponseCount() }, 409);
   scenarioStarted = true;
+  modelRequests.length = 0;
   faux.setResponses(
     scenarioResponses[name as keyof typeof scenarioResponses](),
   );
   return context.body(null, 204);
 });
+app.get("/__fixture/model-requests", (context) => context.json(modelRequests));
 app.get("/__fixture/command-runs/:threadId", (context) =>
   context.json(commandRuns(context.req.param("threadId"))),
 );
@@ -470,6 +585,40 @@ app.use("/v1/*", authenticate);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/settings", settingsRoutes);
 app.route("/v1/threads", threadRoutes);
+// Editing a message, wired to the fixture's agent. Its messages carry dx's
+// author tags only on the attributed route below, which the edit sends
+// through and the edit case sends its messages through.
+const fixtureAgentRouter = createAgentRouter(FixtureLifecycleAgent);
+const attributedAgentRoutes = new Hono<AppEnv>();
+attributedAgentRoutes.use("/:threadId", authorizeThread);
+attributedAgentRoutes.use("/:threadId", attributeSubmission);
+attributedAgentRoutes.route("/", fixtureAgentRouter);
+app.route("/v1/agents/dx-attributed", attributedAgentRoutes);
+app.use("/v1/threads/:threadId/messages/*", authorizeThread);
+app.route(
+  "/v1/threads",
+  createThreadMessageEditRoutes({
+    stop: async (threadId, env) => {
+      const response = await fixtureAgentRouter.request(
+        `/${threadId}/abort`,
+        { method: "POST" },
+        env,
+      );
+      if (!response.ok) throw new Error(`Abort failed (${response.status}).`);
+    },
+    rewind: (threadId, input, env) =>
+      fixtureAgentRouter.request(
+        `/${encodeURIComponent(threadId)}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ kind: "rewind", ...input }),
+        },
+        env,
+      ),
+    routes: async () => attributedAgentRoutes,
+  }),
+);
 app.use("/v1/agents/dx/:threadId", authorizeThread);
 app.use("/v1/agents/dx/:threadId/:subpath{.+}", authorizeThread);
 app.route("/v1/agents/dx", createAgentRouter(FixtureLifecycleAgent));

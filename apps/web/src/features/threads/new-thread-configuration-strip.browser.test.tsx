@@ -863,8 +863,8 @@ describe("new thread Orb picker", () => {
         document.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
       );
       expect(sizes.map((size) => size.textContent)).toEqual([
-        "standard-10.5 CPU · 4 GB",
-        "standard-21 CPU · 6 GB",
+        "standard-10.5 CPU · 4 GiB",
+        "standard-21 CPU · 6 GiB",
       ]);
       expect(sizes.map((size) => size.getAttribute("aria-checked"))).toEqual([
         "true",

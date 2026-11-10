@@ -60,6 +60,8 @@ const ClientId = Schema.String.check(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   ),
 );
+/** What a typing indicator is about: a commented message's id. */
+const TYPING_SCOPE = /^[\w.-]{1,160}$/;
 const revisionKey = (userId: UserId) => `revision:${userId}`;
 
 const readCursor = (url: URL): number | undefined => {
@@ -115,6 +117,8 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
       "memory.invalidated",
       "disk.invalidated",
       "artifacts.invalidated",
+      "comments.invalidated",
+      "space.posts.invalidated",
       "workspace.status",
     ].includes(String(value.type)) ||
     Option.isNone(threadId) ||
@@ -313,6 +317,16 @@ export class RealtimeHub extends DurableObject<Bindings> {
     ) {
       this.#clearPresence(socket);
       this.#broadcastPresence(topic);
+      return;
+    }
+    if (
+      input.type === "presence.typing" &&
+      topic !== undefined &&
+      current?.topic === topic
+    ) {
+      const scope = "scope" in input ? input.scope : undefined;
+      if (typeof scope === "string" && TYPING_SCOPE.test(scope))
+        this.#broadcastTyping(socket, topic, scope);
       return;
     }
     if (
@@ -576,6 +590,30 @@ export class RealtimeHub extends DurableObject<Bindings> {
       changed.add(entry.topic);
     }
     for (const topic of changed) this.#broadcastPresence(topic);
+  }
+
+  /**
+   * Someone present on the Thread is typing a comment on one of its
+   * messages: everyone else present hears it. Memory only, like presence:
+   * nothing is stored, and an indicator lapses unless it is repeated.
+   */
+  #broadcastTyping(from: WebSocket, topic: PresenceTopic, scope: string) {
+    const sender = from.deserializeAttachment() as SocketAttachment;
+    const event = JSON.stringify({
+      type: "presence.typing",
+      topic,
+      userId: sender.participant,
+      clientId: sender.clientId,
+      scope,
+    });
+    for (const [socket, entry] of this.#presence) {
+      if (entry.topic !== topic || socket === from) continue;
+      try {
+        socket.send(event);
+      } catch {
+        this.#presence.delete(socket);
+      }
+    }
   }
 
   #broadcastPresence(topic: PresenceTopic) {

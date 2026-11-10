@@ -1,7 +1,12 @@
+import { USAGE_EVENT_RETENTION_DAYS } from "@dx/domain";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { purgeStartupPhasesBefore } from "../../observability/startup-phase-retention.js";
 import { purgeExpiredPluginUsageEvents } from "../../plugins/metering.js";
 import { purgeExpiredSubmissionPluginTools } from "../../plugins/submission-tools.js";
+import {
+  backfillThreadUsageRollup,
+  purgeExpiredOrbSessions,
+} from "../../thread-usage/repository-d1.js";
 import { backfillUsageRollups } from "./rollup-d1.js";
 import { backfillWorkspaceUsageRollups } from "./workspace-rollup-d1.js";
 
@@ -78,6 +83,11 @@ export const scheduleUsageRetention = (
       purgeExpiredSubmissionPluginTools(bindings.DB, before),
       backfillUsageRollups(bindings.DB, ROLLUP_BACKFILL_CHUNKS),
       backfillWorkspaceUsageRollups(bindings.DB, ROLLUP_BACKFILL_CHUNKS),
+      backfillThreadUsageRollup(bindings.DB, ROLLUP_BACKFILL_CHUNKS),
+      purgeExpiredOrbSessions(
+        bindings.DB,
+        controller.scheduledTime - USAGE_EVENT_RETENTION_DAYS * 86_400_000,
+      ),
     ])
       .then(
         ([
@@ -88,6 +98,7 @@ export const scheduleUsageRetention = (
           toolsResult,
           rollupsBackfilled,
           workspaceRollupsBackfilled,
+          threadRollupBackfilled,
         ]) => {
           settingsPersistenceLogger.info("Usage retention completed.", {
             event: "usage_retention_completed",
@@ -98,6 +109,7 @@ export const scheduleUsageRetention = (
             deletedSubmissionPluginTools: toolsResult.meta.changes,
             rollupsBackfilled,
             workspaceRollupsBackfilled,
+            threadRollupBackfilled,
           });
         },
       )
@@ -116,12 +128,14 @@ export const scheduleWorkspaceUsageBackfill = (
   context: ExecutionContext,
 ) => {
   if (bindings.DB === undefined) return;
+  const db = bindings.DB;
   context.waitUntil(
-    backfillWorkspaceUsageRollups(
-      bindings.DB,
-      1,
-      WORKSPACE_ROLLUP_TICK_ROWS,
-    ).catch(() => {
+    Promise.all([
+      backfillWorkspaceUsageRollups(db, 1, WORKSPACE_ROLLUP_TICK_ROWS),
+      // The Thread rollup (migration 0161) too: the Cost & Usage dialog sums
+      // a Thread's raw model events until it is done.
+      backfillThreadUsageRollup(db, 1, WORKSPACE_ROLLUP_TICK_ROWS),
+    ]).catch(() => {
       settingsPersistenceLogger.error("Workspace usage backfill failed.", {
         event: "workspace_usage_backfill_failed",
         reason: "persistence_unavailable",

@@ -9,6 +9,7 @@ import {
   ChannelNotReachable,
 } from "./channels/channel.js";
 import { notificationChannels } from "./channels/index.js";
+import { cutExcerpt, plainExcerptText } from "./excerpt.js";
 import {
   insertNotifications,
   notificationPreferences,
@@ -39,15 +40,25 @@ export interface NotificationEvent {
 }
 
 const EXCERPT_LENGTH = 280;
+
+/**
+ * A message's text without the tags dx adds for agents: a post's
+ * `<post id="…" />`, an edit's `<edited_post>` and a comment's `<comments>`
+ * blocks, and `<dx_…>` tags. People never see them.
+ */
+export const withoutInternalTags = (text: string) =>
+  text
+    .replace(/<edited_post\b[^>]*>[\s\S]*?<\/edited_post>/g, "")
+    .replace(/<comments\b[^>]*>[\s\S]*?<\/comments>/g, "")
+    .replace(/<post id="[^"]*" \/>/g, "")
+    .replace(/<\/?dx_[a-z_]+\b[^>]*>/g, "")
+    .trim();
 /** `notify_user` promises the agent room for a 300-character body. */
 const AGENT_NOTIFICATION_EXCERPT_LENGTH = 300;
 
-const excerptOf = (text: string, limit: number) => {
-  const trimmed = text.trim();
-  return trimmed.length <= limit
-    ? trimmed
-    : `${trimmed.slice(0, limit - 1).trimEnd()}…`;
-};
+/** The excerpt as plain text, cut on that text; see `excerpt.ts`. */
+const excerptOf = (text: string, limit: number) =>
+  cutExcerpt(plainExcerptText(text), limit);
 
 /**
  * Whether a person receives a topic on a channel: their choice, else the
@@ -82,7 +93,7 @@ export const publishNotification = async (
     (userId) => userId !== event.actorUserId,
   );
   const excerpt = excerptOf(
-    event.excerpt,
+    withoutInternalTags(event.excerpt),
     event.topic === "agent_notification"
       ? AGENT_NOTIFICATION_EXCERPT_LENGTH
       : EXCERPT_LENGTH,
@@ -91,6 +102,10 @@ export const publishNotification = async (
     ...event,
     recipients,
     excerpt,
+    // dx's own notifications (no person, sent as "dx") show dx as sender.
+    ...(event.actorUserId === undefined && event.actorName === "dx"
+      ? { actorKind: "agent" as const }
+      : {}),
   });
   if (created.length === 0) return;
   const userIds = created.map(({ recipientUserId }) => recipientUserId);

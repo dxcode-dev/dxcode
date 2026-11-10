@@ -1,16 +1,44 @@
-import type { OrbProcess, ThreadOrbMemoryData } from "@dx/api";
+import type {
+  OrbProcess,
+  ThreadDetailData,
+  ThreadOrbMemoryData,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { useQuery } from "@tanstack/react-query";
+import { useIsMutating, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleCheck, MemoryStick, X } from "lucide-react";
 import * as React from "react";
+import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../../shared/ui/button.js";
+import { threadArchiveInFlight, threadKeys } from "../thread-queries.js";
 import {
   stopRefusal,
   threadOrbMemoryQueryOptions,
   useStopOrbProcess,
 } from "./orb-memory-queries.js";
 import "./orb-memory.css";
+
+/**
+ * Whether the Thread's Orb answers reads now; an archived Thread's answers
+ * 409. Pass it as a Thread Orb query's `enabled`: it is read whenever the
+ * query would fetch, so an archive shown in the cache stops every read at
+ * once, including a refetch that lands before the page re-renders. While an
+ * archive or restore waits for the server, the cache shows only what the
+ * page expects, so nothing reads until the server answers; the re-render
+ * when it does lets the reads start.
+ */
+export const useThreadOrbReadable = (threadId: ThreadId) => {
+  const client = useQueryClient();
+  const { identity } = useAuthenticatedIdentity();
+  const inFlight = threadArchiveInFlight(identity.id, threadId);
+  const changing = useIsMutating(inFlight) > 0;
+  return () =>
+    !changing &&
+    client.isMutating(inFlight) === 0 &&
+    client.getQueryData<ThreadDetailData>(
+      threadKeys.detail(identity.id, threadId),
+    )?.lifecycleState !== "archived";
+};
 
 /** Below the pressure line this long before the card says all is well. */
 const ORB_MEMORY_SETTLE_MS = 2_500;
@@ -22,7 +50,7 @@ const MIB = 1_024 ** 2;
 
 const formatMemory = (bytes: number) =>
   bytes >= GIB
-    ? `${(bytes / GIB).toFixed(1)} GB`
+    ? `${(bytes / GIB).toFixed(1)} GiB`
     : `${Math.max(1, Math.round(bytes / MIB))} MB`;
 
 const percentUsed = (memory: NonNullable<ThreadOrbMemoryData["memory"]>) =>
@@ -109,7 +137,11 @@ function OrbProcessRow({
  * away by itself.
  */
 export function OrbMemoryNotice({ threadId }: { readonly threadId: ThreadId }) {
-  const { data } = useQuery(threadOrbMemoryQueryOptions(threadId));
+  const orbReadable = useThreadOrbReadable(threadId);
+  const { data } = useQuery({
+    ...threadOrbMemoryQueryOptions(threadId),
+    enabled: orbReadable,
+  });
   const memory = data?.memory;
   const pressure = memory?.pressure === true;
   const [phase, setPhase] = React.useState<Phase>("hidden");

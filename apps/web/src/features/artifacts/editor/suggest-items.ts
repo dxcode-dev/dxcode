@@ -2,7 +2,7 @@
  * What the `/` menu offers (blocks, then chips) and whom `@` lists (dx, then
  * the Thread's people), filtered by what follows the trigger.
  */
-import type { ThreadMemberData } from "@dx/api";
+import { startsAWord } from "../../../shared/comments/mention-items.js";
 import type { BlockKind } from "./block-commands.js";
 import type { SuggestItem } from "./suggestions.js";
 
@@ -85,13 +85,6 @@ export const SLASH_ITEMS: ReadonlyArray<SlashItem> = [
   chip("toggle", "Toggle", ["switch"]),
 ];
 
-/** Whether `query` starts any word of `text`, ignoring case. */
-const startsAWord = (text: string, query: string) =>
-  text
-    .toLowerCase()
-    .split(/[\s_-]+/)
-    .some((word) => word.startsWith(query));
-
 /**
  * The `/` items for `query`, in their groups' order; in each group, labels
  * starting with it come before the rest that match.
@@ -114,60 +107,3 @@ export const slashItems = (query: string): ReadonlyArray<SlashItem> => {
     ];
   });
 };
-
-export interface PersonItem extends SuggestItem {
-  /** Absent for the agent. */
-  readonly userId?: string;
-  readonly image?: string;
-}
-
-/**
- * Whom `@query` can mention: dx, then the Thread's people (its owner and its
- * members while it is shared) other than you, by name or username.
- */
-export const peopleItems = (
-  query: string,
-  members: ReadonlyArray<ThreadMemberData>,
-  viewerId: string,
-): ReadonlyArray<PersonItem> => {
-  const wanted = query.toLowerCase();
-  const agent: PersonItem = { id: "agent", label: "dx", hint: "the agent" };
-  return [
-    ...(startsAWord("dx agent", wanted) ? [agent] : []),
-    ...members.flatMap((member) =>
-      member.userId !== viewerId &&
-      (startsAWord(member.name, wanted) ||
-        member.handle.toLowerCase().startsWith(wanted))
-        ? [
-            {
-              id: member.userId,
-              label: member.name,
-              hint: `@${member.handle}`,
-              userId: member.userId,
-              ...(member.image === undefined ? {} : { image: member.image }),
-            },
-          ]
-        : [],
-    ),
-  ].slice(0, 8);
-};
-
-/** `@here`: everyone who can open the Thread. */
-const HERE_ITEM: PersonItem = {
-  id: "here",
-  label: "here",
-  hint: "Notify everyone in this Thread",
-};
-
-/**
- * Whom `@query` in a comment can mention: the body's people (dx, then the
- * Thread's people other than you), then `@here`.
- */
-export const commentPeopleItems = (
-  query: string,
-  members: ReadonlyArray<ThreadMemberData>,
-  viewerId: string,
-): ReadonlyArray<PersonItem> => [
-  ...peopleItems(query, members, viewerId),
-  ...(startsAWord("here everyone", query.toLowerCase()) ? [HERE_ITEM] : []),
-];

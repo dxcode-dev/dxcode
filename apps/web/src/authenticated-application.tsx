@@ -11,6 +11,7 @@ import { useIdentity } from "./shared/auth/auth-context.js";
 import { ReportBugSlot } from "./shared/bug-reports/report-bug-slot.js";
 import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
 import { Toaster } from "./shared/ui/sonner.js";
+import { toastOffsets } from "./shared/ui/toast-offsets.js";
 import { useMobile } from "./shared/use-mobile.js";
 
 const ReactQueryDevtools = import.meta.env.DEV
@@ -52,15 +53,6 @@ function RecordTimeZone() {
   return null;
 }
 
-/**
- * Toasts rest below the title bar, and on a Thread page below its view row
- * too, where they cover no control: the composer and its Send sit at the
- * bottom, and the bars above hold the controls a notice refers to, such as
- * Wake. `sonner.css` sets both offsets for each layout.
- */
-const belowTitleBar = { top: "var(--dx-toast-top)", right: "16px" };
-const belowViewRow = { top: "var(--dx-toast-top-thread)", right: "16px" };
-
 /** The app's one Toaster: top right on desktop, top center on phones. */
 function AppToaster({ router }: { readonly router: AppRouter }) {
   const mobile = useMobile();
@@ -68,7 +60,10 @@ function AppToaster({ router }: { readonly router: AppRouter }) {
     router,
     select: ({ location }) => /^\/threads\/[^/]+\/?$/u.test(location.pathname),
   });
-  const offset = threadPage ? belowViewRow : belowTitleBar;
+  // Below the bars, where they cover no control: the composer and its Send
+  // sit at the bottom, and the bars above hold the controls a notice
+  // refers to, such as Wake.
+  const offset = threadPage ? toastOffsets.thread : toastOffsets.page;
   return (
     <Toaster
       position={mobile ? "top-center" : "top-right"}

@@ -15,11 +15,29 @@ import {
   claudeCodeToolResultPath,
 } from "./workspace-run.js";
 
-/** Claude Code names a tool of the `dx` MCP server `mcp__dx__<name>`. */
-export const CLAUDE_CODE_DX_TOOL_PREFIX = "mcp__dx__";
+/**
+ * How Claude Code named a dx tool before the dx tool bridge (tool-bridge.ts)
+ * served them without a prefix. Transcripts and Claude sessions from before
+ * keep calls under this name.
+ */
+export const CLAUDE_CODE_LEGACY_DX_TOOL_PREFIX = "mcp__dx__";
+
+/**
+ * A dx tool's name as Claude sees it: dx's own snake_case name. Claude Code's
+ * built-in tools are PascalCase, and another MCP server's tools start with
+ * `mcp__`, so neither is ever taken for a dx tool.
+ */
+const DX_TOOL_NAME = /^[a-z][a-z0-9_]*$/;
 
 export const isClaudeCodeDxTool = (name: string) =>
-  name.startsWith(CLAUDE_CODE_DX_TOOL_PREFIX);
+  name.startsWith(CLAUDE_CODE_LEGACY_DX_TOOL_PREFIX) ||
+  (DX_TOOL_NAME.test(name) && !name.startsWith("mcp__"));
+
+/** dx's name for a dx tool Claude called, under either naming. */
+const dxToolName = (name: string) =>
+  name.startsWith(CLAUDE_CODE_LEGACY_DX_TOOL_PREFIX)
+    ? name.slice(CLAUDE_CODE_LEGACY_DX_TOOL_PREFIX.length)
+    : name;
 
 /** The text Claude receives: what the model would see for this result. */
 const resultText = (result: unknown) => {
@@ -205,22 +223,28 @@ const runForClaude = async (
 };
 
 /**
- * dx's own tools for a Claude Code Thread. Claude calls them through the
- * `dx` MCP server in the workspace; Flue runs the real tool when it reaches
- * the call, exactly as for any other model, so metering, Stop, and the
- * transcript are dx's. Flue accepts any arguments, so a call it would
- * reject still reaches the tool, which answers with the error.
+ * dx's own tools for a Claude Code Thread, under the names dx's own loop
+ * uses. Claude calls them through the dx tool bridge beside the CLI; Flue
+ * runs the real tool when it reaches the call, exactly as for any other
+ * model, so metering, Stop, and the transcript are dx's. Flue accepts any
+ * arguments, so a call it would reject still reaches the tool, which
+ * answers with the error.
  */
 export const claudeCodeDxTools = (
   threadId: string,
   tools: ReadonlyArray<ToolDefinition>,
 ): ToolDefinition[] => {
+  for (const tool of tools)
+    if (!isClaudeCodeDxTool(tool.name) || tool.name.startsWith("mcp__"))
+      throw new Error(
+        `The dx tool ${tool.name} cannot reach Claude Code: dx tool names are snake_case, so they never clash with Claude's own tools.`,
+      );
   threadTools.set(threadId, tools);
   return tools.map(
     (tool) =>
       ({
         ...tool,
-        name: `${CLAUDE_CODE_DX_TOOL_PREFIX}${tool.name}`,
+        name: tool.name,
         input: v.looseObject({}),
         harness: true,
         durable: RERUNNABLE.has(tool.name),
@@ -246,7 +270,7 @@ export const claudeCodeDxSandboxTool = (
   tool: ToolDefinition,
   sandbox: Sandbox,
 ): AgentTool => ({
-  name: `${CLAUDE_CODE_DX_TOOL_PREFIX}${tool.name}`,
+  name: tool.name,
   label: tool.name,
   description: tool.description,
   parameters: Type.Unsafe<Record<string, unknown>>({ type: "object" }),
@@ -279,7 +303,7 @@ export const runClaudeCodeSubagentDxCall = async (
 ) => {
   const tool = threadTools
     .get(threadId)
-    ?.find(({ name }) => `${CLAUDE_CODE_DX_TOOL_PREFIX}${name}` === call.name);
+    ?.find(({ name }) => name === dxToolName(call.name));
   if (tool === undefined) {
     await answer(
       context.harness.sandbox as Sandbox,
@@ -294,7 +318,7 @@ export const runClaudeCodeSubagentDxCall = async (
   );
 };
 
-/** The Thread's dx tools as the `dx` MCP server lists them. */
+/** The Thread's dx tools as the dx tool bridge lists them. */
 export const claudeCodeDxToolList = (threadId: string): ClaudeCodeDxTool[] =>
   (threadTools.get(threadId) ?? []).map((tool) => {
     const schema =

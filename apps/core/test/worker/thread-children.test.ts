@@ -87,6 +87,80 @@ describe("Child Threads", () => {
     });
   });
 
+  it("records which Thread started each child while the family keeps its root", async () => {
+    const project = await createProjectViaApi("children-starter");
+    const root = await createThreadViaApi(project.data.id);
+    const created = async (parentThreadId: string) => {
+      const response = await createChild(project.data.id, parentThreadId);
+      expect(response.status).toBe(201);
+      return (await response.json<CreateThreadResponse>()).data;
+    };
+    const child = await created(root.data.id);
+    const grandchild = await created(child.id);
+    const greatGrandchild = await created(grandchild.id);
+
+    expect(root.data).not.toHaveProperty("startedByThreadId");
+    expect(child).toMatchObject({
+      parentThreadId: root.data.id,
+      startedByThreadId: root.data.id,
+    });
+    expect(grandchild).toMatchObject({
+      parentThreadId: root.data.id,
+      startedByThreadId: child.id,
+    });
+    expect(greatGrandchild).toMatchObject({
+      parentThreadId: root.data.id,
+      startedByThreadId: grandchild.id,
+    });
+  });
+
+  it("lists every child under its root, whichever family member started it", async () => {
+    // root ─ lead ─ issueOwner ─ worker, and legacy with no starter recorded.
+    const project = await createProjectViaApi("children-started-below");
+    const root = (await createThreadViaApi(project.data.id)).data;
+    const created = async (parentThreadId: string) =>
+      (
+        await (
+          await createChild(project.data.id, parentThreadId)
+        ).json<CreateThreadResponse>()
+      ).data;
+    const lead = await created(root.id);
+    const issueOwner = await created(lead.id);
+    const worker = await created(issueOwner.id);
+    const legacy = await created(root.id);
+    await env.DB.prepare(
+      "UPDATE threads SET started_by_thread_id = NULL WHERE id = ?",
+    )
+      .bind(legacy.id)
+      .run();
+    const ids = (threads: ReadonlyArray<ListedThread> | undefined) =>
+      (threads ?? []).map(({ id }) => id).sort();
+
+    const listed = await listWithChildren("lifecycleState=active&roots=true");
+    expect(
+      listed.items.map(({ id, childCount }) => ({ id, childCount })),
+    ).toEqual([{ id: root.id, childCount: 4 }]);
+    expect(ids(listed.children)).toEqual(
+      [lead.id, issueOwner.id, worker.id, legacy.id].sort(),
+    );
+    // Paging a root's children returns the same rows.
+    expect(
+      ids(await list(`lifecycleState=active&parentThreadId=${root.id}`)),
+    ).toEqual(ids(listed.children));
+
+    // An archived member leaves the list and the count; what it started stays.
+    await archive(issueOwner.id);
+    const afterArchive = await listWithChildren(
+      "lifecycleState=active&roots=true",
+    );
+    expect(afterArchive.items).toEqual([
+      expect.objectContaining({ id: root.id, childCount: 3 }),
+    ]);
+    expect(ids(afterArchive.children)).toEqual(
+      [lead.id, worker.id, legacy.id].sort(),
+    );
+  });
+
   it("refuses a parent the requester does not own", async () => {
     const project = await createProjectViaApi("children-owner");
     const parent = await createThreadViaApi(project.data.id);

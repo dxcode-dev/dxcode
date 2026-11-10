@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { formatMessageAuthor } from "@dx/api";
 import {
   configReferenceFor,
   EnvironmentVariableId,
@@ -78,6 +79,14 @@ afterEach(async () => {
 const FAKE_CLAUDE = `#!/bin/bash
 if [ "$1" = --version ]; then echo "2.1.310 (Claude Code)"; exit 0; fi
 printf '%s\\n' "$@" > "$HOME/claude-args"
+# A fork Claude Code cannot make, as when the message is not in the session:
+# it says so and exits before naming a session.
+if [ -e "$HOME/refuse-fork" ] && printf '%s\\n' "$@" | grep -qx -- --resume-session-at; then
+  cp "$HOME/claude-args" "$HOME/refused-args"
+  echo "No message found with message.uuid of: refused" >&2
+  printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true}'
+  exit 1
+fi
 # The plan token as Claude Code reads it: from CLAUDE_CODE_OAUTH_TOKEN, or
 # once from the descriptor CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR names.
 if [ -n "\${CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR-}" ]; then
@@ -258,8 +267,10 @@ exec /usr/bin/awk "$@"
       existsSync(map(guestPath))
         ? readFileSync(map(guestPath), "utf8")
         : undefined,
-    write: (guestPath: string, content: string) =>
-      writeFileSync(map(guestPath), content),
+    write: (guestPath: string, content: string) => {
+      mkdirSync(dirname(map(guestPath)), { recursive: true });
+      writeFileSync(map(guestPath), content);
+    },
     home: (name: string) => readFileSync(join(home, name), "utf8"),
   };
 };
@@ -325,6 +336,20 @@ const toolResult = (id: string, text: string) =>
   });
 const result = (text: string) =>
   line({ type: "result", subtype: "success", is_error: false, result: text });
+/**
+ * The complete message Claude Code prints after streaming one, carrying the
+ * uuid of its entry in the session's transcript.
+ */
+const complete = (id: string, uuid: string, text: string) =>
+  line({
+    type: "assistant",
+    uuid,
+    message: { id, role: "assistant", content: [{ type: "text", text }] },
+    parent_tool_use_id: null,
+  });
+/** Where Claude Code keeps a session of the Thread's repository. */
+const sessionTranscript = (session: string) =>
+  `${GUEST_HOME}/.claude/projects/-home-user-workspace-repo/${session}.jsonl`;
 
 /** A fresh provider module: what a Durable Object restart leaves. */
 const restartedProvider = async () => {
@@ -777,7 +802,7 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
       viewMedia,
       guest.sandbox,
     );
-    expect(tool.name).toBe("mcp__dx__view_media");
+    expect(tool.name).toBe("view_media");
     const { content } = await tool.execute(
       "toolu_small",
       { path: "small.png" },
@@ -1304,6 +1329,253 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     ]);
     for (const input of inputs) expect(input).not.toMatch(/retry/i);
   });
+
+  // Editing an earlier message rewinds Flue's history, but Claude's session
+  // still holds the removed turns. Ways it could fail: the edited message
+  // resumes that session; the new session starts with no idea of what came
+  // before the edited message; a follow-up stops resuming its session.
+  it("starts a new session for an edited message, given the conversation before it, and resumes it after", async () => {
+    const guest = await createGuest();
+    await guest.script([
+      init("session-1"),
+      ...response("m1", [{ text: "Parser fixed." }]),
+      result("Parser fixed."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const first = user("Fix the parser", 70);
+    const firstAnswer = assistant(
+      [{ type: "text", text: "Parser fixed." }],
+      "stop",
+    );
+    await claude.answer({ messages: [first] });
+    expect(guest.file(`${STATE}/session`)).toBe("session-1");
+
+    // A later turn ran in session-1, then the person edited it away: Flue's
+    // history is the first turn and the edited message.
+    const edited = user(
+      `${formatMessageAuthor({
+        author: { role: "owner", userId: "usr_owner", name: "Ada" },
+        edited: true,
+      })}Add a test instead`,
+      80,
+    );
+    await guest.script([
+      init("session-2"),
+      ...response("m2", [{ text: "Test added." }]),
+      result("Test added."),
+    ]);
+    const marked = guest.ops.length;
+    await claude.answer({ messages: [first, firstAnswer, edited] });
+    expect(guest.home("claude-args")).not.toContain("--resume");
+    const input = JSON.parse(guest.home("claude-stdin.jsonl")) as {
+      message: { content: Array<{ type: string; text: string }> };
+    };
+    expect(input.message.content).toHaveLength(2);
+    expect(input.message.content[0]?.text).toContain("<earlier_conversation>");
+    expect(input.message.content[0]?.text).toContain("User: Fix the parser");
+    expect(input.message.content[0]?.text).toContain(
+      "Assistant: Parser fixed.",
+    );
+    expect(input.message.content[1]?.text).toContain("Add a test instead");
+    const editRun = [...runDirectories(guest.ops.slice(marked))][0];
+    expect(guest.file(`${STATE}/runs/${editRun}/resumed`)).toBeUndefined();
+    expect(guest.file(`${STATE}/session`)).toBe("session-2");
+
+    // The next message resumes the new session with only its own input.
+    await guest.script([
+      init("session-2"),
+      ...response("m3", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    await claude.answer({
+      messages: [
+        first,
+        firstAnswer,
+        edited,
+        assistant([{ type: "text", text: "Test added." }], "stop"),
+        user("Run it", 90),
+      ],
+    });
+    const args = guest.home("claude-args").split("\n");
+    expect(args[args.indexOf("--resume") + 1]).toBe("session-2");
+    expect(
+      (
+        JSON.parse(guest.home("claude-stdin.jsonl")) as {
+          message: { content: unknown };
+        }
+      ).message.content,
+    ).toEqual([{ type: "text", text: "Run it" }]);
+  });
+
+  // An edit keeps the conversation before the edited message in Claude's own
+  // session, byte for byte, so its prompt cache still holds. Ways it could
+  // fail: the edit resumes the whole old session; it forks at a message of a
+  // removed turn; it sends the earlier turns again as text; the next message
+  // resumes the old session instead of the fork; a second edit cannot reach
+  // a turn the first fork copied.
+  it("forks Claude's session at the last message an edit keeps, and resumes the fork after", async () => {
+    const guest = await createGuest();
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const argsOf = () => guest.home("claude-args").split("\n");
+    const inputOf = () =>
+      (
+        JSON.parse(guest.home("claude-stdin.jsonl")) as {
+          message: { content: Array<{ type: string; text: string }> };
+        }
+      ).message.content;
+    await guest.script([
+      init("session-1"),
+      ...response("m1", [{ text: "APPLE kept." }]),
+      complete("m1", "uuid-apple", "APPLE kept."),
+      result("APPLE kept."),
+    ]);
+    const first = user("Remember APPLE", 70);
+    const firstAnswer = assistant(
+      [{ type: "text", text: "APPLE kept." }],
+      "stop",
+    );
+    await claude.answer({ messages: [first] });
+    guest.write(sessionTranscript("session-1"), "{}\n");
+    await guest.script([
+      init("session-1"),
+      ...response("m2", [{ text: "BANANA kept." }]),
+      complete("m2", "uuid-banana", "BANANA kept."),
+      result("BANANA kept."),
+    ]);
+    const second = user("Remember BANANA", 80);
+    await claude.answer({ messages: [first, firstAnswer, second] });
+    expect(argsOf()[argsOf().indexOf("--resume") + 1]).toBe("session-1");
+
+    // The person edits the second message: Flue's history is the first turn
+    // and the edited message.
+    const edited = user(
+      `${formatMessageAuthor({
+        author: { role: "owner", userId: "usr_owner", name: "Ada" },
+        edited: true,
+      })}List the code words`,
+      90,
+    );
+    await guest.script([
+      init("session-2"),
+      ...response("m3", [{ text: "APPLE." }]),
+      complete("m3", "uuid-list", "APPLE."),
+      result("APPLE."),
+    ]);
+    const marked = guest.ops.length;
+    await claude.answer({ messages: [first, firstAnswer, edited] });
+    const forked = argsOf();
+    expect(forked[forked.indexOf("--resume") + 1]).toBe("session-1");
+    expect(forked[forked.indexOf("--resume-session-at") + 1]).toBe(
+      "uuid-apple",
+    );
+    expect(forked).toContain("--fork-session");
+    // Only the edited message is new input: the turn before it is Claude's.
+    expect(inputOf()).toHaveLength(1);
+    expect(inputOf()[0]?.text).toContain("List the code words");
+    expect(inputOf()[0]?.text).not.toContain("earlier_conversation");
+    const editRun = [...runDirectories(guest.ops.slice(marked))][0];
+    expect(guest.file(`${STATE}/runs/${editRun}/resumed`)).toBeDefined();
+    expect(guest.file(`${STATE}/session`)).toBe("session-2");
+
+    // The next message resumes the fork, with only its own input.
+    guest.write(sessionTranscript("session-2"), "{}\n");
+    const listed = assistant([{ type: "text", text: "APPLE." }], "stop");
+    await guest.script([
+      init("session-2"),
+      ...response("m4", [{ text: "CHERRY kept." }]),
+      complete("m4", "uuid-cherry", "CHERRY kept."),
+      result("CHERRY kept."),
+    ]);
+    const third = user("Remember CHERRY", 100);
+    await claude.answer({
+      messages: [first, firstAnswer, edited, listed, third],
+    });
+    expect(argsOf()[argsOf().indexOf("--resume") + 1]).toBe("session-2");
+    expect(argsOf()).not.toContain("--resume-session-at");
+    expect(argsOf()).not.toContain("--fork-session");
+    expect(inputOf()).toEqual([{ type: "text", text: "Remember CHERRY" }]);
+
+    // Editing that message forks the fork at the edited turn's answer.
+    const editedAgain = user(
+      `${formatMessageAuthor({
+        author: { role: "owner", userId: "usr_owner", name: "Ada" },
+        edited: true,
+      })}Forget nothing`,
+      110,
+    );
+    await guest.script([
+      init("session-3"),
+      ...response("m5", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    await claude.answer({
+      messages: [first, firstAnswer, edited, listed, editedAgain],
+    });
+    expect(argsOf()[argsOf().indexOf("--resume") + 1]).toBe("session-2");
+    expect(argsOf()[argsOf().indexOf("--resume-session-at") + 1]).toBe(
+      "uuid-list",
+    );
+    expect(guest.file(`${STATE}/session`)).toBe("session-3");
+  });
+
+  // The fork is the fast path; a new session that is told the conversation
+  // is the fallback. Ways it could fail: the edit resumes the whole old
+  // session; the CLI's refusal fails the turn; the fallback starts with no
+  // idea of the conversation before the edited message.
+  it.each([
+    ["Claude's session file is gone", "gone"],
+    ["Claude Code refuses the fork", "refused"],
+  ] as const)(
+    "starts a new session told the conversation before an edit when %s",
+    async (_case, failure) => {
+      const guest = await createGuest();
+      const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+      await guest.script([
+        init("session-1"),
+        ...response("m1", [{ text: "APPLE kept." }]),
+        complete("m1", "uuid-apple", "APPLE kept."),
+        result("APPLE kept."),
+      ]);
+      const first = user("Remember APPLE", 70);
+      const firstAnswer = assistant(
+        [{ type: "text", text: "APPLE kept." }],
+        "stop",
+      );
+      await claude.answer({ messages: [first] });
+      if (failure === "refused") {
+        guest.write(sessionTranscript("session-1"), "{}\n");
+        guest.release("refuse-fork");
+      }
+      const edited = user(
+        `${formatMessageAuthor({
+          author: { role: "owner", userId: "usr_owner", name: "Ada" },
+          edited: true,
+        })}List the code words`,
+        90,
+      );
+      await guest.script([
+        init("session-2"),
+        ...response("m2", [{ text: "APPLE." }]),
+        result("APPLE."),
+      ]);
+      const answered = await claude.answer({
+        messages: [first, firstAnswer, edited],
+      });
+      expect(answered.type).toBe("done");
+      if (failure === "refused")
+        expect(guest.home("refused-args")).toContain("--resume-session-at");
+      expect(guest.home("claude-args")).not.toContain("--resume");
+      const input = (
+        JSON.parse(guest.home("claude-stdin.jsonl")) as {
+          message: { content: Array<{ type: string; text: string }> };
+        }
+      ).message.content;
+      expect(input[0]?.text).toContain("<earlier_conversation>");
+      expect(input[0]?.text).toContain("User: Remember APPLE");
+      expect(input[1]?.text).toContain("List the code words");
+      expect(guest.file(`${STATE}/session`)).toBe("session-2");
+    },
+  );
 
   it("settles a run that wrote a successful result after tool use as done when Flue resumes past a failed message", {
     timeout: 30_000,

@@ -44,6 +44,11 @@ import {
   useAttachmentsUploading,
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
+import {
+  MessageEditContext,
+  type MessageEditOptions,
+  useMessageEditing,
+} from "./message-edit.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import { sendRefusal } from "./send-failure.js";
 import {
@@ -52,6 +57,7 @@ import {
 } from "./sharing/chat-composer.js";
 import { UserMessageText } from "./sharing/message-authors.js";
 import { draftMode } from "./sharing/thread-chat.js";
+import { ThreadPresentationContext } from "./thread-session-context.js";
 import {
   createPendingSubmissionControl,
   type OptimisticThreadCreation,
@@ -802,7 +808,11 @@ const observeComposerDock = (node: HTMLDivElement) => {
     // Read both before writing, so one layout serves both. A hidden pane
     // measures zero; keep its heights so showing it changes nothing.
     const dockHeight = node.offsetHeight;
-    const composerHeight = composer.offsetHeight;
+    // The editing bar sits on the box; the transcript's controls clear both.
+    const composerHeight =
+      composer.offsetHeight +
+      (node.querySelector<HTMLElement>(".composer-editing-bar")?.offsetHeight ??
+        0);
     if (dockHeight === 0 && composerHeight === 0) return;
     pane.style.setProperty("--agent-composer-dock-height", `${dockHeight}px`);
     pane.style.setProperty("--agent-composer-height", `${composerHeight}px`);
@@ -819,6 +829,8 @@ const observeComposerDock = (node: HTMLDivElement) => {
 };
 
 function AgentComposer({
+  editing,
+  focusRef,
   agentActive,
   quickActions,
   stopAvailable,
@@ -837,6 +849,16 @@ function AgentComposer({
   replyRef,
   ref,
 }: {
+  /**
+   * Editing an earlier message: the bar above the box, and Cancel, which
+   * Esc in the box also chooses. Attachments stay as the message had them.
+   */
+  readonly editing?: {
+    readonly bar: React.ReactNode;
+    readonly onCancel: () => void;
+  };
+  /** Focuses the box with the caret at the end, as starting an edit does. */
+  readonly focusRef?: React.RefObject<(() => void) | undefined>;
   /** Set to quote text into the draft, from a transcript selection. */
   readonly replyRef?: React.RefObject<TranscriptReply | undefined>;
   readonly mentions?: ComposerMentions;
@@ -870,7 +892,7 @@ function AgentComposer({
   });
   const uploading = useAttachmentsUploading(images);
   const dropTarget = useImageDropTarget({
-    disabled: draftLocked || uploading,
+    disabled: draftLocked || uploading || editing !== undefined,
     onFiles: onAddImages,
   });
   const composerMentions = useComposerMentions({
@@ -896,10 +918,39 @@ function AgentComposer({
       if (dictate) dictation.start();
     });
   });
+  React.useImperativeHandle(focusRef, () => () => {
+    const textarea = textareaRef.current;
+    if (textarea === null) return;
+    textarea.focus();
+    const end = textarea.value.length;
+    textarea.setSelectionRange(end, end);
+  });
   const enterKey = useComposerEnterKey();
-  const submit = (event: React.FormEvent) => {
+  // While a send is admitted the draft holds that message, which cannot
+  // change, and the box keeps focus: what the viewer types goes after it and
+  // becomes the next draft once the send settles.
+  const [typedWhileSending, setTypedWhileSending] = React.useState("");
+  // A send from the Send button disables that button, which drops its focus;
+  // the cursor comes back to the draft once it unlocks.
+  const refocusAfterSend = React.useRef(false);
+  const attachTextarea = (node: HTMLTextAreaElement | null) => {
+    textareaRef.current = node;
+    if (node === null || draftLocked) return;
+    if (typedWhileSending !== "") {
+      setTypedWhileSending("");
+      onChangeDraft(`${draftValue.get()}${typedWhileSending}`);
+    }
+    if (!refocusAfterSend.current) return;
+    refocusAfterSend.current = false;
+    if (document.activeElement === document.body) node.focus();
+  };
+  const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!dictation.interceptSubmit()) onSubmit(draft);
+    if (dictation.interceptSubmit()) return;
+    refocusAfterSend.current = event.currentTarget.contains(
+      document.activeElement,
+    );
+    onSubmit(draft);
   };
   // One of Send or Stop: Stop only while the agent runs and the composer is
   // empty; otherwise Send, disabled until there is something to send, so the
@@ -913,37 +964,60 @@ function AgentComposer({
       {errorCard}
       {composerMentions.popover}
       {composerMentions.banner}
-      {draftLocked ? null : quickActions}
+      {draftLocked || editing !== undefined ? null : quickActions}
+      {editing?.bar}
       <form
         className="agent-composer"
         data-chat-mode={composerMentions.chatMode ? "" : undefined}
+        data-editing={editing === undefined ? undefined : ""}
         onSubmit={submit}
         ref={ref}
         {...dropTarget}
       >
         <textarea
-          ref={textareaRef}
+          ref={attachTextarea}
           aria-label="Message"
           data-command-target="thread-composer"
           enterKeyHint={enterKey.enterKeyHint}
-          disabled={draftLocked}
-          readOnly={draftLocked}
-          value={draft}
+          aria-busy={draftLocked || undefined}
+          value={`${draft}${typedWhileSending}`}
           {...composerMentions.textareaProps}
           onChange={(event) => {
+            if (draftLocked) {
+              // Only what follows the message being sent can change.
+              const next = event.target.value;
+              if (next.startsWith(draft))
+                setTypedWhileSending(next.slice(draft.length));
+              return;
+            }
             onChangeDraft(event.target.value);
             composerMentions.onInput(event);
           }}
           onSelect={composerMentions.trackCaret}
           onPaste={(event) => {
             const files = pastedFiles(event);
-            if (files.length === 0 || draftLocked || uploading) return;
+            if (
+              files.length === 0 ||
+              draftLocked ||
+              uploading ||
+              editing !== undefined
+            )
+              return;
             event.preventDefault();
             onAddImages(files);
           }}
           onKeyDown={(event) => {
             if (composerMentions.onKeyDown(event)) {
               event.preventDefault();
+              return;
+            }
+            if (
+              editing !== undefined &&
+              event.key === "Escape" &&
+              !draftLocked
+            ) {
+              event.preventDefault();
+              editing.onCancel();
               return;
             }
             if (enterKey.sends(event)) {
@@ -954,7 +1028,7 @@ function AgentComposer({
         />
         <div className="composer-actions">
           <AttachmentMenu
-            disabled={draftLocked || uploading}
+            disabled={draftLocked || uploading || editing !== undefined}
             onFiles={onAddImages}
             onScreenshot={onTakeScreenshot}
           />
@@ -971,7 +1045,11 @@ function AgentComposer({
               size="icon-sm"
               className="composer-submit"
               aria-label={
-                agentActive ? "Send steering message" : "Send message"
+                editing !== undefined
+                  ? "Send edited message"
+                  : agentActive
+                    ? "Send steering message"
+                    : "Send message"
               }
               aria-busy={draftLocked || undefined}
               data-submitting={draftLocked ? "" : undefined}
@@ -1280,6 +1358,8 @@ export interface AgentPanelOptions {
   readonly onFocusHandled?: () => void;
   /** The transcript is hidden behind another tab and must come forward. */
   readonly onFocusRequested?: () => void;
+  /** Edit an earlier message; absent where the viewer may not. */
+  readonly messageEdit?: MessageEditOptions;
 }
 
 /**
@@ -1482,6 +1562,9 @@ interface TranscriptView {
   readonly unconfirmed: boolean;
   readonly inboundMessages: AgentPanelOptions["inboundMessages"];
   readonly chatEcho: ((text: string) => boolean) | undefined;
+  readonly admittedMessageId:
+    | ((submissionId: string) => string | undefined)
+    | undefined;
 }
 
 interface ShownTranscript {
@@ -1514,7 +1597,8 @@ const createTranscriptDerivation = () => {
     previous.discardedSends === next.discardedSends &&
     previous.unconfirmed === next.unconfirmed &&
     previous.inboundMessages === next.inboundMessages &&
-    previous.chatEcho === next.chatEcho;
+    previous.chatEcho === next.chatEcho &&
+    previous.admittedMessageId === next.admittedMessageId;
   const derive = (observed: PanelAgent, view: TranscriptView) => {
     if (
       last !== undefined &&
@@ -1534,6 +1618,7 @@ const createTranscriptDerivation = () => {
       agent.hasMore,
       view.inboundMessages,
       view.chatEcho,
+      view.admittedMessageId,
     ];
     if (
       model === undefined ||
@@ -1553,6 +1638,7 @@ const createTranscriptDerivation = () => {
           settlements: agent.settlements,
           finalOutputs: agent.finalOutputs,
           chatEcho: view.chatEcho,
+          admittedMessageId: view.admittedMessageId,
         },
         model,
       );
@@ -1639,7 +1725,7 @@ function AgentConversation({
       return;
     queueMicrotask(() => onInitialSubmissionObserved(initialSubmissionId));
   };
-  return (
+  const transcript = (
     <ThreadTranscript
       model={model}
       active={active}
@@ -1678,6 +1764,7 @@ function AgentConversation({
       footer={footer}
     />
   );
+  return transcript;
 }
 
 const composerDockRef = (node: HTMLDivElement | null) =>
@@ -1718,6 +1805,7 @@ export function AgentPanel({
   focus,
   onFocusHandled,
   onFocusRequested,
+  messageEdit,
 }: AgentPanelProps) {
   const source =
     retainedSource ?? agentValueSource(renderedAgent as PanelAgent);
@@ -1775,6 +1863,7 @@ export function AgentPanel({
           ) === "chat"
       : undefined;
   const [transcripts] = React.useState(createTranscriptDerivation);
+  const retainedThread = React.useContext(ThreadPresentationContext);
   // The reader is stable for the panel's lifetime; hand it over once mounted.
   const provideTranscriptAccess = (node: HTMLDivElement | null) => {
     if (node === null) return;
@@ -1785,6 +1874,8 @@ export function AgentPanel({
     unconfirmed: admissionPending || submissionPending || sendFailed,
     inboundMessages,
     chatEcho,
+    // A message sent from this page is commented on under Flue's id.
+    admittedMessageId: retainedThread?.client.admittedMessageId,
   };
   // The run state changes a few times per reply, not per streamed frame.
   const status = useAgentSelection(source, (agent) => agent.status);
@@ -1806,6 +1897,23 @@ export function AgentPanel({
     (status === "submitted" && !onlyChat && !workspaceReady
       ? "Preparing workspace…"
       : undefined);
+
+  // Editing an earlier message: the composer holds the edit's own draft, so
+  // the person's unsent draft waits untouched until the edit ends.
+  const messageEditing = useMessageEditing({
+    options: archived || readOnlyNotice !== undefined ? undefined : messageEdit,
+    source,
+    draftValue,
+    onError: (error) =>
+      setActionError((current) =>
+        error !== undefined
+          ? { id: "action:edit", ...error, action: "none" }
+          : current?.id === "action:edit"
+            ? undefined
+            : current,
+      ),
+  });
+  const isEditing = messageEditing.editing;
 
   const { addImages, takeScreenshot } = useImageActions(
     imageCollection,
@@ -1859,40 +1967,42 @@ export function AgentPanel({
         aria-label="Agent chat"
         hidden={!active}
       >
-        <AgentConversation
-          source={source}
-          transcripts={transcripts}
-          view={view}
-          archived={archived}
-          active={active}
-          showProcessingIndicator={!archived && statusMessage === undefined}
-          footer={
-            archived ? (
-              errorCard
-            ) : (
-              <AgentTranscriptFooter
-                statusMessage={statusMessage}
-                idleEnd={
-                  agentActive || statusMessage !== undefined
-                    ? undefined
-                    : transcriptEnd
-                }
-              />
-            )
-          }
-          optimisticCreation={optimisticCreation}
-          onInitialSubmissionObserved={onInitialSubmissionObserved}
-          initialDispatch={initialDispatch}
-          focus={focus}
-          onFocusHandled={onFocusHandled}
-          onFocusRequested={onFocusRequested}
-          onReply={
-            archived || readOnlyNotice !== undefined
-              ? undefined
-              : (quote, dictate) => composerReply.current?.(quote, dictate)
-          }
-          canDictate={dictationAvailable}
-        />
+        <MessageEditContext value={messageEditing.context}>
+          <AgentConversation
+            source={source}
+            transcripts={transcripts}
+            view={view}
+            archived={archived}
+            active={active}
+            showProcessingIndicator={!archived && statusMessage === undefined}
+            footer={
+              archived ? (
+                errorCard
+              ) : (
+                <AgentTranscriptFooter
+                  statusMessage={statusMessage}
+                  idleEnd={
+                    agentActive || statusMessage !== undefined
+                      ? undefined
+                      : transcriptEnd
+                  }
+                />
+              )
+            }
+            optimisticCreation={optimisticCreation}
+            onInitialSubmissionObserved={onInitialSubmissionObserved}
+            initialDispatch={initialDispatch}
+            focus={focus}
+            onFocusHandled={onFocusHandled}
+            onFocusRequested={onFocusRequested}
+            onReply={
+              archived || readOnlyNotice !== undefined
+                ? undefined
+                : (quote, dictate) => composerReply.current?.(quote, dictate)
+            }
+            canDictate={dictationAvailable}
+          />
+        </MessageEditContext>
 
         {archived ? null : readOnlyNotice !== undefined ? (
           <div className="agent-composer-dock" ref={composerDockRef}>
@@ -1900,6 +2010,8 @@ export function AgentPanel({
           </div>
         ) : (
           <AgentComposer
+            editing={messageEditing.composer}
+            focusRef={messageEditing.focusRef}
             agentActive={agentActive}
             quickActions={
               quickActions === undefined ||
@@ -1913,12 +2025,14 @@ export function AgentPanel({
                 />
               )
             }
-            stopAvailable={stopAvailable}
+            stopAvailable={!isEditing && stopAvailable}
             dictationAvailable={dictationAvailable}
-            draftValue={draftValue}
-            draftLocked={draftLocked}
+            draftValue={isEditing ? messageEditing.draft : draftValue}
+            draftLocked={
+              isEditing ? messageEdit?.pending === true : draftLocked
+            }
             replyRef={composerReply}
-            images={images}
+            images={isEditing ? [] : images}
             dockRef={composerDockRef}
             errorCard={errorCard}
             mentions={mentions}
@@ -1927,7 +2041,11 @@ export function AgentPanel({
             onRemoveImage={(image) => {
               setImages(imageCollection.remove(image.id));
             }}
-            onSubmit={(submittedDraft) => void submit(submittedDraft)}
+            onSubmit={(submittedDraft) =>
+              void (isEditing
+                ? messageEditing.submit(submittedDraft)
+                : submit(submittedDraft))
+            }
             onTakeScreenshot={() => void takeScreenshot()}
             ref={composerLifetimeRef}
           />

@@ -1,0 +1,86 @@
+/* Comment primitives shared by artifact comments and a Space's message
+   comments: the `@` and `/` menu, the anchor that opens it above a comment
+   box, and mention chips in a comment's text. */
+
+/* The `/` and `@` menu, under what was typed (or over it near the bottom):
+   the thread actions menu's popup, rows, and highlight, with the artifact
+   switcher's group headings. */
+.artifact-suggest {
+  position: absolute;
+  z-index: 20;
+  width: min(260px, 100%);
+  min-width: 0;
+  max-width: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.artifact-suggest[data-above] {
+  transform: translateY(-100%);
+}
+.artifact-suggest .artifact-suggest-option {
+  flex: none;
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.artifact-suggest .artifact-suggest-option[data-highlighted] {
+  background: var(--accent);
+}
+.artifact-suggest.thread-actions-menu .artifact-suggest-option > .dx-avatar {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  font-size: 8px;
+}
+.artifact-suggest-label {
+  color: var(--foreground);
+}
+.artifact-suggest-hint {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+}
+.artifact-suggest-empty {
+  margin: 6px 8px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+@media (pointer: coarse) {
+  .artifact-suggest.thread-actions-menu .artifact-suggest-option {
+    height: 40px;
+    min-height: 40px;
+  }
+}
+
+/* dx and @here in the list: a dark disc with its icon, as the chat
+   composer's `@` list shows them. */
+.artifact-suggest .composer-mention-agent {
+  display: inline-grid;
+  place-items: center;
+  color: var(--background);
+  background: var(--foreground);
+}
+.artifact-suggest .composer-mention-agent > svg {
+  width: 12px;
+  height: 12px;
+}
+
+/* `@` in a comment (#1808): the list opens above the box, which sits low in
+   the comments panel on a phone. A zero-height anchor, so it adds no gap. */
+.artifact-comment-suggest {
+  position: relative;
+  z-index: 25;
+  height: 0;
+  margin-bottom: -6px;
+}
+
+/* A mention in a comment's text. */
+.artifact-comment-mention {
+  padding: 0 3px;
+  color: var(--primary);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--primary) 12%, transparent);
+  font-weight: 500;
+}

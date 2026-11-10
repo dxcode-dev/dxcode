@@ -12,6 +12,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
+import * as React from "react";
 import {
   isServerPath,
   safeNextPath,
@@ -81,10 +82,6 @@ const page = {
     "NewThreadPage",
   ),
   thread: lazyRouteComponent(() => import("./thread-route.js"), "ThreadRoute"),
-  threadTree: lazyRouteComponent(
-    () => import("./thread-tree-route.js"),
-    "ThreadTreeRoute",
-  ),
   bugReports: lazyRouteComponent(
     () => import("./features/threads/bug-reports/bug-report-page.js"),
     "BugReportsRoute",
@@ -121,6 +118,17 @@ const settingsPage = (
   );
 
 const productNotices = <InstallAppBanner />;
+// The Spaces section loads beside the sidebar rather than in the Thread
+// page's first load.
+const SpaceSidebarSection = lazyRouteComponent(
+  () => import("./space-sidebar-route.js"),
+  "SpaceSidebarSection",
+);
+const productSpacesSection = (onNavigate: () => void) => (
+  <React.Suspense fallback={null}>
+    <SpaceSidebarSection onNavigate={onNavigate} />
+  </React.Suspense>
+);
 
 const rootRoute = createRootRouteWithContext<RouterContext>()({
   component: () => (
@@ -141,7 +149,10 @@ const productRoute = createRoute({
     <ThreadArchiveProvider>
       <ThreadSnoozeProvider>
         <ThreadEditingProvider>
-          <ProductShell notices={productNotices} />
+          <ProductShell
+            notices={productNotices}
+            spacesSection={productSpacesSection}
+          />
         </ThreadEditingProvider>
       </ThreadSnoozeProvider>
     </ThreadArchiveProvider>
@@ -303,6 +314,12 @@ const newThreadRoute = createRoute({
   component: page.newThread,
 });
 
+/**
+ * A Space post's ID, as `@dx/api`'s `SPACE_POST_ID_PATTERN`, or a comment on
+ * one (`commentLinkId`: the post's ID and the comment's hex).
+ */
+const SPACE_POST_LINK = /^pst_[0-9a-z]{26}(?:\.[0-9a-f]{32})?$/;
+
 const seeOpenedThread = ({
   context,
   params,
@@ -321,20 +338,48 @@ const threadRoute = createRoute({
   // `message` opens the Thread at a message, for example a mention or a
   // copied message link;
   // `artifact` is the artifact its Artifacts view shows; `sheet=artifact`
-  // shows it full screen over the Thread (a phone).
+  // shows it full screen over the Thread (a phone); in a Space, `thread`
+  // opens one of the threads it started beside its chat.
   validateSearch: (
     search: Record<string, unknown>,
   ): {
     readonly message?: string;
     readonly artifact?: string;
     readonly sheet?: "artifact";
+    readonly comments?: string;
+    readonly comment?: string;
+    /** In a Space, the thread it started that opens beside the chat. */
+    readonly thread?: string;
   } => ({
-    ...(isMessageLinkId(search.message) ? { message: search.message } : {}),
+    // A message to open at: a tagged message, a transcript row, or, in a
+    // Space, a post (a mention's link).
+    ...(isMessageLinkId(search.message) ||
+    (typeof search.message === "string" && SPACE_POST_LINK.test(search.message))
+      ? { message: search.message }
+      : {}),
+    // A Space's comments on one message (its Flue id), over the chat.
+    ...(typeof search.comments === "string" &&
+    /^[\w.-]{1,160}$/.test(search.comments)
+      ? { comments: search.comments }
+      : {}),
+    ...(typeof search.thread === "string" &&
+    /^thr_[0-9a-f-]{36}$/.test(search.thread)
+      ? { thread: search.thread }
+      : {}),
+    // The comment an open Comments panel brings into view.
+    ...(typeof search.comment === "string" &&
+    /^mcm_[0-9a-f]{32}$/.test(search.comment)
+      ? { comment: search.comment }
+      : {}),
     ...(typeof search.artifact === "string" &&
     /^art_[0-9a-f]{32}$/.test(search.artifact)
       ? { artifact: search.artifact }
       : {}),
     ...(search.sheet === "artifact" ? { sheet: "artifact" as const } : {}),
+    ...(typeof search.thread === "string" &&
+    /^thr_[0-9a-f-]{36}$/.test(search.thread)
+      ? { thread: search.thread }
+      : {}),
   }),
   // Opening a Thread is seeing it: entering the route, or moving within it
   // from one Thread to the next. Not loading it: hovering a link preloads
@@ -351,10 +396,17 @@ const threadRoute = createRoute({
   component: page.thread,
 });
 
-const threadTreeRoute = createRoute({
+// A Thread's tree page lived at /threads/:id/tree; keep old links working.
+const threadTreeRedirectRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/threads/$threadId/tree",
-  component: page.threadTree,
+  beforeLoad: ({ params }) => {
+    throw redirect({
+      to: "/threads/$threadId",
+      params: { threadId: params.threadId },
+      replace: true,
+    });
+  },
 });
 
 const registeredSettingsSection = async (
@@ -567,7 +619,7 @@ const routeTree = rootRoute.addChildren([
     projectSettingsSectionRoute,
     newThreadRoute,
     threadRoute,
-    threadTreeRoute,
+    threadTreeRedirectRoute,
     bugReportsRoute,
     bugReportRoute,
     allBugReportsRoute,

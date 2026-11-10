@@ -132,6 +132,8 @@ export const deleteProject = async (
       `UPDATE threads
           SET lifecycle_state = 'archived', pinned_at = NULL,
               snoozed_until = NULL, snoozed_at = NULL,
+              archived_at = COALESCE(archived_at,
+                CAST(strftime('%s', 'now') AS INTEGER) * 1000),
               workspace_access = 'none', shared_workspace_id = NULL,
               contribute_until = NULL, updated_at = ?2
         WHERE project_id = ?1 AND lifecycle_state != 'deleted'

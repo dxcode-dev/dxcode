@@ -311,6 +311,9 @@ const retiredRandomResourceIds = new Set([
 ]);
 const retiredWorkerBindings = new Map([
   ["ACCOUNT_SHELL", "durable_object_namespace"],
+  // A branch preview's experimental Claude host, before it became the
+  // executor (THREAD_EXECUTOR).
+  ["CLAUDE_HOST", "durable_object_namespace"],
   // In-app bug reports are kept in dx and never filed on GitHub.
   ["DX_BUG_REPORT_LABELS", "plain_text"],
   ["DX_BUG_REPORT_REPOSITORY", "plain_text"],
@@ -1411,10 +1414,14 @@ const validateWorkerProps = (
         preBranchPreviewIdentityBindingOmissions.includes(name)
       ),
   );
+  // A destroy plan replays the recorded props as desired, so a retired
+  // binding the stage still records is expected there too.
   const invalidExtraEnvironmentNames = extraEnvironmentNames.filter(
     (name) =>
       current ||
-      (representation !== "persisted" && representation !== "prior") ||
+      (representation !== "persisted" &&
+        representation !== "prior" &&
+        !allowDestroyWorkerBindingOmissions) ||
       !retiredWorkerBindings.has(name),
   );
   const environmentIssue = `environment[missing=${missingEnvironmentNames.join("|")};extra=${extraEnvironmentNames.join("|")}]`;

@@ -48,6 +48,19 @@ export interface MessageAuthorTag {
    * answering an ask in one of its artifacts. Only the server sets it.
    */
   readonly automation?: MessageAutomation;
+  /**
+   * The Flue message a person commented on, when this message is their
+   * comment that mentions dx (a Space's message comments). Only the server
+   * sets it; clients show the message compactly, since the comment stays in
+   * the message's comments.
+   */
+  readonly commentOn?: string;
+  /**
+   * The person edited an earlier message into this one: the turns after the
+   * original were removed from the conversation, and what they changed in
+   * files, artifacts, and other Threads stays. Only the server sets it.
+   */
+  readonly edited?: boolean;
 }
 
 /** Senders that wake a Thread on the owner's behalf. */
@@ -84,6 +97,8 @@ export const formatMessageAuthor = ({
   sourceThreadId,
   messageId,
   automation,
+  commentOn,
+  edited,
 }: MessageAuthorTag) =>
   `<${TAG} role="${author.role}" user_id="${escapeAttribute(author.userId)}" identifier="${escapeAttribute(author.name)}"${
     author.handle === undefined
@@ -99,7 +114,9 @@ export const formatMessageAuthor = ({
       : ` source_thread="${escapeAttribute(sourceThreadId)}"`
   }${
     messageId === undefined ? "" : ` message_id="${escapeAttribute(messageId)}"`
-  }${automation === undefined ? "" : ` automation="${automation}"`} />\n`;
+  }${automation === undefined ? "" : ` automation="${automation}"`}${
+    commentOn === undefined ? "" : ` comment_on="${escapeAttribute(commentOn)}"`
+  }${edited === true ? ' edited="true"' : ""} />\n`;
 
 /**
  * Removes every author tag from text a person wrote, repeating until none is
@@ -131,6 +148,8 @@ export const parseMessageAuthor = (
   readonly sourceThreadId?: string;
   readonly messageId?: string;
   readonly automation?: MessageAutomation;
+  readonly commentOn?: string;
+  readonly edited?: true;
   readonly text: string;
 } => {
   const match = leadingTag.exec(text);
@@ -174,6 +193,10 @@ export const parseMessageAuthor = (
     fields.get("automation") === "artifact"
       ? { automation: fields.get("automation") as MessageAutomation }
       : {}),
+    ...(fields.get("comment_on")
+      ? { commentOn: fields.get("comment_on") }
+      : {}),
+    ...(fields.get("edited") === "true" ? { edited: true as const } : {}),
     text: rest,
   };
 };

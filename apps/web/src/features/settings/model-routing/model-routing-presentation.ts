@@ -3,6 +3,7 @@ import type {
   ConnectionData,
   DictationProviderData,
   GraphData,
+  SpaceAgentRoute,
 } from "@dx/api";
 import { isClaudeCodeModel } from "@dx/domain";
 
@@ -55,12 +56,15 @@ export function routingPresentation({
   choices,
   connections = [],
   dictation,
+  space,
 }: {
   readonly graph: GraphData;
   readonly choices?: ChoicesData;
   readonly connections?: ReadonlyArray<ConnectionData>;
   /** The Speech provider dictation resolves to; absent hides the row. */
   readonly dictation?: DictationProviderData;
+  /** Where a new Space would run; absent hides the Space row. */
+  readonly space?: SpaceAgentRoute;
 }) {
   const edgeByMode = new Map(graph.edges.map((e) => [e.mode, e]));
   const groups: RoutingGroup[] = graph.modes.map((mode) => ({
@@ -107,6 +111,31 @@ export function routingPresentation({
       groups[groups.indexOf(other)] = { ...other, rows: [...other.rows, row] };
     else groups.push({ id: "other", rows: [row] });
   }
+  // A Space has its own model (Mode Dial → Space) and route, picked once
+  // when each Space is created: Claude Code on a plan, or Model Routing.
+  const spaceDestination =
+    space === undefined || space.kind === "unavailable"
+      ? undefined
+      : {
+          id: `space:${space.kind}`,
+          name: space.connectionName,
+          kind: space.kind === "claude-code" ? "claude-code" : "provider",
+          detail: space.kind === "claude-code" ? "Claude Code" : "dx agent",
+        };
+  if (space !== undefined)
+    groups.push({
+      id: "space",
+      name: "Space",
+      rows: [
+        {
+          id: "space:agent",
+          label: "Space agent",
+          model: space.model,
+          name: space.modelName,
+          destination: spaceDestination?.id ?? NOT_SERVED,
+        },
+      ],
+    });
   const used = new Set(groups.flatMap((g) => g.rows.map((r) => r.destination)));
   const connectionsById = new Map(
     connections.map((row) => [String(row.id), row]),
@@ -146,6 +175,7 @@ export function routingPresentation({
   }
   if (transcription !== undefined)
     destinations.push({ ...transcription, detail: "Transcription" });
+  if (spaceDestination !== undefined) destinations.push(spaceDestination);
   if (used.has(NOT_SERVED))
     destinations.push({
       id: NOT_SERVED,

@@ -8,6 +8,7 @@ import {
   type ToolDefinition,
 } from "@flue/runtime";
 import * as v from "valibot";
+import { spacesEnabledFor } from "../spaces/gate.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
 import { readCallingThread } from "../threads/calling-thread.js";
 import { readHistory } from "./history.js";
@@ -149,6 +150,7 @@ export const createThreadSearchTools = (
     const calling = await readCallingThread(context.db, callingThreadId);
     const scope: ThreadSearchScope = {
       userId: calling.ownerUserId,
+      spaces: await spacesEnabledFor(context.bindings, calling.ownerUserId),
       ...(calling.sharedFamilyRoot === undefined
         ? {}
         : { familyRoot: calling.sharedFamilyRoot }),

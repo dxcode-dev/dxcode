@@ -1,7 +1,7 @@
 {
   "scenario": "One turn of a Thread, seen by a viewer whose sidebar holds 100 roots with one child each, plus the shared list",
   "d1StatementsPerRead": {
-    "rootsList": 13,
+    "rootsList": 12,
     "sharedList": 1,
     "listItem": 1
   },
@@ -9,7 +9,7 @@
     "hints": 2,
     "before": {
       "requests": 4,
-      "d1Statements": 28,
+      "d1Statements": 26,
       "threadRowsReturned": 400
     },
     "after": {

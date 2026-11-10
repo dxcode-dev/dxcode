@@ -195,3 +195,20 @@ export const searchTools = (
       .join("\n\n") || "No matching functions."
   );
 };
+
+const MODULE_LINE = /^(\S+) — .+ MCP server: /;
+
+/**
+ * Each MCP server's line in a `tool_search` description that `moduleList`
+ * wrote, by module name, with the line's length in characters. Lets a
+ * Thread's context window attribute tool-definition tokens per server.
+ */
+export const moduleListLines = (
+  description: string,
+): ReadonlyArray<{ readonly module: string; readonly characters: number }> =>
+  description.split("\n").flatMap((line) => {
+    const match = MODULE_LINE.exec(line);
+    return match?.[1] === undefined
+      ? []
+      : [{ module: match[1], characters: line.length + 1 }];
+  });

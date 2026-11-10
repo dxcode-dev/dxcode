@@ -46,6 +46,8 @@ export const insertNotifications = async (
     readonly threadId: ThreadId;
     readonly messageId?: string;
     readonly actorUserId?: UserId;
+    /** dx's agent sent it, and no person did. */
+    readonly actorKind?: "agent";
     readonly excerpt: string;
   },
   now = new Date(),
@@ -57,8 +59,8 @@ export const insertNotifications = async (
         .prepare(
           `INSERT INTO notification
              (id, recipient_user_id, topic, source_key, thread_id, message_id,
-              actor_user_id, excerpt, created_at)
-           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+              actor_user_id, excerpt, created_at, actor_kind)
+           VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
            ON CONFLICT (recipient_user_id, source_key) DO NOTHING
            RETURNING id, recipient_user_id`,
         )
@@ -72,6 +74,9 @@ export const insertNotifications = async (
           input.actorUserId ?? null,
           input.excerpt.slice(0, 512),
           now.toISOString(),
+          input.actorUserId === undefined && input.actorKind === "agent"
+            ? "agent"
+            : null,
         ),
     ),
   );
@@ -93,6 +98,7 @@ interface InboxRow {
   readonly created_at: string;
   readonly read_at: string | null;
   readonly actor_user_id: string | null;
+  readonly actor_kind: string | null;
   readonly actor_name: string | null;
   readonly actor_handle: string | null;
   readonly actor_image: string | null;
@@ -114,6 +120,7 @@ export const listNotifications = async (
                 thread.title AS thread_title, notification.message_id,
                 notification.excerpt, notification.created_at,
                 notification.read_at, notification.actor_user_id,
+                notification.actor_kind,
                 ${displayNameSql("actor", "account")} AS actor_name,
                 account.username AS actor_handle,
                 ${userImageSql("actor", "account")} AS actor_image
@@ -138,7 +145,9 @@ export const listNotifications = async (
     threadTitle: row.thread_title.slice(0, 256),
     ...(row.message_id === null ? {} : { messageId: row.message_id }),
     ...(row.actor_user_id === null
-      ? {}
+      ? row.actor_kind === "agent"
+        ? { actor: { kind: "agent" as const, name: "dx" } }
+        : {}
       : {
           actor: {
             userId: row.actor_user_id as UserId,

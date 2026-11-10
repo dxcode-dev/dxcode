@@ -9,6 +9,7 @@ import {
 import { getDurableObjectIdentity } from "@flue/runtime/cloudflare";
 import { registerClaudeCodeProvider } from "./claude-code/registration.js";
 import { ExecutionWorkspaces } from "./execution/execution-workspaces.js";
+import { bindThreadExecutors } from "./executor/sandbox.js";
 import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
 import { installContentFreeFlueTracing } from "./observability/flue-tracing.js";
@@ -62,6 +63,8 @@ configureRetryPolicy({
 });
 
 const bindings = env as Bindings;
+// Executor-mode Claude Code Threads run on their executor.
+bindThreadExecutors(bindings.THREAD_EXECUTOR);
 if (
   typeof __DX_CORE_DEV_FIXTURES__ !== "undefined" &&
   __DX_CORE_DEV_FIXTURES__ &&

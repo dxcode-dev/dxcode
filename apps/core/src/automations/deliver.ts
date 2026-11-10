@@ -1,6 +1,8 @@
 import { formatGitHubDelivery } from "@dx/api";
 import type { Bindings } from "../http/types.js";
 import { automationLogger } from "../logging.js";
+import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { shipFromPullRequestWebhook } from "../spaces/progress/shipped.js";
 import {
   ciEvent,
   type FilterKind,
@@ -280,6 +282,9 @@ const openingThread = async (
              ON g.user_id = t.owner_user_id
             AND g.provider_account_login = ?2 COLLATE NOCASE AND g.status = 'active'
           WHERE t.lifecycle_state = 'active'
+            -- A Space's agent starts threads to do the work; it opens no PRs,
+            -- so a working Space never hides which of its threads did.
+            AND t.kind != 'space'
             AND (EXISTS (SELECT 1 FROM project_repository AS r
                    WHERE r.project_id = t.project_id AND r.provider = 'github'
                      AND r.full_name = ?1 COLLATE NOCASE)
@@ -445,6 +450,46 @@ const savePullFromWebhook = async (
 };
 
 /**
+ * A merged PR ships every thread linked to it; their viewers, and the Spaces
+ * that started them, refresh.
+ */
+const shipMergedPullRequest = async (
+  bindings: Bindings,
+  db: D1Database,
+  action: string,
+  payload: Record<string, unknown>,
+  now: Date,
+  waitUntil?: (promise: Promise<unknown>) => void,
+) => {
+  const shipped = await shipFromPullRequestWebhook(
+    db,
+    action,
+    payload,
+    now,
+  ).catch((cause) => {
+    automationLogger.warn("Marking a merged PR's threads shipped failed.", {
+      event: "github_pull_request_ship_failed",
+      cause,
+    });
+    return [];
+  });
+  for (const threadId of shipped) {
+    automationLogger.info("A thread's pull request merged.", {
+      event: "thread_shipped",
+      threadId,
+      reason: "pull_request_merged",
+    });
+    const publication = publishRealtimeInvalidation(
+      bindings,
+      threadId,
+      "thread.invalidated",
+    );
+    if (waitUntil === undefined) await publication;
+    else waitUntil(publication);
+  }
+};
+
+/**
  * Keeps the header's title and state of a linked issue. An issue's own
  * events and every comment on it carry the issue.
  */
@@ -514,6 +559,7 @@ export const deliverGitHubWebhook = async (
       }),
     );
     await savePullFromWebhook(db, action, payload);
+    await shipMergedPullRequest(bindings, db, action, payload, now, waitUntil);
   }
   await saveIssueFromWebhook(db, event, action, payload);
   const happening = fromWebhook(event, action, payload);

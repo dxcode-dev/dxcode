@@ -1,4 +1,10 @@
-import { SHELL_PARTS, type ShellPart, ShellResponseSchema } from "@dx/api";
+import {
+  ABSENT_CONVERSATION_REQUEST_HEADER,
+  ABSENT_CONVERSATION_RESPONSE_HEADER,
+  SHELL_PARTS,
+  type ShellPart,
+  ShellResponseSchema,
+} from "@dx/api";
 import { Schema } from "effect";
 import { noticeUnauthenticated } from "./auth/session-ended.js";
 import { observeRequest } from "./diagnostics/client-diagnostics.js";
@@ -29,6 +35,27 @@ const requestTarget = (input: RequestInfo | URL) => {
     return undefined;
   }
 };
+
+/** A read of a Thread agent's history, by its URL. */
+const isAgentHistoryRead = (url: string) => /[?&]view=history(&|$)/.test(url);
+
+/**
+ * Flue's answer for a conversation that has not started, made in the page.
+ * Core answers a history read that asks 204 instead, so the browser logs no
+ * error (see `ABSENT_CONVERSATION_REQUEST_HEADER`); Flue's client still
+ * reads its own 404.
+ */
+export const absentHistoryResponse = () =>
+  new Response('{"error":{"type":"stream_not_found"}}', {
+    status: 404,
+    headers: { "content-type": "application/json" },
+  });
+
+const absentAsNotFound = (response: Response) =>
+  response.status === 204 &&
+  response.headers.get(ABSENT_CONVERSATION_RESPONSE_HEADER) === "absent"
+    ? absentHistoryResponse()
+    : response;
 
 /**
  * The signed-in app's first-load reads, started at boot as soon as the
@@ -82,10 +109,17 @@ const prefetchedAt = new Map<string, number>();
 
 const readAlone = async (path: string): Promise<BootAnswer | undefined> => {
   try {
-    const response = await fetch(path, {
-      credentials: "same-origin",
-      headers: { accept: "application/json" },
-    });
+    const response = absentAsNotFound(
+      await fetch(path, {
+        credentials: "same-origin",
+        headers: {
+          accept: "application/json",
+          ...(isAgentHistoryRead(path)
+            ? { [ABSENT_CONVERSATION_REQUEST_HEADER]: "1" }
+            : {}),
+        },
+      }),
+    );
     const answer = {
       arrivedAt: Date.now(),
       status: response.status,
@@ -205,11 +239,25 @@ export const sameOriginFetch: typeof fetch = async (input, init) => {
         headers: { "content-type": answer.contentType },
       });
   }
+  const historyRead =
+    method === "GET" &&
+    isAgentHistoryRead(input instanceof Request ? input.url : String(input));
+  const headers = historyRead
+    ? new Headers(
+        init?.headers ?? (input instanceof Request ? input.headers : undefined),
+      )
+    : undefined;
+  headers?.set(ABSENT_CONVERSATION_REQUEST_HEADER, "1");
   const response = await observeRequest(
     requestPath(input),
     init?.method ?? (input instanceof Request ? input.method : undefined),
-    () => fetch(input, { ...init, credentials: "same-origin" }),
+    () =>
+      fetch(input, {
+        ...init,
+        ...(headers === undefined ? {} : { headers }),
+        credentials: "same-origin",
+      }),
   );
   noticeUnauthenticated(response);
-  return response;
+  return historyRead ? absentAsNotFound(response) : response;
 };

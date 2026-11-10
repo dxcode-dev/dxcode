@@ -386,6 +386,13 @@
       "provenance": "authored-wrangler"
     },
     {
+      "name": "THREAD_EXECUTOR",
+      "type": "durable-object",
+      "provenance": "alchemy",
+      "optional": true,
+      "crossScript": true
+    },
+    {
       "name": "THREAD_SEARCH_INDEX",
       "type": "durable-object",
       "provenance": "authored-wrangler"

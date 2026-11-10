@@ -44,6 +44,16 @@ export interface OrbBillingPolicy {
     readonly from: number;
     readonly until: number;
   }) => Promise<ReadonlyMap<string, number>>;
+  /**
+   * What `durationMs` of an Orb this deployment meters costs, in
+   * micro-dollars of its credits, or undefined when it does not meter that
+   * Orb. Display only: a Thread's Cost & Usage prices each Orb session with
+   * it. Absent when the deployment meters nothing.
+   */
+  readonly meteredOrbCost?: (
+    orb: Omit<OrbStartRequest, "operation">,
+    durationMs: number,
+  ) => Promise<number | undefined>;
 }
 
 export interface OrbStartRequest {

@@ -132,8 +132,11 @@ export function ReasoningEffort({
   label,
   disabled,
   onChange,
+  name = "Main Agent reasoning effort",
 }: {
   readonly value: ThinkingLevel;
+  /** The slider's accessible name. */
+  readonly name?: string;
   /** Shown instead of the level, such as Auto before it resolves. */
   readonly label?: string | undefined;
   readonly disabled: boolean;
@@ -153,7 +156,7 @@ export function ReasoningEffort({
         </div>
         <input
           type="range"
-          aria-label="Main Agent reasoning effort"
+          aria-label={name}
           aria-valuetext={value === "xhigh" ? "Extra high" : value}
           min={0}
           max={6}

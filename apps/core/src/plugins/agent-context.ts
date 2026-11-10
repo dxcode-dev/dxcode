@@ -1,9 +1,14 @@
 import { env, waitUntil } from "cloudflare:workers";
 import { Effect } from "effect";
+import { readOrbThreadState } from "../agents/orb-free.js";
 import { mayUseBugReportTools } from "../bug-reports/agent-tools.js";
 import type { Bindings } from "../http/types.js";
 import { resolveMcpAgentConnections } from "../settings/mcp-servers/execution.js";
 import { loadThreadWorkspaceAgentInstructions } from "../settings/workspace-agent-instructions/thread.js";
+import {
+  readGatedSpacePromptData,
+  readGatedStartingSpace,
+} from "../spaces/gated-prompt-data.js";
 import type { PluginHostContext } from "./host.js";
 import { resolveSubmissionPluginTools } from "./submission-tools.js";
 
@@ -62,3 +67,28 @@ export const resolveAgentBugReportReader = async (threadId: string) => {
  */
 export const resolveAgentWorkspaceInstructions = async (threadId: string) =>
   loadThreadWorkspaceAgentInstructions(agentPluginHostContext().db, threadId);
+
+/**
+ * The Space this submission's Thread is, read from current settings so a
+ * renamed Space or a new goal reaches the next message; undefined for any
+ * other Thread, and while Spaces is off for its owner (spaces/gate.ts).
+ */
+export const resolveAgentSpace = async (threadId: string) => {
+  return readGatedSpacePromptData(agentPluginHostContext().bindings, threadId);
+};
+
+/**
+ * The Thread's Orb-relevant state (`runsWithoutOrb`), from D1: the server's
+ * record, never the creation data a client sent. A Space runs without an Orb
+ * whether or not its owner's `spaces` flag is on: turning the flag off never
+ * wakes an Orb for it.
+ */
+export const resolveAgentOrbThreadState = async (threadId: string) =>
+  readOrbThreadState(agentPluginHostContext().db, threadId);
+
+/**
+ * The Space that started this Thread, for the child's prompt; undefined
+ * while Spaces is off for its owner.
+ */
+export const resolveAgentStartingSpace = async (threadId: string) =>
+  readGatedStartingSpace(agentPluginHostContext().bindings, threadId);

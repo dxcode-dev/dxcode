@@ -210,11 +210,14 @@
   color: #10130f;
 }
 .mode-tuning-workbench button:disabled,
-.mode-tuning-workbench input:disabled {
+.mode-tuning-workbench input:disabled,
+.space-agent-role button:disabled,
+.space-agent-role input:disabled {
   opacity: 0.4;
   cursor: default;
 }
-.mode-tuning-workbench :is(button, select, input):focus-visible {
+.mode-tuning-workbench :is(button, select, input):focus-visible,
+.space-agent-role :is(button, select, input):focus-visible {
   outline: 2px solid var(--mode-accent);
   outline-offset: 3px;
 }
@@ -266,4 +269,21 @@
 .tuning-label-target:focus-visible {
   outline: 1px solid var(--mode-accent);
   border-radius: 4px;
+}
+
+/* Settings → Mode Dial → Space: the model new Spaces run on. */
+.space-agent-role {
+  --mode-accent: #ff9f6e;
+  margin-top: 20px;
+  background: #090b10;
+  border: 1px solid #292a32;
+  border-radius: 24px;
+  padding: 24px;
+  color: #d5d6dc;
+}
+.space-agent-role > .tuning-hint {
+  margin: 0 0 14px;
+}
+.space-agent-role .tuning-agent-card .tuning-hint[data-route] {
+  margin-top: 12px;
 }

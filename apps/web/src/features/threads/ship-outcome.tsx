@@ -156,7 +156,8 @@ export function ShipOutcomeActions({
           variant="outline"
           size="sm"
           disabled={archive.pendingThreadId === threadId}
-          onClick={() => archive.setArchived(threadId, true)}
+          // Archived after its Ship run, its work counts as shipped.
+          onClick={() => archive.setArchived(threadId, true, false, "ship")}
         >
           <Archive aria-hidden="true" />
           Archive

@@ -11,6 +11,7 @@ import {
   putThreadPaneLayout,
 } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { retryQuery } from "../../../shared/query/query-retry.js";
 import { closeTerminalSession } from "../../terminal/terminal-session-mutations.js";
 import {
   closedTerminalSessions,
@@ -51,7 +52,12 @@ export const threadPaneLayoutQueryOptions = (
     gcTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
-    retry: 1,
+    // Once after a network failure or a 5xx; never after a 4xx, such as a
+    // Thread that does not exist or is hidden.
+    retry: retryQuery,
+    // A layout that failed to load leaves the default panes; mounting the
+    // page again does not read it again.
+    retryOnMount: false,
   });
 
 interface PendingSave {

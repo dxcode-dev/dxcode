@@ -31,6 +31,8 @@ import {
 } from "../plugins/routes.js";
 import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
+import { spaceAgentModelRoutes } from "../spaces/agent-model.js";
+import { spacesEnabledFor } from "../spaces/gate.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
@@ -83,11 +85,13 @@ const responseData = (
   dictation: DictationProviderData | undefined,
   portalDomain: string | undefined,
   composerQuickActions: boolean,
+  spaces: boolean,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
   // Only when on, so a person without the flag gets the context unchanged.
   ...(composerQuickActions ? { composerQuickActions } : {}),
+  ...(spaces ? { spaces } : {}),
   ...(dictation === undefined ? {} : { dictation }),
   ...(portalDomain === undefined ? {} : { portalDomain }),
   workspace:
@@ -150,6 +154,13 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
           COMPOSER_QUICK_ACTIONS_FEATURE as ExperimentalFeatureId,
         ).catch(() => false),
       ));
+    // Spaces, for the sidebar: the deployment names the person and their
+    // flag is on (spaces/gate.ts). A failed read hides Spaces.
+    const spaces = yield* Effect.promise(() =>
+      spacesEnabledFor(context.env, context.get("principal").userId).catch(
+        () => false,
+      ),
+    );
     return yield* Schema.encodeUnknownEffect(GetSettingsContextResponseSchema)({
       status: "success",
       data: responseData(
@@ -157,6 +168,7 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         dictation,
         portalConfiguration(context.env)?.domain,
         composerQuickActions,
+        spaces,
       ),
     });
   });
@@ -254,6 +266,7 @@ settingsRoutes.route(
   personalExperimentalFeaturesRoutes,
 );
 settingsRoutes.route("/personal/security", personalSecurityRoutes);
+settingsRoutes.route("/personal/space-agent-model", spaceAgentModelRoutes);
 settingsRoutes.route("/personal/feedback-widget", feedbackWidgetEmbedRoutes);
 settingsRoutes.route("/personal/projects", personalProjectDefaultsRoutes);
 settingsRoutes.route("/personal/keys", personalSigningKeyRoutes);

@@ -23,6 +23,7 @@ import {
   ThreadColor,
   type ThreadId,
   ThreadId as ThreadIdSchema,
+  ThreadKind,
   ThreadLifecycleState,
   ThreadModelSelection,
   ThreadTitle,
@@ -97,7 +98,7 @@ export const ThreadDataSchema = Schema.Struct({
   /**
    * The family member whose agent started this Thread: the root or another
    * child. Absent for a root, and for a child started before dx recorded
-   * starters or whose starter was deleted; show that child under the root.
+   * starters or whose starter was deleted; treat the root as its source.
    */
   startedByThreadId: Schema.optional(ThreadIdSchema),
   /**
@@ -105,6 +106,8 @@ export const ThreadDataSchema = Schema.Struct({
    * color takes its parent's, on the orb only.
    */
   parentColor: Schema.optional(ThreadColor),
+  /** `space` for a Space (see `SpaceData`); absent means `thread`. */
+  kind: Schema.optional(ThreadKind),
 }).check(
   Schema.makeFilter((thread) =>
     thread.agentUrl === threadAgentUrl(thread.id)
@@ -317,7 +320,7 @@ export const ThreadDetailDataSchema = Schema.Struct({
   /**
    * The family member whose agent started this Thread: the root or another
    * child. Absent for a root, and for a child started before dx recorded
-   * starters or whose starter was deleted; show that child under the root.
+   * starters or whose starter was deleted; treat the root as its source.
    */
   startedByThreadId: Schema.optional(ThreadIdSchema),
   /**
@@ -325,6 +328,8 @@ export const ThreadDetailDataSchema = Schema.Struct({
    * color takes its parent's, on the orb only.
    */
   parentColor: Schema.optional(ThreadColor),
+  /** `space` for a Space (see `SpaceData`); absent means `thread`. */
+  kind: Schema.optional(ThreadKind),
 }).check(
   Schema.makeFilter((thread) =>
     thread.agentUrl === threadAgentUrl(thread.id)

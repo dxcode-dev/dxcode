@@ -88,7 +88,10 @@ const readOutput = (output: unknown) =>
 
 const presented = new WeakMap<ToolPart, ToolPart>();
 
-/** Claude Code names a dx tool `mcp__dx__<name>`; dx ran it as `<name>`. */
+/**
+ * Claude Code named a dx tool `mcp__dx__<name>` before the dx tool bridge
+ * served dx tools under their own names; older transcripts keep the prefix.
+ */
 const DX_TOOL_PREFIX = "mcp__dx__";
 
 export const presentableToolPart = (part: ToolPart): ToolPart => {

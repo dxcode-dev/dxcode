@@ -105,6 +105,17 @@ export const createThreadDeletionRoutes = (
         const detached = (await childThreadIds(db, family)).filter(
           (id) => !family.includes(id),
         );
+        // The tombstone drops the parent, so read the Space that started
+        // the Thread first: its threads and artifacts lose this one.
+        const space = await db
+          .prepare(
+            `SELECT space.id FROM threads AS thread
+               JOIN threads AS space
+                 ON space.id = thread.parent_thread_id AND space.kind = 'space'
+              WHERE thread.id = ?1`,
+          )
+          .bind(threadId.value)
+          .first<{ id: ThreadId }>();
         deletedAt = new Date().toISOString();
         const tombstoned = await tombstoneThreads(
           db,
@@ -117,7 +128,12 @@ export const createThreadDeletionRoutes = (
         deletedChildren = family.filter(
           (id) => id !== threadId.value && tombstoned.includes(id),
         );
-        invalidated = [threadId.value, ...deletedChildren, ...detached];
+        invalidated = [
+          threadId.value,
+          ...deletedChildren,
+          ...detached,
+          ...(space === null ? [] : [space.id]),
+        ];
         threadDeletionLogger.info("Thread deleted.", {
           event: "thread_deleted",
           requestId,

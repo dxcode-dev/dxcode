@@ -9,6 +9,7 @@ import { Schema } from "effect";
 import { deliverMessage } from "../automations/wake.js";
 import type { Bindings } from "../http/types.js";
 import { publishNotification } from "../notifications/publish.js";
+import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { threadMembers } from "../thread-sharing/members.js";
 import {
@@ -17,7 +18,7 @@ import {
   leadOrJoinAgentWake,
   releaseAgentWindow,
 } from "./agent-wake-window.js";
-import { type ArtifactChecklistItem, askChanges } from "./asks.js";
+import { type ArtifactChecklistItem, askChanges, openAsks } from "./asks.js";
 import { threadArtifactLogger } from "./logger.js";
 import { changesForAgent } from "./people-edits.js";
 import { wrapPeopleText } from "./people-text.js";
@@ -45,7 +46,7 @@ import {
 export const ARTIFACT_WAKE_INTERVAL_MS = 30_000;
 
 /** Who can open the Thread: its owner, and its members while it is shared. */
-const threadReaders = async (db: D1Database, threadId: string) => {
+export const threadReaders = async (db: D1Database, threadId: string) => {
   const owner = await db
     .prepare(
       "SELECT owner_user_id FROM threads WHERE id = ? AND lifecycle_state != 'deleted'",
@@ -60,7 +61,7 @@ const threadReaders = async (db: D1Database, threadId: string) => {
   };
 };
 
-const personName = async (db: D1Database, userId: string) =>
+export const personName = async (db: D1Database, userId: string) =>
   (await db
     .prepare('SELECT name FROM "user" WHERE id = ?')
     .bind(userId)
@@ -170,6 +171,39 @@ const claimWake = async (db: D1Database, threadId: string, now: number) => {
 };
 
 /** Runs every after-save effect for one saved revision. */
+/**
+ * Records whether the saved artifact holds an open ask (`thread_open_ask`),
+ * which a Space's card reads as Needs You. When that changes, the Thread's
+ * viewers, and its Space's, refresh it.
+ */
+const recordOpenAsks = async (
+  bindings: Bindings,
+  db: D1Database,
+  event: ArtifactSavedEvent,
+  open: boolean,
+  now: number,
+) => {
+  const result = open
+    ? await db
+        .prepare(
+          `INSERT INTO thread_open_ask (artifact_id, thread_id, updated_at)
+           SELECT ?1, ?2, ?3 WHERE EXISTS (SELECT 1 FROM threads WHERE id = ?2)
+           ON CONFLICT (artifact_id) DO NOTHING`,
+        )
+        .bind(event.artifactId, event.threadId, now)
+        .run()
+    : await db
+        .prepare("DELETE FROM thread_open_ask WHERE artifact_id = ?1")
+        .bind(event.artifactId)
+        .run();
+  if (result.meta.changes > 0)
+    await publishRealtimeInvalidation(
+      bindings,
+      event.threadId as ThreadId,
+      "thread.invalidated",
+    );
+};
+
 export const artifactSaved = async (
   bindings: Bindings,
   event: ArtifactSavedEvent,
@@ -195,6 +229,9 @@ export const artifactSaved = async (
       });
     }
   };
+  await step("open-asks", () =>
+    recordOpenAsks(bindings, db, event, openAsks(event.after).length > 0, now),
+  );
   const changes = askChanges(event.before, event.after);
   const { owner, readers } = await threadReaders(db, event.threadId);
   if (owner === undefined) return;

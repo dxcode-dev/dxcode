@@ -15,6 +15,11 @@ export const ArchiveThreadRequestSchema = Schema.Struct({
   childThreadIds: Schema.optional(
     Schema.Array(ThreadId).check(Schema.isMaxLength(1_000)),
   ),
+  /**
+   * `ship`: archived from the outcome of the Thread's Ship run, so its work
+   * counts as shipped. Only with `archived: true`.
+   */
+  reason: Schema.optional(Schema.Literal("ship")),
 });
 export const ArchiveThreadResponseSchema = Schema.Struct({
   ...successResponse(ThreadDataSchema).fields,

@@ -1,4 +1,5 @@
 import type { NotificationChannel, NotificationTopic } from "@dx/api";
+import { tokensAsNames } from "./excerpt.js";
 import { plainPreview } from "./plain-preview.js";
 
 /**
@@ -62,8 +63,9 @@ const mention: NotificationTopicDefinition = {
     subject: `${actorName} mentioned you in ${threadTitle}`,
     headline: `${actorName} mentioned you`,
     title: threadTitle,
-    body: excerpt,
-    preview: `${actorName}: ${plainPreview(excerpt) || excerpt}`,
+    // The excerpt keeps picked mentions as tokens for the inbox's chips.
+    body: tokensAsNames(excerpt),
+    preview: `${actorName}: ${tokensAsNames(plainPreview(excerpt) || excerpt)}`,
     actorName,
     reason: "someone mentioned you in dx",
   }),

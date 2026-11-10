@@ -5,6 +5,7 @@ import {
 } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import { spaceThreadIds } from "../spaces/gate.js";
 import { sharedThreadVisibleSql } from "../thread-sharing/access.js";
 import { ownerSearchIndex } from "./index-client.js";
 import { queryTerms, snippetTerm } from "./terms.js";
@@ -29,6 +30,11 @@ export interface ThreadSearchScope {
    * (the root and its children) is visible; shared Threads stay visible.
    */
   readonly familyRoot?: string;
+  /**
+   * Spaces is on for the searcher (spaces/gate.ts), so Space Threads may
+   * match; absent, only ordinary Threads do.
+   */
+  readonly spaces?: boolean;
 }
 
 export interface ThreadSearchRow {
@@ -161,7 +167,7 @@ const accessClause = (scope: ThreadSearchScope, parameters: Parameters) => {
   return `((thread.owner_user_id = ${user}
       AND (project.deleted_at IS NOT NULL
         OR ${threadProjectReachableSql("project", user)})${family})
-    OR ${sharedVisible(user)})`;
+    OR ${sharedVisible(user)})${scope.spaces === true ? "" : " AND thread.kind = 'thread'"}`;
 };
 
 const filterClauses = (
@@ -444,9 +450,22 @@ export const searchThreads = async (
     }
   }
 
+  // Spaces off for the searcher: the threads a Space started are roots.
+  const spaceParents =
+    scope.spaces === true
+      ? new Set<string>()
+      : await spaceThreadIds(
+          db,
+          rows.slice(0, limit).map(({ parent_thread_id }) => parent_thread_id),
+        );
   // A snooze is the owner's; members never see it.
   const page = rows
     .slice(0, limit)
+    .map((row) =>
+      row.parent_thread_id !== null && spaceParents.has(row.parent_thread_id)
+        ? { ...row, parent_thread_id: null }
+        : row,
+    )
     .map((row) =>
       row.owner_user_id === scope.userId
         ? row

@@ -1,4 +1,8 @@
 import { env } from "cloudflare:test";
+import {
+  ABSENT_CONVERSATION_REQUEST_HEADER,
+  ABSENT_CONVERSATION_RESPONSE_HEADER,
+} from "@dx/api";
 import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import { useAgentAdmission } from "../../src/agents/admission.js";
@@ -78,13 +82,17 @@ const fakeFlue = (
   routes.route("/", flue);
   app.route("/v1/agents/dx", routes);
   app.onError(errorHandler);
-  const request = (path: string, method = "GET") => {
+  const request = (
+    path: string,
+    method = "GET",
+    headers: Record<string, string> = {},
+  ) => {
     // The creating request's delivery lands while the read waits.
     if (admitAfterMs !== undefined)
       setTimeout(() => {
         admitted = true;
       }, admitAfterMs);
-    return app.request(`/v1/agents/dx/${path}`, { method }, bindings);
+    return app.request(`/v1/agents/dx/${path}`, { method, headers }, bindings);
   };
   return { request, reads, sends };
 };
@@ -277,5 +285,39 @@ describe("A new Thread's agent read while its first message is pending", () => {
     await storeFirstMessage(blank.id);
     expect((await blankFlue.request(blank.id, "POST")).status).toBe(404);
     expect(blankFlue.sends).toEqual([blank.id]);
+  });
+
+  it("tells the page, without an error status, that a readable Thread's conversation has not started", async () => {
+    // A new Space has no conversation until someone writes in it. The page
+    // asks for its history on every open; a 404 there is a console error.
+    const blank = await newThread("absent-history-read");
+    const flue = fakeFlue();
+    const asks = { [ABSENT_CONVERSATION_REQUEST_HEADER]: "1" };
+
+    const history = await flue.request(
+      `${blank.id}?view=history&promptLimit=2`,
+      "GET",
+      asks,
+    );
+    expect(history.status).toBe(204);
+    expect(history.headers.get(ABSENT_CONVERSATION_RESPONSE_HEADER)).toBe(
+      "absent",
+    );
+    expect(await history.text()).toBe("");
+    // One read of Flue, no wait.
+    expect(flue.reads).toHaveLength(1);
+
+    // Callers that do not ask, such as the agent's own tools, get Flue's
+    // answer; so does any other read, and a Thread the reader cannot read.
+    expect((await flue.request(`${blank.id}?view=history`)).status).toBe(404);
+    expect(
+      (await flue.request(`${blank.id}/stream?live=sse`, "GET", asks)).status,
+    ).toBe(404);
+    const stranger = fakeFlue(undefined, false, undefined, {
+      reader: otherPrincipal,
+    });
+    expect(
+      (await stranger.request(`${blank.id}?view=history`, "GET", asks)).status,
+    ).toBe(404);
   });
 });

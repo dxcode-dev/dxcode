@@ -109,6 +109,12 @@ export interface InitialDispatchDelivery {
   readonly linkAttachments: (pending: PendingInitialDispatch) => Promise<void>;
   /** Tells the Thread's viewers the first message failed. */
   readonly invalidate: (threadId: ThreadId) => Promise<void>;
+  /** Records the admitted message as the Thread's running turn. */
+  readonly recordAdmission?: (admitted: {
+    readonly threadId: ThreadId;
+    readonly submissionId: string;
+    readonly admittedAt: number;
+  }) => Promise<void>;
   /** Releases what the Thread started for the message, after a failure. */
   readonly afterFailure?: () => Promise<void>;
   /** Waits between this delivery's own attempts. */
@@ -180,6 +186,23 @@ export const deliverInitialDispatch = async (
     try {
       const receipt = await admit(delivery.dispatch, pending.request);
       const acceptedAt = Date.now();
+      // Before the row goes, so the Thread never reads idle in between.
+      await delivery
+        .recordAdmission?.({
+          threadId: pending.threadId,
+          submissionId: receipt.submissionId,
+          admittedAt: acceptedAt,
+        })
+        .catch((cause: unknown) =>
+          threadPersistenceLogger.warn(
+            "A new Thread's first turn was not recorded as running.",
+            {
+              event: "thread_initial_dispatch_activity_failed",
+              threadId: pending.threadId,
+              code: cause instanceof Error ? cause.name : "UNKNOWN",
+            },
+          ),
+        );
       await Promise.all([
         delivery.linkAttachments(pending).catch((cause: unknown) =>
           threadPersistenceLogger.warn(

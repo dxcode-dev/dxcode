@@ -4,6 +4,7 @@ compile_error!("dxd runs on Linux only; cross-build it from any host with `pnpm 
 mod attachments;
 mod changes;
 mod child;
+mod cpu;
 mod disk;
 mod environment;
 mod files;
@@ -419,6 +420,7 @@ mod tests {
                 terminals: Vec::new(),
                 memory: None,
                 disk: None,
+                cpu: None,
             })
             .unwrap(),
             r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"}}"#
@@ -440,9 +442,10 @@ mod tests {
                     used_bytes: 15_000,
                     total_bytes: 20_000,
                 }),
+                cpu: Some(crate::cpu::CpuUsage { busy_percent: 37.5 }),
             })
             .unwrap(),
-            r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"},"memory":{"usedBytes":6000,"totalBytes":8000},"disk":{"usedBytes":15000,"totalBytes":20000}}"#
+            r#"{"type":"heartbeat","generation":"gen_1","terminal":{"state":"absent","terminalVersion":1,"terminal":"default"},"memory":{"usedBytes":6000,"totalBytes":8000},"disk":{"usedBytes":15000,"totalBytes":20000},"cpu":{"busyPercent":37.5}}"#
         );
         assert_eq!(
             serde_json::to_string(&ClientMessage::ChangesDirty).unwrap(),

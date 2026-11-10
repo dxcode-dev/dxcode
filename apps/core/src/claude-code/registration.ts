@@ -3,6 +3,7 @@ import {
   type SandboxFactory,
   setProvider,
 } from "@flue/runtime";
+import { claudeCodeExecutor, executorSandbox } from "../executor/sandbox.js";
 import type { ClaudePlanAccess } from "./plan.js";
 import {
   type ClaudeCodeProviderDeps,
@@ -28,8 +29,10 @@ export const registerClaudeCodeProvider = (input: {
       invocation: getModelInvocationContext,
       ...(input.title === undefined ? {} : { title: input.title }),
       sandbox: (threadId) =>
-        claudeCodeSandbox(threadId, () =>
-          input.execution().createSandbox({ id: threadId }),
+        claudeCodeSandbox(threadId, async () =>
+          claudeCodeExecutor(threadId) !== undefined
+            ? executorSandbox(threadId)
+            : input.execution().createSandbox({ id: threadId }),
         ),
       credential: async (threadId, submissionId, canonical) => {
         const response = await coordinator(threadId).fetch(

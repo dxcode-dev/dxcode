@@ -28,6 +28,9 @@ const pluginHost = vi.hoisted(() => ({
   resolveAgentPluginTools: vi.fn(),
   resolveAgentBugReportReader: vi.fn(async () => false),
   resolveAgentWorkspaceInstructions: vi.fn(async () => ""),
+  resolveAgentSpace: vi.fn(async () => undefined),
+  resolveAgentStartingSpace: vi.fn(async () => undefined),
+  resolveAgentOrbThreadState: vi.fn(async () => ({ kind: "thread" })),
 }));
 
 const mcp = vi.hoisted(() => ({
@@ -240,11 +243,13 @@ describe("DxAgent", () => {
       "thr_existing",
       pluginHost.agentThreadToolsContext,
     );
+    // No delivered message names a person here, so no requester.
     expect(threadTools.createThreadTools).toHaveBeenCalledWith(
       "thr_existing",
       pluginHost.agentThreadToolsContext,
       "sub_1",
       false,
+      undefined,
     );
     expect(automationTools.createAutomationTools).toHaveBeenCalledWith(
       "thr_existing",
@@ -407,9 +412,15 @@ describe("DxAgent", () => {
         undefined,
         context("thr_overlap"),
       );
-      expect(runtime.execution.createSandbox).toHaveBeenCalledExactlyOnceWith({
-        id: "thr_overlap",
-      });
+      // It starts once the Thread's kind is read, while the route is still
+      // resolving.
+      await vi.waitFor(() =>
+        expect(runtime.execution.createSandbox).toHaveBeenCalledExactlyOnceWith(
+          {
+            id: "thr_overlap",
+          },
+        ),
+      );
       route.resolve({ model: "test/model", thinking: "medium" });
       await resolving;
 

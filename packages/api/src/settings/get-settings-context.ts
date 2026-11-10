@@ -34,6 +34,11 @@ export const PersonalSettingsContextDataSchema = Schema.Struct({
    * has Workers AI's Clef Flash, so the composer may show its row.
    */
   composerQuickActions: Schema.optional(Schema.Boolean),
+  /**
+   * Spaces is on for the person: the deployment names them and their
+   * `spaces` flag is on. Absent, the app shows no Spaces.
+   */
+  spaces: Schema.optional(Schema.Boolean),
 });
 
 export const WorkspaceSettingsContextDataSchema = Schema.Struct({
@@ -42,6 +47,7 @@ export const WorkspaceSettingsContextDataSchema = Schema.Struct({
   dictationAvailable: Schema.optional(Schema.Boolean),
   portalDomain: Schema.optional(Schema.String),
   composerQuickActions: Schema.optional(Schema.Boolean),
+  spaces: Schema.optional(Schema.Boolean),
 });
 
 export const SettingsContextDataSchema = Schema.Union([

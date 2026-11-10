@@ -14,6 +14,16 @@ import {
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
+  invalidateAllMessageComments,
+  invalidateMessageComments,
+} from "../../spaces/comments/message-comments-cache-queries.js";
+import {
+  invalidateSpaceArtifacts,
+  invalidateSpaceForThread,
+  invalidateSpacePosts,
+  invalidateSpaceQueries,
+} from "../../spaces/space-cache-queries.js";
+import {
   invalidateAllThreadAutomations,
   invalidateThreadAutomations,
 } from "../automations/automations-queries.js";
@@ -69,7 +79,20 @@ const invalidateAllRealtimeState = (
   void invalidateAllArtifacts(queryClient);
   void invalidateNotifications(queryClient, userId);
   void invalidateSidebarLayout(queryClient, userId);
+  void invalidateSpaceQueries(queryClient, userId);
+  void invalidateAllMessageComments(queryClient, userId);
 };
+
+/** How long a typing indicator lasts unless the typer repeats it. */
+export const TYPING_LAPSE_MS = 5_000;
+
+/** Someone typing a comment on one of a Thread's messages (`scope`). */
+export interface ThreadTyping {
+  readonly userId: UserId;
+  readonly scope: string;
+}
+
+const NO_TYPING: ReadonlyArray<ThreadTyping> = [];
 
 const visible = () =>
   typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -85,6 +108,8 @@ export class RealtimeClient {
   #reconnect?: ReturnType<typeof setTimeout>;
   #heartbeat?: ReturnType<typeof setInterval>;
   #topic?: `thread:${ThreadId}`;
+  /** The Threads views hold, oldest first; the newest is `#topic`. */
+  readonly #observers: Array<{ readonly topic: `thread:${ThreadId}` }> = [];
   /** The current topic's join was refused; retried once the Thread changes. */
   #deniedTopic?: `thread:${ThreadId}`;
   readonly #workspaceStatuses = new Map<ThreadId, WorkspaceStatus>();
@@ -93,6 +118,14 @@ export class RealtimeClient {
   readonly #workspaceStatusListeners = new Map<ThreadId, Set<() => void>>();
   readonly #presentUsers = new Map<ThreadId, ReadonlyArray<UserId>>();
   readonly #presenceListeners = new Map<ThreadId, Set<() => void>>();
+  /** Who is typing a comment, per Thread, by client, until it lapses. */
+  readonly #typing = new Map<
+    ThreadId,
+    Map<string, ThreadTyping & { readonly until: number }>
+  >();
+  readonly #typingSnapshots = new Map<ThreadId, ReadonlyArray<ThreadTyping>>();
+  readonly #typingListeners = new Map<ThreadId, Set<() => void>>();
+  readonly #typingTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   #stopped = true;
   #attempt = 0;
 
@@ -147,20 +180,37 @@ export class RealtimeClient {
     this.#socket = undefined;
     this.#rows.stop();
     this.#clearWorkspaceStatuses();
+    for (const timer of this.#typingTimers.values()) clearTimeout(timer);
+    this.#typingTimers.clear();
+    this.#typing.clear();
+    this.#typingSnapshots.clear();
   }
 
+  /**
+   * Joins the Thread's presence while the caller holds it. A page can show
+   * two Threads, such as a Space's chat and a thread open beside it; the
+   * hub holds one topic per socket, so the newest held Thread is joined and,
+   * once it lets go, the one before it is joined again.
+   */
   observeThread(threadId: ThreadId) {
-    const next = `thread:${threadId}` as const;
-    if (this.#topic === next) return () => undefined;
+    const observer = { topic: `thread:${threadId}` as const };
+    this.#observers.push(observer);
+    this.#joinNewestTopic();
+    return () => {
+      const index = this.#observers.indexOf(observer);
+      if (index === -1) return;
+      this.#observers.splice(index, 1);
+      this.#joinNewestTopic();
+    };
+  }
+
+  #joinNewestTopic() {
+    const next = this.#observers.at(-1)?.topic;
+    if (next === this.#topic) return;
     if (this.#topic !== undefined) this.#send("presence.leave", this.#topic);
     this.#topic = next;
     this.#deniedTopic = undefined;
-    if (visible()) this.#send("presence.join", next);
-    return () => {
-      if (this.#topic !== next) return;
-      this.#send("presence.leave", next);
-      this.#topic = undefined;
-    };
+    if (next !== undefined && visible()) this.#send("presence.join", next);
   }
 
   observeWorkspaceStatus(threadId: ThreadId, listener: () => void) {
@@ -191,6 +241,88 @@ export class RealtimeClient {
   presentUsers(threadId: ThreadId): ReadonlyArray<UserId> | undefined {
     return this.#presentUsers.get(threadId);
   }
+
+  observeTyping(threadId: ThreadId, listener: () => void) {
+    const listeners = this.#typingListeners.get(threadId) ?? new Set();
+    listeners.add(listener);
+    this.#typingListeners.set(threadId, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.#typingListeners.delete(threadId);
+    };
+  }
+
+  /** Who else is typing a comment in this Thread now, one entry per person and message. */
+  typing(threadId: ThreadId): ReadonlyArray<ThreadTyping> {
+    return this.#typingSnapshots.get(threadId) ?? NO_TYPING;
+  }
+
+  /**
+   * Tells the others with this Thread open that the viewer is typing a
+   * comment on one of its messages. Only for the Thread the viewer has open;
+   * callers repeat it while typing goes on, well inside `TYPING_LAPSE_MS`.
+   */
+  sendTyping(threadId: ThreadId, scope: string) {
+    const topic = `thread:${threadId}` as const;
+    if (
+      this.#topic !== topic ||
+      this.#deniedTopic === topic ||
+      this.#socket?.readyState !== WebSocket.OPEN
+    )
+      return;
+    this.#socket.send(
+      JSON.stringify({ type: "presence.typing", topic, scope }),
+    );
+  }
+
+  #receiveTyping(
+    threadId: ThreadId,
+    typing: ThreadTyping & { readonly clientId: string },
+  ) {
+    if (typing.userId === this.#userId) return;
+    const entries = this.#typing.get(threadId) ?? new Map();
+    entries.set(typing.clientId, {
+      userId: typing.userId,
+      scope: typing.scope,
+      until: Date.now() + TYPING_LAPSE_MS,
+    });
+    this.#typing.set(threadId, entries);
+    this.#publishTyping(threadId);
+  }
+
+  /** Drops lapsed indicators, publishes the rest, and wakes for the next lapse. */
+  readonly #publishTyping = (threadId: ThreadId) => {
+    const entries = this.#typing.get(threadId);
+    const now = Date.now();
+    for (const [clientId, entry] of entries ?? [])
+      if (entry.until <= now) entries?.delete(clientId);
+    const seen = new Set<string>();
+    const next = [...(entries?.values() ?? [])].flatMap(({ userId, scope }) => {
+      const key = `${userId}\n${scope}`;
+      if (seen.has(key)) return [];
+      seen.add(key);
+      return [{ userId, scope }];
+    });
+    const timer = this.#typingTimers.get(threadId);
+    if (timer !== undefined) clearTimeout(timer);
+    this.#typingTimers.delete(threadId);
+    if (entries === undefined || entries.size === 0) {
+      this.#typing.delete(threadId);
+      this.#typingSnapshots.delete(threadId);
+    } else {
+      this.#typingSnapshots.set(threadId, next);
+      const soonest = Math.min(
+        ...[...entries.values()].map(({ until }) => until),
+      );
+      this.#typingTimers.set(
+        threadId,
+        setTimeout(() => this.#publishTyping(threadId), soonest - now + 10),
+      );
+    }
+    this.#typingListeners.get(threadId)?.forEach((listener) => {
+      listener();
+    });
+  };
 
   #connect() {
     const url = new URL("/v1/realtime", window.location.href);
@@ -286,6 +418,11 @@ export class RealtimeClient {
       }
       this.#rows.threadChanged(event.threadId);
       void invalidateThreadAutomations(this.#queryClient, event.threadId);
+      void invalidateSpaceForThread(
+        this.#queryClient,
+        this.#userId,
+        event.threadId,
+      );
     } else if (event.type === "readiness.invalidated") {
       void invalidateReadinessQuery(
         this.#queryClient,
@@ -300,12 +437,40 @@ export class RealtimeClient {
       void invalidateOrbMemory(this.#queryClient, event.threadId);
     } else if (event.type === "artifacts.invalidated") {
       void invalidateArtifacts(this.#queryClient, event.threadId);
+      void invalidateSpaceArtifacts(
+        this.#queryClient,
+        this.#userId,
+        event.threadId,
+      );
+    } else if (event.type === "space.posts.invalidated") {
+      void invalidateSpacePosts(
+        this.#queryClient,
+        this.#userId,
+        event.threadId,
+      );
+    } else if (event.type === "comments.invalidated") {
+      void invalidateMessageComments(
+        this.#queryClient,
+        this.#userId,
+        event.threadId,
+      );
+      // A comment landed: whoever wrote it stopped typing; anyone still
+      // typing says so again within moments.
+      if (this.#typing.delete(event.threadId))
+        this.#publishTyping(event.threadId);
+    } else if (event.type === "presence.typing") {
+      this.#receiveTyping(event.topic.slice("thread:".length) as ThreadId, {
+        userId: event.userId,
+        clientId: event.clientId,
+        scope: event.scope,
+      });
     } else if (event.type === "disk.invalidated") {
       void invalidateOrbDisk(this.#queryClient, event.threadId);
     } else if (event.type === "notifications.invalidated") {
       void invalidateNotifications(this.#queryClient, this.#userId);
     } else if (event.type === "sidebar.invalidated") {
       void invalidateSidebarLayout(this.#queryClient, this.#userId);
+      void invalidateSpaceQueries(this.#queryClient, this.#userId);
     } else if (event.type === "workspace.status") {
       const threadId = event.threadId;
       if (event.status !== "waking") this.#clearWorkspaceStatus(threadId);

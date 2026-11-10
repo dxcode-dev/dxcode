@@ -25,6 +25,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 export const ORB_CONTAINER_CLASS = "OrbContainerObject";
 export const ORB_IMAGE_NAME = "orb";
+/** Executor-mode Threads' agent containers (apps/core/src/executor). */
+export const EXECUTOR_CLASS = "ThreadExecutorObject";
+export const EXECUTOR_CLAUDE_CODE_IMAGE = "claude-code";
 export const ORB_COMPATIBILITY_DATE = "2026-09-29";
 
 /** Everything that changes what the Orb Worker or its image does. */
@@ -43,6 +46,9 @@ export const orbRecipeFiles = [
   // The installer pins the dx toolbelt, which carries the Desktop.
   "deploy/orb/install.sh",
   "deploy/orb/containers.mjs",
+  "apps/core/src/executor/executor-object.ts",
+  "deploy/executor/claude-code/Dockerfile",
+  "deploy/executor/claude-code/Dockerfile.dockerignore",
 ];
 
 const wranglerVersion = (workspaceRoot) =>
@@ -91,12 +97,29 @@ const orbWorkerConfig = ({ workerName, workspaceRoot, image }) => ({
             : { image },
       },
     },
+    {
+      class_name: EXECUTOR_CLASS,
+      scheduling_policy: "durable_object",
+      images: {
+        [EXECUTOR_CLAUDE_CODE_IMAGE]: {
+          dockerfile: resolve(
+            workspaceRoot,
+            "deploy/executor/claude-code/Dockerfile",
+          ),
+          build_context: resolve(workspaceRoot, "deploy/executor/claude-code"),
+        },
+      },
+    },
   ],
   durable_objects: {
-    bindings: [{ name: "ORB_CONTAINER", class_name: ORB_CONTAINER_CLASS }],
+    bindings: [
+      { name: "ORB_CONTAINER", class_name: ORB_CONTAINER_CLASS },
+      { name: "THREAD_EXECUTOR", class_name: EXECUTOR_CLASS },
+    ],
   },
   migrations: [
     { tag: "v1-orb-container", new_sqlite_classes: [ORB_CONTAINER_CLASS] },
+    { tag: "v2-thread-executor", new_sqlite_classes: [EXECUTOR_CLASS] },
   ],
 });
 
@@ -1075,15 +1098,19 @@ export const destroyOrbWorker = async ({
     cloudflareApi({ accountId, apiToken, fetch }, path, { ...init, signal });
   const namespaces =
     (await api("/workers/durable_objects/namespaces?per_page=1000")) ?? [];
-  const namespace = namespaces.find(
-    (candidate) =>
-      candidate.script === workerName &&
-      candidate.class === ORB_CONTAINER_CLASS,
+  const owned = new Set(
+    namespaces
+      .filter(
+        (candidate) =>
+          candidate.script === workerName &&
+          [ORB_CONTAINER_CLASS, EXECUTOR_CLASS].includes(candidate.class),
+      )
+      .map(({ id }) => id),
   );
-  if (namespace !== undefined) {
+  if (owned.size > 0) {
     const applications = (await api("/containers/applications")) ?? [];
-    for (const application of applications.filter(
-      (candidate) => candidate.durable_objects?.namespace_id === namespace.id,
+    for (const application of applications.filter((candidate) =>
+      owned.has(candidate.durable_objects?.namespace_id),
     ))
       await api(`/containers/applications/${application.id}`, {
         method: "DELETE",

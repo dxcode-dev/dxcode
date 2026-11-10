@@ -78,8 +78,15 @@ class FixtureSandboxDriver implements SandboxDriver {
     return { isFile: true, isDirectory: false, size: content.byteLength };
   }
 
-  async readdir(_path: string): Promise<string[]> {
-    return [];
+  /** The entries directly under `path`, as a real workspace lists them. */
+  async readdir(path: string): Promise<string[]> {
+    const prefix = `${path.replace(/\/$/, "")}/`;
+    const names = new Set<string>();
+    for (const file of this.state.files.keys())
+      if (file.startsWith(prefix))
+        names.add(file.slice(prefix.length).split("/")[0] ?? "");
+    names.delete("");
+    return [...names].sort();
   }
 
   async exists(path: string): Promise<boolean> {

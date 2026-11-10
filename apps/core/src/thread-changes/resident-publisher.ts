@@ -4,6 +4,7 @@ import { Option, Schema } from "effect";
 import type { DxdChangesCandidateEvent } from "../execution/dxd/protocol.js";
 import { DxdChangesCandidateMessage } from "../execution/dxd/protocol.js";
 import { threadChangesLogger } from "../logging.js";
+import { recordDefaultBranchLanding } from "../spaces/progress/shipped.js";
 import {
   captureKey,
   putThreadChangesCapture,
@@ -67,6 +68,8 @@ export const publishThreadChangesResidentCandidate = async (input: {
    * Thread lists show differ from the previous capture's.
    */
   readonly onCommitted?: (fingerprint: string, summaryChanged: boolean) => void;
+  /** Runs when this capture shows the thread's commits reached its default branch. */
+  readonly onShipped?: () => void;
 }): Promise<ThreadChangesResidentPublication> => {
   const decoded = Schema.decodeUnknownOption(DxdChangesCandidateMessage)(
     input.candidate,
@@ -205,6 +208,18 @@ export const publishThreadChangesResidentCandidate = async (input: {
             summary?.deletions !== state.summary?.deletions ||
             summary?.files !== state.summary?.files,
         );
+        // Before the previous capture is deleted: it holds the work the
+        // thread had not pushed yet.
+        if (
+          await recordDefaultBranchLanding({
+            db: input.db,
+            bucket: input.bucket,
+            threadId: input.threadId,
+            previousCaptureId: state.latestCaptureId,
+            manifest,
+          })
+        )
+          input.onShipped?.();
         if (
           state.latestCaptureId !== undefined &&
           state.latestCaptureId !== manifest.captureId

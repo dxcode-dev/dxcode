@@ -115,6 +115,7 @@ import {
   OrbPressureMonitor,
   serveOrbMemory,
 } from "../orb-memory/execution-object.js";
+import { OrbMetricSamples } from "../orb-metrics/samples.js";
 import {
   NO_ORB_RUNS,
   ORB_RUNS_STORAGE_KEY,
@@ -159,6 +160,7 @@ import {
   SERVICES_MANIFEST_PATH,
 } from "../thread-services/manifest.js";
 import { serveDaemonStorage } from "../thread-storage/daemon.js";
+import { recordOrbSession } from "../thread-usage/orb-sessions.js";
 import { workloadIdentityBroker } from "../workload-identity/broker.js";
 import {
   type DaemonActivationMilestones,
@@ -655,6 +657,36 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #processesStartedAt?: number;
   /** When the Orb ran, for Settings → Usage → Orb (`orb-usage/runs.ts`). */
   #orbRuns: OrbRuns = NO_ORB_RUNS;
+  #orbMetricSamples: OrbMetricSamples | undefined;
+
+  #orbMetrics() {
+    this.#orbMetricSamples ??= new OrbMetricSamples(this.ctx.storage.sql);
+    return this.#orbMetricSamples;
+  }
+
+  /**
+   * Ends the open Orb run at `at` and records it as one of the Thread's Orb
+   * sessions (its Cost & Usage), after the response, off the request path.
+   */
+  #endOrbRun(threadId: string, at: number, now: number) {
+    const since = this.#orbRuns.since;
+    this.#orbRuns = orbRunEnded(this.#orbRuns, at, now);
+    if (since === undefined || this.env.DB === undefined) return;
+    const db = this.env.DB;
+    this.ctx.waitUntil(
+      recordOrbSession(db, this.env.DX_RUNNER_PROFILE_CATALOG, {
+        threadId,
+        startedAt: since,
+        endedAt: Math.max(since, at),
+      }).catch((error: unknown) => {
+        threadDaemonLogger.warn("Orb session could not be recorded.", {
+          event: "orb_session_record_failed",
+          threadId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }),
+    );
+  }
 
   constructor(ctx: DurableObjectState, env: Bindings) {
     super(ctx, env);
@@ -860,6 +892,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/orb/disk" || path === "/orb/disk/delete")
       return this.#serveOrbDisk(request, path);
     if (path === "/orb/usage") return this.#serveOrbUsage(request);
+    if (path === "/orb/metrics") {
+      if (request.method !== "GET") return new Response(null, { status: 405 });
+      return Response.json(this.#orbMetrics().read());
+    }
     if (path === "/storage/transfer") return this.#transferStorage(request);
     if (path === "/terminal/close") return this.#closeTerminal(request);
     if (path === "/diagnostics") return this.#diagnostics(request);
@@ -1737,6 +1773,16 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
               this.env,
               threadId,
               summaryChanged,
+            ).catch(() => undefined),
+          );
+        },
+        // Its Space's chart and lists show it shipped.
+        onShipped: () => {
+          this.ctx.waitUntil(
+            publishRealtimeInvalidation(
+              this.env,
+              threadId,
+              "thread.invalidated",
             ).catch(() => undefined),
           );
         },
@@ -3446,8 +3492,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       1000,
     );
     // The drain stops the Orb: its run ends at the daemon's last heartbeat.
-    this.#orbRuns = orbRunEnded(
-      this.#orbRuns,
+    this.#endOrbRun(
+      threadId.value,
       this.#lastHeartbeatAt ?? authority?.lastSeen ?? Date.now(),
       Date.now(),
     );
@@ -4526,8 +4572,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         (priorHeartbeat === undefined ||
           registeredAt - priorHeartbeat > DXD_HEARTBEAT_LEASE_MS)
       )
-        this.#orbRuns = orbRunEnded(
-          this.#orbRuns,
+        this.#endOrbRun(
+          authority.threadId,
           priorHeartbeat ?? this.#orbRuns.since,
           registeredAt,
         );
@@ -4731,6 +4777,15 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       control.value.disk,
       now,
     );
+    try {
+      this.#orbMetrics().observe(now, control.value);
+    } catch (error) {
+      threadDaemonLogger.warn("Orb metrics sample could not be kept.", {
+        event: "orb_metrics_sample_failed",
+        threadId: authority.threadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     socket.serializeAttachment({
       kind: "daemon",
       generation: authority.generation,
@@ -4832,7 +4887,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     this.#authority = disconnected;
     // The run ends at the daemon's last heartbeat, not when the loss is seen.
     const ranUntil = this.#lastHeartbeatAt ?? authority.lastSeen ?? Date.now();
-    this.#orbRuns = orbRunEnded(this.#orbRuns, ranUntil, Date.now());
+    this.#endOrbRun(authority.threadId, ranUntil, Date.now());
     // Storage output gates hold the reply until this write lands.
     void this.ctx.storage.put(ORB_RUNS_STORAGE_KEY, this.#orbRuns);
     this.#orbMemory.reset();

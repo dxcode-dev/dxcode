@@ -402,6 +402,10 @@ pub enum ClientMessage<'a> {
         memory: Option<crate::memory::MemoryUsage>,
         #[serde(skip_serializing_if = "Option::is_none")]
         disk: Option<crate::disk::DiskUsage>,
+        /// Busy share since the previous heartbeat; absent on a session's
+        /// first. See [`crate::cpu`].
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cpu: Option<crate::cpu::CpuUsage>,
     },
     ReadinessPong {
         generation: &'a str,

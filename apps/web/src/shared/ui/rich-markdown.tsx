@@ -37,6 +37,11 @@ import {
   subscribeMermaid,
 } from "./markdown-mermaid.js";
 import { MarkdownView } from "./markdown-view.js";
+import {
+  ThreadReferenceContext,
+  type ThreadReferences,
+  threadIdOfHref,
+} from "./thread-reference-context.js";
 
 /**
  * The view fence's language. Typed by the view contract, so the two cannot
@@ -818,6 +823,7 @@ const galleryComponents = {
 const markdownComponents = (
   resolveFile: MarkdownFileLinkResolver | undefined,
   mentions: MarkdownMentions | undefined,
+  references: ThreadReferences | undefined,
 ): React.ComponentProps<typeof ReactMarkdown>["components"] => ({
   ...(mentions === undefined
     ? {}
@@ -831,11 +837,17 @@ const markdownComponents = (
         }) => mentions.render(handle ?? "", content),
       }),
   ...galleryComponents,
-  a: ({ children: content, href }) => (
-    <MarkdownLink href={href} resolveFile={resolveFile}>
-      <InsideMarkdownLink value={true}>{content}</InsideMarkdownLink>
-    </MarkdownLink>
-  ),
+  ...references?.markdownComponents,
+  a: ({ children: content, href }) => {
+    const thread = references === undefined ? undefined : threadIdOfHref(href);
+    return thread !== undefined && references !== undefined ? (
+      references.chip(thread, content)
+    ) : (
+      <MarkdownLink href={href} resolveFile={resolveFile}>
+        <InsideMarkdownLink value={true}>{content}</InsideMarkdownLink>
+      </MarkdownLink>
+    );
+  },
   img: MarkdownImage,
   input: ({ node: _node, ...props }) => (
     <input
@@ -861,7 +873,8 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
 }) {
   const resolveFile = React.useContext(MarkdownFileLinkContext);
   const mentions = React.useContext(MarkdownMentionContext);
-  const components = markdownComponents(resolveFile, mentions);
+  const references = React.useContext(ThreadReferenceContext);
+  const components = markdownComponents(resolveFile, mentions, references);
   const handles = mentions?.handles;
   const base = hardWrapped ? documentRemarkPlugins : remarkPlugins;
   const plugins =

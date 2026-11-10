@@ -965,13 +965,6 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.artifact-comment-mention {
-  padding: 0 3px;
-  color: var(--primary);
-  border-radius: 4px;
-  background: color-mix(in srgb, var(--primary) 12%, transparent);
-  font-weight: 500;
-}
 .artifact-comment-body a {
   color: var(--link, #3b82f6);
   text-decoration: underline;
@@ -1172,58 +1165,6 @@
   outline: 2px solid color-mix(in srgb, var(--primary) 50%, transparent);
   outline-offset: -2px;
   border-radius: 6px;
-}
-
-/* The `/` and `@` menu, under what was typed (or over it near the bottom):
-   the thread actions menu's popup, rows, and highlight, with the artifact
-   switcher's group headings. */
-.artifact-suggest {
-  position: absolute;
-  z-index: 20;
-  width: min(260px, 100%);
-  min-width: 0;
-  max-width: none;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-.artifact-suggest[data-above] {
-  transform: translateY(-100%);
-}
-.artifact-suggest .artifact-suggest-option {
-  flex: none;
-  border: 0;
-  background: transparent;
-  font-family: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-.artifact-suggest .artifact-suggest-option[data-highlighted] {
-  background: var(--accent);
-}
-.artifact-suggest.thread-actions-menu .artifact-suggest-option > .dx-avatar {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  overflow: hidden;
-  font-size: 8px;
-}
-.artifact-suggest-label {
-  color: var(--foreground);
-}
-.artifact-suggest-hint {
-  margin-left: 6px;
-  color: var(--muted-foreground);
-}
-.artifact-suggest-empty {
-  margin: 6px 8px;
-  color: var(--muted-foreground);
-  font-size: 12px;
-}
-@media (pointer: coarse) {
-  .artifact-suggest.thread-actions-menu .artifact-suggest-option {
-    height: 40px;
-    min-height: 40px;
-  }
 }
 
 /* Images: as wide as the page at most. Selected, Open and Alt text show
@@ -1458,15 +1399,6 @@ span.artifact-image-upload {
   padding: 0 8px;
   color: var(--muted-foreground);
   font-size: 12px;
-}
-
-/* `@` in a comment (#1808): the list opens above the box, which sits low in
-   the comments panel on a phone. A zero-height anchor, so it adds no gap. */
-.artifact-comment-suggest {
-  position: relative;
-  z-index: 25;
-  height: 0;
-  margin-bottom: -6px;
 }
 
 /* In the Artifacts pane beside the conversation (about 590 px at 1440)

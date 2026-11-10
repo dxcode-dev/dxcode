@@ -220,6 +220,12 @@ const parseToolInput = (json: string): Record<string, unknown> => {
 
 export class ClaudeCodeStream {
   sessionId: string | undefined;
+  /**
+   * The uuid of the latest entry of Claude's own transcript the run printed:
+   * its last message, or a tool result. An edit later resumes the session
+   * at it (`--resume-session-at`), keeping everything up to here.
+   */
+  lastMessageUuid: string | undefined;
   readonly segments: ClaudeCodeSegment[] = [emptySegment()];
   readonly toolResults = new Map<string, ClaudeCodeToolResult>();
   /** Each subagent's steps, by the tool_use id of the call that started it. */
@@ -279,6 +285,7 @@ export class ClaudeCodeStream {
           this.#streamEvent(record(event.event));
         return;
       case "assistant":
+        this.#noteUuid(event);
         if (typeof event.parent_tool_use_id === "string")
           this.#subagentMessage(
             event.parent_tool_use_id,
@@ -288,6 +295,7 @@ export class ClaudeCodeStream {
         else this.#completeMessage(record(event.message));
         return;
       case "user":
+        this.#noteUuid(event);
         if (event.parent_tool_use_id == null) this.#closeFallback();
         if (typeof event.parent_tool_use_id === "string")
           this.#subagentMessage(
@@ -315,6 +323,16 @@ export class ClaudeCodeStream {
       default:
         return;
     }
+  }
+
+  /** A subagent's messages are in its own transcript, not the session's. */
+  #noteUuid(event: Json) {
+    if (
+      event.parent_tool_use_id == null &&
+      typeof event.uuid === "string" &&
+      !this.finished
+    )
+      this.lastMessageUuid = event.uuid;
   }
 
   /**

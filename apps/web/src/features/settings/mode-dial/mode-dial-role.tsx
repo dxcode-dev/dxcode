@@ -47,6 +47,9 @@ export function MainAgentRole({
   busy,
   target,
   onChoose,
+  id = "mode-dial-model",
+  label = "Main Agent model",
+  notServedHint = true,
 }: {
   readonly choice: ModeDraft;
   /** What the main agent runs; undefined while Auto resolves only after Save. */
@@ -60,6 +63,11 @@ export function MainAgentRole({
   readonly busy: boolean;
   readonly target: ModelRoutingTarget;
   readonly onChoose: (next: ModeDraft) => void;
+  /** The model select's id, for the label beside it. */
+  readonly id?: string;
+  readonly label?: string;
+  /** Off where something besides Model Routing serves the model. */
+  readonly notServedHint?: boolean;
 }) {
   const servingModel = servedModels.find(
     (model) => model.canonical === effective?.model,
@@ -67,8 +75,8 @@ export function MainAgentRole({
   return (
     <>
       <select
-        id="mode-dial-model"
-        aria-label="Main Agent model"
+        id={id}
+        aria-label={label}
         value={choice === AUTO ? AUTO : choice.model}
         disabled={busy || choicesPending || choicesError !== undefined}
         onChange={(e) => {
@@ -102,6 +110,7 @@ export function MainAgentRole({
         ))}
       </select>
       <ReasoningEffort
+        name={label.replace(/ model$/, " reasoning effort")}
         value={effective?.thinking ?? "medium"}
         label={effective === undefined ? "Auto" : undefined}
         disabled={
@@ -115,7 +124,8 @@ export function MainAgentRole({
         <p className="tuning-hint" role="alert">
           {choicesError}
         </p>
-      ) : effective !== undefined &&
+      ) : notServedHint &&
+        effective !== undefined &&
         !choicesPending &&
         servingModel === undefined ? (
         <p className="tuning-hint">

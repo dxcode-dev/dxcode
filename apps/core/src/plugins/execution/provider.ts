@@ -13,6 +13,7 @@ import {
 } from "@dx/domain";
 import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
+import { readOrbThreadState, runsWithoutOrb } from "../../agents/orb-free.js";
 import type { DeploymentOrbs } from "../../execution/deployment-orbs.js";
 import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
 import {
@@ -26,6 +27,7 @@ import {
   resolveExecutionTarget,
 } from "../../execution/runner-profiles/execution.js";
 import type { SourceWorkspaceRuntimeOptions } from "../../execution/source-preparation.js";
+import { releaseExecutor } from "../../executor/sandbox.js";
 import type { Bindings } from "../../http/types.js";
 import { orbProvidersLogger } from "../../logging.js";
 import { stepTiming } from "../../observability/step-timing.js";
@@ -848,6 +850,15 @@ export const composeExecutionWorkspaces = (
     threadId: ThreadId,
     mode: "archive" | "destroy",
   ): Promise<void | "stopping"> => {
+    // A Thread in executor mode has no Orb to release; its executor, if it
+    // ever started one, is released instead.
+    if (
+      bindings.DB !== undefined &&
+      runsWithoutOrb(await readOrbThreadState(bindings.DB, threadId))
+    ) {
+      await releaseExecutor(threadId, mode);
+      return;
+    }
     const { entry, target } = await resolve(threadId, false);
     // Only a provider that hosts dxd can have a resident daemon to drain.
     // Draining is core (the Thread's execution object), so it runs even when

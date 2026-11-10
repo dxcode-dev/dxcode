@@ -1,5 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
-import { ClipboardType, Copy, Link2 } from "lucide-react";
+import { ClipboardType, Copy, Link2, Pencil } from "lucide-react";
+import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import type { MessageMenuRow } from "./message-actions.js";
 import {
@@ -7,6 +8,7 @@ import {
   copyMessageText,
   copyWithStyling,
 } from "./message-copy.js";
+import { canEditMessage, MessageEditContext } from "./message-edit.js";
 import { messageLinkId, messageLinkUrl } from "./message-link.js";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {
@@ -37,12 +39,24 @@ export function MessageMenuItems({
   const linkId = messageLinkId(row);
   const link = linkId === undefined ? undefined : messageLinkUrl(linkId);
   const user = row.kind === "user-prompt";
+  const editing = React.use(MessageEditContext);
   return (
     <>
       {header && row.sentAt !== undefined ? (
         <time className="message-menu-time" dateTime={row.sentAt}>
           {timeFormat.format(new Date(row.sentAt))}
         </time>
+      ) : null}
+      {canEditMessage(row, editing) ? (
+        <Menu.Item
+          className="thread-context-item"
+          data-message-edit=""
+          onClick={() => editing?.start(row)}
+        >
+          <Pencil />
+          <span>Edit</span>
+          <ShortcutKeycaps keycaps={["E"]} />
+        </Menu.Item>
       ) : null}
       <Menu.Item
         className="thread-context-item"

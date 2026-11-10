@@ -136,6 +136,14 @@ export interface Bindings {
    * installed the provider.
    */
   readonly ORB_CONTAINER?: DurableObjectNamespace<OrbContainerObject>;
+  /**
+   * The Orb Worker's executor namespace: one small container per Thread in
+   * \`executor\` execution mode that runs Claude Code. Bound with
+   * \`ORB_CONTAINER\`.
+   */
+  readonly THREAD_EXECUTOR?: DurableObjectNamespace<
+    import("../executor/executor-object.js").ThreadExecutorObject
+  >;
   readonly AI?: Ai;
   readonly DB?: D1Database;
   readonly EMAIL?: SendEmail;
@@ -169,6 +177,8 @@ export interface Variables {
   readonly threadLifecycleState: ThreadLifecycleState;
   /** The Thread has a snooze (asleep or woken), so a message wakes it. */
   readonly threadSnoozed?: boolean;
+  /** Set by Thread authorization: whether the Thread is a Space. */
+  readonly threadKind?: "thread" | "space";
   /** The Thread POST is a chat message: Flue records it without a model call. */
   readonly chatDelivery: boolean;
   /**
@@ -181,6 +191,44 @@ export interface Variables {
    * subscription that delivers this request's message.
    */
   readonly messageAutomation?: "schedule" | "github" | "artifact";
+  /**
+   * Set only in-process by a Space's message comments: the Flue message a
+   * person commented on, when their comment mentions dx and goes to the
+   * agent in the main chat.
+   */
+  readonly messageCommentOn?: string;
+  /**
+   * Set only in-process by a Space's posts: the message is this person's
+   * post, already stored (`create`, removed again if the agent refuses it)
+   * or edited (`edit`), so admission tags no new post.
+   */
+  readonly spacePost?: {
+    readonly id: string;
+    readonly kind: "create" | "edit";
+  };
+  /** Set only in-process: a new Space's hidden setup message, not a post. */
+  readonly spaceSetup?: true;
+  /**
+   * Set only in-process by the message edit route: the message replaces one
+   * the person sent earlier, after the conversation was rewound to it.
+   */
+  readonly messageEdit?: true;
+  /**
+   * Set only in-process: what a Thread creation records beyond its request.
+   * Spaces create their root Thread as a Space, and a Space's agent records
+   * whose message made it start a child.
+   */
+  /**
+   * Whether the route's Thread is a Space, read beside authentication by
+   * `prefetchThreadKind` for the Spaces gate (spaces/gate.ts).
+   */
+  readonly threadIsSpace?: Promise<boolean>;
+  readonly threadCreation?: {
+    readonly kind?: "space";
+    /** Set only by server logic, such as Space creation; never a client. */
+    readonly executionMode?: "executor";
+    readonly requestedByUserId?: string;
+  };
 }
 
 export interface AppEnv {

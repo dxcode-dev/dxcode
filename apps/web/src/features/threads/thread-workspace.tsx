@@ -16,7 +16,7 @@ import {
   type UseFlueAgentResult,
   useFlueAgent,
 } from "@flue/react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   lazyRouteComponent,
   useLocation,
@@ -56,9 +56,9 @@ import {
   ThreadFilesPanel,
 } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
+import type { MessageEditOptions } from "./message-edit.js";
+import { editThreadMessageMutationOptions } from "./message-edit-mutations.js";
 import { isMessageLinkId } from "./message-link.js";
-import { OrbDiskNotice } from "./orb-disk/orb-disk-notice.js";
-import { OrbMemoryNotice } from "./orb-memory/orb-memory-notice.js";
 import {
   fileTargetKey,
   focusedTab,
@@ -94,6 +94,7 @@ import {
   ThreadFileNavigationContext,
 } from "./thread-file-navigation.js";
 import { ThreadHeader } from "./thread-header.js";
+import { ThreadMenu } from "./thread-menu.js";
 import { retryInitialThreadDispatch } from "./thread-mutations.js";
 import {
   invalidateThreadQueries,
@@ -141,6 +142,11 @@ const ArtifactSheet = lazyRouteComponent(
   () => import("../artifacts/artifact-sheet.js"),
   "ArtifactSheet",
 );
+// The Orb's disk and memory cards show only while it runs short.
+const OrbNotices = lazyRouteComponent(
+  () => import("./orb-notices.js"),
+  "OrbNotices",
+);
 const loadingArtifacts = (
   <div className="thread-files-state" role="status">
     <span className="sr-only">Loading artifacts…</span>
@@ -183,11 +189,13 @@ const historySettledNow = (session: FlueAgentSession) => {
  * alongside the Thread detail. True once history has loaded or failed, and
  * stays true while a refresh reloads it, so the open page never unmounts.
  * A revoked Thread is not activated; access granted again starts a new entry.
+ * An embedded Thread stays live alongside the page's own.
  */
 const useRetainedThread = (
   registry: ThreadSessionRegistry | undefined,
   threadId: ThreadId,
   authorized: boolean,
+  embedded: boolean,
 ) => {
   const entry =
     authorized && isThreadId(threadId)
@@ -195,7 +203,7 @@ const useRetainedThread = (
       : undefined;
   const subscribe = (listener: () => void) => {
     if (registry === undefined || entry === undefined) return () => {};
-    const deactivate = registry.activate(entry);
+    const deactivate = registry.activate(entry, { alongside: embedded });
     const observe = () => {
       if (historySettledNow(entry.session))
         entry.presentation.set(HISTORY_SETTLED, true);
@@ -225,6 +233,8 @@ const useRetainedThread = (
 export function ThreadWorkspace({
   Terminal,
   Desktop,
+  threadId: shownThreadId,
+  renderTitleBar,
 }: {
   readonly Terminal?: React.ComponentType<{
     readonly active?: boolean;
@@ -232,17 +242,28 @@ export function ThreadWorkspace({
     readonly onWorkspaceStatusChange?: (status?: string) => void;
   }>;
   readonly Desktop?: ThreadDesktopComponent;
+  /**
+   * Another Thread than the route's, shown inside its page, such as a
+   * Space's child beside the Space's chat. The route's search parameters
+   * (`message`, `sheet`) stay the route Thread's.
+   */
+  readonly threadId?: ThreadId;
+  /** Replaces the title bar, such as a Space's tab strip. */
+  readonly renderTitleBar?: ThreadTitleBarRenderer;
 }) {
-  const { threadId } = useParams({ from: "/_product/threads/$threadId" });
+  const route = useParams({ from: "/_product/threads/$threadId" });
+  const threadId = shownThreadId ?? route.threadId;
+  const embedded = shownThreadId !== undefined;
   const navigate = useNavigate();
   // A card's Open on a phone shows the artifact full screen over the Thread.
-  const artifactSheet = useArtifactSheet();
+  const artifactSheet = useArtifactSheet() && !embedded;
   const dictationSlot = useDictationSlot();
   const returnTo = useLocation({ select: (location) => location.href });
   // A notification opens the Thread at a message; the URL keeps it only
   // until the transcript has scrolled there.
   const focusMessageId = useLocation({
     select: (location) => {
+      if (embedded) return undefined;
       const message: unknown = location.search?.message;
       return isMessageLinkId(message) ? message : undefined;
     },
@@ -261,7 +282,9 @@ export function ThreadWorkspace({
     void navigate({
       to: "/threads/$threadId",
       params: { threadId },
-      search: {},
+      // A Space keeps the thread open beside its chat.
+      search: ({ thread }: { readonly thread?: string }) =>
+        thread === undefined ? {} : { thread },
       replace: true,
     });
   const { identity } = useAuthenticatedIdentity();
@@ -319,6 +342,7 @@ export function ThreadWorkspace({
     registry,
     id,
     !isAuthorizationError(error),
+    embedded,
   );
   // The saved panes load with the Thread, so the page opens in its layout
   // instead of rebuilding from the default one.
@@ -414,6 +438,7 @@ export function ThreadWorkspace({
         {...(focus === undefined ? {} : { focus, onFocusHandled })}
         Terminal={Terminal}
         Desktop={Desktop}
+        renderTitleBar={renderTitleBar}
       />
       {artifactSheet ? (
         <React.Suspense fallback={null}>
@@ -534,7 +559,24 @@ type ThreadSessionProps = {
     readonly onWorkspaceStatusChange?: (status?: string) => void;
   }>;
   readonly Desktop?: ThreadDesktopComponent;
+  readonly renderTitleBar?: ThreadTitleBarRenderer;
 };
+
+/**
+ * What a page that draws its own title bar gets: the Thread, its More
+ * Actions menu, and the Views button when the layout has panes.
+ */
+export interface ThreadTitleBarParts {
+  readonly thread: ThreadDetailData;
+  /** The Thread's More Actions. */
+  readonly menu: () => React.ReactNode;
+  readonly views: React.ReactNode;
+  readonly stacked: boolean;
+}
+
+export type ThreadTitleBarRenderer = (
+  parts: ThreadTitleBarParts,
+) => React.ReactNode;
 
 export function ThreadSession(props: ThreadSessionProps) {
   const registry = React.useContext(ThreadSessionRegistryContext);
@@ -582,6 +624,27 @@ function useComposerMentions(
   return access === "owner"
     ? { mode: "share", onOpenShare: openShare }
     : undefined;
+}
+
+/**
+ * Editing an earlier message, in ordinary Threads the viewer can write to:
+ * a Space's posts edit in place, and archived Threads and viewers send
+ * nothing.
+ */
+function useMessageEdit(
+  thread: ThreadDetailData,
+  viewerId: UserId,
+): MessageEditOptions | undefined {
+  const edit = useMutation(
+    editThreadMessageMutationOptions(viewerId, thread.id),
+  );
+  if (
+    thread.kind === "space" ||
+    thread.lifecycleState !== "active" ||
+    thread.access === "view"
+  )
+    return undefined;
+  return { viewerId, send: edit.mutateAsync, pending: edit.isPending };
 }
 
 /** Opening another member's shared Thread follows it. */
@@ -1003,27 +1066,6 @@ function usePaneViewContents({
   };
 }
 
-function OrbNotices({
-  threadId,
-  onAskAgent,
-  onOpenTerminal,
-}: {
-  readonly threadId: ThreadId;
-  readonly onAskAgent: (message: string) => void;
-  readonly onOpenTerminal: (() => void) | undefined;
-}) {
-  return (
-    <>
-      <OrbDiskNotice
-        threadId={threadId}
-        onAskAgent={onAskAgent}
-        onOpenTerminal={onOpenTerminal}
-      />
-      <OrbMemoryNotice threadId={threadId} />
-    </>
-  );
-}
-
 /**
  * Process names, commands, and folders are Terminal-level detail:
  * contributors only. So are a Ship or Push to Branch run's outcomes.
@@ -1042,11 +1084,13 @@ function orbComposerNotice(
   ) => (
     <React.Fragment key={thread.id}>
       {ready ? (
-        <OrbNotices
-          threadId={thread.id}
-          onAskAgent={send}
-          onOpenTerminal={onOpenTerminal}
-        />
+        <React.Suspense fallback={null}>
+          <OrbNotices
+            threadId={thread.id}
+            onAskAgent={send}
+            onOpenTerminal={onOpenTerminal}
+          />
+        </React.Suspense>
       ) : null}
       <ShipOutcomeActions
         threadId={thread.id}
@@ -1073,6 +1117,7 @@ function ThreadSessionContent({
   onFocusHandled,
   Terminal,
   Desktop,
+  renderTitleBar,
   agentSource,
 }: ThreadSessionProps & {
   readonly agentSource: ThreadAgentSource;
@@ -1084,6 +1129,7 @@ function ThreadSessionContent({
   const [shareOpen, setShareOpen] = React.useState(false);
   const openShare = () => setShareOpen(true);
   const mentions = useComposerMentions(thread, identity.id, openShare);
+  const messageEdit = useMessageEdit(thread, identity.id);
   useFollowOnOpen(thread, identity.id);
   const [transcriptAccess] = React.useState(createTranscriptAccess);
   const dispatch = usePaneLayoutDispatch(thread.id);
@@ -1105,6 +1151,7 @@ function ThreadSessionContent({
   };
   const sharedPanelProps = {
     mentions,
+    ...(messageEdit === undefined ? {} : { messageEdit }),
     ...(focus === undefined
       ? {}
       : {
@@ -1228,17 +1275,33 @@ function ThreadSessionContent({
       threadId={thread.id}
       archived={archived}
       contents={contents}
-      renderTitleBar={({ views: viewsButton }) => (
+      renderTitleBar={({ views: viewsButton, stacked }) => (
         <>
           <ThreadRefreshError message={refreshError} onRetry={onRefreshRetry} />
-          <ThreadHeader
-            thread={thread}
-            project={project}
-            shareOpen={shareOpen}
-            onShareOpenChange={setShareOpen}
-            transcript={transcriptAccess.current}
-            views={viewsButton}
-          />
+          {renderTitleBar === undefined
+            ? null
+            : renderTitleBar({
+                thread,
+                stacked,
+                views: viewsButton,
+                menu: () => (
+                  <ThreadMenu
+                    thread={thread}
+                    project={project}
+                    transcript={transcriptAccess.current}
+                  />
+                ),
+              })}
+          {renderTitleBar !== undefined ? null : (
+            <ThreadHeader
+              thread={thread}
+              project={project}
+              shareOpen={shareOpen}
+              onShareOpenChange={setShareOpen}
+              transcript={transcriptAccess.current}
+              views={viewsButton}
+            />
+          )}
         </>
       )}
     />

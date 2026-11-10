@@ -14,9 +14,11 @@ import {
   type RunnerProfileId,
   type SettingsMembershipInvariantViolation,
   type Thread,
+  type ThreadExecutionMode,
   type ThreadExecutionPin,
   type ThreadId,
   type ThreadInitialDispatchDraft,
+  type ThreadKind,
   type ThreadListRequest,
   type ThreadModelSelection,
   type ThreadNotFound,
@@ -26,8 +28,9 @@ import {
   ThreadSourceIntent,
   ThreadSourceSnapshot,
   type ThreadTitle,
-  type ThreadVisibility,
   type ThreadUpdate,
+  type ThreadVisibility,
+  type UserId,
   type WorkspacePolicyDenied,
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
@@ -76,6 +79,12 @@ interface ThreadServiceShape {
     parentThreadId?: ThreadId,
     /** `workspace` for a Thread shared from its start; not with a parent. */
     visibility?: ThreadVisibility,
+    /** A Space's root, or the person a Space's child was started for. */
+    creation?: {
+      readonly kind?: ThreadKind;
+      readonly executionMode?: ThreadExecutionMode;
+      readonly requestedByUserId?: UserId;
+    },
   ) => Effect.Effect<
     PreparedThread,
     | Schema.SchemaError
@@ -179,6 +188,7 @@ export class ThreadService extends Context.Service<
             titlePending,
             parentThreadId,
             visibility,
+            creation,
           ) {
             // A family has one root: a child's child keeps the root as its
             // parent and records the child as the Thread that started it.
@@ -244,6 +254,13 @@ export class ThreadService extends Context.Service<
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
               ...(titlePending === true ? { titlePending } : {}),
               ...(visibility === undefined ? {} : { visibility }),
+              ...(creation?.kind === undefined ? {} : { kind: creation.kind }),
+              ...(creation?.executionMode === undefined
+                ? {}
+                : { executionMode: creation.executionMode }),
+              ...(creation?.requestedByUserId === undefined
+                ? {}
+                : { requestedByUserId: creation.requestedByUserId }),
               ...(parentThread === undefined
                 ? {}
                 : {

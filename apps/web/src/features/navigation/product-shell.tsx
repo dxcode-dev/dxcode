@@ -53,15 +53,17 @@ const whenIdle = (run: () => void) => {
   return () => window.clearTimeout(timer);
 };
 
+interface ProductShellProps {
+  readonly notices?: React.ReactNode;
+  /** The sidebar's Spaces section, given what closes the phone drawer. */
+  readonly spacesSection?: (onNavigate: () => void) => React.ReactNode;
+}
+
 /**
  * The signed-in layout. `notices` are full-width bars above the panels, such
  * as the new-version and install banners the application composes in.
  */
-export function ProductShell({
-  notices,
-}: {
-  readonly notices?: React.ReactNode;
-}) {
+export function ProductShell({ notices, spacesSection }: ProductShellProps) {
   const navigate = useNavigate();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -245,6 +247,7 @@ export function ProductShell({
       onSetPinned={setThreadPinned}
       pinningThreadId={editing?.pinningThreadId}
       extensionRegion={sidebarExtensionRegion}
+      spacesSection={spacesSection?.(closeMobileSidebar)}
     />
   );
 

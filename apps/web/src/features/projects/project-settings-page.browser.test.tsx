@@ -565,7 +565,7 @@ describe("project settings workspace state", () => {
     ];
     // Only the saved size is shown, checked and not choosable.
     expect(radios.map((radio) => radio.closest("label")?.textContent)).toEqual([
-      "standard-21 CPU4GB memory8GB disk",
+      "standard-21 CPU4GiB memory8GB disk",
     ]);
     expect(radios[0]?.checked).toBe(true);
     expect(radios[0]?.disabled).toBe(true);
@@ -695,9 +695,9 @@ describe("project settings workspace state", () => {
       ...container.querySelectorAll("label.runner-profile-card"),
     ].map((label) => label.textContent);
     expect(labels).toEqual([
-      "small2 CPU4GB memory20GB disk$0.018/hourBilled by Boat to your account, paused when inactive",
-      "large2 CPU4GB memory20GB disk$0.072/hourBilled by Boat to your account, paused when inactive",
-      "custom2 CPU4GB memory20GB diskBilled by Boat to your account, paused when inactive",
+      "small2 CPU4GiB memory20GB disk$0.018/hourBilled by Boat to your account, paused when inactive",
+      "large2 CPU4GiB memory20GB disk$0.072/hourBilled by Boat to your account, paused when inactive",
+      "custom2 CPU4GiB memory20GB diskBilled by Boat to your account, paused when inactive",
     ]);
     await React.act(() => root.unmount());
   });
@@ -748,10 +748,10 @@ describe("project settings workspace state", () => {
       ...container.querySelectorAll("label.runner-profile-card"),
     ].map((label) => label.textContent);
     expect(labels).toEqual([
-      "standard-10.5 CPU4GB memory8GB diskUp to $0.074/hourBilled by Cloudflare to the workspace's account, paused when inactive",
-      "standard-21 CPU4GB memory8GB diskUp to $0.11/hourBilled by Cloudflare to the workspace's account, paused when inactive",
+      "standard-10.5 CPU4GiB memory8GB diskUp to $0.074/hourBilled by Cloudflare to the workspace's account, paused when inactive",
+      "standard-21 CPU4GiB memory8GB diskUp to $0.11/hourBilled by Cloudflare to the workspace's account, paused when inactive",
       // The saved local size: no known price, and no account pays for it.
-      "local2 CPU4GB memory20GB disk",
+      "local2 CPU4GiB memory20GB disk",
     ]);
     await React.act(() => root.unmount());
   });

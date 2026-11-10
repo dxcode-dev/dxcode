@@ -320,6 +320,17 @@ export const DxdDiskUsage = Schema.Struct({
 });
 export type DxdDiskUsage = typeof DxdDiskUsage.Type;
 
+/**
+ * How busy the Orb's CPUs were since dxd's previous heartbeat, as a share
+ * of all the CPU time the Orb may use. Absent on a session's first.
+ */
+export const DxdCpuUsage = Schema.Struct({
+  busyPercent: Schema.Number.check(
+    Schema.isBetween({ minimum: 0, maximum: 100 }),
+  ),
+});
+export type DxdCpuUsage = typeof DxdCpuUsage.Type;
+
 export const DxdHeartbeatMessage = Schema.Struct({
   type: Schema.Literal("heartbeat"),
   generation: DaemonGeneration,
@@ -332,6 +343,7 @@ export const DxdHeartbeatMessage = Schema.Struct({
   ),
   memory: Schema.optional(DxdMemoryUsage),
   disk: Schema.optional(DxdDiskUsage),
+  cpu: Schema.optional(DxdCpuUsage),
 });
 
 const TerminalControlBase = {

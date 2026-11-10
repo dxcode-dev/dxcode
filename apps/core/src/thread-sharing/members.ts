@@ -10,22 +10,16 @@ import { userImageSql } from "../avatars/storage.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
 import { displayNameSql } from "./service.js";
 
-/**
- * Active members of the workspace the Thread is shared with, the owner
- * included, by name; none while the Thread is private or the owner has left
- * that workspace.
- */
-export const threadMembers = async (
-  db: D1Database,
-  threadId: ThreadId,
-): Promise<ReadonlyArray<ThreadMemberData>> =>
+/** One row per member, each carrying the Thread's mode and kind. */
+const memberRows = async (db: D1Database, threadId: ThreadId) =>
   (
     await db
       .prepare(
         `SELECT "user".id AS user_id,
                 ${displayNameSql('"user"', "account")} AS name,
                 account.username AS handle, "user".email,
-                ${userImageSql('"user"', "account")} AS image
+                ${userImageSql('"user"', "account")} AS image,
+                thread.conversation_mode, thread.kind
            FROM threads AS thread
            JOIN organization ON organization.id = thread.shared_workspace_id
                             AND organization.lifecycleState = 'active'
@@ -45,16 +39,61 @@ export const threadMembers = async (
         handle: string;
         email: string;
         image: string | null;
+        conversation_mode: ThreadConversationMode | null;
+        kind: string | null;
       }>()
-  ).results.map((row) => ({
-    userId: row.user_id as UserId,
-    name: (row.name?.trim() || "Member").slice(0, 256),
-    handle: row.handle.slice(0, 64),
-    email: row.email.slice(0, 320),
-    ...(row.image === null || row.image.length > 2_048
-      ? {}
-      : { image: row.image }),
-  }));
+  ).results;
+
+const memberData = (
+  row: Awaited<ReturnType<typeof memberRows>>[number],
+): ThreadMemberData => ({
+  userId: row.user_id as UserId,
+  name: (row.name?.trim() || "Member").slice(0, 256),
+  handle: row.handle.slice(0, 64),
+  email: row.email.slice(0, 320),
+  ...(row.image === null || row.image.length > 2_048
+    ? {}
+    : { image: row.image }),
+});
+
+/**
+ * Active members of the workspace the Thread is shared with, the owner
+ * included, by name; none while the Thread is private or the owner has left
+ * that workspace.
+ */
+export const threadMembers = async (
+  db: D1Database,
+  threadId: ThreadId,
+): Promise<ReadonlyArray<ThreadMemberData>> =>
+  (await memberRows(db, threadId)).map(memberData);
+
+/**
+ * A shared Thread's members with its mode and kind, in one read; no
+ * conversation while it is private. A Space is always in agent mode: every
+ * message in it goes to its agent.
+ */
+export const sharedThreadConversation = async (
+  db: D1Database,
+  threadId: ThreadId,
+): Promise<{
+  readonly members: ReadonlyArray<ThreadMemberData>;
+  readonly conversation?: {
+    readonly mode: ThreadConversationMode;
+    readonly space: boolean;
+  };
+}> => {
+  const rows = await memberRows(db, threadId);
+  const first = rows[0];
+  if (first === undefined) return { members: [] };
+  const space = first.kind === "space";
+  return {
+    members: rows.map(memberData),
+    conversation: {
+      mode: space ? "agent" : (first.conversation_mode ?? "agent"),
+      space,
+    },
+  };
+};
 
 /**
  * Who a message is for and whom it tags. `@dx` sends it to the agent; a
@@ -101,18 +140,6 @@ export const messageIdFor = async (threadId: ThreadId, deliveryKey: string) => {
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")}`;
 };
-
-/** The Thread's mode; see ThreadConversationModeSchema. */
-export const conversationMode = async (
-  db: D1Database,
-  threadId: ThreadId,
-): Promise<ThreadConversationMode> =>
-  (
-    await db
-      .prepare("SELECT conversation_mode FROM threads WHERE id = ?1")
-      .bind(threadId)
-      .first<{ conversation_mode: ThreadConversationMode }>()
-  )?.conversation_mode ?? "agent";
 
 /** Records a mode a message switched to; returns whether it changed. */
 export const switchConversationMode = async (

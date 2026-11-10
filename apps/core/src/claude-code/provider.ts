@@ -1,3 +1,4 @@
+import { parseMessageAuthor } from "@dx/api";
 import {
   CLAUDE_CODE_DEFAULT_EFFORT,
   CLAUDE_CODE_PROVIDER_ID,
@@ -21,6 +22,7 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import type { getModelInvocationContext, Sandbox } from "@flue/runtime";
+import { claudeCodeExecutor } from "../executor/sandbox.js";
 import { claudeCodeLogger } from "../logging.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import {
@@ -46,6 +48,9 @@ import {
   type ClaudeCodeRun,
   claudeCodeAnswer,
   claudeCodeRunKey,
+  claudeCodeTurnEnd,
+  forgetClaudeCodeSession,
+  forkClaudeCodeSession,
 } from "./workspace-run.js";
 
 const ALREADY_FINISHED = "Claude Code already finished this request.";
@@ -410,6 +415,73 @@ const inputBlocks = (messages: Context["messages"]): ClaudeCodeInputBlock[] =>
 
 type UserMessage = Extract<Context["messages"][number], { role: "user" }>;
 
+const firstText = (message: Context["messages"][number]) =>
+  message.role !== "user"
+    ? undefined
+    : typeof message.content === "string"
+      ? message.content
+      : message.content.find((block) => block.type === "text")?.text;
+
+/**
+ * A message a person edited into the place of an earlier one: dx rewound
+ * the conversation to it, so Claude's session remembers turns that are gone.
+ */
+const isEditedMessage = (message: Context["messages"][number]) =>
+  parseMessageAuthor(firstText(message) ?? "").edited === true;
+
+/** The most of the earlier conversation a new session is given. */
+const EARLIER_CONVERSATION_CHARS = 60_000;
+/** The most of one tool result or call a new session is given. */
+const EARLIER_TOOL_CHARS = 600;
+
+const shorten = (text: string, limit: number) =>
+  text.length <= limit ? text : `${text.slice(0, limit)} …`;
+
+/**
+ * The conversation before this turn, for a new Claude session: one that
+ * replaced a lost one, or one an edit started. Messages, Claude's tool calls
+ * and their results as Flue recorded them, oldest first, long tool output
+ * shortened, and the oldest part dropped past a budget. Undefined when the
+ * turn is the Thread's first.
+ */
+const earlierConversation = (messages: Context["messages"]) => {
+  const entries = messages.flatMap((message): string[] => {
+    if (message.role === "user") {
+      if (isLifecycleSignal(message)) return [];
+      const text =
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .map((block) => (block.type === "text" ? block.text : "[image]"))
+              .join("\n");
+      return [`User: ${text.trim()}`];
+    }
+    if (message.role === "assistant")
+      return message.content.flatMap((block): string[] =>
+        block.type === "text" && block.text.trim() !== ""
+          ? [`Assistant: ${block.text.trim()}`]
+          : block.type === "toolCall"
+            ? [
+                `Assistant used ${block.name}: ${shorten(JSON.stringify(block.arguments), EARLIER_TOOL_CHARS)}`,
+              ]
+            : [],
+      );
+    if (message.role !== "toolResult") return [];
+    const output = message.content
+      .map((block) => (block.type === "text" ? block.text : "[image]"))
+      .join("\n")
+      .trim();
+    return [
+      `${message.isError ? "Tool error" : "Tool result"}: ${shorten(output, EARLIER_TOOL_CHARS)}`,
+    ];
+  });
+  if (entries.length === 0) return undefined;
+  let text = entries.join("\n\n");
+  if (text.length > EARLIER_CONVERSATION_CHARS)
+    text = `[Earlier messages omitted.]\n\n${text.slice(-EARLIER_CONVERSATION_CHARS)}`;
+  return `<earlier_conversation>\nThis Thread's conversation before this message, oldest first, which this Claude Code session did not see. Long tool output is shortened.\n\n${text}\n</earlier_conversation>\n\n`;
+};
+
 /** FNV-1a, enough to tell two user messages with one timestamp apart. */
 const fingerprint = (value: string) => {
   let hash = 0x811c9dc5;
@@ -637,6 +709,40 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         const sandbox = await deps.sandbox(threadId);
         await deliverClaudeCodeDxToolResults(context, sandbox);
         const attempts = await claudeCodeRuns.attempts(threadId, turn, sandbox);
+        // An edited message must not resume Claude's session, which still
+        // holds the turns the edit removed. It forks the session at the last
+        // message of the turn before it, so the conversation it keeps
+        // reaches Claude byte for byte and reads from the prompt cache. When
+        // that point is unknown, or the message was the Thread's first, a
+        // new session starts, told the conversation before it.
+        const edited = pending.some(isEditedMessage);
+        if (attempts.length === 0 && edited) {
+          const kept =
+            previous === undefined
+              ? undefined
+              : await claudeCodeTurnEnd(sandbox, turnKey(previous.anchor));
+          if (kept === undefined) await forgetClaudeCodeSession(sandbox);
+          else await forkClaudeCodeSession(sandbox, kept);
+          claudeCodeLogger.info(
+            "Claude Code rewinds its session for an edit.",
+            {
+              event: "claude_code_edit_rewind",
+              threadId,
+              way:
+                kept !== undefined
+                  ? "fork"
+                  : previous === undefined
+                    ? "first-message"
+                    : "turn-end-unknown",
+            },
+          );
+        }
+        const turnStartsAt = context.messages.indexOf(
+          pending[0] ?? turnInput[0] ?? anchor,
+        );
+        const earlier = earlierConversation(
+          context.messages.slice(0, Math.max(0, turnStartsAt)),
+        );
         let latest: { attempt: number; run: ClaudeCodeRun } | undefined;
         for (const candidate of [...attempts].reverse())
           if ((await candidate.run.base()) <= segment) {
@@ -732,6 +838,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             ? inputBlocks(pending)
             : inputBlocks(freshSession ? [anchor] : turnInput);
         let launchedToken: string | undefined;
+        let launchedSession: string | undefined;
         const launchAttempt = async () => {
           const credential = await deps.credential(
             threadId,
@@ -761,7 +868,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           run = next;
           launchedToken = credential.token;
           const remembered = prompts.get(threadId);
-          await next.launch(
+          const session = await next.launch(
             {
               model: model.id,
               effort: claudeCodeEffort(
@@ -778,11 +885,35 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
                 remembered?.prompt ?? getCurrentSystemPrompt(context.messages),
               personalInstructions: remembered?.personalInstructions,
               input: input(),
+              ...(earlier === undefined
+                ? {}
+                : {
+                    freshInput: [
+                      { type: "text" as const, text: earlier },
+                      ...inputBlocks(pending.length > 0 ? pending : turnInput),
+                    ],
+                  }),
               token: credential.token,
               tools: claudeCodeDxToolList(threadId),
+              // A Thread on its executor keeps only its profile's built-ins.
+              ...(claudeCodeExecutor(threadId) === undefined
+                ? {}
+                : {
+                    builtInTools:
+                      claudeCodeExecutor(threadId)?.builtInTools ?? [],
+                  }),
             },
             signal,
           );
+          launchedSession = session;
+          if (edited || (session !== undefined && session !== "resume"))
+            claudeCodeLogger.info("Claude Code started a run.", {
+              event: "claude_code_session",
+              threadId,
+              session,
+              edited,
+              attempt: nextAttempt - 1,
+            });
           return next;
         };
         if (relaunch) {
@@ -907,6 +1038,15 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           (await current.resumed()) &&
           (await current.exitedOnItsOwn())
         ) {
+          claudeCodeLogger.warn(
+            "Claude Code could not load its session; a new one answers.",
+            {
+              event: "claude_code_session_refused",
+              threadId,
+              session: launchedSession,
+              detail: (await current.stderrTail()).slice(0, 500),
+            },
+          );
           await current.forgetSession();
           freshSession = true;
           current = await launchAttempt();

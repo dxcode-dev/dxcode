@@ -22,6 +22,9 @@ const requiredScope = (
     path === "/v1/threads" ||
     path.startsWith("/v1/threads/") ||
     path === "/v1/shared-threads" ||
+    // A Space is a Thread.
+    path === "/v1/spaces" ||
+    path.startsWith("/v1/spaces/") ||
     path === "/v1/attachments" ||
     path.startsWith("/v1/attachments/")
   ) {

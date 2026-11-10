@@ -493,6 +493,7 @@ export const DERIVED_BINDINGS = Object.freeze([
   "DX_WORKER_LOGS",
   "DX_WORKSPACE_INACTIVITY_MS",
   "ORB_CONTAINER",
+  "THREAD_EXECUTOR",
 ]);
 
 export const settingBindings = (settings = SELFHOST_SETTINGS) =>

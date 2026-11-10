@@ -1,0 +1,1872 @@
+/* Spaces: the sidebar section, New Space, Edit Space, Discover Spaces, and
+   the Space page with its panel and a thread open beside the chat. Layout
+   and spacing only where shared components already set identity. */
+
+.space-icon {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--thread-color);
+  stroke-width: 2.2;
+}
+
+.space-icon-button {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+.space-icon-button:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-icon-button > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.space-unread-dot {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: #4d9cff;
+  box-shadow: 0 0 0 1.5px var(--surface);
+}
+
+/* Sidebar */
+.sidebar-spaces .thread-group-heading .thread-group-meta {
+  opacity: 1;
+}
+/* With Spaces listed, the first-thread doodle would point past them. */
+.sidebar-spaces[data-listed] ~ .sidebar-first-thread {
+  display: none;
+}
+.sidebar-spaces-empty {
+  padding: 2px 8px 8px;
+}
+.sidebar-space-row {
+  gap: 6px;
+}
+.sidebar-space-row > .sidebar-space-icon {
+  width: 14px;
+  height: 14px;
+}
+.sidebar-space-row > strong {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+/* Unlike a Thread's title, which fades, a Space's name too long for its
+   row ends in an ellipsis; its tooltip shows it whole. */
+.product-sidebar .thread-row.sidebar-space-row > strong {
+  flex: 0 1 auto;
+  text-overflow: ellipsis;
+}
+.sidebar-space-row > strong > .thread-row-title-text {
+  display: inline;
+}
+/* Not a title column like the row's other spans: one overlapping row
+   beside the age. The name keeps its room first; a long one leaves room
+   for fewer faces, down to one. */
+.sidebar-space-row > .participant-stack {
+  flex: 0 100 auto;
+  flex-direction: row;
+  min-width: 18px;
+  margin-left: auto;
+  padding: 2px;
+  overflow: hidden;
+}
+.sidebar-space-row .participant-stack .dx-avatar {
+  width: 14px;
+  height: 14px;
+  font-size: 6px;
+}
+.sidebar-space-row .participant-stack > .dx-avatar + .dx-avatar {
+  margin-left: -5px;
+}
+.sidebar-space-row .participant-more {
+  display: none;
+}
+.sidebar-space-row > .sidebar-space-age {
+  flex: none;
+  margin-left: auto;
+  min-width: 22px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* The Space's own status beside its name; amber while it needs input, as
+   a thread that needs you reads on its card. */
+.sidebar-space-row > .sidebar-space-status {
+  display: block;
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--sidebar-text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:is(
+  .sidebar-space-status,
+  .sidebar-space-card-status,
+  .space-panel-status
+)[data-waiting] {
+  color: oklch(62% 0.15 60);
+}
+
+/* The card beside a hovered Space row. */
+.sidebar-space-card {
+  position: fixed;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 320px;
+  max-width: calc(100vw - 16px);
+  padding: 8px 10px;
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.08);
+  pointer-events: none;
+}
+.sidebar-space-card-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-space-card-text > strong {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-space-card-status {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-space-card-text > small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+}
+.sidebar-space-card-icon {
+  margin-top: 3px;
+}
+
+/* Shared form pieces */
+.space-project-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--muted-foreground);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 9%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+}
+.space-select-trigger,
+.space-readonly-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px 0 8px;
+  color: var(--foreground);
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+.space-readonly-field {
+  border-color: transparent;
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.space-select-trigger:focus-visible,
+.space-select-trigger[data-popup-open] {
+  border-color: var(--foreground);
+  outline: none;
+}
+.space-select-trigger:disabled {
+  color: var(--muted-foreground);
+}
+.space-select-trigger > svg:last-child {
+  width: 15px;
+  height: 15px;
+  margin-left: auto;
+  color: var(--muted-foreground);
+}
+.space-select-value,
+.space-select-placeholder {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-select-placeholder {
+  color: var(--muted-foreground);
+}
+.space-select-lock {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin: 0 2px;
+  color: var(--muted-foreground);
+}
+.space-select-positioner {
+  z-index: 130;
+}
+.space-select-popup {
+  min-width: var(--anchor-width);
+}
+.space-select-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--divider);
+}
+.space-select-search > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+.space-select-search > input {
+  flex: 1;
+  min-width: 0;
+  color: var(--foreground);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+}
+.space-select-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  outline: 0;
+  cursor: default;
+  user-select: none;
+  font-size: 12.5px;
+}
+.space-select-item[data-highlighted] {
+  background: var(--accent);
+}
+.space-select-detail {
+  color: var(--muted-foreground);
+}
+.space-select-check {
+  display: grid;
+  margin-left: auto;
+}
+.space-select-check > svg {
+  width: 14px;
+  height: 14px;
+}
+.space-goal-field {
+  display: grid;
+  overflow: hidden;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.space-goal-field:focus-within {
+  border-color: var(--foreground);
+}
+.space-goal-field > textarea {
+  min-height: 84px;
+  padding: 10px 12px;
+  color: var(--foreground);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: none;
+}
+.space-goal-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: 36px;
+  padding: 0 6px;
+  border-top: 1px solid var(--divider);
+}
+.space-primary-button {
+  gap: 8px;
+  border-radius: 999px;
+}
+.space-enter-keycap {
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 16px;
+  opacity: 0.85;
+}
+
+/* New Space: full screen */
+.space-create-backdrop {
+  position: fixed;
+  z-index: 110;
+  inset: 0;
+  background: rgb(0 0 0 / 45%);
+}
+.space-create-viewport {
+  position: fixed;
+  z-index: 111;
+  inset: 0;
+  display: grid;
+  padding: 12px;
+}
+.space-create {
+  display: grid;
+  grid-template-rows: 52px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow:
+    0 0 0 1px var(--outline),
+    0 18px 48px rgb(0 0 0 / 45%);
+  outline: none;
+}
+.space-create-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 0 20px;
+  border-bottom: 1px solid var(--divider);
+}
+.space-create-breadcrumb {
+  display: flex;
+  gap: 8px;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+.space-create-breadcrumb > [aria-current] {
+  color: var(--foreground);
+  font-weight: 500;
+}
+.space-create-close {
+  margin-left: auto;
+}
+.space-create-body {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+  min-height: 0;
+}
+.space-create-intro {
+  display: flex;
+  align-items: center;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 40px 48px 40px 64px;
+  border-right: 1px solid var(--divider);
+}
+.space-create-intro-inner {
+  width: 100%;
+  max-width: 540px;
+}
+.space-create-title {
+  margin: 0 0 10px;
+  font-size: 19px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+.space-create-lede {
+  max-width: 400px;
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 15px;
+  line-height: 1.5;
+}
+.space-create-eyebrow {
+  margin: 40px 0 12px;
+  color: var(--muted-foreground);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.space-suggestions {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.space-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  width: 100%;
+  padding: 14px 18px;
+  color: inherit;
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.space-suggestion:hover {
+  background: var(--accent);
+}
+.space-suggestion[aria-pressed="true"] {
+  border-color: var(--foreground);
+}
+.space-suggestion-text {
+  display: grid;
+  flex: 1;
+  gap: 4px;
+  min-width: 0;
+}
+.space-suggestion-text > strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+.space-suggestion-text > span {
+  color: var(--muted-foreground);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.space-suggestion-text > small {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  opacity: 0.8;
+}
+.space-suggestion-check {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+}
+.space-create-form-pane {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 40px 48px;
+  background: color-mix(in srgb, var(--foreground) 2%, var(--surface));
+}
+.space-create-card {
+  width: 100%;
+  max-width: 860px;
+  padding: 12px 32px 28px;
+  border: 1px solid var(--outline);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: 0 2px 12px rgb(0 0 0 / 12%);
+}
+.space-field-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr);
+  gap: 40px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--divider);
+}
+.space-field-row:last-of-type {
+  border-bottom: 0;
+}
+.space-field-label > label {
+  font-size: 13.5px;
+  font-weight: 500;
+}
+.space-field-label > label > span {
+  margin-left: 4px;
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.space-field-label > p {
+  margin: 4px 0 0;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.space-field-control {
+  min-width: 0;
+}
+.space-field-control > input,
+.space-name-row > input {
+  height: 36px;
+  font-size: 13px;
+}
+.space-create-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 8px;
+}
+
+/* Edit Space and Discover Spaces dialogs */
+.dialog-popup.space-dialog {
+  display: grid;
+  gap: 12px;
+  width: min(480px, calc(100vw - 32px));
+}
+.space-dialog > h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 550;
+  line-height: 18px;
+}
+.space-dialog-form {
+  display: grid;
+  gap: 6px;
+}
+.dialog-popup.space-dialog .space-dialog-label {
+  display: block;
+  margin-top: 8px;
+  color: var(--popover-foreground);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+.space-dialog-label > span {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.space-dialog-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.space-dialog-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 11px;
+}
+.space-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+.space-name-row {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
+  gap: 8px;
+}
+.space-color-button {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--outline);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.space-color-button[data-popup-open],
+.space-color-button:focus-visible {
+  border-color: var(--foreground);
+  outline: none;
+}
+.space-color-swatch {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--thread-color);
+}
+.space-color-positioner {
+  z-index: 130;
+}
+.space-color-popup {
+  padding: 8px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  background: var(--popover);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  outline: none;
+}
+.space-color-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 30px);
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.space-color-option {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+}
+.space-color-option .space-color-swatch {
+  width: 22px;
+  height: 22px;
+}
+.space-color-option:has(input:checked) {
+  border-color: var(--foreground);
+}
+.dialog-popup.space-discover-dialog {
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(720px, calc(100vw - 32px));
+  min-height: min(560px, calc(100dvh - 64px));
+  padding: 0;
+}
+.space-discover-header {
+  display: grid;
+  gap: 2px;
+  padding: 24px 24px 16px;
+  border-bottom: 1px solid var(--divider);
+}
+.space-discover-header > h2 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+}
+.space-discover-header > p {
+  margin: 0 0 14px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+.space-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.space-search:focus-within {
+  border-color: var(--foreground);
+}
+.space-search > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--muted-foreground);
+}
+.space-search > input {
+  flex: 1;
+  min-width: 0;
+  color: var(--foreground);
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+}
+.space-discover-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 8px 12px 16px;
+}
+.space-empty-state {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 56px 24px;
+  text-align: center;
+}
+.space-empty-state > svg {
+  width: 30px;
+  height: 30px;
+  margin-bottom: 8px;
+  color: var(--muted-foreground);
+}
+.space-empty-state > strong {
+  font-size: 14px;
+  font-weight: 550;
+}
+.space-empty-state > p {
+  max-width: 380px;
+  margin: 0 0 8px;
+  color: var(--muted-foreground);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.space-discover-list {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.space-discover-list > li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 8px;
+  border-radius: 8px;
+}
+.space-discover-list > li:hover {
+  background: var(--accent);
+}
+.space-discover-open {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.space-discover-open > .space-icon {
+  width: 16px;
+  height: 16px;
+}
+.space-discover-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.space-discover-text > strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.space-discover-text > span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The Space page, after the reference Spaces (captures of 2026-11-09): no
+   title bar; each pane is a tab strip on the shell over a rounded surface.
+   The Space chat is the first tab; an open thread is a further tab, beside
+   it on a wide page; Space Details is a column on the shell at the right. */
+.space-page {
+  display: flex;
+  min-width: 0;
+  height: 100%;
+  gap: 4px;
+  padding: 0 4px 4px;
+  background: var(--shell);
+}
+.product-shell-content > .space-page {
+  width: 100%;
+  height: 100%;
+}
+.space-panes {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  gap: 4px;
+}
+.space-pane {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+}
+.space-pane[hidden] {
+  display: none;
+}
+.space-pane-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 0 10px 10px;
+  background: var(--surface);
+}
+/* An open thread's Thread page: its title bar is the strip, and its panes
+   are cards on the same shell. With one pane holding only the agent, that
+   pane's strip gives way to the thread's tab, so the chat card sits under
+   it; a second view brings every pane's strip back. */
+.space-page {
+  --pane-canvas: var(--shell);
+}
+.space-thread-pane > * {
+  flex: 1;
+  min-height: 0;
+}
+.space-thread-pane .thread-pane-tree {
+  padding: 0;
+}
+.space-thread-pane
+  .thread-pane-tree
+  > .thread-pane:only-child:not(:has(.pane-tab + .pane-tab))
+  > .pane-strip-drop {
+  display: none;
+}
+.space-thread-pane
+  .thread-pane-tree
+  > .thread-pane:only-child:not(:has(.pane-tab + .pane-tab))
+  > .pane-body {
+  border-top-right-radius: 8px;
+}
+
+/* The tab strip */
+.space-tab-strip {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: 2px;
+  height: 32px;
+  min-width: 0;
+  padding: 0 4px 0 0;
+  background: var(--shell);
+}
+.product-sidebar-trigger + .space-page .space-pane:first-child .space-tab-strip,
+.space-page[data-phone] .space-pane .space-tab-strip {
+  padding-left: 38px;
+}
+.space-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 6px;
+  min-width: 0;
+  max-width: 260px;
+  height: 28px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 8px 8px 0 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 16px;
+}
+button.space-tab:hover,
+.space-thread-tab:not([data-active]):hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--surface) 50%, transparent);
+}
+.space-tab[data-active] {
+  color: var(--foreground);
+  background: var(--surface);
+}
+.space-tab-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.space-tab-status > svg {
+  width: 14px;
+  height: 14px;
+}
+.space-tab-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-thread-tab {
+  gap: 2px;
+  padding-right: 4px;
+}
+.space-tab-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  background: transparent;
+  font: inherit;
+}
+.space-tab-menu {
+  display: inline-flex;
+  margin-left: 2px;
+}
+.space-tab-menu .thread-title-action {
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+}
+.space-tab-close {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+}
+.space-tab-close:hover {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-tab-close > svg {
+  width: 12px;
+  height: 12px;
+}
+.space-tab-spacer {
+  flex: 1;
+  min-width: 4px;
+}
+.space-tab-tools {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  height: 30px;
+  padding-bottom: 2px;
+}
+.space-tab-tools .space-icon-button {
+  width: 26px;
+  height: 26px;
+}
+.space-tab-tools .space-icon-button > svg {
+  width: 15px;
+  height: 15px;
+}
+/* The Thread's own title bar controls (its More Actions and Views) as
+   the title bar draws them. */
+.space-tab-strip .thread-title-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  gap: 4px;
+  height: 24px;
+  min-width: 24px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.space-tab-strip .thread-title-action-text {
+  padding: 4px 8px;
+}
+.space-tab-strip .thread-title-action svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.space-tab-strip .thread-title-action:hover,
+.space-tab-strip .thread-title-action[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.space-tab-strip .thread-title-action:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--ring);
+}
+.space-tab-mode {
+  padding: 0 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.space-details-toggle {
+  position: relative;
+}
+.space-needs-input-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: oklch(70% 0.15 70);
+  box-shadow: 0 0 0 1.5px var(--shell);
+}
+.space-panel-status {
+  margin: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-icon-button[aria-pressed="true"] {
+  color: var(--foreground);
+}
+.space-icon-button:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.space-icon-button[aria-label="Sharing"]:disabled {
+  opacity: 1;
+}
+.space-project-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 180px;
+  padding: 0 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 26px;
+}
+.space-project-chip > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.space-project-chip > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The chat: posts newest at the bottom, a day divider over each day's
+   first post, the viewer's posts on the right in a bubble, other people's
+   on the left under their name, dx's as plain text. */
+.space-chat {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.space-chat-scroll {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column-reverse;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+/* Few posts sit at the top; more stay anchored to the newest. */
+.space-chat-content {
+  width: 100%;
+  max-width: 41rem;
+  margin: 0 auto auto;
+  padding: 36px 24px 16px;
+  color: var(--chat-foreground, var(--foreground));
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.space-chat-earlier,
+.space-chat-error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.space-day-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 16px;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+}
+.space-day-divider::before,
+.space-day-divider::after {
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+  content: "";
+}
+.space-post {
+  position: relative;
+  margin-bottom: 14px;
+}
+.space-post.agent-message .message-content {
+  padding: 0;
+}
+.space-post.agent-message .markdown > :first-child {
+  margin-top: 0;
+}
+.space-post.agent-message .markdown > :last-child {
+  margin-bottom: 0;
+}
+.space-post-body {
+  position: relative;
+}
+/* A post a mention's link opened at flashes, as a linked message does. */
+.space-post[data-notification-target] {
+  border-radius: 12px;
+  animation: notification-target-flash 2.4s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .space-post[data-notification-target] {
+    animation: none;
+    outline: 2px solid var(--chat-mention-foreground);
+    outline-offset: 4px;
+  }
+}
+.space-post.user-message {
+  margin-bottom: 14px;
+  padding: 0;
+}
+.space-post .user-message-text {
+  margin: 0;
+}
+/* The viewer's post: one column as wide as its bubble at the right, so its
+   reactions end under the bubble and its replies start at its left edge. */
+.space-post[data-kind="mine"] {
+  display: grid;
+  grid-template-columns: fit-content(min(85%, 42rem));
+  justify-content: end;
+}
+.space-post[data-kind="mine"] .message-content {
+  max-width: none;
+  margin-left: 0;
+}
+
+.space-post[data-kind="other"] > .message-author {
+  justify-content: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+}
+.space-post[data-kind="other"] > .message-author .dx-avatar {
+  width: 18px;
+  height: 18px;
+  font-size: 8px;
+}
+.space-post[data-kind="other"] .message-content {
+  margin-right: auto;
+  margin-left: 0;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  background-image: none;
+  box-shadow: none;
+}
+.space-post[data-pending] .message-content {
+  opacity: 0.6;
+}
+/* A post's actions float over its top-right corner while the pointer is on
+   it, as the reference's: above the bubble's first line, never over it. */
+.space-post-actions {
+  position: absolute;
+  z-index: 2;
+  top: -24px;
+  right: -10px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--outline);
+  border-radius: 8px;
+  background: var(--popover);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+/* Another person's bubble is only as wide as its text: the actions sit at
+   its corner, not the column's. */
+.space-post[data-kind="other"] > .space-post-body {
+  width: fit-content;
+  max-width: min(85%, 42rem);
+}
+.space-post[data-kind="other"] > .space-post-body > .message-content {
+  max-width: none;
+}
+.space-post:hover .space-post-actions,
+.space-post:focus-within .space-post-actions,
+.space-post-actions:has([data-popup-open]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+@media (pointer: coarse) {
+  .space-post-actions {
+    position: static;
+    width: fit-content;
+    margin-top: 4px;
+    opacity: 1;
+    pointer-events: auto;
+    border: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  .space-post-actions[data-side="right"] {
+    margin-left: auto;
+  }
+}
+.space-post-action {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+.space-post-action:hover,
+.space-post-action[data-popup-open] {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-post-action > svg {
+  width: 14px;
+  height: 14px;
+}
+.space-post-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+.space-post-meta[data-side="right"] {
+  justify-content: flex-end;
+}
+.space-post-edited {
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  line-height: 18px;
+}
+.space-post-edited:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.space-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.space-reaction {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.space-reaction:hover:not(:disabled) {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-reaction[aria-pressed="true"] {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--unread) 55%, transparent);
+  background: color-mix(in srgb, var(--unread) 12%, transparent);
+}
+.space-reaction:disabled {
+  cursor: default;
+}
+.space-reaction-picker {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+  background: var(--popover);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
+}
+.space-reaction-picker > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 16px;
+}
+.space-reaction-picker > button:hover,
+.space-reaction-picker > button[aria-pressed="true"] {
+  background: var(--accent);
+}
+.space-post-revisions {
+  width: min(380px, calc(100vw - 32px));
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 10px 12px;
+  color: var(--popover-foreground);
+  border: 1px solid var(--outline);
+  border-radius: 10px;
+  background: var(--popover);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
+  font-size: 12.5px;
+}
+.space-post-revisions > h3 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.space-post-revisions > ol {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.space-post-revisions li {
+  display: grid;
+  gap: 2px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.space-post-revisions li > p {
+  margin: 0;
+  color: var(--popover-foreground);
+  font-size: 12.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+/* Only the viewer's own posts edit, in their column at the right. */
+.space-post-edit {
+  display: grid;
+  gap: 6px;
+  width: min(36rem, 70vw);
+  margin-left: auto;
+}
+.space-post-edit > textarea {
+  width: 100%;
+  padding: 8px 12px;
+  color: var(--foreground);
+  border: 1px solid var(--input);
+  border-radius: 12px;
+  background: var(--surface);
+  font: inherit;
+  resize: vertical;
+}
+.space-post-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.space-post-edit-error,
+.space-composer-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: 12px;
+}
+.space-post-replies {
+  margin-top: 6px;
+}
+.space-chat .space-composer-dock {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  pointer-events: auto;
+  background: none;
+  width: 100%;
+  max-width: 43rem;
+  margin: 0 auto;
+  padding: 0 16px 8px;
+}
+.space-composer > textarea {
+  min-height: 52px;
+}
+.space-unarchive {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  height: 44px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  font: inherit;
+  font-size: 13px;
+}
+.space-unarchive:hover:not(:disabled) {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-unarchive > svg {
+  width: 15px;
+  height: 15px;
+}
+
+/* Space Details: a column on the shell on a wide page, a bottom sheet
+   otherwise. Toasts rest beside the column, not over its header. */
+body:has(.space-page[data-details="column"]) .dx-toaster[data-sonner-toaster] {
+  --dx-toast-right: calc(288px + 16px);
+}
+.space-details-column {
+  flex: 0 0 284px;
+  min-width: 0;
+  height: 100%;
+  overflow-y: auto;
+}
+.space-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 4px 16px 10px;
+}
+.space-panel-header {
+  display: grid;
+  gap: 4px;
+}
+.space-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 28px;
+}
+.space-panel-title > h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-goal {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+}
+.space-goal-text {
+  display: -webkit-box;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.3;
+  text-align: left;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+button.space-goal-text {
+  cursor: pointer;
+}
+.space-goal[data-expanded] > .space-goal-text {
+  display: block;
+  -webkit-line-clamp: unset;
+}
+.space-goal-toggle {
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 11.5px;
+}
+.space-goal-toggle:hover {
+  color: var(--foreground);
+}
+.space-panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 26px;
+  margin-top: 4px;
+}
+.space-panel-meta > .space-project-chip {
+  padding-left: 0;
+}
+.space-panel-meta-spacer {
+  flex: 1;
+}
+.space-panel-tab-list {
+  display: flex;
+  gap: 2px;
+}
+.space-panel-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 8px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  font-size: 12.5px;
+}
+/* The selected tab sits on a filled pill, as the reference's; the others
+   are plain until hovered. */
+.space-panel-tab:hover {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
+}
+.space-panel-tab[aria-selected="true"] {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.space-panel-tab:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1.5px var(--ring);
+}
+.space-panel-tab-icon {
+  position: relative;
+  display: inline-grid;
+}
+.space-panel-tab-icon > svg {
+  width: 14px;
+  height: 14px;
+}
+.space-panel-tab-icon > .space-unread-dot {
+  top: -2px;
+  right: -3px;
+}
+.space-panel-tab-panel {
+  padding-top: 8px;
+  outline: none;
+}
+.space-panel-empty {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 28px 16px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+.space-panel-empty > svg {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 6px;
+}
+.space-panel-empty > strong {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 500;
+}
+.space-panel-empty > p {
+  max-width: 260px;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.space-panel-loading {
+  min-height: 80px;
+}
+.space-thread-sections {
+  display: grid;
+  gap: 10px;
+}
+.space-thread-section-heading {
+  width: 100%;
+  height: 24px;
+  padding: 0 4px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  line-height: 16px;
+}
+.space-thread-section-heading > small {
+  font-size: 12px;
+  line-height: 16px;
+}
+.space-thread-section-heading > .space-thread-section-chevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 120ms ease;
+}
+.space-thread-section-heading[data-collapsed] > .space-thread-section-chevron {
+  transform: rotate(-90deg);
+}
+.space-thread-section-heading > i {
+  flex: 1;
+}
+/* An Artifacts tab group's heading is a label, not a toggle. */
+.space-artifact-heading {
+  margin: 0;
+}
+.space-artifact-heading > .space-artifact-archived {
+  flex: none;
+  padding: 0 5px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--divider);
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-style: normal;
+  line-height: 15px;
+}
+.space-thread-list {
+  display: grid;
+  gap: 1px;
+  margin: 2px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.space-thread-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  color: inherit;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+}
+.space-thread-row:hover,
+.space-thread-row[aria-current] {
+  background: var(--accent);
+}
+.space-thread-status {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 18px;
+  color: var(--muted-foreground);
+}
+.space-thread-status > svg {
+  width: 15px;
+  height: 15px;
+}
+.space-thread-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+.space-thread-text > strong,
+.space-thread-text > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-thread-text > strong {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 18px;
+}
+.space-thread-text > small {
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  line-height: 16px;
+}
+.space-thread-requester {
+  display: inline-grid;
+  margin-top: 1px;
+}
+.space-thread-row .space-thread-requester .dx-avatar {
+  width: 16px;
+  height: 16px;
+  font-size: 7px;
+}
+.space-thread-age {
+  flex: none;
+  min-width: 24px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+  text-align: right;
+}
+.space-sheet-backdrop {
+  position: fixed;
+  z-index: 90;
+  inset: 0;
+  background: rgb(0 0 0 / 40%);
+}
+.space-sheet {
+  position: fixed;
+  z-index: 91;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  max-height: min(72dvh, 640px);
+  overflow-y: auto;
+  padding-bottom: env(safe-area-inset-bottom);
+  color: var(--foreground);
+  border-radius: 18px 18px 0 0;
+  background: var(--popover);
+  box-shadow:
+    0 0 0 1px var(--outline),
+    0 -12px 32px rgb(0 0 0 / 35%);
+  outline: none;
+  transition: transform 180ms ease;
+}
+.space-sheet[data-starting-style],
+.space-sheet[data-ending-style] {
+  transform: translateY(100%);
+}
+.space-sheet-handle {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.space-sheet-handle > span {
+  width: 48px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+.space-sheet .space-panel {
+  padding: 2px 20px 20px;
+}
+
+@media (max-width: 767px) {
+  .space-create-viewport {
+    padding: 0;
+  }
+  .space-create {
+    border-radius: 0;
+  }
+  .space-create-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    overflow-y: auto;
+  }
+  .space-create-intro,
+  .space-create-form-pane {
+    overflow: visible;
+    padding: 20px 16px;
+    border-right: 0;
+  }
+  .space-create-intro {
+    padding-bottom: 4px;
+  }
+  .space-create-eyebrow {
+    margin-top: 20px;
+  }
+  .space-create-form-pane {
+    align-items: flex-start;
+  }
+  .space-create-card {
+    padding: 4px 16px 16px;
+  }
+  .space-field-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 16px 0;
+  }
+  .dialog-popup.space-discover-dialog {
+    min-height: 0;
+  }
+}
+
+/* A phone's strip: tabs not in front shrink to their mark, and the mode
+   gives way to the tabs. */
+.space-page[data-phone] .space-tab:not([data-active]) .space-tab-title,
+.space-page[data-phone] .space-tab-mode {
+  display: none;
+}
+.space-page[data-phone] .space-tab {
+  max-width: none;
+}
+.sidebar-space-row > .participant-stack + .sidebar-space-age {
+  margin-left: 0;
+}
+
+/* Create Space → Agent: where the Space will run, and the model picker. */
+.space-agent-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  font-size: 13px;
+  color: var(--text-muted, #a0a3ad);
+}
+.space-agent-field[data-route="unavailable"] > span {
+  color: var(--danger, #ff8a80);
+}
+.space-agent-change {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: 4px 0;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+/* Above the Create Space dialog (backdrop 110, viewport 111). */
+.space-agent-picker-backdrop {
+  position: fixed;
+  z-index: 112;
+  inset: 0;
+  background: rgb(0 0 0 / 0.45);
+}
+.space-agent-picker {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  z-index: 113;
+  width: min(440px, calc(100vw - 32px));
+  padding: 24px;
+  border: 1px solid var(--border, #2a2b33);
+  border-radius: 16px;
+  background: var(--surface, #111217);
+  display: grid;
+  gap: 14px;
+}
+.space-agent-picker-title {
+  margin: 0;
+  font-size: 16px;
+}
+.space-agent-picker-lede,
+.space-agent-picker-route {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted, #a0a3ad);
+}
+.space-agent-picker-route[data-route="unavailable"] {
+  color: var(--danger, #ff8a80);
+}
+.space-agent-picker select {
+  height: 36px;
+}
+.space-agent-picker-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}

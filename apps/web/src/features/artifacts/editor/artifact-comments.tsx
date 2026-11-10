@@ -2,22 +2,30 @@ import { Menu } from "@base-ui/react/menu";
 import { Popover } from "@base-ui/react/popover";
 import type { ThreadArtifactComment } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, MessageSquare } from "lucide-react";
 import * as React from "react";
+import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
+import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
+import {
+  asksAgent,
+  toggleAgent,
+} from "../../../shared/comments/comment-mentions.js";
+import {
+  type CommentPeople,
+  CommentText,
+} from "../../../shared/comments/comment-text.js";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
+import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import {
   createArtifactCommentMutation,
   resolveArtifactCommentMutation,
 } from "../artifact-comments-queries.js";
 import { ArtifactApiError } from "../artifacts-api.js";
-import { useCommentMentions } from "./comment-mention-menu.js";
-import { asksAgent, toggleAgent } from "./comment-mentions.js";
-import { CommentText } from "./comment-text.js";
 
 /** A comment being written on a quote in the current revision. */
 export interface CommentDraft {
@@ -80,13 +88,17 @@ function CommentComposer({
   const [own, setOwn] = React.useState("");
   const body = text?.value ?? own;
   const setBody = text?.set ?? setOwn;
-  // The box shows `@dx` as people read it; it posts as the mention.
-  const asking = asksAgent(body);
   const box = React.useRef<HTMLTextAreaElement | null>(null);
   // The mic's words show on their own line under the buttons.
   const [noticeHost, setNoticeHost] = React.useState<HTMLElement | null>(null);
   // `@` lists the Thread's people, dx, and @here (#1808).
-  const mentions = useCommentMentions({ threadId, body, setBody, box });
+  const { identity } = useAuthenticatedIdentity();
+  const members =
+    useQuery(threadMembersQueryOptions(identity.id, threadId)).data ?? [];
+  const mentions = useCommentMentions({ members, body, setBody, box });
+  // The box shows `@dx` as people read it; it posts as the mention. Judged
+  // as it will post: a picked person named "dx …" is that person, not dx.
+  const asking = asksAgent(mentions.post(body));
   const submit = () => {
     const value = body.trim();
     if (value === "" || pending) return;
@@ -201,12 +213,6 @@ function CommentComposer({
     </form>
   );
 }
-
-/** Who can be named in this Thread, by user ID, with their picture. */
-export type CommentPeople = ReadonlyMap<
-  string,
-  { readonly name: string; readonly image?: string | undefined }
->;
 
 /** dx's mark for the agent; a person's picture, or their initials. */
 function CommentAvatar({

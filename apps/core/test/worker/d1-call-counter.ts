@@ -14,7 +14,24 @@ export interface D1Call {
   readonly sql: ReadonlyArray<string>;
   readonly startedAt: number;
   endedAt: number;
+  /**
+   * Rows D1 read for the call (`meta.rows_read`, summed over a batch);
+   * undefined for `first`, whose result carries no meta.
+   */
+  rowsRead?: number;
 }
+
+const rowsReadOf = (result: unknown): number | undefined => {
+  const one = (item: unknown) =>
+    (item as { meta?: { rows_read?: number } } | null)?.meta?.rows_read;
+  if (Array.isArray(result)) {
+    const counts = result.map(one);
+    return counts.every((count) => typeof count === "number")
+      ? counts.reduce((sum: number, count) => sum + (count as number), 0)
+      : undefined;
+  }
+  return one(result);
+};
 
 export interface D1CallCounter {
   readonly db: D1Database;
@@ -43,7 +60,10 @@ export const countD1Calls = (database: D1Database): D1CallCounter => {
     };
     calls.push(call);
     try {
-      return await run();
+      const result = await run();
+      const rowsRead = rowsReadOf(result);
+      if (rowsRead !== undefined) call.rowsRead = rowsRead;
+      return result;
     } finally {
       call.endedAt = performance.now();
     }

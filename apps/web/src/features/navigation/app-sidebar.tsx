@@ -227,6 +227,11 @@ export interface AppSidebarProps {
   readonly onSetPinned?: (threadId: ThreadData["id"], pinned: boolean) => void;
   readonly pinningThreadId?: ThreadData["id"];
   readonly extensionRegion?: React.ReactNode;
+  /**
+   * The Spaces section, listed above the Threads while the settings context
+   * says Spaces is on; it never renders, or loads, otherwise.
+   */
+  readonly spacesSection?: React.ReactNode;
   /** Each listed root's child Threads, loaded with the roots. */
   readonly childThreads?: ReadonlyMap<
     ThreadData["id"],
@@ -280,6 +285,7 @@ function AppSidebarContent({
   onUnfollow,
   pinningThreadId,
   extensionRegion,
+  spacesSection,
   childThreads,
   layout,
 }: AppSidebarProps & { readonly layout: SidebarLayout }) {
@@ -386,6 +392,10 @@ function AppSidebarContent({
       {/* The rows share one context menu instead of one each (#1462). */}
       <SharedThreadContextMenu>
         <SidebarThreadNavigation
+          // Only for people who turned Spaces on (its experimental flag).
+          leadingContent={
+            settingsContext?.spaces === true ? spacesSection : undefined
+          }
           archiveContent={
             userId === undefined ? undefined : (
               <SidebarArchive

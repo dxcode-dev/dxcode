@@ -897,6 +897,13 @@ a {
 .thread-menu-item[data-highlighted] {
   background: var(--accent);
 }
+/* A value after the item's name, such as a Space's cost. */
+.thread-menu-item-hint {
+  margin-left: auto;
+  padding-left: 12px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
 .thread-menu-item svg {
   width: 13px;
   height: 13px;
@@ -973,6 +980,24 @@ a {
   padding-left: 12px;
   color: var(--muted-foreground);
   text-align: right;
+}
+/* Who paid the Thread's cost, as in "$0.08  ✓ Credits". */
+.thread-actions-menu .thread-menu-item > .thread-menu-cost-coverage {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+}
+.thread-actions-menu
+  .thread-menu-item
+  > .thread-menu-cost-coverage[data-credits],
+.thread-actions-menu .thread-menu-item > .thread-menu-cost-coverage svg {
+  color: var(--thread-color-blue);
+}
+.thread-actions-menu .thread-menu-item > .thread-menu-cost-coverage svg {
+  width: 13px;
+  height: 13px;
 }
 /* Delete: red text and icon, highlighted or not. */
 .thread-menu-item.thread-menu-item-danger,
@@ -1408,6 +1433,13 @@ a {
      top, below the row's padding. */
   --message-actions-y: 0px;
 }
+/* A shared Thread names the sender above the bubble (16px avatar, 4px
+   gap): ⋯ hangs from the bubble's top-right corner, clear of the name. */
+.conversation-message:has(> .message-actions-anchor[data-side="right"]):has(
+  > .message-author
+) {
+  --message-actions-y: calc(18px + var(--message-actions-size) / 2);
+}
 .conversation-message:has(> .message-actions-anchor):focus {
   outline: none;
 }
@@ -1626,6 +1658,11 @@ a {
 ) > .message-content {
   box-shadow: inset 0 0 0 1px light-dark(#595959, #8c8c8c);
 }
+/* The message being edited. */
+.transcript-row.conversation-message.user-message[data-editing]
+> .message-content {
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
 .user-message {
   margin-bottom: 8px;
   padding: 4px 0;
@@ -1722,6 +1759,30 @@ a {
 }
 .thread-source-link:hover {
   color: var(--chat-foreground);
+}
+/* A Space's request on someone's behalf: their message, under their name. */
+.thread-request-message {
+  display: grid;
+  gap: 4px;
+  color: var(--chat-foreground);
+  font-size: 13px;
+}
+.thread-request-message > .message-author {
+  justify-content: flex-start;
+  margin-bottom: 0;
+}
+.thread-request-message > .message-text {
+  color: var(--muted-foreground);
+}
+.thread-request-source {
+  justify-self: start;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-decoration: none;
+}
+.thread-request-source:hover {
+  color: var(--chat-foreground);
+  text-decoration: underline;
 }
 @media (prefers-reduced-motion: reduce) {
   .thread-source-toggle > .thread-source-chevron {
@@ -2747,6 +2808,55 @@ a {
 .agent-composer:focus-within {
   border-color: color-mix(in srgb, var(--foreground) 22%, transparent);
   background: var(--background);
+}
+/* Editing an earlier message: a tab on the composer's top edge names it,
+   with Cancel (Esc), and says what else the edit removes or keeps. */
+.composer-editing-bar {
+  width: calc(100% - 24px);
+  max-width: calc(var(--composer-width) - 24px);
+  margin: 0 auto;
+  padding: 3px 4px 3px 12px;
+  pointer-events: auto;
+  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--foreground) 12%, transparent);
+  border-bottom: 0;
+  border-radius: 10px 10px 0 0;
+  background: color-mix(in srgb, var(--foreground) 3%, var(--background));
+  font-size: 12px;
+  line-height: 16px;
+}
+.composer-editing-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+}
+.composer-editing-title {
+  flex: 1;
+  min-width: 0;
+}
+.composer-editing-cancel {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+/* Phones: no keyboard to press Esc on, and a larger Cancel. */
+.mobile-pane-content .composer-editing-cancel {
+  height: 32px;
+}
+.mobile-pane-content .composer-editing-key {
+  display: none;
+}
+.composer-editing-note {
+  margin: 0 0 3px;
+  padding-right: 8px;
+  color: var(--foreground);
+  font-size: 11px;
+}
+/* What the edit removes dims while the person edits. */
+.transcript-turn > [data-editing] ~ *,
+.transcript-virtual-item[data-edit-removes] {
+  opacity: 0.45;
+  transition: opacity 150ms;
 }
 .agent-composer[data-file-drop-active] {
   border-color: var(--ring);
@@ -12734,6 +12844,10 @@ body:has(.dx-app-shell) {
   width: 14px;
   height: 14px;
 }
+.thread-executor-icon > .thread-space-icon {
+  color: var(--thread-color, currentColor);
+  stroke-width: 2.2;
+}
 .product-sidebar .thread-row > svg {
   width: 16px;
   height: 16px;
@@ -12961,10 +13075,6 @@ body:has(.dx-app-shell) {
   .thread-children-icon > svg {
     transition: none;
   }
-}
-/* A child's count of the Threads below it is a link to their tree. */
-.thread-started-count {
-  text-decoration: none;
 }
 .thread-row-shell[data-children] .thread-row-avatars {
   right: calc(var(--thread-children-width) + 16px);

@@ -22,7 +22,8 @@ const tombstoneOf = (column: string) => `${column} IN (
  * transaction. Each row stays, so its ID can never be issued again. Titles,
  * instructions, and snapshots are scrubbed. Their child Threads become
  * top-level Threads. Their notifications, sidebar placement, sharing
- * records, who saw them, attention rows, schedules, GitHub subscriptions, and GitHub issue links are removed,
+ * records, who saw them, attention rows, schedules, GitHub subscriptions,
+ * GitHub issue links, and comments on a Space's messages are removed,
  * and each deletion is recorded for cleanup. With `ownerUserId`, only that
  * owner's Threads change. The first statement returns the Threads it
  * tombstoned.
@@ -135,6 +136,18 @@ export const tombstoneStatements = (
       .prepare(
         `DELETE FROM thread_github_link WHERE ${tombstoneOf("thread_id")}`,
       )
+      .bind(ids, ownerUserId),
+    db
+      .prepare(`DELETE FROM thread_open_ask WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
+    db
+      .prepare(
+        `DELETE FROM space_visit WHERE ${tombstoneOf("space_thread_id")}`,
+      )
+      .bind(ids, ownerUserId),
+    // What people wrote about a deleted Space's messages goes with them.
+    db
+      .prepare(`DELETE FROM space_comment WHERE ${tombstoneOf("thread_id")}`)
       .bind(ids, ownerUserId),
   ];
 };

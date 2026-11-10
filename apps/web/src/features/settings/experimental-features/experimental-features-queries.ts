@@ -9,6 +9,7 @@ import {
   updatePersonalExperimentalFeature,
 } from "../../../shared/api/client.js";
 import { orbProviderKeys } from "../orb-providers/orb-providers-queries.js";
+import { settingsKeys } from "../settings-context-queries.js";
 
 export const experimentalFeatureKeys = {
   personal: (userId: UserId) => ["experimental-features", userId] as const,
@@ -47,6 +48,11 @@ export const updatePersonalExperimentalFeatureMutationOptions = (
       // offered, so the Orb Providers list and every picker load again.
       await queryClient.invalidateQueries({
         queryKey: orbProviderKeys.all(userId),
+      });
+      // The settings context carries flags the app reads at load, such as
+      // Spaces and composer quick actions.
+      await queryClient.invalidateQueries({
+        queryKey: settingsKeys.contexts(userId),
       });
     },
   });

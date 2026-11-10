@@ -16,7 +16,6 @@ import {
   FileText,
   Hash,
   Link2,
-  Network,
   Pencil,
   Pin,
   PinOff,
@@ -46,11 +45,6 @@ import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
 import type { DictationRecord } from "./dictation/dictation-session.js";
-import {
-  serializeThreadJson,
-  serializeThreadMarkdown,
-  threadExportFilename,
-} from "./thread-export.js";
 import { ThreadPresentationContext } from "./thread-session-context.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
 
@@ -60,9 +54,9 @@ import type { TranscriptViewModel } from "./transcript-view-model.js";
 // or down on its button, or focus). Loaded, the rows render in the menu's
 // first frame, so the menu never grows: loading on the tap itself left them
 // 170-230 ms behind the menu on a phone at 4x CPU.
-let loadedDetails: typeof import("./thread-menu-details.js") | undefined;
+let loadedDetails: typeof import("./thread-menu-chunk.js") | undefined;
 const loadDetails = () =>
-  import("./thread-menu-details.js").then((module) => {
+  import("./thread-menu-chunk.js").then((module) => {
     loadedDetails = module;
     return module;
   });
@@ -84,6 +78,17 @@ const menuParts = { Item: Menu.Item, Separator: Menu.Separator };
 const BugReportDialog = React.lazy(() =>
   import("./bug-reports/bug-report-dialog.js").then((module) => ({
     default: module.BugReportDialog,
+  })),
+);
+
+/**
+ * A Thread's Cost & Usage, loaded when it first opens. Reached through the
+ * details chunk, which imports it, so the dialog's chunk list stays out of
+ * the Thread page's first load.
+ */
+const ThreadUsageDialog = React.lazy(() =>
+  loadDetails().then((module) => ({
+    default: module.ThreadUsageDialogLoader,
   })),
 );
 
@@ -174,8 +179,27 @@ export function ThreadMenu({
     readonly changesOpen: boolean;
     readonly dictation?: DictationRecord;
   }>();
+  const [usageOpen, setUsageOpen] = React.useState(false);
+  const openUsage = () => setUsageOpen(true);
   const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
   const download = (format: "markdown" | "json") => {
+    // The serializers come with the menu's details chunk, which loads when
+    // the page is idle or the menu is reached for, so they stay out of the
+    // Thread page's first load and are usually ready by the click.
+    if (loadedDetails === undefined)
+      void loadDetails().then(({ threadExport }) =>
+        saveExport(threadExport, format),
+      );
+    else saveExport(loadedDetails.threadExport, format);
+  };
+  const saveExport = (
+    {
+      serializeThreadJson,
+      serializeThreadMarkdown,
+      threadExportFilename,
+    }: typeof import("./thread-export.js"),
+    format: "markdown" | "json",
+  ) => {
     const markdown = format === "markdown";
     const model = transcript();
     const contents = markdown
@@ -253,18 +277,6 @@ export function ThreadMenu({
                   <span>Open Source Thread</span>
                 </Menu.Item>
               )}
-              <Menu.Item
-                className="thread-menu-item"
-                render={
-                  <Link
-                    to="/threads/$threadId/tree"
-                    params={{ threadId: thread.id }}
-                  />
-                }
-              >
-                <Network />
-                <span>Open Thread Tree</span>
-              </Menu.Item>
               <Menu.Separator className="thread-menu-separator" />
               <Menu.Item
                 className="thread-menu-item"
@@ -274,30 +286,10 @@ export function ThreadMenu({
                 <span>Copy Thread URL</span>
                 <ShortcutKeycaps keycaps={copyUrlKeycaps} emptyLabel="" />
               </Menu.Item>
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => void copyThreadId(thread.id)}
-              >
-                <Hash />
-                <span>Copy Thread ID</span>
-              </Menu.Item>
-              <ThreadMenuSubmenu icon={<FileDown />} label="Export">
-                <Menu.Item
-                  className="thread-menu-item"
-                  onClick={() => download("markdown")}
-                >
-                  <FileText />
-                  <span>Markdown</span>
-                </Menu.Item>
-                <Menu.Item
-                  className="thread-menu-item"
-                  onClick={() => download("json")}
-                >
-                  <Braces />
-                  <span>JSON</span>
-                </Menu.Item>
-              </ThreadMenuSubmenu>
-              {showDetails ? null : <ThreadMenuDetails thread={thread} />}
+              <ThreadIdentityItems thread={thread} onDownload={download} />
+              {showDetails ? null : (
+                <ThreadMenuDetails thread={thread} onOpenUsage={openUsage} />
+              )}
               {onOpenShare === undefined &&
               overflowItems === undefined &&
               !pinnable &&
@@ -374,6 +366,7 @@ export function ThreadMenu({
                   thread={thread}
                   project={project}
                   layout="phone"
+                  onOpenUsage={openUsage}
                 />
               ) : null}
               <Menu.Separator className="thread-menu-separator" />
@@ -409,6 +402,14 @@ export function ThreadMenu({
           />
         </React.Suspense>
       )}
+      {usageOpen ? (
+        <React.Suspense fallback={null}>
+          <ThreadUsageDialog
+            thread={thread}
+            onClose={() => setUsageOpen(false)}
+          />
+        </React.Suspense>
+      ) : null}
       <span className="sr-only" aria-live="polite">
         {announcement}
         {announcement ? <Check /> : null}
@@ -538,5 +539,42 @@ function DeleteMenuItem({
         </Menu.Positioner>
       </Menu.Portal>
     </Menu.SubmenuRoot>
+  );
+}
+
+/** Copy Thread ID and Export, which a Space's menu leaves out. */
+function ThreadIdentityItems({
+  thread,
+  onDownload,
+}: {
+  readonly thread: ThreadDetailData;
+  readonly onDownload: (format: "markdown" | "json") => void;
+}) {
+  return (
+    <>
+      <Menu.Item
+        className="thread-menu-item"
+        onClick={() => void copyThreadId(thread.id)}
+      >
+        <Hash />
+        <span>Copy Thread ID</span>
+      </Menu.Item>
+      <ThreadMenuSubmenu icon={<FileDown />} label="Export">
+        <Menu.Item
+          className="thread-menu-item"
+          onClick={() => onDownload("markdown")}
+        >
+          <FileText />
+          <span>Markdown</span>
+        </Menu.Item>
+        <Menu.Item
+          className="thread-menu-item"
+          onClick={() => onDownload("json")}
+        >
+          <Braces />
+          <span>JSON</span>
+        </Menu.Item>
+      </ThreadMenuSubmenu>
+    </>
   );
 }

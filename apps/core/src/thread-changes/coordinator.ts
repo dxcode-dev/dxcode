@@ -2,6 +2,7 @@ import type { ThreadId } from "@dx/domain";
 import type { Sandbox } from "@flue/runtime";
 import type { DxdChangesRefresh } from "../execution/dxd/protocol.js";
 import { threadChangesLogger } from "../logging.js";
+import { recordDefaultBranchLanding } from "../spaces/progress/shipped.js";
 import {
   captureKey,
   captureThreadChanges,
@@ -294,6 +295,15 @@ export const makeThreadChangesCoordinator = (input: {
           .catch((cause) => logFailure(input.threadId, "orphan-delete", cause));
         return "raced" as const;
       }
+      // Before the previous capture is deleted: it holds the work the
+      // thread had not pushed yet. The turn's end refreshes its viewers.
+      await recordDefaultBranchLanding({
+        db: input.db,
+        bucket: input.bucket,
+        threadId: input.threadId,
+        previousCaptureId: state.latestCaptureId,
+        manifest,
+      });
       if (
         state.latestCaptureId !== undefined &&
         state.latestCaptureId !== manifest.captureId

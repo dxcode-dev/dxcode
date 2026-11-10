@@ -18,15 +18,10 @@ export const ThreadListItemSchema = Schema.Struct({
   mode: Schema.Union([ModeId, ModelId]),
   changes: Schema.optional(ThreadChangesSummarySchema),
   /**
-   * Roots only: the child Threads listed in this one's family, at any depth;
-   * absent when none. The roots list carries those listed directly under it.
+   * Roots only: the child Threads listed under this one, whichever member of
+   * the family started them; absent when none. The roots list carries them.
    */
   childCount: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
-  /**
-   * Child Threads only: the Threads below this one that list under it rather
-   * than under the root, those it started and theirs. Absent when none.
-   */
-  startedCount: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   /**
    * The agent finished a turn the requester has not seen: it settled after
    * they last opened the Thread. Absent when seen.

@@ -759,6 +759,311 @@ describe("generated Flue Worker lifecycle", () => {
     });
   });
 
+  // Editing an earlier message (dx Thread edit and rewind). Ways it could
+  // fail: the removed turns stay in the transcript or the model's context;
+  // someone else, or a stale copy of the message, edits it; a running turn
+  // keeps running or blocks the edit; the edited message reaches the agent
+  // without its edit mark; the edit undoes side effects it must keep.
+  it("edits an earlier message: the later turns leave the transcript and the model, side effects stay", async () => {
+    const threadId = await startScenarioThread("edit-rewind", "one");
+    const settled = async (count: number) =>
+      waitUntil(
+        async () =>
+          (
+            await (
+              await fixtureRequest(`/__fixture/settlements/${threadId}`)
+            ).json<unknown[]>()
+          ).length >= count,
+        `${count} settled turns`,
+        20_000,
+      );
+    await settled(1);
+    // Messages through dx's admission carry their author tag, as in Core.
+    const sendAttributed = async (body: string, key: string) => {
+      const response = await fixtureRequest(
+        `/v1/agents/dx-attributed/${threadId}`,
+        {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/json" },
+          body: JSON.stringify({ kind: "user", body, idempotencyKey: key }),
+        },
+      );
+      expect(response.status).toBe(202);
+    };
+    await sendAttributed("two", "edit-two");
+    await settled(2);
+    await sendAttributed("three", "edit-three");
+    await settled(3);
+    const before = await threadClient(threadId).history();
+    expect(textsOf(before, "user")).toEqual(["one", "two", "three"]);
+    expect(textsOf(before, "assistant")).toEqual([
+      "seen: one",
+      "seen: one | two",
+      "seen: one | two | three",
+    ]);
+    const message = (history: FlueHistory, text: string) => {
+      const found = history.messages.find(
+        (candidate) =>
+          candidate.role === "user" &&
+          candidate.parts.some(
+            (part) =>
+              part.type === "text" &&
+              parseMessageAuthor(part.text).text === text,
+          ),
+      );
+      const raw = found?.parts.find((part) => part.type === "text");
+      if (found === undefined || raw?.type !== "text")
+        throw new Error(`No message "${text}".`);
+      return { id: found.id, original: raw.text };
+    };
+    const two = message(before, "two");
+    const edit = (
+      id: string,
+      body: { original: string; body: string; idempotencyKey: string },
+    ) =>
+      fixtureRequest(`/v1/threads/${threadId}/messages/${id}/edit`, {
+        method: "POST",
+        headers: { ...authorization, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    // A message another person sent is not theirs to edit.
+    const notYours = await edit(two.id, {
+      original: two.original.replace(
+        /user_id="[^"]*"/,
+        'user_id="usr_someone-else"',
+      ),
+      body: "two, edited",
+      idempotencyKey: "edit-not-yours",
+    });
+    expect(notYours.status).toBe(403);
+    // A copy that no longer matches the message changes nothing.
+    const stale = await edit(two.id, {
+      original: two.original.replace(/two$/, "2"),
+      body: "two, edited",
+      idempotencyKey: "edit-stale",
+    });
+    expect(stale.status).toBe(409);
+    expect(textsOf(await threadClient(threadId).history(), "user")).toEqual([
+      "one",
+      "two",
+      "three",
+    ]);
+
+    const edited = await edit(two.id, {
+      original: two.original,
+      body: "two, edited",
+      idempotencyKey: "edit-two-once",
+    });
+    expect(edited.status).toBe(200);
+    await settled(4);
+    const after = await threadClient(threadId).history();
+    expect(textsOf(after, "user")).toEqual(["one", "two, edited"]);
+    expect(textsOf(after, "assistant")).toEqual([
+      "seen: one",
+      "seen: one | two, edited",
+    ]);
+    // The agent is told this message replaces an earlier one.
+    expect(
+      parseMessageAuthor(message(after, "two, edited").original),
+    ).toMatchObject({
+      edited: true,
+    });
+    // The removed turn's command ran, and stays run.
+    const runs = await (
+      await fixtureRequest(`/__fixture/command-runs/${threadId}`)
+    ).json<Record<string, number>>();
+    expect(runs["edit-side-effect"]).toBe(1);
+    // Retrying the same edit converges on it.
+    const retried = await edit(two.id, {
+      original: two.original,
+      body: "two, edited",
+      idempotencyKey: "edit-two-once",
+    });
+    expect(retried.status).toBe(200);
+    expect(textsOf(await threadClient(threadId).history(), "user")).toEqual([
+      "one",
+      "two, edited",
+    ]);
+    // The old message is gone: editing it again changes nothing.
+    const gone = await edit(two.id, {
+      original: two.original,
+      body: "two, again",
+      idempotencyKey: "edit-two-gone",
+    });
+    expect(gone.status).toBe(409);
+
+    // An edit while a turn runs stops it first.
+    await sendAttributed("hold", "edit-hold");
+    await waitUntil(
+      async () =>
+        (
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "the held turn",
+    );
+    const running = await threadClient(threadId).history();
+    const editedTwo = message(running, "two, edited");
+    const whileRunning = await edit(editedTwo.id, {
+      original: editedTwo.original,
+      body: "two, edited again",
+      idempotencyKey: "edit-while-running",
+    });
+    expect(whileRunning.status).toBe(200);
+    await settled(6);
+    const final = await threadClient(threadId).history();
+    expect(textsOf(final, "user")).toEqual(["one", "two, edited again"]);
+    expect(textsOf(final, "assistant")).toEqual([
+      "seen: one",
+      "seen: one | two, edited again",
+    ]);
+    writeProof("edit-rewind", {
+      threadId,
+      before: {
+        user: textsOf(before, "user"),
+        assistant: textsOf(before, "assistant"),
+      },
+      afterEdit: {
+        user: textsOf(after, "user"),
+        assistant: textsOf(after, "assistant"),
+      },
+      afterEditWhileRunning: {
+        user: textsOf(final, "user"),
+        assistant: textsOf(final, "assistant"),
+      },
+      commandRuns: runs,
+      refused: {
+        notYours: notYours.status,
+        stale: stale.status,
+        gone: gone.status,
+      },
+    });
+  });
+
+  // An edit's first model call must repeat what the replaced turn sent up to
+  // the edited message, byte for byte, so the provider's prompt cache still
+  // holds the conversation the edit keeps. Ways it could fail: the rewind
+  // leaves a marker in the history; the system prompt is composed again with
+  // the workspace the removed turn changed (here, a file it wrote at the
+  // root); tools come back in another order; the kept messages are rendered
+  // again with new metadata. A normal next turn has the same constraint.
+  it("sends the model the same request up to an edited message, after a turn that changed the workspace", async () => {
+    const threadId = await startScenarioThread("edit-cache", "one");
+    const settled = async (count: number) =>
+      waitUntil(
+        async () =>
+          (
+            await (
+              await fixtureRequest(`/__fixture/settlements/${threadId}`)
+            ).json<unknown[]>()
+          ).length >= count,
+        `${count} settled turns`,
+        20_000,
+      );
+    await settled(1);
+    const send = async (body: string, key: string) => {
+      const response = await fixtureRequest(
+        `/v1/agents/dx-attributed/${threadId}`,
+        {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/json" },
+          body: JSON.stringify({ kind: "user", body, idempotencyKey: key }),
+        },
+      );
+      expect(response.status).toBe(202);
+    };
+    await send("two", "cache-two");
+    await settled(2);
+    await send("three", "cache-three");
+    await settled(3);
+    const before = await threadClient(threadId).history();
+    const two = before.messages.find(
+      (candidate) =>
+        candidate.role === "user" &&
+        candidate.parts.some(
+          (part) =>
+            part.type === "text" &&
+            parseMessageAuthor(part.text).text === "two",
+        ),
+    );
+    const original = two?.parts.find((part) => part.type === "text");
+    if (two === undefined || original?.type !== "text")
+      throw new Error("No second message.");
+    const edited = await fixtureRequest(
+      `/v1/threads/${threadId}/messages/${two.id}/edit`,
+      {
+        method: "POST",
+        headers: { ...authorization, "content-type": "application/json" },
+        body: JSON.stringify({
+          original: original.text,
+          body: "two, edited",
+          idempotencyKey: "cache-edit",
+        }),
+      },
+    );
+    expect(edited.status).toBe(200);
+    await settled(4);
+    const calls = await (
+      await fixtureRequest("/__fixture/model-requests")
+    ).json<
+      Array<{ systemPrompt: string; tools: string; messages: string[] }>
+    >();
+    // One, two (a write, then its answer), three, and the edited two.
+    expect(calls).toHaveLength(5);
+    const [, replaced, afterWrite, nextTurn, edit] = calls as [
+      (typeof calls)[number],
+      (typeof calls)[number],
+      (typeof calls)[number],
+      (typeof calls)[number],
+      (typeof calls)[number],
+    ];
+    // The edit's call: the replaced call's system prompt and tools, and its
+    // messages up to the edited one, then the edited message. pi carries the
+    // system prompt as the leading system message; the workspace it lists is
+    // the one the conversation started in, without the file the removed
+    // turn wrote.
+    const leading = JSON.parse(edit.messages[0] ?? "{}") as {
+      role?: string;
+      content?: string;
+    };
+    expect(leading.role).toBe("system");
+    expect(leading.content).toContain("Working directory: /home/user");
+    expect(leading.content).not.toContain("edit-cache-kept.txt");
+    expect(edit.systemPrompt).toBe(replaced.systemPrompt);
+    expect(edit.tools).toBe(replaced.tools);
+    const kept = replaced.messages.length - 1;
+    expect(edit.messages.slice(0, kept)).toEqual(
+      replaced.messages.slice(0, kept),
+    );
+    expect(edit.messages).toHaveLength(kept + 1);
+    const last = JSON.parse(edit.messages[kept] ?? "{}") as {
+      content: string | Array<{ type: string; text?: string }>;
+    };
+    expect(
+      parseMessageAuthor(
+        typeof last.content === "string"
+          ? last.content
+          : (last.content[0]?.text ?? ""),
+      ).text,
+    ).toBe("two, edited");
+    // A normal next turn after the write keeps its prefix the same way.
+    expect(nextTurn.systemPrompt).toBe(afterWrite.systemPrompt);
+    expect(nextTurn.messages.slice(0, afterWrite.messages.length)).toEqual(
+      afterWrite.messages,
+    );
+    writeProof("edit-cache", {
+      threadId,
+      systemMessageBytes: leading.content?.length,
+      keptMessages: kept,
+      sameKeptPrefix:
+        edit.messages.slice(0, kept).join("\n") ===
+        replaced.messages.slice(0, kept).join("\n"),
+      sameTools: edit.tools === replaced.tools,
+    });
+  });
+
   // #1668: archiving a Thread mid-turn stopped its Orb but not its agent.
   // The running turn failed once the Orb was gone, and every message queued
   // behind it failed with it, each saying the Thread's plan was removed.

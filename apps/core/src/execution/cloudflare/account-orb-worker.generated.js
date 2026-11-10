@@ -2331,6 +2331,7 @@ getLogger([
 	"audit"
 ]);
 getLogger(["dx", "automations"]);
+getLogger(["dx", "spaces"]);
 //#endregion
 //#region apps/core/src/execution/disk-cleanup-script.ts
 var KIB = 1024;

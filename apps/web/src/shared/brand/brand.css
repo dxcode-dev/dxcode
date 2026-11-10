@@ -73,3 +73,9 @@
   /* "dx" has no descender, so the line box centers the ink high; nudge it. */
   transform: translateY(0.05em);
 }
+
+/* Inside a 20px avatar (`.dx-avatar`), in its foreground color. */
+.dx-brand-wordmark[data-size="avatar"] .dx-brand-wordmark-glyph {
+  font-size: 9.5px;
+  transform: translateY(0.05em);
+}

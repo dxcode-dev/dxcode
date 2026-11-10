@@ -1,7 +1,7 @@
 import type { ThreadId, UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
+import type { CommentPeople } from "../../../shared/comments/comment-text.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
-import type { CommentPeople } from "./artifact-comments.js";
 
 /**
  * Who can be named in the Thread's comments, by user ID: its members, which

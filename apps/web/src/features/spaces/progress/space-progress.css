@@ -1,0 +1,257 @@
+/* A Space's 30-day chart: stacked shipped/archived bars, the open line. */
+.space-progress {
+  --space-progress-shipped: color-mix(
+    in srgb,
+    var(--success) 62%,
+    var(--background)
+  );
+  --space-progress-archived: light-dark(
+    color-mix(in srgb, var(--muted-foreground) 42%, var(--background)),
+    color-mix(in srgb, var(--muted-foreground) 62%, var(--background))
+  );
+  --space-progress-line: color-mix(in srgb, var(--foreground) 72%, transparent);
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.space-progress-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  min-width: 0;
+}
+
+.space-progress-plot {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 60px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.space-progress-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.space-progress-area {
+  fill: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.space-progress-bar[data-kind="shipped"] {
+  fill: var(--space-progress-shipped);
+}
+.space-progress-bar[data-kind="archived"] {
+  fill: var(--space-progress-archived);
+}
+
+.space-progress-line {
+  fill: none;
+  stroke: var(--space-progress-line);
+  stroke-width: 1.5px;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.space-progress-end {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  background: var(--space-progress-line);
+  pointer-events: none;
+}
+
+.space-progress-days {
+  position: absolute;
+  inset: 0;
+  display: grid;
+}
+
+.space-progress-day-button {
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  cursor: pointer;
+}
+.space-progress-day-button[data-hovered],
+.space-progress-day-button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--foreground) 7%, transparent);
+}
+.space-progress-day-button:focus-visible {
+  outline: 1.5px solid var(--ring, var(--foreground));
+  outline-offset: -1.5px;
+}
+
+.space-progress-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  z-index: 2;
+  padding: 4px 8px;
+  color: var(--popover-foreground);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--popover);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.12);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.space-progress-tooltip[data-side="start"] {
+  transform: translateX(-12px);
+}
+.space-progress-tooltip[data-side="end"] {
+  transform: translateX(calc(-100% + 12px));
+}
+
+.space-progress-legend {
+  display: grid;
+  flex: none;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  line-height: 16px;
+  list-style: none;
+}
+.space-progress-legend li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.space-progress-legend strong {
+  color: var(--foreground);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+.space-progress-legend li[data-kind="shipped"] strong {
+  color: var(--success);
+}
+
+.space-progress-swatch {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+}
+.space-progress-swatch[data-kind="shipped"] {
+  background: var(--space-progress-shipped);
+}
+.space-progress-swatch[data-kind="archived"] {
+  background: var(--space-progress-archived);
+}
+.space-progress-swatch[data-kind="open"] {
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--space-progress-line);
+}
+
+.space-progress-day {
+  display: grid;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 16px;
+}
+.space-progress-day > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0 2px 6px;
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+.space-progress-day-close {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.space-progress-day-close:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+.space-progress-day-close > svg {
+  width: 14px;
+  height: 14px;
+}
+.space-progress-day > p {
+  margin: 0;
+  padding: 4px 6px;
+  color: var(--muted-foreground);
+}
+.space-progress-day > ul {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.space-progress-day li > button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  color: var(--foreground);
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.space-progress-day li > button:hover {
+  background: var(--muted);
+}
+.space-progress-day li small {
+  margin-inline-start: auto;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.space-progress-day-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-progress-outcome {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.space-progress-outcome[data-outcome="shipped"] {
+  background: var(--space-progress-shipped);
+}
+.space-progress-outcome[data-outcome="archived"] {
+  background: var(--space-progress-archived);
+}
+.space-progress-outcome[data-outcome="open"] {
+  border: 1.5px solid var(--space-progress-line);
+  border-radius: 50%;
+}

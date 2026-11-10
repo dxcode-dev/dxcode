@@ -8,6 +8,7 @@ import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { MessageActions } from "./message-actions.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
+import { MessageEditContext } from "./message-edit.js";
 import { rowMatchesMessageLink } from "./message-link.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
@@ -17,6 +18,7 @@ import {
 } from "./sharing/message-authors.js";
 import {
   AutomationMessage,
+  CommentPromptMessage,
   ThreadSourceMessage,
 } from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
@@ -163,11 +165,13 @@ function TranscriptRowShellContent({
   const user = row.kind === "user-prompt";
   const fromThread = user ? row.sourceThreadId : undefined;
   const automation = user ? row.automation : undefined;
+  const commentOn = user ? row.commentOn : undefined;
   const author = useMessageAuthor(
     user ? row.author : undefined,
     user ? row.admitted : true,
     user ? row.sentAt : undefined,
   );
+  const editing = React.use(MessageEditContext)?.editingRowId === row.id;
   // What people and the agent wrote has a menu; tool work does not.
   const withMenu = (article: React.ReactElement, content: React.ReactNode) =>
     row.kind === "user-prompt" ||
@@ -182,6 +186,7 @@ function TranscriptRowShellContent({
           user &&
           fromThread === undefined &&
           automation === undefined &&
+          commentOn === undefined &&
           (author === undefined || author.mine)
             ? "right"
             : "left"
@@ -207,6 +212,8 @@ function TranscriptRowShellContent({
         sourceThreadId={fromThread}
         text={row.text}
         pending={!row.admitted}
+        {...(row.author === undefined ? {} : { author: row.author })}
+        {...(row.sentAt === undefined ? {} : { sentAt: row.sentAt })}
       />,
     );
   if (automation !== undefined && row.kind === "user-prompt")
@@ -226,6 +233,23 @@ function TranscriptRowShellContent({
         pending={!row.admitted}
       />,
     );
+  if (commentOn !== undefined && row.kind === "user-prompt")
+    return withMenu(
+      <article
+        id={row.id}
+        data-row-id={row.id}
+        data-row-kind={row.kind}
+        data-comment-on={commentOn}
+        ref={measureElement}
+        tabIndex={-1}
+        className="transcript-row conversation-message thread-source-row"
+      />,
+      <CommentPromptMessage
+        name={author?.name ?? row.author?.name ?? "Someone"}
+        text={row.text}
+        pending={!row.admitted}
+      />,
+    );
   return withMenu(
     <article
       id={row.id}
@@ -235,6 +259,7 @@ function TranscriptRowShellContent({
         user && author !== undefined && !author.mine ? "other" : undefined
       }
       data-continued={user && row.continued ? "" : undefined}
+      data-editing={editing ? "" : undefined}
       ref={measureElement}
       tabIndex={-1}
       className={`transcript-row conversation-message ${user ? "user-message" : "agent-message"}`}
@@ -1045,6 +1070,17 @@ export function TranscriptViewport(
     model,
     rowsByTurn,
   );
+  // Editing a message previews what the edit removes: every turn after the
+  // edited message's turn dims (the rest of that turn dims in CSS).
+  const editingRowId = React.use(MessageEditContext)?.editingRowId;
+  const editingTurnId =
+    editingRowId === undefined
+      ? undefined
+      : model.rows.find((row) => row.id === editingRowId)?.turnId;
+  const editingTurnIndex =
+    editingTurnId === undefined
+      ? -1
+      : model.turns.findIndex((turn) => turn.id === editingTurnId);
   return (
     <>
       <section
@@ -1091,6 +1127,11 @@ export function TranscriptViewport(
                 <div
                   className="transcript-virtual-item"
                   data-index={item.index}
+                  data-edit-removes={
+                    editingTurnIndex !== -1 && item.index > editingTurnIndex
+                      ? ""
+                      : undefined
+                  }
                   key={item.key}
                   style={
                     {

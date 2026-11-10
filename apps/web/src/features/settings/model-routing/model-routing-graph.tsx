@@ -3,6 +3,7 @@ import type {
   ConnectionData,
   DictationProviderData,
   GraphData,
+  SpaceAgentRoute,
 } from "@dx/api";
 import { GitBranch, Mic, Unplug } from "lucide-react";
 import { useState } from "react";
@@ -97,12 +98,14 @@ export function ModelRoutingGraph({
   choices,
   connections,
   dictation,
+  space,
   onConnectionClick,
 }: {
   readonly graph: GraphData;
   readonly choices?: ChoicesData;
   readonly connections?: ReadonlyArray<ConnectionData>;
   readonly dictation?: DictationProviderData;
+  readonly space?: SpaceAgentRoute;
   readonly onConnectionClick?: (id: string) => void;
 }) {
   const { groups, destinations } = routingPresentation({
@@ -110,6 +113,7 @@ export function ModelRoutingGraph({
     choices,
     connections,
     dictation,
+    space,
   });
   const [highlight, setHighlight] = useState<RoutingHighlight>();
   const [edges, setEdges] = useState<ReadonlyArray<MeasuredEdge>>([]);

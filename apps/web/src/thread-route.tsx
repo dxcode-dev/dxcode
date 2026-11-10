@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import { Monitor, SquareTerminal } from "lucide-react";
 import * as React from "react";
+import { useDictationSlot } from "./features/threads/dictation/use-dictation.js";
 import { threadQueryOptions } from "./features/threads/thread-queries.js";
 import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
 import { useAuthenticatedIdentity } from "./shared/auth/auth-context.js";
@@ -71,9 +72,48 @@ function ThreadDocumentTitle() {
   return title === undefined ? null : <DocumentTitle name={title} />;
 }
 
+// A Space's page loads when a Space first opens, so other Thread pages
+// never load its panel, dialogs, or requests.
+const SpaceRoute = lazyRouteComponent(
+  () => import("./space-route.js"),
+  "SpaceRoute",
+);
+
+const renderSpaceThread = (
+  props: React.ComponentProps<typeof ThreadWorkspace>,
+) => (
+  <ThreadWorkspace
+    Terminal={ThreadTerminal}
+    Desktop={DesktopViewer}
+    {...props}
+  />
+);
+
+/** A Space's page, or any other Thread's, by the Thread's kind. */
+function ThreadOrSpaceWorkspace() {
+  const { threadId } = useParams({ from: "/_product/threads/$threadId" });
+  const { identity } = useAuthenticatedIdentity();
+  const dictation = useDictationSlot();
+  const { data: space } = useQuery({
+    ...threadQueryOptions(identity.id, threadId as ThreadId),
+    select: (thread) => thread.kind === "space",
+  });
+  return space === true ? (
+    <React.Suspense fallback={null}>
+      <SpaceRoute
+        key={threadId}
+        renderThread={renderSpaceThread}
+        dictation={dictation}
+      />
+    </React.Suspense>
+  ) : (
+    <ThreadWorkspace Terminal={ThreadTerminal} Desktop={DesktopViewer} />
+  );
+}
+
 export const ThreadRoute = () => (
   <>
     <ThreadDocumentTitle />
-    <ThreadWorkspace Terminal={ThreadTerminal} Desktop={DesktopViewer} />
+    <ThreadOrSpaceWorkspace />
   </>
 );

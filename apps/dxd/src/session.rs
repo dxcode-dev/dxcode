@@ -11,6 +11,7 @@ use crate::changes::{
     CandidateOutcome, CaptureCache, ChangesScheduler, CompletedRefresh, RefreshRequest,
     UnavailableReason,
 };
+use crate::cpu::Cpu;
 use crate::disk::Disk;
 use crate::environment::{EnvironmentOutcome, EnvironmentResult, EnvironmentRuntime, Materialized};
 use crate::files::{FilesContext, FilesDone, FilesResult, FilesWorkers};
@@ -459,6 +460,8 @@ impl Daemon {
         self.connected.store(true, Ordering::Release);
         *healthy_since = Some(Instant::now());
 
+        // The first heartbeat only takes the reading the next one compares.
+        let mut cpu = Cpu::default();
         send_json(
             &control,
             &ClientMessage::Heartbeat {
@@ -467,6 +470,7 @@ impl Daemon {
                 terminals: self.terminal.other_heartbeats(),
                 memory: memory::usage(),
                 disk: self.disk.usage(),
+                cpu: cpu.sample(),
             },
         )
         .await?;
@@ -603,6 +607,7 @@ impl Daemon {
                 terminals: self.terminal.other_heartbeats(),
                             memory: memory::usage(),
                             disk: self.disk.usage(),
+                            cpu: cpu.sample(),
                         },
                     )
                     .await?;
