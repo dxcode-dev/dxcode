@@ -71,10 +71,10 @@ import { settingsContextQueryOptions } from "./features/settings/settings-contex
 import { defaultPaneLayout } from "./features/threads/panes/pane-layout.js";
 import { paneLayoutKeys } from "./features/threads/panes/pane-layout-queries.js";
 import { threadKeys } from "./features/threads/thread-queries.js";
-import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
+
 import { AuthContext } from "./shared/auth/auth-context.js";
 import { createQueryClient } from "./shared/query/query-client.js";
-import { SpaceRoute } from "./space-route.js";
+import { ThreadRoute } from "./thread-route.js";
 import "./styles.css";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -119,6 +119,7 @@ const threads = {
   [NORMAL]: detail(NORMAL, "Normal thread"),
   // A Space's own Thread runs without an Orb.
   [SPACE]: detail(SPACE, "Parity Space", {
+    kind: "space",
     executionWorkspace: { ready: false, preparationStatus: null },
   }),
   [CHILD]: detail(CHILD, "Child thread", { parentThreadId: SPACE }),
@@ -138,11 +139,76 @@ const usage = {
   context: { available: false, reason: "claude-code" },
 };
 
+/** A schedule, a CI and a PR-comments subscription, a pull request, CI. */
+const automations = {
+  schedule: {
+    title: "Nightly check",
+    prompt: "Check the build.",
+    label: "Daily, 9:00 AM",
+    rrule: "RRULE:FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+    timeZone: "UTC",
+    runMode: "existing",
+    enabled: true,
+    nextRunAt: at(-600),
+  },
+  githubSubscriptions: [
+    {
+      id: `ghs_${"a".repeat(32)}`,
+      title: "CI on abc1234",
+      repository: "acme/app",
+      filterKind: "ci",
+      target: "CI on abc1234",
+      url: "https://github.com/acme/app/commit/abc1234",
+      destination: "this-thread",
+      automatic: true,
+      enabled: true,
+      state: "active",
+      createdAt: at(20),
+    },
+    {
+      id: `ghs_${"b".repeat(32)}`,
+      title: "PR #12 comments",
+      repository: "acme/app",
+      filterKind: "pr-comments",
+      target: "comments on #12",
+      url: "https://github.com/acme/app/pull/12",
+      destination: "this-thread",
+      automatic: true,
+      enabled: true,
+      state: "active",
+      createdAt: at(20),
+    },
+  ],
+  issues: [],
+  pullRequests: [
+    {
+      repository: "acme/app",
+      number: 12,
+      url: "https://github.com/acme/app/pull/12",
+      state: "open",
+      title: "Fix the header",
+    },
+  ],
+  ciRuns: [
+    {
+      repository: "acme/app",
+      sha: "abc1234def5678",
+      branch: "fix-header",
+      result: "passed",
+      url: "https://github.com/acme/app/commit/abc1234",
+      checks: [{ name: "build", result: "success" }],
+      at: at(5),
+    },
+  ],
+};
+
 const serve = () => {
   const ok = (data: unknown) => Response.json({ status: "success", data });
   vi.stubGlobal("fetch", async (input: RequestInfo) => {
     const path = new URL(String(input), "https://dx.test").pathname;
     if (/^\/v1\/threads\/[^/]+\/usage$/.test(path)) return ok(usage);
+    if (/^\/v1\/threads\/[^/]+\/automations$/.test(path))
+      return ok(automations);
     if (path === `/v1/spaces/${SPACE}`)
       return ok({
         space: {
@@ -241,14 +307,9 @@ const mount = async (url: string, width: number, height: number) => {
         className="product-shell-content"
         style={{ position: "fixed", inset: 0, display: "flex" }}
       >
-        {threadId === SPACE ? (
-          <SpaceRoute
-            renderThread={(props) => <ThreadWorkspace {...props} />}
-            dictation={undefined}
-          />
-        ) : (
-          <ThreadWorkspace />
-        )}
+        {/* The real Thread route: a Space's page for the Space, with
+            what the route hands it, else the Thread page. */}
+        <ThreadRoute key={threadId} />
       </main>
     );
   };
@@ -407,4 +468,111 @@ for (const viewport of VIEWPORTS)
         )
         .toMatch(/Cost|Usage/);
       await page.screenshot({ path: `${shot}-usage.png` });
+    });
+
+/** The automations' chips shown outside any menu: PR, CI, listeners. */
+const automationChips = () =>
+  [...document.querySelectorAll<HTMLElement>(".automation-chip")]
+    .filter(visible)
+    .map((chip) => chip.getAttribute("aria-label") ?? "");
+
+for (const viewport of VIEWPORTS)
+  for (const surface of ["normal", "space", "child"] as const)
+    it(`${surface} on ${viewport.name}: shows its pull requests, CI, schedule, and GitHub subscriptions`, async () => {
+      await mount(URLS[surface], viewport.width, viewport.height);
+      await until(() => barOf(surface) !== null);
+      if (surface === "child")
+        await until(
+          () =>
+            document.querySelector(
+              ".space-thread-pane .space-tab-menu button",
+            ) !== null,
+        );
+      await settle(600);
+      const shot = `${SHOTS}/${viewport.name}-${surface}-automations`;
+      await page.screenshot({ path: `${shot}-bar.png` });
+      if (viewport.name === "desktop") {
+        // In the bar, as chips that open their lists.
+        const chips = automationChips().join(" | ");
+        expect.soft(chips, "pull request chip").toMatch(/pull request/);
+        expect.soft(chips, "CI chip").toMatch(/Passed on abc1234|abc1234/);
+        expect
+          .soft(chips, "listeners chip")
+          .toMatch(/subscriptions.*Scheduled|Scheduled/);
+        const listeners = [
+          ...document.querySelectorAll<HTMLElement>(".automation-chip"),
+        ].find(
+          (chip) =>
+            visible(chip) &&
+            /Scheduled/.test(chip.getAttribute("aria-label") ?? ""),
+        );
+        if (listeners === undefined) return;
+        await userEvent.click(listeners);
+        await settle(400);
+        const panel = document.body.textContent ?? "";
+        expect.soft(panel, "lists the schedule").toMatch(/Daily, 9:00 AM/);
+        expect
+          .soft(panel, "lists the CI subscription")
+          .toMatch(/CI on abc1234/);
+        expect
+          .soft(panel, "lists the PR comments subscription")
+          .toMatch(/comments on #12/);
+        await page.screenshot({ path: `${shot}-open.png` });
+        return;
+      }
+      // On a phone, each sits in the bar while it fits, else in More
+      // Actions, as a normal Thread's narrow bar does.
+      const inBar = automationChips().join(" | ");
+      const button = menuButtonOf(surface);
+      expect.soft(button, "More Actions in the bar").toBeDefined();
+      if (button === undefined) return;
+      await userEvent.click(button);
+      await until(() => document.querySelector(".thread-menu-popup") !== null);
+      await settle(300);
+      await page.screenshot({ path: `${shot}-menu.png` });
+      const items = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".thread-menu-popup .thread-menu-item",
+        ),
+      ].map((item) => item.textContent?.trim() ?? "");
+      const reachable = (chip: RegExp, item: string) =>
+        chip.test(inBar) || items.includes(item);
+      expect
+        .soft(reachable(/pull request/, "Pull requests"), "pull requests")
+        .toBe(true);
+      expect.soft(reachable(/abc1234/, "CI"), "CI").toBe(true);
+      expect
+        .soft(
+          reachable(/Scheduled/, "Schedule and GitHub events"),
+          "schedule and GitHub events",
+        )
+        .toBe(true);
+      const entry = [
+        ...document.querySelectorAll<HTMLElement>(
+          ".thread-menu-popup .thread-menu-item",
+        ),
+      ].find((item) =>
+        /Schedule and GitHub events/.test(item.textContent ?? ""),
+      );
+      if (entry !== undefined) await userEvent.click(entry);
+      else {
+        await userEvent.keyboard("{Escape}");
+        await settle(200);
+        const chip = [
+          ...document.querySelectorAll<HTMLElement>(".automation-chip"),
+        ].find(
+          (each) =>
+            visible(each) &&
+            /Scheduled/.test(each.getAttribute("aria-label") ?? ""),
+        );
+        if (chip === undefined) return;
+        await userEvent.click(chip);
+      }
+      await settle(500);
+      const sheet = document.body.textContent ?? "";
+      expect.soft(sheet, "lists the schedule").toMatch(/Daily, 9:00 AM/);
+      expect
+        .soft(sheet, "lists the PR comments subscription")
+        .toMatch(/comments on #12/);
+      await page.screenshot({ path: `${shot}-open.png` });
     });

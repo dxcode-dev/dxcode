@@ -16,6 +16,7 @@ import { SlotComposer } from "./features/threads/slot-composer.js";
 import type { ThreadWorkspace } from "./features/threads/thread-workspace.js";
 import type { MessageFilesSlot } from "./shared/composer/composer-slot.js";
 import type { DictationSlot } from "./shared/dictation/dictation-slot.js";
+import type { ThreadAutomationsSlot } from "./shared/thread-automations-slot.js";
 
 type ThreadWorkspaceProps = React.ComponentProps<typeof ThreadWorkspace>;
 
@@ -72,11 +73,14 @@ export function SpaceRoute({
   renderThread,
   dictation,
   files,
+  automations,
 }: {
   readonly renderThread: (props: ThreadWorkspaceProps) => React.ReactNode;
   readonly dictation: DictationSlot | undefined;
   /** The transcript's views of a message's files, for posts. */
   readonly files?: MessageFilesSlot;
+  /** A Thread title bar's issues, pull requests, CI, and listeners. */
+  readonly automations?: ThreadAutomationsSlot;
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const spaceThreadId = threadId as ThreadId;
@@ -100,6 +104,7 @@ export function SpaceRoute({
       dictation={dictation}
       Composer={SlotComposer}
       files={files}
+      automations={automations}
     />
   );
 }

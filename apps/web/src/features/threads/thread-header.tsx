@@ -1,16 +1,11 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { lazyRouteComponent, useNavigate } from "@tanstack/react-router";
 import { DateTime } from "effect";
 import {
   AlarmClock,
   Bookmark,
-  CalendarClock,
-  CircleCheck,
-  CircleDot,
   Eye,
   FolderGit2,
-  GitPullRequest,
   LockKeyhole,
   UsersRound,
 } from "lucide-react";
@@ -30,6 +25,7 @@ import {
   automationViews,
   useThreadAutomations,
 } from "./automations/automations-queries.js";
+import { ThreadAutomationMenuItems } from "./automations/thread-automation-menu-items.js";
 import { ThreadAutomationsButton } from "./automations/thread-automations-button.js";
 import { ThreadAutomationsSheet } from "./automations/thread-automations-sheet.js";
 import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
@@ -156,7 +152,9 @@ export function ThreadHeader({
   readonly views?: React.ReactNode;
   /**
    * Only More Actions, for a bar that stands in for the title bar, such as
-   * a Space's thread tab: it lists all that a phone's title bar moves there.
+   * a Space's thread tab: it lists all that a phone's title bar moves there,
+   * but the issues, pull requests, CI, and listeners only on a phone, since
+   * the bar shows their chips elsewhere.
    */
   readonly menuOnly?: boolean;
 }) {
@@ -181,7 +179,8 @@ export function ThreadHeader({
       ? selection.model
       : summary.label;
   const openShare = own && !archived ? () => setShareOpen(true) : undefined;
-  const compact = useThreadLayoutMode().compact || menuOnly;
+  const phone = useThreadLayoutMode().compact;
+  const compact = phone || menuOnly;
   const navigate = useNavigate();
   const shared =
     thread.sharing !== undefined || (thread.participants?.length ?? 0) > 1;
@@ -191,32 +190,24 @@ export function ThreadHeader({
     useTitleBarOverflow();
   const [sheet, setSheet] = React.useState<AutomationView | undefined>();
   const automations = useThreadAutomations(thread.id, own && compact).data;
+  const listed = (view: AutomationView) =>
+    menuOnly ? phone : hidden.has(view);
   const overflowItems =
     hidden.size === 0 && !menuOnly
       ? undefined
       : [
-          ...automationViews(automations).flatMap(({ view, label }) =>
-            menuOnly || hidden.has(view)
-              ? [
-                  <Menu.Item
-                    key={view}
-                    className="thread-menu-item"
-                    onClick={() => setSheet(view)}
-                  >
-                    {view === "issues" ? (
-                      <CircleDot />
-                    ) : view === "pulls" ? (
-                      <GitPullRequest />
-                    ) : view === "ci" ? (
-                      <CircleCheck />
-                    ) : (
-                      <CalendarClock />
-                    )}
-                    <span>{label}</span>
-                  </Menu.Item>,
-                ]
-              : [],
-          ),
+          // A bar that stands in for the title bar shows the chips beside
+          // it, so it lists them only on a phone.
+          ...(automationViews(automations).some(({ view }) => listed(view))
+            ? [
+                <ThreadAutomationMenuItems
+                  key="automations"
+                  threadId={thread.id}
+                  include={listed}
+                  onOpen={setSheet}
+                />,
+              ]
+            : []),
           ...((menuOnly || hidden.has("participants")) && shared
             ? [
                 <ThreadMenuSubmenu

@@ -3358,3 +3358,195 @@ async fn real_daemon_runs_several_login_shells() {
     let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
     assert!(heartbeat.get("terminals").is_none(), "{heartbeat}");
 }
+
+/// Runs `dxd git-credential get` for a github.com repository, as Git does,
+/// and returns its output once it exits.
+fn git_credential_helper(fixture: &Fixture) -> Helper {
+    let socket = fixture.state.join("workload-identity.sock");
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let started = Instant::now();
+        let mut child = Command::new(DXD)
+            .args(["git-credential", "get"])
+            .env_clear()
+            .env("PATH", std::env::var("PATH").unwrap())
+            .env("DX_WORKLOAD_IDENTITY_SOCKET", &socket)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"protocol=https\nhost=github.com\npath=acme/app.git\n\n")
+            .unwrap();
+        let output = child.wait_with_output().unwrap();
+        (output, started.elapsed())
+    })
+}
+
+type Helper = tokio::task::JoinHandle<(std::process::Output, Duration)>;
+
+/// The helper's request as Core receives it; fails with the helper's own
+/// output when it gives up before asking.
+async fn credential_request(socket: &mut Socket, helper: &mut Helper) -> Value {
+    tokio::select! {
+        request = wait_for(socket, |value| value["type"] == "workload-identity.request") => request,
+        finished = &mut *helper => {
+            let (output, elapsed) = finished.unwrap();
+            panic!(
+                "the helper gave up after {} ms without asking Core: {}",
+                elapsed.as_millis(),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+}
+
+async fn answer_credential(
+    socket: &mut Socket,
+    helper: &mut Helper,
+    generation: &str,
+    result: Value,
+) {
+    let request = credential_request(socket, helper).await;
+    assert_eq!(request["request"]["kind"], "git-credential");
+    assert_eq!(request["request"]["host"], "github.com");
+    send(
+        socket,
+        json!({
+            "type": "workload-identity.response", "generation": generation,
+            "requestId": request["requestId"], "result": result,
+        }),
+    )
+    .await;
+}
+
+fn issued() -> Value {
+    json!({"kind": "credential", "username": "x-access-token", "password": "ghu_synthetic"})
+}
+
+fn assert_credential(label: &str, output: &std::process::Output, elapsed: Duration) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    eprintln!(
+        "measured: {label}: credential after {} ms",
+        elapsed.as_millis()
+    );
+    assert!(output.status.success(), "{label}: helper failed: {stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "username=x-access-token\npassword=ghu_synthetic\n\n",
+        "{label}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "{label}: took {elapsed:?}"
+    );
+    assert!(
+        !stderr.contains("Settings"),
+        "{label}: a dropped connection never asks to reconnect GitHub: {stderr}"
+    );
+}
+
+/// #2049: Git and `gh` credentials come from Core over dxd's connection. When
+/// that connection drops (Core closes it, the daemon restarts, or it drops
+/// while a request is in flight), the helper waits for the daemon to
+/// register again and gets its credential then, instead of failing at once
+/// and telling the person to reconnect GitHub. Only Core's refusal says that.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_serves_git_credentials_across_a_lost_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let mut daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let mut generation = register(&mut socket).await;
+
+    // Connected: one round trip.
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("connected", &output, elapsed);
+
+    // Core dropped the connection (a lease expiry) and the daemon is not
+    // back yet: the request waits for it.
+    drop(socket);
+    let mut helper = git_credential_helper(&fixture);
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let mut socket = accept(&listener).await;
+    generation = register(&mut socket).await;
+    answer_credential(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("asked while disconnected", &output, elapsed);
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("dx's connection to this Orb dropped; retrying"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The connection drops while Core holds the request: it is asked again
+    // on the next connection.
+    let mut helper = git_credential_helper(&fixture);
+    let request = credential_request(&mut socket, &mut helper).await;
+    assert_eq!(request["request"]["host"], "github.com");
+    drop(socket);
+    let mut socket = accept(&listener).await;
+    generation = register(&mut socket).await;
+    answer_credential(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("dropped in flight", &output, elapsed);
+
+    // The daemon itself restarts (a crash, or a resumed Orb whose processes
+    // start again): the helper waits for the new one.
+    let _ = daemon.0.kill();
+    let _ = daemon.0.wait();
+    drop(socket);
+    let mut helper = git_credential_helper(&fixture);
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    generation = register(&mut socket).await;
+    answer_credential(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("daemon restarted", &output, elapsed);
+
+    // Core refused: the owner's connection is missing or revoked. Only this
+    // says to reconnect.
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential(
+        &mut socket,
+        &mut helper,
+        &generation,
+        json!({"kind": "unauthorized"}),
+    )
+    .await;
+    let (output, _) = helper.await.unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(
+        stderr.contains("Reconnect") && stderr.contains("dx Settings → Integrations"),
+        "{stderr}"
+    );
+
+    // Core could not issue one for another reason: say so, without blaming
+    // the connection.
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential(
+        &mut socket,
+        &mut helper,
+        &generation,
+        json!({"kind": "unavailable"}),
+    )
+    .await;
+    let (output, elapsed) = helper.await.unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success());
+    assert!(elapsed < Duration::from_secs(5), "Core's answer is final");
+    assert!(!stderr.contains("Settings"), "{stderr}");
+    assert!(stderr.contains("try again"), "{stderr}");
+    drop(daemon);
+}

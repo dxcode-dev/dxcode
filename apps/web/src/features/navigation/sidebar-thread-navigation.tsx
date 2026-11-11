@@ -1,6 +1,6 @@
 import type { ThreadData } from "@dx/api";
 import { Archive, ChevronDown, FolderGit2 } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
@@ -38,7 +38,10 @@ export function SidebarThreadNavigation({
   pinningThreadId,
 }: {
   readonly archiveContent?: ReactNode;
-  /** Shown above the Threads, such as the Spaces section. */
+  /**
+   * Shown below the pinned Threads and above every other section, such as
+   * the Spaces section.
+   */
   readonly leadingContent?: ReactNode;
   readonly activeThreadId?: string;
   readonly childThreads?: ReadonlyMap<
@@ -91,6 +94,8 @@ export function SidebarThreadNavigation({
     !loadingMore &&
     loadMoreError === undefined &&
     (archiveContent === undefined || collapsedGroups.has("archived"));
+  // The pinned section, when there is one, is always first.
+  const pinned = sections[0]?.id === "pinned";
   return (
     <nav
       className={`sidebar-scroll ${empty && query.length === 0 ? "sidebar-scroll-empty" : ""}`}
@@ -101,7 +106,7 @@ export function SidebarThreadNavigation({
         expanded={expandedThreads}
         toggle={onToggleThread}
       >
-        {leadingContent}
+        {pinned ? null : leadingContent}
         {empty ? (
           query.length === 0 ? (
             <div className="sidebar-first-thread">
@@ -187,53 +192,55 @@ export function SidebarThreadNavigation({
               </button>
             );
           return (
-            <section
-              className="thread-project-group"
-              data-thread-section={section.id}
-              aria-busy={section.loading || undefined}
-              key={section.id}
-            >
-              {archivable.length === 0 ? (
-                heading
-              ) : (
-                <div className="thread-group-heading-row">
-                  {heading}
-                  <button
-                    type="button"
-                    className="thread-group-action"
-                    aria-label="Archive inactive threads"
-                    title="Archive inactive threads"
-                    onClick={() =>
-                      onArchiveInactive?.(archivable.map(({ id }) => id))
-                    }
-                  >
-                    <Archive aria-hidden="true" />
-                  </button>
-                </div>
-              )}
-              {collapsed
-                ? null
-                : section.id === "archived" && archiveContent !== undefined
-                  ? archiveContent
-                  : section.groups === undefined
-                    ? rows(section.threads)
-                    : section.groups.map((group) => (
-                        <div
-                          className="thread-project-group"
-                          data-thread-subgroup={group.id}
-                          key={group.id}
-                        >
-                          <h3 className="thread-group-heading thread-subgroup-heading">
-                            <FolderGit2
-                              className="thread-group-icon"
-                              aria-hidden="true"
-                            />
-                            <span>{group.label}</span>
-                          </h3>
-                          {rows(group.threads)}
-                        </div>
-                      ))}
-            </section>
+            <Fragment key={section.id}>
+              <section
+                className="thread-project-group"
+                data-thread-section={section.id}
+                aria-busy={section.loading || undefined}
+              >
+                {archivable.length === 0 ? (
+                  heading
+                ) : (
+                  <div className="thread-group-heading-row">
+                    {heading}
+                    <button
+                      type="button"
+                      className="thread-group-action"
+                      aria-label="Archive inactive threads"
+                      title="Archive inactive threads"
+                      onClick={() =>
+                        onArchiveInactive?.(archivable.map(({ id }) => id))
+                      }
+                    >
+                      <Archive aria-hidden="true" />
+                    </button>
+                  </div>
+                )}
+                {collapsed
+                  ? null
+                  : section.id === "archived" && archiveContent !== undefined
+                    ? archiveContent
+                    : section.groups === undefined
+                      ? rows(section.threads)
+                      : section.groups.map((group) => (
+                          <div
+                            className="thread-project-group"
+                            data-thread-subgroup={group.id}
+                            key={group.id}
+                          >
+                            <h3 className="thread-group-heading thread-subgroup-heading">
+                              <FolderGit2
+                                className="thread-group-icon"
+                                aria-hidden="true"
+                              />
+                              <span>{group.label}</span>
+                            </h3>
+                            {rows(group.threads)}
+                          </div>
+                        ))}
+              </section>
+              {section.id === "pinned" ? leadingContent : null}
+            </Fragment>
           );
         })}
         {hasMore ? (

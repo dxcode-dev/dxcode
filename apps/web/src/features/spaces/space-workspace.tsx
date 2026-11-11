@@ -12,12 +12,14 @@ import type {
 } from "../../shared/composer/composer-slot.js";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
+import type { ThreadAutomationsSlot } from "../../shared/thread-automations-slot.js";
 import { Button } from "../../shared/ui/button.js";
 import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import { deleteThreadMutationOptions } from "../threads/thread-mutations.js";
 import { EditSpaceDialog } from "./edit-space-dialog.js";
 import { SpacePostFilesContext } from "./posts/space-post-files-context.js";
 import { SPACE_ARTIFACT_SHEET } from "./space-artifact.js";
+import { SpaceAutomationsContext } from "./space-automations-context.js";
 import { type RenderSpaceComments, SpaceChat } from "./space-chat.js";
 import { useSpaceDetailsHidden } from "./space-details-store.js";
 import { threadSelectionChip } from "./space-format.js";
@@ -45,6 +47,11 @@ import "./spaces.css";
 const noFiles = () => null;
 /** Posts show only their words without the transcript's file views. */
 const NO_FILES: MessageFilesSlot = { Images: noFiles, Links: noFiles };
+const NO_AUTOMATIONS: ThreadAutomationsSlot = {
+  Chips: noFiles,
+  MenuItems: noFiles,
+  Sheet: noFiles,
+};
 
 /** From this width Space Details is a column beside the panes. */
 const DETAILS_COLUMN_QUERY = "(min-width: 1024px)";
@@ -250,6 +257,7 @@ function SpacePage({
   const [tabbed, setTabbed] = React.useState(false);
   const [dialog, setDialog] = React.useState<SpaceDialog>();
   const archive = useOptionalThreadArchive();
+  const { Chips } = React.use(SpaceAutomationsContext);
   const open = useOpenSpaceThread();
   const close = useCloseSpaceThread();
   const childIds = new Set((threads ?? []).map(({ id }) => id as string));
@@ -377,6 +385,13 @@ function SpacePage({
                   <span className="space-tab-spacer" />
                   <ThreadTabTools
                     threadId={child}
+                    automations={
+                      phone ||
+                      (parts.thread.access !== undefined &&
+                        parts.thread.access !== "owner") ? null : (
+                        <Chips threadId={child} />
+                      )
+                    }
                     views={parts.views}
                     mode={threadSelectionChip(
                       parts.thread.agentInitialization.selection,
@@ -454,6 +469,7 @@ export function SpaceWorkspace({
   dictation,
   Composer,
   files,
+  automations,
 }: {
   readonly renderThread: (slots: SpaceThreadSlots) => React.ReactNode;
   readonly renderComments?: RenderSpaceComments;
@@ -464,6 +480,8 @@ export function SpaceWorkspace({
   readonly Composer: ComposerSlot;
   /** The transcript's file views, for posts' files. */
   readonly files?: MessageFilesSlot;
+  /** A Thread title bar's issues, pull requests, CI, and listeners. */
+  readonly automations?: ThreadAutomationsSlot;
 }) {
   const { threadId } = useParams({ from: "/_product/threads/$threadId" });
   const { identity } = useAuthenticatedIdentity();
@@ -508,29 +526,31 @@ export function SpaceWorkspace({
     return <DxLoading label="Loading Space…" variant="pane" />;
   return (
     <SpacePostFilesContext value={files ?? NO_FILES}>
-      <SpaceThreadsContext
-        value={{
-          spaceThreadId,
-          childThreadIds,
-          reveal: () => setSpaceTabFor(undefined),
-        }}
-      >
-        <SpacePage
-          space={space}
-          threads={threads}
-          childThreadId={childThreadId}
-          spaceTabActive={
-            childThreadId !== undefined && spaceTabFor === childThreadId
-          }
-          onSelectSpaceTab={() => setSpaceTabFor(childThreadId)}
-          onSelectThreadTab={() => setSpaceTabFor(undefined)}
-          renderThread={renderThread}
-          renderComments={renderComments}
-          Artifact={Artifact}
-          dictation={dictation}
-          Composer={Composer}
-        />
-      </SpaceThreadsContext>
+      <SpaceAutomationsContext value={automations ?? NO_AUTOMATIONS}>
+        <SpaceThreadsContext
+          value={{
+            spaceThreadId,
+            childThreadIds,
+            reveal: () => setSpaceTabFor(undefined),
+          }}
+        >
+          <SpacePage
+            space={space}
+            threads={threads}
+            childThreadId={childThreadId}
+            spaceTabActive={
+              childThreadId !== undefined && spaceTabFor === childThreadId
+            }
+            onSelectSpaceTab={() => setSpaceTabFor(childThreadId)}
+            onSelectThreadTab={() => setSpaceTabFor(undefined)}
+            renderThread={renderThread}
+            renderComments={renderComments}
+            Artifact={Artifact}
+            dictation={dictation}
+            Composer={Composer}
+          />
+        </SpaceThreadsContext>
+      </SpaceAutomationsContext>
     </SpacePostFilesContext>
   );
 }

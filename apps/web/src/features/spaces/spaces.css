@@ -1005,7 +1005,9 @@ button.space-tab:hover,
   box-shadow: 0 0 0 1px var(--ring);
 }
 .space-tab-mode {
+  flex: none;
   padding: 0 6px;
+  white-space: nowrap;
   color: var(--muted-foreground);
   font-size: 12px;
 }
@@ -1920,4 +1922,60 @@ button.space-goal-text {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+}
+
+/* A thread's issues, pull requests, CI, and listeners in a Space's strip
+   and in Space Details, as a Thread's title bar shows them. */
+.space-tab-strip .automation-chip,
+.space-panel-automations .automation-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  gap: 4px;
+  height: 26px;
+  min-width: 0;
+  padding: 4px 8px;
+  color: var(--muted-foreground);
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 16px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.space-tab-strip .automation-chip svg,
+.space-panel-automations .automation-chip svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.space-tab-strip .automation-chip:hover,
+.space-tab-strip .automation-chip[data-popup-open],
+.space-panel-automations .automation-chip:hover,
+.space-panel-automations .automation-chip[data-popup-open] {
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.space-tab-strip .automation-chip:focus-visible,
+.space-panel-automations .automation-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--ring);
+}
+.space-tab-strip .thread-title-bar-item {
+  align-self: center;
+}
+/* Their row in Space Details, under the Project; empty when there are none. */
+.space-panel-automations {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  margin-left: -8px;
+}
+.space-panel-automations:empty {
+  display: none;
 }

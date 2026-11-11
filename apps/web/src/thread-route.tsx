@@ -3,6 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import { Monitor, SquareTerminal } from "lucide-react";
 import * as React from "react";
+import { ThreadAutomationMenuItems } from "./features/threads/automations/thread-automation-menu-items.js";
+import { ThreadAutomationsButton } from "./features/threads/automations/thread-automations-button.js";
+import { ThreadAutomationsSheet } from "./features/threads/automations/thread-automations-sheet.js";
 import { useDictationSlot } from "./features/threads/dictation/use-dictation.js";
 import {
   MessageFileLinks,
@@ -12,6 +15,7 @@ import { threadQueryOptions } from "./features/threads/thread-queries.js";
 import { ThreadWorkspace } from "./features/threads/thread-workspace.js";
 import { useAuthenticatedIdentity } from "./shared/auth/auth-context.js";
 import type { MessageFilesSlot } from "./shared/composer/composer-slot.js";
+import type { ThreadAutomationsSlot } from "./shared/thread-automations-slot.js";
 import { DocumentTitle } from "./shared/ui/document-title.js";
 
 // The Terminal and Desktop load when their tab first shows, not with the
@@ -90,6 +94,13 @@ const MESSAGE_FILES: MessageFilesSlot = {
   Links: MessageFileLinks,
 };
 
+/** A Thread's issues, pull requests, CI, and listeners, for a Space. */
+const AUTOMATIONS: ThreadAutomationsSlot = {
+  Chips: ThreadAutomationsButton,
+  MenuItems: ThreadAutomationMenuItems,
+  Sheet: ThreadAutomationsSheet,
+};
+
 const renderSpaceThread = (
   props: React.ComponentProps<typeof ThreadWorkspace>,
 ) => (
@@ -116,6 +127,7 @@ function ThreadOrSpaceWorkspace() {
         renderThread={renderSpaceThread}
         dictation={dictation}
         files={MESSAGE_FILES}
+        automations={AUTOMATIONS}
       />
     </React.Suspense>
   ) : (

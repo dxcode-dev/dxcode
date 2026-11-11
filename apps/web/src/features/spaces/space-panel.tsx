@@ -25,6 +25,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { requestThreadView } from "../../shared/commands/thread-open-view-event.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
+import type { ThreadAutomationView } from "../../shared/thread-automations-slot.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { copyThreadUrl } from "../../shared/thread-copy.js";
 import { Avatar } from "../../shared/ui/avatar.js";
@@ -33,6 +34,7 @@ import { threadQueryOptions } from "../threads/thread-queries.js";
 import { SpaceCommentsTab } from "./comments/space-comments-tab.js";
 import { SpaceProgressChart } from "./progress/space-progress-chart.js";
 import { useOpenSpaceArtifact } from "./space-artifact.js";
+import { SpaceAutomationsContext } from "./space-automations-context.js";
 import {
   compactAge,
   epochOf,
@@ -339,9 +341,15 @@ export function SpacePanelMenu({
   onEdit,
   onDelete,
   onArchive,
+  automations = false,
 }: {
   readonly space: SpaceData;
   readonly userId: UserId;
+  /**
+   * Lists the Space's issues, pull requests, CI, and listeners, for a bar
+   * with no room for their chips, each opening its sheet.
+   */
+  readonly automations?: boolean;
   readonly onEdit?: () => void;
   readonly onDelete?: () => void;
   readonly onArchive?: () => void;
@@ -352,6 +360,9 @@ export function SpacePanelMenu({
   // Thread's More Actions lists them.
   const thread = useQuery(threadQueryOptions(userId, space.threadId)).data;
   const [usageOpen, setUsageOpen] = React.useState(false);
+  const { MenuItems, Sheet } = React.use(SpaceAutomationsContext);
+  const [sheet, setSheet] = React.useState<ThreadAutomationView>();
+  const own = space.access === "owner";
   return (
     <>
       <Menu.Root>
@@ -391,6 +402,9 @@ export function SpacePanelMenu({
                   <span>Archive Space</span>
                 </Menu.Item>
               )}
+              {automations && own ? (
+                <MenuItems threadId={space.threadId} onOpen={setSheet} />
+              ) : null}
               {thread === undefined ? null : (
                 <React.Suspense fallback={null}>
                   <ThreadDetailRows
@@ -436,7 +450,33 @@ export function SpacePanelMenu({
           />
         </React.Suspense>
       ) : null}
+      {sheet === undefined ? null : (
+        <Sheet
+          threadId={space.threadId}
+          view={sheet}
+          onClose={() => setSheet(undefined)}
+        />
+      )}
     </>
+  );
+}
+
+/**
+ * The Space's issues, pull requests, CI, and schedule and GitHub listeners,
+ * as chips that open their lists, as a Thread's title bar shows them. Only
+ * the owner reads them.
+ */
+export function SpaceAutomationChips({ space }: { readonly space: SpaceData }) {
+  const { Chips } = React.use(SpaceAutomationsContext);
+  return space.access === "owner" ? <Chips threadId={space.threadId} /> : null;
+}
+
+/** The Space's automation chips on their own row of Space Details. */
+function SpaceAutomationsRow({ space }: { readonly space: SpaceData }) {
+  return (
+    <div className="space-panel-automations">
+      <SpaceAutomationChips space={space} />
+    </div>
   );
 }
 
@@ -639,6 +679,7 @@ export function SpacePanel({
           <span className="space-panel-meta-spacer" />
           <SpaceCallAndSharing space={space} onShare={onEdit} />
         </div>
+        <SpaceAutomationsRow space={space} />
       </header>
       <SpaceProgressChart spaceThreadId={space.threadId} />
       <Tabs.Root

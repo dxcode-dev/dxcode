@@ -1387,7 +1387,7 @@ impl PendingWorkloadIdentity {
             .collect::<Vec<_>>();
         for request_id in expired {
             if let Some((_, request)) = self.requests.remove(&request_id) {
-                request.respond(WorkloadIdentityResult::Unavailable);
+                request.lost();
                 // Bound session memory. Responses older than this window still fail closed.
                 if self.expired.len() == 256 {
                     self.expired.pop_front();
@@ -1414,7 +1414,7 @@ impl PendingWorkloadIdentity {
 impl Drop for PendingWorkloadIdentity {
     fn drop(&mut self) {
         for (_, (_, request)) in self.requests.drain() {
-            request.respond(WorkloadIdentityResult::Unavailable);
+            request.lost();
         }
     }
 }
@@ -1431,7 +1431,7 @@ async fn dispatch_workload_identity_request(
         || pending.requests.contains_key(&request.request_id)
         || pending.expired.contains(&request.request_id)
     {
-        request.respond(WorkloadIdentityResult::Unavailable);
+        request.lost();
         return Ok(());
     }
     if let Err(exit) = send_json(
@@ -1444,7 +1444,7 @@ async fn dispatch_workload_identity_request(
     )
     .await
     {
-        request.respond(WorkloadIdentityResult::Unavailable);
+        request.lost();
         return Err(exit);
     }
     pending

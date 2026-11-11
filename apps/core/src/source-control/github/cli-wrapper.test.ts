@@ -32,7 +32,7 @@ const executable = (path: string, content: string) => {
 };
 
 /** Real wrapper, fake `git` credential helper result, and fake real `gh`. */
-const workspace = (password: string | undefined) => {
+const workspace = (password: string | undefined, helperSays?: string) => {
   const root = mkdtempSync(join(tmpdir(), "dx-gh-wrapper-"));
   directories.push(root);
   const wrapperDirectory = join(root, "local-bin");
@@ -47,7 +47,7 @@ test "$1 $2" = "credential fill" || exit 2
 input=$(cat)
 printf '%s' "$input" > "${root}/credential-request"
 printf '%s' "$GIT_TERMINAL_PROMPT:$GIT_CONFIG_GLOBAL" > "${root}/git-environment"
-${password === undefined ? "echo 'fatal: could not read Username' >&2; exit 128" : `printf 'protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=${password}\\n'`}
+${password === undefined ? `${helperSays === undefined ? "" : `echo "${helperSays}" >&2; `}echo 'fatal: could not read Username' >&2; exit 128` : `printf 'protocol=https\\nhost=github.com\\nusername=x-access-token\\npassword=${password}\\n'`}
 `,
   );
   executable(
@@ -103,13 +103,19 @@ describe("GitHub CLI wrapper", () => {
     );
   });
 
-  it("runs unauthenticated with one diagnostic when no credential is available", () => {
-    const result = workspace(undefined).run(["auth", "status"]);
+  it("runs unauthenticated and shows only why dx's helper had no credential", () => {
+    // #2049: the helper knows whether dx's connection to the Orb dropped or
+    // the owner's GitHub access is gone; the wrapper never guesses.
+    const dropped =
+      "dx: dx's connection to this Orb did not come back within 30 s, so dx could not give Git credentials. Try again in a moment.";
+    const result = workspace(undefined, dropped).run(["auth", "status"]);
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("token= args=auth status\n");
     expect(result.stderr).toBe(
-      "dx: GitHub credentials are unavailable; gh is not authenticated. Connect GitHub in dx Settings → Integrations.\n",
+      `${dropped}\ndx: gh is running without GitHub credentials.\n`,
     );
+    const bare = workspace(undefined).run(["auth", "status"]);
+    expect(bare.stderr).toBe("dx: gh is running without GitHub credentials.\n");
   });
 
   it("keeps Git's dx credential helper in place", () => {

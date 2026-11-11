@@ -7,6 +7,7 @@ import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SpaceIcon } from "./space-icon.js";
 import {
   SpaceAgentChip,
+  SpaceAutomationChips,
   SpaceCallAndSharing,
   SpacePanelMenu,
   SpaceProjectChip,
@@ -136,17 +137,21 @@ export function ThreadTab({
 }
 
 /**
- * The open thread's Views, what it runs on, Side by Side, and Focus Thread (its own
+ * The open thread's issues, pull requests, CI, and listeners, its Views,
+ * what it runs on, Side by Side, and Focus Thread (its own
  * page).
  */
 export function ThreadTabTools({
   threadId,
+  automations,
   views,
   mode,
   split,
   onToggleSplit,
 }: {
   readonly threadId: ThreadId;
+  /** Its issues, pull requests, CI, and listeners, as its title bar shows them. */
+  readonly automations?: React.ReactNode;
   /** The Thread page's Views button: Terminal, Changes, Artifacts, … */
   readonly views: React.ReactNode;
   /** What the thread runs on, as a Thread's title bar shows it. */
@@ -158,6 +163,7 @@ export function ThreadTabTools({
   const navigate = useNavigate();
   return (
     <span className="space-tab-tools">
+      {automations}
       {views}
       {mode === undefined ? null : (
         <span className="space-tab-mode" title={mode.title}>
@@ -193,8 +199,9 @@ export function ThreadTabTools({
 
 /**
  * While Space Details is hidden, its quick parts sit at the strip's end:
- * the Project, what the Space's agent runs on, Huddle, sharing, Space
- * Actions, and Show Space Details.
+ * the Project, the Space's issues, pull requests, CI, and listeners, what
+ * its agent runs on, Huddle, sharing, Space Actions, and Show Space Details.
+ * A phone's strip lists the issues and the rest in Space Actions instead.
  */
 export function SpaceStripTools({
   space,
@@ -225,6 +232,7 @@ export function SpaceStripTools({
       {compact ? null : (
         <>
           <SpaceProjectChip space={space} />
+          <SpaceAutomationChips space={space} />
           <SpaceAgentChip space={space} />
           <SpaceCallAndSharing space={space} onShare={onEdit} />
         </>
@@ -233,6 +241,7 @@ export function SpaceStripTools({
         <SpacePanelMenu
           space={space}
           userId={userId}
+          automations={compact}
           onEdit={onEdit}
           onDelete={onDelete}
           onArchive={onArchive}

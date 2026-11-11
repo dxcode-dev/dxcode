@@ -528,6 +528,8 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   localStorage.clear();
   rendered = [];
+  // A phone test that fails before its last line must not leave touch on.
+  await cdp().send("Emulation.setTouchEmulationEnabled", { enabled: false });
 });
 
 const settle = (ms = 50) =>
@@ -1931,6 +1933,4 @@ for (const [width, height] of [
     });
     await until(() => q(".space-artifact-stub") !== null);
     expect(q(".space-artifact-stub")?.dataset.thread).toBe(SPACE);
-
-    await cdp().send("Emulation.setTouchEmulationEnabled", { enabled: false });
   });

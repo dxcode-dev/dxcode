@@ -14092,9 +14092,13 @@ body:has(.dx-app-shell) {
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-/* The project's name keeps its width; the owner crumb gives up space first. */
+/* The project's name keeps its width; the owner crumb gives up space first.
+   Shrinking is shared by weight, so beside a weight of 1000 the name still
+   lost a fraction of a pixel, enough to end it in an ellipsis in some fonts
+   (DejaVu Sans). The name's weight stays 1: below 1, it would give up only
+   that fraction of the overflow once the owner is down to its mark. */
 .project-detail-title .projects-title-owner {
-  flex: 0 1000 auto;
+  flex: 0 1000000 auto;
   min-width: 18px;
 }
 .project-detail-name {

@@ -142,7 +142,11 @@ import {
   BITBUCKET_GIT_PATH,
   bitbucketRuntimeBroker,
 } from "../source-control/bitbucket/runtime.js";
-import { readGitHubUserAccessToken } from "../source-control/github/control-plane.js";
+import {
+  GitHubControlPlaneForbidden,
+  readGitHubUserAccessToken,
+} from "../source-control/github/control-plane.js";
+import { GitHubProviderError } from "../source-control/github/provider-http.js";
 import { threadToken } from "../source-control/github/thread-token-cache.js";
 import { repairCandidatePatches } from "../thread-changes/candidate.js";
 import {
@@ -3884,16 +3888,21 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         }
       } catch (cause) {
         result = {
-          kind:
-            cause instanceof WorkloadIdentityUnauthorized
-              ? "unauthorized"
-              : "unavailable",
+          kind: workloadIdentityRefused(cause) ? "unauthorized" : "unavailable",
         };
       } finally {
         this.#pendingWorkloadIdentityRequests.delete(message.requestId);
       }
     }
-    if (!current()) return;
+    if (!current()) {
+      // The helper asks again once the daemon's next connection is current.
+      threadDaemonLogger.info("Workload identity answer not sent.", {
+        event: "thread_daemon_workload_identity_dropped",
+        threadId: authority.threadId,
+        kind: result.kind,
+      });
+      return;
+    }
     let encoded = JSON.stringify({
       type: "workload-identity.response",
       generation: authority.generation,
@@ -4578,6 +4587,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           registeredAt,
         );
       this.#orbRuns = orbRunStarted(this.#orbRuns, registeredAt);
+      threadDaemonLogger.info("Thread daemon registered.", {
+        event: "thread_daemon_registered",
+        threadId: authority.threadId,
+        release: control.value.release,
+        ...(priorHeartbeat === undefined
+          ? {}
+          : { silentMs: registeredAt - priorHeartbeat }),
+      });
       await Promise.all([
         this.ctx.storage.put(AUTHORITY_STORAGE_KEY, next),
         this.ctx.storage.delete(APPLIED_ENVIRONMENT_STORAGE_KEY),
@@ -5107,3 +5124,14 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     void repair.catch(() => undefined);
   }
 }
+
+/**
+ * Whether Core refused a workload identity request because the owner's
+ * access itself is missing or revoked (#2049). The helper tells the person
+ * to reconnect only then; any other failure says to try again.
+ */
+const workloadIdentityRefused = (cause: unknown) =>
+  cause instanceof WorkloadIdentityUnauthorized ||
+  cause instanceof GitHubControlPlaneForbidden ||
+  (cause instanceof GitHubProviderError &&
+    (cause.category === "unauthorized" || cause.category === "forbidden"));

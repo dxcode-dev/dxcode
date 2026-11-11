@@ -1,7 +1,8 @@
 // The sidebar's Spaces section against a fake dx server, through the real
 // shell, sidebar, dialogs, queries, and router.
 //
-// Ways it could go wrong: the section is missing or below the Threads; it
+// Ways it could go wrong: the section is missing, above the pinned Threads,
+// or below the other Threads, on a computer or in the phone drawer; it
 // shows no empty text without Spaces, or no count once it lists some; its
 // heading does not collapse the rows; New Space sends the wrong Project,
 // sharing, or a blank goal, creates with no name, or does not open the new
@@ -29,9 +30,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 
+const viewport = vi.hoisted(() => ({ mobile: false }));
 vi.mock("../../shared/use-mobile.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../shared/use-mobile.js")>()),
-  useMobile: () => false,
+  useMobile: () => viewport.mobile,
 }));
 vi.mock("../navigation/sidebar-layout.js", async (importOriginal) => {
   const layout =
@@ -123,6 +125,8 @@ const fakeServer = () => {
         projectName: "Checkout",
       },
     ] as unknown[],
+    /** Active Threads the sidebar lists; `pinned` ones list under Pinned. */
+    threads: [] as Array<{ id: ThreadId; title: string; pinned?: true }>,
   };
   const ok = (data: unknown, status = 200) =>
     Response.json({ status: "success", data }, { status });
@@ -131,7 +135,26 @@ const fakeServer = () => {
     const method = init?.method ?? "GET";
     const path = url.pathname;
     state.requests.push(path);
-    if (path === "/v1/threads" && method === "GET") return ok({ items: [] });
+    if (path === "/v1/threads" && method === "GET")
+      return ok({
+        items:
+          url.searchParams.get("lifecycleState") === "active"
+            ? state.threads.map(({ id, title, pinned }) => ({
+                id,
+                title,
+                projectId: projects[0]?.id,
+                visibility: "private",
+                createdAt: now,
+                updatedAt: now,
+                lastActivityAt: now,
+                activityStatus: "idle",
+                lifecycleState: "active",
+                ...(pinned ? { pinnedAt: now } : {}),
+                agentUrl: `/v1/agents/dx/${id}`,
+                mode: "high",
+              }))
+            : [],
+      });
     if (path === "/v1/spaces/suggestions" && method === "GET")
       return ok({ items: state.suggestions });
     if (path === "/v1/spaces/discover" && url.searchParams.get("q") !== null)
@@ -186,6 +209,7 @@ function ThreadPageStub() {
 let root: Root | undefined;
 
 afterEach(async () => {
+  viewport.mobile = false;
   await React.act(() => root?.unmount());
   root = undefined;
   document.body.replaceChildren();
@@ -812,4 +836,132 @@ it("shows a Space's own status beside its name and in its hover card, amber whil
     document.querySelector(".sidebar-space-card-status")?.textContent,
   ).toBe("Waiting on Ada to pick a merchant ID");
   await v2Shot("sidebar-space-status-1440");
+});
+
+// The Spaces section sits right under the pinned Threads and above every
+// other Thread section, on a computer and in the phone drawer, with and
+// without pinned Threads or Spaces, and with sections collapsed.
+const PINNED = "thr_00000000-0000-4000-8000-0000000000d1" as ThreadId;
+const RECENT = "thr_00000000-0000-4000-8000-0000000000d2" as ThreadId;
+const orderShot = (name: string) =>
+  page.screenshot({ path: `../../../.cache/spaces-order-ui/${name}.png` });
+/** The Thread list's sections, top to bottom: "spaces" or a section id. */
+const sidebarOrder = () =>
+  [
+    ...(document.querySelector(
+      viewport.mobile
+        ? ".mobile-sidebar-drawer nav[aria-label='Threads']"
+        : ".product-sidebar nav[aria-label='Threads']",
+    )?.children ?? []),
+  ]
+    .map((element) =>
+      element.matches("section[aria-label='Spaces']")
+        ? "spaces"
+        : element.getAttribute("data-thread-section"),
+    )
+    .filter((name) => name !== null);
+const mountWith = async (
+  {
+    spaces,
+    pinned,
+    mobile = false,
+  }: { spaces: boolean; pinned: boolean; mobile?: boolean },
+  width = mobile ? 390 : 1440,
+  height = mobile ? 844 : 900,
+) => {
+  viewport.mobile = mobile;
+  await mount(false, width, height, (server) => {
+    server.threads.push({ id: RECENT, title: "Recent work" });
+    if (pinned)
+      server.threads.push({ id: PINNED, title: "Pinned work", pinned: true });
+    if (spaces) server.joined.push(space(TEAM_SPACE, { name: "Payments" }));
+  });
+  if (mobile) {
+    await userEvent.click(page.getByRole("button", { name: "Open sidebar" }));
+  }
+  await until(() => sidebarOrder().length >= (pinned ? 3 : 2));
+  if (spaces) await until(() => spaceRows().length === 1);
+  await settle(200);
+};
+const remount = async () => {
+  await React.act(() => root?.unmount());
+  root = undefined;
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+};
+
+it("lists Spaces below the pinned Threads and above the rest, on a computer and a phone", async () => {
+  await mountWith({ spaces: true, pinned: true });
+  await orderShot("pinned-spaces-1440");
+  expect
+    .soft(sidebarOrder())
+    .toEqual(["pinned", "spaces", projects[0]?.id, "snoozed", "archived"]);
+  // The pinned Thread's row is above the Space's row on screen too.
+  const pinnedRow = document.querySelector(
+    `.product-sidebar a[href='/threads/${PINNED}']`,
+  ) as HTMLElement;
+  const spaceRow = document.querySelector(
+    `.product-sidebar a[href='/threads/${TEAM_SPACE}']`,
+  ) as HTMLElement;
+  const recentRow = document.querySelector(
+    `.product-sidebar a[href='/threads/${RECENT}']`,
+  ) as HTMLElement;
+  expect
+    .soft(pinnedRow.getBoundingClientRect().bottom)
+    .toBeLessThanOrEqual(spaceRow.getBoundingClientRect().top);
+  expect(spaceRow.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    recentRow.getBoundingClientRect().top,
+  );
+
+  // Collapsed Spaces and a collapsed Project keep their places.
+  await userEvent.click(
+    section()?.querySelector<HTMLButtonElement>(
+      "button.thread-group-heading",
+    ) as HTMLButtonElement,
+  );
+  await until(() => spaceRows().length === 0);
+  await userEvent.click(
+    [
+      ...document.querySelectorAll<HTMLButtonElement>(
+        ".product-sidebar [data-thread-section] > .thread-group-heading",
+      ),
+    ].find((heading) =>
+      heading.textContent?.includes("Website"),
+    ) as HTMLButtonElement,
+  );
+  await until(
+    () =>
+      document.querySelector(
+        `.product-sidebar a[href='/threads/${RECENT}']`,
+      ) === null,
+  );
+  await orderShot("pinned-spaces-collapsed-1440");
+  expect
+    .soft(sidebarOrder())
+    .toEqual(["pinned", "spaces", projects[0]?.id, "snoozed", "archived"]);
+
+  // No pinned Threads: Spaces leads.
+  await remount();
+  await mountWith({ spaces: true, pinned: false });
+  await orderShot("no-pinned-1440");
+  expect
+    .soft(sidebarOrder())
+    .toEqual(["spaces", projects[0]?.id, "snoozed", "archived"]);
+
+  // No Spaces: the empty section still sits under the pinned Threads.
+  await remount();
+  await mountWith({ spaces: false, pinned: true });
+  await until(() => section()?.textContent?.includes("Start or join") === true);
+  await orderShot("no-spaces-1440");
+  expect
+    .soft(sidebarOrder())
+    .toEqual(["pinned", "spaces", projects[0]?.id, "snoozed", "archived"]);
+
+  // The phone drawer lists them in the same order.
+  await remount();
+  await mountWith({ spaces: true, pinned: true, mobile: true });
+  await orderShot("pinned-spaces-390");
+  expect
+    .soft(sidebarOrder())
+    .toEqual(["pinned", "spaces", projects[0]?.id, "snoozed", "archived"]);
 });

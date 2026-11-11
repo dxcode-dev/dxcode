@@ -24,17 +24,40 @@ const MAX_HTTP_RESPONSE_BYTES: u64 = 32 * 1024;
 const MAX_CONCURRENT_REQUESTS: usize = 32;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long a helper keeps asking while dxd's connection to Core is down
+/// (#2049): a dropped socket is back within about 3 s and a restarted
+/// daemon within about 2 s, so this covers several redials, not an outage.
+const RECONNECT_WAIT: Duration = Duration::from_secs(30);
+const RECONNECT_POLL: Duration = Duration::from_millis(250);
+/// The socket's answer when no connection carried the request to Core, or
+/// the connection ended before Core answered: asking again is safe.
+const DISCONNECTED: &str = "disconnected";
+
+/// What became of a request the daemon relayed.
+#[derive(Debug)]
+pub enum Relayed {
+    /// Core answered on the connection that carried the request.
+    Answered(WorkloadIdentityResult),
+    /// No answer will come: the connection ended, or Core did not answer
+    /// within the request lease. Core never saw it, or its answer is lost.
+    Lost,
+}
 
 pub struct LocalRequest {
     pub epoch: u64,
     pub request_id: String,
     pub request: WorkloadIdentityRequest,
-    reply: SyncSender<WorkloadIdentityResult>,
+    reply: SyncSender<Relayed>,
 }
 
 impl LocalRequest {
     pub fn respond(self, result: WorkloadIdentityResult) {
-        let _ = self.reply.try_send(result);
+        let _ = self.reply.try_send(Relayed::Answered(result));
+    }
+
+    /// The request will get no answer from Core; the helper asks again.
+    pub fn lost(self) {
+        let _ = self.reply.try_send(Relayed::Lost);
     }
 }
 
@@ -149,11 +172,11 @@ fn handle_stream(
         Err(_) => return write_error(&mut stream, 400, "invalid-request"),
     };
     if !connected.load(Ordering::Acquire) {
-        return write_error(&mut stream, 503, "unavailable");
+        return write_error(&mut stream, 503, DISCONNECTED);
     }
     let request_epoch = epoch.load(Ordering::Acquire);
     if request_epoch == 0 || !connected.load(Ordering::Acquire) {
-        return write_error(&mut stream, 503, "unavailable");
+        return write_error(&mut stream, 503, DISCONNECTED);
     }
     let (reply, response) = sync_channel(1);
     let local = LocalRequest {
@@ -165,28 +188,33 @@ fn handle_stream(
     match sender.try_send(local) {
         Ok(()) => {}
         Err(TrySendError::Full(_)) | Err(TrySendError::Closed(_)) => {
-            return write_error(&mut stream, 503, "unavailable");
+            return write_error(&mut stream, 503, DISCONNECTED);
         }
     }
     let result = response.recv_timeout(REQUEST_TIMEOUT);
     if !connected.load(Ordering::Acquire) || epoch.load(Ordering::Acquire) != request_epoch {
-        return write_error(&mut stream, 503, "unavailable");
+        return write_error(&mut stream, 503, DISCONNECTED);
     }
     match result {
-        Ok(WorkloadIdentityResult::Issued { token, expires_at }) => {
+        Ok(Relayed::Answered(WorkloadIdentityResult::Issued { token, expires_at })) => {
             write_token(&mut stream, &token, expires_at)
         }
-        Ok(WorkloadIdentityResult::Signed { signature }) => {
+        Ok(Relayed::Answered(WorkloadIdentityResult::Signed { signature })) => {
             write_result(&mut stream, &WorkloadIdentityResult::Signed { signature })
         }
-        Ok(WorkloadIdentityResult::Credential { username, password }) => write_result(
-            &mut stream,
-            &WorkloadIdentityResult::Credential { username, password },
-        ),
-        Ok(WorkloadIdentityResult::Unauthorized) => write_error(&mut stream, 403, "unauthorized"),
-        Ok(WorkloadIdentityResult::Unavailable) | Err(_) => {
+        Ok(Relayed::Answered(WorkloadIdentityResult::Credential { username, password })) => {
+            write_result(
+                &mut stream,
+                &WorkloadIdentityResult::Credential { username, password },
+            )
+        }
+        Ok(Relayed::Answered(WorkloadIdentityResult::Unauthorized)) => {
+            write_error(&mut stream, 403, "unauthorized")
+        }
+        Ok(Relayed::Answered(WorkloadIdentityResult::Unavailable)) => {
             write_error(&mut stream, 503, "unavailable")
         }
+        Ok(Relayed::Lost) | Err(_) => write_error(&mut stream, 503, DISCONNECTED),
     }
 }
 
@@ -332,24 +360,154 @@ fn write_response(
     stream.write_all(body)
 }
 
-fn request_token(arguments: &[String]) -> Result<TokenResponse, ()> {
+/// Why a helper got no credential.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum HelperError {
+    /// Not a request dx serves.
+    Invalid,
+    /// dxd's connection to Core stayed down for the whole `RECONNECT_WAIT`.
+    Disconnected,
+    /// Core refused: the owner's connection is missing or was revoked.
+    Refused,
+    /// Core answered, but could not issue one now.
+    Unavailable,
+}
+
+enum Attempt {
+    Answered(Vec<u8>),
+    Failed(HelperError),
+}
+
+fn socket_path() -> Result<PathBuf, HelperError> {
+    let path = std::env::var("DX_WORKLOAD_IDENTITY_SOCKET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH));
+    path.is_absolute()
+        .then_some(path)
+        .ok_or(HelperError::Invalid)
+}
+
+/// One request over the daemon's socket. Anything that keeps the request
+/// from reaching Core, or Core's answer from coming back, is `Disconnected`:
+/// no socket (a daemon restarting), one nobody listens on (a daemon that
+/// died), or the daemon's own answer that its connection is down.
+fn attempt(socket_path: &Path, body: &[u8]) -> Attempt {
+    let disconnected = Attempt::Failed(HelperError::Disconnected);
+    // A starting daemon binds the socket before it narrows its mode; one
+    // that never becomes private is never used.
+    let Ok(metadata) = fs::symlink_metadata(socket_path) else {
+        return disconnected;
+    };
+    if !metadata.file_type().is_socket()
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || metadata.uid() != unsafe { libc::geteuid() }
+    {
+        return disconnected;
+    }
+    let Ok(mut stream) = UnixStream::connect(socket_path) else {
+        return disconnected;
+    };
+    // The daemon answers within its own request timeout.
+    if stream
+        .set_read_timeout(Some(REQUEST_TIMEOUT + IO_TIMEOUT))
+        .and_then(|()| stream.set_write_timeout(Some(IO_TIMEOUT)))
+        .is_err()
+    {
+        return disconnected;
+    }
+    let sent = write!(
+        stream,
+        "POST /token HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len(),
+    )
+    .and_then(|()| stream.write_all(body));
+    if sent.is_err() {
+        return disconnected;
+    }
+    let mut response = Vec::new();
+    if stream
+        .take(MAX_HTTP_RESPONSE_BYTES + 1)
+        .read_to_end(&mut response)
+        .is_err()
+    {
+        return disconnected;
+    }
+    if response.len() as u64 > MAX_HTTP_RESPONSE_BYTES {
+        return Attempt::Failed(HelperError::Unavailable);
+    }
+    let Some(end) = header_end(&response) else {
+        return Attempt::Failed(HelperError::Unavailable);
+    };
+    let Ok(header) = std::str::from_utf8(&response[..end]) else {
+        return Attempt::Failed(HelperError::Unavailable);
+    };
+    if header.starts_with("HTTP/1.1 200 OK\r\n") {
+        return Attempt::Answered(response[end..].to_vec());
+    }
+    if header.starts_with("HTTP/1.1 403 ") {
+        return Attempt::Failed(HelperError::Refused);
+    }
+    if header.starts_with("HTTP/1.1 400 ") {
+        return Attempt::Failed(HelperError::Invalid);
+    }
+    #[derive(Deserialize)]
+    struct Error {
+        error: String,
+    }
+    match serde_json::from_slice::<Error>(&response[end..]) {
+        Ok(Error { error }) if header.starts_with("HTTP/1.1 503 ") && error == DISCONNECTED => {
+            disconnected
+        }
+        _ => Attempt::Failed(HelperError::Unavailable),
+    }
+}
+
+/// Asks the daemon, and keeps asking for up to `RECONNECT_WAIT` while its
+/// connection to Core is down (#2049), so a dropped connection or a
+/// restarting daemon costs a few seconds instead of the command. Every
+/// request is safe to repeat: each only asks Core to issue something.
+fn exchange(body: &[u8]) -> Result<Vec<u8>, HelperError> {
+    let socket_path = socket_path()?;
+    let deadline = std::time::Instant::now() + RECONNECT_WAIT;
+    let mut announced = false;
+    loop {
+        match attempt(&socket_path, body) {
+            Attempt::Answered(body) => return Ok(body),
+            Attempt::Failed(HelperError::Disconnected) => {}
+            Attempt::Failed(error) => return Err(error),
+        }
+        if std::time::Instant::now() + RECONNECT_POLL >= deadline {
+            return Err(HelperError::Disconnected);
+        }
+        if !announced {
+            announced = true;
+            eprintln!(
+                "dx: dx's connection to this Orb dropped; retrying for up to {} s.",
+                RECONNECT_WAIT.as_secs()
+            );
+        }
+        thread::sleep(RECONNECT_POLL);
+    }
+}
+
+fn request_token(arguments: &[String]) -> Result<TokenResponse, HelperError> {
     let mut audience = None;
     let mut ttl_seconds = None;
     let mut index = 1;
     while index < arguments.len() {
         let flag = &arguments[index];
-        let value = arguments.get(index + 1).ok_or(())?;
+        let value = arguments.get(index + 1).ok_or(HelperError::Invalid)?;
         match flag.as_str() {
             "--audience" if audience.is_none() => audience = Some(value.clone()),
             "--ttl-seconds" if ttl_seconds.is_none() => {
-                ttl_seconds = Some(value.parse::<u64>().map_err(|_| ())?)
+                ttl_seconds = Some(value.parse::<u64>().map_err(|_| HelperError::Invalid)?)
             }
-            _ => return Err(()),
+            _ => return Err(HelperError::Invalid),
         }
         index += 2;
     }
     let request = WorkloadIdentityRequest {
-        audience: Some(audience.ok_or(())?),
+        audience: Some(audience.ok_or(HelperError::Invalid)?),
         ttl_seconds,
         kind: None,
         payload_base64: None,
@@ -358,113 +516,41 @@ fn request_token(arguments: &[String]) -> Result<TokenResponse, ()> {
         path: None,
     };
     if !request.valid() {
-        return Err(());
+        return Err(HelperError::Invalid);
     }
-    let socket_path = std::env::var("DX_WORKLOAD_IDENTITY_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH));
-    if !socket_path.is_absolute() {
-        return Err(());
-    }
-    let metadata = fs::symlink_metadata(&socket_path).map_err(|_| ())?;
-    if !metadata.file_type().is_socket()
-        || metadata.permissions().mode() & 0o777 != 0o600
-        || metadata.uid() != unsafe { libc::geteuid() }
-    {
-        return Err(());
-    }
-    let body = serde_json::to_vec(&request).map_err(|_| ())?;
-    let mut stream = UnixStream::connect(socket_path).map_err(|_| ())?;
-    stream
-        .set_read_timeout(Some(REQUEST_TIMEOUT))
-        .map_err(|_| ())?;
-    stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
-    write!(
-        stream,
-        "POST /token HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len(),
-    )
-    .map_err(|_| ())?;
-    stream.write_all(&body).map_err(|_| ())?;
-    let mut response = Vec::new();
-    stream
-        .take(MAX_HTTP_RESPONSE_BYTES + 1)
-        .read_to_end(&mut response)
-        .map_err(|_| ())?;
-    if response.len() as u64 > MAX_HTTP_RESPONSE_BYTES {
-        return Err(());
-    }
-    let end = header_end(&response).ok_or(())?;
-    let header = std::str::from_utf8(&response[..end]).map_err(|_| ())?;
-    if !header.starts_with("HTTP/1.1 200 OK\r\n") {
-        return Err(());
-    }
-    let token: TokenResponse = serde_json::from_slice(&response[end..]).map_err(|_| ())?;
+    let body = serde_json::to_vec(&request).map_err(|_| HelperError::Invalid)?;
+    let token: TokenResponse =
+        serde_json::from_slice(&exchange(&body)?).map_err(|_| HelperError::Unavailable)?;
     let result = WorkloadIdentityResult::Issued {
         token: token.token,
         expires_at: token.expires_at,
     };
     if !result.valid() {
-        return Err(());
+        return Err(HelperError::Unavailable);
     }
     let WorkloadIdentityResult::Issued { token, expires_at } = result else {
-        return Err(());
+        return Err(HelperError::Unavailable);
     };
     Ok(TokenResponse { token, expires_at })
 }
 
 pub fn print_token(arguments: &[String]) -> Result<(), ()> {
-    let TokenResponse { token, .. } = request_token(arguments)?;
+    let TokenResponse { token, .. } = request_token(arguments).map_err(|_| ())?;
     println!("{token}");
     Ok(())
 }
 
-fn request_helper(request: WorkloadIdentityRequest) -> Result<WorkloadIdentityResult, ()> {
+fn request_helper(request: WorkloadIdentityRequest) -> Result<WorkloadIdentityResult, HelperError> {
     if !request.valid() {
-        return Err(());
+        return Err(HelperError::Invalid);
     }
-    let socket_path = std::env::var("DX_WORKLOAD_IDENTITY_SOCKET")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_SOCKET_PATH));
-    let metadata = fs::symlink_metadata(&socket_path).map_err(|_| ())?;
-    if !socket_path.is_absolute()
-        || !metadata.file_type().is_socket()
-        || metadata.permissions().mode() & 0o777 != 0o600
-        || metadata.uid() != unsafe { libc::geteuid() }
-    {
-        return Err(());
-    }
-    let body = serde_json::to_vec(&request).map_err(|_| ())?;
-    let mut stream = UnixStream::connect(socket_path).map_err(|_| ())?;
-    stream
-        .set_read_timeout(Some(REQUEST_TIMEOUT))
-        .map_err(|_| ())?;
-    stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(|_| ())?;
-    write!(
-        stream,
-        "POST /token HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        body.len(),
-    )
-    .map_err(|_| ())?;
-    stream.write_all(&body).map_err(|_| ())?;
-    let mut response = Vec::new();
-    stream
-        .take(MAX_HTTP_RESPONSE_BYTES + 1)
-        .read_to_end(&mut response)
-        .map_err(|_| ())?;
-    if response.len() as u64 > MAX_HTTP_RESPONSE_BYTES {
-        return Err(());
-    }
-    let end = header_end(&response).ok_or(())?;
-    if !std::str::from_utf8(&response[..end])
-        .map_err(|_| ())?
-        .starts_with("HTTP/1.1 200 OK\r\n")
-    {
-        return Err(());
-    }
+    let body = serde_json::to_vec(&request).map_err(|_| HelperError::Invalid)?;
     let result: WorkloadIdentityResult =
-        serde_json::from_slice(&response[end..]).map_err(|_| ())?;
-    result.valid().then_some(result).ok_or(())
+        serde_json::from_slice(&exchange(&body)?).map_err(|_| HelperError::Unavailable)?;
+    result
+        .valid()
+        .then_some(result)
+        .ok_or(HelperError::Unavailable)
 }
 
 pub fn git_sign(arguments: &[String]) -> Result<(), ()> {
@@ -505,8 +591,11 @@ pub fn git_sign(arguments: &[String]) -> Result<(), ()> {
         protocol: None,
         host: None,
         path: None,
-    })?;
-    let WorkloadIdentityResult::Signed { signature } = result else {
+    });
+    if result == Err(HelperError::Disconnected) {
+        eprintln!("{}", disconnected_message("sign this commit"));
+    }
+    let WorkloadIdentityResult::Signed { signature } = result.map_err(|_| ())? else {
         return Err(());
     };
     let signature_path = PathBuf::from(format!("{}.sig", arguments[7]));
@@ -539,15 +628,41 @@ pub fn git_credential(arguments: &[String]) -> Result<(), ()> {
     if operation != Some("get") {
         return Ok(());
     }
-    let result = parse_git_credential_request(&input).and_then(request_helper);
-    let Ok(WorkloadIdentityResult::Credential { username, password }) = result else {
-        eprintln!(
-            "dx: Git credentials for this repository are unavailable. Reconnect the repository in dx Settings → Integrations if this persists."
-        );
-        return Err(());
+    let request = parse_git_credential_request(&input).map_err(|()| HelperError::Invalid);
+    let host = request
+        .as_ref()
+        .ok()
+        .and_then(|request| request.host.clone())
+        .filter(|host| host.len() <= 255 && host.bytes().all(|byte| byte.is_ascii_graphic()))
+        .unwrap_or_else(|| "this repository".into());
+    let failure = match request.and_then(request_helper) {
+        Ok(WorkloadIdentityResult::Credential { username, password }) => {
+            println!("username={username}\npassword={password}\n");
+            return Ok(());
+        }
+        Ok(_) | Err(HelperError::Unavailable) => format!(
+            "dx: dx could not issue Git credentials for {host} just now; try again in a moment."
+        ),
+        Err(HelperError::Disconnected) => disconnected_message("give Git credentials"),
+        // Only Core's refusal means the owner's connection itself is gone.
+        Err(HelperError::Refused) => format!(
+            "dx: The Thread owner's connection to {host} is missing or was revoked. Reconnect it in dx Settings → Integrations."
+        ),
+        Err(HelperError::Invalid) => {
+            format!("dx: dx does not provide Git credentials for {host}.")
+        }
     };
-    println!("username={username}\npassword={password}\n");
-    Ok(())
+    eprintln!("{failure}");
+    Err(())
+}
+
+/// The connection to Core stayed down past the wait: say what happened,
+/// never that a GitHub or Bitbucket connection needs repair.
+fn disconnected_message(action: &str) -> String {
+    format!(
+        "dx: dx's connection to this Orb did not come back within {} s, so dx could not {action}. Try again in a moment.",
+        RECONNECT_WAIT.as_secs()
+    )
 }
 
 /// Reads Git's credential description. Only the protocol, host, and path
@@ -618,7 +733,7 @@ pub fn print_gcp_credential(arguments: &[String]) -> Result<(), ()> {
             println!("{}", serde_json::to_string(&output).map_err(|_| ())?);
             Ok(())
         }
-        Err(()) => {
+        Err(_) => {
             let output = GcpCredentialError {
                 version: 1,
                 success: false,
@@ -661,10 +776,8 @@ mod tests {
                 ),
             );
             pending.expire(now + crate::WORKLOAD_IDENTITY_REQUEST_LEASE);
-            assert!(matches!(
-                response.try_recv(),
-                Ok(WorkloadIdentityResult::Unavailable)
-            ));
+            // Core never answered: the helper asks again (#2049).
+            assert!(matches!(response.try_recv(), Ok(Relayed::Lost)));
             assert!(pending.requests.is_empty());
             assert!(
                 pending
