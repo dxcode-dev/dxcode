@@ -25,13 +25,14 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { requestThreadView } from "../../shared/commands/thread-open-view-event.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
-import { useOpenArtifact } from "../../shared/navigation/open-artifact.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { copyThreadUrl } from "../../shared/thread-copy.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
+import { threadQueryOptions } from "../threads/thread-queries.js";
 import { SpaceCommentsTab } from "./comments/space-comments-tab.js";
 import { SpaceProgressChart } from "./progress/space-progress-chart.js";
+import { useOpenSpaceArtifact } from "./space-artifact.js";
 import {
   compactAge,
   epochOf,
@@ -39,6 +40,7 @@ import {
   groupSpaceThreads,
   spaceProject,
   spaceStatusText,
+  threadSelectionChip,
 } from "./space-format.js";
 import {
   spaceArtifactsQueryOptions,
@@ -46,6 +48,20 @@ import {
   useSetSpaceJoined,
 } from "./space-queries.js";
 import { useOpenSpaceThread } from "./use-open-space-thread.js";
+
+// What the Space's own Thread runs on and its cost: the rows a Thread's
+// More Actions lists, from the chunk it loads them from, so they stay out
+// of the Space page's first load. They load at the first sign of reaching
+// for Space Actions.
+const loadThreadDetails = () => import("../threads/thread-menu-chunk.js");
+const preloadThreadDetails = () => void loadThreadDetails();
+const ThreadDetailRows = React.lazy(loadThreadDetails);
+const ThreadUsageDialog = React.lazy(() =>
+  loadThreadDetails().then((module) => ({
+    default: module.ThreadUsageDialogLoader,
+  })),
+);
+const menuParts = { Item: Menu.Item, Separator: Menu.Separator };
 
 function ThreadRowAge({ thread }: { readonly thread: SpaceThreadItem }) {
   const at = epochOf(thread.lastActivityAt);
@@ -66,6 +82,8 @@ function SpaceThreadRow({
   readonly active: boolean;
   readonly onOpen: (threadId: ThreadId) => void;
 }) {
+  // Opening a thread is seeing it, so the open one is never unread.
+  const unread = thread.unread === true && !active;
   return (
     <li>
       <button
@@ -79,9 +97,9 @@ function SpaceThreadRow({
         <span className="space-thread-status">
           <OrbIcon
             activityStatus={thread.state === "working" ? "working" : "idle"}
-            unread={thread.unread === true}
+            unread={unread}
             aria-hidden="false"
-            aria-label={thread.unread === true ? "Unread" : thread.state}
+            aria-label={unread ? "Unread" : thread.state}
           />
         </span>
         <span className="space-thread-text">
@@ -217,22 +235,25 @@ function SpaceArtifactRow({
 
 /**
  * The Artifacts tab: the artifacts of the Space and of the threads it
- * started, by thread, the Space's own first. The Space's own open as dx
- * opens an artifact; a thread's open that thread's tab on the artifact.
+ * started, by thread, the Space's own first. The Space's own open full
+ * screen over the page; a thread's open that thread's tab on the artifact.
  */
 function SpaceArtifactsTab({
   spaceThreadId,
+  onOpened,
 }: {
   readonly spaceThreadId: ThreadId;
+  readonly onOpened?: () => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const artifacts = useQuery(
     spaceArtifactsQueryOptions(identity.id, spaceThreadId),
   );
-  const openOwn = useOpenArtifact();
+  const openOwn = useOpenSpaceArtifact();
   const openThread = useOpenSpaceThread();
   const navigate = useNavigate();
   const open = (artifact: SpaceArtifactItem) => {
+    onOpened?.();
     if (artifact.thread.id === spaceThreadId) return openOwn(artifact.id);
     requestThreadView(artifact.thread.id, "artifacts");
     if (!openThread(artifact.thread.id, { artifact: artifact.id }))
@@ -307,7 +328,11 @@ function ArtifactAge({ at }: { readonly at: number }) {
   return useTimeText((now) => compactAge(at, now));
 }
 
-/** The panel's More Actions: Edit Space…, Copy Space URL, Leave Space. */
+/**
+ * The panel's More Actions: Edit Space…, Copy Space URL, Archive, then
+ * what the Space's agent runs on and its cost (which opens Cost & Usage),
+ * Leave Space, and Delete Space….
+ */
 export function SpacePanelMenu({
   space,
   userId,
@@ -323,69 +348,111 @@ export function SpacePanelMenu({
 }) {
   const leave = useSetSpaceJoined(userId);
   const member = space.access !== "owner" && space.joined;
+  // The Space's own Thread: what its agent runs on and what it cost, as a
+  // Thread's More Actions lists them.
+  const thread = useQuery(threadQueryOptions(userId, space.threadId)).data;
+  const [usageOpen, setUsageOpen] = React.useState(false);
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        className="space-icon-button"
-        aria-label="Space Actions"
-        title="Space Actions"
-      >
-        <Ellipsis aria-hidden="true" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
+    <>
+      <Menu.Root>
+        <Menu.Trigger
+          className="space-icon-button"
+          aria-label="Space Actions"
+          title="Space Actions"
+          onPointerEnter={preloadThreadDetails}
+          onPointerDown={preloadThreadDetails}
+          onFocus={preloadThreadDetails}
         >
-          <Menu.Popup className="thread-menu-popup thread-actions-menu">
-            {onEdit === undefined ? null : (
-              <Menu.Item className="thread-menu-item" onClick={onEdit}>
-                <Pencil />
-                <span>Edit Space…</span>
-              </Menu.Item>
-            )}
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() => void copyThreadUrl(space.threadId)}
-            >
-              <Link2 />
-              <span>Copy Space URL</span>
-            </Menu.Item>
-            {onArchive === undefined ? null : (
-              <Menu.Item className="thread-menu-item" onClick={onArchive}>
-                <Archive />
-                <span>Archive Space</span>
-              </Menu.Item>
-            )}
-            {member ? (
-              <>
-                <Menu.Separator className="thread-menu-separator" />
-                <Menu.Item
-                  className="thread-menu-item"
-                  disabled={leave.isPending}
-                  onClick={() =>
-                    leave.mutate({ threadId: space.threadId, joined: false })
-                  }
-                >
-                  <LogOut />
-                  <span>Leave Space</span>
+          <Ellipsis aria-hidden="true" />
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner
+            className="thread-menu-positioner"
+            align="end"
+            sideOffset={4}
+          >
+            <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-menu-details">
+              {onEdit === undefined ? null : (
+                <Menu.Item className="thread-menu-item" onClick={onEdit}>
+                  <Pencil />
+                  <span>Edit Space…</span>
                 </Menu.Item>
-              </>
-            ) : null}
-            {onDelete === undefined ? null : (
-              <>
-                <Menu.Separator className="thread-menu-separator" />
-                <Menu.Item className="thread-menu-item" onClick={onDelete}>
-                  <Trash2 />
-                  <span>Delete Space…</span>
+              )}
+              <Menu.Item
+                className="thread-menu-item"
+                onClick={() => void copyThreadUrl(space.threadId)}
+              >
+                <Link2 />
+                <span>Copy Space URL</span>
+              </Menu.Item>
+              {onArchive === undefined ? null : (
+                <Menu.Item className="thread-menu-item" onClick={onArchive}>
+                  <Archive />
+                  <span>Archive Space</span>
                 </Menu.Item>
-              </>
-            )}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+              )}
+              {thread === undefined ? null : (
+                <React.Suspense fallback={null}>
+                  <ThreadDetailRows
+                    Menu={menuParts}
+                    thread={thread}
+                    onOpenUsage={() => setUsageOpen(true)}
+                  />
+                </React.Suspense>
+              )}
+              {member ? (
+                <>
+                  <Menu.Separator className="thread-menu-separator" />
+                  <Menu.Item
+                    className="thread-menu-item"
+                    disabled={leave.isPending}
+                    onClick={() =>
+                      leave.mutate({ threadId: space.threadId, joined: false })
+                    }
+                  >
+                    <LogOut />
+                    <span>Leave Space</span>
+                  </Menu.Item>
+                </>
+              ) : null}
+              {onDelete === undefined ? null : (
+                <>
+                  <Menu.Separator className="thread-menu-separator" />
+                  <Menu.Item className="thread-menu-item" onClick={onDelete}>
+                    <Trash2 />
+                    <span>Delete Space…</span>
+                  </Menu.Item>
+                </>
+              )}
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+      {usageOpen && thread !== undefined ? (
+        <React.Suspense fallback={null}>
+          <ThreadUsageDialog
+            thread={thread}
+            onClose={() => setUsageOpen(false)}
+          />
+        </React.Suspense>
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * What the Space's agent runs on, as a Thread's title bar shows its mode or
+ * model, with the model and effort in its tooltip.
+ */
+export function SpaceAgentChip({ space }: { readonly space: SpaceData }) {
+  const { identity } = useAuthenticatedIdentity();
+  const thread = useQuery(threadQueryOptions(identity.id, space.threadId)).data;
+  if (thread === undefined) return null;
+  const chip = threadSelectionChip(thread.agentInitialization.selection);
+  return (
+    <span className="space-tab-mode space-agent-chip" title={chip.title}>
+      {chip.label}
+    </span>
   );
 }
 
@@ -498,6 +565,8 @@ export function SpacePanel({
   space,
   activeThreadId,
   onOpenThread,
+  onOpenComments,
+  onOpened,
   onEdit,
   onDelete,
   onArchive,
@@ -506,6 +575,10 @@ export function SpacePanel({
   readonly space: SpaceData;
   readonly activeThreadId: ThreadId | undefined;
   readonly onOpenThread: (threadId: ThreadId) => void;
+  /** Brings the Space chat, where a message's comments open, to the front. */
+  readonly onOpenComments: () => void;
+  /** Runs as an artifact or comments row opens: the sheet closes itself. */
+  readonly onOpened?: () => void;
   readonly onEdit?: () => void;
   readonly onDelete?: () => void;
   readonly onArchive?: () => void;
@@ -516,7 +589,10 @@ export function SpacePanel({
   const threads = useQuery(
     spaceThreadsQueryOptions(identity.id, space.threadId),
   ).data;
-  const unread = threads?.some((thread) => thread.unread === true) === true;
+  const unread =
+    threads?.some(
+      (thread) => thread.unread === true && thread.id !== activeThreadId,
+    ) === true;
   const [tab, setTab] = React.useState<SpacePanelTab>("threads");
   const status = spaceStatusText(space);
   return (
@@ -559,6 +635,7 @@ export function SpacePanel({
         )}
         <div className="space-panel-meta">
           <SpaceProjectChip space={space} />
+          <SpaceAgentChip space={space} />
           <span className="space-panel-meta-spacer" />
           <SpaceCallAndSharing space={space} onShare={onEdit} />
         </div>
@@ -598,10 +675,19 @@ export function SpacePanel({
           />
         </Tabs.Panel>
         <Tabs.Panel className="space-panel-tab-panel" value="comments">
-          <SpaceCommentsTab spaceThreadId={space.threadId} />
+          <SpaceCommentsTab
+            spaceThreadId={space.threadId}
+            onOpen={() => {
+              onOpened?.();
+              onOpenComments();
+            }}
+          />
         </Tabs.Panel>
         <Tabs.Panel className="space-panel-tab-panel" value="artifacts">
-          <SpaceArtifactsTab spaceThreadId={space.threadId} />
+          <SpaceArtifactsTab
+            spaceThreadId={space.threadId}
+            onOpened={onOpened}
+          />
         </Tabs.Panel>
       </Tabs.Root>
     </div>

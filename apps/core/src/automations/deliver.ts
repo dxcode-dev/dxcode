@@ -3,6 +3,7 @@ import type { Bindings } from "../http/types.js";
 import { automationLogger } from "../logging.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { shipFromPullRequestWebhook } from "../spaces/progress/shipped.js";
+import { reportShippedToSpace } from "../spaces/report-back.js";
 import {
   ciEvent,
   type FilterKind,
@@ -461,6 +462,10 @@ const shipMergedPullRequest = async (
   now: Date,
   waitUntil?: (promise: Promise<unknown>) => void,
 ) => {
+  const repository = (payload.repository as { full_name?: unknown } | undefined)
+    ?.full_name;
+  const number = (payload.pull_request as { number?: unknown } | undefined)
+    ?.number;
   const shipped = await shipFromPullRequestWebhook(
     db,
     action,
@@ -479,11 +484,14 @@ const shipMergedPullRequest = async (
       threadId,
       reason: "pull_request_merged",
     });
-    const publication = publishRealtimeInvalidation(
-      bindings,
-      threadId,
-      "thread.invalidated",
-    );
+    const publication = Promise.all([
+      publishRealtimeInvalidation(bindings, threadId, "thread.invalidated"),
+      // A Space's coordinator hears it, unless the merge wakes the thread.
+      reportShippedToSpace(bindings, threadId, {
+        reason: "pull_request_merged",
+        pullRequest: `${String(repository)}#${String(number)}`,
+      }),
+    ]);
     if (waitUntil === undefined) await publication;
     else waitUntil(publication);
   }

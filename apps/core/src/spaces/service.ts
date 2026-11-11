@@ -107,16 +107,19 @@ export const spaceWorkspaceId = async (
 
 /**
  * Where a Space's thread stands, first match wins:
- * - `shipped`: its work reached the default branch, its pull request merged,
- *   or Ship archived it (`shipped_at`);
- * - `archived`: archived without shipping;
+ * - `archived`: archived; `shipped` instead when its work shipped
+ *   (`shipped_at`: it reached the default branch, its pull request merged,
+ *   or Ship archived it);
  * - `working`: a turn is running, its first one from when the first message
- *   is stored;
+ *   is stored, shipped or not: a shipped thread asked for more is open again;
  * - `needs_you`: it asked a person for something: an open ask in one of its
  *   artifacts (`request_attention`), or a recorded question or approval;
- * - `failed`: its last turn failed;
- * - `ready_to_ship`: it finished with uncommitted changes or an open pull
- *   request;
+ * - `failed`: its last turn failed, unless it only waits for its Claude
+ *   plan to reset and then runs again by itself (`plan_wait`), or the
+ *   failure came before the thread shipped;
+ * - `ready_to_ship`: it finished with an open pull request, or, unshipped,
+ *   with uncommitted changes;
+ * - `shipped`: it shipped and rests with nothing new;
  * - `idle`: it finished with nothing to ship.
  */
 export const spaceThreadState = (row: {
@@ -127,10 +130,13 @@ export const spaceThreadState = (row: {
   readonly open_ask?: number | null;
   readonly open_pull?: number | null;
   readonly turn_failed: number;
+  readonly turn_settled_at?: string | null;
+  readonly plan_wait?: number | null;
   readonly summary_files: number | null;
 }): SpaceThreadState => {
-  if (row.shipped_at !== null) return "shipped";
-  if (row.lifecycle_state === "archived") return "archived";
+  const shipped = row.shipped_at !== null;
+  if (row.lifecycle_state === "archived")
+    return shipped ? "shipped" : "archived";
   if (row.activity_status === "working") return "working";
   if (
     row.open_ask === 1 ||
@@ -138,10 +144,19 @@ export const spaceThreadState = (row: {
     row.attention_kind === "approval"
   )
     return "needs_you";
-  if (row.turn_failed === 1 || row.attention_kind === "failed") return "failed";
-  if (row.open_pull === 1 || (row.summary_files ?? 0) > 0)
+  // A failure from before the thread shipped is history, not news.
+  const settledSinceShipped =
+    !shipped ||
+    Date.parse(row.turn_settled_at ?? "") > (row.shipped_at ?? Infinity);
+  if (
+    row.plan_wait !== 1 &&
+    settledSinceShipped &&
+    (row.turn_failed === 1 || row.attention_kind === "failed")
+  )
+    return "failed";
+  if (row.open_pull === 1 || (!shipped && (row.summary_files ?? 0) > 0))
     return "ready_to_ship";
-  return "idle";
+  return shipped ? "shipped" : "idle";
 };
 
 /** The threads a Space started, as `viewer` sees them. */
@@ -202,6 +217,8 @@ export const spaceThreadItems = async (
           open_ask: row.open_ask,
           open_pull: row.open_pull,
           turn_failed: row.turn_failed,
+          turn_settled_at: row.turn_settled_at,
+          plan_wait: row.plan_wait,
           summary_files: row.summary_files,
         }),
         shippedAt: row.shipped_at === null ? null : timestamp(row.shipped_at),

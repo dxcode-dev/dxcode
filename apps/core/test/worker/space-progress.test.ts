@@ -346,6 +346,12 @@ describe("how a Space's thread ships", () => {
     const spaceId = await createSpace();
     const fixer = await startChild(spaceId, "Fix coupon rounding");
     const bystander = await startChild(spaceId, "Write checkout tests");
+    // Both finished their turns; a thread that runs again is open, not shipped.
+    await env.DB.prepare(
+      "UPDATE threads SET activity_status = 'idle' WHERE parent_thread_id = ?",
+    )
+      .bind(spaceId)
+      .run();
     // The agent subscribes to the PR it opened, which links the thread.
     for (const [threadId, number] of [
       [fixer, 12],

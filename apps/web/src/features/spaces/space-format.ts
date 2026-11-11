@@ -3,9 +3,11 @@ import type {
   SpaceData,
   SpaceThreadItem,
   SpaceThreadState,
+  ThreadDetailData,
 } from "@dx/api";
 import { PROJECTLESS_PROJECT_NAME, type ThreadId } from "@dx/domain";
 import { DateTime } from "effect";
+import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 
 /** A row's age: `now`, `5m`, `3h`, `15d`, `1mo`, `2y`, as sidebar rows show it. */
 export const compactAge = (at: number, now: number) => {
@@ -123,3 +125,21 @@ export const updatedAgo = (at: number, now: number) => {
  */
 export const spaceStatusText = (space: SpaceData) =>
   space.statusLine ?? (space.waitingOnInput ? "Needs input" : undefined);
+
+/**
+ * What a Space shows for what a thread (or its own agent) runs on, as a
+ * Thread's title bar does: a pinned model's ID,
+ * else the summary's label, with the summary's title as its tooltip.
+ */
+export function threadSelectionChip(
+  selection: ThreadDetailData["agentInitialization"]["selection"],
+) {
+  const summary = threadSelectionSummary(selection);
+  return {
+    label:
+      selection.kind === "model" && summary.kind === "model"
+        ? selection.model
+        : summary.label,
+    title: summary.title,
+  };
+}

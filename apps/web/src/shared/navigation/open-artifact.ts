@@ -13,7 +13,7 @@ type NavigationState = Extract<
 >;
 
 /** Marks the history entry Open pushed for a sheet, so Close can go back. */
-const sheetOpened: NavigationState = (previous) => ({
+export const sheetOpened: NavigationState = (previous) => ({
   ...previous,
   artifactSheet: true,
 });

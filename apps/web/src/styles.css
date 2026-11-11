@@ -967,7 +967,8 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* A phone's menu also lists the model and Project, so it runs wider. */
+/* More Actions lists what the Thread runs on (and on a phone its Project),
+   so it runs wider. */
 .thread-menu-popup.thread-actions-menu-details {
   min-width: min(264px, calc(100vw - 8px));
 }

@@ -5,6 +5,7 @@ import {
   type SpaceThreadItem,
 } from "@dx/api";
 import {
+  claudePlanLimitText,
   Principal,
   ProjectRepository,
   type ThreadId,
@@ -28,7 +29,10 @@ import type {
   HistoryMessage,
   HistoryRead,
 } from "../../src/thread-search/history.js";
-import { recordFlueThreadActivity } from "../../src/threads/activity.js";
+import {
+  reconcileStaleThreadActivity,
+  recordFlueThreadActivity,
+} from "../../src/threads/activity.js";
 import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
@@ -66,12 +70,28 @@ const agentPosts = vi.hoisted(
     }>,
 );
 
+/** Submissions each agent's Flue history says settled, and how. */
+const agentSettlements = vi.hoisted(
+  () =>
+    new Map<
+      string,
+      Array<{ readonly submissionId: string; readonly outcome: string }>
+    >(),
+);
+
 // No Flue agent runs here: a message posted to one is recorded.
 vi.mock("../../src/agents/routes.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../src/agents/routes.js")>();
   const { Hono } = await import("hono");
   const routes = new Hono<import("../../src/http/types.js").AppEnv>();
+  // Flue's history read: what each agent says it settled.
+  routes.get("/:threadId", (context) => {
+    const settlements = agentSettlements.get(context.req.param("threadId"));
+    return settlements === undefined
+      ? context.json({ error: "not found" }, 404)
+      : context.json({ messages: [], settlements });
+  });
   routes.post("/:threadId", async (context) => {
     agentPosts.push({
       path: `/v1/agents/dx/${context.req.param("threadId")}`,
@@ -328,6 +348,7 @@ const catchUp = async (spaceId: ThreadId, userId = member) => {
 };
 
 beforeEach(async () => {
+  agentSettlements.clear();
   model.calls.length = 0;
   model.answer = "";
   await env.DB.batch([
@@ -874,6 +895,219 @@ describe("Space thread cards in workerd with real D1", () => {
     expect(listed.find(({ id }) => id === childId)?.state).toBe("shipped");
   });
 
+  it("moves a shipped thread back to open while it runs again, and back to Shipped once it rests", async () => {
+    const spaceId = await newSpace();
+    const childId = await startChild(spaceId, "Coupon rounding");
+    await settleFirstTurn(childId);
+    const shippedAt = Date.now() - 60_000;
+    await env.DB.prepare(
+      "UPDATE threads SET shipped_at = ?2, ship_reason = 'pull_request_merged' WHERE id = ?1",
+    )
+      .bind(childId, shippedAt)
+      .run();
+    expect((await card(spaceId, childId)).state).toBe("shipped");
+
+    // Someone asks it for more after it shipped: it runs, so it is open.
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_running",
+        instanceId: childId,
+        submissionId: "sub_after_ship",
+      }),
+      { env: bindings } as never,
+    );
+    const running = await card(spaceId, childId);
+    expect(running.state).toBe("working");
+    expect(running.shippedAt).not.toBeNull();
+    const listed = (await send(member, `/v1/spaces/${spaceId}/threads`)).body
+      .data.items as SpaceThreadItem[];
+    expect(listed.find(({ id }) => id === childId)?.state).toBe("working");
+
+    // It asks a person something: Needs You, not Shipped.
+    await env.DB.prepare(
+      "INSERT INTO thread_attention_request (thread_id, kind, requested_at) VALUES (?, 'question', ?)",
+    )
+      .bind(childId, new Date().toISOString())
+      .run();
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_settled",
+        instanceId: childId,
+        submissionId: "sub_after_ship",
+        outcome: "completed",
+      }),
+      { env: bindings } as never,
+    );
+    expect((await card(spaceId, childId)).state).toBe("needs_you");
+    await env.DB.prepare(
+      "DELETE FROM thread_attention_request WHERE thread_id = ?",
+    )
+      .bind(childId)
+      .run();
+
+    // It rests with nothing new to ship: Shipped again.
+    expect((await card(spaceId, childId)).state).toBe("shipped");
+
+    // It opened a new pull request after shipping: Ready to Ship.
+    await env.DB.prepare(
+      `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at)
+       VALUES (?1, 'acme/checkout', 'acme/checkout', 8, 'pull', ?2, ?3)`,
+    )
+      .bind(
+        childId,
+        JSON.stringify({ title: "Round taxes", summary: "", state: "open" }),
+        new Date().toISOString(),
+      )
+      .run();
+    expect((await card(spaceId, childId)).state).toBe("ready_to_ship");
+    await env.DB.prepare("DELETE FROM thread_github_link WHERE thread_id = ?")
+      .bind(childId)
+      .run();
+
+    // A turn after shipping failed: Failed, not Shipped.
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_running",
+        instanceId: childId,
+        submissionId: "sub_fails_after_ship",
+      }),
+      { env: bindings } as never,
+    );
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_settled",
+        instanceId: childId,
+        submissionId: "sub_fails_after_ship",
+        outcome: "failed",
+      }),
+      { env: bindings } as never,
+    );
+    expect((await card(spaceId, childId)).state).toBe("failed");
+
+    // Shipped from its Ship outcome, archived, then restored and running.
+    const restored = await startChild(spaceId, "Refund totals");
+    await settleFirstTurn(restored);
+    await env.DB.prepare(
+      "UPDATE threads SET shipped_at = ?2, ship_reason = 'ship_archived', lifecycle_state = 'archived', archived_at = ?2 WHERE id = ?1",
+    )
+      .bind(restored, Date.now() - 60_000)
+      .run();
+    expect((await card(spaceId, restored)).state).toBe("shipped");
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'active', restored_at = ?2 WHERE id = ?1",
+    )
+      .bind(restored, Date.now())
+      .run();
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_running",
+        instanceId: restored,
+        submissionId: "sub_restored",
+      }),
+      { env: bindings } as never,
+    );
+    expect((await card(spaceId, restored)).state).toBe("working");
+  });
+
+  it("shows a thread waiting for its Claude plan to reset as resting, not Failed", async () => {
+    const spaceId = await newSpace();
+    const childId = await startChild(spaceId, "Coupon rounding");
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_settled",
+        instanceId: childId,
+        submissionId: `sub_${childId}`,
+        outcome: "failed",
+        error: {
+          message: claudePlanLimitText({
+            window: "five_hour",
+            resetsAt: Math.floor(Date.now() / 1000) + 3_600,
+            cause: "exhausted",
+          }),
+        },
+      }),
+      { env: bindings } as never,
+    );
+    // The limit text started a wait for the plan's reset.
+    expect(
+      await env.DB.prepare("SELECT 1 FROM thread_plan_wait WHERE thread_id = ?")
+        .bind(childId)
+        .first(),
+    ).not.toBeNull();
+    expect((await card(spaceId, childId)).state).toBe("idle");
+
+    // The plan resets and the resumed turn runs: working.
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_running",
+        instanceId: childId,
+        submissionId: "sub_resumed",
+      }),
+      { env: bindings } as never,
+    );
+    expect((await card(spaceId, childId)).state).toBe("working");
+
+    // A failure that is not a plan limit still shows Failed.
+    await recordFlueThreadActivity(
+      observation({
+        type: "submission_settled",
+        instanceId: childId,
+        submissionId: "sub_resumed",
+        outcome: "failed",
+        error: { message: "The model provider refused the request." },
+      }),
+      { env: bindings } as never,
+    );
+    expect((await card(spaceId, childId)).state).toBe("failed");
+  });
+
+  it("settles a turn whose settlement dx missed, so a thread that stopped stops showing as running", async () => {
+    const spaceId = await newSpace();
+    const lost = await startChild(spaceId, "Coupon rounding");
+    const failed = await startChild(spaceId, "Refund totals");
+    const running = await startChild(spaceId, "Tax rounding");
+    const orphan = await startChild(spaceId, "Search relevance");
+    // Each first turn started ten minutes ago; dx never heard any settle.
+    await env.DB.prepare(
+      "UPDATE thread_activity_submission SET observed_at = ?2 WHERE thread_id IN (SELECT id FROM threads WHERE parent_thread_id = ?1)",
+    )
+      .bind(spaceId, new Date(Date.now() - 10 * 60_000).toISOString())
+      .run();
+    for (const id of [lost, failed, running, orphan])
+      expect((await card(spaceId, id)).state).toBe("working");
+    // Flue settled two of them; the third still runs.
+    agentSettlements.set(lost, [
+      { submissionId: `sub_${lost}`, outcome: "completed" },
+    ]);
+    agentSettlements.set(failed, [
+      { submissionId: `sub_${failed}`, outcome: "failed" },
+    ]);
+    agentSettlements.set(running, []);
+    // The fourth's agent has no conversation at all: nothing can be running.
+
+    await reconcileStaleThreadActivity(bindings, Date.now());
+
+    expect((await card(spaceId, lost)).state).toBe("idle");
+    expect((await card(spaceId, failed)).state).toBe("failed");
+    expect((await card(spaceId, running)).state).toBe("working");
+    expect((await card(spaceId, orphan)).state).toBe("idle");
+    const statuses = (
+      await env.DB.prepare(
+        "SELECT id, activity_status FROM threads WHERE parent_thread_id = ?",
+      )
+        .bind(spaceId)
+        .all<{ id: string; activity_status: string }>()
+    ).results;
+    expect(
+      Object.fromEntries(statuses.map((r) => [r.id, r.activity_status])),
+    ).toEqual({
+      [lost]: "idle",
+      [failed]: "idle",
+      [running]: "working",
+      [orphan]: "idle",
+    });
+  });
+
   it("catches a returning person up once, with links only to the Space's threads", async () => {
     const spaceId = await newSpace();
     const finished = await startChild(spaceId, "Fix coupon rounding");
@@ -962,6 +1196,8 @@ describe("Space thread cards in workerd with real D1", () => {
     const finished = await startChild(spaceId, "Walk the tools folder");
     const archived = await startChild(spaceId, "Survey the test suite");
     const shipped = await startChild(spaceId, "Fix coupon rounding");
+    // It finished its turn before it shipped; a running one would be open.
+    await settleFirstTurn(shipped);
     const twoHoursAgo = Date.now() - 2 * 3_600_000;
     await env.DB.prepare(
       "UPDATE threads SET created_at = ?1 WHERE parent_thread_id = ?2",

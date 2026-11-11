@@ -635,9 +635,16 @@ export function DxAgent(props: AgentProps) {
       for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
       for (const tool of claudeCodeDxTools(props.id, profile.tools))
         useTool(tool);
-      useAgentStart(({ harness }) => {
+      // The same skills as the dx agent's Space: written to the executor,
+      // where the launch script links them into ~/.claude/skills.
+      useAgentStart(async ({ harness }) => {
         resetClaudeCodeThreadState(props.id);
         rememberClaudeCodeSandbox(props.id, harness.sandbox);
+        const target = { coordinated: harness.sandbox };
+        await Promise.all([
+          installBuiltInSkills(target),
+          installSettingsSkills(target, props.id, skills),
+        ]);
       });
       // Appended to Claude Code's own prompt, as for every Claude Code
       // Thread; the profile already carries the workspace's and the

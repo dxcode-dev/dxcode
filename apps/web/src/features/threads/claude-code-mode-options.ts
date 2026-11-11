@@ -5,7 +5,7 @@ import {
   claudePlanBlockedUntil,
   isClaudeCodeModel,
 } from "@dx/domain";
-import { modelDisplayName } from "../../shared/model-display-name.js";
+import { claudeCodeShortName } from "../../shared/model-display-name.js";
 import type { ModeDialClaudeCode } from "../../shared/ui/mode-dial-plate.js";
 
 const EFFORT_LABELS: Readonly<Record<ClaudeCodeEffort, string>> = {
@@ -18,14 +18,6 @@ const EFFORT_LABELS: Readonly<Record<ClaudeCodeEffort, string>> = {
 
 export const claudeCodeEffortLabel = (effort: ClaudeCodeEffort) =>
   EFFORT_LABELS[effort];
-
-const SHORT_EFFORT_LABELS: Readonly<Record<ClaudeCodeEffort, string>> = {
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "X-High",
-  max: "Max",
-};
 
 /** Claude Code models the owner's connected plan serves, in catalog order. */
 export const claudeCodeModels = (choices: ChoicesData | undefined) =>
@@ -51,17 +43,6 @@ export const currentClaudeCodeModel = (
       models[0],
   };
 };
-
-/** "Claude Haiku 5.5" without the family name, as the dial shows it. */
-const claudeCodeShortName = (name: string) =>
-  modelDisplayName(name).replace(/^Claude /, "");
-
-/**
- * The composer chip's words for a Claude Code pick, "Opus 5.5 High": the
- * Claude icon and color already say Claude Code.
- */
-export const claudeCodeChipLabel = (name: string, effort: ClaudeCodeEffort) =>
-  `${claudeCodeShortName(name)} ${SHORT_EFFORT_LABELS[effort]}`;
 
 /** The dial's Claude Code lamp and display, once a plan is connected. */
 export const claudeCodeDial = (

@@ -1,5 +1,8 @@
 import { threadAgentName } from "@dx/api";
-import { MAX_MCP_SERVERS_PER_THREAD } from "@dx/domain";
+import {
+  CLAUDE_CODE_PROVIDER_ID,
+  MAX_MCP_SERVERS_PER_THREAD,
+} from "@dx/domain";
 import * as v from "valibot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -102,7 +105,14 @@ vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
 vi.mock("../settings/plugins/flue.js", () => ({
   createPluginTool: plugins.createPluginTool,
 }));
+// A Space on Claude Code runs on its executor; this deployment has one.
+vi.mock("../executor/sandbox.js", async (importActual) => ({
+  ...(await importActual<typeof import("../executor/sandbox.js")>()),
+  executorAvailable: () => true,
+  executorSandbox: () => ({}),
+}));
 
+import { claudeCodeExecutor } from "../executor/sandbox.js";
 import { BUILT_IN_SKILL_NAMES } from "./built-in-skill-names.js";
 import { DxAgent } from "./dx-agent.js";
 import { DxAgentInitialDataSchema } from "./dx-agent-initial-data.js";
@@ -675,6 +685,116 @@ describe("DxAgent", () => {
       "review-guidelines",
       "repo-only",
     ]);
+  });
+
+  // A Space's main Thread has no Orb, so it lacks only what needs one:
+  // dx-workspace (how an Orb sleeps and serves) and the repository's
+  // skills. Every other skill an ordinary Thread gets, it gets too, in dx
+  // mode and in Claude Code mode alike.
+  it("offers a Space's main Thread the same skills as an ordinary Thread, in dx and Claude Code mode", async () => {
+    const settingsSkill = {
+      id: "skl_00000000-0000-4000-8000-000000000051",
+      version: 1,
+      name: "team-style",
+      scope: "workspace" as const,
+      integrity: "d".repeat(64),
+      description: "Team style.",
+      instructions: "Write like the team.",
+      resources: [],
+    };
+    hooks.useInitialData.mockReturnValue({
+      personalInstructions: "",
+      settingsRevision: 0,
+      settingsVersion: 1,
+      skills: [settingsSkill],
+    });
+    const space = {
+      spaceName: "Parity",
+      goal: null,
+      project: null,
+      threadUrl: "https://dx.example.com/threads/thr_space",
+      origin: "https://dx.example.com",
+      ownerName: "Rhea",
+    };
+    const claudeCode = {
+      model: `${CLAUDE_CODE_PROVIDER_ID}/claude-opus-5-5`,
+      thinking: "high",
+    };
+    const dxModel = {
+      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      thinking: "medium",
+    };
+
+    // What the agent can load: the skills the dx agent mounts, or the
+    // skill directories written for Claude Code at agent start, which
+    // reach Claude only while it keeps its Skill tool.
+    const offered = async (
+      threadId: string,
+      promptData: Record<string, unknown>,
+    ) => {
+      hooks.useSkill.mockReset();
+      hooks.useAgentStart.mockReset();
+      hooks.usePromptData.mockReturnValueOnce(promptData as never);
+      // Claude Code's view_media reads the deployment's origin at render.
+      pluginHost.agentThreadToolsContext.mockReturnValueOnce({
+        bindings: {},
+      } as never);
+      DxAgent({ id: threadId });
+      const mounted = hooks.useSkill.mock.calls.map(
+        ([skill]) => (skill as { name: string }).name,
+      );
+      const written = new Map<string, string>();
+      const sandbox = {
+        readFile: async () => {
+          throw new Error("missing");
+        },
+        writeFile: async (path: string, content: string) => {
+          written.set(path, content);
+        },
+        exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      };
+      for (const [start] of hooks.useAgentStart.mock.calls)
+        await start({
+          harness: { sandbox },
+          log: { error: vi.fn() },
+          append: vi.fn(),
+        });
+      const installed = [...written.values()].flatMap((script) =>
+        [...script.matchAll(/"\$stage\/([^/"]+)\/SKILL\.md"/g)].map(
+          ([, name]) => name,
+        ),
+      );
+      const builtIns = claudeCodeExecutor(threadId)?.builtInTools;
+      const skillTool = builtIns === undefined || builtIns.includes("Skill");
+      return promptData.route === claudeCode
+        ? skillTool
+          ? [...new Set(installed)].sort()
+          : []
+        : mounted.sort();
+    };
+
+    const thread = (route: unknown) => ({ route });
+    const spaceThread = (route: unknown) => ({ route, orbFree: true, space });
+    const table = {
+      "thread, dx": await offered("thr_parity_thread_dx", thread(dxModel)),
+      "Space, dx": await offered("thr_parity_space_dx", spaceThread(dxModel)),
+      "thread, Claude Code": await offered(
+        "thr_parity_thread_cc",
+        thread(claudeCode),
+      ),
+      "Space, Claude Code": await offered(
+        "thr_parity_space_cc",
+        spaceThread(claudeCode),
+      ),
+    };
+    const shared = [...BUILT_IN_SKILL_NAMES, "team-style"].sort();
+    expect(table).toEqual({
+      "thread, dx": ["dx-workspace", ...shared].sort(),
+      "Space, dx": shared,
+      // Claude Code carries dx-workspace in its prompt instead.
+      "thread, Claude Code": shared,
+      "Space, Claude Code": shared,
+    });
   });
 
   it("mounts trusted plugin tools and dispatches lifecycle hooks through the isolated runtime", async () => {

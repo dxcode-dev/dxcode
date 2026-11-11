@@ -1,6 +1,6 @@
 import type { ThreadDetailData } from "@dx/api";
 import { isClaudeCodeModel } from "@dx/domain";
-import { modelDisplayName } from "../../shared/model-display-name.js";
+import { modelDisplayName } from "./model-display-name.js";
 
 type ThreadSelection = ThreadDetailData["agentInitialization"]["selection"];
 

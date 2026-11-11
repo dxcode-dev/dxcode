@@ -1,16 +1,50 @@
 import { Dialog } from "@base-ui/react/dialog";
-import { isClaudeCodeModel, SPACE_AGENT_DEFAULT } from "@dx/domain";
+import type { SpaceAgentRoute } from "@dx/api";
+import {
+  claudeCodeEffort,
+  isClaudeCodeModel,
+  SPACE_AGENT_DEFAULT,
+  type ThinkingLevel,
+} from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import { Cpu } from "lucide-react";
 import * as React from "react";
 import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
+import {
+  claudeCodeChipLabel,
+  modelDisplayName,
+} from "../../shared/model-display-name.js";
 import { spaceRouteText } from "../../shared/space-agent-route.js";
 import { Button } from "../../shared/ui/button.js";
+import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { modelRoutingChoicesQueryOptions } from "../settings/model-routing/model-routing-queries.js";
 import { spaceAgentModelMutationOptions } from "./space-agent-model-mutations.js";
 import { spaceAgentModelQueryOptions } from "./space-agent-model-queries.js";
 
 const AUTO = "auto";
+
+const THINKING_LABELS: Readonly<Record<ThinkingLevel, string>> = {
+  off: "",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "X-High",
+  max: "Max",
+};
+
+/**
+ * The Agent chip's words: a Claude Code route as the composer's Claude Code
+ * chip says it ("Opus 5.5 Medium"), a Model Routing one as "<model>
+ * <effort>".
+ */
+const spaceAgentChipLabel = (route: SpaceAgentRoute) =>
+  route.kind === "claude-code"
+    ? claudeCodeChipLabel(route.modelName, claudeCodeEffort(route.thinking))
+    : [modelDisplayName(route.modelName), THINKING_LABELS[route.thinking]]
+        .filter((part) => part !== "")
+        .join(" ");
 
 /**
  * The model for new Spaces, picked before a Space exists: from the Create
@@ -120,9 +154,11 @@ export function SpaceAgentPicker({
 }
 
 /**
- * Where a new Space will run, with a way to change it. On Claude Code with
- * several plans, the plan list and its limits, as the New Thread composer
- * shows them.
+ * Where a new Space will run, as the New Thread composer shows a Claude
+ * Code pick: the orange chip with the Claude icon and "<model> <effort>"
+ * ("Opus 5.5 Medium"), then, with several plans, the composer's plan list
+ * and its limits. On Model Routing the chip names the model; with nothing
+ * serving it, the reason. The chip opens the model picker.
  */
 export function SpaceAgentField({
   id,
@@ -146,7 +182,7 @@ export function SpaceAgentField({
   const query = useQuery(spaceAgentModelQueryOptions(identity));
   const choices = useQuery(modelRoutingChoicesQueryOptions(identity)).data;
   const route = query.data?.route;
-  // The line names the plan picked; on Auto, the one dx would pick now.
+  // The words name the plan picked; on Auto, the one dx would pick now.
   const chosen = choices?.claudePlans.find(
     ({ connectionId }) => connectionId === plan,
   );
@@ -154,17 +190,51 @@ export function SpaceAgentField({
     route?.kind === "claude-code" && chosen !== undefined
       ? { ...route, connectionName: chosen.name }
       : route;
+  const claudeCode = route?.kind === "claude-code";
+  const described =
+    shown === undefined
+      ? query.isError
+        ? "The model for Spaces could not be loaded."
+        : "Loading…"
+      : spaceRouteText(shown);
   return (
     <div className="space-agent-field" data-route={route?.kind}>
-      <span role={route?.kind === "unavailable" ? "alert" : "status"}>
-        {shown === undefined
-          ? query.isError
-            ? "The model for Spaces could not be loaded."
-            : "Loading…"
-          : spaceRouteText(shown)}
-      </span>
-      <span className="space-agent-actions">
-        {route?.kind === "claude-code" && PlanPicker !== undefined ? (
+      {route?.kind === "unavailable" || query.isError ? (
+        <p className="space-agent-message" role="alert">
+          {described}
+        </p>
+      ) : (
+        <span className="visually-hidden" role="status">
+          {described}
+        </span>
+      )}
+      <span className="space-agent-chips">
+        <button
+          id={id}
+          type="button"
+          className="new-thread-config-pill new-thread-mode space-agent-chip"
+          data-claude-code={claudeCode || undefined}
+          aria-label={`${described} Change the model for Spaces.`}
+          title={described}
+          disabled={locked}
+          onClick={onChange}
+        >
+          {claudeCode ? (
+            <ClaudeIcon className="new-thread-mode-dial-icon" />
+          ) : (
+            <Cpu className="new-thread-mode-dial-icon" aria-hidden="true" />
+          )}
+          <span className="new-thread-mode-value">
+            {route === undefined
+              ? query.isError
+                ? "Pick a model"
+                : "Loading…"
+              : route.kind === "unavailable"
+                ? "Pick a model"
+                : spaceAgentChipLabel(route)}
+          </span>
+        </button>
+        {claudeCode && PlanPicker !== undefined ? (
           <React.Suspense fallback={null}>
             <PlanPicker
               choices={choices}
@@ -175,14 +245,6 @@ export function SpaceAgentField({
             />
           </React.Suspense>
         ) : null}
-        <button
-          id={id}
-          type="button"
-          className="space-agent-change"
-          onClick={onChange}
-        >
-          Change
-        </button>
       </span>
     </div>
   );

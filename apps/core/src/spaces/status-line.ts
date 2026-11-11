@@ -2,9 +2,13 @@ import type { ThreadId, UserId } from "@dx/domain";
 import type { FlueObservation } from "@flue/runtime";
 import type { Bindings } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
-import { endedTurn } from "../quick-actions/actions.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
-import { readHistory } from "../thread-search/history.js";
+import {
+  finalReplyText,
+  type HistoryPage,
+  type HistoryRead,
+  readHistory,
+} from "../thread-search/history.js";
 import { reportTurnToSpace } from "./report-back.js";
 import { runSpaceModel } from "./space-model.js";
 
@@ -605,6 +609,50 @@ export const storeStatusLine = async (
   ).meta.changes > 0;
 
 /**
+ * How many of the latest prompts a settled turn's read takes: a message
+ * that reached the thread right after the turn ended is the latest prompt
+ * by then, and the turn is still on the page.
+ */
+const TURN_PROMPT_LIMIT = 4;
+/** Waits between reads while the thread's history is busy or unreadable. */
+const HISTORY_RETRY_DELAYS_MS: ReadonlyArray<number> = [300, 1_500];
+
+/** The thread's history as its turn settled, retried while busy. */
+const settledHistory = async (
+  read: () => Promise<HistoryRead>,
+  delays: ReadonlyArray<number>,
+): Promise<HistoryPage | undefined> => {
+  for (let attempt = 0; ; attempt += 1) {
+    const history = await read();
+    if (history.kind === "page") return history.page;
+    if (history.kind === "empty") return undefined;
+    const delay = delays[attempt];
+    if (delay === undefined) {
+      spaceLogger.warn("A Space thread's settled turn could not be read.", {
+        event: "space_thread_history_unread",
+        kind: history.kind,
+      });
+      return undefined;
+    }
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+};
+
+/**
+ * The final reply of the turn `submissionId` answered, wherever it is on
+ * the page; empty when it ended without text after its last tool call.
+ */
+export const turnReply = (page: HistoryPage, submissionId: string) => {
+  const answer = page.messages.findLast(
+    (message) =>
+      message.role === "assistant" &&
+      message.purpose === "assistant" &&
+      message.submissionId === submissionId,
+  );
+  return answer === undefined ? "" : finalReplyText(answer.parts ?? []);
+};
+
+/**
  * Keeps a Space child's status line current from the runtime's
  * observations. Runs after the observation's Thread activity is recorded.
  * Never rejects.
@@ -614,6 +662,7 @@ export const recordSpaceStatusLine = async (
   event: FlueObservation,
   writeFinished: FinishedLineWriter = workersAiFinishedLine,
   readTurnHistory: typeof readHistory = readHistory,
+  retryDelays: ReadonlyArray<number> = HISTORY_RETRY_DELAYS_MS,
 ): Promise<void> => {
   // Observations from tooling may carry no environment.
   const db = (bindings as Bindings | undefined)?.DB;
@@ -653,6 +702,9 @@ export const recordSpaceStatusLine = async (
       return;
     }
     lastWorkingLine.delete(threadId);
+    // A failed turn tells its parent through `notifyTurnCompleted`
+    // (notifications/turn-completed.ts); a stopped one is a person's act in
+    // the thread. Either way its card shows it.
     if (event.outcome !== "completed") {
       await announce(bindings, threadId);
       return;
@@ -661,34 +713,40 @@ export const recordSpaceStatusLine = async (
       .prepare("SELECT owner_user_id FROM threads WHERE id = ?1")
       .bind(threadId)
       .first<{ owner_user_id: UserId }>();
-    const history =
+    const page =
       owner === null
         ? undefined
-        : await readTurnHistory(bindings, owner.owner_user_id, threadId, 1, [
-            event.submissionId,
-          ]);
+        : await settledHistory(
+            () =>
+              readTurnHistory(
+                bindings,
+                owner.owner_user_id,
+                threadId,
+                TURN_PROMPT_LIMIT,
+                [event.submissionId],
+              ),
+            retryDelays,
+          );
+    // A steered message settles with the turn that answered it.
     const answering =
-      history?.kind === "page"
-        ? (history.page.answeredBy.get(event.submissionId) ??
-          event.submissionId)
-        : event.submissionId;
-    const turn =
-      history?.kind === "page" ? endedTurn(history.page, answering) : undefined;
+      page?.answeredBy.get(event.submissionId) ?? event.submissionId;
+    const reply = page === undefined ? undefined : turnReply(page, answering);
     const line =
-      turn === undefined || turn.reply.trim() === ""
+      reply === undefined || reply.trim() === ""
         ? undefined
-        : await writeFinished({ bindings, reply: turn.reply });
+        : await writeFinished({ bindings, reply });
     if (line !== undefined) await storeStatusLine(db, threadId, line, "idle");
     await announce(bindings, threadId);
-    // The Space hears how the turn ended even when the child did not say.
-    if (turn !== undefined && history?.kind === "page" && owner !== null)
+    // The Space hears how the turn ended even when the child did not say,
+    // and even when its history could not be read.
+    if (owner !== null)
       await reportTurnToSpace(bindings, {
         spaceThreadId: space,
         threadId,
         ownerUserId: owner.owner_user_id,
-        page: history.page,
+        page,
         submissionId: answering,
-        reply: turn.reply,
+        reply,
       });
   } catch (cause) {
     spaceLogger.warn("A Space thread's status line was not updated.", {

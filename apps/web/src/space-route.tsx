@@ -1,5 +1,5 @@
 import type { ThreadId } from "@dx/domain";
-import { useParams } from "@tanstack/react-router";
+import { lazyRouteComponent, useParams } from "@tanstack/react-router";
 import * as React from "react";
 import type { CommentableMessage } from "./features/spaces/comments/message-comments.js";
 import { MessageCommentsPanel } from "./features/spaces/comments/message-comments.js";
@@ -18,6 +18,21 @@ import type { MessageFilesSlot } from "./shared/composer/composer-slot.js";
 import type { DictationSlot } from "./shared/dictation/dictation-slot.js";
 
 type ThreadWorkspaceProps = React.ComponentProps<typeof ThreadWorkspace>;
+
+// Loads when a Space's own artifact first opens, as on the Thread page.
+const ArtifactSheet = lazyRouteComponent(
+  () => import("./features/artifacts/artifact-sheet.js"),
+  "ArtifactSheet",
+);
+
+/** One of a Space's own artifacts, full screen, with the composer's mic. */
+function SpaceArtifactSheet(props: React.ComponentProps<typeof ArtifactSheet>) {
+  return (
+    <React.Suspense fallback={null}>
+      <ArtifactSheet {...props} />
+    </React.Suspense>
+  );
+}
 
 /** The open post's comments, with who is typing from the realtime hub. */
 function SpaceCommentsOverlay({
@@ -81,6 +96,7 @@ export function SpaceRoute({
           dictation={dictation}
         />
       )}
+      Artifact={SpaceArtifactSheet}
       dictation={dictation}
       Composer={SlotComposer}
       files={files}

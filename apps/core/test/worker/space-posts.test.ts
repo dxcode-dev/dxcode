@@ -26,6 +26,7 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { buildSpaceSetupMessage } from "../../src/spaces/agent/setup-message.js";
+import { createOwnerAskTools } from "../../src/owner-asks/agent-tools.js";
 import { messageCommentRoutes } from "../../src/spaces/message-comments/routes.js";
 import { clearSpaceEyesOnSettle } from "../../src/spaces/posts/eyes.js";
 import { reportTurnToSpace } from "../../src/spaces/report-back.js";
@@ -860,6 +861,89 @@ describe("Messages the Space's agent receives", () => {
     );
     expect((await posts(owner, spaceId)).items).toEqual([]);
   });
+
+  it("tells the Space's agent whether a reporting child asked a person, so a wait no one was told of gets posted", async () => {
+    const spaceId = await freshSpace();
+    const child = async (title: string) => {
+      const createThread = createThreadTools(
+        spaceId,
+        () => ({ db: env.DB, bindings }),
+        `sub_${title}`,
+        false,
+        member,
+      ).find(({ name }) => name === "create_thread");
+      if (createThread === undefined) throw new Error("No create_thread tool.");
+      return (
+        (await createThread.run({
+          data: { prompt: title, title },
+          toolCallId: `call_${title}`,
+        } as never)) as { output: { threadId: ThreadId } }
+      ).output.threadId;
+    };
+    const waiting = await child("Skills parity");
+    const asking = await child("Preview proof");
+    flue.agent.length = 0;
+    const toolOf = (
+      tools: ReturnType<typeof createThreadTools>,
+      name: string,
+    ) => {
+      const found = tools.find((tool) => tool.name === name);
+      if (found === undefined) throw new Error(`No ${name} tool.`);
+      return found;
+    };
+    const report = (childId: ThreadId, message: string) =>
+      toolOf(
+        createThreadTools(
+          childId,
+          () => ({ db: env.DB, bindings }),
+          "sub_child",
+        ),
+        "send_thread_message",
+      ).run({
+        data: { thread: spaceId, message },
+        toolCallId: `call_report_${childId}`,
+      } as never);
+
+    // A child that only says it waits on a person, as the "skills parity"
+    // thread did: no one was told, and the report says nothing more.
+    await report(
+      waiting,
+      "Waiting on Ada's go-ahead to deploy a preview and a Claude plan token.",
+    );
+    // A child that asks its owner with request_attention first.
+    const [requestAttention] = createOwnerAskTools(
+      asking,
+      () => ({
+        db: env.DB,
+        bindings: { ...bindings, DX_STORAGE: env.DX_STORAGE },
+      }),
+      "sub_child",
+    );
+    if (requestAttention === undefined)
+      throw new Error("No request_attention.");
+    await requestAttention.run({
+      data: {
+        kind: "approval",
+        summary: "Approve deploying a preview of the coupon fix",
+      },
+      toolCallId: "call_ask",
+    } as never);
+    await report(asking, "Waiting on Ada's approval to deploy a preview.");
+
+    const received = flue.agent.map(
+      ({ body }) => parseMessageAuthor(body).text,
+    );
+    console.log(
+      `[space-report] waits on a person: ${JSON.stringify(received)}`,
+    );
+    expect(received).toHaveLength(2);
+    expect(received[0]).not.toContain("open ask");
+    expect(received[1]).toContain(
+      "(dx: this thread has an open ask in its artifacts, whose mention notified the person it waits on; its card shows Needs you.)",
+    );
+    expect((await posts(owner, spaceId)).items).toEqual([]);
+    // Two children, an artifact, and two reports: past 5 s under load.
+  }, 20_000);
 
   it("sends an @dx comment on a post with the post and every comment so far", async () => {
     const spaceId = await freshSpace();

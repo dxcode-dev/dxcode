@@ -307,3 +307,110 @@ export const recordAdmittedThreadSubmission = (
     ? Promise.resolve()
     : Effect.runPromise(record(bindings, activity).pipe(Effect.asVoid));
 };
+
+/** A turn this long without a settlement dx heard of is checked with Flue. */
+export const STALE_ACTIVITY_AFTER_MS = 5 * 60_000;
+/** How many threads one cron tick checks; the next tick takes the rest. */
+const STALE_ACTIVITY_BATCH = 20;
+
+/**
+ * Settles the turns Flue settled whose settlement dx never recorded, so a
+ * thread that stopped stops showing as running (the header's Orb, its Space
+ * card and tab, the sidebar). Recording an observation is best effort
+ * (`observability/flue.ts`): a D1 error or an evicted isolate loses it, and
+ * nothing else ever moved the turn's row off `working`.
+ *
+ * Each tick reads the history of threads whose oldest running turn is older
+ * than `STALE_ACTIVITY_AFTER_MS`, asking Flue for those turns' settlements,
+ * and records each one Flue settled as its observation would have; a
+ * thread whose agent has no conversation at all runs nothing, so its turns
+ * end as aborted. A turn Flue has not settled is still queued or running
+ * and stays as it is.
+ * Returns how many turns it settled.
+ */
+export const reconcileStaleThreadActivity = async (
+  bindings: Bindings,
+  now: number,
+): Promise<number> => {
+  const { readHistory } = await import("../thread-search/history.js");
+  const db = await Effect.runPromise(decodeD1Binding(bindings.DB));
+  const rows = (
+    await db
+      .prepare(
+        `SELECT submission.thread_id, submission.submission_id,
+              thread.owner_user_id
+         FROM thread_activity_submission AS submission
+         JOIN threads AS thread ON thread.id = submission.thread_id
+        WHERE submission.state = 'working'
+          AND submission.observed_at < ?1
+          AND thread.lifecycle_state != 'deleted'
+          AND submission.thread_id IN (
+            SELECT stale.thread_id FROM thread_activity_submission AS stale
+             WHERE stale.state = 'working' AND stale.observed_at < ?1
+             GROUP BY stale.thread_id
+             ORDER BY MIN(stale.observed_at)
+             LIMIT ?2
+          )`,
+      )
+      .bind(
+        new Date(now - STALE_ACTIVITY_AFTER_MS).toISOString(),
+        STALE_ACTIVITY_BATCH,
+      )
+      .all<{
+        thread_id: string;
+        submission_id: string;
+        owner_user_id: string;
+      }>()
+  ).results;
+  const threads = new Map<
+    string,
+    { readonly owner: string; readonly submissions: string[] }
+  >();
+  for (const row of rows) {
+    const thread = threads.get(row.thread_id) ?? {
+      owner: row.owner_user_id,
+      submissions: [],
+    };
+    thread.submissions.push(row.submission_id);
+    threads.set(row.thread_id, thread);
+  }
+  let settled = 0;
+  for (const [threadId, { owner, submissions }] of threads) {
+    const history = await readHistory(
+      bindings,
+      owner as never,
+      threadId,
+      1,
+      submissions.slice(0, 50),
+    ).catch(() => undefined);
+    if (history === undefined) continue;
+    // No conversation at all: Flue runs nothing for the thread.
+    if (history.kind !== "page" && history.kind !== "empty") continue;
+    for (const submissionId of submissions) {
+      const outcome =
+        history.kind === "empty"
+          ? "aborted"
+          : history.page.settled.get(submissionId);
+      if (outcome === undefined) continue;
+      const planResetAt =
+        outcome === "failed" && history.kind === "page"
+          ? claudePlanResetOf(history.page.failures.get(submissionId)?.message)
+          : undefined;
+      const activity = Option.getOrUndefined(
+        Schema.decodeOption(ThreadActivityInput)({
+          threadId,
+          submissionId,
+          kind: "settled",
+          state: "settled",
+          outcome,
+          ...(planResetAt === undefined ? {} : { planResetAt }),
+          occurredAt: new Date(now).toISOString(),
+        }),
+      );
+      if (activity === undefined) continue;
+      await Effect.runPromise(record(bindings, activity).pipe(Effect.asVoid));
+      settled += 1;
+    }
+  }
+  return settled;
+};

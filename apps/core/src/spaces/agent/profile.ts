@@ -15,7 +15,11 @@ import {
  * - `tools` is the whole dx tool set, which Claude Code reaches through the
  *   dx tool bridge under the same names (`claudeCodeDxTools`);
  * - `orb` is `none`: no sandbox, so no shell, file, or Git tool, and
- *   `claudeCodeBuiltInTools` is all Claude Code may keep of its own.
+ *   `claudeCodeBuiltInTools` is all Claude Code may keep of its own;
+ * - skills are an ordinary Thread's dx skills (the built-in and the
+ *   Thread's settings skills) minus `dx-workspace`, which describes an Orb:
+ *   the dx agent mounts them with `useSkill`, and Claude Code finds them in
+ *   `~/.claude/skills` on its executor through its own Skill tool.
  */
 export interface SpaceAgentProfile {
   readonly prompt: string;
@@ -66,8 +70,15 @@ export const SPACE_KEPT_DX_TOOLS: ReadonlySet<string> = new Set([
 export const SPACE_CLAUDE_CODE_PREFACE =
   "# You are this Space's agent\n\nThe instructions below decide how you work in this session. Where the Claude Code instructions above differ, such as answering in your reply or working on files yourself, follow the instructions below: people see only your posts, and threads do the work.";
 
-/** Claude Code's own tools a Space may keep: the web, nothing local. */
-export const SPACE_CLAUDE_CODE_BUILT_IN_TOOLS = ["WebSearch", "WebFetch"];
+/**
+ * Claude Code's own tools a Space may keep: the web and its skills, nothing
+ * that touches files.
+ */
+export const SPACE_CLAUDE_CODE_BUILT_IN_TOOLS = [
+  "WebSearch",
+  "WebFetch",
+  "Skill",
+];
 
 /** The Space's tool set: its own tools, then the dx tools it keeps. */
 export const spaceProfileTools = (

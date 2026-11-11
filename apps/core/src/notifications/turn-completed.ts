@@ -1,4 +1,5 @@
 import type { ThreadId, UserId } from "@dx/domain";
+import { claudePlanResetOf } from "../claude-code/plan-wait.js";
 import type { Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { threadPresentUsers } from "../realtime/publication.js";
@@ -41,7 +42,11 @@ const failureText = (error: TurnCompletion["error"]) => {
  * agent never replied, so without this the parent waits forever (#1614).
  * Sent as a message from the child, so it starts the parent's turn; at most
  * once per child in PARENT_NOTICE_WINDOW_MS, so a child that keeps failing
- * cannot loop with its parent. Answers whether the parent took it.
+ * cannot loop with its parent. A turn stopped on its Claude plan's limit
+ * waits for the plan's reset and then runs again by itself
+ * (claude-code/plan-wait.ts), so the parent hears that, once per reset,
+ * however often the child is woken while it waits. Answers whether the
+ * parent took it.
  */
 const tellParent = async (
   bindings: Bindings,
@@ -49,17 +54,29 @@ const tellParent = async (
   child: { readonly id: ThreadId; readonly title: string | null },
   parentThreadId: string,
   text: string,
+  planResetsAt: number | undefined,
 ) => {
   const window = Math.floor(Date.now() / PARENT_NOTICE_WINDOW_MS);
+  const resumes =
+    planResetsAt === undefined
+      ? ""
+      : ` dx runs it again by itself when the plan resets at ${new Date(
+          planResetsAt * 1000,
+        )
+          .toISOString()
+          .slice(0, 16)
+          .replace("T", " ")} UTC, and it reports then.`;
   const { response } = await ownerRequest(
     { bindings, ownerUserId, sourceThreadId: child.id },
     "POST",
     `/v1/agents/dx/${encodeURIComponent(parentThreadId)}`,
     {
       kind: "user",
-      body: `Child Thread ${child.title === null ? "" : `"${child.title}" `}(${child.id}) failed its turn and could not reply. ${text}`,
+      body: `Child Thread ${child.title === null ? "" : `"${child.title}" `}(${child.id}) failed its turn and could not reply. ${text}${resumes}`,
       idempotencyKey: await sha256Hex(
-        `turn-failed:${child.id}:${String(window)}`,
+        planResetsAt === undefined
+          ? `turn-failed:${child.id}:${String(window)}`
+          : `turn-failed:${child.id}:plan:${String(planResetsAt)}`,
       ),
     },
   );
@@ -118,6 +135,7 @@ export const notifyTurnCompleted = async (
           { id: completion.threadId, title: thread.title },
           thread.parent_thread_id,
           failure,
+          claudePlanResetOf(completion.error?.message),
         ).catch(() => false));
       if (told) return;
     }

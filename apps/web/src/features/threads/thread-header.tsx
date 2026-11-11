@@ -40,7 +40,7 @@ import {
   ThreadParticipantsMenuContent,
 } from "./sharing/thread-participants.js";
 import { ThreadMenu, ThreadMenuSubmenu } from "./thread-menu.js";
-import { threadSelectionSummary } from "./thread-selection-summary.js";
+import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { TitleBarItemSlot } from "./title-bar-item.js";
 import { useTitleBarOverflow } from "./title-bar-overflow.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
@@ -143,6 +143,7 @@ export function ThreadHeader({
   shareOpen: controlledShareOpen,
   onShareOpenChange,
   views,
+  menuOnly = false,
 }: {
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
@@ -153,6 +154,11 @@ export function ThreadHeader({
   readonly onShareOpenChange?: (open: boolean) => void;
   /** The Views button, when the page lays out in panes. */
   readonly views?: React.ReactNode;
+  /**
+   * Only More Actions, for a bar that stands in for the title bar, such as
+   * a Space's thread tab: it lists all that a phone's title bar moves there.
+   */
+  readonly menuOnly?: boolean;
 }) {
   const [localShareOpen, setLocalShareOpen] = React.useState(false);
   const shareOpen = controlledShareOpen ?? localShareOpen;
@@ -175,7 +181,7 @@ export function ThreadHeader({
       ? selection.model
       : summary.label;
   const openShare = own && !archived ? () => setShareOpen(true) : undefined;
-  const { compact } = useThreadLayoutMode();
+  const compact = useThreadLayoutMode().compact || menuOnly;
   const navigate = useNavigate();
   const shared =
     thread.sharing !== undefined || (thread.participants?.length ?? 0) > 1;
@@ -186,11 +192,11 @@ export function ThreadHeader({
   const [sheet, setSheet] = React.useState<AutomationView | undefined>();
   const automations = useThreadAutomations(thread.id, own && compact).data;
   const overflowItems =
-    hidden.size === 0
+    hidden.size === 0 && !menuOnly
       ? undefined
       : [
           ...automationViews(automations).flatMap(({ view, label }) =>
-            hidden.has(view)
+            menuOnly || hidden.has(view)
               ? [
                   <Menu.Item
                     key={view}
@@ -211,7 +217,7 @@ export function ThreadHeader({
                 ]
               : [],
           ),
-          ...(hidden.has("participants") && shared
+          ...((menuOnly || hidden.has("participants")) && shared
             ? [
                 <ThreadMenuSubmenu
                   key="participants"
@@ -243,6 +249,34 @@ export function ThreadHeader({
     />
   ) : null;
   const orbLabel = `${EXECUTION_ENVIRONMENT_DISPLAY_NAME} ${environmentState}`;
+  const dialogs = (
+    <>
+      {shareOpen && own && !archived ? (
+        <React.Suspense fallback={null}>
+          <ShareDialog
+            thread={thread}
+            ownerName={ownerName}
+            open
+            onOpenChange={setShareOpen}
+          />
+        </React.Suspense>
+      ) : null}
+      {sheet === undefined ? null : (
+        <ThreadAutomationsSheet
+          threadId={thread.id}
+          view={sheet}
+          onClose={() => setSheet(undefined)}
+        />
+      )}
+    </>
+  );
+  if (menuOnly)
+    return (
+      <>
+        {menu}
+        {dialogs}
+      </>
+    );
   return (
     <header
       className="thread-title-bar"
@@ -358,23 +392,7 @@ export function ThreadHeader({
         {views}
         {compact ? <span className="thread-title-menu">{menu}</span> : null}
       </div>
-      {shareOpen && own && !archived ? (
-        <React.Suspense fallback={null}>
-          <ShareDialog
-            thread={thread}
-            ownerName={ownerName}
-            open
-            onOpenChange={setShareOpen}
-          />
-        </React.Suspense>
-      ) : null}
-      {sheet === undefined ? null : (
-        <ThreadAutomationsSheet
-          threadId={thread.id}
-          view={sheet}
-          onClose={() => setSheet(undefined)}
-        />
-      )}
+      {dialogs}
     </header>
   );
 }

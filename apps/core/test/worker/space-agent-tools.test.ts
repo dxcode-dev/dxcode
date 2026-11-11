@@ -446,6 +446,7 @@ describe("The Space agent's management tools", () => {
     const working = await start("Coupon rounding", "call_a");
     const idle = await start("Release notes", "call_b");
     const shipped = await start("Tax rounding", "call_c");
+    const asking = await start("Refund provider", "call_d");
     expect(await threadRow(working)).toMatchObject({
       parent_thread_id: spaceId,
       requested_by_user_id: member,
@@ -469,8 +470,15 @@ describe("The Space agent's management tools", () => {
         "UPDATE threads SET activity_status = 'idle', last_activity_at = '2026-01-01T00:00:00.000Z', updated_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
       ).bind(idle),
       env.DB.prepare(
-        "UPDATE threads SET shipped_at = 1, ship_reason = 'default_branch' WHERE id = ?",
+        "UPDATE threads SET activity_status = 'idle', shipped_at = 1, ship_reason = 'default_branch' WHERE id = ?",
       ).bind(shipped),
+      // It asked a person a question days ago and still waits on them.
+      env.DB.prepare(
+        "UPDATE threads SET activity_status = 'idle', last_activity_at = '2026-01-01T00:00:00.000Z', updated_at = '2026-01-01T00:00:00.000Z' WHERE id = ?",
+      ).bind(asking),
+      env.DB.prepare(
+        "INSERT INTO thread_attention_request (thread_id, kind, requested_at) VALUES (?, 'question', '2026-01-01T00:00:00.000Z')",
+      ).bind(asking),
     ]);
 
     const tools = toolsFor(spaceId);
@@ -483,6 +491,7 @@ describe("The Space agent's management tools", () => {
     );
     expect(Object.keys(byTitle).sort()).toEqual([
       "Coupon rounding",
+      "Refund provider",
       "Release notes",
       "Tax rounding",
     ]);
@@ -496,6 +505,8 @@ describe("The Space agent's management tools", () => {
       request_post_id: asked.id,
     });
     expect(byTitle["Release notes"]).toMatchObject({ state: "inactive" });
+    // A question nobody answered is never just inactive.
+    expect(byTitle["Refund provider"]).toMatchObject({ state: "needs-input" });
     expect(byTitle["Tax rounding"]).toMatchObject({
       state: "shipped",
       commits_landed: true,
@@ -519,7 +530,7 @@ describe("The Space agent's management tools", () => {
       limit: 2,
       cursor: page.nextCursor,
     });
-    expect(rest.threads).toHaveLength(1);
+    expect(rest.threads).toHaveLength(2);
     expect(rest.nextCursor).toBeUndefined();
   });
 

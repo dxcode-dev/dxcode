@@ -323,13 +323,19 @@ const SPACE_POST_LINK = /^pst_[0-9a-z]{26}(?:\.[0-9a-f]{32})?$/;
 const seeOpenedThread = ({
   context,
   params,
+  search,
 }: {
   readonly context: RouterContext;
   readonly params: { readonly threadId: string };
+  readonly search: { readonly thread?: string };
 }) => {
-  const threadId = Schema.decodeUnknownOption(ThreadId)(params.threadId);
-  if (Option.isSome(threadId))
-    openThreadSeen(context.queryClient, context.userId, threadId.value);
+  // A Space's page opens one of its threads beside the chat (`?thread=`):
+  // that thread is open too.
+  for (const opened of [params.threadId, search.thread]) {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(opened);
+    if (Option.isSome(threadId))
+      openThreadSeen(context.queryClient, context.userId, threadId.value);
+  }
 };
 
 const threadRoute = createRoute({
@@ -338,14 +344,15 @@ const threadRoute = createRoute({
   // `message` opens the Thread at a message, for example a mention or a
   // copied message link;
   // `artifact` is the artifact its Artifacts view shows; `sheet=artifact`
-  // shows it full screen over the Thread (a phone); in a Space, `thread`
+  // shows it full screen over the Thread (a phone), and `sheet=space-artifact`
+  // one of a Space's own over the Space's page; in a Space, `thread`
   // opens one of the threads it started beside its chat.
   validateSearch: (
     search: Record<string, unknown>,
   ): {
     readonly message?: string;
     readonly artifact?: string;
-    readonly sheet?: "artifact";
+    readonly sheet?: "artifact" | "space-artifact";
     readonly comments?: string;
     readonly comment?: string;
     /** In a Space, the thread it started that opens beside the chat. */
@@ -375,7 +382,9 @@ const threadRoute = createRoute({
     /^art_[0-9a-f]{32}$/.test(search.artifact)
       ? { artifact: search.artifact }
       : {}),
-    ...(search.sheet === "artifact" ? { sheet: "artifact" as const } : {}),
+    ...(search.sheet === "artifact" || search.sheet === "space-artifact"
+      ? { sheet: search.sheet }
+      : {}),
     ...(typeof search.thread === "string" &&
     /^thr_[0-9a-f-]{36}$/.test(search.thread)
       ? { thread: search.thread }

@@ -405,6 +405,8 @@ export interface SpaceThreadRow extends Record<string, unknown> {
   readonly open_pull: number;
   readonly turn_settled_at: string | null;
   readonly turn_failed: number;
+  /** Its last turn failed on its Claude plan's limit; it runs again at the reset. */
+  readonly plan_wait: number;
   readonly unread: number;
   readonly project_name: string;
   readonly workspace_access: "none" | "view" | "contribute";
@@ -466,6 +468,10 @@ export const listSpaceThreadRows = async (
                      AND json_extract(link.subject_json, '$.state') = 'open'
                 ) AS open_pull,
                 thread.turn_settled_at,
+                EXISTS (
+                  SELECT 1 FROM thread_plan_wait AS plan_wait
+                   WHERE plan_wait.thread_id = thread.id
+                ) AS plan_wait,
                 thread.turn_failed, ${threadUnreadSql("thread", "?2")} AS unread
            FROM threads AS thread
            JOIN threads AS space_thread ON space_thread.id = thread.parent_thread_id

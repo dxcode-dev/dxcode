@@ -254,9 +254,7 @@ export function ThreadMenu({
             align="start"
             sideOffset={4}
           >
-            <Menu.Popup
-              className={`thread-menu-popup thread-actions-menu${showDetails ? " thread-actions-menu-details" : ""}`}
-            >
+            <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-menu-details">
               {/* A family shares as one unit, so members reach the Thread
                   that started this one too: its starter, or for a Thread
                   started before dx recorded starters, the family's root. */}

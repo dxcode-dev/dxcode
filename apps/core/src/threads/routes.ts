@@ -174,6 +174,7 @@ import { WorkspacePolicyService } from "../settings/workspace-policy/service.js"
 import { authorizeProjectSource } from "../source-control/admission.js";
 import { spacesEnabledFor, spaceThreadIds } from "../spaces/gate.js";
 import { markThreadsShipped } from "../spaces/progress/shipped.js";
+import { reportShippedToSpace } from "../spaces/report-back.js";
 import { isDeletedThread } from "../thread-deletion/tombstone.js";
 import { scheduleThreadSearchIndex } from "../thread-search/enqueue.js";
 import {
@@ -2637,7 +2638,7 @@ export const createThreadRoutes = (
       }).pipe(Effect.provide(threadServiceLayer(db)));
       // Archived from its Ship outcome, its work shipped; the first way it
       // shipped stays.
-      if (body.reason === "ship")
+      if (body.reason === "ship") {
         yield* Effect.tryPromise({
           try: () =>
             markThreadsShipped(db, [thread.id], "ship_archived", Date.now()),
@@ -2647,6 +2648,13 @@ export const createThreadRoutes = (
               cause,
             ),
         });
+        // A Space's coordinator hears it; this never rejects.
+        yield* Effect.promise(() =>
+          reportShippedToSpace(context.env, thread.id, {
+            reason: "ship_archived",
+          }),
+        );
+      }
       for (const changed of [thread, ...children])
         yield* Effect.promise(() =>
           scheduleRealtimeInvalidation(

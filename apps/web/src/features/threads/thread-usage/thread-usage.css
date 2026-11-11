@@ -626,10 +626,13 @@
   .thread-usage-table :is(th, td):last-child {
     padding-right: 10px;
   }
+  /* The cached share may wrap too: kept on one line, it set the column's
+     width and pushed the table past a phone's edge in wider fonts. */
   .thread-usage-cached {
     display: block;
     color: var(--muted-foreground);
     font-size: 10px;
+    white-space: normal;
   }
   .thread-usage-models td:nth-child(2) {
     min-width: 96px;

@@ -6,6 +6,7 @@ import type * as React from "react";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SpaceIcon } from "./space-icon.js";
 import {
+  SpaceAgentChip,
   SpaceCallAndSharing,
   SpacePanelMenu,
   SpaceProjectChip,
@@ -135,7 +136,7 @@ export function ThreadTab({
 }
 
 /**
- * The open thread's Views, mode, Side by Side, and Focus Thread (its own
+ * The open thread's Views, what it runs on, Side by Side, and Focus Thread (its own
  * page).
  */
 export function ThreadTabTools({
@@ -148,7 +149,8 @@ export function ThreadTabTools({
   readonly threadId: ThreadId;
   /** The Thread page's Views button: Terminal, Changes, Artifacts, … */
   readonly views: React.ReactNode;
-  readonly mode: string | undefined;
+  /** What the thread runs on, as a Thread's title bar shows it. */
+  readonly mode: { readonly label: string; readonly title: string } | undefined;
   readonly split: boolean;
   /** Absent where the page is too narrow for two panes. */
   readonly onToggleSplit?: () => void;
@@ -158,8 +160,8 @@ export function ThreadTabTools({
     <span className="space-tab-tools">
       {views}
       {mode === undefined ? null : (
-        <span className="space-tab-mode" title="Mode">
-          {mode}
+        <span className="space-tab-mode" title={mode.title}>
+          {mode.label}
         </span>
       )}
       {onToggleSplit === undefined ? null : (
@@ -191,12 +193,14 @@ export function ThreadTabTools({
 
 /**
  * While Space Details is hidden, its quick parts sit at the strip's end:
- * the Project, Huddle, sharing, More Actions, and Show Space Details.
+ * the Project, what the Space's agent runs on, Huddle, sharing, Space
+ * Actions, and Show Space Details.
  */
 export function SpaceStripTools({
   space,
   userId,
   compact,
+  menu = false,
   onEdit,
   onDelete,
   onArchive,
@@ -204,8 +208,13 @@ export function SpaceStripTools({
 }: {
   readonly space: SpaceData;
   readonly userId: Parameters<typeof SpacePanelMenu>[0]["userId"];
-  /** A phone's strip: only Show Space Details. */
+  /**
+   * A phone's strip: Space Actions, when `menu` is set, and Show Space
+   * Details.
+   */
   readonly compact: boolean;
+  /** Keeps Space Actions on a phone's strip, as a Thread keeps More Actions. */
+  readonly menu?: boolean;
   readonly onEdit?: () => void;
   readonly onDelete?: () => void;
   readonly onArchive?: () => void;
@@ -216,15 +225,18 @@ export function SpaceStripTools({
       {compact ? null : (
         <>
           <SpaceProjectChip space={space} />
+          <SpaceAgentChip space={space} />
           <SpaceCallAndSharing space={space} onShare={onEdit} />
-          <SpacePanelMenu
-            space={space}
-            userId={userId}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onArchive={onArchive}
-          />
         </>
+      )}
+      {compact && !menu ? null : (
+        <SpacePanelMenu
+          space={space}
+          userId={userId}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onArchive={onArchive}
+        />
       )}
       <button
         type="button"

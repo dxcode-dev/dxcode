@@ -27,7 +27,8 @@ import { sweepThreadStorage } from "./thread-storage/store.js";
 
 /**
  * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
- * unfinished Thread deletions and undelivered first messages, deletes expired Thread storage files, fires
+ * unfinished Thread deletions and undelivered first messages, settles turns
+ * whose settlement was missed, deletes expired Thread storage files, fires
  * due schedules, polls GitHub subscriptions, renews Bitbucket tokens, and
  * retries bug reports still
  * to forward to the central deployment; the daily tick also runs
@@ -99,6 +100,27 @@ export const scheduled = (
       .catch((cause) =>
         threadPersistenceLogger.error("Pending first message sweep failed.", {
           event: "thread_initial_dispatch_sweep_failed",
+          cause,
+        }),
+      ),
+  );
+  // A turn whose settlement dx missed would show as running forever: the
+  // header's Orb, the Space card and tab, the sidebar (threads/activity.ts).
+  context.waitUntil(
+    import("./threads/activity.js")
+      .then(({ reconcileStaleThreadActivity }) =>
+        reconcileStaleThreadActivity(bindings, controller.scheduledTime),
+      )
+      .then((settled) => {
+        if (settled > 0)
+          threadPersistenceLogger.info("Missed turn settlements recorded.", {
+            event: "thread_activity_reconciled",
+            settled,
+          });
+      })
+      .catch((cause) =>
+        threadPersistenceLogger.error("Thread activity reconcile failed.", {
+          event: "thread_activity_reconcile_failed",
           cause,
         }),
       ),

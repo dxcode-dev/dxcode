@@ -21,12 +21,18 @@
 // Artifacts tab lists only the Space's own artifacts, puts a thread before
 // the Space's, keeps headings over the Space's alone, drops an archived
 // thread's label, opens a thread's artifact on the Space's page instead of
-// that thread's tab and Artifacts view, or stays stale after a change.
+// that thread's tab and Artifacts view, or stays stale after a change; the
+// phone's details sheet will not close when dragged down, closes on a short
+// nudge, or stays over the page when a thread, comments, or artifact row
+// opens what it names underneath it; a comments row leaves the thread's tab
+// in front of the chat its comments open over; the Space's own artifact
+// opens nothing.
 //
 // Screenshots land in apps/web/.cache/spaces-v2-ui/ (ignored by Git).
 
 import type { SpaceArtifactItem, ThreadDetailData } from "@dx/api";
 import {
+  defaultThreadModelSelection,
   PROJECTLESS_PROJECT_NAME,
   type ThreadId,
   type UserId,
@@ -43,7 +49,7 @@ import {
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
-import { page, userEvent } from "vitest/browser";
+import { cdp, page, userEvent } from "vitest/browser";
 import { AuthContext } from "../../shared/auth/auth-context.js";
 import { createQueryClient } from "../../shared/query/query-client.js";
 import { ThreadArchiveContext } from "../../shared/thread-archive.js";
@@ -472,6 +478,7 @@ function ThreadPageStub({ slots }: { readonly slots: SpaceThreadSlots }) {
     activityStatus: item?.activityStatus ?? "idle",
     lifecycleState: item?.lifecycleState ?? "active",
     parentThreadId: SPACE,
+    agentInitialization: { selection: defaultThreadModelSelection() },
   } as unknown as ThreadDetailData;
   const parts: SpaceTitleBarParts = {
     thread,
@@ -602,6 +609,9 @@ const mount = async (
           rendered.push(slots.threadId);
           return <ThreadPageStub key={slots.threadId} slots={slots} />;
         }}
+        Artifact={({ threadId }) => (
+          <div className="space-artifact-stub" data-thread={threadId} />
+        )}
         Composer={SlotComposer}
       />
     ),
@@ -1103,6 +1113,34 @@ it("keeps the first tab clear of the sidebar's Open button while the sidebar is 
   ).toBeLessThan(6);
   await settle(200);
   await shot("space-sidebar-hidden-1440");
+});
+
+it("keeps an open thread's tabs clear of the sidebar's Open button, where the Space chat's sit, while the sidebar is hidden", async () => {
+  serve();
+  // Too narrow for side by side: the thread's tab shares the chat's strip.
+  await mount(1100, 800, {
+    sidebarCollapsed: true,
+    search: `?thread=${child(1)}`,
+  });
+  await until(() => threadPane()?.hidden === false && loaded());
+  expect(chatPane()?.hidden).toBe(true);
+  const trigger = box(q(".product-sidebar-trigger"));
+  const firstTab = () =>
+    box(
+      q(".space-pane:not([hidden]) .space-tab-strip .space-tab") as HTMLElement,
+    );
+  const onThread = firstTab();
+  await settle(200);
+  await shot("space-sidebar-hidden-thread-tab-1100");
+  // The strip's first tab starts after the Open button, never under it.
+  expect(onThread.left).toBeGreaterThanOrEqual(trigger.right);
+  // Switching to the Space chat's tab leaves the strip where it was.
+  await userEvent.click(
+    q(".space-thread-pane .space-tab[data-tab='space']") as HTMLElement,
+  );
+  await until(() => chatPane()?.hidden === false);
+  expect(firstTab().left).toBe(onThread.left);
+  expect(firstTab().top).toBe(onThread.top);
 });
 
 it("opens comments on a post from its replies row and its Comment action", async () => {
@@ -1749,3 +1787,150 @@ it("shows the Artifacts tab's empty, loading, and error states", async () => {
     }
   }
 });
+
+/** A finger on the screen: down at `from`, moved in steps to `to`, lifted. */
+const drag = async (x: number, from: number, to: number) => {
+  const point = (y: number) => [{ x, y, id: 1, radiusX: 4, radiusY: 4 }];
+  await cdp().send("Input.dispatchTouchEvent", {
+    type: "touchStart",
+    touchPoints: point(from),
+  });
+  for (let step = 1; step <= 10; step += 1) {
+    await cdp().send("Input.dispatchTouchEvent", {
+      type: "touchMove",
+      touchPoints: point(from + ((to - from) * step) / 10),
+    });
+    await settle(16);
+  }
+  await cdp().send("Input.dispatchTouchEvent", {
+    type: "touchEnd",
+    touchPoints: [],
+  });
+};
+
+const sheet = () => q(".space-sheet");
+const openSheet = async () => {
+  // The strip in front: the chat's, or the open thread's.
+  await userEvent.click(
+    all("button[aria-label='Show Space Details']").find((toggle) =>
+      toggle.checkVisibility(),
+    ) as HTMLElement,
+  );
+  await until(() => sheet()?.hasAttribute("data-open") === true);
+  // Past the sheet's entrance, so a drag starts where it rests.
+  await settle(400);
+};
+const sheetTab = async (label: string) => {
+  await userEvent.click(
+    all(".space-sheet [role='tab']").find(
+      (tab) => tab.textContent?.trim() === label,
+    ) as HTMLElement,
+  );
+};
+const sheetRow = async (text: string) => {
+  await until(() =>
+    all(".space-sheet button").some((row) => row.textContent?.includes(text)),
+  );
+  return all(".space-sheet button").find((row) =>
+    row.textContent?.includes(text),
+  ) as HTMLElement;
+};
+const searchOf = (router: Awaited<ReturnType<typeof mount>>) =>
+  router.state.location.search as Record<string, unknown>;
+/** Closes a message's comments as their panel's Close does. */
+const closeComments = async (router: Awaited<ReturnType<typeof mount>>) => {
+  await React.act(() =>
+    router.navigate({
+      to: ".",
+      search: ({ comments: _comments, ...rest }: Record<string, unknown>) =>
+        rest,
+    } as never),
+  );
+  await until(() => searchOf(router).comments === undefined);
+};
+
+for (const [width, height] of [
+  [320, 568],
+  [390, 844],
+  [430, 932],
+] as const)
+  it(`closes the phone's details sheet when dragged down or when a row opens what it names, at ${width}×${height}`, async () => {
+    await cdp().send("Emulation.setTouchEmulationEnabled", {
+      enabled: true,
+      maxTouchPoints: 5,
+    });
+    const server = serve();
+    server.artifacts = [
+      artifactItem(1, "Checkout launch plan", spaceOwn, 3),
+      artifactItem(2, "Rounding fix notes", couponThread, 1),
+    ];
+    const router = await mount(width, height);
+    await until(loaded);
+
+    // A nudge leaves the sheet open; dragging it most of the way closes it.
+    await openSheet();
+    const top = box(sheet()).top;
+    await drag(width / 2, top + 8, top + 30);
+    await settle(400);
+    expect(sheet()?.hasAttribute("data-open")).toBe(true);
+    await shot(`space-sheet-open-${width}`);
+    await drag(width / 2, top + 8, height - 10);
+    await until(() => sheet() === null);
+    // Dragging from the sheet's content, not only its handle, closes it.
+    await openSheet();
+    const title = box(q(".space-sheet h2"));
+    await drag(width / 2, title.top + 4, height - 10);
+    await until(() => sheet() === null);
+
+    // A message's comments: the sheet closes over the chat they open on.
+    await openSheet();
+    await sheetTab("Comments");
+    await userEvent.click(await sheetRow("Split this into parallel"));
+    await until(() => sheet() === null);
+    expect(searchOf(router).comments).toBe(postId(2));
+    expect(chatPane()?.hidden).toBe(false);
+    await closeComments(router);
+
+    // A thread opens in its tab, in front, with the sheet gone.
+    await openSheet();
+    await userEvent.click(await sheetRow("Fix coupon"));
+    await until(() => sheet() === null && threadPane()?.hidden === false);
+    expect(chatPane()?.hidden).toBe(true);
+
+    // With the thread's tab in front, comments bring the chat back first.
+    await openSheet();
+    await sheetTab("Comments");
+    await userEvent.click(await sheetRow("Split this into parallel"));
+    await until(() => sheet() === null);
+    await until(() => chatPane()?.hidden === false);
+    expect(threadPane()?.hidden).toBe(true);
+    expect(searchOf(router)).toMatchObject({
+      thread: child(1),
+      comments: postId(2),
+    });
+    await closeComments(router);
+
+    // A thread's artifact: its tab, on its Artifacts view, with no sheet.
+    await openSheet();
+    await sheetTab("Artifacts");
+    await userEvent.click(await sheetRow("Rounding fix notes"));
+    await until(() => sheet() === null && threadPane()?.hidden === false);
+    await until(
+      () => q(`[data-thread='${child(1)}']`)?.dataset.view === "artifacts",
+    );
+    expect(searchOf(router).artifact).toBe(artifactId(2));
+
+    // The Space's own artifact: full screen over the page, with no sheet.
+    await openSheet();
+    await sheetTab("Artifacts");
+    await userEvent.click(await sheetRow("Checkout launch plan"));
+    await until(() => sheet() === null);
+    expect(searchOf(router)).toMatchObject({
+      artifact: artifactId(1),
+      sheet: "space-artifact",
+    });
+    await until(() => q(".space-artifact-stub") !== null);
+    expect(q(".space-artifact-stub")?.dataset.thread).toBe(SPACE);
+
+    await cdp().send("Emulation.setTouchEmulationEnabled", { enabled: false });
+  });

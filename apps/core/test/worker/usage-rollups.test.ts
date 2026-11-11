@@ -419,6 +419,9 @@ beforeEach(async () => {
 
 afterEach(reset);
 
+// Each comparison reads raw events, the slow path rollups replace: the first
+// test takes about 16 s on an idle machine and ran 67 s, past its old 60 s
+// limit, under `verify:changed`. These share workspace-usage-rollups' 300 s.
 describe("usage rollups", () => {
   it("answer every dashboard exactly as raw events do, through late, duplicate, and expired events", async () => {
     await record(dataset(500, 0));
@@ -461,7 +464,7 @@ describe("usage rollups", () => {
     expect(rows.hourly_events).toBe(rows.events);
     expect(rows.daily_events).toBe(rows.events);
     await expectRollupsMatchRaw();
-  }, 60_000);
+  }, 300_000);
 
   it("picks each event's price in an hour a price window starts inside", async () => {
     const model = (id: string, occurredAt: string) =>
@@ -560,7 +563,7 @@ describe("usage rollups", () => {
     expect(rows.daily_events).toBe(rows.events);
     expect(before.summary.modelTurns).toBeGreaterThan(0);
     await expectRollupsMatchRaw();
-  }, 60_000);
+  }, 300_000);
 
   it("adds a backfill chunk once when two runs race for it", async () => {
     await record(dataset(60, 40_000));
@@ -582,5 +585,5 @@ describe("usage rollups", () => {
     expect(rows.hourly_events).toBe(rows.events);
     expect(rows.daily_events).toBe(rows.events);
     await expectRollupsMatchRaw();
-  }, 60_000);
+  }, 300_000);
 });

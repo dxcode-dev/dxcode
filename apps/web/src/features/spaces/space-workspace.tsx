@@ -1,4 +1,4 @@
-import { Dialog } from "@base-ui/react/dialog";
+import { Drawer } from "@base-ui/react/drawer";
 import type { SpaceData, SpaceThreadItem, ThreadDetailData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -17,8 +17,10 @@ import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import { deleteThreadMutationOptions } from "../threads/thread-mutations.js";
 import { EditSpaceDialog } from "./edit-space-dialog.js";
 import { SpacePostFilesContext } from "./posts/space-post-files-context.js";
+import { SPACE_ARTIFACT_SHEET } from "./space-artifact.js";
 import { type RenderSpaceComments, SpaceChat } from "./space-chat.js";
 import { useSpaceDetailsHidden } from "./space-details-store.js";
+import { threadSelectionChip } from "./space-format.js";
 import { SpacePanel } from "./space-panel.js";
 import {
   spaceQueryOptions,
@@ -80,7 +82,10 @@ export interface SpaceThreadSlots {
   readonly renderTitleBar: (parts: SpaceTitleBarParts) => React.ReactNode;
 }
 
-/** Space Details as a bottom sheet over the page. */
+/**
+ * Space Details as a bottom sheet over the page. Dragging it down, tapping
+ * its handle or the page behind it, or Escape closes it.
+ */
 function SpaceDetailsSheet({
   open,
   onOpenChange,
@@ -91,22 +96,41 @@ function SpaceDetailsSheet({
   readonly children: React.ReactNode;
 }) {
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="space-sheet-backdrop" />
-        <Dialog.Popup className="space-sheet" aria-label="Space Details">
-          <Dialog.Close
-            className="space-sheet-handle"
-            aria-label="Close Space Details"
-          >
-            <span />
-          </Dialog.Close>
-          {children}
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Drawer.Root open={open} onOpenChange={onOpenChange} swipeDirection="down">
+      <Drawer.Portal>
+        <Drawer.Backdrop className="space-sheet-backdrop" />
+        <Drawer.Viewport className="space-sheet-viewport">
+          <Drawer.Popup className="space-sheet" aria-label="Space Details">
+            <Drawer.Close
+              className="space-sheet-handle"
+              aria-label="Close Space Details"
+            >
+              <span />
+            </Drawer.Close>
+            <Drawer.Content className="space-sheet-content">
+              {children}
+            </Drawer.Content>
+          </Drawer.Popup>
+        </Drawer.Viewport>
+      </Drawer.Portal>
+    </Drawer.Root>
   );
 }
+
+/** The page's view of one of the Space's own artifacts, full screen. */
+export type SpaceArtifactSlot = React.ComponentType<{
+  readonly threadId: ThreadId;
+  readonly readOnly: boolean;
+  readonly dictation: DictationSlot | undefined;
+}>;
+
+/** Whether the URL asks for one of the Space's own artifacts, full screen. */
+const useSpaceArtifactRequested = () =>
+  useLocation({
+    select: (location) =>
+      location.search?.sheet === SPACE_ARTIFACT_SHEET &&
+      typeof location.search?.artifact === "string",
+  });
 
 /** Deletes the Space after asking; its page goes home once it is gone. */
 function DeleteSpaceDialog({
@@ -199,6 +223,7 @@ function SpacePage({
   onSelectThreadTab,
   renderThread,
   renderComments,
+  Artifact,
   dictation,
   Composer,
 }: {
@@ -211,10 +236,12 @@ function SpacePage({
   readonly onSelectThreadTab: () => void;
   readonly renderThread: (slots: SpaceThreadSlots) => React.ReactNode;
   readonly renderComments?: RenderSpaceComments;
+  readonly Artifact?: SpaceArtifactSlot;
   readonly dictation?: DictationSlot;
   readonly Composer: ComposerSlot;
 }) {
   const { identity } = useAuthenticatedIdentity();
+  const artifactRequested = useSpaceArtifactRequested();
   const detailsColumnFits = useMediaQuery(DETAILS_COLUMN_QUERY);
   const splitFits = useMediaQuery(SPLIT_QUERY);
   const phone = useMediaQuery(PHONE_QUERY);
@@ -252,6 +279,12 @@ function SpacePage({
     setSheetOpen(false);
     open(threadId);
   };
+  const closeSheet = () => setSheetOpen(false);
+  // A message's comments open over the Space chat, so it comes to the front
+  // when a thread's tab shares its strip.
+  const showChat = () => {
+    if (child !== undefined && !split) onSelectSpaceTab();
+  };
   const showDetails = () => {
     if (detailsColumnFits) setDetailsHidden(false);
     else setSheetOpen(true);
@@ -260,17 +293,19 @@ function SpacePage({
   const toggleSplit = splitFits ? () => setTabbed((now) => !now) : undefined;
   // The Space chat's strip ends with Space Details' quick parts while the
   // column is not shown, unless the thread's own strip ends the row.
-  const stripTools = column ? null : (
-    <SpaceStripTools
-      space={space}
-      userId={identity.id}
-      compact={phone}
-      onEdit={onEdit}
-      onDelete={onDelete}
-      onArchive={onArchive}
-      onShow={showDetails}
-    />
-  );
+  const stripTools = (menu: boolean) =>
+    column ? null : (
+      <SpaceStripTools
+        space={space}
+        userId={identity.id}
+        compact={phone}
+        menu={menu}
+        onEdit={onEdit}
+        onDelete={onDelete}
+        onArchive={onArchive}
+        onShow={showDetails}
+      />
+    );
   const threadTabInSpaceStrip =
     child !== undefined && !split ? (
       <ThreadTab
@@ -302,7 +337,9 @@ function SpacePage({
             <SpaceChatTab space={space} active />
             {threadTabInSpaceStrip}
             <span className="space-tab-spacer" />
-            {stripTools}
+            {/* A phone keeps Space Actions in the chat's strip, as a
+                Thread keeps More Actions in its bar. */}
+            {stripTools(true)}
           </SpaceTabStrip>
           <div className="space-pane-body">
             <SpaceChat
@@ -341,11 +378,13 @@ function SpacePage({
                   <ThreadTabTools
                     threadId={child}
                     views={parts.views}
-                    mode={item?.mode}
+                    mode={threadSelectionChip(
+                      parts.thread.agentInitialization.selection,
+                    )}
                     split={split}
                     onToggleSplit={toggleSplit}
                   />
-                  {split ? null : stripTools}
+                  {split ? null : stripTools(false)}
                 </SpaceTabStrip>
               ),
             })}
@@ -358,6 +397,7 @@ function SpacePage({
             space={space}
             activeThreadId={child}
             onOpenThread={openThread}
+            onOpenComments={showChat}
             onEdit={onEdit}
             onDelete={onDelete}
             onArchive={onArchive}
@@ -371,12 +411,21 @@ function SpacePage({
             space={space}
             activeThreadId={child}
             onOpenThread={openThread}
+            onOpenComments={showChat}
+            onOpened={closeSheet}
             onEdit={onEdit}
             onDelete={onDelete}
             onArchive={onArchive}
           />
         </SpaceDetailsSheet>
       )}
+      {artifactRequested && Artifact !== undefined ? (
+        <Artifact
+          threadId={space.threadId}
+          readOnly={space.access === "view" || archived}
+          dictation={dictation}
+        />
+      ) : null}
       {dialog === "edit" ? (
         <EditSpaceDialog
           space={space}
@@ -401,12 +450,15 @@ function SpacePage({
 export function SpaceWorkspace({
   renderThread,
   renderComments,
+  Artifact,
   dictation,
   Composer,
   files,
 }: {
   readonly renderThread: (slots: SpaceThreadSlots) => React.ReactNode;
   readonly renderComments?: RenderSpaceComments;
+  /** One of the Space's own artifacts, full screen over the page. */
+  readonly Artifact?: SpaceArtifactSlot;
   readonly dictation?: DictationSlot;
   /** The Thread composer's box for the Space's chat. */
   readonly Composer: ComposerSlot;
@@ -474,6 +526,7 @@ export function SpaceWorkspace({
           onSelectThreadTab={() => setSpaceTabFor(undefined)}
           renderThread={renderThread}
           renderComments={renderComments}
+          Artifact={Artifact}
           dictation={dictation}
           Composer={Composer}
         />

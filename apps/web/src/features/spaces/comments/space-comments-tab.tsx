@@ -17,8 +17,11 @@ const firstName = (name: string) => name.trim().split(/\s+/)[0] ?? name;
  */
 export function SpaceCommentsTab({
   spaceThreadId,
+  onOpen,
 }: {
   readonly spaceThreadId: ThreadId;
+  /** Shows the Space chat the comments open over. */
+  readonly onOpen: () => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const navigate = useNavigate();
@@ -45,7 +48,8 @@ export function SpaceCommentsTab({
             <button
               type="button"
               className="space-comments-row"
-              onClick={() =>
+              onClick={() => {
+                onOpen();
                 void navigate({
                   to: "/threads/$threadId",
                   params: { threadId: spaceThreadId },
@@ -53,8 +57,8 @@ export function SpaceCommentsTab({
                     ...previous,
                     comments: item.message.messageId,
                   }),
-                })
-              }
+                });
+              }}
             >
               <MessagesSquare aria-hidden="true" />
               <span className="space-comments-row-text">

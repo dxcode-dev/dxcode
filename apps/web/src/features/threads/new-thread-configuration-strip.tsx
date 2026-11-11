@@ -30,7 +30,10 @@ import {
 import type { ReactNode } from "react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
-import { modelDisplayName } from "../../shared/model-display-name.js";
+import {
+  claudeCodeChipLabel,
+  modelDisplayName,
+} from "../../shared/model-display-name.js";
 import { useNewProjectSurface } from "../../shared/new-project-surface.js";
 import { useTheme } from "../../shared/theme/theme-provider.js";
 import { Button } from "../../shared/ui/button.js";
@@ -51,7 +54,6 @@ import {
   ClaudePlanPicker,
 } from "./claude-code-mode.js";
 import {
-  claudeCodeChipLabel,
   claudeCodeDial,
   claudeCodeEffortLabel,
 } from "./claude-code-mode-options.js";

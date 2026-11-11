@@ -163,14 +163,20 @@ const withSettledTitle = <Cached extends ThreadData>(
   return { ...settled, title: cached.title } as Cached;
 };
 
+const createdHere = new Set<string>();
+
+/** This client created the Thread, so opening it has nothing to mark seen. */
+export const wasCreatedHere = (threadId: ThreadId) => createdHere.has(threadId);
+
 export const cacheCreatedThread = (
   queryClient: QueryClient,
   userId: UserId,
   thread: ThreadDetailData,
   /** Created in No Project, which the detail does not say. */
   projectless = false,
-) =>
-  Promise.all([
+) => {
+  createdHere.add(thread.id);
+  return Promise.all([
     queryClient.cancelQueries({
       queryKey: threadKeys.detail(userId, thread.id),
       exact: true,
@@ -212,6 +218,7 @@ export const cacheCreatedThread = (
       });
     }
   });
+};
 
 export const createThreadMutationOptions = (
   queryClient: QueryClient,

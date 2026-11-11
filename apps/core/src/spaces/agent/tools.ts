@@ -89,9 +89,10 @@ type ListedState = (typeof SPACE_THREAD_STATES)[number];
 /**
  * A thread's state as `list_space_threads` names it, from the state its
  * card shows (`spaceThreadState`): a failure waits on a person like a
- * question does; any thread that is not running, shipped, or archived is
- * scheduled while it waits for a scheduled run, else inactive after 72
- * hours without activity.
+ * question does; a question or ask stays needs-input however old it is;
+ * any other thread that is not running, shipped, or archived is scheduled
+ * while it waits for a scheduled run, else inactive after 72 hours without
+ * activity.
  */
 export const listedThreadState = (input: {
   readonly state: SpaceThreadState;
@@ -105,9 +106,10 @@ export const listedThreadState = (input: {
     input.state === "archived"
   )
     return input.state;
+  if (input.state === "needs_you") return "needs-input";
   if (input.scheduled) return "scheduled";
   if (input.now - input.lastActivityAt >= INACTIVE_AFTER_MS) return "inactive";
-  return input.state === "needs_you" || input.state === "failed"
+  return input.state === "failed"
     ? "needs-input"
     : input.state === "ready_to_ship"
       ? "ready-to-ship"

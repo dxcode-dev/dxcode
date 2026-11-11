@@ -94,7 +94,6 @@ import {
   ThreadFileNavigationContext,
 } from "./thread-file-navigation.js";
 import { ThreadHeader } from "./thread-header.js";
-import { ThreadMenu } from "./thread-menu.js";
 import { retryInitialThreadDispatch } from "./thread-mutations.js";
 import {
   invalidateThreadQueries,
@@ -568,7 +567,10 @@ type ThreadSessionProps = {
  */
 export interface ThreadTitleBarParts {
   readonly thread: ThreadDetailData;
-  /** The Thread's More Actions. */
+  /**
+   * The Thread's More Actions, listing what a phone's title bar moves
+   * there, since such a bar has no room for the title bar's controls.
+   */
   readonly menu: () => React.ReactNode;
   readonly views: React.ReactNode;
   readonly stacked: boolean;
@@ -1285,10 +1287,13 @@ function ThreadSessionContent({
                 stacked,
                 views: viewsButton,
                 menu: () => (
-                  <ThreadMenu
+                  <ThreadHeader
+                    menuOnly
                     thread={thread}
                     project={project}
                     transcript={transcriptAccess.current}
+                    shareOpen={shareOpen}
+                    onShareOpenChange={setShareOpen}
                   />
                 ),
               })}

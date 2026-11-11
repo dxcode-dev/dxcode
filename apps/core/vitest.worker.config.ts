@@ -188,6 +188,11 @@ export default defineConfig({
       "./test/worker/apply-migrations.ts",
     ],
     fileParallelism: true,
+    // Each test drives a workerd isolate and real D1: 1-2 s alone, and a full
+    // run on a few cores stretches that past vitest's 5 s unit-test default
+    // (spaces-gate ran 7.2 s, claude-plan-pick 5.3 s). Lifecycle tests get
+    // the same 30 s.
+    testTimeout: 30_000,
     deps: {
       optimizer: {
         ssr: {

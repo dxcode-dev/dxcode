@@ -848,7 +848,14 @@
   padding: 0 4px 0 0;
   background: var(--shell);
 }
+/* While the sidebar is hidden, the first pane shown keeps its tabs clear of
+   the Open button: the Space chat, or the thread whose tab hides it. */
 .product-sidebar-trigger + .space-page .space-pane:first-child .space-tab-strip,
+.product-sidebar-trigger
+  + .space-page
+  .space-pane[hidden]
+  + .space-pane
+  .space-tab-strip,
 .space-page[data-phone] .space-pane .space-tab-strip {
   padding-left: 38px;
 }
@@ -1712,15 +1719,30 @@ button.space-goal-text {
   z-index: 90;
   inset: 0;
   background: rgb(0 0 0 / 40%);
+  /* Fades as the sheet is dragged down. */
+  opacity: calc(1 - var(--drawer-swipe-progress, 0));
+  transition: opacity 240ms ease;
 }
-.space-sheet {
+.space-sheet-backdrop[data-swiping] {
+  transition-duration: 0ms;
+}
+.space-sheet-backdrop[data-starting-style],
+.space-sheet-backdrop[data-ending-style] {
+  opacity: 0;
+}
+.space-sheet-viewport {
   position: fixed;
   z-index: 91;
-  right: 0;
-  bottom: 0;
-  left: 0;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  pointer-events: none;
+}
+.space-sheet {
+  width: 100%;
   max-height: min(72dvh, 640px);
   overflow-y: auto;
+  overscroll-behavior: contain;
   padding-bottom: env(safe-area-inset-bottom);
   color: var(--foreground);
   border-radius: 18px 18px 0 0;
@@ -1729,11 +1751,22 @@ button.space-goal-text {
     0 0 0 1px var(--outline),
     0 -12px 32px rgb(0 0 0 / 35%);
   outline: none;
-  transition: transform 180ms ease;
+  pointer-events: auto;
+  /* Follows the finger while it drags the sheet down. */
+  transform: translateY(var(--drawer-swipe-movement-y, 0px));
+  transition: transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+.space-sheet[data-swiping] {
+  transition-duration: 0ms;
+  user-select: none;
 }
 .space-sheet[data-starting-style],
 .space-sheet[data-ending-style] {
   transform: translateY(100%);
+}
+.space-sheet[data-ending-style] {
+  transition-duration: calc(var(--drawer-swipe-strength, 1) * 240ms);
 }
 .space-sheet-handle {
   display: grid;
@@ -1811,37 +1844,41 @@ button.space-goal-text {
   margin-left: 0;
 }
 
-/* Create Space → Agent: where the Space will run, and the model picker. */
+/* Create Space → Agent: the New Thread composer's Claude Code chip, plan
+   list, and limits button, in one row; the reason above when no model
+   serves Spaces. */
 .space-agent-field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  justify-items: start;
+  gap: 8px;
   min-height: 36px;
-  font-size: 13px;
-  color: var(--text-muted, #a0a3ad);
+  align-content: center;
 }
-.space-agent-field {
-  flex-wrap: wrap;
-}
-.space-agent-actions {
+.space-agent-chips {
   display: flex;
-  flex: none;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
 }
-.space-agent-field[data-route="unavailable"] > span:first-child {
+.space-agent-chip {
+  min-width: 0;
+}
+.space-agent-chip .new-thread-mode-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.space-agent-chip:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.space-agent-message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 18px;
   color: var(--danger, #ff8a80);
-}
-.space-agent-change {
-  flex: none;
-  background: none;
-  border: 0;
-  padding: 4px 0;
-  color: inherit;
-  text-decoration: underline;
-  cursor: pointer;
 }
 /* Above the Create Space dialog (backdrop 110, viewport 111). */
 .space-agent-picker-backdrop {

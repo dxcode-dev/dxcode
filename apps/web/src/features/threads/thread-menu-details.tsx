@@ -16,7 +16,7 @@ import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { threadOrbMemoryQueryOptions } from "./orb-memory/orb-memory-queries.js";
 import { threadArchiveInFlight, threadKeys } from "./thread-queries.js";
-import { threadSelectionSummary } from "./thread-selection-summary.js";
+import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { formatUsd } from "./thread-usage/thread-usage-format.js";
 import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
 
@@ -48,8 +48,8 @@ export type MenuParts = Pick<typeof BaseMenu, "Item" | "Separator">;
 // not with the Thread page.
 
 /**
- * The Orb's state and the Thread's cost, each after a separator; on a phone
- * (`layout="phone"`), what the Thread runs on, its Orb, Project, and cost.
+ * What the Thread runs on and its Orb's state, then its cost, each group
+ * after a separator; on a phone (`layout="phone"`), the Project too.
  */
 export default function ThreadMenuDetails({
   Menu,
@@ -77,11 +77,10 @@ export default function ThreadMenuDetails({
   const own = thread.access === undefined || thread.access === "owner";
   return (
     <>
+      <Menu.Separator className="thread-menu-separator" />
+      <SelectionMenuItem Menu={Menu} thread={thread} />
       {canUseOrb(thread) ? (
-        <>
-          <Menu.Separator className="thread-menu-separator" />
-          <OrbMenuItem Menu={Menu} threadId={thread.id} />
-        </>
+        <OrbMenuItem Menu={Menu} threadId={thread.id} />
       ) : null}
       {own ? (
         <>
@@ -112,30 +111,12 @@ function ThreadDetailItems({
   readonly project?: Pick<ProjectData, "name">;
   readonly onOpenUsage: () => void;
 }) {
-  const selection = threadSelectionSummary(
-    thread.agentInitialization.selection,
-  );
   const own = thread.access === undefined || thread.access === "owner";
   const projectName = project?.name ?? thread.projectName ?? "No project";
   return (
     <>
       <Menu.Separator className="thread-menu-separator" />
-      <Menu.Item
-        className="thread-menu-item thread-menu-detail-item"
-        title={selection.title}
-      >
-        {selection.kind === "claude-code" ? (
-          <ClaudeIcon />
-        ) : selection.kind === "mode" ? (
-          <Gauge />
-        ) : (
-          <Sparkles />
-        )}
-        <span className="thread-menu-detail-label">{selection.label}</span>
-        {selection.detail === undefined ? null : (
-          <span className="thread-menu-detail-value">{selection.detail}</span>
-        )}
-      </Menu.Item>
+      <SelectionMenuItem Menu={Menu} thread={thread} />
       {canUseOrb(thread) ? (
         <OrbMenuItem Menu={Menu} threadId={thread.id} />
       ) : null}
@@ -163,6 +144,37 @@ function ThreadDetailItems({
         />
       ) : null}
     </>
+  );
+}
+
+/** What the Thread runs on: its mode, or Claude Code or a model with its effort. */
+function SelectionMenuItem({
+  Menu,
+  thread,
+}: {
+  readonly Menu: MenuParts;
+  readonly thread: ThreadDetailData;
+}) {
+  const selection = threadSelectionSummary(
+    thread.agentInitialization.selection,
+  );
+  return (
+    <Menu.Item
+      className="thread-menu-item thread-menu-detail-item"
+      title={selection.title}
+    >
+      {selection.kind === "claude-code" ? (
+        <ClaudeIcon />
+      ) : selection.kind === "mode" ? (
+        <Gauge />
+      ) : (
+        <Sparkles />
+      )}
+      <span className="thread-menu-detail-label">{selection.label}</span>
+      {selection.detail === undefined ? null : (
+        <span className="thread-menu-detail-value">{selection.detail}</span>
+      )}
+    </Menu.Item>
   );
 }
 

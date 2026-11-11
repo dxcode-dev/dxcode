@@ -5,7 +5,16 @@ import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { integrationCredentialReferenceFor } from "@dx/domain";
 import { Effect, Redacted } from "effect";
 import { Hono } from "hono";
-import { afterAll, afterEach, assert, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  assert,
+  beforeAll,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import manifest from "../../../migration-manifest.json" with { type: "json" };
 import type { AppEnv } from "../../http/types.js";
 import { readProjectOrbFiles } from "../../projects/orb-files.js";
@@ -68,13 +77,17 @@ afterEach(() => {
 /**
  * Every D1 migration, applied once for this file. Each test opens its own
  * copy: applying all of them took about 0.9 s per test, which a busy release
- * runner stretched past the 5 s test timeout.
+ * runner stretched past the 5 s test timeout. The copy is built before the
+ * first test, under the hook timeout, so no test pays for it.
  */
 const migratedDirectory = mkdtempSync(
   join(tmpdir(), "dx-bitbucket-lifecycle-"),
 );
 afterAll(() => rmSync(migratedDirectory, { recursive: true, force: true }));
 let migrated: string | undefined;
+beforeAll(() => {
+  migratedDatabase();
+}, 60_000);
 const migratedDatabase = () => {
   if (migrated !== undefined) return migrated;
   const template = new DatabaseSync(":memory:");

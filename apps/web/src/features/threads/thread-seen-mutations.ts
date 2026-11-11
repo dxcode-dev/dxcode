@@ -9,14 +9,22 @@ import {
   type ThreadListClientItem,
   type ThreadPage,
 } from "../../shared/api/client.js";
-import { isOptimisticThread } from "./thread-mutations.js";
+import { spaceKeys } from "../spaces/space-cache-queries.js";
+import { isOptimisticThread, wasCreatedHere } from "./thread-mutations.js";
 import { invalidateThreadLists, threadKeys } from "./thread-queries.js";
 import { expectSeenEcho } from "./thread-row-queries.js";
 
 type Row = ThreadListClientItem;
 
-const cachedRow = (client: QueryClient, userId: UserId, threadId: ThreadId) =>
-  [
+/** Every Space's Threads tab list this client holds. */
+const spaceThreadLists = (userId: UserId) => ({
+  queryKey: spaceKeys.all(userId),
+  predicate: ({ queryKey }: { readonly queryKey: ReadonlyArray<unknown> }) =>
+    queryKey[4] === "threads" && queryKey.length === 5,
+});
+
+const cachedRow = (client: QueryClient, userId: UserId, threadId: ThreadId) => {
+  const rows = [
     ...client
       .getQueriesData<InfiniteData<ThreadPage>>({
         queryKey: threadKeys.lists(userId),
@@ -29,7 +37,13 @@ const cachedRow = (client: QueryClient, userId: UserId, threadId: ThreadId) =>
       ),
     ...(client.getQueryData<ReadonlyArray<Row>>(threadKeys.shared(userId)) ??
       []),
-  ].find(({ id }) => id === threadId);
+    ...client
+      .getQueriesData<ReadonlyArray<Row>>(spaceThreadLists(userId))
+      .flatMap(([, rows]) => rows ?? []),
+  ].filter(({ id }) => id === threadId);
+  // A list read before the Thread finished may still hold it read.
+  return rows.find(({ unread }) => unread) ?? rows[0];
+};
 
 /**
  * The row as the server lists it once the Thread is seen: not unread, and
@@ -52,8 +66,8 @@ const seenRow = (row: Row, threadId: ThreadId, parentId?: ThreadId): Row => {
 };
 
 /**
- * Opening a Thread is seeing it. The sidebar drops its unread dot, and its
- * parent's, at once; the server records it, and a failure refetches the
+ * Opening a Thread is seeing it. The sidebar and a Space's Threads tab drop
+ * its unread dot, and its parent's, at once; the server records it, and a failure refetches the
  * lists so they show what it holds.
  */
 export const openThreadSeen = (
@@ -89,15 +103,15 @@ export const openThreadSeen = (
       threadKeys.shared(userId),
       (rows) => (rows === undefined ? rows : change(rows)),
     );
+    client.setQueriesData<ReadonlyArray<Row>>(
+      spaceThreadLists(userId),
+      (rows) => (rows === undefined ? rows : change(rows)),
+    );
   }
-  // A listed row that is not unread has nothing to record. One no list
-  // holds might be, unless it is one this client just created or showed,
-  // whose detail it already holds.
-  if (row !== undefined && row.unread !== true) return;
-  if (
-    row === undefined &&
-    client.getQueryData(threadKeys.detail(userId, threadId)) !== undefined
-  )
+  // A listed row that is not unread has nothing to record, nor has one this
+  // client created. Any other might be: holding its detail says nothing,
+  // since a Space's tab shows a thread and a hover preloads one unseen.
+  if (row === undefined ? wasCreatedHere(threadId) : row.unread !== true)
     return;
   const mark = () => {
     expectSeenEcho(threadId);
@@ -105,7 +119,12 @@ export const openThreadSeen = (
       invalidateThreadLists(client, userId),
     );
   };
-  if (row !== undefined) return mark();
+  if (
+    row !== undefined ||
+    client.getQueryState(threadKeys.detail(userId, threadId))?.status ===
+      "success"
+  )
+    return mark();
   // Known to no list yet, such as a URL loaded fresh: marked once the
   // Thread loads, so one that does not exist, or is hidden, is never sent.
   markWhenLoaded(client, userId, threadId, mark);
