@@ -98,6 +98,8 @@ export default defineConfig({
       },
       // React rendering tests run compiled, in headless Chromium.
       "apps/web/vitest.browser.config.ts",
+      // Phone touch-screen tests, in a browser of their own.
+      "apps/web/vitest.browser-touch.config.ts",
     ],
   },
 });

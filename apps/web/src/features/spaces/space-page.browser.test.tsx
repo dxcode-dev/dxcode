@@ -1851,6 +1851,8 @@ const closeComments = async (router: Awaited<ReturnType<typeof mount>>) => {
   await until(() => searchOf(router).comments === undefined);
 };
 
+// Six openings of the sheet, each past its 400 ms entrance, and three drags:
+// about 9.5 s on an idle machine, so 15 s left a busy run no room.
 for (const [width, height] of [
   [320, 568],
   [390, 844],
@@ -1933,4 +1935,4 @@ for (const [width, height] of [
     });
     await until(() => q(".space-artifact-stub") !== null);
     expect(q(".space-artifact-stub")?.dataset.thread).toBe(SPACE);
-  });
+  }, 30_000);

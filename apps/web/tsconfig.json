@@ -13,7 +13,8 @@
     "src/**/*.tsx",
     "vite.config.ts",
     "vite-local.ts",
-    "vitest.browser.config.ts"
+    "vitest.browser.config.ts",
+    "vitest.browser-touch.config.ts"
   ],
   "references": [
     { "path": "../../packages/domain" },

@@ -181,6 +181,9 @@ it("says a hidden Thread is not found right after the first 404 on a fresh load 
 });
 
 it("says a Space the viewer cannot open is not found as soon as its read answers 404", async () => {
+  // The Space page's code loads on first use; under a full run Vite's first
+  // compile of it alone took past the limit, which is for the 404's handling.
+  await import("./space-route.js");
   // The page already holds the Thread as a Space (opened before Spaces was
   // switched off for this person); its Space read now answers 404.
   await mount(

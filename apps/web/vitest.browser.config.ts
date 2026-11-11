@@ -8,7 +8,7 @@
 import { createHash } from "node:crypto";
 import { playwright } from "@vitest/browser-playwright";
 import type { BrowserContext } from "playwright";
-import { defineProject } from "vitest/config";
+import { configDefaults, defineProject } from "vitest/config";
 import { appPlugins } from "./vite.config.js";
 
 const root = import.meta.dirname;
@@ -61,39 +61,73 @@ chromium.providerFactory = (project) => {
   return provider;
 };
 
-export default defineProject({
-  root,
-  plugins: appPlugins(),
-  define: { "import.meta.env.DX_ENV": JSON.stringify("") },
-  // Vitest's importOriginal keeps only the default export of a pre-bundled
-  // ESM dependency, so a mock that spreads react-markdown loses its named
-  // exports. Serving it unbundled keeps every export; its CommonJS
-  // dependencies still need pre-bundling.
-  optimizeDeps: {
-    exclude: ["react-markdown"],
-    include: [
-      "react-markdown > hast-util-to-jsx-runtime > style-to-js",
-      "react-markdown > remark-parse > unified > extend",
-      "react-markdown > remark-parse > mdast-util-from-markdown > micromark > debug",
-    ],
-  },
-  test: {
-    name: "web-browser",
-    include: ["src/**/*.browser.test.{ts,tsx}"],
-    setupFiles: ["./src/testing/browser-test-setup.ts"],
-    // Chromium running beside the node tests starved their timing-sensitive
-    // cases on a four-core machine, so this project runs after them.
-    sequence: { groupOrder: 1 },
-    browser: {
-      enabled: true,
-      headless: true,
-      screenshotFailures: false,
-      // Vitest's default 414px frame is a phone; tests that want the phone
-      // layout ask for it.
-      viewport: { width: 1280, height: 800 },
-      api: { host: "127.0.0.1", port: checkoutPort },
-      provider: chromium,
-      instances: [{ browser: "chromium" }],
+/**
+ * Files that put the tab in a phone's touch mode with CDP touch emulation.
+ * Turning it on or off leaves headless Chrome with no hover-capable pointer
+ * (`hover: none`) for the rest of the tab's life, and test files take turns
+ * in a tab, so a hover-only control such as a message's ⋯ then never shows
+ * for whichever file comes next. They run in their own project and browser.
+ */
+export const touchScreenTests = [
+  "src/features/artifacts/editor/artifact-editor-selection.browser.test.tsx",
+  "src/features/projects/project-phone-title.browser.test.tsx",
+  "src/features/spaces/space-page.browser.test.tsx",
+  "src/features/threads/changes/changes-phone-range.browser.test.tsx",
+  "src/features/threads/new-thread-phone-composer.browser.test.tsx",
+];
+
+export const browserProject = ({
+  name,
+  include,
+  exclude = [],
+  port,
+}: {
+  readonly name: string;
+  readonly include: string[];
+  readonly exclude?: string[];
+  readonly port: number;
+}) =>
+  defineProject({
+    root,
+    plugins: appPlugins(),
+    define: { "import.meta.env.DX_ENV": JSON.stringify("") },
+    // Vitest's importOriginal keeps only the default export of a pre-bundled
+    // ESM dependency, so a mock that spreads react-markdown loses its named
+    // exports. Serving it unbundled keeps every export; its CommonJS
+    // dependencies still need pre-bundling.
+    optimizeDeps: {
+      exclude: ["react-markdown"],
+      include: [
+        "react-markdown > hast-util-to-jsx-runtime > style-to-js",
+        "react-markdown > remark-parse > unified > extend",
+        "react-markdown > remark-parse > mdast-util-from-markdown > micromark > debug",
+      ],
     },
-  },
+    test: {
+      name,
+      include,
+      exclude: [...configDefaults.exclude, ...exclude],
+      setupFiles: ["./src/testing/browser-test-setup.ts"],
+      // Chromium running beside the node tests starved their timing-sensitive
+      // cases on a four-core machine, so this project runs after them.
+      sequence: { groupOrder: 1 },
+      browser: {
+        enabled: true,
+        headless: true,
+        screenshotFailures: false,
+        // Vitest's default 414px frame is a phone; tests that want the phone
+        // layout ask for it.
+        viewport: { width: 1280, height: 800 },
+        api: { host: "127.0.0.1", port },
+        provider: chromium,
+        instances: [{ browser: "chromium" }],
+      },
+    },
+  });
+
+export default browserProject({
+  name: "web-browser",
+  include: ["src/**/*.browser.test.{ts,tsx}"],
+  exclude: touchScreenTests,
+  port: checkoutPort,
 });

@@ -197,7 +197,12 @@ export const useNewThreadMentions = ({
                 className="composer-mention-option"
                 data-active={index === active ? "" : undefined}
                 onMouseDown={(event) => event.preventDefault()}
-                onMouseEnter={() => setHighlight(index)}
+                // Only a moving mouse picks: Chrome also sends hover events when the
+                // list opens under a resting one, which undid an arrow key.
+                onMouseMove={(event) => {
+                  if (event.movementX !== 0 || event.movementY !== 0)
+                    setHighlight(index);
+                }}
                 onClick={() => choose(member)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") choose(member);

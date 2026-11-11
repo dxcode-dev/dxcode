@@ -181,9 +181,23 @@ describe.each([1440, 390])("table grips at %i", (width) => {
         ),
       }),
     ).toBe("Inserted");
-    await userEvent.keyboard("{Control>}z{/Control}");
-    await userEvent.keyboard("{Control>}z{/Control}");
-    await settle();
+    // Undo takes the typing and the column back. The editor groups edits
+    // less than 500 ms apart, so a pause while typing on a busy machine splits
+    // "Inserted" into more than one step: undo until the table is as it was.
+    const original = [
+      ["Step", "Owner", "Status"],
+      ["Edit", "Web", "Ready"],
+      ["Review", "QA", "Done"],
+    ];
+    for (
+      let undo = 0;
+      undo < 10 && JSON.stringify(cells(prose)) !== JSON.stringify(original);
+      undo += 1
+    ) {
+      await userEvent.keyboard("{Control>}z{/Control}");
+      await settle();
+    }
+    expect(cells(prose)).toEqual(original);
     await userEvent.click(target(prose, 1, 1));
     await choose("Column Options", "Insert Right");
     expect(cells(prose)).toEqual([

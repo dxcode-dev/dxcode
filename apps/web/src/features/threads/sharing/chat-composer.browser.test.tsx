@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { userEvent } from "vitest/browser";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -173,6 +174,51 @@ describe("mentions in the composer", () => {
     expect(panel.banner()).toBeNull();
     await panel.submit();
     expect(onSent).toHaveBeenLastCalledWith("agent");
+    await React.act(() => panel.root.unmount());
+  });
+
+  it("keeps an arrow key's pick when the list opens under a resting mouse, and a moving mouse still picks", async () => {
+    const panel = await mount(members());
+    const options = () => [
+      ...panel.container.querySelectorAll<HTMLElement>('[role="option"]'),
+    ];
+    // Rest the mouse where the first option opens, then reopen the list.
+    await panel.type("@");
+    const first = options()[0]?.getBoundingClientRect();
+    if (first === undefined) throw new Error("Expected options.");
+    await panel.press("Escape");
+    const spot = document.body.appendChild(document.createElement("div"));
+    Object.assign(spot.style, {
+      position: "fixed",
+      left: `${first.left}px`,
+      top: `${first.top}px`,
+      width: `${first.width}px`,
+      height: `${first.height}px`,
+    });
+    await userEvent.hover(spot);
+    spot.remove();
+    await panel.type("");
+    await panel.type("@");
+
+    // Chrome's hover update for the resting mouse lands after the key.
+    await panel.press("ArrowDown");
+    await vi.waitFor(() => expect(options()[0]?.matches(":hover")).toBe(true), {
+      timeout: 3_000,
+    });
+    await React.act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    expect(
+      options().map((option) => option.hasAttribute("data-active")),
+    ).toEqual([false, true]);
+    await panel.press("Enter");
+    expect(panel.textarea.value).toBe("@ben ");
+
+    await panel.type("@");
+    await panel.press("ArrowDown");
+    await userEvent.hover(options()[1] as HTMLElement);
+    await userEvent.hover(options()[0] as HTMLElement);
+    expect(
+      options().map((option) => option.hasAttribute("data-active")),
+    ).toEqual([true, false]);
     await React.act(() => panel.root.unmount());
   });
 });
