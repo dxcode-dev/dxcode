@@ -27,9 +27,16 @@
 // - it shows the desktop as live before a picture is drawn, with nothing
 //   covering the black canvas, so a click there reaches the remote screen
 //   unseen;
-// - it waits forever on a stream that opens but draws nothing.
+// - it waits forever on a stream that opens but draws nothing;
+// - a window closed or minimized on the desktop has no way back: the app
+//   row is missing, does not say which apps are open, starts a second app
+//   instead of bringing the open one forward, leaves keyboard control off
+//   the desktop after a click, never notices a window closed on the
+//   desktop, or shows (and fails) on an Orb whose daemon predates it.
 
+import type { DesktopWindow } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -175,9 +182,50 @@ const roots: ReturnType<typeof createRoot>[] = [];
 type DesktopAnswer = "ready" | "unsupported" | "unavailable" | number;
 let desktopAnswers: DesktopAnswer[] = [];
 let desktopChecks: string[] = [];
+/** The Desktop's windows as dx Core lists them, or its answer for an old daemon. */
+let desktopWindows: DesktopWindow[] = [];
+let windowsAnswer: "ready" | "unsupported" = "ready";
+let windowRequests: Array<{ method: string; body?: unknown }> = [];
+/** What the guest does on `POST .../desktop/windows`. */
+const actOnWindows = (action: { app?: string; window?: number }) => {
+  desktopWindows = desktopWindows.map((window) => ({
+    ...window,
+    focused: false,
+  }));
+  const target =
+    action.window !== undefined
+      ? desktopWindows.find((window) => window.id === action.window)
+      : desktopWindows.findLast((window) => window.app === action.app);
+  if (target !== undefined) {
+    Object.assign(target, { focused: true, minimized: false });
+    return;
+  }
+  if (action.app === "terminal" || action.app === "browser")
+    desktopWindows.push({
+      id: 100 + desktopWindows.length,
+      app: action.app,
+      title: action.app === "terminal" ? "xterm" : "New Tab - Chromium",
+      minimized: false,
+      focused: true,
+    });
+};
 /** dx Core's Desktop status check; answers in order, then `ready`. */
-const fakeCore = async (input: RequestInfo | URL) => {
+const fakeCore = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), window.location.href);
+  if (url.pathname.endsWith("/desktop/windows")) {
+    const method = init?.method ?? "GET";
+    const body =
+      typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+    windowRequests.push({ method, ...(body === undefined ? {} : { body }) });
+    if (method === "POST" && windowsAnswer === "ready") actOnWindows(body);
+    return Response.json({
+      status: "success",
+      data:
+        windowsAnswer === "ready"
+          ? { desktop: "ready", windows: desktopWindows }
+          : { desktop: windowsAnswer, windows: [] },
+    });
+  }
   desktopChecks.push(url.pathname);
   const answer = desktopAnswers.shift() ?? "ready";
   return typeof answer === "number"
@@ -243,6 +291,9 @@ beforeEach(() => {
   });
   desktopAnswers = [];
   desktopChecks = [];
+  desktopWindows = [];
+  windowsAnswer = "ready";
+  windowRequests = [];
   vi.stubGlobal("fetch", vi.fn(fakeCore));
   vi.stubGlobal("WebSocket", FakeSocket);
   FakeVideoDecoder.decoded = [];
@@ -271,11 +322,18 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
+let queryClient = new QueryClient();
+/** The app's query client, as the Thread page provides it. */
+const withQueries = (element: React.ReactElement) => (
+  <QueryClientProvider client={queryClient}>{element}</QueryClientProvider>
+);
+
 const render = async (element: React.ReactElement) => {
   const container = document.body.appendChild(document.createElement("div"));
   const root = createRoot(container);
   roots.push(root);
-  await React.act(() => root.render(element));
+  queryClient = new QueryClient();
+  await React.act(() => root.render(withQueries(element)));
   await settle();
   return { container, root };
 };
@@ -387,8 +445,16 @@ describe("DesktopViewer", () => {
     const socket = await live();
     const surface = surfaceOf(container);
     const canvas = container.querySelector("canvas") as HTMLCanvasElement;
-    // The 1280x720 picture letterboxes in the 1280x900 canvas: 90 px bands.
+    // The app row takes the top of the pane once the windows are listed.
+    await vi.waitFor(() =>
+      expect(container.querySelector(".desktop-apps")).not.toBeNull(),
+    );
+    // The 1280x720 picture letterboxes in the canvas below the row, in two
+    // equal bands.
     const box = canvas.getBoundingClientRect();
+    expect(box.width).toBe(1280);
+    const band = (box.height - 720) / 2;
+    expect(band).toBeGreaterThan(0);
     const sent = () => socket.commands().filter((c) => /^[mbkr]/.test(c));
 
     // Without control, moving over the desktop sends nothing.
@@ -397,7 +463,7 @@ describe("DesktopViewer", () => {
         new PointerEvent("pointermove", {
           bubbles: true,
           clientX: box.left + 640,
-          clientY: box.top + 90 + 360,
+          clientY: box.top + band + 360,
         }),
       );
     });
@@ -412,7 +478,7 @@ describe("DesktopViewer", () => {
             button: 0,
             pointerType: "mouse",
             clientX: box.left + 640,
-            clientY: box.top + 90 + 360,
+            clientY: box.top + band + 360,
           }),
         );
     });
@@ -451,7 +517,7 @@ describe("DesktopViewer", () => {
     const root = createRoot(container);
     roots.push(root);
     await React.act(() =>
-      root.render(<DesktopViewer active threadId={threadA} />),
+      root.render(withQueries(<DesktopViewer active threadId={threadA} />)),
     );
     await connected();
     const socket = desktopSocket();
@@ -600,7 +666,7 @@ describe("DesktopViewer", () => {
     expect(FakeSocket.instances).toEqual([]);
 
     await React.act(() =>
-      root.render(<DesktopViewer active threadId={threadA} />),
+      root.render(withQueries(<DesktopViewer active threadId={threadA} />)),
     );
     await connected();
     const socket = desktopSocket();
@@ -626,7 +692,9 @@ describe("DesktopViewer", () => {
 
     // A collapsed pane or another tab keeps the socket for the minute.
     await React.act(() =>
-      root.render(<DesktopViewer active={false} threadId={threadA} />),
+      root.render(
+        withQueries(<DesktopViewer active={false} threadId={threadA} />),
+      ),
     );
     await React.act(() => vi.advanceTimersByTimeAsync(50_000));
     expect(openSockets()).toHaveLength(1);
@@ -639,7 +707,7 @@ describe("DesktopViewer", () => {
     const { root } = await render(<DesktopViewer active threadId={threadA} />);
     await connected();
     await React.act(() =>
-      root.render(<DesktopViewer active threadId={threadB} />),
+      root.render(withQueries(<DesktopViewer active threadId={threadB} />)),
     );
     await connected();
     expect(new URL(desktopSocket().url).pathname).toBe(
@@ -968,5 +1036,170 @@ describe("DesktopViewer", () => {
     await React.act(() => vi.advanceTimersByTimeAsync(61_000));
     expect(openSockets()).toEqual([]);
     await React.act(() => root.unmount());
+  });
+
+  describe("app row", () => {
+    const row = (container: HTMLElement) =>
+      container.querySelector<HTMLElement>(
+        '[role="toolbar"][aria-label="Desktop apps"]',
+      );
+    const app = (container: HTMLElement, label: string) =>
+      [...(row(container)?.querySelectorAll("button") ?? [])].find(
+        (candidate) => candidate.textContent?.includes(label),
+      ) as HTMLButtonElement;
+
+    it("lists the apps, opens a closed one, and brings an open one forward instead of starting another", async () => {
+      desktopWindows = [
+        {
+          id: 7,
+          app: "browser",
+          title: "Docs - Chromium",
+          minimized: true,
+          focused: false,
+        },
+        { id: 9, title: "Figure 1", minimized: false, focused: true },
+      ];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      // Nothing is listed before the desktop shows.
+      expect(row(container)).toBeNull();
+      expect(windowRequests).toEqual([]);
+      await live();
+      await vi.waitFor(() => expect(row(container)).not.toBeNull());
+
+      // Above the desktop: Terminal (closed), Chromium (minimized), and the
+      // other open window by its title.
+      const children = [
+        ...(container.querySelector(".thread-desktop-shell")?.children ?? []),
+      ];
+      expect(children.indexOf(row(container) as Element)).toBeLessThan(
+        children.indexOf(surfaceOf(container)),
+      );
+      expect(app(container, "Terminal").dataset.state).toBe("closed");
+      expect(app(container, "Terminal").getAttribute("aria-label")).toBe(
+        "Open Terminal",
+      );
+      expect(app(container, "Chromium").dataset.state).toBe("minimized");
+      expect(app(container, "Chromium").getAttribute("aria-label")).toBe(
+        "Restore Chromium",
+      );
+      expect(app(container, "Figure 1").dataset.state).toBe("focused");
+
+      // A closed app starts, shows as open in front, and the keyboard goes
+      // on to the desktop.
+      await React.act(() => app(container, "Terminal").click());
+      await vi.waitFor(() =>
+        expect(app(container, "Terminal").dataset.state).toBe("focused"),
+      );
+      expect(windowRequests.at(-1)).toEqual({
+        method: "POST",
+        body: { app: "terminal" },
+      });
+      expect(document.activeElement).toBe(surfaceOf(container));
+      expect(app(container, "Figure 1").dataset.state).toBe("open");
+
+      // An open one comes forward; nothing new starts.
+      await React.act(() => app(container, "Chromium").click());
+      await vi.waitFor(() =>
+        expect(app(container, "Chromium").dataset.state).toBe("focused"),
+      );
+      expect(windowRequests.at(-1)).toEqual({
+        method: "POST",
+        body: { app: "browser" },
+      });
+      expect(
+        desktopWindows.filter((window) => window.app === "browser"),
+      ).toHaveLength(1);
+
+      // Another window comes forward by its ID.
+      await React.act(() => app(container, "Figure 1").click());
+      await vi.waitFor(() =>
+        expect(app(container, "Figure 1").dataset.state).toBe("focused"),
+      );
+      expect(windowRequests.at(-1)).toEqual({
+        method: "POST",
+        body: { window: 9 },
+      });
+      await React.act(() => root.unmount());
+    });
+
+    it("notices a window closed on the desktop after a click there", async () => {
+      desktopWindows = [
+        {
+          id: 3,
+          app: "terminal",
+          title: "xterm",
+          minimized: false,
+          focused: true,
+        },
+      ];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      await live();
+      await vi.waitFor(() =>
+        expect(app(container, "Terminal").dataset.state).toBe("focused"),
+      );
+      const listed = windowRequests.length;
+
+      // The person clicks the window's close button on the desktop.
+      desktopWindows = [];
+      await React.act(async () => {
+        surfaceOf(container).dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true }),
+        );
+      });
+      await vi.waitFor(() =>
+        expect(app(container, "Terminal").dataset.state).toBe("closed"),
+      );
+      expect(windowRequests.length).toBe(listed + 1);
+      expect(windowRequests.at(-1)?.method).toBe("GET");
+      await React.act(() => root.unmount());
+    });
+
+    it("catches up with apps a desktop that just started opens after its first picture", async () => {
+      // A desktop that just started (or woke from a stop) has no windows at
+      // its first listing; its Terminal maps a moment later.
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      await live();
+      await vi.waitFor(() =>
+        expect(app(container, "Terminal").dataset.state).toBe("closed"),
+      );
+      desktopWindows = [
+        {
+          id: 5,
+          app: "terminal",
+          title: "xterm",
+          minimized: false,
+          focused: true,
+        },
+      ];
+      // No input on the desktop, and well before the ten-second poll.
+      await vi.waitFor(
+        () => expect(app(container, "Terminal").dataset.state).toBe("focused"),
+        { timeout: 4_000 },
+      );
+      await React.act(() => root.unmount());
+    });
+
+    it("stays hidden on an Orb whose daemon cannot list windows", async () => {
+      windowsAnswer = "unsupported";
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      await live();
+      await vi.waitFor(() => expect(windowRequests.length).toBeGreaterThan(0));
+      await settle();
+      expect(row(container)).toBeNull();
+      expect(surfaceOf(container)).not.toBeNull();
+      await React.act(() => root.unmount());
+    });
   });
 });

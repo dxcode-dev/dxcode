@@ -5,6 +5,7 @@ mod attachments;
 mod changes;
 mod child;
 mod cpu;
+mod desktop;
 mod disk;
 mod environment;
 mod files;
@@ -406,7 +407,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}},"desktop":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(

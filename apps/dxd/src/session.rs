@@ -12,6 +12,7 @@ use crate::changes::{
     UnavailableReason,
 };
 use crate::cpu::Cpu;
+use crate::desktop;
 use crate::disk::Disk;
 use crate::environment::{EnvironmentOutcome, EnvironmentResult, EnvironmentRuntime, Materialized};
 use crate::files::{FilesContext, FilesDone, FilesResult, FilesWorkers};
@@ -160,6 +161,9 @@ pub struct Daemon {
     memory: Memory,
     /// The workspace filesystem: heartbeats' usage, snapshots, deletions.
     disk: Disk,
+    /// The Desktop whose windows the viewer's app row lists. A local runtime
+    /// has none unless `DXD_DESKTOP` names one (tests).
+    desktop_paths: Option<desktop::DesktopPaths>,
 }
 
 impl Daemon {
@@ -195,6 +199,15 @@ impl Daemon {
                 |local| PathBuf::from(&local.state_directory),
             ),
         );
+        let desktop_paths = match &config.local_runtime {
+            None => Some(desktop::DesktopPaths::default()),
+            Some(local) => std::env::var_os("DXD_DESKTOP")
+                .filter(|value| !value.is_empty())
+                .map(|value| desktop::DesktopPaths {
+                    home: PathBuf::from(&local.home_directory),
+                    desktop: PathBuf::from(value),
+                }),
+        };
         Ok(Self {
             changes_workspace: PathBuf::from(&config.workspace_root),
             changes_cache: CaptureCache::default(),
@@ -221,6 +234,7 @@ impl Daemon {
             desktop_start: Arc::default(),
             memory,
             disk,
+            desktop_paths,
         })
     }
 
@@ -960,6 +974,50 @@ impl Daemon {
                                     reason: "unsupported",
                                 },
                                 DesktopStart::Failed => {
+                                    PortalResult::Unavailable { reason: "failed" }
+                                }
+                            };
+                            if let Ok(text) = serde_json::to_string(&ClientMessage::Response {
+                                generation: &generation,
+                                request_id: &request_id,
+                                result: OperationResult::Portal(result),
+                            }) {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
+                    RequestOperation::Portal(
+                        operation @ (PortalOperation::DesktopWindows {}
+                        | PortalOperation::DesktopOpen { .. }
+                        | PortalOperation::DesktopFocus { .. }),
+                    ) => {
+                        // X11 round trips, and a launch waits for its
+                        // window: the answer returns through the proxy's
+                        // lane.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let paths = self.desktop_paths.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let windows = match paths {
+                                None => desktop::DesktopWindows::Unsupported,
+                                Some(paths) => match operation {
+                                    PortalOperation::DesktopOpen { app } => {
+                                        desktop::open(&paths, app)
+                                    }
+                                    PortalOperation::DesktopFocus { window } => {
+                                        desktop::focus(&paths, window)
+                                    }
+                                    _ => desktop::windows(&paths),
+                                },
+                            };
+                            let result = match windows {
+                                desktop::DesktopWindows::Windows(windows) => {
+                                    PortalResult::Windows { windows }
+                                }
+                                desktop::DesktopWindows::Unsupported => PortalResult::Unavailable {
+                                    reason: "unsupported",
+                                },
+                                desktop::DesktopWindows::Failed => {
                                     PortalResult::Unavailable { reason: "failed" }
                                 }
                             };

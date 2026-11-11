@@ -355,7 +355,7 @@ export const productionExperimentalFeatureRegistry =
         id: "orb-provider-freestyle",
         title: "Freestyle Orbs",
         description:
-          "Beta: offers Freestyle in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. It doesn't offer every workspace feature yet; its Orbs have no Desktop. Off, Threads already on it keep running.",
+          "Beta: offers Freestyle in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. Its Orbs run the same dx toolbelt as every provider, Desktop included. Off, Threads already on it keep running.",
         // Tracked in the private repository, so no public issue yet.
         owner: { team: "dx/execution" },
         status: "experimental",
@@ -380,7 +380,7 @@ export const productionExperimentalFeatureRegistry =
         id: "orb-provider-docker",
         title: "Docker Cloud Sandboxes Orbs",
         description:
-          "Beta: offers Docker Cloud Sandboxes in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. dx hasn't yet checked every workspace feature on it, such as the Desktop. Off, Threads already on it keep running.",
+          "Beta: offers Docker Cloud Sandboxes in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. Its Orbs run the same dx toolbelt as every provider, Desktop included. Off, Threads already on it keep running.",
         // Tracked in the private repository, so no public issue yet.
         owner: { team: "dx/execution" },
         status: "experimental",
@@ -405,7 +405,7 @@ export const productionExperimentalFeatureRegistry =
         id: "orb-provider-boat",
         title: "Boat Orbs",
         description:
-          "Beta: offers Boat in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. It doesn't offer every workspace feature yet; its Orbs have no Desktop. Off, Threads already on it keep running.",
+          "Beta: offers Boat in Orb Providers, the New Thread Orb picker, and Project Defaults, so you can connect it and start Threads on it. Its Orbs run the same dx toolbelt as every provider, Desktop included. Off, Threads already on it keep running.",
         // Tracked in the private repository, so no public issue yet.
         owner: { team: "dx/execution" },
         status: "experimental",

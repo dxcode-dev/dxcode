@@ -192,6 +192,15 @@ person and the agent use on the desktop with the host's `PATH`:
   the Chromium profile, and `environment`, which a program sources to open
   windows on the desktop).
 
+The desktop has no panel, so the viewer shows an app row above it
+(`/v1/threads/:threadId/desktop/windows`). dxd reads openbox's windows
+(`_NET_CLIENT_LIST`, `WM_CLASS`, `_NET_WM_STATE`) over the display's socket
+from `environment`, and a click asks openbox to activate one
+(`_NET_ACTIVE_WINDOW`, which also restores a minimized window) or, when the
+Terminal or Chromium has no window, starts it as the session does (an xterm
+through `env.sh`, or `chromium`) and waits for its window
+([`apps/dxd/src/desktop.rs`](../../apps/dxd/src/desktop.rs)).
+
 voxl ([tembo/voxl](https://github.com/tembo/voxl), MIT) streams the display
 as H.264 over one WebSocket, `/ws`, which the browser decodes with
 WebCodecs. It captures straight from Xvfb's framebuffer, a shared-memory

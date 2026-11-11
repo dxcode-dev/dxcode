@@ -1,11 +1,14 @@
 import {
   GetThreadDesktopResponseSchema,
+  GetThreadDesktopWindowsResponseSchema,
   ThreadDesktopReadOnlyResponseSchema,
   type ThreadDesktopState,
+  ThreadDesktopWindowsActionSchema,
+  type ThreadDesktopWindowsData,
 } from "@dx/api";
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
@@ -57,8 +60,65 @@ const checkDesktop = async (
     : "unavailable";
 };
 
+const readOnly = (context: Context<AppEnv>) =>
+  context.json(
+    Schema.encodeUnknownSync(ThreadDesktopReadOnlyResponseSchema)({
+      status: "error",
+      data: {
+        code: "THREAD_READ_ONLY",
+        message: "Only contributors can use the Desktop in a shared Thread.",
+        requestId: context.get("requestId"),
+      },
+    }),
+    403,
+  );
+
 /**
- * The Desktop: a status check and its WebSocket. voxl runs with its own
+ * The Desktop's windows through the Thread execution object, which relays
+ * to a live daemon only: `GET` lists them, `POST` with a validated action
+ * opens or focuses one and answers with the windows after it.
+ */
+const desktopWindows = async (
+  context: Context<AppEnv>,
+  body?: string,
+): Promise<Response> => {
+  const threadId = Schema.decodeUnknownOption(ThreadId)(
+    context.req.param("threadId"),
+  );
+  if (Option.isNone(threadId)) return context.notFound();
+  if (!mayReadOrbContents(context.get("threadAccess")))
+    return readOnly(context);
+  const stub = executionStub(context.env, threadId.value);
+  let data: ThreadDesktopWindowsData = { desktop: "unsupported", windows: [] };
+  if (stub !== undefined) {
+    const response = await stub
+      .fetch(
+        new Request("https://thread-execution/desktop/windows", {
+          method: body === undefined ? "GET" : "POST",
+          headers: {
+            "x-dx-thread-id": threadId.value,
+            "content-type": "application/json",
+          },
+          ...(body === undefined ? {} : { body }),
+        }),
+      )
+      .catch(() => undefined);
+    data = response?.ok
+      ? ((await response.json()) as ThreadDesktopWindowsData)
+      : { desktop: "unavailable", windows: [] };
+  }
+  context.header("cache-control", "no-store");
+  return context.json(
+    Schema.encodeUnknownSync(GetThreadDesktopWindowsResponseSchema)({
+      status: "success",
+      data,
+    }),
+    200,
+  );
+};
+
+/**
+ * The Desktop: a status check, its windows, and its WebSocket. voxl runs with its own
  * sign-in off (`--enable-basic-auth=false`): these routes, after Thread authorization (owner
  * or Contribute access, active Thread), are its only way in, through the
  * Thread execution object and the resident daemon's session.
@@ -70,18 +130,7 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
     );
     if (Option.isNone(threadId)) return context.notFound();
     if (!mayReadOrbContents(context.get("threadAccess")))
-      return context.json(
-        Schema.encodeUnknownSync(ThreadDesktopReadOnlyResponseSchema)({
-          status: "error",
-          data: {
-            code: "THREAD_READ_ONLY",
-            message:
-              "Only contributors can use the Desktop in a shared Thread.",
-            requestId: context.get("requestId"),
-          },
-        }),
-        403,
-      );
+      return readOnly(context);
     const stub = executionStub(context.env, threadId.value);
     const desktop =
       stub === undefined
@@ -97,6 +146,26 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
       }),
       200,
     );
+  })
+  .get("/:threadId/desktop/windows", (context) => desktopWindows(context))
+  .post("/:threadId/desktop/windows", async (context) => {
+    const action = Schema.decodeUnknownOption(ThreadDesktopWindowsActionSchema)(
+      await context.req.json().catch(() => undefined),
+      { onExcessProperty: "error" },
+    );
+    if (Option.isNone(action))
+      return context.json(
+        {
+          status: "error",
+          data: {
+            code: "INVALID_REQUEST",
+            message: "Name an app (terminal or browser) or a window ID.",
+            requestId: context.get("requestId"),
+          },
+        },
+        400,
+      );
+    return desktopWindows(context, JSON.stringify(action.value));
   })
   .get("/:threadId/desktop/:channel", async (context) => {
     const request = context.req.raw;

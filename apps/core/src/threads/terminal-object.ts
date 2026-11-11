@@ -159,6 +159,7 @@ import {
   type ThreadChangesSource,
 } from "../thread-changes/repository-d1.js";
 import { publishThreadChangesResidentCandidate } from "../thread-changes/resident-publisher.js";
+import { serveDesktopWindows } from "../thread-desktop/execution-object.js";
 import {
   parseServicesManifest,
   SERVICES_MANIFEST_PATH,
@@ -402,6 +403,8 @@ interface DaemonAuthority {
   readonly storage?: boolean;
   /** The connected daemon runs Terminals besides `default`. */
   readonly terminalSessions?: boolean;
+  /** The connected daemon lists, opens, and focuses Desktop windows. */
+  readonly desktop?: boolean;
 }
 
 interface DaemonAttachment {
@@ -891,6 +894,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       path === "/proxy/ports"
     )
       return this.#proxy(request, path);
+    if (path === "/desktop/windows") return this.#serveDesktopWindows(request);
     if (path === "/orb/memory" || path === "/orb/memory/stop")
       return this.#serveOrbMemory(request, path);
     if (path === "/orb/disk" || path === "/orb/disk/delete")
@@ -1143,6 +1147,33 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         this.#lastHeartbeatAt ?? this.#authority?.lastSeen,
       ),
     );
+  }
+
+  /**
+   * The Desktop's windows for an already authorized caller: a listing, or
+   * opening or focusing one, relayed only to a live daemon. None wakes a
+   * paused workspace.
+   */
+  #serveDesktopWindows(request: Request) {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    const authority = this.#authority;
+    return serveDesktopWindows(request, threadId.value, {
+      threadId: authority?.threadId,
+      running: this.#isTransportReady() && this.#isHeartbeatFresh(),
+      desktop: authority?.desktop === true,
+      dispatch: (operation, timeoutMs) =>
+        authority === undefined
+          ? Promise.resolve(daemonFailureResponse("known"))
+          : this.#dispatchDaemonOperation(
+              authority,
+              operation,
+              DXD_MAX_REQUEST_FRAME_BYTES,
+              timeoutMs,
+            ),
+    });
   }
 
   /**
@@ -3137,6 +3168,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           pending.operation.operation !== "files.readSandbox" &&
           pending.operation.operation !== "proxy.ports" &&
           pending.operation.operation !== "desktop.ensure" &&
+          pending.operation.operation !== "desktop.windows" &&
+          pending.operation.operation !== "desktop.open" &&
+          pending.operation.operation !== "desktop.focus" &&
           pending.operation.operation !== "services.ensure" &&
           pending.operation.operation !== "memory.snapshot" &&
           pending.operation.operation !== "memory.stop" &&
@@ -4559,6 +4593,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         storage: control.value.capabilities.storage !== undefined,
         terminalSessions:
           control.value.capabilities.terminalSessions !== undefined,
+        desktop: control.value.capabilities.desktop !== undefined,
       };
       this.#orbMemory.reset();
       this.#orbDisk.reset();

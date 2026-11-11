@@ -1,0 +1,105 @@
+.thread-desktop-shell:has(> .desktop-apps) {
+  flex-direction: column;
+}
+.desktop-apps {
+  display: flex;
+  align-items: center;
+  flex: none;
+  gap: 2px;
+  height: 36px;
+  padding: 0 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--divider);
+  background: var(--surface);
+  scrollbar-width: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.desktop-apps::-webkit-scrollbar {
+  display: none;
+}
+.desktop-apps-divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--divider);
+}
+.desktop-app {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px;
+  color: var(--muted-foreground);
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.desktop-app svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.desktop-app:hover:not(:disabled) {
+  color: var(--foreground);
+  background: var(--secondary);
+}
+.desktop-app:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.desktop-app:disabled {
+  cursor: progress;
+}
+/* Open apps read in full color; the one in front sits on a tile. */
+.desktop-app[data-state="open"],
+.desktop-app[data-state="minimized"],
+.desktop-app[data-state="focused"] {
+  color: var(--chat-foreground);
+}
+.desktop-app[data-state="focused"] {
+  background: var(--secondary);
+}
+/* A dot marks an open app; hollow when all its windows are minimized. */
+.desktop-app-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 50%;
+  background: transparent;
+}
+.desktop-app[data-state="open"] .desktop-app-dot,
+.desktop-app[data-state="focused"] .desktop-app-dot {
+  background: var(--chat-foreground);
+}
+.desktop-app[data-state="minimized"] .desktop-app-dot {
+  box-shadow: inset 0 0 0 1px var(--chat-foreground);
+}
+.desktop-app-window span {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.desktop-app-window[data-state="minimized"] span {
+  font-style: italic;
+}
+.desktop-app-spinner {
+  animation: desktop-app-spin 0.8s linear infinite;
+}
+@keyframes desktop-app-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-app-spinner {
+    animation: none;
+  }
+}

@@ -1,4 +1,7 @@
 import {
+  DesktopAppSchema,
+  DesktopWindowIdSchema,
+  DesktopWindowSchema,
   IssueWorkloadIdentityRequestSchema,
   IssueWorkloadIdentityResultSchema,
   MAX_THREAD_STORAGE_FILE_BYTES,
@@ -132,6 +135,11 @@ export const DxdTerminalCapability = Schema.Struct({
   terminalSessions: Schema.optional(
     Schema.Struct({ version: Schema.Literal(1) }),
   ),
+  /**
+   * Version 1: Core may send `desktop.windows`, `desktop.open`, and
+   * `desktop.focus`. Without it a daemon drops its connection on them.
+   */
+  desktop: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -940,6 +948,23 @@ export const DxdDesktopEnsureOperation = Schema.Struct({
   operation: Schema.Literal("desktop.ensure"),
 });
 
+/** The Desktop's windows, for the viewer's app row. */
+export const DxdDesktopWindowsOperation = Schema.Struct({
+  operation: Schema.Literal("desktop.windows"),
+});
+
+/** Bring the app's most recent window to the front, or start the app. */
+export const DxdDesktopOpenOperation = Schema.Struct({
+  operation: Schema.Literal("desktop.open"),
+  app: DesktopAppSchema,
+});
+
+/** Bring one window to the front, restoring it when minimized. */
+export const DxdDesktopFocusOperation = Schema.Struct({
+  operation: Schema.Literal("desktop.focus"),
+  window: DesktopWindowIdSchema,
+});
+
 /** Start declared services that are not serving; see `thread-services`. */
 export const DxdServicesEnsureOperation = Schema.Struct({
   operation: Schema.Literal("services.ensure"),
@@ -1059,6 +1084,9 @@ export const DxdOperation = Schema.Union([
   DxdEnvironmentCheckOperation,
   DxdProxyPortsOperation,
   DxdDesktopEnsureOperation,
+  DxdDesktopWindowsOperation,
+  DxdDesktopOpenOperation,
+  DxdDesktopFocusOperation,
   DxdServicesEnsureOperation,
   DxdMemorySnapshotOperation,
   DxdMemoryStopOperation,
@@ -1378,6 +1406,19 @@ export const DxdDesktopEnsureResult = Schema.Union([
   }),
 ]);
 export type DxdDesktopEnsureResult = typeof DxdDesktopEnsureResult.Type;
+
+/** The windows after a `desktop.*` window operation. */
+export const DxdDesktopWindowsResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("windows"),
+    windows: Schema.Array(DesktopWindowSchema).check(Schema.isMaxLength(24)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals(["unsupported", "failed"]),
+  }),
+]);
+export type DxdDesktopWindowsResult = typeof DxdDesktopWindowsResult.Type;
 
 /** An invalid service is `failed`; too many services is `unavailable`. */
 export const DxdServicesEnsureResult = Schema.Union([

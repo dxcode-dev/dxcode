@@ -307,6 +307,7 @@ async fn register(socket: &mut Socket) -> String {
     assert_eq!(register["capabilities"]["terminal"]["version"], 1);
     assert_eq!(register["capabilities"]["files"]["version"], 1);
     assert_eq!(register["capabilities"]["terminalSessions"]["version"], 1);
+    assert_eq!(register["capabilities"]["desktop"]["version"], 1);
     assert!(register["capabilities"].get("environment").is_none());
     let generation = format!("gen-{}", rand::random::<u32>());
     socket
@@ -471,6 +472,19 @@ async fn real_daemon_serves_every_feature_over_protocol_v2() {
     eprintln!(
         "measured: readiness round trip {} µs",
         probe_started.elapsed().as_micros()
+    );
+
+    // A local runtime has no Desktop unless `DXD_DESKTOP` names one.
+    let windows = request(
+        &mut socket,
+        &generation,
+        "desktop-none",
+        json!({"operation": "desktop.windows"}),
+    )
+    .await;
+    assert_eq!(
+        windows,
+        json!({"kind": "unavailable", "reason": "unsupported"})
     );
 
     // Files: whole directory in one response, read, save with refresh.
@@ -3549,4 +3563,307 @@ async fn real_daemon_serves_git_credentials_across_a_lost_connection() {
     assert!(!stderr.contains("Settings"), "{stderr}");
     assert!(stderr.contains("try again"), "{stderr}");
     drop(daemon);
+}
+
+/// A real Desktop display: the toolbelt's Xvfb and openbox with the Orb's
+/// openbox configuration, the session's environment file in the fixture's
+/// home, and a Desktop directory whose `env.sh` names the toolbelt and whose
+/// `chromium` opens a stand-in browser window (an xterm of class Chromium)
+/// that starts minimized, as a person leaves a window with openbox's
+/// minimize button. `DXD_TEST_DESKTOP` names the toolbelt's `env`
+/// directory, else the Orb's `/opt/dx/desktop/env`.
+struct DesktopFixture {
+    directory: tempfile::TempDir,
+    display: String,
+    _openbox: ProcessGuard,
+    _xvfb: ProcessGuard,
+}
+
+impl DesktopFixture {
+    fn new(home: &Path) -> Option<Self> {
+        let env = std::env::var_os("DXD_TEST_DESKTOP")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/opt/dx/desktop/env"));
+        let bin = env.join("bin");
+        if !bin.join("Xvfb").is_file() {
+            return None;
+        }
+        let number = (40..200)
+            .find(|number| {
+                !Path::new(&format!("/tmp/.X11-unix/X{number}")).exists()
+                    && !Path::new(&format!("/tmp/.X{number}-lock")).exists()
+            })
+            .expect("a free display number");
+        let display = format!(":{number}");
+        let quiet = |command: &mut Command| {
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap()
+        };
+        let xvfb = ProcessGuard(quiet(Command::new(bin.join("Xvfb")).arg(&display).args([
+            "-screen",
+            "0",
+            "1280x800x24",
+            "-nolisten",
+            "tcp",
+        ])));
+        let socket = PathBuf::from(format!("/tmp/.X11-unix/X{number}"));
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !socket.exists() {
+            assert!(Instant::now() < deadline, "Xvfb never listened");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        // openbox adopts windows mapped before it runs, so nothing waits
+        // for it here.
+        let openbox = ProcessGuard(quiet(
+            Command::new(bin.join("openbox"))
+                .arg("--config-file")
+                .arg(
+                    Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../deploy/orb/desktop/openbox/rc.xml"),
+                )
+                .env("DISPLAY", &display),
+        ));
+        let state = home.join(".local/state/dx-desktop");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(
+            state.join("environment"),
+            format!("export DISPLAY='{display}'\nexport XDG_SESSION_TYPE='x11'\n"),
+        )
+        .unwrap();
+        std::fs::write(state.join("session.pid"), "1\n").unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let desktop = directory.path();
+        std::fs::write(desktop.join("start"), "#!/bin/sh\n").unwrap();
+        std::fs::write(
+            desktop.join("env.sh"),
+            format!(
+                "bin='{}'\nexport DX_HOST_PATH=\"${{DX_HOST_PATH:-$PATH}}\"\nexport PATH=\"$bin:$DX_HOST_PATH\"\n",
+                bin.display()
+            ),
+        )
+        .unwrap();
+        let chromium = desktop.join("chromium");
+        std::fs::write(
+            &chromium,
+            format!(
+                "#!/bin/bash\n. \"$HOME/.local/state/dx-desktop/environment\"\nexec '{bin}/setsid' -f '{bin}/xterm' -iconic -class Chromium -T 'New Tab - Chromium' </dev/null >/dev/null 2>&1\n",
+                bin = bin.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&chromium, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        Some(Self {
+            directory,
+            display,
+            _openbox: openbox,
+            _xvfb: xvfb,
+        })
+    }
+
+    /// The apps' processes on this display: every xterm whose environment
+    /// names it.
+    fn app_processes(&self) -> Vec<u32> {
+        let wanted = format!("DISPLAY={}", self.display);
+        std::fs::read_dir("/proc")
+            .unwrap()
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|comm| {
+                    comm.trim().ends_with("xterm-wrapped") || comm.trim() == "xterm"
+                }) && std::fs::read(format!("/proc/{pid}/environ")).is_ok_and(|environ| {
+                    environ
+                        .split(|byte| *byte == 0)
+                        .any(|entry| entry == wanted.as_bytes())
+                })
+            })
+            .collect()
+    }
+
+    /// Ends every app window, as a person closing them.
+    fn close_apps(&self) {
+        for pid in self.app_processes() {
+            let _ = Command::new("kill").arg(pid.to_string()).status();
+        }
+    }
+}
+
+impl Drop for DesktopFixture {
+    fn drop(&mut self) {
+        self.close_apps();
+    }
+}
+
+fn windows_of<'a>(result: &'a Value, app: &str) -> Vec<&'a Value> {
+    result["windows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("a window list: {result}"))
+        .iter()
+        .filter(|window| window["app"] == app)
+        .collect()
+}
+
+/// The Desktop's app row: dxd lists openbox's windows, starts the Terminal
+/// or Chromium when none of its windows is open, brings an open one to the
+/// front instead of starting another, restores a minimized one, and starts
+/// an app again after its window was closed.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_lists_opens_and_focuses_desktop_windows() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let Some(desktop) = DesktopFixture::new(&fixture.home) else {
+        eprintln!("skipped: no Desktop toolbelt (set DXD_TEST_DESKTOP)");
+        return;
+    };
+    let mut command = Command::new(DXD);
+    command
+        .arg("--config")
+        .arg(&fixture.config)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("USER", "user")
+        .env("DXD_TMUX", "")
+        .env("DXD_DESKTOP", desktop.directory.path())
+        .env(
+            "DX_WORKLOAD_IDENTITY_SOCKET",
+            fixture.state.join("workload-identity.sock"),
+        )
+        .stdin(Stdio::null());
+    let _daemon = DaemonGuard(command.spawn().unwrap());
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let mut sequence = 0;
+    let mut ask = async |socket: &mut Socket, operation: Value| {
+        sequence += 1;
+        let result = memory_request(
+            socket,
+            &generation,
+            &format!("desktop-{sequence}"),
+            operation,
+        )
+        .await;
+        assert_eq!(result["kind"], "windows", "{result}");
+        result
+    };
+
+    let empty = ask(&mut socket, json!({"operation": "desktop.windows"})).await;
+    assert_eq!(empty["windows"], json!([]), "{empty}");
+
+    // Closed: the Terminal starts, and its window is listed in front.
+    let started = Instant::now();
+    let opened = ask(
+        &mut socket,
+        json!({"operation": "desktop.open", "app": "terminal"}),
+    )
+    .await;
+    let terminals = windows_of(&opened, "terminal");
+    assert_eq!(terminals.len(), 1, "{opened}");
+    assert_eq!(terminals[0]["minimized"], false, "{opened}");
+    assert!(
+        !terminals[0]["title"].as_str().unwrap().is_empty(),
+        "{opened}"
+    );
+    let terminal = terminals[0]["id"].as_u64().unwrap();
+    eprintln!("terminal window after {:?}", started.elapsed());
+    assert_eq!(desktop.app_processes().len(), 1);
+
+    // Open: another click brings it forward and starts nothing.
+    let again = ask(
+        &mut socket,
+        json!({"operation": "desktop.open", "app": "terminal"}),
+    )
+    .await;
+    assert_eq!(windows_of(&again, "terminal").len(), 1, "{again}");
+    assert_eq!(
+        windows_of(&again, "terminal")[0]["focused"],
+        true,
+        "{again}"
+    );
+    assert_eq!(desktop.app_processes().len(), 1);
+
+    // The browser's window starts minimized; opening it again restores it
+    // and takes focus from the Terminal.
+    let browser = ask(
+        &mut socket,
+        json!({"operation": "desktop.open", "app": "browser"}),
+    )
+    .await;
+    let browsers = windows_of(&browser, "browser");
+    assert_eq!(browsers.len(), 1, "{browser}");
+    assert_eq!(browsers[0]["minimized"], true, "{browser}");
+    assert_eq!(browsers[0]["title"], "New Tab - Chromium", "{browser}");
+    let restored = ask(
+        &mut socket,
+        json!({"operation": "desktop.open", "app": "browser"}),
+    )
+    .await;
+    assert_eq!(
+        windows_of(&restored, "browser")[0]["minimized"],
+        false,
+        "{restored}"
+    );
+    assert_eq!(
+        windows_of(&restored, "browser")[0]["focused"],
+        true,
+        "{restored}"
+    );
+    assert_eq!(
+        windows_of(&restored, "terminal")[0]["focused"],
+        false,
+        "{restored}"
+    );
+
+    // A window by its ID, and one that no longer exists changes nothing.
+    let focused = ask(
+        &mut socket,
+        json!({"operation": "desktop.focus", "window": terminal}),
+    )
+    .await;
+    assert_eq!(
+        windows_of(&focused, "terminal")[0]["focused"],
+        true,
+        "{focused}"
+    );
+    let unknown = ask(
+        &mut socket,
+        json!({"operation": "desktop.focus", "window": 4_000_000_000u32}),
+    )
+    .await;
+    assert_eq!(unknown["windows"], focused["windows"], "{unknown}");
+
+    // Closed by the person: the list empties, and the Terminal starts again.
+    let closed = desktop.app_processes();
+    desktop.close_apps();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let listed = ask(&mut socket, json!({"operation": "desktop.windows"})).await;
+        if listed["windows"] == json!([]) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "closed windows stayed listed: {listed}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let reopened = ask(
+        &mut socket,
+        json!({"operation": "desktop.open", "app": "terminal"}),
+    )
+    .await;
+    let terminals = windows_of(&reopened, "terminal");
+    assert_eq!(terminals.len(), 1, "{reopened}");
+    assert_eq!(terminals[0]["minimized"], false, "{reopened}");
+    assert!(windows_of(&reopened, "browser").is_empty(), "{reopened}");
+    // A new process: X may hand the new window the closed one's ID.
+    let running = desktop.app_processes();
+    assert_eq!(running.len(), 1);
+    assert!(!closed.contains(&running[0]), "{closed:?} {running:?}");
 }

@@ -21,7 +21,10 @@ import { runRepositories } from "./runtime.js";
 //   viewer retries a desktop that can never start or gives up on one that
 //   can;
 // - the status check does not start the desktop or wake the workspace, or
-//   sends the browser's cookies to the guest.
+//   sends the browser's cookies to the guest;
+// - the app row's window routes reach the sandbox for a View-only member,
+//   an outsider, or an archived Thread, pass an action the guest never
+//   validated, or read as the Desktop's socket channel.
 
 const appOrigin = "http://dx.test";
 const baseBindings = {
@@ -35,7 +38,9 @@ const baseBindings = {
 
 interface ExecutionCall {
   readonly url: string;
+  readonly method: string;
   readonly headers: Headers;
+  readonly body: string;
 }
 
 /** A Thread execution namespace that answers like the real object. */
@@ -45,7 +50,13 @@ const fakeExecution = (respond: (request: Request) => Response) => {
     idFromName: (name: string) => ({ name }),
     get: () => ({
       fetch: async (request: Request) => {
-        calls.push({ url: request.url, headers: new Headers(request.headers) });
+        const body = await request.clone().text();
+        calls.push({
+          url: request.url,
+          method: request.method,
+          headers: new Headers(request.headers),
+          body,
+        });
         return respond(request);
       },
     }),
@@ -277,5 +288,154 @@ describe("Thread Desktop routes in workerd", () => {
       });
     }
     expect(execution.calls).toHaveLength(0);
+  });
+
+  it("relays the app row's window listing and actions through the Thread execution object", async () => {
+    const owner = await signUp("windows");
+    const member = await signUp("windows-viewer");
+    const threadId = await createThread(owner.userId);
+    const windows = [
+      {
+        id: 6291468,
+        app: "terminal",
+        title: "xterm",
+        minimized: false,
+        focused: true,
+      },
+      { id: 8388620, title: "Figure 1", minimized: true, focused: false },
+    ];
+    const execution = fakeExecution(() =>
+      Response.json({ desktop: "ready", windows }),
+    );
+    const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
+    const windowsRequest = (cookie: string, body?: unknown) =>
+      app.request(
+        `${appOrigin}/v1/threads/${threadId}/desktop/windows`,
+        body === undefined
+          ? { headers: { cookie, accept: "application/json" } }
+          : {
+              method: "POST",
+              headers: {
+                cookie,
+                origin: appOrigin,
+                "content-type": "application/json",
+              },
+              body: JSON.stringify(body),
+            },
+        bindings,
+      );
+
+    const listed = await windowsRequest(owner.cookie);
+    expect(listed.status).toBe(200);
+    expect(listed.headers.get("cache-control")).toBe("no-store");
+    await expect(listed.json()).resolves.toEqual({
+      status: "success",
+      data: { desktop: "ready", windows },
+    });
+    for (const action of [
+      { app: "terminal" },
+      { app: "browser" },
+      { window: 8388620 },
+    ]) {
+      const acted = await windowsRequest(owner.cookie, action);
+      expect(acted.status).toBe(200);
+      await expect(acted.json()).resolves.toMatchObject({
+        data: { desktop: "ready" },
+      });
+    }
+    expect(
+      execution.calls.map(({ url, method, body }) => ({ url, method, body })),
+    ).toEqual([
+      {
+        url: "https://thread-execution/desktop/windows",
+        method: "GET",
+        body: "",
+      },
+      {
+        url: "https://thread-execution/desktop/windows",
+        method: "POST",
+        body: '{"app":"terminal"}',
+      },
+      {
+        url: "https://thread-execution/desktop/windows",
+        method: "POST",
+        body: '{"app":"browser"}',
+      },
+      {
+        url: "https://thread-execution/desktop/windows",
+        method: "POST",
+        body: '{"window":8388620}',
+      },
+    ]);
+    // Only dx's own headers reach the object, never the browser's cookie.
+    expect(execution.calls[0]?.headers.get("cookie")).toBeNull();
+    expect(execution.calls[0]?.headers.get("x-dx-thread-id")).toBe(threadId);
+
+    // An action the guest does not know never reaches it.
+    for (const action of [
+      { app: "gedit" },
+      { window: 0 },
+      { window: -1 },
+      { app: "terminal", command: "rm -rf ~" },
+      {},
+    ]) {
+      const refusedAction = await windowsRequest(owner.cookie, action);
+      expect(refusedAction.status).toBe(400);
+    }
+    expect(execution.calls).toHaveLength(4);
+
+    // An outsider and a View-only member are refused before the object.
+    expect((await windowsRequest(member.cookie)).status).toBe(404);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO organization (id, name, slug, createdAt) VALUES (?, 'Windows team', ?, 1)",
+      ).bind(`org-${threadId}`, `windows-${threadId.slice(-12)}`),
+      env.DB.prepare(
+        `INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES
+           (?1 || '-o', ?1, ?2, 'owner', 1), (?1 || '-m', ?1, ?3, 'member', 2)`,
+      ).bind(`org-${threadId}`, owner.userId, member.userId),
+      env.DB.prepare(
+        "UPDATE threads SET shared_workspace_id = ?, workspace_access = 'view' WHERE id = ?",
+      ).bind(`org-${threadId}`, threadId),
+    ]);
+    const viewer = await windowsRequest(member.cookie, { app: "terminal" });
+    expect(viewer.status).toBe(403);
+    expect(await viewer.text()).toContain("THREAD_READ_ONLY");
+    expect((await windowsRequest(member.cookie)).status).toBe(403);
+    expect(execution.calls).toHaveLength(4);
+
+    // Archived: refused before the object.
+    await env.DB.prepare(
+      "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
+    )
+      .bind(threadId)
+      .run();
+    const archived = await windowsRequest(owner.cookie, { app: "terminal" });
+    expect(archived.status).toBe(409);
+    expect(execution.calls).toHaveLength(4);
+  });
+
+  it("answers unavailable when the object cannot reach the Desktop, and unsupported without one", async () => {
+    const owner = await signUp("windows-down");
+    const threadId = await createThread(owner.userId);
+    const list = (bindings: Bindings) =>
+      app.request(
+        `${appOrigin}/v1/threads/${threadId}/desktop/windows`,
+        { headers: { cookie: owner.cookie, accept: "application/json" } },
+        bindings,
+      );
+    const down = fakeExecution(() => new Response(null, { status: 500 }));
+    await expect(
+      (
+        await list({ ...baseBindings, THREAD_EXECUTION: down.namespace })
+      ).json(),
+    ).resolves.toEqual({
+      status: "success",
+      data: { desktop: "unavailable", windows: [] },
+    });
+    await expect((await list(baseBindings)).json()).resolves.toEqual({
+      status: "success",
+      data: { desktop: "unsupported", windows: [] },
+    });
   });
 });

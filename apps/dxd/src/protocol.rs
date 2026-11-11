@@ -134,6 +134,13 @@ pub struct ProxyCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may send `desktop.windows`, `desktop.open`, and
+/// `desktop.focus`; see [`crate::desktop`].
+#[derive(Serialize)]
+pub struct DesktopCapability {
+    pub version: u8,
+}
+
 /// Version 1: heartbeats carry `memory`, and Core may send the
 /// `memory.snapshot` and `memory.stop` operations; see [`crate::memory`].
 #[derive(Serialize)]
@@ -174,6 +181,7 @@ pub struct Capabilities {
     pub disk: DiskCapability,
     pub storage: StorageCapability,
     pub terminal_sessions: TerminalSessionsCapability,
+    pub desktop: DesktopCapability,
 }
 
 impl Capabilities {
@@ -189,6 +197,7 @@ impl Capabilities {
             disk: DiskCapability { version: 1 },
             storage: StorageCapability { version: 1 },
             terminal_sessions: TerminalSessionsCapability { version: 1 },
+            desktop: DesktopCapability { version: 1 },
         }
     }
 }
@@ -458,6 +467,15 @@ pub enum PortalOperation {
     Ports {},
     #[serde(rename = "desktop.ensure")]
     DesktopEnsure {},
+    /// The Desktop's windows.
+    #[serde(rename = "desktop.windows")]
+    DesktopWindows {},
+    /// Bring the app's window to the front, or start the app.
+    #[serde(rename = "desktop.open")]
+    DesktopOpen { app: crate::desktop::DesktopApp },
+    /// Bring one window to the front, restoring it when minimized.
+    #[serde(rename = "desktop.focus")]
+    DesktopFocus { window: u32 },
     /// Start declared services that are not serving; Core validated them.
     #[serde(rename = "services.ensure")]
     ServicesEnsure {
@@ -477,6 +495,9 @@ pub enum PortalResult {
     },
     Services {
         services: Vec<crate::services::ServiceStatus>,
+    },
+    Windows {
+        windows: Vec<crate::desktop::DesktopWindow>,
     },
 }
 

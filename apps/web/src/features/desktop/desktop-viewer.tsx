@@ -1,4 +1,5 @@
 import type { ThreadId } from "@dx/domain";
+import { useQueryClient } from "@tanstack/react-query";
 import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
 import {
@@ -7,6 +8,7 @@ import {
 } from "../../shared/auth/session-ended.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { useMobile } from "../../shared/use-mobile.js";
+import { DesktopAppRow } from "./desktop-apps.js";
 import { followPaneSize, writeLocalClipboard } from "./desktop-display.js";
 import {
   codeForCharacter,
@@ -16,6 +18,8 @@ import {
 import { DesktopKeys } from "./desktop-keys.js";
 import {
   desktopPath,
+  desktopWindowInputHandlers,
+  refreshDesktopWindowsAfterStart,
   checkDesktop as requestDesktop,
 } from "./desktop-queries.js";
 import type { VoxlConnection, VoxlSession } from "./voxl/session.js";
@@ -144,6 +148,7 @@ function DesktopSession({
   const [status, setStatus] = React.useState<DesktopStatus>({
     phase: "starting",
   });
+  const queryClient = useQueryClient();
   const canvas = React.useRef<HTMLCanvasElement | null>(null);
   const inputRef = React.useRef<DesktopInput>({
     lastInput: Date.now(),
@@ -324,6 +329,7 @@ function DesktopSession({
           blankStreams = 0;
           if (drawn || recovering || halted) return;
           drawn = true;
+          refreshDesktopWindowsAfterStart(queryClient, threadId);
           setStatus(nextStatus(connection, drawn));
         },
         // Guest code can change the remote clipboard at any time; copying
@@ -368,8 +374,14 @@ function DesktopSession({
     inputRef.current.lastGesture = now;
   };
   const mobile = useMobile();
+  const windowInput = desktopWindowInputHandlers(queryClient, threadId);
   return (
     <>
+      <DesktopAppRow
+        threadId={threadId}
+        live={status.phase === "live" || status.phase === "reconnecting"}
+        onDone={() => remoteRef.current?.focus()}
+      />
       {/* Before the surface, so it exists when the surface attaches. */}
       <textarea
         ref={attachTextInput}
@@ -395,6 +407,7 @@ function DesktopSession({
         onWheelCapture={noteInput}
         onPointerDownCapture={noteGesture}
         onKeyDownCapture={noteGesture}
+        {...windowInput}
       >
         <canvas className="thread-desktop-canvas" ref={canvas} />
       </div>
