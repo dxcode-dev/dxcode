@@ -63,18 +63,16 @@ type ClaudePlanChoice = ChoicesData["claudePlans"][number];
 
 /**
  * The enabled Claude plans a new Claude Code Thread can be bound to, in
- * routing order, and the one it takes: the one picked, else the first. With
- * the person's automatic plan pick on (`auto`), none picked leaves it to dx
- * when the Thread is created ("Auto").
+ * routing order, and the one picked. None picked leaves it to dx when the
+ * Thread is created ("Auto").
  */
 export const claudePlanPick = (
   choices: ChoicesData | undefined,
   picked: string | undefined,
 ) => {
   const plans = (choices?.claudePlans ?? []).filter(({ enabled }) => enabled);
-  const auto = choices?.claudeAutoPick === true;
-  const named = plans.find(({ connectionId }) => connectionId === picked);
-  return { plans, auto, current: auto ? named : (named ?? plans[0]) };
+  const current = plans.find(({ connectionId }) => connectionId === picked);
+  return { plans, current };
 };
 
 /** A plan's short name in the composer: "Plan 2", by routing order. */

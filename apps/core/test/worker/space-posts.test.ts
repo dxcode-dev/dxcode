@@ -36,7 +36,7 @@ import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { ownerRequest } from "../../src/threads/owner-request.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * A Space's posts end to end in workerd with real D1, through the same
@@ -290,8 +290,7 @@ beforeEach(async () => {
   );
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, member, viewer, outsider]));
+beforeEach(() => seedSpaceUsers([owner, member, viewer, outsider]));
 
 describe("A new Space", () => {
   it("sends its agent a hidden setup message, which is not a post", async () => {
@@ -1075,13 +1074,6 @@ describe("Mentions in people's posts", () => {
       message_id: created.id,
       excerpt: `Can @[Ben Member](user:${member}) and @[Vi Viewer](user:${viewer}) review it?`,
     });
-
-    // Someone who turned Spaces off cannot open the Space: no notification.
-    await turnSpacesOn([viewer], false);
-    const unseen = (
-      await post(owner, spaceId, `@[Vi Viewer](user:${viewer}) one more`)
-    ).body.data.post as SpacePost;
-    expect(await mentionsOf(unseen.id)).toEqual([]);
   });
 
   it("routes a typed @handle through the same path, with no internal tags", async () => {

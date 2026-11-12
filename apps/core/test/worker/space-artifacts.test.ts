@@ -22,7 +22,7 @@ import {
 import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * A Space's Artifacts tab lists the artifacts of the Space and of every
@@ -196,7 +196,7 @@ beforeEach(async () => {
     .run();
 });
 
-beforeEach(() => turnSpacesOn([owner, member, outsider]));
+beforeEach(() => seedSpaceUsers([owner, member, outsider]));
 
 describe("a Space's artifacts across its threads", () => {
   it("lists the Space's own and its children's, archived included, deleted never", async () => {

@@ -164,18 +164,6 @@ export const enabledExperimentalFeatures = async (
   return Effect.runPromise(operation);
 };
 
-/**
- * Whether a personal experimental feature is on for the person, after its
- * prerequisites and incompatibilities. A feature the registry does not
- * list is off; a failed read rejects, so callers fail closed.
- */
-export const experimentalFeatureEnabled = async (
-  bindings: AppEnv["Bindings"],
-  principal: Principal,
-  featureId: ExperimentalFeatureId,
-): Promise<boolean> =>
-  (await enabledExperimentalFeatures(bindings, principal)).has(featureId);
-
 export const personalExperimentalFeaturesRoutes = new Hono<AppEnv>();
 
 personalExperimentalFeaturesRoutes.get("/", async (context) => {

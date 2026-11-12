@@ -154,6 +154,13 @@ export interface Bindings {
     import("../source-control/bitbucket/token-coordinator.js").BitbucketTokenCoordinatorObject
   >;
   /**
+   * One object per GitHub user authorization, which renews its rotating user
+   * token one at a time and keeps going when the request that asked ends.
+   */
+  readonly GITHUB_TOKEN_COORDINATOR?: DurableObjectNamespace<
+    import("../source-control/github/token-coordinator.js").GitHubTokenCoordinatorObject
+  >;
+  /**
    * The Cloudflare Containers Orb provider: the Orb Worker's container
    * object namespace, bound across scripts. Present only when the deployment
    * installed the provider.
@@ -257,11 +264,6 @@ export interface Variables {
    * Spaces create their root Thread as a Space, and a Space's agent records
    * whose message made it start a child.
    */
-  /**
-   * Whether the route's Thread is a Space, read beside authentication by
-   * `prefetchThreadKind` for the Spaces gate (spaces/gate.ts).
-   */
-  readonly threadIsSpace?: Promise<boolean>;
   readonly threadCreation?: {
     readonly kind?: "space";
     /** Set only by server logic, such as Space creation; never a client. */

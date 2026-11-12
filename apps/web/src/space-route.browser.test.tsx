@@ -346,10 +346,8 @@ const mount = async (initialEntry = `/threads/${SPACE}`) => {
   document.documentElement.dataset.resolvedAppearance = "light";
   document.documentElement.dataset.palette = "daydream";
   const queryClient = createQueryClient();
-  // Spaces is on for the viewer (its experimental flag).
   queryClient.setQueryData(settingsContextQueryOptions(viewer).queryKey, {
     activeScope: "personal",
-    spaces: true,
   } as never);
   const rootRoute = createRootRoute();
   const product = createRoute({

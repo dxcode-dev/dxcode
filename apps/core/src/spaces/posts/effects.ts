@@ -9,7 +9,6 @@ import {
 import { publishRealtimeInvalidation } from "../../realtime/publication.js";
 import { threadMembers } from "../../thread-sharing/members.js";
 import { spaceAppOrigin } from "../agent-prompt.js";
-import { spacesEnabledFor } from "../gate.js";
 import { recordPostSubmission, setSpacePostReaction } from "./store.js";
 
 /**
@@ -188,10 +187,7 @@ export const notifyPostMentions = async (
     const candidates = [...named(mentioned)].filter(
       (userId) => userId !== authorId && !already.has(userId),
     );
-    const recipients: UserId[] = [];
-    for (const userId of candidates)
-      if (await spacesEnabledFor(bindings, userId))
-        recipients.push(userId as UserId);
+    const recipients = candidates as UserId[];
     if (recipients.length === 0) return;
     await publishNotification(bindings, {
       // The Space agent's post is its notification, not a mention.

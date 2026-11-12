@@ -93,7 +93,8 @@ const PORTAL = params.get("portal") === "1";
 const DRAFT_READ_LAG_MS = Number(params.get("draftReadLag") ?? 0);
 const DRAFT_SAVE_LAG_MS = Number(params.get("draftSaveLag") ?? 0);
 const DRAFT_CLEAR_LAG_MS = Number(params.get("draftClearLag") ?? 0);
-// `quickActions=1` turns on the composer's quick-action row (experimental).
+// `quickActions=1` shows the composer's quick-action row, as a deployment
+// with Workers AI's Clef does.
 const QUICK_ACTIONS = params.get("quickActions") === "1";
 
 const userId = "usr_perf" as UserId;

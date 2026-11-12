@@ -73,6 +73,10 @@
       {
         "name": "BITBUCKET_TOKEN_COORDINATOR",
         "class_name": "BitbucketTokenCoordinatorObject"
+      },
+      {
+        "name": "GITHUB_TOKEN_COORDINATOR",
+        "class_name": "GitHubTokenCoordinatorObject"
       }
     ]
   },
@@ -112,6 +116,10 @@
     {
       "tag": "v8-bitbucket-token-coordinator",
       "new_sqlite_classes": ["BitbucketTokenCoordinatorObject"]
+    },
+    {
+      "tag": "v9-github-token-coordinator",
+      "new_sqlite_classes": ["GitHubTokenCoordinatorObject"]
     }
   ]
 }

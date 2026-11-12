@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from "react";
+import { HUDDLE_MOCK } from "./huddle-availability.js";
 import type { HuddleClient, HuddleScope } from "./huddle-client.js";
-import { HUDDLE_MOCK } from "./huddle-flag.js";
 import { MockHuddleClient } from "./mock-huddle-client.js";
 import { RealtimeKitHuddleClient } from "./realtimekit-huddle-client.js";
 

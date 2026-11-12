@@ -138,17 +138,7 @@ export const resolveSpaceAgentRoute = async (
         }
       }
       try {
-        let resolved: Awaited<ReturnType<typeof attempt>>;
-        try {
-          resolved = await attempt();
-        } catch (error) {
-          // Several plans and no automatic pick: a Space takes the first.
-          if (
-            !(error instanceof ClaudePlanRefused && error.reason === "required")
-          )
-            throw error;
-          resolved = await attempt(plans[0]?.id);
-        }
+        const resolved = await attempt();
         const connectionId = resolved.claudeConnectionId ?? plans[0]?.id;
         return {
           route: {

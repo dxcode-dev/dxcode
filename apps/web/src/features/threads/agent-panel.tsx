@@ -1394,8 +1394,8 @@ export interface AgentPanelOptions {
   readonly transcriptEnd?: React.ReactNode;
   /**
    * The composer quick-action row, which Clef Flash fills once the agent's
-   * turn ends: present only while this person's `composer-quick-actions`
-   * flag is on and they can send.
+   * turn ends: present only while the deployment has Clef Flash and this
+   * person can send.
    */
   readonly quickActions?: { readonly thread: ThreadDetailData };
   readonly optimisticCreation?: OptimisticThreadCreation;

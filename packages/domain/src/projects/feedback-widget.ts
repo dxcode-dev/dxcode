@@ -1,8 +1,5 @@
 import { Schema } from "effect";
 
-/** The experimental flag the Feedback Widget sits behind. */
-export const FEEDBACK_WIDGET_FEATURE = "feedback-widget";
-
 export const MAX_FEEDBACK_WIDGET_ORIGINS = 20;
 export const MAX_FEEDBACK_WIDGET_COMMENTS = 20;
 

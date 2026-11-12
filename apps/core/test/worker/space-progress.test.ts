@@ -25,7 +25,7 @@ import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { threadRoutes } from "../../src/threads/routes.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * A Space's progress in workerd with real D1 and R2: how a thread it
@@ -227,8 +227,7 @@ beforeEach(async () => {
   );
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, member, outsider]));
+beforeEach(() => seedSpaceUsers([owner, member, outsider]));
 
 /**
  * A member's browser with the Space open: its realtime socket in the

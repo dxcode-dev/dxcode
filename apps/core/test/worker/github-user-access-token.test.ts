@@ -87,13 +87,24 @@ describe("GitHub user access token for native Git", () => {
 
   it("refreshes a token within its last hour, then reuses the new one", async () => {
     await authorize("gh-token-expiring", 30 * 60 * 1_000);
-    const fetcher = vi.fn<typeof fetch>(async () => refreshResponse());
+    // The renewal checks the new token with GitHub (`GET /user`) before
+    // relying on it; only the token call rotates.
+    const fetcher = vi.fn<typeof fetch>(async (input) =>
+      new Request(input).url === "https://api.github.com/user"
+        ? Response.json({ id: 42, login: "octo" })
+        : refreshResponse(),
+    );
     vi.stubGlobal("fetch", fetcher);
     for (let attempt = 0; attempt < 2; attempt += 1)
       await expect(
         readGitHubUserAccessToken(bindings, env.DB, "gh-token-expiring"),
       ).resolves.toBe("ghu_refreshed");
-    expect(fetcher).toHaveBeenCalledOnce();
+    const refreshes = fetcher.mock.calls.filter(
+      ([input]) =>
+        new Request(input).url ===
+        "https://github.com/login/oauth/access_token",
+    );
+    expect(refreshes).toHaveLength(1);
   });
 
   it("keeps serving an unexpired token when refresh is unavailable", async () => {

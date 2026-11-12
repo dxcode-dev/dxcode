@@ -278,11 +278,6 @@ export const ChoicesResponseSchema = successResponse(
     modes: Schema.Array(ModeChoiceDataSchema),
     models: Schema.Array(ServedModelChoiceDataSchema),
     claudePlans: Schema.Array(ClaudePlanChoiceDataSchema),
-    /**
-     * The requester's `claude-plan-auto-pick` flag: on, a Claude Code
-     * Thread they create without naming a plan gets dx's pick ("Auto").
-     */
-    claudeAutoPick: Schema.optional(Schema.Boolean),
   }),
 );
 

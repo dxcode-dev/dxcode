@@ -1,13 +1,8 @@
-import {
-  COMPOSER_QUICK_ACTIONS_FEATURE,
-  type ThreadQuickAction,
-} from "@dx/api";
-import type { ExperimentalFeatureId, ThreadId, UserId } from "@dx/domain";
+import type { ThreadQuickAction } from "@dx/api";
+import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { agentModelLogger } from "../logging.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { readHistory } from "../thread-search/history.js";
-import { threadMembers } from "../thread-sharing/members.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import {
   chooseQuickActions,
@@ -25,37 +20,10 @@ export interface SettledSubmission {
   readonly outcome: "completed" | "failed" | "aborted";
 }
 
-/** Whether anyone who can open the Thread turned the row on for themselves. */
-const anyoneWantsQuickActions = async (
-  bindings: Bindings,
-  db: D1Database,
-  threadId: ThreadId,
-  ownerUserId: string,
-) => {
-  const people = [
-    ownerUserId,
-    ...(await threadMembers(db, threadId)).map(({ userId }) => userId),
-  ];
-  for (const userId of new Set(people))
-    if (
-      await experimentalFeatureEnabled(
-        bindings,
-        {
-          userId: userId as UserId,
-          credentialScopes: ["personal"],
-        },
-        COMPOSER_QUICK_ACTIONS_FEATURE as ExperimentalFeatureId,
-      ).catch(() => false)
-    )
-      return true;
-  return false;
-};
-
 /**
  * The turn-end hook for composer quick actions, run beside the finished-turn
  * notification on every settled submission, for Flue and Claude Code turns
- * alike. When the turn completed and someone in the Thread has the
- * experimental flag on, it reads the agent message that ended the turn,
+ * alike. When the turn completed, it reads the agent message that ended the turn,
  * has a small text model write the replies the person might send next
  * (`reply-writer.ts`), asks Clef Flash which actions to show, and stores
  * the pick for the quick-actions
@@ -88,16 +56,7 @@ export const pickQuickActionsAtTurnEnd = async (
       )
       .bind(settled.threadId)
       .first<{ owner_user_id: string; parent_thread_id: string | null }>();
-    if (
-      thread === null ||
-      !(await anyoneWantsQuickActions(
-        bindings,
-        db,
-        settled.threadId,
-        thread.owner_user_id,
-      ))
-    )
-      return;
+    if (thread === null) return;
     const history = await readTurnHistory(
       bindings,
       thread.owner_user_id as UserId,

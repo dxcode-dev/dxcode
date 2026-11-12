@@ -1,16 +1,13 @@
 import {
-  HUDDLE_FEATURE,
   HuddleErrorResponseSchema,
   type HuddleFailure,
   HuddleJoinResponseSchema,
   HuddleSummaryResponseSchema,
 } from "@dx/api";
-import type { ExperimentalFeatureId } from "@dx/domain";
 import { Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { userImageSql } from "../avatars/storage.js";
 import type { AppEnv } from "../http/types.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { displayNameSql } from "../thread-sharing/service.js";
 import {
   addParticipant,
@@ -21,10 +18,6 @@ import {
 } from "./realtimekit.js";
 
 const FAILURES = {
-  HUDDLE_DISABLED: [
-    404,
-    "Huddle is off. Turn it on in Settings, Experimental Features.",
-  ],
   HUDDLE_UNAVAILABLE: [
     409,
     "This deployment has no RealtimeKit app, so huddles are unavailable.",
@@ -105,14 +98,6 @@ const meetingFor = async (
   return (await storedMeeting(db, threadId)) ?? created;
 };
 
-/** Huddle answers only people who turned on the `huddle` flag. */
-const enabled = (context: Context<AppEnv>) =>
-  experimentalFeatureEnabled(
-    context.env,
-    context.get("actor") ?? context.get("principal"),
-    HUDDLE_FEATURE as ExperimentalFeatureId,
-  );
-
 /**
  * `/v1/threads/:threadId/huddle`, behind `authorizeThread`: the Thread's
  * huddle, for anyone who can open the Thread, view-only members included,
@@ -125,7 +110,6 @@ const enabled = (context: Context<AppEnv>) =>
  */
 export const threadHuddleRoutes = new Hono<AppEnv>()
   .get("/:threadId/huddle", async (context) => {
-    if (!(await enabled(context))) return failure(context, "HUDDLE_DISABLED");
     const access = realtimeKitAccess(context.env);
     const db = context.env.DB;
     if (access === undefined || db === undefined)
@@ -169,7 +153,6 @@ export const threadHuddleRoutes = new Hono<AppEnv>()
     );
   })
   .post("/:threadId/huddle/join", async (context) => {
-    if (!(await enabled(context))) return failure(context, "HUDDLE_DISABLED");
     const access = realtimeKitAccess(context.env);
     const db = context.env.DB;
     if (access === undefined || db === undefined)

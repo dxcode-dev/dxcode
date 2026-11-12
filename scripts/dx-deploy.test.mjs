@@ -209,7 +209,7 @@ describe("common deployment installer", () => {
     ).toThrow("The sarvam integration requires the speech plugin.");
   });
 
-  it("asks an existing deployment about Huddle, which costs money, and keeps it off until someone turns it on", () => {
+  it("asks an existing deployment about Huddle, which costs money, keeps it off until someone turns it on, and asks a browser-login deployment for its token", () => {
     const huddle = SELFHOST_SETTINGS.find(({ id }) => id === "huddle");
     const config = validateSelfhostConfig({
       name: "selfhost",
@@ -226,12 +226,20 @@ describe("common deployment installer", () => {
     expect(
       validateSelfhostConfig(huddle?.set(on, false)).integrations,
     ).not.toContain("huddle");
-    // Alchemy OAuth cannot mint Huddle's token, so it is never offered there.
-    expect(
-      unseenSettings({ ...config, cloudflareAuth: "alchemy-oauth" }).map(
-        ({ id }) => id,
-      ),
-    ).not.toContain("huddle");
+    // Browser login cannot mint Huddle's token, so turning Huddle on there
+    // asks for the operator's own; a token deployment never asks.
+    const browser = validateSelfhostConfig({
+      ...config,
+      cloudflareAuth: "alchemy-oauth",
+    });
+    expect(unseenSettings(browser).map(({ id }) => id)).toContain("huddle");
+    const browserOn = validateSelfhostConfig(huddle?.set(browser, true));
+    expect(unseenSettings(browserOn).map(({ id }) => id)).toContain(
+      "realtimeKitApiToken",
+    );
+    expect(unseenSettings(on).map(({ id }) => id)).not.toContain(
+      "realtimeKitApiToken",
+    );
   });
 
   it("rejects unknown plugins and a provider key without its plugin", () => {

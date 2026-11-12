@@ -1,5 +1,4 @@
 import {
-  FeedbackWidgetDisabledResponseSchema,
   FeedbackWidgetForbiddenResponseSchema,
   FeedbackWidgetInvalidOriginResponseSchema,
   FeedbackWidgetInvalidRequestResponseSchema,
@@ -10,8 +9,6 @@ import {
   GetFeedbackWidgetResponseSchema,
 } from "@dx/api";
 import {
-  type ExperimentalFeatureId,
-  FEEDBACK_WIDGET_FEATURE,
   normalizeFeedbackWidgetOrigin,
   type Principal,
   type ProjectId,
@@ -25,7 +22,6 @@ import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
 import { ProjectService } from "../projects/service.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import {
   addOrigin,
   canManageProject,
@@ -140,13 +136,6 @@ const withProject =
     if (Option.isNone(params))
       return fail(context, FeedbackWidgetInvalidRequestResponseSchema, 400);
     const principal = context.get("principal");
-    const enabled = await experimentalFeatureEnabled(
-      context.env,
-      principal,
-      FEEDBACK_WIDGET_FEATURE as ExperimentalFeatureId,
-    ).catch(() => false);
-    if (!enabled)
-      return fail(context, FeedbackWidgetDisabledResponseSchema, 403);
     const db = context.env.DB as D1Database;
     const projectId = params.value.projectId;
     if ((await reachableProject(db, principal, projectId)) === undefined)

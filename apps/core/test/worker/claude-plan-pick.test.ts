@@ -16,7 +16,6 @@ import {
   TEST_RUNNER_PROFILE_CATALOG,
 } from "../../src/testing/bindings.js";
 import { createThreadTools } from "../../src/threads/agent-tools.js";
-import { turnSpacesOn } from "./spaces-flag.js";
 
 /**
  * A person or an agent picks the Claude Pro/Max plan a new Claude Code
@@ -256,8 +255,8 @@ describe("Claude plan pick", () => {
     const choices = (await (await call(`${base}/choices`, cookie)).json()) as {
       data: { claudePlans: unknown };
     };
-    // In routing order; the third never ran Claude Code, so its limits are
-    // unknown.
+    // In routing order, each with its running Threads; the third never ran
+    // Claude Code, so its limits are unknown.
     expect(choices.data.claudePlans).toEqual([
       {
         connectionId: first,
@@ -265,6 +264,7 @@ describe("Claude plan pick", () => {
         enabled: true,
         allowExtraUsage: false,
         usage: firstUsage,
+        load: 0,
       },
       {
         connectionId: second,
@@ -272,17 +272,19 @@ describe("Claude plan pick", () => {
         enabled: true,
         allowExtraUsage: false,
         usage: secondUsage,
+        load: 0,
       },
       {
         connectionId: third,
         name: "Claude Pro/Max 3",
         enabled: false,
         allowExtraUsage: false,
+        load: 0,
       },
     ]);
   });
 
-  it("binds a new Thread to the plan picked at creation, and refuses a used-up, disabled, or foreign plan", async () => {
+  it("binds a new Thread to the plan picked at creation, dx's pick when none is named, and refuses a used-up, disabled, or foreign plan", async () => {
     const { cookie, userId } = await signup(
       "claude-plan-pick-create@example.com",
       182,
@@ -292,12 +294,13 @@ describe("Claude plan pick", () => {
     const projectId = "prj_00000000-0000-4000-8000-0000000c1a01";
     await seedProject(userId, projectId);
 
-    // Two plans and no pick: the person or agent must choose one.
+    // Two plans and no pick: dx picks one of them.
     const unpicked = await create(cookie, projectId, { selection });
-    expect(unpicked.status).toBe(400);
-    expect(unpicked.body.data.code).toBe("CLAUDE_PLAN_REQUIRED");
-    expect(unpicked.body.data.message).toContain(first);
-    expect(unpicked.body.data.message).toContain(second);
+    expect(unpicked.status).toBe(201);
+    assert.exists(unpicked.body.data.id);
+    expect([first, second]).toContain(
+      (await boundTo(unpicked.body.data.id))?.claude_connection_id,
+    );
 
     // The second plan, picked, though the first is first in order.
     const picked = await create(cookie, projectId, {
@@ -391,30 +394,10 @@ describe("Claude plan pick", () => {
 });
 
 /**
- * Turns `userId`'s personal `claude-plan-auto-pick` flag on or off, as
- * Settings → Experimental does.
- */
-const autoPick = (userId: string, enabled: boolean) =>
-  env.DB.prepare(
-    `INSERT INTO personal_experimental_feature_preferences (
-       user_id, preferences, revision, updated_at
-     ) VALUES (?1, ?2, 1, ?3)
-     ON CONFLICT (user_id) DO UPDATE SET preferences = excluded.preferences`,
-  )
-    .bind(
-      userId,
-      JSON.stringify(
-        enabled ? [{ id: "claude-plan-auto-pick", enabled: true }] : [],
-      ),
-      new Date().toISOString(),
-    )
-    .run();
-
-/**
  * The automatic pick (#1685): with no plan named, dx binds a new Claude Code
  * Thread to a plan by each plan's 5-hour and weekly readings and its running
- * Threads, once, at creation. The policy is on the issue. It is behind the
- * owner's personal `claude-plan-auto-pick` flag; these tests turn it on.
+ * Threads, once, at creation. The policy is on the issue. It is on for
+ * everyone.
  */
 describe("Claude plan auto pick", () => {
   const day = 24 * hour;
@@ -443,14 +426,8 @@ describe("Claude plan auto pick", () => {
     ).data.claudePlans;
 
   /** Three plans: nearly full, mid-window resetting soon, never used. */
-  const threePlans = async (
-    email: string,
-    index: number,
-    project: string,
-    auto = true,
-  ) => {
+  const threePlans = async (email: string, index: number, project: string) => {
     const { cookie, userId } = await signup(email, index);
-    await autoPick(userId, auto);
     const nearlyFull = await connect(cookie, "Claude Pro/Max", TOKENS[0]);
     const resetsSoon = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]);
     const unused = await connect(cookie, "Claude Pro/Max 3", TOKENS[2]);
@@ -664,8 +641,6 @@ describe("Claude plan auto pick", () => {
     const projectId = "prj_00000000-0000-4000-8000-0000000c1687";
     const a = await signup("claude-plan-auto-owner-a@example.com", 186);
     const b = await signup("claude-plan-auto-owner-b@example.com", 187);
-    await autoPick(a.userId, true);
-    await autoPick(b.userId, true);
     // A's plans are both near their 5-hour limit; B's plan is unused, with
     // none of its Threads running, so it has the most room of all.
     const aFirst = await connect(a.cookie, "Claude Pro/Max", TOKENS[0]);
@@ -759,23 +734,23 @@ describe("Claude plan auto pick", () => {
       .first<{ bound: number }>();
     expect(onB?.bound).toBe(0);
   });
-  it("leaves creation as before while the owner's flag is off, whoever else has it on", async () => {
+
+  it("picks for every owner without a setting: the composer, the choices, and an agent's child", async () => {
     const projectId = "prj_00000000-0000-4000-8000-0000000c1688";
-    const { cookie, userId, nearlyFull, resetsSoon } = await threePlans(
-      "claude-plan-auto-off@example.com",
+    const { cookie, nearlyFull, resetsSoon, unused } = await threePlans(
+      "claude-plan-auto-default@example.com",
       188,
       projectId,
-      false,
     );
-    // Someone else's flag is on; it never decides for this owner.
-    const other = await signup("claude-plan-auto-off-other@example.com", 189);
-    await autoPick(other.userId, true);
 
-    // The composer: no pick is refused, as before, and the choices carry
-    // neither running Threads nor the pick.
+    // The composer: no pick takes dx's, and the choices carry each plan's
+    // running Threads, with no switch for the pick.
     const unpicked = await create(cookie, projectId, { selection });
-    expect(unpicked.status).toBe(400);
-    expect(unpicked.body.data.code).toBe("CLAUDE_PLAN_REQUIRED");
+    expect(unpicked.status).toBe(201);
+    const unpickedId = unpicked.body.data.id;
+    assert.exists(unpickedId);
+    expect((await boundTo(unpickedId))?.claude_connection_id).toBe(resetsSoon);
+    await settle(unpickedId);
     const choices = (
       (await (await call(`${base}/choices`, cookie)).json()) as {
         data: Record<string, unknown> & {
@@ -783,9 +758,14 @@ describe("Claude plan auto pick", () => {
         };
       }
     ).data;
-    expect(choices.claudeAutoPick).toBeUndefined();
-    for (const plan of choices.claudePlans)
-      expect(plan).not.toHaveProperty("load");
+    expect(choices).not.toHaveProperty("claudeAutoPick");
+    expect(
+      choices.claudePlans.map(({ connectionId, load }) => [connectionId, load]),
+    ).toEqual([
+      [nearlyFull, 0],
+      [resetsSoon, 0],
+      [unused, 0],
+    ]);
 
     const parent = await create(cookie, projectId, {
       selection,
@@ -795,13 +775,12 @@ describe("Claude plan auto pick", () => {
     assert.exists(parentId);
     await settle(parentId);
 
-    // An agent: list_agent_modes shows no pick, and create_thread with no
-    // plan is refused.
+    // An agent: create_thread with no plan takes the pick, not the parent's.
     const tools = Object.fromEntries(
       createThreadTools(
         parentId,
         () => ({ db: env.DB, bindings, waitUntil: keep }),
-        "sub_auto_off",
+        "sub_auto_default",
       ).map((tool) => [
         tool.name,
         tool as unknown as {
@@ -814,40 +793,15 @@ describe("Claude plan auto pick", () => {
     );
     const listed = await tools.list_agent_modes?.run({
       data: {},
-      toolCallId: "modes-off",
+      toolCallId: "modes-default",
     });
-    assert.exists(listed);
-    expect(listed.output).not.toHaveProperty("claudeAutoPlan");
-    for (const plan of listed.output.claudePlans as Record<string, unknown>[])
-      expect(plan).not.toHaveProperty("runningThreads");
-    await expect(
-      tools.create_thread?.run({
-        data: { prompt: "Child work.", title: "Child", agent_mode: MODEL },
-        toolCallId: "off-child",
-      }),
-    ).rejects.toThrow(/CLAUDE_PLAN_REQUIRED|Pick the Claude plan/);
-
-    // An automation: its Thread runs on its parent's plan, though another
-    // plan resets sooner.
-    const automated = await startThread(
-      {
-        bindings,
-        ownerUserId: userId,
-        automation: "schedule",
-        waitUntil: keep,
-      },
-      {
-        parentThreadId: parentId,
-        projectId,
-        title: "Scheduled",
-        prompt: "Scheduled work.",
-        selection: { kind: "model", model: MODEL, thinking: "high" },
-        key: "claude-plan-auto-off-schedule",
-      },
-    );
-    const automatedPlan = (await boundTo(automated))?.claude_connection_id;
-    expect(automatedPlan).toBe(nearlyFull);
-    expect(automatedPlan).not.toBe(resetsSoon);
+    expect(listed?.output.claudeAutoPlan).toMatchObject({ plan: resetsSoon });
+    const child = await tools.create_thread?.run({
+      data: { prompt: "Child work.", title: "Child", agent_mode: MODEL },
+      toolCallId: "default-child",
+    });
+    const childId = child?.output.threadId as string;
+    expect((await boundTo(childId))?.claude_connection_id).toBe(resetsSoon);
   });
 });
 
@@ -892,8 +846,7 @@ describe("A new Space's Claude plan", () => {
       "claude-plan-pick-space@example.com",
       191,
     );
-    // Spaces on, with Auto's Space model (Opus), which Claude Code serves.
-    await turnSpacesOn([userId]);
+    // Auto's Space model (Opus), which Claude Code serves.
     await env.DB.prepare("DELETE FROM space_agent_model WHERE user_id = ?")
       .bind(userId)
       .run();

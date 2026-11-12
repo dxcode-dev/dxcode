@@ -1,7 +1,7 @@
 import type { ThreadId } from "@dx/domain";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
-import { artifactSaved } from "./ask-effects.js";
+import { artifactSaved, askDecidedElsewhere } from "./ask-effects.js";
 import { openAsks } from "./asks.js";
 import {
   type ArtifactWithMarkdown,
@@ -76,7 +76,8 @@ export interface OwnerAsk {
  * mentioning them: in the artifact the agent names, unless it already holds
  * an open ask for the owner there, or else in the Thread's top-level Plan
  * artifact, which it creates when there is none. The mention notifies the
- * owner; a tick or an answer under it wakes the Thread (`ask-effects.ts`).
+ * owner; a tick or an answer under it reaches the agent through Notify agent
+ * or a comment that mentions it (`ask-effects.ts`).
  */
 export const addOwnerAsk = async (
   context: ThreadToolsContext,
@@ -176,10 +177,10 @@ export const addOwnerAsk = async (
 
 /**
  * Ticks the owner's open ask in `artifactId` whose text holds `marker`, and
- * appends `outcome`, as `writer`'s save. A tick by a person wakes the
- * Thread (`ask-effects.ts`), so the agent hears the outcome of something it
- * asked about that was decided elsewhere, such as a skill proposal decided
- * on the Skills settings page. Best effort: an ask already ticked, edited
+ * appends `outcome`, as `writer`'s save. A person's decision wakes the
+ * Thread (`askDecidedElsewhere`), so the agent hears the outcome of
+ * something it asked about that was decided elsewhere, such as a skill
+ * proposal decided on the Skills settings page. Best effort: an ask already ticked, edited
  * away, or lost to newer saves is left as it is.
  */
 export const settleOwnerAsk = async (
@@ -189,7 +190,7 @@ export const settleOwnerAsk = async (
     readonly artifactId: string;
     readonly marker: string;
     readonly outcome: string;
-    /** A person's save wakes the Thread; the agent's own does not. */
+    /** A person's decision wakes the Thread; the agent's own does not. */
     readonly writer: ArtifactWriter;
   },
 ): Promise<boolean> => {
@@ -206,8 +207,8 @@ export const settleOwnerAsk = async (
       (line) => /^\s*[-*+] \[ \] /.test(line) && line.includes(input.marker),
     );
     if (index === -1) return false;
-    lines[index] =
-      `${(lines[index] ?? "").replace(/\[ \]/, "[x]").trimEnd()} ${input.outcome}`;
+    const decided = `${(lines[index] ?? "").replace(/\[ \]/, "[x]").trimEnd()} ${input.outcome}`;
+    lines[index] = decided;
     const result = await saveArtifact(bindings, {
       threadId: input.threadId,
       artifactId: input.artifactId,
@@ -231,6 +232,16 @@ export const settleOwnerAsk = async (
       after: result.value.markdown,
       writer,
     });
+    // A person's decision reaches the agent now; the agent's own does not.
+    if (writer.kind === "user")
+      await askDecidedElsewhere(bindings, {
+        threadId: input.threadId,
+        artifactId: result.value.artifact.id,
+        title: result.value.artifact.title,
+        revision: result.value.artifact.revision,
+        userId: writer.userId,
+        item: decided.trim(),
+      });
     return true;
   }
   return false;

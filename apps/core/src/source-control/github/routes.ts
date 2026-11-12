@@ -44,8 +44,10 @@ import {
   GitHubControlPlaneInvalid,
   type GitHubOwner,
   listGitHubGrants,
+  readGitHubUserAuthorizationStatus,
 } from "./control-plane.js";
 import { GitHubProviderError } from "./provider-http.js";
+import { githubRenewerFor } from "./token-renewer.js";
 import {
   GITHUB_WEBHOOK_MAX_BYTES,
   GitHubWebhookInvalid,
@@ -277,7 +279,13 @@ const readBoundedBody = async (request: Request) => {
 
 const controlPlane = async (context: Context<AppEnv>) => {
   const deps = await dependencies(context);
-  return { ...deps, service: createGitHubControlPlane(deps) };
+  return {
+    ...deps,
+    service: createGitHubControlPlane({
+      ...deps,
+      renewer: githubRenewerFor(context.env, deps.db),
+    }),
+  };
 };
 
 const beginAuthorization = async (context: Context<AppEnv>) => {
@@ -313,9 +321,14 @@ const list = async (context: Context<AppEnv>) => {
     await Effect.runPromise(loadGitHubAppConfiguration(context.env));
   await browser(context);
   const owner = personalOwner(context);
+  const [grants, authorization] = await Promise.all([
+    listGitHubGrants(db, owner),
+    readGitHubUserAuthorizationStatus(db, owner.id),
+  ]);
   return {
     configured,
-    grants: await listGitHubGrants(db, owner),
+    grants,
+    ...(authorization === undefined ? {} : { authorization }),
   };
 };
 

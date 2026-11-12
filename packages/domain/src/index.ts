@@ -135,7 +135,6 @@ export {
   WebToolErrorCode,
 } from "./plugins/web.js";
 export {
-  FEEDBACK_WIDGET_FEATURE,
   FeedbackWidgetClientId,
   FeedbackWidgetComment,
   FeedbackWidgetOrigin,
@@ -212,7 +211,6 @@ export {
   parseClaudePlanLimit,
 } from "./settings/claude-code.js";
 export {
-  CLAUDE_PLAN_AUTO_PICK_FEATURE,
   CLAUDE_PLAN_MAX_LOAD,
   CLAUDE_PLAN_THREAD_HOURLY_USE,
   type ClaudeAutoPlan,

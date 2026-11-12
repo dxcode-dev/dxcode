@@ -31,8 +31,8 @@ import { sweepThreadStorage } from "./thread-storage/store.js";
  * The Worker's cron handler. Every tick sweeps snoozed Threads, retries
  * unfinished Thread deletions and undelivered first messages, settles turns
  * whose settlement was missed, deletes expired Thread storage files, fires
- * due schedules, polls GitHub subscriptions, renews Bitbucket tokens, and
- * retries bug reports still
+ * due schedules, polls GitHub subscriptions, renews Bitbucket and GitHub user
+ * tokens, and retries bug reports still
  * to forward to the central deployment; the daily tick also runs
  * usage and attachment retention.
  */
@@ -64,6 +64,20 @@ export const scheduled = (
       .catch((cause) =>
         sourceControlLogger.error("Bitbucket renewal sweep failed.", {
           event: "bitbucket_token_renewal_sweep_failed",
+          cause,
+        }),
+      ),
+  );
+  // GitHub user tokens rotate the same way; their authorizations renew here
+  // too (#1953).
+  context.waitUntil(
+    import("./source-control/github/token-renewer.js")
+      .then(({ sweepGitHubRenewals }) =>
+        sweepGitHubRenewals(bindings, controller.scheduledTime),
+      )
+      .catch((cause) =>
+        sourceControlLogger.error("GitHub renewal sweep failed.", {
+          event: "github_token_renewal_sweep_failed",
           cause,
         }),
       ),

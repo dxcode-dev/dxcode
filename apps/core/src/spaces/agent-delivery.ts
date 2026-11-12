@@ -2,7 +2,6 @@ import type { Principal } from "@dx/domain";
 import { Hono } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { sha256Hex } from "../threads/agent-tools.js";
-import { spacesEnabledFor, threadOwner } from "./gate.js";
 
 /**
  * Sends a message to a Space's agent through DxAgent's routes behind dx's
@@ -36,15 +35,6 @@ export const deliverToSpaceAgent =
     waitUntil?: (promise: Promise<unknown>) => void,
   ): DeliverToSpaceAgent =>
   async (input) => {
-    // A Space whose owner turned Spaces off has no agent to deliver to: its
-    // prompt and tools never load (spaces/gate.ts), so the post is refused
-    // and nothing is stored.
-    const owner =
-      bindings.DB === undefined
-        ? undefined
-        : await threadOwner(bindings.DB, input.threadId);
-    if (owner === undefined || !(await spacesEnabledFor(bindings, owner)))
-      return { status: 503 };
     const { dxAgentRoutes } = await import("../agents/routes.js");
     const app = new Hono<AppEnv>();
     app.use(async (context, next) => {

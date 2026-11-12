@@ -402,14 +402,13 @@ export class ModelNotServed extends Schema.TaggedError<ModelNotServed>()(
 ) {}
 
 /**
- * A new Claude Code Thread's Claude Pro/Max plan was not picked, cannot be
- * used, or is used up for the Thread's model until `resetsAt` (epoch
+ * A new Claude Code Thread's Claude Pro/Max plan cannot be used, or is used up for the Thread's model until `resetsAt` (epoch
  * seconds). A Thread is bound to its plan at creation and takes no other.
  */
 export class ClaudePlanRefused extends Schema.TaggedError<ClaudePlanRefused>()(
   "ClaudePlanRefused",
   {
-    reason: Schema.Literals(["required", "unavailable", "used-up"]),
+    reason: Schema.Literals(["unavailable", "used-up"]),
     message: Schema.String,
     resetsAt: Schema.optional(Schema.Number),
   },

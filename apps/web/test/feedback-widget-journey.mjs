@@ -2,8 +2,8 @@
 // preview. It plays both sides: the dx admin who sets the widget up, and a
 // person on the website who comments on elements and starts a Thread.
 //
-// 1. Turns on the experimental flag in Personal Settings, creates a project,
-//    enables the widget in Project Settings, and allows the site's origin.
+// 1. Creates a project, enables the widget in Project Settings (its tab is
+//    there for everyone), and allows the site's origin.
 // 2. Serves a small website on :4100 with the copied script tag, opens it
 //    with `?dx`, comments on elements across two pages, sends, signs in
 //    through the consent popup, and starts a Thread.
@@ -11,8 +11,8 @@
 // 4. Controls: an unlisted origin is refused in the page and by the API; a
 //    site that is not allowed cannot frame the panel; the grant stays in the
 //    panel's storage, not the website's; consent needs the dx origin; a
-//    wrong verifier claims nothing; flag off refuses sending; Turn Off makes
-//    the script inert and ends every grant.
+//    wrong verifier claims nothing; Turn Off makes the script inert and ends
+//    every grant.
 //
 // Writes a video, screenshots, a HAR without bodies, console.json, and
 // summary.json to <output dir>.
@@ -171,18 +171,6 @@ const shot = (page, name) =>
     path: join(output, `${String(++shots).padStart(2, "0")}-${name}.png`),
   });
 
-const featureOn = async (enabled) => {
-  const { body } = await api(
-    "GET",
-    "/v1/settings/personal/experimental-features",
-  );
-  const flag = body.data.flags.find(
-    ({ registration }) => registration.id === "feedback-widget",
-  );
-  assert(flag, "The feedback-widget flag is not registered.");
-  return flag.effectiveEnabled === enabled;
-};
-
 const admin = await context.newPage();
 let project;
 let clientId;
@@ -190,17 +178,8 @@ let threadId;
 let panelToken;
 
 await check(
-  "Feedback Widget is off by default and hidden in Project Settings",
+  "Project Settings has the Feedback Widget tab, off for a new project",
   async () => {
-    if (await featureOn(true)) {
-      await admin.goto(`${dxOrigin}/settings/experimental-features`);
-      await admin
-        .getByRole("button", { name: "Disable Feedback Widget" })
-        .click();
-      await admin.waitForFunction(() => true);
-      for (let i = 0; i < 20 && !(await featureOn(false)); i++)
-        await admin.waitForTimeout(250);
-    }
     // Locally a Thread needs a served model; the key is never used because
     // the local model fixture answers. A deployment has its own model.
     const loopback = ["127.0.0.1", "localhost"].includes(
@@ -238,35 +217,16 @@ await check(
     await admin
       .getByRole("navigation", { name: "Project settings sections" })
       .waitFor();
-    assert.equal(
-      await admin.getByRole("link", { name: "Feedback Widget" }).count(),
-      0,
-      "The tab shows without the flag.",
+    await admin.getByRole("link", { name: "Feedback Widget" }).waitFor();
+    const { body } = await api(
+      "GET",
+      `/v1/projects/${project.id}/feedback-widget`,
     );
-    const refused = await api(
-      "POST",
-      `/v1/projects/${project.id}/feedback-widget/enable`,
-      undefined,
-      [403],
-    );
-    assert.equal(refused.body.data.code, "FEEDBACK_WIDGET_FEATURE_DISABLED");
-    await shot(admin, "project-settings-flag-off");
+    assert.equal(body.data.enabled, false);
+    await shot(admin, "project-settings");
     return { project: project.id };
   },
 );
-
-await check("Turn on the experimental flag in Personal Settings", async () => {
-  await admin.goto(`${dxOrigin}/settings/experimental-features`);
-  const toggle = admin.getByRole("button", { name: "Enable Feedback Widget" });
-  await toggle.waitFor();
-  await shot(admin, "experimental-features-off");
-  await toggle.click();
-  await admin
-    .getByRole("button", { name: "Disable Feedback Widget" })
-    .waitFor();
-  assert(await featureOn(true));
-  await shot(admin, "experimental-features-on");
-});
 
 await check("Enable the widget and allow the site's origin", async () => {
   await admin.goto(`${dxOrigin}/projects/${project.id}/settings`);
@@ -575,56 +535,12 @@ await check(
   },
 );
 
-await check("With the flag off, the panel refuses to send", async () => {
-  await admin.goto(`${dxOrigin}/settings/experimental-features`);
-  await admin.getByRole("button", { name: "Disable Feedback Widget" }).click();
-  await admin.getByRole("button", { name: "Enable Feedback Widget" }).waitFor();
-  const me = await bare("GET", `/api/feedback-widget/${clientId}/me`, {
-    headers: { authorization: `Bearer ${panelToken}` },
-  });
-  assert.equal(me.status, 200);
-  assert.equal(JSON.parse(me.text).data.readiness, "feature-disabled");
-  await visitor.goto(`${siteOrigin}/`);
-  await launcher.click();
-  await comment(visitor.locator("#hero-title"), "Try while the flag is off");
-  await widget.getByRole("button", { name: "Add" }).click();
-  await widget.getByRole("button", { name: "Send" }).click();
-  await panel.getByText("Turn on Feedback Widget in dx").waitFor();
-  assert.equal(
-    await panel.getByRole("button", { name: "Start in Orb" }).isDisabled(),
-    true,
-  );
-  await shot(visitor, "flag-off-panel");
-  const sent = await bare("POST", `/api/feedback-widget/${clientId}/threads`, {
-    headers: {
-      authorization: `Bearer ${panelToken}`,
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      comments: [
-        {
-          pageUrl: `${siteOrigin}/`,
-          selector: "h1",
-          element: "<h1>",
-          text: "",
-          comment: "x",
-        },
-      ],
-    }),
-  });
-  assert.equal(sent.status, 403);
-  assert.match(sent.text, /FEEDBACK_WIDGET_FEATURE_DISABLED/);
-  await admin.getByRole("button", { name: "Enable Feedback Widget" }).click();
-  await admin
-    .getByRole("button", { name: "Disable Feedback Widget" })
-    .waitFor();
-});
-
 await check(
   "Show on dx: send feedback about dx itself to the project",
   async () => {
-    // The dx app is a site too: allow its origin, choose the project under
-    // the flag, and the widget loads in dx with ?dx.
+    // The dx app is a site too: allow its origin, choose the project in
+    // Experimental Features' Feedback Widget on dx, and the widget loads in
+    // dx with ?dx.
     await api("POST", `/v1/projects/${project.id}/feedback-widget/origins`, {
       origin: dxOrigin,
     });

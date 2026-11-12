@@ -1,9 +1,5 @@
 import { FeedbackWidgetSendRequestSchema } from "@dx/api";
-import {
-  type ExperimentalFeatureId,
-  FEEDBACK_WIDGET_FEATURE,
-  type UserId,
-} from "@dx/domain";
+import type { UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
@@ -14,7 +10,6 @@ import {
   type PortalFeedbackSend,
   type PortalFeedbackService,
 } from "../portals/feedback.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { ownerRequest } from "../threads/owner-request.js";
 import { portalWidgetSource } from "./pages.js";
 import { sha256Hex } from "./store.js";
@@ -22,7 +17,7 @@ import { portalFeedbackPrompt } from "./thread-prompt.js";
 
 /**
  * Core's side of the Feedback Widget in a Thread's Portal (see
- * portals/feedback.ts): the person's feature flag, the widget's script, and
+ * portals/feedback.ts): the widget's script, and
  * delivering comments to the Thread as the person's own message, through the
  * route the web client uses, so it is admitted with the same access checks.
  */
@@ -40,24 +35,12 @@ export const portalFeedbackService = (
   bindings: Bindings,
   waitUntil?: (promise: Promise<unknown>) => void,
 ): PortalFeedbackService => {
-  const enabled = (userId: string) =>
-    experimentalFeatureEnabled(
-      bindings,
-      {
-        userId: userId as UserId,
-        credentialScopes: ["personal", "workspace"],
-      },
-      FEEDBACK_WIDGET_FEATURE as ExperimentalFeatureId,
-    ).catch(() => false);
   return {
-    enabled,
-    async script(userId) {
-      return (await enabled(userId))
-        ? portalWidgetSource({
-            scriptPath: PORTAL_FEEDBACK_SCRIPT_PATH,
-            sendPath: PORTAL_FEEDBACK_SEND_PATH,
-          })
-        : undefined;
+    async script() {
+      return portalWidgetSource({
+        scriptPath: PORTAL_FEEDBACK_SCRIPT_PATH,
+        sendPath: PORTAL_FEEDBACK_SEND_PATH,
+      });
     },
     async send(input: PortalFeedbackSend) {
       const decoded = Schema.decodeUnknownOption(
@@ -78,12 +61,6 @@ export const portalFeedbackService = (
           403,
           "FEEDBACK_WIDGET_ORIGIN_NOT_ALLOWED",
           "Every comment must be on a page of this Portal.",
-        );
-      if (!(await enabled(input.userId)))
-        return failure(
-          403,
-          "FEEDBACK_WIDGET_FEATURE_DISABLED",
-          "Turn on Feedback Widget in Experimental Features.",
         );
       const { response, payload } = await ownerRequest(
         {

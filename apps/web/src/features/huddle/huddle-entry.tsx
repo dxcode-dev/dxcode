@@ -1,9 +1,9 @@
 import { lazy, Suspense } from "react";
 import type { HuddleSlotProps } from "../../shared/huddle/huddle-slot.js";
-import { useHuddleEnabled } from "./huddle-flag.js";
+import { useHuddleEnabled } from "./huddle-availability.js";
 import type { HuddlePlace } from "./huddle-session.js";
 
-// Huddle loads only for people who turned it on.
+// Huddle loads only where the deployment offers it.
 const HuddleButton = lazy(() => import("./huddle-button.js"));
 const HuddleLayer = lazy(() => import("./huddle-layer.js"));
 
@@ -31,7 +31,7 @@ export function HuddleButtonEntry({
   );
 }
 
-/** The tab's huddle window, beside the router, for people with Huddle on. */
+/** The tab's huddle window, beside the router, where Huddle is offered. */
 export function HuddleLayerEntry({
   onOpenPlace,
 }: {

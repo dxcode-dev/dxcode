@@ -1,6 +1,7 @@
 import { codeFontSizePixels } from "@dx/domain";
 import { FitAddon, Ghostty, type ITheme, Terminal } from "ghostty-web";
 import ghosttyWasmUrl from "ghostty-web/ghostty-vt.wasm?url";
+import { attachTerminalScrolling } from "./terminal-scroll.js";
 
 export interface BrowserTerminalEmulator {
   readonly element: HTMLElement;
@@ -89,6 +90,7 @@ export async function mountBrowserTerminal(
     void copyText(terminal.getSelection());
     return true;
   });
+  const detachScrolling = attachTerminalScrolling(terminal, element, onData);
   element.setAttribute("role", "application");
   element.setAttribute("aria-label", "Terminal");
   const fitVisible = () => {
@@ -114,6 +116,7 @@ export async function mountBrowserTerminal(
       disposed = true;
       resizeObserver.disconnect();
       clearTimeout(fitTimer);
+      detachScrolling();
       dataSubscription.dispose();
       fit.dispose();
       terminal.dispose();

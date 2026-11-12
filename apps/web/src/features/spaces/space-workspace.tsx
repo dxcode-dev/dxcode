@@ -502,8 +502,7 @@ export function SpaceWorkspace({
   // the thread when it was just opened, until the Space tab is chosen.
   const [spaceTabFor, setSpaceTabFor] = React.useState<ThreadId>();
   const childThreadIds = new Set((threads ?? []).map(({ id }) => id as string));
-  // Not found (or Spaces switched off for this person) says so at once,
-  // as a Thread that does not exist does.
+  // Not found says so at once, as a Thread that does not exist does.
   if (space === undefined && spaceQuery.isError)
     return (
       <div className="fatal-state">

@@ -16133,10 +16133,7 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
   padding: 0 16px 12px;
   color: var(--destructive);
 }
-/* Experimental Features → Feedback Widget → Show on dx: a nested row. */
-.feedback-widget-on-dx > .settings-row {
-  padding-left: 32px;
-}
+/* Experimental Features → Feedback Widget on dx → Show on dx. */
 .feedback-widget-on-dx .settings-select {
   width: 220px;
 }

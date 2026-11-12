@@ -44,9 +44,6 @@ export const ARTIFACT_KINDS = ["document", "board"] as const;
 export const ThreadArtifactKindSchema = Schema.Literals(ARTIFACT_KINDS);
 export type ThreadArtifactKind = typeof ThreadArtifactKindSchema.Type;
 
-/** The experimental flag for drawing boards. */
-export const ARTIFACT_BOARDS_FEATURE = "artifact-boards";
-
 export const ARTIFACT_ID_PATTERN = /^art_[0-9a-f]{32}$/;
 export const ThreadArtifactIdSchema = Schema.String.check(
   Schema.isPattern(ARTIFACT_ID_PATTERN),
@@ -142,7 +139,7 @@ export type ThreadArtifactRevisionResponse =
 /** `POST /v1/threads/:threadId/artifacts`. */
 export const CreateThreadArtifactRequestSchema = Schema.Struct({
   title: ThreadArtifactTitleSchema,
-  /** `document` when left out. A board needs the `artifact-boards` flag. */
+  /** `document` when left out. */
   kind: Schema.optional(ThreadArtifactKindSchema),
   folder: Schema.optional(ThreadArtifactFolderSchema),
   markdown: ThreadArtifactMarkdownSchema,
@@ -307,8 +304,6 @@ export const ThreadArtifactErrorCodeSchema = Schema.Literals([
   "ARTIFACT_TOO_LARGE",
   "ARTIFACT_STORAGE_FULL",
   "ARTIFACTS_UNAVAILABLE",
-  "ARTIFACT_NOTIFY_DISABLED",
-  "ARTIFACT_KIND_DISABLED",
 ]);
 export type ThreadArtifactErrorCode = typeof ThreadArtifactErrorCodeSchema.Type;
 
@@ -333,13 +328,10 @@ export const ThreadArtifactErrorResponseSchema = Schema.Struct({
 export type ThreadArtifactErrorResponse =
   typeof ThreadArtifactErrorResponseSchema.Type;
 
-/** The experimental flag for Notify agent (#1765). */
-export const ARTIFACT_NOTIFY_AGENT_FEATURE = "artifact-notify-agent";
-
 /**
  * `POST /v1/threads/:threadId/artifacts/:artifactId/notify`: wakes the
  * Thread's agent once with what people changed since it last saved the
- * artifact. Only with the `artifact-notify-agent` flag on.
+ * artifact.
  */
 export const NotifyArtifactAgentResponseSchema = successResponse(
   Schema.Struct({

@@ -21,7 +21,7 @@ const reloadToast = () =>
 
 /**
  * Feedback Widget on dx: which dx host and Project receive feedback about
- * dx itself. Shown under the experimental flag while it is on.
+ * dx itself.
  */
 export function FeedbackWidgetOnDxSetting() {
   const { identity } = useAuthenticatedIdentity();

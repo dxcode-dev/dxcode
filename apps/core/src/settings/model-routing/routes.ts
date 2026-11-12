@@ -48,29 +48,9 @@ import {
   ModelRoutingService,
   ModelRoutingValidationError,
 } from "./service.js";
-import { claudeAutoPickEnabled } from "./submission.js";
 
 const respond = (schema: Schema.ConstraintEncoder<unknown>, data: unknown) =>
   Schema.encodeUnknownSync(schema)({ status: "success", data });
-
-/**
- * Routing choices with the requester's automatic plan pick: on, each plan's
- * running Threads and `claudeAutoPick`; off, the choices as before.
- */
-const withClaudeAutoPick = <
-  Choices extends {
-    readonly claudePlans: ReadonlyArray<{ readonly load?: number }>;
-  },
->(
-  choices: Choices,
-  enabled: boolean,
-) =>
-  enabled
-    ? { ...choices, claudeAutoPick: true }
-    : {
-        ...choices,
-        claudePlans: choices.claudePlans.map(({ load: _, ...plan }) => plan),
-      };
 
 class MutationForbidden extends Error {}
 class ModelRoutingUnavailableError extends Error {}
@@ -451,10 +431,7 @@ personalModelRoutingRoutes.get("/choices", (c) =>
     return c.json(
       respond(
         ChoicesResponseSchema,
-        withClaudeAutoPick(
-          await deps.service.choices(c.get("principal").userId),
-          await claudeAutoPickEnabled(c.env, c.get("principal").userId),
-        ),
+        await deps.service.choices(c.get("principal").userId),
       ),
       200,
     );
@@ -568,10 +545,7 @@ workspaceModelRoutingRoutes.get("/choices", (c) =>
     return c.json(
       respond(
         ChoicesResponseSchema,
-        withClaudeAutoPick(
-          await deps.service.choices(c.get("principal").userId, target),
-          await claudeAutoPickEnabled(c.env, c.get("principal").userId),
-        ),
+        await deps.service.choices(c.get("principal").userId, target),
       ),
       200,
     );

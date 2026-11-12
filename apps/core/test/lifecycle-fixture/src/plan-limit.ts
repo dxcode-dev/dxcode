@@ -46,15 +46,22 @@ planLimitRoutes.post("/tick", async (context) => {
 
 /**
  * A person's tick, or their comment that mentions the agent, through the
- * real artifact after-save effects. Each wake reaches the plan agent the way
- * a production wake reaches its agent: one user message, keyed so a repeat
- * admits nothing new. `now` spaces the two wakes past the per-Thread interval.
+ * real artifact after-save and comment effects. A tick wakes nothing
+ * (#1765); each comment's wake reaches the plan agent the way a production
+ * wake reaches its agent: one user message, keyed so a repeat admits nothing
+ * new. `now` spaces two comments past the agent wake window, and `comment`
+ * numbers each one.
  */
 planLimitRoutes.post("/artifact-wake/:threadId", async (context) => {
   const threadId = context.req.param("threadId");
-  const { kind, now } = await context.req.json<{
+  const {
+    kind,
+    now,
+    comment = 1,
+  } = await context.req.json<{
     kind: "tick" | "comment";
     now: number;
+    comment?: number;
   }>();
   const deliver: DeliverArtifactWake = async (wake) => {
     const response = await agentRoutes.request(
@@ -90,7 +97,7 @@ planLimitRoutes.post("/artifact-wake/:threadId", async (context) => {
         after: "- [x] @[Owner](user:plan-fixture-owner) Approve the release\n",
         writer: person,
       },
-      { deliver, now },
+      { now },
     );
   else
     await artifactCommented(
@@ -98,7 +105,7 @@ planLimitRoutes.post("/artifact-wake/:threadId", async (context) => {
       {
         threadId,
         artifactId: "art_00000000000000000000000000000001",
-        commentId: "cmt_00000000000000000000000000000001",
+        commentId: `cmt_${String(comment).padStart(32, "0")}`,
         quote: "Approve the release",
         body: "@[dx](agent) add the changelog link",
         writer: person,

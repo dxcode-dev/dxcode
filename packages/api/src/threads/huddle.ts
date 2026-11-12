@@ -2,12 +2,9 @@ import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
 /**
- * Huddle (experimental): a live audio and video call on Cloudflare
- * RealtimeKit, one per Thread. A Space's huddle is its own Thread's.
+ * Huddle: a live audio and video call on Cloudflare RealtimeKit, one per
+ * Thread. A Space's huddle is its own Thread's. The deployment turns it on.
  */
-
-/** The personal experimental flag that turns Huddle on. */
-export const HUDDLE_FEATURE = "huddle";
 
 const Text = Schema.String.check(Schema.isMaxLength(500));
 
@@ -41,10 +38,6 @@ export const HuddleJoinResponseSchema = successResponse(
 export type HuddleJoinData = (typeof HuddleJoinResponseSchema.Type)["data"];
 
 export const HuddleErrorResponseSchema = Schema.Union([
-  errorResponse(
-    "HUDDLE_DISABLED",
-    "Huddle is off. Turn it on in Settings, Experimental Features.",
-  ),
   errorResponse(
     "HUDDLE_UNAVAILABLE",
     "This deployment has no RealtimeKit app, so huddles are unavailable.",

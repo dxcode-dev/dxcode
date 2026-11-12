@@ -738,14 +738,13 @@ const relay = async (
   };
   const websocket = isWebSocket(request);
   const feedback = bindings.PORTAL_FEEDBACK;
-  // A member with the Feedback Widget on gets it on every page; the page is
-  // asked for unencoded so the script tag can be added to it.
+  // A member gets the Feedback Widget on every page; the page is asked for
+  // unencoded so the script tag can be added to it.
   const withWidget =
     identity !== undefined &&
     feedback !== undefined &&
     !websocket &&
-    wantsFeedbackWidget(request) &&
-    (await feedback.enabled(identity.userId).catch(() => false));
+    wantsFeedbackWidget(request);
   const outgoing = withWidget ? unencoded(request) : request;
   let response: Response;
   try {

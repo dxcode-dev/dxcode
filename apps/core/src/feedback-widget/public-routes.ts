@@ -17,8 +17,6 @@
 
 import { FeedbackWidgetSendRequestSchema } from "@dx/api";
 import {
-  type ExperimentalFeatureId,
-  FEEDBACK_WIDGET_FEATURE,
   FeedbackWidgetClientId,
   newThreadId,
   type Principal,
@@ -36,7 +34,6 @@ import {
 } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { ownerRequest } from "../threads/owner-request.js";
 import {
   approvedPage,
@@ -96,14 +93,7 @@ const personal = (userId: string): Principal => ({
   credentialScopes: ["personal", "workspace"],
 });
 
-const featureEnabled = (bindings: AppEnv["Bindings"], userId: string) =>
-  experimentalFeatureEnabled(
-    bindings,
-    personal(userId),
-    FEEDBACK_WIDGET_FEATURE as ExperimentalFeatureId,
-  ).catch(() => false);
-
-type Readiness = "ready" | "feature-disabled" | "access-required";
+type Readiness = "ready" | "access-required";
 
 /** Whether this person may send from this widget now. */
 const readiness = async (
@@ -111,16 +101,12 @@ const readiness = async (
   widget: ClientWidget,
   userId: string,
 ): Promise<Readiness> => {
-  const [enabled, project] = await Promise.all([
-    featureEnabled(bindings, userId),
-    reachableProject(
-      bindings.DB as D1Database,
-      personal(userId),
-      widget.projectId as ProjectId,
-    ),
-  ]);
-  if (project === undefined) return "access-required";
-  return enabled ? "ready" : "feature-disabled";
+  const project = await reachableProject(
+    bindings.DB as D1Database,
+    personal(userId),
+    widget.projectId as ProjectId,
+  );
+  return project === undefined ? "access-required" : "ready";
 };
 
 const bearer = (context: Context<AppEnv>) => {
@@ -228,12 +214,6 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
         403,
         "Access Required",
         `You can't start Threads in ${widget.projectLabel}. Ask its owner to add you to the workspace.`,
-      );
-    if (ready === "feature-disabled")
-      return messagePage(
-        403,
-        "Turn on Feedback Widget",
-        "Turn on Feedback Widget in Personal Settings → Experimental Features, then choose Continue with dx again.",
       );
     return consentPage({
       projectLabel: widget.projectLabel,
@@ -416,13 +396,6 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
           403,
           "FEEDBACK_WIDGET_ACCESS_REQUIRED",
           `You can't start Threads in ${widget.projectLabel}.`,
-        );
-      if (ready === "feature-disabled")
-        return apiError(
-          context,
-          403,
-          "FEEDBACK_WIDGET_FEATURE_DISABLED",
-          "Turn on Feedback Widget in Experimental Features.",
         );
       const threadId = newThreadId();
       const { response, payload } = await ownerRequest(

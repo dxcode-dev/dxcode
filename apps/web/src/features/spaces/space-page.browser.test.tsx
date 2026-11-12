@@ -571,8 +571,6 @@ const mount = async (
   client.setQueryData(settingsContextQueryOptions(owner).queryKey, {
     activeScope: "workspace",
     workspace: { id: "wks_acme", displayName: "acme", shortName: "acme" },
-    // Spaces is on for the viewer (its experimental flag).
-    spaces: true,
   } as never);
   const rootRoute = createRootRoute();
   const product = createRoute({

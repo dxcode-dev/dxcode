@@ -21,10 +21,6 @@ export class PortalFeedback
     );
   }
 
-  enabled(userId: string) {
-    return this.#service().enabled(userId);
-  }
-
   script(userId: string) {
     return this.#service().script(userId);
   }

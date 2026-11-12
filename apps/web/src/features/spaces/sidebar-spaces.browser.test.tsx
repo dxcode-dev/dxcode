@@ -233,8 +233,6 @@ const mount = async (
   width = 1440,
   height = 900,
   seed: (server: ReturnType<typeof fakeServer>) => void = () => {},
-  /** The settings context's `spaces`: the deployment turned Spaces on. */
-  spaces = true,
 ) => {
   await page.viewport(width, height);
   const server = fakeServer();
@@ -259,7 +257,6 @@ const mount = async (
           },
         }
       : { activeScope: "personal" }),
-    ...(spaces ? { spaces: true } : {}),
   } as never);
   client.setQueryData(threadKeys.shared(userId), []);
   const rootRoute = createRootRoute({
@@ -368,28 +365,6 @@ const options = () =>
   ].map((option) => option.textContent?.trim());
 const shot = (name: string) =>
   page.screenshot({ path: `../../../.cache/spaces-ui/${name}.png` });
-
-// Spaces is on only for the people a deployment names, and only while their
-// flag is on (apps/core/src/spaces/gate.ts); the settings context says so.
-it("shows no Spaces section, New Space, or Discover when Spaces is off", async () => {
-  const { server } = await mount(true, 1440, 900, () => {}, false);
-  await until(() => document.querySelector(".product-sidebar") !== null);
-  await settle(300);
-  expect(section()).toBeNull();
-  expect(document.body.textContent).not.toContain("New Space");
-  expect(document.body.textContent).not.toContain("Discover");
-  expect(document.body.textContent).not.toContain("Spaces");
-  expect(
-    server.requests.filter((path) => path.startsWith("/v1/spaces")),
-  ).toEqual([]);
-  await shot("spaces-off-1440");
-
-  // On, the same shell shows the section.
-  await React.act(() => root?.unmount());
-  document.body.replaceChildren();
-  await mount(true);
-  await until(() => section() !== null);
-});
 
 it("creates a Space from the sidebar, opens it, and lists it first in the sidebar", async () => {
   const { server } = await mount(true);

@@ -22,7 +22,7 @@ import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { ownerRequest } from "../../src/threads/owner-request.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * The tools only a Space's main thread has, run as the Space's agent runs
@@ -264,8 +264,7 @@ beforeEach(async () => {
   );
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, member, outsider]));
+beforeEach(() => seedSpaceUsers([owner, member, outsider]));
 
 describe("The Space agent's post tools", () => {
   it("posts once per tool call, edits only its own posts, and keeps revisions", async () => {

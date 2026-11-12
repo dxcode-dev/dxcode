@@ -175,11 +175,9 @@ function dxFeedbackPanel(config) {
       );
     } else if (view === "ready" || view === "sending") {
       const blocked =
-        me.readiness === "feature-disabled"
-          ? "Turn on Feedback Widget in dx under Personal Settings → Experimental Features to send."
-          : me.readiness === "access-required"
-            ? `Access Required: you can't start Threads in ${config.projectLabel}.`
-            : "";
+        me.readiness === "access-required"
+          ? `Access Required: you can't start Threads in ${config.projectLabel}.`
+          : "";
       body.push(
         element("div", { class: "eyebrow", text: me.projectLabel }),
         element("h1", {

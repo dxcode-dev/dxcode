@@ -26,7 +26,7 @@ import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
 import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * Comments on a Space's messages end to end in workerd with real D1, through
@@ -236,8 +236,7 @@ beforeEach(async () => {
   );
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, member, viewer, outsider]));
+beforeEach(() => seedSpaceUsers([owner, member, viewer, outsider]));
 
 describe("Comments on a Space's messages", () => {
   it("lists comments per message and summarizes each commented message in message order", async () => {

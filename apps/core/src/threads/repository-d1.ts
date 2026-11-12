@@ -875,15 +875,6 @@ export const ThreadRepositoryD1 = Layer.effect(
             // reachable; otherwise it lists as a root, so a pinned child
             // sits with the other pinned Threads. Pages ordered by the pin
             // snapshot judge pinning by that snapshot too.
-            // The reader's `spaces` flag (spaces/gate.ts), decided in the
-            // same statement so the list costs no extra read. Off, Spaces
-            // never list and the threads a Space started are roots.
-            const spacesOn = sql`EXISTS (
-              SELECT 1 FROM personal_experimental_feature_preferences AS spaces_flag,
-                     json_each(spaces_flag.preferences) AS spaces_preference
-               WHERE spaces_flag.user_id = ${reader.userId}
-                 AND json_extract(spaces_preference.value, '$.id') = 'spaces'
-                 AND json_extract(spaces_preference.value, '$.enabled') = 1)`;
             const treeFilterFor = (
               pinnedAt: "thread.pinned_at" | "thread.snapshot_pinned_at",
             ) =>
@@ -894,11 +885,10 @@ export const ThreadRepositoryD1 = Layer.effect(
                   : // Active Spaces list in the sidebar's own Spaces
                     // section; archived ones list with the archived Threads.
                     // The threads a Space started list only in that Space.
-                    // With Spaces off, those threads list as roots.
-                    sql`((${spacesOn} AND ${request.lifecycleState === "archived" ? sql`thread.kind IN ('thread', 'space')` : sql`thread.kind = 'thread'`} AND NOT EXISTS (
+                    sql`${request.lifecycleState === "archived" ? sql`thread.kind IN ('thread', 'space')` : sql`thread.kind = 'thread'`} AND NOT EXISTS (
                       SELECT 1 FROM threads AS space
                        WHERE space.id = thread.parent_thread_id
-                         AND space.kind = 'space')) OR NOT ${spacesOn}) AND (thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
+                         AND space.kind = 'space') AND (thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
                       SELECT 1 FROM threads AS parent
                        WHERE parent.id = thread.parent_thread_id
                          AND parent.kind = 'thread'
@@ -955,19 +945,13 @@ export const ThreadRepositoryD1 = Layer.effect(
                 : 1;
             // The listed Thread columns besides its activity and pin, which
             // a page reads as of its snapshot.
-            // With Spaces off, a thread a Space started names no parent.
-            const parentShown = sql`(thread.parent_thread_id IS NULL OR ${spacesOn} OR NOT EXISTS (
-              SELECT 1 FROM threads AS space_parent
-               WHERE space_parent.id = thread.parent_thread_id
-                 AND space_parent.kind = 'space'))`;
             const listedColumns = sql`
               thread.id, thread.title, thread.project_id, thread.owner_user_id,
               thread.agent_instructions, thread.agent_instructions_revision,
               thread.agent_instructions_version, thread.model_selection,
               thread.runner_profile_id, thread.title_pending_until, thread.color,
               thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
-              CASE WHEN ${parentShown} THEN thread.parent_thread_id END AS parent_thread_id,
-              CASE WHEN ${parentShown} THEN thread.started_by_thread_id END AS started_by_thread_id,
+              thread.parent_thread_id, thread.started_by_thread_id,
               thread.kind, thread.requested_by_user_id,
               thread.plugin_snapshot_json, thread.skill_snapshot_json,
               thread.visibility, thread.created_at,
@@ -976,11 +960,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 AND ${inReachableScope("thread", reader)}
                 AND ${projectId ? sql`thread.project_id = ${projectId}` : sql`1 = 1`}
                 AND thread.lifecycle_state != 'deleted'
-                AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})
-                AND (${spacesOn} OR (thread.kind = 'thread' AND NOT EXISTS (
-                  SELECT 1 FROM threads AS space
-                   WHERE space.id = ${request.tree?.kind === "children" ? request.tree.parentThreadId : null}
-                     AND space.kind = 'space')))`;
+                AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})`;
             const rows = yield* (
               cursor === undefined
                 ? // The first page's snapshot is now, so each Thread's

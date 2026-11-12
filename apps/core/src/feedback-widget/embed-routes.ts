@@ -1,26 +1,20 @@
 import {
-  FeedbackWidgetDisabledResponseSchema,
   FeedbackWidgetInvalidRequestResponseSchema,
   FeedbackWidgetInvalidScriptResponseSchema,
   GetPersonalFeedbackWidgetEmbedResponseSchema,
   UpdatePersonalFeedbackWidgetEmbedRequestSchema,
 } from "@dx/api";
-import {
-  type ExperimentalFeatureId,
-  FEEDBACK_WIDGET_FEATURE,
-  parseFeedbackWidgetScriptUrl,
-} from "@dx/domain";
+import { parseFeedbackWidgetScriptUrl } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
 import { appOrigin } from "./settings-routes.js";
 
 /**
- * Personal Settings → Experimental Features → Feedback Widget on dx: which
+ * Personal Settings → Feedback Widget on dx: which
  * widget this dx app loads for the person. Any dx host's widget may be
  * chosen; the app's Content-Security-Policy decides which hosts load.
  */
@@ -109,22 +103,9 @@ const respond = async (context: Context<AppEnv>) => {
   );
 };
 
-const flagged = async (context: Context<AppEnv>) =>
-  experimentalFeatureEnabled(
-    context.env,
-    context.get("principal"),
-    FEEDBACK_WIDGET_FEATURE as ExperimentalFeatureId,
-  ).catch(() => false);
-
 export const feedbackWidgetEmbedRoutes = new Hono<AppEnv>()
-  .get("/", async (context) =>
-    (await flagged(context))
-      ? respond(context)
-      : errorJson(context, FeedbackWidgetDisabledResponseSchema, 403),
-  )
+  .get("/", (context) => respond(context))
   .put("/", async (context) => {
-    if (!(await flagged(context)))
-      return errorJson(context, FeedbackWidgetDisabledResponseSchema, 403);
     const decoded = Schema.decodeUnknownOption(
       UpdatePersonalFeedbackWidgetEmbedRequestSchema,
     )(await readBoundedJson(context.req.raw).catch(() => undefined));

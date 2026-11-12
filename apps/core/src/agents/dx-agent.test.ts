@@ -30,7 +30,6 @@ const pluginHost = vi.hoisted(() => ({
   }),
   resolveAgentPluginTools: vi.fn(),
   resolveAgentBugReportReader: vi.fn(async () => false),
-  resolveAgentArtifactBoards: vi.fn(async () => false),
   resolveAgentWorkspaceInstructions: vi.fn(async () => ""),
   resolveAgentSpace: vi.fn(async () => undefined),
   resolveAgentStartingSpace: vi.fn(async () => undefined),
@@ -257,7 +256,6 @@ describe("DxAgent", () => {
       "thr_existing",
       pluginHost.agentThreadToolsContext,
       "sub_1",
-      { boards: false },
     );
     expect(storageTools.createThreadStorageTools).toHaveBeenCalledWith(
       "thr_existing",

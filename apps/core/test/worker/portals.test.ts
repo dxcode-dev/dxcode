@@ -437,7 +437,10 @@ describe("Portal host routing in workerd", () => {
       bindings,
     );
     expect(page.status).toBe(200);
-    expect(await page.text()).toBe("<p>guest</p>");
+    // A signed-in member's page carries the Feedback Widget's script tag.
+    expect(await page.text()).toBe(
+      '<p>guest</p><script src="/__dx_portal/feedback.js" async></script>',
+    );
     expect(execution.names).toEqual([threadId]);
     const relayed = execution.calls[0];
     expect(relayed?.url).toBe("https://thread-execution/proxy/http");
@@ -2012,26 +2015,6 @@ describe("Feedback Widget in Portals in workerd", () => {
         headers: { "content-type": "text/html; charset=utf-8" },
       });
     });
-  const turnOn = async (bindings: Bindings, cookie: string) => {
-    const response = await app.request(
-      `${appOrigin}/v1/settings/personal/experimental-features`,
-      {
-        method: "PUT",
-        headers: {
-          cookie,
-          origin: appOrigin,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify({
-          featureId: "feedback-widget",
-          enabled: true,
-          expectedRevision: 0,
-        }),
-      },
-      bindings,
-    );
-    expect(response.status).toBe(200);
-  };
   const comment = (pageUrl: string) => ({
     pageUrl,
     selector: "h1",
@@ -2041,7 +2024,7 @@ describe("Feedback Widget in Portals in workerd", () => {
     comment: "Make the heading bigger",
   });
 
-  it("adds the widget to a signed-in member's pages only while their flag is on", async () => {
+  it("adds the widget to a signed-in member's pages", async () => {
     const owner = await signUp("feedback-owner");
     const threadId = await createThread(owner.userId);
     const execution = guest();
@@ -2060,22 +2043,7 @@ describe("Feedback Widget in Portals in workerd", () => {
         bindings,
       );
 
-    // Off: the guest's page passes as it is, encoded as the browser asked.
-    const off = await open("/");
-    expect(await off.text()).toBe(page);
-    expect(execution.calls.at(-1)?.headers.get("accept-encoding")).toBe(
-      "gzip, br",
-    );
-    const offScript = await open("/__dx_portal/feedback.js", {
-      "sec-fetch-dest": "script",
-      "sec-fetch-site": "same-origin",
-    });
-    expect(offScript.status).toBe(200);
-    expect(await offScript.text()).not.toContain("dxFeedbackWidget(");
-
-    await turnOn(bindings, owner.cookie);
-
-    // On: every page gets the script tag before </body>, asked for unencoded.
+    // Every page gets the script tag before </body>, asked for unencoded.
     const on = await open("/docs?x=1");
     expect(on.status).toBe(200);
     const body = await on.text();
@@ -2139,14 +2107,6 @@ describe("Feedback Widget in Portals in workerd", () => {
       );
     const valid = { comments: [comment(`${origin}/`)] };
 
-    // The flag is off.
-    const off = await send(valid);
-    expect(off.status).toBe(403);
-    expect(await off.json()).toMatchObject({
-      data: { code: "FEEDBACK_WIDGET_FEATURE_DISABLED" },
-    });
-    await turnOn(bindings, owner.cookie);
-
     // Another site, even another Portal, cannot send as the member.
     const otherPortal = portalOriginFor(threadId, 3000);
     expect(
@@ -2186,7 +2146,6 @@ describe("Feedback Widget in Portals in workerd", () => {
     const execution = guest();
     const sent: Array<unknown> = [];
     const feedback = {
-      enabled: async (userId: string) => userId === owner.userId,
       script: async () => "/* widget */",
       send: async (input: unknown) => {
         sent.push(input);
@@ -2235,7 +2194,6 @@ describe("Feedback Widget in Portals in workerd", () => {
     const threadId = await createThread(owner.userId);
     const sent: Array<unknown> = [];
     const feedback = {
-      enabled: async () => true,
       script: async () => "/* widget */",
       send: async (input: unknown) => {
         sent.push(input);
@@ -2314,7 +2272,6 @@ describe("Feedback Widget in Portals in workerd", () => {
     const owner = await signUp("embed-cap");
     const threadId = await createThread(owner.userId);
     const projectId = `prj_${threadId.slice(4)}`;
-    await turnOn(baseBindings, owner.cookie);
     const enabled = await app.request(
       `${appOrigin}/v1/projects/${projectId}/feedback-widget/enable`,
       { method: "POST", headers: { cookie: owner.cookie, origin: appOrigin } },
@@ -2400,7 +2357,6 @@ describe("Feedback Widget in Portals in workerd", () => {
   it("never shows the widget to, or takes comments from, a public link's visitors", async () => {
     const owner = await signUp("feedback-public");
     const threadId = await createThread(owner.userId);
-    await turnOn(baseBindings, owner.cookie);
     const execution = guest();
     const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
     const origin = portalOriginFor(threadId, 5173);

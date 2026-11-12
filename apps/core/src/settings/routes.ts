@@ -1,11 +1,9 @@
 import {
-  COMPOSER_QUICK_ACTIONS_FEATURE,
   type DictationProviderData,
   GetSettingsContextForbiddenResponseSchema,
   GetSettingsContextPersistenceUnavailableResponseSchema,
   GetSettingsContextResponseSchema,
 } from "@dx/api";
-import type { ExperimentalFeatureId } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Match, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
@@ -17,6 +15,7 @@ import {
 } from "../dictation/vocabulary.js";
 import { feedbackWidgetEmbedRoutes } from "../feedback-widget/embed-routes.js";
 import type { AppEnv } from "../http/types.js";
+import { realtimeKitAccess } from "../huddles/realtimekit.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
 import { notificationPreferenceRoutes } from "../notifications/routes.js";
 import { personalOrbUsageRoutes } from "../orb-usage/routes.js";
@@ -32,7 +31,6 @@ import {
 import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
 import { spaceAgentModelRoutes } from "../spaces/agent-model.js";
-import { spacesEnabledFor } from "../spaces/gate.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
@@ -41,10 +39,7 @@ import {
   personalEnvironmentVariableRoutes,
   workspaceEnvironmentVariableRoutes,
 } from "./environment-variables/routes.js";
-import {
-  experimentalFeatureEnabled,
-  personalExperimentalFeaturesRoutes,
-} from "./experimental-features/routes.js";
+import { personalExperimentalFeaturesRoutes } from "./experimental-features/routes.js";
 import { personalIntegrationRoutes } from "./integrations/routes.js";
 import { personalSigningKeyRoutes } from "./keys/routes.js";
 import {
@@ -85,13 +80,13 @@ const responseData = (
   dictation: DictationProviderData | undefined,
   portalDomain: string | undefined,
   composerQuickActions: boolean,
-  spaces: boolean,
+  huddle: boolean,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
-  // Only when on, so a person without the flag gets the context unchanged.
+  // Only when the deployment offers them.
   ...(composerQuickActions ? { composerQuickActions } : {}),
-  ...(spaces ? { spaces } : {}),
+  ...(huddle ? { huddle } : {}),
   ...(dictation === undefined ? {} : { dictation }),
   ...(portalDomain === undefined ? {} : { portalDomain }),
   workspace:
@@ -142,25 +137,11 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         return undefined;
       }),
     );
-    // Composer quick actions need the person's flag and Clef Flash; the
-    // Thread page reads this instead of asking for the flags. A failed read
-    // hides the row rather than failing the settings context.
-    const composerQuickActions =
-      clefAvailable(context.env) &&
-      (yield* Effect.promise(() =>
-        experimentalFeatureEnabled(
-          context.env,
-          context.get("principal"),
-          COMPOSER_QUICK_ACTIONS_FEATURE as ExperimentalFeatureId,
-        ).catch(() => false),
-      ));
-    // Spaces, for the sidebar: the deployment names the person and their
-    // flag is on (spaces/gate.ts). A failed read hides Spaces.
-    const spaces = yield* Effect.promise(() =>
-      spacesEnabledFor(context.env, context.get("principal").userId).catch(
-        () => false,
-      ),
-    );
+    // Composer quick actions need Workers AI's Clef Flash; Huddle needs the
+    // deployment's RealtimeKit app, which it turns on only when it chooses
+    // to pay for calls.
+    const composerQuickActions = clefAvailable(context.env);
+    const huddle = realtimeKitAccess(context.env) !== undefined;
     return yield* Schema.encodeUnknownEffect(GetSettingsContextResponseSchema)({
       status: "success",
       data: responseData(
@@ -168,7 +149,7 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         dictation,
         portalConfiguration(context.env)?.domain,
         composerQuickActions,
-        spaces,
+        huddle,
       ),
     });
   });

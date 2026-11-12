@@ -255,150 +255,6 @@ export const productionExperimentalFeatureRegistry =
     version: 1,
     features: [
       {
-        id: "artifact-notify-agent",
-        title: "Notify agent from artifacts",
-        description:
-          "Saving, ticking, or changing an artifact no longer wakes the agent. Notify agent in the artifact toolbar wakes it once with what changed, and a comment that mentions @dx wakes it right away.",
-        // Tracked in #1765.
-        owner: { team: "dx/artifacts" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "interface",
-        risk: "low",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-02-15",
-        lifecyclePlan: {
-          migration:
-            "Nothing is stored for the flag; turning it off brings back waking on ticks and answers, and hides Notify agent.",
-          graduation:
-            "Drop the flag check from artifact saves, comments, the notify route, and the toolbar.",
-          removal:
-            "Delete the notify route, the toolbar button, and the flag checks; ticks and answers wake as before.",
-        },
-      },
-      {
-        id: "artifact-boards",
-        title: "Drawing boards",
-        description:
-          "Adds drawing boards to artifacts: shapes, arrows, text, and freehand that you, your collaborators, and the agent draw on together.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/artifacts" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "low",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-02-15",
-        lifecyclePlan: {
-          migration: "Boards stay stored; off, they open as a preview.",
-          graduation: "Drop the flag checks.",
-          removal: "Delete board artifacts and the board kind.",
-        },
-      },
-      {
-        id: "composer-quick-actions",
-        title: "Composer quick actions",
-        description:
-          "When the agent ends a turn, a small Workers AI model writes the replies you might send next, and Cloudflare's Clef Flash model picks which quick actions to show above the composer, and in what order: Snooze Until I'm Needed and those replies.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/threads" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "interface",
-        risk: "low",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-01-15",
-        lifecyclePlan: {
-          migration:
-            "Each Thread keeps its latest pick in thread_quick_actions; turning the flag off hides the row at once and stops new picks.",
-          graduation:
-            "Drop the flag check from the turn-end hook, the quick-actions route, and the Thread page.",
-          removal:
-            "Delete the turn-end hook, the quick-actions route, the composer row, and drop thread_quick_actions.",
-        },
-      },
-      {
-        id: "claude-plan-auto-pick",
-        title: "Pick my Claude plan automatically",
-        description:
-          "A new Claude Code Thread that names no plan gets one of your Claude Pro/Max plans picked by their limits and running Threads. Off, you pick the plan.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/model-routing" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "medium",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "new-thread",
-        reviewDate: "2027-01-15",
-        lifecyclePlan: {
-          migration: "Nothing is stored; bound Threads keep their plan.",
-          graduation: "Drop the flag checks.",
-          removal: "Delete the automatic pick and the composer's Auto.",
-        },
-      },
-      {
-        id: "feedback-widget",
-        title: "Feedback Widget",
-        description:
-          "Adds Feedback Widget to Project Settings: a script for your website that lets you click any element, write what to change, and send it to a new Thread in the Project. You need it on to set up the widget and to send from it.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/projects" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "medium",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-02-15",
-        lifecyclePlan: {
-          migration:
-            "Widgets, origins, and grants stay in D1; turning the flag off hides the settings tab and refuses setup and sending.",
-          graduation:
-            "Drop the flag checks from the settings tab, the settings routes, and the send route.",
-          removal:
-            "Turn every widget off, drop its tables, and delete the public widget routes and the settings tab.",
-        },
-      },
-      {
-        id: "huddle",
-        title: "Huddle",
-        description:
-          "Adds Huddle to every Space and Thread you can open: a live audio and video call on Cloudflare RealtimeKit, with screen sharing and a floating window that stays while you move around dx. Off, you see no huddles.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/spaces" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "medium",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-02-15",
-        lifecyclePlan: {
-          migration:
-            "Each Thread keeps its RealtimeKit meeting in thread_huddles; turning the flag off hides the button and refuses joining.",
-          graduation:
-            "Drop the flag checks from the huddle routes and the Huddle slot.",
-          removal:
-            "Delete the huddle routes, the Huddle UI, and the deploy's RealtimeKit app wiring, and drop thread_huddles.",
-        },
-      },
-      {
         id: "orb-provider-freestyle",
         title: "Freestyle Orbs",
         description:
@@ -473,36 +329,18 @@ export const productionExperimentalFeatureRegistry =
             "Retire the flag as removed and drop the provider's descriptor, connector, and sizes.",
         },
       },
-      {
-        id: "spaces",
-        title: "Spaces",
-        description:
-          "Adds Spaces to the sidebar: a shared chat whose agent works toward a goal and starts a Thread for each piece of it.",
-        // Tracked in the private repository, so no public issue yet.
-        owner: { team: "dx/spaces" },
-        status: "experimental",
-        defaultEnabled: false,
-        allowedScope: "personal",
-        kind: "capability",
-        risk: "medium",
-        prerequisites: [],
-        incompatibilities: [],
-        activation: "immediate",
-        reviewDate: "2027-02-15",
-        lifecyclePlan: {
-          migration:
-            "Spaces and their threads stay in D1; turning the flag off hides Spaces, including those shared with you, and lists the threads they started as ordinary Threads until it is on again.",
-          graduation:
-            "Drop the flag checks in apps/core/src/spaces/gate.ts and the sidebar, then retire the flag as graduated.",
-          removal:
-            "Retire the flag as removed, delete the Spaces routes, pages, and agent prompt, and drop the Space tables.",
-        },
-      },
     ],
     migrations: [
       { kind: "retire", id: "needs-you-prioritize", outcome: "removed" },
       { kind: "retire", id: "artifact-asks", outcome: "removed" },
       { kind: "retire", id: "orb-restart", outcome: "removed" },
+      { kind: "retire", id: "artifact-notify-agent", outcome: "graduated" },
+      { kind: "retire", id: "artifact-boards", outcome: "graduated" },
+      { kind: "retire", id: "composer-quick-actions", outcome: "graduated" },
+      { kind: "retire", id: "claude-plan-auto-pick", outcome: "graduated" },
+      { kind: "retire", id: "feedback-widget", outcome: "graduated" },
+      { kind: "retire", id: "huddle", outcome: "graduated" },
+      { kind: "retire", id: "spaces", outcome: "graduated" },
     ],
   });
 

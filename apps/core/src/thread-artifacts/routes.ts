@@ -1,8 +1,6 @@
 import {
-  ARTIFACT_BOARDS_FEATURE,
   ARTIFACT_IMAGE_MAX_BYTES,
   ARTIFACT_MAX_BYTES,
-  ARTIFACT_NOTIFY_AGENT_FEATURE,
   CreateThreadArtifactCommentRequestSchema,
   CreateThreadArtifactRequestSchema,
   type DeleteThreadArtifactResponseSchema,
@@ -18,14 +16,13 @@ import {
   type ThreadArtifactResponse,
   type ThreadArtifactRevisionResponse,
 } from "@dx/api";
-import type { ExperimentalFeatureId, ThreadId } from "@dx/domain";
+import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { attachmentOrigin, sniffAttachmentType } from "../attachments/store.js";
 import { readBoundedBody, readBoundedText } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import {
   findThreadStorageFile,
   putThreadStorageFile,
@@ -76,10 +73,6 @@ const MESSAGES: Record<ThreadArtifactErrorCode, string> = {
   ARTIFACT_STORAGE_FULL:
     "This Thread's artifacts are full. Delete an artifact to save more.",
   ARTIFACTS_UNAVAILABLE: "Artifacts are temporarily unavailable.",
-  ARTIFACT_NOTIFY_DISABLED:
-    "Notify agent is an experimental feature. Turn it on in Settings, Experimental Features.",
-  ARTIFACT_KIND_DISABLED:
-    "Drawing boards are an experimental feature. Turn them on in Settings, Experimental Features.",
 };
 
 const STATUS = {
@@ -95,8 +88,6 @@ const STATUS = {
   ARTIFACT_TOO_LARGE: 413,
   ARTIFACT_STORAGE_FULL: 413,
   ARTIFACTS_UNAVAILABLE: 503,
-  ARTIFACT_NOTIFY_DISABLED: 404,
-  ARTIFACT_KIND_DISABLED: 403,
 } as const satisfies Record<ThreadArtifactErrorCode, number>;
 
 const refuse = (
@@ -217,19 +208,15 @@ const answerWrite = async (
       const text = artifactKind(result.value.artifact.kind).toText;
       afterResponse(
         context,
-        artifactSaved(
-          context.env,
-          {
-            threadId: param(context, "threadId"),
-            artifactId: result.value.artifact.id,
-            title: result.value.artifact.title,
-            revision: result.value.artifact.revision,
-            before: text(result.previous),
-            after: text(result.value.markdown),
-            writer: writer(context),
-          },
-          { waitUntil: (promise) => afterResponse(context, promise) },
-        ),
+        artifactSaved(context.env, {
+          threadId: param(context, "threadId"),
+          artifactId: result.value.artifact.id,
+          title: result.value.artifact.title,
+          revision: result.value.artifact.revision,
+          before: text(result.previous),
+          after: text(result.value.markdown),
+          writer: writer(context),
+        }),
       );
       context.header("Cache-Control", "no-store");
       return context.json<ThreadArtifactResponse>(
@@ -307,15 +294,6 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
         CreateThreadArtifactRequestSchema,
       );
       if (input === undefined) return refuse(context, "INVALID_REQUEST");
-      if (
-        input.kind === "board" &&
-        !(await experimentalFeatureEnabled(
-          context.env,
-          context.get("principal"),
-          ARTIFACT_BOARDS_FEATURE as ExperimentalFeatureId,
-        ).catch(() => false))
-      )
-        return refuse(context, "ARTIFACT_KIND_DISABLED");
       return answerWrite(
         context,
         await createArtifact(context.env, {
@@ -528,12 +506,6 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
     // member's POST never gets here (`viewerMayRequest`).
     handle("notify", async (context) => {
       const principal = context.get("principal");
-      const enabled = await experimentalFeatureEnabled(
-        context.env,
-        principal,
-        ARTIFACT_NOTIFY_AGENT_FEATURE as ExperimentalFeatureId,
-      ).catch(() => false);
-      if (!enabled) return refuse(context, "ARTIFACT_NOTIFY_DISABLED");
       const notified = await notifyArtifactAgent(
         context.env,
         {

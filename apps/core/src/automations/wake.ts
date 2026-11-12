@@ -1,12 +1,9 @@
 import {
-  isClaudeCodeModel,
   THREAD_TITLE_MAX_LENGTH,
   type ThreadModelSelection,
   type UserId,
 } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
-import { loadThreadClaudePlan } from "../settings/model-routing/connection-store-d1.js";
-import { claudeAutoPickEnabled } from "../settings/model-routing/submission.js";
 import {
   agentModeSelection,
   idempotentThreadId,
@@ -147,20 +144,8 @@ export const startThread = async (
   },
 ) => {
   const threadId = await idempotentThreadId(input.key);
-  // No one picks a plan here. With the owner's automatic plan pick on, a
-  // Claude Code Thread an automation starts takes that pick at creation;
-  // otherwise it runs on its parent's plan.
-  const claudeConnectionId =
-    input.selection?.kind === "model" &&
-    isClaudeCodeModel(input.selection.model) &&
-    target.bindings.DB !== undefined &&
-    !(await claudeAutoPickEnabled(
-      target.bindings,
-      target.ownerUserId as UserId,
-    ))
-      ? (await loadThreadClaudePlan(target.bindings.DB, input.parentThreadId))
-          .connectionId
-      : undefined;
+  // No one picks a plan here: a Claude Code Thread an automation starts
+  // takes dx's automatic pick at creation.
   const { response, payload } = await ownerRequest(
     {
       bindings: target.bindings,
@@ -180,7 +165,6 @@ export const startThread = async (
       title: input.title.slice(0, THREAD_TITLE_MAX_LENGTH).trimEnd(),
       generateTitle: false,
       ...(input.selection === undefined ? {} : { selection: input.selection }),
-      ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       initialMessage: { body: input.prompt, attachments: [] },
     },
   );

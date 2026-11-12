@@ -22,6 +22,9 @@ declare module "cloudflare:test" {
     readonly BITBUCKET_TOKEN_COORDINATOR: DurableObjectNamespace<
       import("../../src/source-control/bitbucket/token-coordinator.js").BitbucketTokenCoordinatorObject
     >;
+    readonly GITHUB_TOKEN_COORDINATOR: DurableObjectNamespace<
+      import("../../src/source-control/github/token-coordinator.js").GitHubTokenCoordinatorObject
+    >;
     readonly DX_STORAGE: R2Bucket;
     readonly LOADER: WorkerLoader;
     readonly TEST_MIGRATIONS: D1Migration[];

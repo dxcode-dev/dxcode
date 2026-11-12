@@ -1,6 +1,6 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ThreadArtifact, ThreadArtifactKind } from "@dx/api";
-import { parseBoard, type ThreadId } from "@dx/domain";
+import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { Check, ChevronDown, FileText } from "lucide-react";
@@ -11,12 +11,10 @@ import {
   artifactOptions,
   createArtifactMutation,
 } from "./artifact-document-queries.js";
-import type { ArtifactDocument } from "./artifacts-api.js";
-import { BoardPreview } from "./board/board-preview.js";
 import {
+  ARTIFACT_KIND_VIEWS,
   type ArtifactKindView,
   artifactKindView,
-  useEnabledArtifactKinds,
 } from "./kinds.js";
 import "./artifacts-view.css";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
@@ -145,41 +143,6 @@ function ArtifactSwitcher({
   );
 }
 
-/**
- * A board whose type this person has not turned on: its preview, read only,
- * and how to turn it on.
- */
-function KindOff({
-  document,
-  switcher,
-}: {
-  readonly document: ArtifactDocument;
-  readonly switcher: React.ReactNode;
-}) {
-  const parsed = parseBoard(document.markdown);
-  const view = artifactKindView(document.artifact.kind);
-  return (
-    <section className="artifact-view">
-      <header className="artifact-header">{switcher}</header>
-      <div className="board-off">
-        {parsed.ok ? (
-          <div className="board-off-preview">
-            <BoardPreview
-              className="board-preview"
-              board={parsed.board}
-              label={`Preview of ${document.artifact.title}`}
-            />
-          </div>
-        ) : null}
-        <p className="board-off-note">
-          This is a drawing {view.noun}. Turn on Drawing boards in Settings,
-          Experimental Features, to edit it.
-        </p>
-      </div>
-    </section>
-  );
-}
-
 function OpenArtifact({
   threadId,
   artifactId,
@@ -187,10 +150,7 @@ function OpenArtifact({
   readOnly,
   switcher,
   dictation,
-  enabled,
 }: {
-  /** The types this person has turned on. */
-  readonly enabled: ReadonlyArray<ArtifactKindView>;
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly active: boolean;
@@ -213,8 +173,6 @@ function OpenArtifact({
       </section>
     );
   const view = artifactKindView(query.data.artifact.kind);
-  if (!enabled.includes(view))
-    return <KindOff document={query.data} switcher={switcher()} />;
   return (
     <React.Suspense
       fallback={
@@ -277,7 +235,6 @@ export function ArtifactsView({
     selected.id !== pinned
   )
     setPinned(selected.id);
-  const enabled = useEnabledArtifactKinds();
   const startBlank = (kind: ThreadArtifactKind) =>
     create.mutate({
       title: kind === "board" ? "Untitled board" : "Untitled",
@@ -289,7 +246,7 @@ export function ArtifactsView({
       selected={selected}
       onSelect={openArtifact}
       onCreate={startBlank}
-      creatable={enabled}
+      creatable={ARTIFACT_KIND_VIEWS}
       canCreate={!readOnly && !create.isPending}
       extra={extra}
     />
@@ -307,13 +264,12 @@ export function ArtifactsView({
       <div className="artifacts-empty">
         <FileText aria-hidden="true" />
         <p>
-          {enabled.length > 1
-            ? "No artifacts yet. Ask the agent to write or draw one, or start a blank one."
-            : "No artifacts yet. Ask the agent to write one, or start a blank artifact."}
+          No artifacts yet. Ask the agent to write or draw one, or start a blank
+          one.
         </p>
         {readOnly ? null : (
           <div className="artifacts-new-row">
-            {enabled.map((view) => (
+            {ARTIFACT_KIND_VIEWS.map((view) => (
               <button
                 key={view.kind}
                 type="button"
@@ -322,7 +278,7 @@ export function ArtifactsView({
                 onClick={() => startBlank(view.kind)}
               >
                 <view.icon aria-hidden="true" />
-                {enabled.length > 1 ? view.newLabel : "New Artifact"}
+                {view.newLabel}
               </button>
             ))}
           </div>
@@ -343,7 +299,6 @@ export function ArtifactsView({
       readOnly={readOnly}
       switcher={switcher}
       dictation={dictation}
-      enabled={enabled}
     />
   );
 }

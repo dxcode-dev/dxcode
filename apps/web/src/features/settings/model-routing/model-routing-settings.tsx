@@ -469,11 +469,10 @@ export const ModelRoutingSettings = ({
   const settingsContext = useQuery(
     settingsContextQueryOptions(identity.id, target),
   );
-  // Where a new Space would run, while Spaces is on: personal only.
+  // Where a new Space would run: personal only.
   const spaceAgent = useQuery({
     ...spaceAgentModelQueryOptions(identity.id),
-    enabled:
-      workspaceSlug === undefined && settingsContext.data?.spaces === true,
+    enabled: workspaceSlug === undefined,
   });
 
   const options = connectionMutationOptions(queryClient, target);

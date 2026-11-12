@@ -32,7 +32,6 @@ import {
   SPACE_CREATE_THREAD_DESCRIPTION,
   SPACE_TOOL_PARAMETER_DESCRIPTIONS,
 } from "../spaces/agent/tool-descriptions.js";
-import { spacesEnabledFor } from "../spaces/gate.js";
 import { readSpacePost } from "../spaces/posts/store.js";
 import { createThreadSearchTools } from "../thread-search/agent-tools.js";
 import { resolveOrbChoice } from "./agent-orbs.js";
@@ -329,17 +328,9 @@ export const createThreadTools = (
       ? `${callingThreadId}:${crypto.randomUUID()}`
       : `${callingThreadId}:${submissionId ?? ""}:${toolCallId}`;
 
-  /**
-   * The calling Thread, as a Space only while Spaces is on for its owner:
-   * otherwise it and every Space Thread are out of the tools' reach.
-   */
-  const callingThread = async (
-    context: ThreadToolsContext,
-  ): Promise<CallingThread> => {
-    const thread = await readCallingThread(context.db, callingThreadId);
-    const spaces = await spacesEnabledFor(context.bindings, thread.ownerUserId);
-    return { ...thread, space: thread.space && spaces, spaces };
-  };
+  /** The calling Thread, whose owner every Thread tool acts as. */
+  const callingThread = (context: ThreadToolsContext): Promise<CallingThread> =>
+    readCallingThread(context.db, callingThreadId);
 
   /** The owner's Threads among `threadIds`; others are absent. */
   const readThreads = async (
@@ -355,9 +346,7 @@ export const createThreadTools = (
            (SELECT resets_at FROM thread_plan_wait
              WHERE thread_id = threads.id) AS plan_resets_at
          FROM threads
-         WHERE owner_user_id = ? AND lifecycle_state != 'deleted'${
-           owner.spaces === true ? "" : " AND kind = 'thread'"
-}
+         WHERE owner_user_id = ? AND lifecycle_state != 'deleted'
            AND id IN (${threadIds.map(() => "?").join(", ")})${
              owner.sharedFamilyRoot === undefined
                ? ""
@@ -804,7 +793,7 @@ export const createThreadTools = (
             v.string(),
             v.maxLength(128),
             v.description(
-              "For a Claude Code child: the plan ID from list_agent_modes' claudePlans that it runs on for its whole life. Required when the owner has more than one enabled plan, unless list_agent_modes returns claudeAutoPlan: then omit it to let dx pick the plan (claudeAutoPlan shows which and why), and name one only when the user asks for it. A plan that is used up is refused with its reset time.",
+              "For a Claude Code child: the plan ID from list_agent_modes' claudePlans that it runs on for its whole life. Omit it to let dx pick the plan (list_agent_modes' claudeAutoPlan shows which and why), and name one only when the user asks for it. A plan that is used up is refused with its reset time.",
             ),
           ),
         ),
@@ -1346,7 +1335,7 @@ export const createThreadTools = (
     defineTool({
       name: "list_agent_modes",
       description: description([
-        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. pluginModes lists agents installed plugins offer, each with its own instructions, tools, and model; pass its mode, plugin:<plugin>/<key>, as agent_mode. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. When the owner has turned on the automatic plan pick, each plan also shows its running Threads, and claudeAutoPlan names the plan dx picks for a Claude Code child that names none, and why. Also returns this Thread's mode, which a child gets by default.",
+        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. pluginModes lists agents installed plugins offer, each with its own instructions, tools, and model; pass its mode, plugin:<plugin>/<key>, as agent_mode. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. Each plan also shows its running Threads, and claudeAutoPlan names the plan dx picks for a Claude Code child that names none, and why. Also returns this Thread's mode, which a child gets by default.",
         "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode. For Claude Code, pass a plan's ID as claude_plan; when claudeAutoPlan is listed, omit claude_plan to take it unless the user names a plan. A child stays on its plan; it never moves to another.",
       ]),
       input: v.object({}),
@@ -1396,7 +1385,6 @@ export const createThreadTools = (
                   readonly usage?: ClaudePlanUsage;
                   readonly load?: number;
                 }>;
-                readonly claudeAutoPick?: boolean;
               }
             | undefined;
           const claudeCaller =
@@ -1455,23 +1443,16 @@ export const createThreadTools = (
               ...((choices?.claudePlans ?? []).length === 0
                 ? {}
                 : {
-                    // With the owner's automatic plan pick off, the
-                    // listing is as before: no running Threads, no pick.
-                    claudePlans: (choices?.claudePlans ?? []).map((plan) => {
-                      const listing = claudePlanListing(
+                    claudePlans: (choices?.claudePlans ?? []).map((plan) =>
+                      claudePlanListing(
                         plan,
                         claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL,
-                      );
-                      if (choices?.claudeAutoPick === true) return listing;
-                      const { runningThreads: _, ...asBefore } = listing;
-                      return asBefore;
-                    }),
-                    ...(choices?.claudeAutoPick === true
-                      ? claudeAutoPlanListing(
-                          choices.claudePlans ?? [],
-                          claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL,
-                        )
-                      : {}),
+                      ),
+                    ),
+                    ...claudeAutoPlanListing(
+                      choices?.claudePlans ?? [],
+                      claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL,
+                    ),
                   }),
             },
           };

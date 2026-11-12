@@ -1,9 +1,9 @@
 /**
- * Notify agent in the artifact toolbar (#1765), behind the person's
- * `artifact-notify-agent` flag.
+ * Notify agent in the artifact toolbar (#1765), offered to everyone who can
+ * edit the artifact.
  *
  * Ways it can fail, each covered below:
- *  1. The button shows with the flag off, or not with it on.
+ *  1. The button does not show.
  *  2. A click sends nothing, or more than one request, or does not say the
  *     agent was notified.
  *  3. A failed notify reads as sent.
@@ -17,7 +17,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
 import { createQueryClient } from "../../../shared/query/query-client.js";
-import { personalExperimentalFeaturesQueryOptions } from "../../settings/experimental-features/experimental-features-queries.js";
 import { ArtifactEditor } from "./artifact-editor.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
@@ -50,7 +49,7 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-const mount = async (flagOn: boolean, notifyStatus = 200) => {
+const mount = async (notifyStatus = 200) => {
   const markdown = "Ship it today.\n";
   vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -84,19 +83,6 @@ const mount = async (flagOn: boolean, notifyStatus = 200) => {
   container.style.width = "800px";
   container.style.display = "flex";
   const client = createQueryClient();
-  client.setQueryData(
-    personalExperimentalFeaturesQueryOptions(userId).queryKey,
-    {
-      flags: flagOn
-        ? [
-            {
-              registration: { id: "artifact-notify-agent" },
-              effectiveEnabled: true,
-            },
-          ]
-        : [],
-    } as never,
-  );
   root = createRoot(container);
   await React.act(() =>
     root?.render(
@@ -132,13 +118,8 @@ const notifyButton = () =>
   ].find((button) => button.classList.contains("artifact-notify-agent"));
 
 describe("Notify agent", () => {
-  it("is not offered with the flag off", async () => {
-    await mount(false);
-    expect(notifyButton()).toBeUndefined();
-  });
-
   it("notifies the agent once and says so, in its own color", async () => {
-    await mount(true);
+    await mount();
     const button = notifyButton();
     if (button === undefined) throw new Error("No Notify agent.");
     expect(button.textContent).toBe("Notify agent");
@@ -152,7 +133,7 @@ describe("Notify agent", () => {
   });
 
   it("offers a retry when notifying fails, never reading as sent", async () => {
-    await mount(true, 503);
+    await mount(503);
     const button = notifyButton();
     if (button === undefined) throw new Error("No Notify agent.");
     await userEvent.click(button);

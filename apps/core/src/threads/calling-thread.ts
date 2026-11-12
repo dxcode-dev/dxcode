@@ -23,11 +23,6 @@ export interface CallingThread {
   readonly projectless: boolean;
   /** The Thread is a Space: the children it starts record who asked. */
   readonly space: boolean;
-  /**
-   * Spaces is on for the owner (spaces/gate.ts), so their tools may reach
-   * Space Threads; set by the Thread tools, absent (off) otherwise.
-   */
-  readonly spaces?: boolean;
 }
 
 /** Reads the calling Thread; every Thread tool acts as its owner. */

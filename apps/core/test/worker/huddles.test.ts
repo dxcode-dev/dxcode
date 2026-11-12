@@ -2,9 +2,9 @@ import { env } from "cloudflare:test";
 import type { Principal } from "@dx/domain";
 import { Hono } from "hono";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { threadHuddleRoutes } from "../../src/huddles/routes.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import { threadHuddleRoutes } from "../../src/huddles/routes.js";
 import { viewerMayRequest } from "../../src/thread-sharing/access.js";
 import {
   bindings,
@@ -18,8 +18,8 @@ import {
  * Huddle's routes in workerd with real D1; RealtimeKit's REST API is a fake
  * that records what it was sent. The ways it could fail:
  *
- * 1. It answers someone whose `huddle` flag is off, or pretends to work on
- *    a deployment without RealtimeKit.
+ * 1. It refuses someone who can open the Thread but never changed a
+ *    setting, or pretends to work on a deployment without RealtimeKit.
  * 2. Each join creates a new meeting, so people in one Thread never meet;
  *    or two Threads share a meeting.
  * 3. A person joins under someone else's id or without their dx name.
@@ -36,20 +36,6 @@ const withRealtimeKit: Bindings = {
   ...bindings,
   DX_REALTIMEKIT: JSON.stringify({ accountId: ACCOUNT, token: "rtk-token" }),
 } as Bindings;
-
-const enableHuddle = (who: Principal, enabled = true) =>
-  env.DB.prepare(
-    `INSERT INTO personal_experimental_feature_preferences (
-       user_id, preferences, revision, updated_at
-     ) VALUES (?1, ?2, 1, ?3)
-     ON CONFLICT (user_id) DO UPDATE SET preferences = excluded.preferences`,
-  )
-    .bind(
-      who.userId,
-      JSON.stringify(enabled ? [{ id: "huddle", enabled: true }] : []),
-      new Date().toISOString(),
-    )
-    .run();
 
 const appFor = (who: Principal, access: "owner" | "contribute" | "view") => {
   const app = new Hono<AppEnv>();
@@ -180,30 +166,29 @@ afterEach(() => {
 });
 
 describe("huddle routes", () => {
-  it("answer nobody whose flag is off, and say so when RealtimeKit is missing", async () => {
+  it("answers anyone who can open the Thread, and says so when RealtimeKit is missing", async () => {
     const thread = await newThread();
     const rtk = fakeRealtimeKit();
-    await enableHuddle(principal, false);
-    const off = await call(appFor(principal, "owner"), thread, withRealtimeKit);
-    expect(off.status).toBe(404);
-    expect(off.body.data.code).toBe("HUDDLE_DISABLED");
-    const offJoin = await call(
+    // No setting: nobody has met yet.
+    const idle = await call(
       appFor(principal, "owner"),
       thread,
       withRealtimeKit,
-      "POST",
     );
-    expect(offJoin.body.data.code).toBe("HUDDLE_DISABLED");
+    expect(idle.status).toBe(200);
+    expect(idle.body.data).toMatchObject({ active: false, participants: [] });
 
-    await enableHuddle(principal);
-    const missing = await call(
+    const missing = await call(appFor(principal, "owner"), thread, bindings);
+    expect(missing.status).toBe(409);
+    expect(missing.body.data.code).toBe("HUDDLE_UNAVAILABLE");
+    const missingJoin = await call(
       appFor(principal, "owner"),
       thread,
       bindings,
       "POST",
     );
-    expect(missing.status).toBe(409);
-    expect(missing.body.data.code).toBe("HUDDLE_UNAVAILABLE");
+    expect(missingJoin.status).toBe(409);
+    expect(missingJoin.body.data.code).toBe("HUDDLE_UNAVAILABLE");
     expect(rtk.sent).toEqual([]);
   });
 
@@ -211,8 +196,6 @@ describe("huddle routes", () => {
     const thread = await newThread();
     const other = await newThread();
     const rtk = fakeRealtimeKit();
-    await enableHuddle(principal);
-    await enableHuddle(otherPrincipal);
 
     const first = await call(
       appFor(principal, "owner"),
@@ -278,7 +261,6 @@ describe("huddle routes", () => {
   it("lists only the people in the session now, once each", async () => {
     const thread = await newThread();
     const rtk = fakeRealtimeKit();
-    await enableHuddle(principal);
     const app = appFor(principal, "owner");
 
     // No meeting yet: nobody is in it, and RealtimeKit is not asked.

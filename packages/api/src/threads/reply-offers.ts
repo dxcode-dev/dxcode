@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
 /**
- * Composer quick actions (experimental): when the agent ends a turn, a
+ * Composer quick actions: when the agent ends a turn, a
  * small Workers AI text model writes the replies the person might send
  * next from the agent's final reply, and Clef Flash picks which actions to
  * show above the composer, and in what order: those replies and Snooze
@@ -12,8 +12,6 @@ import { errorResponse, successResponse } from "../http/response.js";
 export const REPLY_OFFER_LIMIT = 2;
 /** A reply is a short message, sent as written. */
 export const REPLY_OFFER_MAX_LENGTH = 120;
-/** The personal experimental flag that turns the row on. */
-export const COMPOSER_QUICK_ACTIONS_FEATURE = "composer-quick-actions";
 
 export const ThreadQuickActionSchema = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("snooze") }),
@@ -48,10 +46,6 @@ export type ThreadQuickActionsData =
   (typeof ThreadQuickActionsResponseSchema.Type)["data"];
 
 export const ThreadQuickActionsErrorResponseSchema = Schema.Union([
-  errorResponse(
-    "QUICK_ACTIONS_DISABLED",
-    "Composer quick actions are off. Turn them on in Settings, Experimental Features.",
-  ),
   errorResponse(
     "QUICK_ACTIONS_MODEL_UNAVAILABLE",
     "Composer quick actions need Workers AI's Clef Flash, which this deployment does not provide.",

@@ -428,9 +428,22 @@ export const SELFHOST_SETTINGS = Object.freeze([
       "Calls in Spaces and Threads on Cloudflare RealtimeKit, billed per participant minute to this Cloudflare account. People still turn it on under Experimental Features.",
     example: "false",
     binding: "DX_REALTIMEKIT",
-    // Alchemy OAuth cannot mint the RealtimeKit token Huddle needs.
-    when: (config) => config.cloudflareAuth !== "alchemy-oauth",
     ...integration("huddle"),
+  },
+  {
+    id: "realtimeKitApiToken",
+    group: "Plugins",
+    kind: "secret",
+    env: "DX_REALTIMEKIT_API_TOKEN",
+    binding: "DX_REALTIMEKIT",
+    label: "Cloudflare API token for Huddle",
+    description:
+      "Browser login cannot create one: in the Cloudflare dashboard, create an account API token with Realtime > Realtime Admin on this account.",
+    example: "…",
+    required: true,
+    when: (config) =>
+      config.integrations.includes("huddle") &&
+      config.cloudflareAuth === "alchemy-oauth",
   },
   {
     id: "workerTraces",

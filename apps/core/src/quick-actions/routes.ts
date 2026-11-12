@@ -1,14 +1,11 @@
 import {
-  COMPOSER_QUICK_ACTIONS_FEATURE,
   type ThreadQuickActionsData,
   ThreadQuickActionsErrorResponseSchema,
   ThreadQuickActionsResponseSchema,
 } from "@dx/api";
-import type { ExperimentalFeatureId } from "@dx/domain";
 import { Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
-import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { storedQuickActions } from "./store.js";
 
@@ -16,10 +13,6 @@ type QuickActionsFailure =
   (typeof ThreadQuickActionsErrorResponseSchema.Type)["data"]["code"];
 
 const FAILURES = {
-  QUICK_ACTIONS_DISABLED: [
-    404,
-    "Composer quick actions are off. Turn them on in Settings, Experimental Features.",
-  ],
   QUICK_ACTIONS_MODEL_UNAVAILABLE: [
     409,
     "Composer quick actions need Workers AI's Clef Flash, which this deployment does not provide.",
@@ -67,8 +60,7 @@ const ownerCanSnooze = async (db: D1Database, threadId: string) => {
 /**
  * `GET /v1/threads/:threadId/quick-actions`, behind `authorizeThread`: the
  * actions to show above the composer after the agent's latest response, for
- * someone who can send in the Thread and has the personal
- * `composer-quick-actions` flag on. It serves what the turn-end hook picked
+ * someone who can send in the Thread. It serves what the turn-end hook picked
  * (`turn-ended.ts`) and never asks a model itself. `?messageId=` names the
  * agent message on the person's screen: until the hook has picked for that
  * message the answer is `pending`, so the page asks again shortly.
@@ -76,15 +68,6 @@ const ownerCanSnooze = async (db: D1Database, threadId: string) => {
 export const threadQuickActionsRoutes = new Hono<AppEnv>().get(
   "/:threadId/quick-actions",
   async (context) => {
-    const actor = context.get("actor") ?? context.get("principal");
-    if (
-      !(await experimentalFeatureEnabled(
-        context.env,
-        actor,
-        COMPOSER_QUICK_ACTIONS_FEATURE as ExperimentalFeatureId,
-      ))
-    )
-      return failure(context, "QUICK_ACTIONS_DISABLED");
     if (!clefAvailable(context.env))
       return failure(context, "QUICK_ACTIONS_MODEL_UNAVAILABLE");
     const access = context.get("threadAccess") ?? "owner";

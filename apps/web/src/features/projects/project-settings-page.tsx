@@ -76,7 +76,6 @@ import {
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { ChangeOwnerCard } from "./change-owner-card.js";
 import { DeleteProjectCard } from "./delete-project-card.js";
-import { useFeedbackWidgetEnabled } from "./feedback-widget-queries.js";
 import { FeedbackWidgetProjectSettings } from "./feedback-widget-settings.js";
 import { AdditionalRepositoriesPicker } from "./new-project-dialog.js";
 import { buildProjectMetadataChanges } from "./project-metadata.js";
@@ -108,14 +107,8 @@ const sections = [
     icon: OrbIcon,
   },
   { id: "secrets", label: "Secrets & Env Vars", icon: KeyRound },
+  { id: "feedback-widget", label: "Feedback Widget", icon: MessageSquareText },
 ] as const;
-
-/** Shown only to people who turned on the experimental flag. */
-const feedbackWidgetSection = {
-  id: "feedback-widget",
-  label: "Feedback Widget",
-  icon: MessageSquareText,
-} as const;
 
 export function ProjectSettingsPage({
   renderEnvironmentSettings,
@@ -143,7 +136,6 @@ export function ProjectSettingsPage({
       }),
   );
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
-  const feedbackWidget = useFeedbackWidgetEnabled();
   const project = projectQuery.data;
   const section: ProjectSettingsSection = isProjectSettingsSection(
     params.section,
@@ -180,10 +172,7 @@ export function ProjectSettingsPage({
         </header>
         <div className="project-settings-layout">
           <nav aria-label="Project settings sections">
-            {(feedbackWidget
-              ? [...sections, feedbackWidgetSection]
-              : sections
-            ).map((item) => (
+            {sections.map((item) => (
               <Link
                 key={item.id}
                 className={section === item.id ? "active" : ""}
@@ -224,7 +213,7 @@ export function ProjectSettingsPage({
                 userId={identity.id}
               />
             ) : null}
-            {canManage && feedbackWidget && section === "feedback-widget" ? (
+            {canManage && section === "feedback-widget" ? (
               <FeedbackWidgetProjectSettings
                 projectId={project.id}
                 userId={identity.id}

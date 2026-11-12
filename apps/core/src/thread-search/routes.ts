@@ -9,7 +9,6 @@ import { ThreadSearchQueryError } from "@dx/domain";
 import { Result, Schema } from "effect";
 import { Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
-import { spacesEnabledFor } from "../spaces/gate.js";
 import {
   searchThreads,
   type ThreadSearchHit,
@@ -75,13 +74,7 @@ export const threadSearchRoutes = new Hono<AppEnv>().get(
       const result = await searchThreads({
         db,
         bindings: context.env,
-        scope: {
-          userId: context.get("principal").userId,
-          spaces: await spacesEnabledFor(
-            context.env,
-            context.get("principal").userId,
-          ),
-        },
+        scope: { userId: context.get("principal").userId },
         query: decoded.success.q,
         ...(decoded.success.limit === undefined
           ? {}

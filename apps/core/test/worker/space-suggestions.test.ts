@@ -16,7 +16,7 @@ import { spaceRoutes } from "../../src/spaces/routes.js";
 import { SPACE_SUGGESTION_MODEL } from "../../src/spaces/suggestions.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * New Space's suggestions in workerd with real D1, with a fake Workers AI
@@ -153,8 +153,7 @@ beforeEach(async () => {
   ]);
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, stranger]));
+beforeEach(() => seedSpaceUsers([owner, stranger]));
 
 describe("GET /v1/spaces/suggestions", () => {
   it("groups the owner's recent threads with one model call and keeps only real groups", async () => {

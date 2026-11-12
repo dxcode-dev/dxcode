@@ -308,6 +308,11 @@ export default Alchemy.Stack(
       e2bApiKey: Config.option(Config.Redacted("E2B_API_KEY")),
       githubApp: Config.option(Config.Redacted("DX_INTEGRATION_GITHUB_APP")),
       sarvamApiKey: Config.option(Config.Redacted("SARVAM_API_KEY")),
+      // Huddle on a browser-login self-host, which cannot mint the token:
+      // the operator's own Realtime Admin token, held across deploys.
+      realtimeKitApiToken: Config.option(
+        Config.Redacted("DX_REALTIMEKIT_API_TOKEN"),
+      ),
       // Where the R2 S3 credentials Core signs attachment URLs with come
       // from: "token" deployments mint a bucket-scoped token; "operator"
       // self-hosts (Alchemy OAuth, which cannot create tokens) hold the R2
@@ -774,20 +779,28 @@ export default Alchemy.Stack(
         configuration.huddle,
         () => configuration.environment === "preview",
       );
-      if (!wanted || configuration.attachmentSigning === "operator")
-        return undefined;
+      if (!wanted) return undefined;
       const accountId = Option.isSome(configuration.cloudflareAccountId)
         ? configuration.cloudflareAccountId.value
         : yield* Effect.die("CLOUDFLARE_ACCOUNT_ID is required for Huddle.");
+      const binding = (value: Redacted.Redacted<string>) =>
+        Redacted.make(
+          JSON.stringify({ accountId, token: Redacted.value(value) }),
+        );
+      // Alchemy browser login cannot mint tokens, so those self-hosts hold
+      // the Realtime Admin token their operator created.
+      if (configuration.attachmentSigning === "operator")
+        return Output.map(
+          (yield* HeldSecret("HuddleApiToken", {
+            value: Option.getOrUndefined(configuration.realtimeKitApiToken),
+          })).value,
+          binding,
+        );
       const token = yield* Cloudflare.ApiToken.AccountApiToken(
         "HuddleToken",
         realtimeKitTokenProps(accountId, configuration.workerName),
       );
-      return Output.map(token.value, (value) =>
-        Redacted.make(
-          JSON.stringify({ accountId, token: Redacted.value(value) }),
-        ),
-      );
+      return Output.map(token.value, binding);
     });
     // Turnstile protects magic-link requests. A self-host sender may serve
     // notification email alone, which needs no widget; hosted targets always

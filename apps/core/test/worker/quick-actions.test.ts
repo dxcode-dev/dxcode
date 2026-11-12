@@ -39,8 +39,8 @@ import {
  * could fail:
  *
  * 1. The agent is told about quick actions: a tool or a prompt line.
- * 2. The hook calls Clef, or stores a pick, when nobody has the flag on,
- *    the deployment has no Workers AI, or the turn failed or was stopped.
+ * 2. The hook calls Clef, or stores a pick, when the deployment has no
+ *    Workers AI, or the turn failed or was stopped.
  * 3. It picks for a message that did not end the turn: a newer message, or
  *    a response from another submission.
  * 4. The writer reads anything but the agent's final reply (text before
@@ -53,7 +53,7 @@ import {
  *    a failed call shows a guess, or leaves the page waiting.
  * 6. A turn that settles several submissions asks Clef more than once.
  * 7. The route asks a model itself, serves a pick for another message, or
- *    answers with the flag off, without Workers AI, or to a viewer.
+ *    answers without Workers AI, or to a viewer.
  * 8. Snooze is offered to a contributor, or for a Thread already snoozed.
  * 9. Another model than GLM 4.7 Flash writes, or than Clef Flash ranks.
  */
@@ -133,22 +133,6 @@ const history = (
     hasOlder: false,
   },
 });
-
-const enableQuickActions = (who: Principal, enabled = true) =>
-  env.DB.prepare(
-    `INSERT INTO personal_experimental_feature_preferences (
-       user_id, preferences, revision, updated_at
-     ) VALUES (?1, ?2, 1, ?3)
-     ON CONFLICT (user_id) DO UPDATE SET preferences = excluded.preferences`,
-  )
-    .bind(
-      who.userId,
-      JSON.stringify(
-        enabled ? [{ id: "composer-quick-actions", enabled: true }] : [],
-      ),
-      new Date().toISOString(),
-    )
-    .run();
 
 /** The route behind what `authorizeThread` would set for `access`. */
 const appFor = (who: Principal, access: "owner" | "contribute" | "view") => {
@@ -245,13 +229,6 @@ describe("Composer quick actions", () => {
       );
     const owner = appFor(principal, "owner");
 
-    // 2. Nobody has the flag: no Clef call, nothing stored.
-    await settle("sub-a1");
-    expect(clef.calls).toEqual([]);
-    expect(writer.messages).toEqual([]);
-    expect(await stored(thread)).toBeNull();
-    await enableQuickActions(principal);
-
     // 2. No Workers AI, or a failed or stopped turn: no call.
     const { AI: _ai, ...withoutAi } = bindings;
     await settle("sub-a1", "completed", withoutAi as Bindings);
@@ -263,6 +240,7 @@ describe("Composer quick actions", () => {
     await settle("sub-a1", "aborted");
     expect(clef.calls).toEqual([]);
     expect(writer.messages).toEqual([]);
+    expect(await stored(thread)).toBeNull();
 
     // 7. Before the hook picks, the route says pending, and asks no model.
     expect((await get(owner, thread, ai, "a1")).body.data).toEqual({
@@ -318,9 +296,8 @@ describe("Composer quick actions", () => {
     expect(writer.messages).toHaveLength(1);
 
     // 7, 8. A contributor gets the replies without Snooze; a message the
-    // hook has not picked for is pending; viewers and people without the
-    // flag or Workers AI get nothing.
-    await enableQuickActions(otherPrincipal);
+    // hook has not picked for is pending; viewers, or anyone without
+    // Workers AI, get nothing.
     const contributor = appFor(otherPrincipal, "contribute");
     expect((await get(contributor, thread, ai, "a1")).body.data).toEqual({
       messageId: "a1",
@@ -340,10 +317,6 @@ describe("Composer quick actions", () => {
       409,
       "QUICK_ACTIONS_MODEL_UNAVAILABLE",
     ]);
-    await enableQuickActions(otherPrincipal, false);
-    expect((await get(contributor, thread, ai, "a1")).body.data.code).toBe(
-      "QUICK_ACTIONS_DISABLED",
-    );
     await env.DB.prepare("UPDATE threads SET snoozed_until = ? WHERE id = ?")
       .bind(new Date(Date.now() + 3_600_000).toISOString(), thread)
       .run();

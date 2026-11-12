@@ -8,7 +8,7 @@
 // Ways it could go wrong: the row shows the long "Claude Code · … on …"
 // sentence instead of the chip; the chip is plain, lacks the Claude icon, or
 // words the model differently from the composer; the plan list shows with
-// one plan, hides with two, or lacks Auto when the automatic pick is on; a
+// one plan, hides with two, or lacks Auto; a
 // used-up plan is not marked; the picked plan is not the one the Space is
 // created on; the chip does not open the model picker; a Model Routing
 // route looks like Claude Code or shows a plan list; with no model served
@@ -78,7 +78,6 @@ const CLAUDE_CODE_ROUTE = {
 type Setup = {
   readonly route: Record<string, unknown>;
   readonly plans: ReadonlyArray<ReturnType<typeof plan>>;
-  readonly autoPick?: boolean;
 };
 
 /** dx's routes the dialog reads; every other read stays loading. */
@@ -96,7 +95,6 @@ const fakeServer = (setup: Setup) => {
         modes: [],
         models: [],
         claudePlans: setup.plans,
-        claudeAutoPick: setup.autoPick === true,
       });
     if (url.pathname === "/v1/spaces" && method === "POST") {
       state.created.push(JSON.parse(String(init?.body)));
@@ -137,7 +135,6 @@ const mount = async (setup: Setup, width = 1440, height = 900) => {
   });
   client.setQueryData(settingsContextQueryOptions(userId).queryKey, {
     activeScope: "personal",
-    spaces: true,
   } as never);
   const rootRoute = createRootRoute({
     component: () => (
@@ -233,7 +230,6 @@ it("offers Auto and each plan, and creates the Space on the plan picked", async 
   const server = await mount({
     route: CLAUDE_CODE_ROUTE,
     plans: [plan(PLAN_1, "Claude Pro/Max"), plan(PLAN_2, "Claude Pro/Max 2")],
-    autoPick: true,
   });
   await until(() => planSelect() !== null);
   expect(planOptions()).toEqual(["Auto", "Plan 1", "Plan 2"]);
@@ -261,7 +257,7 @@ it("offers Auto and each plan, and creates the Space on the plan picked", async 
   expect(server.created[0]?.claudeConnectionId).toBe(PLAN_2);
 });
 
-it("lists two plans without Auto and marks a used-up one", async () => {
+it("lists Auto and two plans, and marks a used-up one", async () => {
   await mount({
     route: CLAUDE_CODE_ROUTE,
     plans: [
@@ -270,7 +266,7 @@ it("lists two plans without Auto and marks a used-up one", async () => {
     ],
   });
   await until(() => planSelect() !== null);
-  expect(planOptions()).toEqual(["Plan 1 · used up", "Plan 2"]);
+  expect(planOptions()).toEqual(["Auto", "Plan 1 · used up", "Plan 2"]);
   await userEvent.click(limitsButton() as HTMLButtonElement);
   await until(() => document.querySelector(".claude-plan-limits") !== null);
   expect(document.querySelector(".claude-plan-limits")?.textContent).toContain(
@@ -335,7 +331,6 @@ it("keeps the chip and plan list in one row inside a phone's form", async () => 
     {
       route: CLAUDE_CODE_ROUTE,
       plans: [plan(PLAN_1, "Claude Pro/Max"), plan(PLAN_2, "Claude Pro/Max 2")],
-      autoPick: true,
     },
     390,
     844,

@@ -10,13 +10,6 @@ import {
  * creation; nothing ever moves a Thread to another plan.
  */
 
-/**
- * The personal experimental flag that turns the pick on, read for the new
- * Thread's owner (whose plans are picked). Off, a Thread that names no plan
- * is created as before: refused when its owner has several enabled plans.
- */
-export const CLAUDE_PLAN_AUTO_PICK_FEATURE = "claude-plan-auto-pick";
-
 /** A plan as the pick sees it: its last-known limits and running Threads. */
 export interface ClaudePlanCandidate {
   readonly connectionId: string;

@@ -7,8 +7,8 @@
  * The answer is the Thread's execution mode (`threads.execution_mode`,
  * wiki/runtime-architecture.md#execution-modes): `executor` runs with no
  * Orb. It is the server's, read from D1, never the creation data a client
- * sends. The kind rides along because the Spaces gate reads it from the same
- * cache; it does not decide the Orb.
+ * sends. The kind rides along for readers that ask whether a Thread is a
+ * Space (spaces/posts/eyes.ts); it does not decide the Orb.
  */
 export interface OrbThreadState {
   readonly kind: "thread" | "space";
@@ -35,8 +35,8 @@ const remember = (threadId: string, state: OrbThreadState) => {
 
 /**
  * Records a Thread's kind and execution mode read elsewhere, such as in a
- * Thread list, so a later `readOrbThreadState` in this isolate (the Spaces
- * gate's, when that Thread opens) needs no read of its own. Neither ever
+ * Thread list, so a later `readOrbThreadState` in this isolate needs no
+ * read of its own. Neither ever
  * changes for a Thread.
  */
 export const rememberThreadKind = (

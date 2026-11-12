@@ -4,41 +4,14 @@ import {
   GetPersonalFeedbackWidgetEmbedResponseSchema,
   type PersonalFeedbackWidgetEmbedData,
 } from "@dx/api";
-import {
-  FEEDBACK_WIDGET_FEATURE,
-  type ProjectId,
-  type UserId,
-} from "@dx/domain";
+import type { ProjectId, UserId } from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
   queryOptions,
-  useQuery,
 } from "@tanstack/react-query";
 import { request } from "../../shared/api/client.js";
-import { useIdentity } from "../../shared/auth/auth-context.js";
-import { personalExperimentalFeaturesQueryOptions } from "../settings/experimental-features/experimental-features-queries.js";
 import { projectKeys } from "./project-queries.js";
-
-/**
- * Whether the signed-in person turned on the experimental Feedback Widget.
- * Off while the flags load.
- */
-export const useFeedbackWidgetEnabled = () => {
-  const identity = useIdentity()?.identity;
-  const features = useQuery({
-    ...personalExperimentalFeaturesQueryOptions(
-      identity?.id as NonNullable<typeof identity>["id"],
-    ),
-    enabled: identity !== undefined,
-  });
-  return (
-    features.data?.flags.some(
-      ({ registration, effectiveEnabled }) =>
-        registration.id === FEEDBACK_WIDGET_FEATURE && effectiveEnabled,
-    ) === true
-  );
-};
 
 export const feedbackWidgetKey = (userId: UserId, projectId: ProjectId) =>
   [...projectKeys.detail(userId, projectId), "feedback-widget"] as const;

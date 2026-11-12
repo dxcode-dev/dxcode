@@ -2,7 +2,6 @@ import type { MessageAutomation, MessagePlugin } from "@dx/api";
 import type { Principal, UserId } from "@dx/domain";
 import { Hono } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
-import { useSpacesGate } from "../spaces/gate.js";
 
 let ownerRouteModules:
   | Promise<
@@ -80,8 +79,6 @@ export const ownerRequest = async (
       });
     await next();
   });
-  // The owner's tools reach Spaces only while Spaces is on for the owner.
-  useSpacesGate(app);
   app.route("/v1/threads", threadRoutes);
   app.route("/v1/agents/dx", dxAgentRoutes);
   app.route("/v1/settings", settingsRoutes);

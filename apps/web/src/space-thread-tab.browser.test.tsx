@@ -199,10 +199,8 @@ const mount = async () => {
   document.documentElement.dataset.resolvedAppearance = "light";
   document.documentElement.dataset.palette = "daydream";
   const queryClient = createQueryClient();
-  // Spaces is on for the viewer (its experimental flag).
   queryClient.setQueryData(settingsContextQueryOptions(viewer).queryKey, {
     activeScope: "personal",
-    spaces: true,
   } as never);
   queryClient.setQueryData(threadKeys.detail(viewer, CHILD), childThread);
   queryClient.setQueryData(projectKeys.detail(viewer, PROJECT), {

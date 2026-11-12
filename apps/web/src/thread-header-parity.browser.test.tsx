@@ -281,7 +281,6 @@ const mount = async (url: string, width: number, height: number) => {
   const queryClient = createQueryClient();
   queryClient.setQueryData(settingsContextQueryOptions(viewer).queryKey, {
     activeScope: "personal",
-    spaces: true,
   } as never);
   for (const thread of Object.values(threads)) {
     queryClient.setQueryData(threadKeys.detail(viewer, thread.id), thread);

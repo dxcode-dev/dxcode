@@ -16,7 +16,7 @@ import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
 import { threadRoutes } from "../../src/threads/routes.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * Archived Spaces stay reachable: they list with the archived Threads in
@@ -94,8 +94,7 @@ beforeEach(async () => {
   ]);
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner]));
+beforeEach(() => seedSpaceUsers([owner]));
 
 describe("archived Spaces", () => {
   it("list with the archived Threads, and active ones stay out of the Threads", async () => {

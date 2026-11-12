@@ -3,7 +3,6 @@ import type { Bindings } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
 import type { HistoryPage } from "../thread-search/history.js";
 import { ownerRequest } from "../threads/owner-request.js";
-import { spacesEnabledFor } from "./gate.js";
 
 /**
  * A Space's coordinator learns about its children only from messages, so
@@ -121,12 +120,7 @@ const sendSpaceReport = async (
       )
       .bind(input.spaceThreadId, input.ownerUserId, input.threadId)
       .first();
-    // A Space its owner turned off gets no reports (spaces/gate.ts).
-    if (
-      space === null ||
-      !(await spacesEnabledFor(bindings, input.ownerUserId))
-    )
-      return;
+    if (space === null) return;
     const { response } = await ownerRequest(
       {
         bindings,

@@ -2,7 +2,6 @@ import type {
   ExperimentalFeaturePreferenceData,
   PersonalExperimentalFeaturesData,
 } from "@dx/api";
-import { FEEDBACK_WIDGET_FEATURE } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
 import * as React from "react";
@@ -86,31 +85,30 @@ function ExperimentalFeaturesPanel({
           data.flags.map((flag) => {
             const hint = featureHint(flag);
             return (
-              <React.Fragment key={flag.registration.id}>
-                <SettingsRow
-                  title={flag.registration.title}
-                  description={
-                    hint === undefined
-                      ? flag.registration.description
-                      : `${flag.registration.description} ${hint}`
-                  }
-                  control={
-                    <SettingsToggle
-                      checked={flag.personalEnabled}
-                      disabled={savingFeatureId !== undefined}
-                      label={`${flag.personalEnabled ? "Disable" : "Enable"} ${flag.registration.title}`}
-                      onCheckedChange={() => onToggle(flag)}
-                    />
-                  }
-                />
-                {flag.registration.id === FEEDBACK_WIDGET_FEATURE &&
-                flag.effectiveEnabled ? (
-                  <FeedbackWidgetOnDxSetting />
-                ) : null}
-              </React.Fragment>
+              <SettingsRow
+                key={flag.registration.id}
+                title={flag.registration.title}
+                description={
+                  hint === undefined
+                    ? flag.registration.description
+                    : `${flag.registration.description} ${hint}`
+                }
+                control={
+                  <SettingsToggle
+                    checked={flag.personalEnabled}
+                    disabled={savingFeatureId !== undefined}
+                    label={`${flag.personalEnabled ? "Disable" : "Enable"} ${flag.registration.title}`}
+                    onCheckedChange={() => onToggle(flag)}
+                  />
+                }
+              />
             );
           })
         )}
+      </SettingsCard>
+      <SettingsHeading title="Feedback Widget on dx" />
+      <SettingsCard>
+        <FeedbackWidgetOnDxSetting />
       </SettingsCard>
     </div>
   );

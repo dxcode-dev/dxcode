@@ -1,5 +1,6 @@
 import type { RTKParticipant } from "@cloudflare/realtimekit";
 import { ApiError } from "../../shared/api/client.js";
+import { HuddleAudio } from "./huddle-audio.js";
 import {
   type HuddleCallState,
   type HuddleClient,
@@ -11,7 +12,6 @@ import {
   huddleScopeKey,
   IDLE_HUDDLE,
 } from "./huddle-client.js";
-import { HuddleAudio } from "./huddle-audio.js";
 import { postHuddleJoin } from "./huddle-join-mutations.js";
 import { getHuddleSummary } from "./huddle-summary-queries.js";
 
@@ -43,13 +43,7 @@ type Failure = { readonly code: HuddleErrorCode; readonly message: string };
 const joinFailure = (error: unknown): Failure => {
   if (error instanceof ApiError) {
     if (error.status === 403 || error.status === 404)
-      return {
-        code: "forbidden",
-        message:
-          error.code === "HUDDLE_DISABLED"
-            ? error.message
-            : "You can't join this huddle.",
-      };
+      return { code: "forbidden", message: "You can't join this huddle." };
     return { code: "unknown", message: error.message };
   }
   if (error instanceof TypeError)

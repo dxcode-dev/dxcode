@@ -1204,8 +1204,8 @@ function ThreadSessionContent({
   };
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
   const dictationAvailable = settingsQuery.data?.dictationAvailable === true;
-  // The composer's quick-action row (experimental): the settings context
-  // says the person's flag is on and Clef Flash is there; viewers get none.
+  // The composer's quick-action row: the settings context says Clef Flash
+  // is there; viewers get none.
   const quickActions =
     settingsQuery.data?.composerQuickActions === true &&
     thread.access !== "view" &&

@@ -91,6 +91,7 @@ const preThreadSearchIndexBindingOmission = "THREAD_SEARCH_INDEX";
 const preOrbProviderPreparationBindingOmission = "ORB_PROVIDER_PREPARATION";
 const preBitbucketTokenCoordinatorBindingOmission =
   "BITBUCKET_TOKEN_COORDINATOR";
+const preGitHubTokenCoordinatorBindingOmission = "GITHUB_TOKEN_COORDINATOR";
 // Plugin code's Dynamic Worker loader. Stages deployed before it, and the
 // props Alchemy records for a worker_loader binding, lack it.
 const preWorkerLoaderBindingOmission = "LOADER";
@@ -130,6 +131,7 @@ const destroyWorkerBindingOmissions = new Set([
   "DX_TURNSTILE_SITE_KEY",
   "DX_WORKSPACE_INACTIVITY_MS",
   "EMAIL",
+  "GITHUB_TOKEN_COORDINATOR",
   "ORB_PROVIDER_PREPARATION",
   "REALTIME_HUB",
   "THREAD_SEARCH_INDEX",
@@ -157,6 +159,7 @@ const workerDurableObjectBindings = [
   ["BITBUCKET_TOKEN_COORDINATOR", "BitbucketTokenCoordinatorObject"],
   ["BYOK_CREDENTIAL_COORDINATOR", "ByokCredentialCoordinatorObject"],
   ["FLUE_DX_AGENT_AGENT", "FlueDxAgentAgent"],
+  ["GITHUB_TOKEN_COORDINATOR", "GitHubTokenCoordinatorObject"],
   ["ORB_PROVIDER_PREPARATION", "OrbProviderPreparationObject"],
   ["PLUGIN_TRIGGER_DELIVERY", "PluginTriggerDeliveryObject"],
   ["REALTIME_HUB", "RealtimeHub"],
@@ -261,10 +264,12 @@ const deploymentResourceTypes = ({
           ["WorkerLogsToken", "Cloudflare.ApiToken.AccountApiToken"],
         ]
       : [["AttachmentR2Credentials", "Dx.HeldSecret"]]),
-    // Huddle's RealtimeKit-only token, where Huddle is on and the deploy
-    // can mint tokens.
-    ...(huddle && attachmentSigning === "token"
-      ? [["HuddleToken", "Cloudflare.ApiToken.AccountApiToken"]]
+    // Huddle's RealtimeKit-only token where Huddle is on: minted, or, on a
+    // browser-login self-host, the operator's own, held across deploys.
+    ...(huddle
+      ? attachmentSigning === "token"
+        ? [["HuddleToken", "Cloudflare.ApiToken.AccountApiToken"]]
+        : [["HuddleApiToken", "Dx.HeldSecret"]]
       : []),
     ...(orbProviders.includes("cloudflare")
       ? [["OrbContainers", "Dx.OrbContainers"]]
@@ -1413,6 +1418,13 @@ const validateWorkerProps = (
           representation === "prior" ||
           allowDestroyWorkerBindingOmissions) &&
         name === preBitbucketTokenCoordinatorBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" ||
+          representation === "prior" ||
+          allowDestroyWorkerBindingOmissions) &&
+        name === preGitHubTokenCoordinatorBindingOmission
       ) &&
       !(
         !current &&
@@ -2884,6 +2896,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     id === "GitHubAppSecret" ||
     id === "SarvamApiKey" ||
     id === "BoatApiKey" ||
+    id === "HuddleApiToken" ||
     id === "BugReportDestinationKey" ||
     id === "BugReportIntakeSecret"
   )

@@ -2,26 +2,22 @@ import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useIdentity } from "../../shared/auth/auth-context.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
-import {
-  personalFeedbackWidgetQueryOptions,
-  useFeedbackWidgetEnabled,
-} from "./feedback-widget-queries.js";
+import { personalFeedbackWidgetQueryOptions } from "./feedback-widget-queries.js";
 
 /**
  * Loads the Feedback Widget the person chose for dx itself, so they can
- * comment on dx's own pages and send it to a Project on any dx host. Only
- * with the experimental flag on; the widget stays hidden until `?dx`.
+ * comment on dx's own pages and send it to a Project on any dx host. The
+ * widget stays hidden until `?dx`.
  */
 export function FeedbackWidgetOnDx() {
   const identity = useIdentity()?.identity;
-  const enabled = useFeedbackWidgetEnabled();
   const embed = useQuery({
     ...personalFeedbackWidgetQueryOptions(
       identity?.id as NonNullable<typeof identity>["id"],
     ),
-    enabled: enabled && identity !== undefined,
+    enabled: identity !== undefined,
   });
-  const scriptUrl = enabled ? embed.data?.scriptUrl : undefined;
+  const scriptUrl = embed.data?.scriptUrl;
   return scriptUrl === undefined ? null : (
     <FeedbackWidgetScript key={scriptUrl} scriptUrl={scriptUrl} />
   );

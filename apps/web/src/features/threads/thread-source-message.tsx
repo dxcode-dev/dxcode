@@ -198,7 +198,7 @@ export function AutomationMessage({
         )}
         <span>
           {artifact
-            ? "Artifact ask ticked or answered"
+            ? "From an artifact"
             : external
               ? "Sent from outside dx"
               : "Scheduled wake-up"}

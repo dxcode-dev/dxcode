@@ -132,6 +132,7 @@ const NAMES = [
   "Checklist",
   "Insert",
   "Comment",
+  "Notify agent",
   "Add Row",
   "Add Column",
   "Row Options",

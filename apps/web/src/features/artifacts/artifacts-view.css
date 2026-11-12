@@ -176,32 +176,12 @@
   color: var(--muted-foreground);
 }
 
-/* A board whose flag is off, or a document's embed: the plain preview. */
+/* A board in a document's embed: the plain preview. */
 .board-preview {
   display: block;
   width: 100%;
   height: 100%;
 }
-.board-off {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-}
-.board-off-preview {
-  flex: 1;
-  min-height: 0;
-  padding: 16px;
-}
-.board-off-note {
-  flex: none;
-  margin: 0;
-  padding: 10px 14px;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground);
-  font-size: 13px;
-}
-
 /* A board preview's hand-drawn text, without loading the board editor: the
    Latin subset of Excalidraw's font, which ships with dx (see vite.config). */
 @font-face {

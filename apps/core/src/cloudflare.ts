@@ -29,6 +29,7 @@ export { ByokCredentialCoordinatorObject } from "./settings/model-byok/invocatio
 export { SubscriptionCredentialCoordinatorObject } from "./settings/model-subscriptions/invocation.js";
 export { PluginTriggerDeliveryObject } from "./settings/triggers/durable-object.js";
 export { BitbucketTokenCoordinatorObject } from "./source-control/bitbucket/token-coordinator.js";
+export { GitHubTokenCoordinatorObject } from "./source-control/github/token-coordinator.js";
 export { ThreadSearchIndexObject } from "./thread-search/index-object.js";
 export { ThreadExecutionObject } from "./threads/terminal-object.js";
 

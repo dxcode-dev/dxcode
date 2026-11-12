@@ -131,6 +131,62 @@ describe("integrations settings", () => {
     },
   );
 
+  // #1953: GitHub refused to renew the sign-in that `gh` and additional
+  // repositories use, while the App installation itself still works.
+  it("asks to reconnect an expired GitHub sign-in beside a working installation", async () => {
+    ceremonies.authorize.mockClear();
+    ceremonies.install.mockClear();
+    const client = new QueryClient();
+    client.setQueryData(bitbucketKeys.connection(userId), {
+      configured: false,
+      connection: null,
+    });
+    client.setQueryData(integrationKeys.github(userId), {
+      configured: true,
+      grants: [
+        {
+          id: "grant-1",
+          status: "active",
+          installationStatus: "active",
+          account: { id: "9", login: "octocat", type: "user" },
+          repositories: [],
+        },
+      ],
+      authorization: { login: "octocat", status: "reauthorization-required" },
+    });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    try {
+      await act(async () =>
+        root.render(
+          <AuthContext.Provider
+            value={{
+              identity: { id: userId, name: "Test", email: "test@example.com" },
+              logout: () => undefined,
+            }}
+          >
+            <QueryClientProvider client={client}>
+              <IntegrationsSettings onDirtyChange={() => undefined} />
+            </QueryClientProvider>
+          </AuthContext.Provider>,
+        ),
+      );
+      expect(container.textContent).toContain(
+        "GitHub stopped accepting this sign-in.",
+      );
+      const button = container.querySelector<HTMLButtonElement>(
+        'button[aria-label="Reconnect @octocat sign-in"]',
+      );
+      expect(button).not.toBeNull();
+      await act(async () => button?.click());
+      expect(ceremonies.authorize).toHaveBeenCalledTimes(1);
+      expect(ceremonies.install).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => root.unmount());
+      client.clear();
+    }
+  });
+
   it("replaces the document and sends the DX return target for GitHub OAuth", async () => {
     navigation.mockClear();
     const client = new QueryClient();

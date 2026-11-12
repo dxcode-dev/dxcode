@@ -295,6 +295,14 @@ const selfhostShape =
       })
     : undefined;
 const attachmentSigning = selfhostShape?.attachmentSigning ?? "token";
+// Huddle's RealtimeKit token on a browser-login self-host, which cannot mint
+// one: the deployment holds it, so it is needed only the first time.
+const realtimeKitApiToken =
+  target === "selfhost" &&
+  selfhostConfig.integrations.includes("huddle") &&
+  attachmentSigning === "operator"
+    ? operatorEnvironment.DX_REALTIMEKIT_API_TOKEN?.trim()
+    : undefined;
 // The operator's R2 API token, for deployments that cannot mint one. The
 // deployment holds it, so it is needed only the first time or to rotate it.
 const attachmentR2Credentials =
@@ -771,6 +779,9 @@ const environment = {
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
   ...(boatApiKey ? { BOAT_API_KEY: boatApiKey } : {}),
+  ...(realtimeKitApiToken
+    ? { DX_REALTIMEKIT_API_TOKEN: realtimeKitApiToken }
+    : {}),
   ...lizardSettings,
   ...(deploymentAdminEmails
     ? { DX_DEPLOYMENT_ADMIN_EMAILS: deploymentAdminEmails }

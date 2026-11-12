@@ -74,23 +74,11 @@ export const checklistItems = (
   return items;
 };
 
-const identity = (item: ArtifactChecklistItem) =>
-  `${item.occurrence}\u0000${item.text}`;
-
 /** Open asks: unchecked items that mention a person. */
 export const openAsks = (markdown: string) =>
   checklistItems(markdown).filter(
     (item) => !item.checked && item.mentions.length > 0,
   );
-
-export interface ArtifactAskChanges {
-  /** Asks that were unchecked before and are ticked now. */
-  readonly ticked: ReadonlyArray<ArtifactChecklistItem>;
-  /** Open asks a person wrote under, still unchecked. */
-  readonly answered: ReadonlyArray<ArtifactChecklistItem>;
-  /** People mentioned anywhere in the new text who were not before. */
-  readonly newMentions: ReadonlyArray<string>;
-}
 
 const mentionsIn = (markdown: string) => {
   const found = new Set<string>();
@@ -110,32 +98,8 @@ const mentionsIn = (markdown: string) => {
   return found;
 };
 
-/**
- * What a save changed about asks and mentions, comparing whole revisions: a
- * merged save can carry several ticks at once. Items are matched by their
- * text (and which repeat of it they are), so a tick that also moves the item
- * still counts.
- */
-export const askChanges = (
-  before: string,
-  after: string,
-): ArtifactAskChanges => {
-  const previous = new Map(
-    checklistItems(before).map((item) => [identity(item), item]),
-  );
-  const ticked: ArtifactChecklistItem[] = [];
-  const answered: ArtifactChecklistItem[] = [];
-  for (const item of checklistItems(after)) {
-    const old = previous.get(identity(item));
-    if (old === undefined || old.checked || old.mentions.length === 0) continue;
-    if (item.checked) ticked.push(item);
-    else if (item.body !== old.body && item.body.length > 0)
-      answered.push(item);
-  }
+/** People mentioned anywhere in `after` who were not in `before`. */
+export const newMentions = (before: string, after: string) => {
   const had = mentionsIn(before);
-  return {
-    ticked,
-    answered,
-    newMentions: [...mentionsIn(after)].filter((id) => !had.has(id)),
-  };
+  return [...mentionsIn(after)].filter((id) => !had.has(id));
 };

@@ -25,7 +25,7 @@ import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { threadRoutes } from "../../src/threads/routes.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * Spaces end to end in workerd with real D1: creating, listing, discovering,
@@ -217,8 +217,7 @@ beforeEach(async () => {
   );
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, member, outsider]));
+beforeEach(() => seedSpaceUsers([owner, member, outsider]));
 
 describe("Spaces in workerd with real D1", () => {
   it("creates a private Space as a Thread only its owner reaches", async () => {

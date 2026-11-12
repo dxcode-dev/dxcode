@@ -145,7 +145,7 @@ describe("a wake while the Thread's Claude plan is used up", () => {
     });
   });
 
-  it("does the same for a person's tick and @dx comment in an artifact (#1606)", async () => {
+  it("does the same for a person's @dx comments in an artifact, and a tick wakes nothing (#1606, #1765)", async () => {
     const project = await fixtureRequest(
       "/v1/projects",
       json({ name: "plan-reset-artifacts" }),
@@ -176,27 +176,34 @@ describe("a wake while the Thread's Claude plan is used up", () => {
       `/__fixture/plan/report-limit/${threadId}`,
       json({ resetsAt }),
     );
-    const wake = async (kind: "tick" | "comment", now: number) => {
+    const wake = async (
+      kind: "tick" | "comment",
+      now: number,
+      comment?: number,
+    ) => {
       const response = await fixtureRequest(
         `/__fixture/plan/artifact-wake/${threadId}`,
-        { method: "POST", body: JSON.stringify({ kind, now }) },
+        { method: "POST", body: JSON.stringify({ kind, now, comment }) },
       );
       expect(response.status).toBe(200);
-      const { delivered } = await response.json<{ delivered: string[] }>();
-      expect(delivered).toHaveLength(1);
-      return delivered[0] ?? "";
+      return (await response.json<{ delivered: string[] }>()).delivered;
     };
 
-    // The tick's wake fails on the limit; so does the comment's, which comes
-    // after the per-Thread wake interval.
-    const tick = await wake("tick", Date.now());
-    await expect(client.read(tick)).rejects.toThrow(
-      /Claude plan limit reached/,
-    );
-    const comment = await wake("comment", Date.now() + 31_000);
-    await expect(client.read(comment)).rejects.toThrow(
-      /Claude plan limit reached/,
-    );
+    // A tick wakes nothing (#1765).
+    expect(await wake("tick", Date.now())).toEqual([]);
+    // Each comment's wake fails on the limit; the second comes after the
+    // agent wake window, so it wakes on its own.
+    const t0 = Date.now();
+    for (const [comment, now] of [
+      [1, t0],
+      [2, t0 + 31_000],
+    ] as const) {
+      const delivered = await wake("comment", now, comment);
+      expect(delivered).toHaveLength(1);
+      await expect(client.read(delivered[0] ?? "")).rejects.toThrow(
+        /Claude plan limit reached/,
+      );
+    }
 
     // Nothing runs before the reset; then one tick runs the Thread once,
     // and its turn answers both wakes in order.
@@ -210,7 +217,7 @@ describe("a wake while the Thread's Claude plan is used up", () => {
     const [answer, ...more] = await answers();
     expect(more).toEqual([]);
     expect(answer).toMatch(
-      /^Answered: A person ticked an ask in artifact art_0{31}1 \(revision 2\)[\s\S]* \| A person mentioned you in a comment \(cmt_0{31}1\)/,
+      /^Answered: A person mentioned you in a comment \(cmt_0{31}1\)[\s\S]* \| A person mentioned you in a comment \(cmt_0{31}2\)/,
     );
     expect(await tickSweep()).toEqual([]);
     writeProof("plan-reset-artifacts", {

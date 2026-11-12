@@ -32,6 +32,7 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
+import { threadHuddleRoutes } from "./huddles/routes.js";
 import {
   notificationRoutes,
   notificationUnsubscribeRoutes,
@@ -50,7 +51,6 @@ import { threadPortalRoutes } from "./portals/routes.js";
 import { projectRepositoryBrowseRoutes } from "./projects/repository-browse.js";
 import { projectRoutes } from "./projects/routes.js";
 import { threadQuickActionsRoutes } from "./quick-actions/routes.js";
-import { threadHuddleRoutes } from "./huddles/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
 import { contentSecurityPolicy } from "./security/headers.js";
@@ -69,7 +69,6 @@ import {
   githubControlPlaneRoutes,
   githubWebhookRoutes,
 } from "./source-control/github/routes.js";
-import { prefetchThreadKind, useSpacesGate } from "./spaces/gate.js";
 import { messageCommentRoutes } from "./spaces/message-comments/routes.js";
 import { spaceRoutes } from "./spaces/routes.js";
 import { threadArtifactRoutes } from "./thread-artifacts/routes.js";
@@ -131,14 +130,8 @@ app.route("/v1/deployment", registeredDeploymentHookRoutes);
 app.route("/v1", threadDaemonRoutes);
 // Navigated to, not fetched: it redirects to sign-in instead of answering 401.
 app.route("/v1/portal-auth", portalAuthRoutes);
-// Whether a route's Thread is a Space, read while the request authenticates
-// so the Spaces gate below adds no round trip; see spaces/gate.ts.
-app.use("/v1/threads/:threadId/*", prefetchThreadKind);
-app.use("/v1/agents/dx/:threadId/*", prefetchThreadKind);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
-// Spaces only for people whose `spaces` flag is on; see spaces/gate.ts.
-useSpacesGate(app);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);

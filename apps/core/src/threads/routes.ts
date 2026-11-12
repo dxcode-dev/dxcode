@@ -183,7 +183,6 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
-import { spacesEnabledFor, spaceThreadIds } from "../spaces/gate.js";
 import { markThreadsShipped } from "../spaces/progress/shipped.js";
 import { reportShippedToSpace } from "../spaces/report-back.js";
 import { isDeletedThread } from "../thread-deletion/tombstone.js";
@@ -1805,11 +1804,9 @@ export const createThreadRoutes = (
               status: "error",
               data: {
                 code:
-                  failure.reason === "required"
-                    ? "CLAUDE_PLAN_REQUIRED"
-                    : failure.reason === "used-up"
-                      ? "CLAUDE_PLAN_USED_UP"
-                      : "CLAUDE_PLAN_UNAVAILABLE",
+                  failure.reason === "used-up"
+                    ? "CLAUDE_PLAN_USED_UP"
+                    : "CLAUDE_PLAN_UNAVAILABLE",
                 message: failure.message,
                 requestId,
                 ...(failure.resetsAt === undefined
@@ -3277,8 +3274,6 @@ export const createThreadRoutes = (
         () => new InvalidThreadRequest(),
       );
       const db = yield* decodeD1Binding(context.env.DB);
-      const viewerUserId = (context.get("actor") ?? context.get("principal"))
-        .userId;
       const thread = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
         return yield* service.get(context.get("principal"), params.threadId);
@@ -3306,7 +3301,7 @@ export const createThreadRoutes = (
         ),
       );
       // Independent reads: the page waits on all, so they run at once.
-      const [detail, sharing, spaceParent] = yield* Effect.all(
+      const [detail, sharing] = yield* Effect.all(
         [
           threadDetailData(context.env.DB, db, thread),
           Effect.tryPromise({
@@ -3325,27 +3320,14 @@ export const createThreadRoutes = (
                 cause,
               ),
           }),
-          // Spaces off for the viewer: a thread a Space started is a root.
-          Effect.promise(async () =>
-            thread.parentThreadId !== undefined &&
-            (await spaceThreadIds(db, [thread.parentThreadId])).size > 0
-              ? !(await spacesEnabledFor(context.env, viewerUserId))
-              : false,
-          ),
         ],
         { concurrency: "unbounded" },
       );
       const shown =
         sharing.access === "owner" ? detail : withoutOwnerConfiguration(detail);
-      const {
-        parentThreadId: _parent,
-        startedByThreadId: _starter,
-        parentColor: _parentColor,
-        ...asRoot
-      } = shown;
       return yield* Schema.encodeUnknownEffect(GetThreadResponseSchema)({
         status: "success",
-        data: { ...(spaceParent ? asRoot : shown), ...sharing },
+        data: { ...shown, ...sharing },
       });
     });
 

@@ -30,6 +30,13 @@ import {
   GitHubProviderError,
   type GitHubRepository,
 } from "./provider-http.js";
+import {
+  createGitHubRenewal,
+  type GitHubRenewer,
+  memoryRenewalJournals,
+  serializedRenewer,
+} from "./token-renewal.js";
+import { githubRenewerFor } from "./token-renewer.js";
 
 const CEREMONY_TTL_MS = 10 * 60 * 1_000;
 const USER_TOKEN_REFRESH_MARGIN_MS = 60 * 60 * 1_000;
@@ -499,6 +506,11 @@ export const createGitHubControlPlane = (input: {
   readonly keyring: ConfigEncryptionKeyring;
   readonly vault: IntegrationCredentialVaultShape;
   readonly fetcher?: typeof fetch;
+  /**
+   * Who renews the user token: the authorization's Durable Object in a
+   * deployment (`githubRenewerFor`), else this isolate.
+   */
+  readonly renewer?: GitHubRenewer;
 }) => {
   const { db, config, keyring, vault } = input;
   /** A relayed preview's state names its host for the relay to route. */
@@ -790,6 +802,10 @@ export const createGitHubControlPlane = (input: {
             refresh_token_reference_id = excluded.refresh_token_reference_id,
             expires_at = excluded.expires_at,
             refresh_expires_at = excluded.refresh_expires_at,
+            next_renewal_at = NULL,
+            renewal_failures = 0,
+            renewal_failing_since = NULL,
+            last_renewal_error = NULL,
             updated_at = excluded.updated_at
         `)
           .bind(
@@ -891,6 +907,7 @@ export const createGitHubControlPlane = (input: {
         !(
           cause instanceof GitHubProviderError &&
           (cause.category === "unauthorized" ||
+            cause.category === "invalid-grant" ||
             cause.category === "invalid-response")
         )
       )
@@ -1206,68 +1223,50 @@ export const createGitHubControlPlane = (input: {
         return yield* new GitHubControlPlaneInvalid();
     });
 
+  const renewer =
+    input.renewer ??
+    serializedRenewer(() =>
+      createGitHubRenewal({
+        db,
+        keyring,
+        vault,
+        provider,
+        journalFor: memoryRenewalJournals(),
+      }),
+    );
+
+  /**
+   * Renews the user token through its coordinator, which rotates it at most
+   * once at a time and never loses GitHub's answer. A token with more than an
+   * hour left is current and left alone. A refused refresh token ends the
+   * authorization: the person reconnects.
+   */
   const refresh = async (actorUserId: string) => {
     const authorization = await activeAuthorization(db, actorUserId);
     if (authorization.refresh_token_reference_id === null)
       throw new GitHubControlPlaneForbidden();
-    const owner = personalOwner(actorUserId);
-    const refreshReference = integrationCredentialReferenceFor(
-      authorization.refresh_token_reference_id as never,
-    );
-    const refreshToken = await Effect.runPromise(
-      vault.read(keyring, owner, "refresh-token", refreshReference),
-    );
-    const tokens = await provider.refresh(refreshToken);
-    const { accessReference, refreshReference: nextRefreshReference } =
-      await putTokenPair(owner, tokens.accessToken, tokens.refreshToken);
-    const now = nowIso();
-    const update = await db
-      .prepare(`
-        UPDATE github_user_authorization
-           SET access_token_reference_id = ?, refresh_token_reference_id = ?,
-               expires_at = ?, refresh_expires_at = ?, updated_at = ?
-         WHERE id = ? AND access_token_reference_id = ? AND refresh_token_reference_id = ?
-      `)
-      .bind(
-        accessReference.id,
-        nextRefreshReference.id,
-        tokens.expiresAt.toISOString(),
-        tokens.refreshExpiresAt?.toISOString() ?? null,
-        now,
-        authorization.id,
-        authorization.access_token_reference_id,
-        authorization.refresh_token_reference_id,
-      )
-      .run();
-    if (update.meta.changes !== 1) {
-      await Promise.all([
-        Effect.runPromise(Effect.ignore(vault.remove(owner, accessReference))),
-        Effect.runPromise(
-          Effect.ignore(vault.remove(owner, nextRefreshReference)),
-        ),
-      ]);
-      throw new GitHubControlPlaneInvalid();
-    }
-    await Promise.all([
-      Effect.runPromise(
-        Effect.ignore(
-          vault.remove(
-            owner,
-            integrationCredentialReferenceFor(
-              authorization.access_token_reference_id as never,
-            ),
-          ),
-        ),
-      ),
-      Effect.runPromise(Effect.ignore(vault.remove(owner, refreshReference))),
-    ]);
+    const result = await renewer.renew({
+      authorizationId: authorization.id,
+      userId: actorUserId,
+      trigger: "use",
+    });
+    if (result.outcome === "reauthorization-required")
+      throw new GitHubControlPlaneForbidden();
+    if (result.outcome === "unavailable" || result.outcome === "rate-limited")
+      throw new GitHubProviderError({
+        category: result.outcome,
+        ...(result.outcome === "rate-limited" && result.retryAt !== undefined
+          ? { retryAt: new Date(result.retryAt) }
+          : {}),
+      });
   };
 
   /**
    * The user's current GitHub App user access token for native Git and `gh`.
-   * GitHub disables the previous token when a refresh token is used, so
-   * refresh early. A concurrent refresh may rotate the pair and remove the
-   * reference this request read; follow the current reference instead.
+   * GitHub disables the previous token when a refresh token is used, so it
+   * is renewed early, by the cron and by the coordinator. A renewal may
+   * rotate the pair and remove the reference this request read; follow the
+   * current reference instead.
    */
   const userAccessToken = async (actorUserId: string) => {
     const unexpired = (authorization: AuthorizationRow, marginMs: number) =>
@@ -1527,7 +1526,29 @@ export const readGitHubUserAccessToken = async (
     config,
     keyring,
     vault,
+    renewer: githubRenewerFor(bindings, db),
   }).userAccessToken(userId);
+};
+
+/** The person's GitHub sign-in, for Settings to ask for a reconnect. */
+export const readGitHubUserAuthorizationStatus = async (
+  db: D1Database,
+  userId: string,
+) => {
+  const row = await db
+    .prepare(`
+      SELECT provider_account_login, status FROM github_user_authorization
+       WHERE user_id = ? AND status IN ('active', 'reauthorization-required')
+       ORDER BY updated_at DESC, id DESC LIMIT 1
+    `)
+    .bind(userId)
+    .first<{
+      provider_account_login: string;
+      status: "active" | "reauthorization-required";
+    }>();
+  return row === null
+    ? undefined
+    : { login: row.provider_account_login, status: row.status };
 };
 
 export const listGitHubGrants = async (db: D1Database, owner: GitHubOwner) => {

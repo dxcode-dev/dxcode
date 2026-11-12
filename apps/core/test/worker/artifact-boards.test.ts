@@ -2,7 +2,6 @@ import { env } from "cloudflare:test";
 import type {
   ThreadArtifactCommentListResponse,
   ThreadArtifactCommentResponse,
-  ThreadArtifactErrorResponse,
   ThreadArtifactResponse,
 } from "@dx/api";
 import {
@@ -33,8 +32,8 @@ import { runRepositories } from "./runtime.js";
  * `artifact` tool, reading and writing board text.
  *
  * Ways it could fail, each covered below:
- * - a person without the `artifact-boards` flag creates a board, or the
- *   agent does while its owner's flag is off;
+ * - a person cannot create a board, or the agent's `artifact` tool does not
+ *   offer boards or cannot create one;
  * - a malformed board body, or one that carries an image's bytes inline,
  *   is saved;
  * - the agent's board text does not round-trip: what it reads, written
@@ -79,17 +78,6 @@ const newThread = async () => {
   return entity.id as ThreadId;
 };
 
-const setBoards = (enabled: boolean) =>
-  env.DB.prepare(
-    `INSERT INTO personal_experimental_feature_preferences
-       (user_id, preferences, revision, updated_at)
-     VALUES (?1, ?2, 1, '2026-11-12T00:00:00.000Z')
-     ON CONFLICT (user_id) DO UPDATE SET
-       preferences = excluded.preferences, revision = revision + 1`,
-  )
-    .bind(owner, JSON.stringify([{ id: "artifact-boards", enabled }]))
-    .run();
-
 /** The person, through the routes. */
 const person = (path: string, method = "GET", body?: unknown) => {
   const routes = new Hono<AppEnv>();
@@ -128,17 +116,21 @@ const read = async (threadId: string, artifactId: string) =>
     ).json()) as ThreadArtifactResponse
   ).data;
 
-const toolFor = (threadId: string, boards = true) => {
+const toolDefinition = (threadId: string) => {
   const [tool] = createArtifactTools(
     threadId,
     () => ({ db: env.DB, bindings }),
     "sub_boards_test",
-    { boards },
   );
+  return tool as ToolDefinition;
+};
+
+const toolFor = (threadId: string) => {
+  const tool = toolDefinition(threadId);
   // biome-ignore lint/suspicious/noExplicitAny: the tool's output is JSON for the model.
   return async (data: Record<string, unknown>): Promise<any> =>
     (
-      (await (tool as ToolDefinition).run({
+      (await tool.run({
         data,
         toolCallId: "call",
         log: { info() {}, warn() {}, error() {}, debug() {} },
@@ -214,44 +206,11 @@ beforeEach(async () => {
         yield* (yield* ProjectRepository).insert(projectEntity);
       }),
     );
-  await setBoards(true);
 });
 
 describe("drawing boards", () => {
-  it("needs the flag: for people creating one, and for the agent", async () => {
+  it("lets people and the agent create boards, next to documents", async () => {
     const threadId = await newThread();
-    await setBoards(false);
-    const refused = await person(`/v1/threads/${threadId}/artifacts`, "POST", {
-      title: "Sketch",
-      kind: "board",
-      markdown: "",
-    });
-    expect(refused.status).toBe(403);
-    expect(
-      ((await refused.json()) as ThreadArtifactErrorResponse).data.code,
-    ).toBe("ARTIFACT_KIND_DISABLED");
-    // Documents need no flag.
-    const document = await person(`/v1/threads/${threadId}/artifacts`, "POST", {
-      title: "Notes",
-      markdown: "# Notes\n",
-    });
-    expect(document.status).toBe(201);
-    expect(
-      ((await document.json()) as ThreadArtifactResponse).data.artifact.kind,
-    ).toBe("document");
-    await expect(
-      toolFor(
-        threadId,
-        false,
-      )({
-        action: "create",
-        type: "board",
-        title: "Flow",
-        markdown: FLOW,
-      }),
-    ).rejects.toThrow(/Drawing boards are off/);
-
-    await setBoards(true);
     const created = await person(`/v1/threads/${threadId}/artifacts`, "POST", {
       title: "Sketch",
       kind: "board",
@@ -262,6 +221,27 @@ describe("drawing boards", () => {
     expect(board.artifact.kind).toBe("board");
     // An empty board opens blank.
     expect(elementsOf(board.markdown).elements).toEqual([]);
+    const document = await person(`/v1/threads/${threadId}/artifacts`, "POST", {
+      title: "Notes",
+      markdown: "# Notes\n",
+    });
+    expect(document.status).toBe(201);
+    expect(
+      ((await document.json()) as ThreadArtifactResponse).data.artifact.kind,
+    ).toBe("document");
+
+    // The agent's tool offers boards and makes one.
+    expect(toolDefinition(threadId).description).toContain(
+      'Drawing boards: create one with type "board"',
+    );
+    expect(
+      await toolFor(threadId)({
+        action: "create",
+        type: "board",
+        title: "Flow",
+        markdown: FLOW,
+      }),
+    ).toMatchObject({ saved: true, type: "board" });
   });
 
   it("refuses a malformed board, and images carried inline", async () => {

@@ -23,7 +23,7 @@ import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { threadRoutes } from "../../src/threads/routes.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * How a Space's coordinator hears about its children, end to end in workerd
@@ -360,7 +360,7 @@ beforeEach(async () => {
       yield* (yield* ProjectRepository).insert(ownerProject);
     }),
   );
-  turnSpacesOn([owner]);
+  seedSpaceUsers([owner]);
 });
 
 // Each case starts a Space and its children in workerd: past 5 s under load.

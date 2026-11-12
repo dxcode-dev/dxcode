@@ -4,7 +4,7 @@ import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 const owner = "orb-free-owner" as UserId;
 const projectId = "prj_00000000-0000-4000-8000-0000000005a0";
@@ -212,8 +212,7 @@ beforeEach(() => {
   execution.createSandbox.mockClear();
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner]));
+beforeEach(() => seedSpaceUsers([owner]));
 
 describe("DxAgent's tool set", () => {
   it("keeps an ordinary Thread's Orb, tools, and prompt as they were", () => {
@@ -298,42 +297,6 @@ describe("DxAgent's tool set", () => {
     ).catch(() => undefined);
     expect(execution.createSandbox).toHaveBeenCalledTimes(1);
     expect(ordinary?.orbFree).toBeUndefined();
-  });
-
-  // Spaces is the owner's experimental flag (spaces/gate.ts). Off, the Space
-  // loads no prompt or tools, and still never starts an Orb.
-  it("starts no Orb and loads no Space prompt or tools while the owner's flag is off", async () => {
-    const spaceId = "thr_00000000-0000-4000-8000-0000000005a3";
-    await runRepositories(
-      Effect.gen(function* () {
-        yield* (yield* ProjectRepository).insert(
-          project(projectId, owner, "checkout"),
-        );
-        yield* (yield* ThreadRepository).insert(
-          thread(spaceId, projectId, owner),
-        );
-      }),
-    );
-    await env.DB.prepare(
-      "UPDATE threads SET kind = 'space', execution_mode = 'executor' WHERE id = ?",
-    )
-      .bind(spaceId)
-      .run();
-    await turnSpacesOn([owner], false);
-    const resolved = await DxAgent.resolvePromptData(initialData, {
-      instanceId: spaceId,
-      scope: undefined,
-    } as never);
-    expect(execution.createSandbox).not.toHaveBeenCalled();
-    expect(resolved).toMatchObject({ orbFree: true });
-    expect(resolved?.space).toBeUndefined();
-    flue.initialData = initialData;
-    flue.promptData = resolved;
-    expect(() => DxAgent({ id: spaceId } as never)).toThrow(
-      "This Space is unavailable.",
-    );
-    expect(flue.sandboxes).toBe(0);
-    expect(names()).toEqual([]);
   });
 
   it("runs a Claude Code Space only on its executor, never on an Orb", () => {

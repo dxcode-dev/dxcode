@@ -54,6 +54,16 @@ export const ListGitHubGrantsResponseSchema = successResponse(
   Schema.Struct({
     configured: Schema.Boolean,
     grants: Schema.Array(GitHubGrantDataSchema),
+    /**
+     * The person's GitHub sign-in, which `gh` and additional repositories
+     * use. `reauthorization-required` when GitHub refused to renew it.
+     */
+    authorization: Schema.optional(
+      Schema.Struct({
+        login: Schema.String,
+        status: Schema.Literals(["active", "reauthorization-required"]),
+      }),
+    ),
   }),
 );
 

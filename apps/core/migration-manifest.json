@@ -239,6 +239,11 @@
       "filename": "0045_release_v0.2.106.sql",
       "sha256": "631bccf58f8d8d2a89c038e4d90f4f72f7201324d82bb5737db01b851bc188bf",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0046_release_v0.2.107.sql",
+      "sha256": "96697f8de1c2061fc9eee061441bbec16b76740fe301ba4781a719d278cad680",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [
@@ -294,6 +299,12 @@
       "tag": "v8-bitbucket-token-coordinator",
       "newSqliteClasses": ["BitbucketTokenCoordinatorObject"],
       "sha256": "0b9f28d9d5dd8e4185f54b8f83be1dbe9bfdb817e6386659d0893ad7425d57a7",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v9-github-token-coordinator",
+      "newSqliteClasses": ["GitHubTokenCoordinatorObject"],
+      "sha256": "16d0a7e054572da258c7366f1232750621f4859b744d32f25683dd56307b7c3c",
       "classification": "non-destructive"
     }
   ]

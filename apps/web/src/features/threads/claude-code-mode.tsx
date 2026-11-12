@@ -215,8 +215,8 @@ export function ClaudePlanPicker({
 }) {
   const nowMs = useNowMinute();
   const nowSeconds = Math.floor(nowMs / 1000);
-  const { plans, auto, current } = claudePlanPick(choices, plan);
-  if (plans.length === 0 || (!auto && current === undefined)) return null;
+  const { plans, current } = claudePlanPick(choices, plan);
+  if (plans.length === 0) return null;
   return (
     <>
       {plans.length < 2 ? null : (
@@ -241,7 +241,7 @@ export function ClaudePlanPicker({
               )
             }
           >
-            {auto ? <option value={AUTO_PLAN}>Auto</option> : null}
+            <option value={AUTO_PLAN}>Auto</option>
             {plans.map((option) => (
               <option key={option.connectionId} value={option.connectionId}>
                 {claudePlanLabel(plans, option, model, nowSeconds)}
@@ -255,7 +255,7 @@ export function ClaudePlanPicker({
         model={model}
         nowMs={nowMs}
         current={current}
-        autoPicks={auto && current === undefined}
+        autoPicks={current === undefined}
       />
     </>
   );

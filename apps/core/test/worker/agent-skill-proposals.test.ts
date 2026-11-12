@@ -9,7 +9,7 @@ import {
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
 import { Hono } from "hono";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { SettingsAudit } from "../../src/settings/audit.js";
@@ -51,6 +51,30 @@ import { runRepositories } from "./runtime.js";
  * - the owner is not asked to review, or the agent's Thread never hears the
  *   outcome (its ask stays unticked).
  */
+
+// Flue's run is stood in for: the agent route only records the message it
+// admits, so a test sees what woke the Thread.
+const delivered = vi.hoisted(() => ({
+  messages: [] as Array<{ threadId: string; body: string }>,
+}));
+
+vi.mock("../../src/agents/routes.js", async () => {
+  const { Hono } = await import("hono");
+  const { useAgentAdmission } = await import("../../src/agents/admission.js");
+  const routes = useAgentAdmission(new Hono());
+  routes.post("/:threadId", async (context) => {
+    const body = (await context.req.json()) as {
+      body: string;
+      idempotencyKey: string;
+    };
+    delivered.messages.push({
+      threadId: context.req.param("threadId"),
+      body: body.body,
+    });
+    return context.json({ submissionId: `sub_${body.idempotencyKey}` }, 202);
+  });
+  return { dxAgentRoutes: routes };
+});
 
 const owner = Schema.decodeSync(UserId)("proposal-owner");
 const member = Schema.decodeSync(UserId)("proposal-member");
@@ -200,6 +224,7 @@ const planMarkdown = async (threadId: string) => {
 };
 
 beforeEach(async () => {
+  delivered.messages.length = 0;
   await env.DB.batch([
     env.DB.prepare(
       'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
@@ -295,6 +320,14 @@ describe("manage_skills proposals", () => {
     const after = await planMarkdown(threadId);
     expect(after).toContain("- [x] @[Proposal Owner](user:proposal-owner)");
     expect(after).toContain("Approved");
+    expect(delivered.messages).toEqual([
+      {
+        threadId,
+        body: expect.stringContaining("A person decided an ask in artifact"),
+      },
+    ]);
+    expect(delivered.messages[0]?.body).toContain("Who: Proposal Owner");
+    expect(delivered.messages[0]?.body).toContain("Approved");
 
     // Decided once only, and the agent sees the outcome.
     const again = await app(owner)(

@@ -366,6 +366,11 @@
       "provenance": "generated-flue"
     },
     {
+      "name": "GITHUB_TOKEN_COORDINATOR",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
       "name": "LIZARD_API_KEY",
       "type": "secret",
       "provenance": "alchemy",

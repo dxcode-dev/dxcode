@@ -59,11 +59,6 @@ export const FeedbackWidgetForbiddenResponseSchema = errorResponse(
   "Only the project's creator or a workspace admin can change its Feedback Widget.",
 );
 
-export const FeedbackWidgetDisabledResponseSchema = errorResponse(
-  "FEEDBACK_WIDGET_FEATURE_DISABLED",
-  "Turn on Feedback Widget in Experimental Features.",
-);
-
 export const FeedbackWidgetPersistenceUnavailableResponseSchema = errorResponse(
   "PERSISTENCE_UNAVAILABLE",
   "Persistence is temporarily unavailable.",

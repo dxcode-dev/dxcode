@@ -375,6 +375,8 @@ function GitHubIntegration({
   const [error, setError] = React.useState<string>();
   const configured = grantsQuery.data?.configured;
   const grants = grantsQuery.data?.grants ?? [];
+  const authorization = grantsQuery.data?.authorization;
+  const signInExpired = authorization?.status === "reauthorization-required";
   const redirect = async (operation: "connect" | "install") => {
     setError(undefined);
     try {
@@ -447,8 +449,24 @@ function GitHubIntegration({
             }
       }
     >
-      {grants.length === 0 ? null : (
+      {grants.length === 0 && !signInExpired ? null : (
         <div className="integration-tile-rows">
+          {!signInExpired ? null : (
+            <IntegrationRow
+              icon={<GitHubIcon />}
+              title={`@${authorization.login} sign-in`}
+              description="GitHub stopped accepting this sign-in. The agent's gh and additional repositories need it; reconnect to continue."
+              actions={
+                <Button
+                  size="xs"
+                  aria-label={`Reconnect @${authorization.login} sign-in`}
+                  onClick={() => void redirect("connect")}
+                >
+                  Reconnect
+                </Button>
+              }
+            />
+          )}
           {grants.map((grant) => (
             <GitHubInstallation
               key={grant.id}

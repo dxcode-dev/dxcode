@@ -36,10 +36,8 @@ export interface PortalFeedbackResult {
 }
 
 export interface PortalFeedbackService {
-  /** Whether the person has the Feedback Widget feature on. */
-  enabled(userId: string): Promise<boolean>;
-  /** The widget script, or undefined when the feature is off for them. */
-  script(userId: string): Promise<string | undefined>;
+  /** The widget script. */
+  script(userId: string): Promise<string>;
   send(input: PortalFeedbackSend): Promise<PortalFeedbackResult>;
 }
 

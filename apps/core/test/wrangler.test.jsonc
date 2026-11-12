@@ -10,7 +10,10 @@
     // The Bitbucket token coordinator reads its consumer from its own
     // environment, as in a deployment; the callback matches DX_AUTH_URL.
     "DX_AUTH_URL": "https://dx.test",
-    "DX_INTEGRATION_BITBUCKET_OAUTH": "{\"version\":1,\"clientId\":\"client\",\"clientSecret\":\"secret\",\"callbackUrl\":\"https://dx.test/v1/integrations/bitbucket/oauth/callback\"}"
+    "DX_INTEGRATION_BITBUCKET_OAUTH": "{\"version\":1,\"clientId\":\"client\",\"clientSecret\":\"secret\",\"callbackUrl\":\"https://dx.test/v1/integrations/bitbucket/oauth/callback\"}",
+    // The GitHub token coordinator likewise reads the App from its own
+    // environment: testing/bindings.ts's TEST_GITHUB_APP_CONFIGURATION.
+    "DX_INTEGRATION_GITHUB_APP": "{\"version\":1,\"appId\":\"12345\",\"appSlug\":\"dx-test\",\"clientId\":\"Iv1.test-client\",\"clientSecret\":\"test-client-secret\",\"privateKeyPem\":\"-----BEGIN PRIVATE KEY-----\\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=\\n-----END PRIVATE KEY-----\\n\",\"webhookSecret\":\"test-webhook-secret\",\"callbackUrl\":\"https://dx.test/v1/integrations/github/oauth/callback\",\"setupUrl\":\"https://dx.test/v1/integrations/github/setup\",\"webhookUrl\":\"https://dx.test/v1/integrations/github/webhooks\",\"expiringUserTokens\":true,\"permissionManifestVersion\":1,\"repositoryPermissions\":{\"actions\":\"write\",\"checks\":\"read\",\"contents\":\"write\",\"issues\":\"write\",\"metadata\":\"read\",\"pull_requests\":\"write\",\"statuses\":\"read\",\"workflows\":\"write\"},\"organizationPermissions\":{\"projects\":\"write\"},\"events\":[\"repository\"]}"
   },
   "worker_loaders": [{ "binding": "LOADER" }],
   "d1_databases": [
@@ -70,6 +73,10 @@
       {
         "name": "BITBUCKET_TOKEN_COORDINATOR",
         "class_name": "BitbucketTokenCoordinatorObject"
+      },
+      {
+        "name": "GITHUB_TOKEN_COORDINATOR",
+        "class_name": "GitHubTokenCoordinatorObject"
       }
     ]
   },
@@ -105,6 +112,10 @@
     {
       "tag": "v8-bitbucket-token-coordinator",
       "new_sqlite_classes": ["BitbucketTokenCoordinatorObject"]
+    },
+    {
+      "tag": "v9-github-token-coordinator",
+      "new_sqlite_classes": ["GitHubTokenCoordinatorObject"]
     }
   ]
 }

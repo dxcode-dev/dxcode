@@ -36,7 +36,7 @@ import {
 import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { project } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
-import { turnSpacesOn } from "./spaces-flag.js";
+import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * A Space's thread cards and catch-up card, end to end in workerd with real
@@ -374,8 +374,7 @@ beforeEach(async () => {
   );
 });
 
-// Spaces is a personal experimental feature (spaces/gate.ts).
-beforeEach(() => turnSpacesOn([owner, member]));
+beforeEach(() => seedSpaceUsers([owner, member]));
 
 describe("Space thread cards in workerd with real D1", () => {
   it("keeps a Space child's status line current from its own activity", async () => {
@@ -835,19 +834,15 @@ describe("Space thread cards in workerd with real D1", () => {
       writer: { kind: "user", userId: member },
     });
     if (saved.kind !== "saved") throw new Error(`save: ${saved.kind}`);
-    await artifactSaved(
-      bindings,
-      {
-        threadId: childId,
-        artifactId,
-        title: "Plan",
-        revision: saved.value.artifact.revision,
-        before: saved.previous,
-        after: saved.value.markdown,
-        writer: { kind: "user", userId: member },
-      },
-      { deliver: async () => undefined },
-    );
+    await artifactSaved(bindings, {
+      threadId: childId,
+      artifactId,
+      title: "Plan",
+      revision: saved.value.artifact.revision,
+      before: saved.previous,
+      after: saved.value.markdown,
+      writer: { kind: "user", userId: member },
+    });
     expect((await card(spaceId, childId)).state).toBe("idle");
 
     // An open pull request, or uncommitted changes, is ready to ship.

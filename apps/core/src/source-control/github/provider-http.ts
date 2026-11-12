@@ -18,6 +18,7 @@ export type GitHubProviderErrorCategory =
   | "not-found"
   | "rate-limited"
   | "invalid-response"
+  | "invalid-grant"
   | "unavailable";
 
 export class GitHubProviderError extends Schema.TaggedError<GitHubProviderError>()(
@@ -30,6 +31,7 @@ export class GitHubProviderError extends Schema.TaggedError<GitHubProviderError>
       "not-found",
       "rate-limited",
       "invalid-response",
+      "invalid-grant",
       "unavailable",
     ]),
     retryAt: Schema.optional(Schema.instanceOf(Date)),
@@ -317,8 +319,21 @@ export const createGitHubProvider = (
         client_secret: secret,
         ...values,
       }),
+      // A refresh that times out after GitHub rotated loses the rotation, so
+      // give GitHub longer than other calls get.
+      signal: AbortSignal.timeout(30_000),
     });
     const record = value as Record<string, unknown>;
+    // GitHub answers a used, expired, or revoked refresh token with 200 and
+    // `{"error":"bad_refresh_token"}`: the grant is gone for good.
+    if (
+      record?.error === "bad_refresh_token" ||
+      record?.error === "invalid_grant"
+    )
+      throw new GitHubProviderError({
+        category: "invalid-grant",
+        endpoint: "oauth-token",
+      });
     const accessToken = bounded(record?.access_token);
     const refreshToken = bounded(record?.refresh_token);
     const expires = record?.expires_in;

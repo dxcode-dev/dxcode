@@ -238,10 +238,8 @@ const mount = async (
     history,
   });
   const client = createQueryClient();
-  // Spaces is on for the viewer (its experimental flag).
   client.setQueryData(settingsContextQueryOptions(viewer).queryKey, {
     activeScope: "personal",
-    spaces: true,
   } as never);
   root = createRoot(document.body.appendChild(document.createElement("div")));
   await React.act(async () => {

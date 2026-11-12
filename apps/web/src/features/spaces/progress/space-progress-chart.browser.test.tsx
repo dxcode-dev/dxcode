@@ -205,10 +205,8 @@ const mount = async (appearance: "light" | "dark" = "light", phone = false) => {
     history: createMemoryHistory({ initialEntries: [`/threads/${SPACE}`] }),
   });
   const client = createQueryClient();
-  // Spaces is on for the viewer (its experimental flag).
   client.setQueryData(settingsContextQueryOptions(viewer).queryKey, {
     activeScope: "personal",
-    spaces: true,
   } as never);
   document.body.style.margin = "0";
   document.body.style.background = "var(--shell)";

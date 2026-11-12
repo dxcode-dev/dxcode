@@ -1,9 +1,7 @@
 import {
   CLAUDE_CODE_PROVIDER_ID,
-  CLAUDE_PLAN_AUTO_PICK_FEATURE,
   type ClaudeAutoPlan,
   ClaudePlanRefused,
-  type ExperimentalFeatureId,
   isClaudeCodeModel,
   normalizeCustomModelBaseUrl,
   pickClaudePlan,
@@ -20,7 +18,6 @@ import {
   devWorkersAiConnection,
   workersAiDeploymentEnabled,
 } from "../../runtime/model-routing-dev-defaults.js";
-import { experimentalFeatureEnabled } from "../experimental-features/routes.js";
 import { catalogProviderModels } from "./catalog.js";
 import {
   bindThreadClaudeConnection,
@@ -152,21 +149,6 @@ const resetText = (seconds: number) =>
   `${new Date(seconds * 1000).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 
 /**
- * Whether the automatic plan pick is on for `ownerId`, the new Thread's
- * owner, whose plans are picked: their personal `claude-plan-auto-pick`
- * flag. Never the caller's or a parent agent's. A failed read counts as off,
- * so creation falls back to asking for a plan.
- */
-export const claudeAutoPickEnabled = (bindings: Bindings, ownerId: UserId) =>
-  experimentalFeatureEnabled(
-    bindings,
-    // The owner's own personal preferences, whichever credential the caller
-    // used (a session, an agent, or an automation).
-    { userId: ownerId, credentialScopes: ["personal"] },
-    CLAUDE_PLAN_AUTO_PICK_FEATURE as ExperimentalFeatureId,
-  ).catch(() => false);
-
-/**
  * The plan a new Claude Code Thread takes when no one names one: the
  * automatic pick across the owner's enabled plans (see `pickClaudePlan`),
  * refused when every plan is used up for `model`.
@@ -202,8 +184,7 @@ export const autoClaudePlan = async (
  * The Claude plan a new Thread is bound to at creation, for life: the one
  * picked, if it is the owner's, enabled, and not used up for `model`. With
  * no pick, a Thread whose owner has one enabled plan takes it at its first
- * submission; with more, dx picks one automatically when the owner's
- * `claude-plan-auto-pick` flag is on, and otherwise a plan must be picked.
+ * submission; with more, dx picks one automatically.
  * A Thread that does not run Claude Code takes no plan.
  */
 const pickedClaudePlan = async (
@@ -211,7 +192,6 @@ const pickedClaudePlan = async (
   connections: ReadonlyArray<StoredModelConnection>,
   model: string,
   picked: string | undefined,
-  autoPickEnabled: () => Promise<boolean>,
 ): Promise<string | undefined> => {
   const plans = connections.filter(
     ({ providerId, enabled }) =>
@@ -226,13 +206,6 @@ const pickedClaudePlan = async (
   }
   if (picked === undefined) {
     if (plans.length <= 1) return undefined;
-    if (!(await autoPickEnabled()))
-      throw new ClaudePlanRefused({
-        reason: "required",
-        message: `Pick the Claude plan this Thread runs on: ${plans
-          .map(({ id, name }) => `${name} (${id})`)
-          .join(", ")}.`,
-      });
     const auto = await autoClaudePlan(db, plans, model);
     if (auto === undefined) return undefined;
     if (auto.kind === "used-up")
@@ -311,7 +284,6 @@ export const resolveSelectionForUser = async (
     connections,
     model,
     claudeConnectionId,
-    () => claudeAutoPickEnabled(bindings, userId),
   );
   return {
     ...resolveSubmissionModel({
@@ -560,8 +532,8 @@ export const resolveRouteSubmission = async (
  * The Claude plan a plugin agent's Thread runs on when its model is a Claude
  * Code model and nobody picked one. A plugin agent has no composer to ask
  * in, so with several enabled plans dx picks as the automatic pick does
- * (`pickClaudePlan`: room left, then the soonest reset), whether or not the
- * owner turned the automatic pick on. With one plan or none it leaves the
+ * (`pickClaudePlan`: room left, then the soonest reset). With one plan or
+ * none it leaves the
  * choice to creation. When every plan is used up it refuses with the first
  * reset time, as the automatic pick does.
  */
