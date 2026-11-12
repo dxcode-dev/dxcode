@@ -23,6 +23,14 @@ patchedDependencies:
 # instead of failing later in a build or deploy.
 engineStrict: true
 
+# Supply-chain cooldown: pnpm installs no dependency version published less
+# than 7 days ago (10080 minutes). Most malicious releases are found and
+# pulled within that window. Strict mode makes a too-new version fail the
+# install instead of being silently added to minimumReleaseAgeExclude; pnpm 12
+# needs it set explicitly (pnpm/pnpm#14409).
+minimumReleaseAge: 10080
+minimumReleaseAgeStrict: true
+
 allowBuilds:
   esbuild: true
   workerd: true
