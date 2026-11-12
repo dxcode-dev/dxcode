@@ -19,6 +19,7 @@ import { createExaWebProvider } from "../../src/plugins/web/providers/exa.js";
 import { webCapabilityInvoker } from "../../src/plugins/web/tools.js";
 import { settingsRoutes } from "../../src/settings/routes.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import { chunkedBody } from "./chunked-body.js";
 
 const owner = "plugin-owner" as UserId;
 const member = "plugin-member" as UserId;
@@ -363,6 +364,38 @@ describe("first-party plugin settings in workerd with real D1", () => {
       status: "disabled",
       by: "personal",
     });
+  });
+
+  it("stops reading an oversized settings body at the 128 KB cap", async () => {
+    const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+      createApp(solo).request(
+        `/settings${personal}/search/configuration`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json", ...headers },
+          body,
+        },
+        deployed,
+      );
+
+    // Chunked, with no Content-Length: Core stops at the cap instead of
+    // holding all 8 MB, and answers with its usual invalid-request error.
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const streamed = await send(chunked.stream);
+    expect(streamed.status).toBe(400);
+    expect(await streamed.json()).toMatchObject({
+      status: "error",
+      data: { code: "INVALID_PLUGIN_REQUEST" },
+    });
+    expect(chunked.read.chunks).toBeLessThanOrEqual(10);
+
+    // A declared length over the cap is refused before any of it is read.
+    const declared = chunkedBody({ totalBytes: 256 * 1_024 });
+    const announced = await send(declared.stream, {
+      "content-length": String(256 * 1_024),
+    });
+    expect(announced.status).toBe(400);
+    expect(declared.read.chunks).toBe(0);
   });
 
   it("reports no provider when nothing is configured anywhere", async () => {

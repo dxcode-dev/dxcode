@@ -1,6 +1,7 @@
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import type { OrbFaultPlan } from "./orb-container-faults.js";
 
@@ -54,7 +55,7 @@ export const threadOrbFaultRoutes = new Hono<AppEnv>()
     const orb = target(context.env, threadId.value);
     if (orb === undefined) return context.notFound();
     const request = Schema.decodeUnknownOption(FaultRequest)(
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
     );
     if (Option.isNone(request))
       return context.json({ status: "error", data: { code: "INVALID" } }, 400);

@@ -16,6 +16,7 @@ import {
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { settingsAuditLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -188,12 +189,19 @@ const resolveFor = async (
   return resolved;
 };
 
+// A plugin enablement, configuration, or policy body: a provider, a few
+// settings, and up to 16 credentials
+// of at most 4 KiB each.
+const MAX_PLUGIN_SETTINGS_REQUEST_BYTES = 128 * 1024;
+
 const decodeBody = async <S extends Schema.Top>(
   c: Context<AppEnv>,
   schema: S & { readonly DecodingServices: never },
 ): Promise<S["Type"]> => {
   try {
-    return Schema.decodeUnknownSync(schema)(await c.req.json());
+    return Schema.decodeUnknownSync(schema)(
+      await readBoundedJson(c.req.raw, MAX_PLUGIN_SETTINGS_REQUEST_BYTES),
+    );
   } catch {
     throw new PluginSettingsFailure("INVALID_PLUGIN_REQUEST", 400);
   }

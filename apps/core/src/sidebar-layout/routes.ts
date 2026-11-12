@@ -6,6 +6,7 @@ import {
 import type { UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { sidebarLayoutLogger } from "../logging.js";
 import { scheduleUserInvalidation } from "../realtime/publication.js";
@@ -71,7 +72,7 @@ export const sidebarLayoutRoutes = new Hono<AppEnv>()
     handle(context, async (db, userId) => {
       const entry = Schema.decodeUnknownOption(
         UpdateSidebarLayoutRequestSchema,
-      )(await context.req.json().catch(() => undefined));
+      )(await readBoundedJson(context.req.raw).catch(() => undefined));
       if (Option.isNone(entry))
         return context.json(
           Schema.encodeUnknownSync(SidebarLayoutErrorResponseSchema)({

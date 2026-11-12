@@ -8,6 +8,7 @@ import {
 } from "@dx/api";
 import { Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { attachmentLogger } from "../logging.js";
 import { canReadAttachment } from "./access.js";
@@ -64,7 +65,9 @@ const decodeJson = async <A>(
   schema: Schema.Codec<A, unknown>,
 ) => {
   try {
-    return Schema.decodeUnknownSync(schema)(await context.req.json());
+    return Schema.decodeUnknownSync(schema)(
+      await readBoundedJson(context.req.raw),
+    );
   } catch {
     return undefined;
   }

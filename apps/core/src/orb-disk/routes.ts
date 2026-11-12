@@ -15,6 +15,7 @@ import {
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
@@ -170,7 +171,7 @@ export const threadOrbDiskRoutes = new Hono<AppEnv>()
     const request = diskRequest(context);
     if ("response" in request) return request.response;
     const body = Schema.decodeUnknownOption(DeleteThreadOrbFolderRequestSchema)(
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
       { onExcessProperty: "error" },
     );
     if (Option.isNone(body))

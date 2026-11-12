@@ -18,6 +18,7 @@ import { ThreadId } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { DxdChangesRefresh } from "../execution/dxd/protocol.js";
+import { readBoundedBody } from "../http/bounded-body.js";
 import { decodeJsonBody } from "../http/request-decoding.js";
 import { requestServerTiming } from "../http/server-timing.js";
 import type { AppEnv } from "../http/types.js";
@@ -393,8 +394,9 @@ const makeThreadFilesRoutes = () => {
         declared > THREAD_FILES_MAX_UPLOAD_BYTES
       )
         throw new ThreadFilesInvalid();
-      const bytes = new Uint8Array(await context.req.arrayBuffer());
-      if (bytes.byteLength !== declared) throw new ThreadFilesInvalid();
+      const bytes = await readBoundedBody(context.req.raw, declared);
+      if (bytes === undefined || bytes.byteLength !== declared)
+        throw new ThreadFilesInvalid();
       const selected = selectWorkspaceRuntime(context.env, {
         local: localResident,
         deployed: configuredResident,

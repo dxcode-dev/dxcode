@@ -6,6 +6,7 @@ import {
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { automationLogger } from "../logging.js";
 import {
@@ -71,7 +72,7 @@ const withDb = async (
 
 const body = async <A>(context: Context<AppEnv>, schema: Schema.Codec<A>) =>
   Schema.decodeUnknownOption(schema)(
-    await context.req.json().catch(() => undefined),
+    await readBoundedJson(context.req.raw).catch(() => undefined),
   );
 
 const optional = <K extends string>(key: K, value: string | null) =>

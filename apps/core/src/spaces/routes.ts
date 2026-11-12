@@ -20,6 +20,7 @@ import { type Principal, ThreadId, type UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { isTimeZone } from "../automations/recurrence.js";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
 import {
@@ -132,7 +133,7 @@ const jsonBody = async <S extends Schema.Top>(
   schema: S,
 ): Promise<S["Type"]> => {
   const decoded = Schema.decodeUnknownOption(schema as never)(
-    await context.req.json().catch(() => undefined),
+    await readBoundedJson(context.req.raw).catch(() => undefined),
   );
   if (Option.isNone(decoded)) throw invalidRequest();
   return decoded.value as S["Type"];

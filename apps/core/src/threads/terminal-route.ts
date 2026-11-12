@@ -7,6 +7,7 @@ import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 
@@ -73,7 +74,7 @@ export const threadTerminalRoutes = new Hono<AppEnv>()
     );
     if (Option.isNone(threadId)) return context.notFound();
     const body = Schema.decodeUnknownOption(CloseThreadTerminalRequestSchema)(
-      await request.json().catch(() => undefined),
+      await readBoundedJson(request).catch(() => undefined),
     );
     if (Option.isNone(body)) return context.body(null, 400);
     const namespace = context.env.THREAD_EXECUTION;

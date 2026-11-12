@@ -1,3 +1,5 @@
+import { readBoundedBody } from "../http/bounded-body.js";
+
 // dxd ingress: forward a daemon's WebSocket upgrade to its Thread execution
 // object, which checks the key against the hash it keeps with the authority.
 // Dependency-free on purpose: this module is also the whole of the dedicated
@@ -94,9 +96,10 @@ export const forwardDaemonStorage = async (
     return new Response(null, { status: 404 });
   if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
     return new Response(null, { status: 401 });
-  const body = write ? await request.arrayBuffer() : undefined;
-  if (body !== undefined && body.byteLength > MAX_STORAGE_BODY_BYTES)
-    return new Response(null, { status: 413 });
+  const body = write
+    ? await readBoundedBody(request, MAX_STORAGE_BODY_BYTES)
+    : undefined;
+  if (write && body === undefined) return new Response(null, { status: 413 });
   return namespace.get(namespace.idFromName(threadId)).fetch(
     new Request("https://thread.internal/daemon/storage", {
       method: request.method,

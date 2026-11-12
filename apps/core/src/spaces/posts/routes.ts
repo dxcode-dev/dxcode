@@ -20,6 +20,7 @@ import {
   messageAttachmentBody,
   resolveMessageAttachments,
 } from "../../attachments/message.js";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
 import { ownerAgentInitialization } from "../../thread-sharing/middleware.js";
@@ -265,7 +266,7 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
   ) => {
     const request = decode(
       SpacePostTextRequestSchema,
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
     );
     if (request.text.trim() === "") throw invalid();
     const space = await deps.readSpace(db, principal, threadId);
@@ -320,7 +321,7 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
   ) => {
     const request = decode(
       SpacePostTextRequestSchema,
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
     );
     if (request.text.trim() === "") throw invalid();
     const space = await deps.readSpace(db, principal, threadId);

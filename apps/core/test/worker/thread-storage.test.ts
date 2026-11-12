@@ -26,6 +26,7 @@ import {
   sweepThreadStorage,
 } from "../../src/thread-storage/store.js";
 import { forwardDaemonStorage } from "../../src/threads/daemon-ingress.js";
+import { chunkedBody } from "./chunked-body.js";
 import { project, thread } from "./fixtures.js";
 import {
   DAEMON_KEY,
@@ -480,6 +481,36 @@ describe("Thread storage", () => {
     );
     expect(archivedWrite.status).toBe(401);
     await archivedWrite.arrayBuffer();
+  });
+
+  it("stops reading an oversized daemon upload before the key is checked", async () => {
+    // Any key of the right shape reaches the ingress's body read, so the cap
+    // holds while the body streams in.
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const streamed = await daemon(
+      threadEntity.id,
+      "",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: chunked.stream,
+      },
+      "dxd_not-this-threads-key-0123456789",
+    );
+    expect(streamed.status).toBe(413);
+    expect(chunked.read.chunks).toBeLessThanOrEqual(6);
+
+    const declared = chunkedBody({ totalBytes: 128 * 1_024 });
+    const announced = await daemon(threadEntity.id, "", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(128 * 1_024),
+      },
+      body: declared.stream,
+    });
+    expect(announced.status).toBe(413);
+    expect(declared.read.chunks).toBe(0);
   });
 
   it("deletes a Thread's files with the Thread", async () => {

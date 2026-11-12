@@ -26,6 +26,7 @@ import type { Context } from "hono";
 import { Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
+import { readBoundedJson } from "../http/bounded-body.js";
 import { requestServerTiming } from "../http/server-timing.js";
 import type { AppEnv } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -427,7 +428,7 @@ threadChangesRoutes.post("/:threadId/changes/push", async (context) => {
   let body: typeof PushThreadChangesRequestSchema.Type;
   try {
     body = Schema.decodeUnknownSync(PushThreadChangesRequestSchema)(
-      await context.req.json(),
+      await readBoundedJson(context.req.raw),
       { onExcessProperty: "error" },
     );
   } catch {

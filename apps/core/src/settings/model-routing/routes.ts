@@ -31,6 +31,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import {
@@ -249,7 +250,7 @@ const decodeBody = async <A>(
   schema: Schema.Codec<A, unknown>,
 ): Promise<A> => {
   try {
-    const body = await c.req.json();
+    const body = await readBoundedJson(c.req.raw);
     return Schema.decodeUnknownSync(schema)(body);
   } catch {
     throw new ModelRoutingValidationError([

@@ -10,6 +10,7 @@ import {
 import { ThreadId, type UserId } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
@@ -82,7 +83,7 @@ export const threadSharingRoutes = new Hono<AppEnv>().put(
         context.req.param("threadId"),
       );
       const body = Schema.decodeUnknownOption(UpdateThreadSharingRequestSchema)(
-        await context.req.json().catch(() => undefined),
+        await readBoundedJson(context.req.raw).catch(() => undefined),
       );
       if (Option.isNone(threadId) || Option.isNone(body))
         return failure(

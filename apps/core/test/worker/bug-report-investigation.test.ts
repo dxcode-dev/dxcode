@@ -15,6 +15,7 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { createThreadTools } from "../../src/threads/agent-tools.js";
+import { chunkedBody } from "./chunked-body.js";
 import {
   createProductApp,
   createProjectViaApi,
@@ -375,6 +376,17 @@ describe("Investigating a bug report", () => {
     expect(
       (await investigate(report.id, principal, { selection: "low" })).status,
     ).toBe(400);
+
+    // An oversized body is refused, not read as a request for the defaults.
+    const chunked = chunkedBody({ totalBytes: 16 * 1_024 * 1_024 });
+    const oversized = await app(principal).request(
+      `/bug-reports/${report.id}/investigation`,
+      { method: "POST", headers: jsonHeaders, body: chunked.stream },
+      noReaders,
+    );
+    expect(oversized.status).toBe(400);
+    expect(chunked.read.chunks).toBeLessThan(chunked.chunks);
+    expect(await investigatingThreads(report.id)).toEqual([]);
 
     // The reporter starts it; then someone who is no reader sees nothing.
     const started = await investigate(report.id, principal, {}, noReaders);

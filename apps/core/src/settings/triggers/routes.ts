@@ -42,6 +42,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { DateTime, Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedBody } from "../../http/bounded-body.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -700,17 +701,10 @@ pluginTriggerIngressRoutes.post("/:triggerId/:capability", async (context) => {
   if (!/^application\/json(?:\s*;.*)?$/i.test(contentType ?? "")) {
     return invalidIngress(context, 415);
   }
-  const contentLength = Number(context.req.header("content-length") ?? "0");
-  if (
-    Number.isFinite(contentLength) &&
-    contentLength > MAX_TRIGGER_PAYLOAD_BYTES
-  ) {
-    return invalidIngress(context, 413);
-  }
-  const raw = new Uint8Array(await context.req.arrayBuffer());
-  if (raw.byteLength > MAX_TRIGGER_PAYLOAD_BYTES) {
-    return invalidIngress(context, 413);
-  }
+  // Anyone holding the URL can post here, so the cap holds while the body
+  // streams in: a chunked body with no Content-Length stops at the limit.
+  const raw = await readBoundedBody(context.req.raw, MAX_TRIGGER_PAYLOAD_BYTES);
+  if (raw === undefined) return invalidIngress(context, 413);
   const headers = Schema.decodeUnknownOption(PluginTriggerWebhookHeadersSchema)(
     {
       timestamp: context.req.header("x-dx-timestamp"),

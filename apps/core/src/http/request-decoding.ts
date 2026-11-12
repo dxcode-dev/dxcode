@@ -1,6 +1,10 @@
 import { Effect, Schema, type SchemaAST } from "effect";
 import type { HonoRequest } from "hono";
-import { readBoundedText } from "./bounded-body.js";
+import {
+  MAX_JSON_REQUEST_BYTES,
+  readBoundedJson,
+  readBoundedText,
+} from "./bounded-body.js";
 
 const strictParseOptions = {
   onExcessProperty: "error",
@@ -22,6 +26,7 @@ export const decodeJsonBody = <S extends Schema.Constraint, E>(
   request: HonoRequest,
   schema: S,
   invalid: (input?: unknown) => E,
+  maxBytes: number = MAX_JSON_REQUEST_BYTES,
 ): Effect.Effect<S["Type"], E, S["DecodingServices"]> => {
   const contentType = request.header("content-type");
   if (contentType === undefined || !jsonMediaType.test(contentType)) {
@@ -29,7 +34,7 @@ export const decodeJsonBody = <S extends Schema.Constraint, E>(
   }
 
   return Effect.tryPromise({
-    try: () => request.json(),
+    try: () => readBoundedJson(request.raw, maxBytes),
     catch: invalid,
   }).pipe(Effect.flatMap((body) => decodeRequestInput(schema, body, invalid)));
 };

@@ -396,6 +396,30 @@ describe("Thread creation admission in workerd with real D1", () => {
     }
   });
 
+  it("accepts a first message whose inline images exceed the shared JSON cap", async () => {
+    // Thread creation takes ten 14 MB images; the shared 8 MB JSON cap
+    // must not refuse a request the schema allows.
+    const project = await createProjectViaApi("large-inline-images");
+    const dispatched: Array<Parameters<Dispatch>[0]> = [];
+    const { create } = harness(flueValidatedDispatch(dispatched));
+    const threadId = newThreadId();
+    const image = {
+      type: "image",
+      mimeType: "image/png",
+      data: "A".repeat(6 * 1_024 * 1_024),
+    };
+    const response = await create({
+      projectId: project.data.id,
+      threadId,
+      initialMessage: {
+        body: "Fix the flaky login test",
+        attachments: [image, image],
+      },
+    });
+    expect(response.status).toBe(201);
+    expect(dispatched).toHaveLength(1);
+  });
+
   it("stops the Orb it started beside a refused inline-image dispatch before it removes the Thread", async () => {
     // Ways this could fail: the Orb keeps running after its Thread is gone;
     // it is stopped after the row is deleted, so nothing can name it; an Orb

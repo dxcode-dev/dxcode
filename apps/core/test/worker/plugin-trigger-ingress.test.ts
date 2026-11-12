@@ -11,6 +11,7 @@ import {
   generatePluginTriggerCapability,
   hashPluginTriggerCapability,
 } from "../../src/settings/triggers/service.js";
+import { chunkedBody } from "./chunked-body.js";
 import {
   pluginTriggerOwner,
   setupPluginTrigger,
@@ -183,6 +184,46 @@ describe("plugin trigger webhook ingress", () => {
         )
       ).status,
     ).toBe(413);
+  });
+
+  it("stops reading an oversized anonymous body at the 64 KB cap", async () => {
+    const { triggerId, capability } = await fixture();
+    const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+      app.request(
+        `/api/triggers/${triggerId}/${capability}`,
+        { method: "POST", headers: { ...signedHeaders(), ...headers }, body },
+        bindings,
+      );
+
+    // Chunked, with no Content-Length: Core stops at the cap instead of
+    // holding all 8 MB.
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const streamed = await send(chunked.stream);
+    expect(streamed.status).toBe(413);
+    expect(chunked.read.chunks).toBeLessThanOrEqual(6);
+    expect(chunked.read.chunks).toBeLessThan(chunked.chunks);
+
+    // A declared length over the cap is refused before any of it is read.
+    const declared = chunkedBody({ totalBytes: 128 * 1_024 });
+    const announced = await send(declared.stream, {
+      "content-length": String(128 * 1_024),
+    });
+    expect(announced.status).toBe(413);
+    expect(declared.read.chunks).toBe(0);
+
+    // A chunked body under the cap still lands.
+    const small = new TextEncoder().encode(
+      JSON.stringify({ event: "build.completed", data: { build: 50 } }),
+    );
+    const accepted = await send(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(small);
+          controller.close();
+        },
+      }),
+    );
+    expect(accepted.status).toBe(202);
   });
 
   it("verifies HMAC over the exact timestamp, identities, and body bytes", async () => {

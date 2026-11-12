@@ -17,6 +17,7 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { TEST_GITHUB_APP_CONFIGURATION } from "../../src/testing/bindings.js";
+import { chunkedBody } from "./chunked-body.js";
 import { network } from "./network-boundary.js";
 import {
   createProjectViaApi,
@@ -509,6 +510,48 @@ describe("Bug reports", () => {
         )
       ).status,
     ).toBe(413);
+
+    // A chunked form with no Content-Length stops at the cap with the same
+    // 413, instead of being read whole.
+    const boundary = "dx-oversized-form";
+    const head = new TextEncoder().encode(
+      `--${boundary}\r\nContent-Disposition: form-data; name="image"; filename="big.png"\r\nContent-Type: image/png\r\n\r\n`,
+    );
+    const filler = chunkedBody({
+      totalBytes: 128 * 1_024 * 1_024,
+      chunkBytes: 1_024 * 1_024,
+    });
+    const reader = filler.stream.getReader();
+    let sentHead = false;
+    const form = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          if (!sentHead) {
+            sentHead = true;
+            controller.enqueue(head);
+            return;
+          }
+          const next = await reader.read();
+          if (next.done) controller.close();
+          else controller.enqueue(next.value);
+        },
+        cancel: (reason) => reader.cancel(reason),
+      },
+      { highWaterMark: 0 },
+    );
+    const streamed = await app(principal).request(
+      "/bug-reports",
+      {
+        method: "POST",
+        headers: {
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+        },
+        body: form,
+      },
+      deployedBindings(),
+    );
+    expect(streamed.status).toBe(413);
+    expect(filler.read.chunks).toBeLessThan(filler.chunks);
   });
 
   it("lets the deployment's report readers open any report", async () => {

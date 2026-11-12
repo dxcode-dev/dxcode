@@ -1,5 +1,6 @@
 import { DurableObject } from "cloudflare:workers";
 import { Effect } from "effect";
+import { readBoundedBody } from "../../http/bounded-body.js";
 import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
@@ -47,9 +48,10 @@ const invocationRequest = async (
   ) {
     return undefined;
   }
-  const bytes = await request.arrayBuffer().catch(() => undefined);
-  if (bytes === undefined || bytes.byteLength > MAX_BODY_BYTES)
-    return undefined;
+  const bytes = await readBoundedBody(request, MAX_BODY_BYTES).catch(
+    () => undefined,
+  );
+  if (bytes === undefined) return undefined;
   let decoded: Record<string, unknown> | undefined;
   try {
     decoded = record(JSON.parse(new TextDecoder().decode(bytes)));

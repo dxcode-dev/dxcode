@@ -18,6 +18,7 @@ import type { ThreadId, UserId } from "@dx/domain";
 import { Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { ExecutionWorkspaces } from "../../execution/execution-workspaces.js";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import { httpErrorLogger } from "../../logging.js";
 import { purgeDeletedThread } from "../../thread-deletion/cleanup.js";
@@ -66,7 +67,7 @@ const decodeBody = async <A>(
   schema: Schema.Codec<A, unknown>,
 ): Promise<A> => {
   try {
-    return Schema.decodeUnknownSync(schema)(await c.req.json());
+    return Schema.decodeUnknownSync(schema)(await readBoundedJson(c.req.raw));
   } catch {
     throw new WorkspaceMembersError(
       "INVALID_WORKSPACE_MEMBERS_REQUEST",

@@ -40,6 +40,7 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -372,7 +373,7 @@ const registerRoutes = (
   );
 
   router.post("/preview", async (context) => {
-    const raw = await context.req.json().catch(() => undefined);
+    const raw = await readBoundedJson(context.req.raw).catch(() => undefined);
     return run(
       context,
       operation(context, (_db, access) =>

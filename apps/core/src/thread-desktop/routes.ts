@@ -10,6 +10,7 @@ import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
@@ -150,7 +151,7 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
   .get("/:threadId/desktop/windows", (context) => desktopWindows(context))
   .post("/:threadId/desktop/windows", async (context) => {
     const action = Schema.decodeUnknownOption(ThreadDesktopWindowsActionSchema)(
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
       { onExcessProperty: "error" },
     );
     if (Option.isNone(action))

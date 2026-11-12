@@ -9,10 +9,11 @@ import {
 import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { threadPersistenceLogger } from "../logging.js";
-import { ownerSearchIndex } from "../thread-search/index-client.js";
 import { enqueueThreadSearchIndex } from "../thread-search/enqueue.js";
+import { ownerSearchIndex } from "../thread-search/index-client.js";
 import { sha256Hex } from "./agent-tools.js";
 
 const decodeRequest = Schema.decodeUnknownOption(
@@ -149,7 +150,7 @@ export const createThreadMessageEditRoutes = (agent: MessageEditAgent) =>
       const threadId = decodeThreadId(context.req.param("threadId"));
       const entryId = context.req.param("entryId");
       const request = decodeRequest(
-        await context.req.json().catch(() => undefined),
+        await readBoundedJson(context.req.raw).catch(() => undefined),
       );
       if (
         Option.isNone(threadId) ||

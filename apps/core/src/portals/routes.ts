@@ -11,6 +11,7 @@ import {
 import { ThreadId } from "@dx/domain";
 import { DateTime, Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { portalLogger } from "../logging.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
@@ -188,7 +189,7 @@ export const threadPortalRoutes = new Hono<AppEnv>()
     if ("response" in request) return request.response;
     const { configuration, threadId, port, db, requestId } = request;
     const body = Schema.decodeUnknownOption(PublishThreadPortalRequestSchema)(
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
     );
     if (Option.isNone(body))
       return publicError(

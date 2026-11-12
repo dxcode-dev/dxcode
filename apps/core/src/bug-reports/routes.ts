@@ -21,6 +21,12 @@ import {
 import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import {
+  MAX_JSON_REQUEST_BYTES,
+  RequestBodyTooLarge,
+  readBoundedFormData,
+  readBoundedText,
+} from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { bugReportLogger } from "../logging.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
@@ -103,16 +109,16 @@ const readForm = async <R extends { readonly message: string }>(
   kinds: ReadonlyArray<string>,
   wantsAudio: (report: R) => boolean,
 ) => {
-  const length = Number(context.req.header("content-length") ?? "0");
-  if (
-    length >
+  const form = await readBoundedFormData(
+    context.req.raw,
     BUG_REPORT_JSON_MAX_BYTES +
       BUG_REPORT_MAX_IMAGES * BUG_REPORT_IMAGE_MAX_BYTES +
       BUG_REPORT_AUDIO_MAX_BYTES +
-      64 * 1024
-  )
-    return "TOO_LARGE" as const;
-  const form = await context.req.formData().catch(() => undefined);
+      64 * 1024,
+  ).catch((error: unknown) =>
+    error instanceof RequestBodyTooLarge ? ("TOO_LARGE" as const) : undefined,
+  );
+  if (form === "TOO_LARGE") return form;
   if (form === undefined) return "INVALID_REQUEST" as const;
   const raw = form.get("report");
   if (typeof raw !== "string") return "INVALID_REQUEST" as const;
@@ -577,7 +583,12 @@ export const bugReportRoutes = new Hono<AppEnv>()
       Schema.decodeUnknownOption(BugReportIdSchema)(context.req.param("id")),
     );
     if (id === undefined) return failure(context, "NOT_FOUND", 404);
-    const text = await context.req.text().catch(() => undefined);
+    const text = await readBoundedText(
+      context.req.raw,
+      MAX_JSON_REQUEST_BYTES,
+    ).catch(() => undefined);
+    // An empty body asks for the defaults; one over the cap is refused.
+    if (text === undefined) return failure(context, "INVALID_REQUEST", 400);
     const input = Option.getOrUndefined(
       Schema.decodeUnknownOption(StartBugReportInvestigationRequestSchema)(
         (() => {

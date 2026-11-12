@@ -81,6 +81,7 @@ import {
   selectRunnerProfile,
 } from "../execution/runner-profiles/catalog.js";
 import { feedbackWidgetSettingsRoutes } from "../feedback-widget/settings-routes.js";
+import { readBoundedJson } from "../http/bounded-body.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -1589,7 +1590,7 @@ projectRoutes.post("/:projectId/move", async (context) => {
     projectId: context.req.param("projectId"),
   });
   const body = Schema.decodeUnknownOption(MoveProjectRequestSchema)(
-    await context.req.json().catch(() => undefined),
+    await readBoundedJson(context.req.raw).catch(() => undefined),
   );
   if (Option.isNone(params) || Option.isNone(body))
     return failure(MoveProjectInvalidRequestResponseSchema, 400);
@@ -1797,7 +1798,7 @@ projectRoutes.post("/:projectId/delete", async (context) => {
     projectId: context.req.param("projectId"),
   });
   const body = Schema.decodeUnknownOption(DeleteProjectRequestSchema)(
-    await context.req.json().catch(() => undefined),
+    await readBoundedJson(context.req.raw).catch(() => undefined),
   );
   if (Option.isNone(params) || Option.isNone(body))
     return context.json(

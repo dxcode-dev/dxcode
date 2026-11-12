@@ -24,6 +24,7 @@ import {
   CreateThreadRunnerUnavailableResponseSchema,
   CreateThreadSharingForbiddenResponseSchema,
   CreateThreadSharingUnavailableResponseSchema,
+  FLUE_MAX_IMAGE_DATA_LENGTH,
   GetThreadInvalidRequestResponseSchema,
   GetThreadListItemInvalidRequestResponseSchema,
   GetThreadListItemNotFoundResponseSchema,
@@ -43,6 +44,7 @@ import {
   ListThreadsPersistenceUnavailableResponseSchema,
   ListThreadsQuerySchema,
   ListThreadsResponseSchema,
+  MAX_IMAGES_PER_MESSAGE,
   MarkThreadSeenInvalidRequestResponseSchema,
   MarkThreadSeenNotFoundResponseSchema,
   MarkThreadSeenParamsSchema,
@@ -126,6 +128,7 @@ import {
 } from "../execution/runner-profiles/catalog.js";
 import { resolveExecutionRunnerProfile } from "../execution/runner-profiles/execution.js";
 import { readExecutionWorkspaceReadiness } from "../execution/workspace-readiness.js";
+import { MAX_JSON_REQUEST_BYTES } from "../http/bounded-body.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -221,6 +224,11 @@ import {
 import { ThreadRepositoryD1 } from "./repository-d1.js";
 import { ThreadService } from "./service.js";
 import { threadSnoozeData } from "./snooze.js";
+
+// Thread creation may carry up to ten inline images of up to 14 MB of base64
+// each, beside the message text; the cap admits that and no more.
+const MAX_CREATE_THREAD_REQUEST_BYTES =
+  MAX_IMAGES_PER_MESSAGE * FLUE_MAX_IMAGE_DATA_LENGTH + MAX_JSON_REQUEST_BYTES;
 
 class InvalidSnoozeTime extends Schema.TaggedError<InvalidSnoozeTime>()(
   "InvalidSnoozeTime",
@@ -814,6 +822,7 @@ export const createThreadRoutes = (
         context.req,
         CreateThreadRequestSchema,
         () => new InvalidThreadRequest(),
+        MAX_CREATE_THREAD_REQUEST_BYTES,
       );
       requestAdmittedAt = Date.now();
       const db = yield* decodeD1Binding(context.env.DB);

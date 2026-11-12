@@ -28,12 +28,12 @@ import {
 import { THREAD_SWEEP_CRON } from "../../src/notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "../../src/notifications/snooze-wake.js";
 import { notifyTurnCompleted } from "../../src/notifications/turn-completed.js";
-import { artifactSaved } from "../../src/thread-artifacts/ask-effects.js";
 import { observeFlueEvent } from "../../src/observability/flue.js";
 import {
   TEST_AUTH_SECRET,
   TEST_RUNNER_PROFILE_CATALOG,
 } from "../../src/testing/bindings.js";
+import { artifactSaved } from "../../src/thread-artifacts/ask-effects.js";
 import { attributeSubmission } from "../../src/thread-sharing/middleware.js";
 import { threadSharingRoutes } from "../../src/thread-sharing/routes.js";
 import { project, thread } from "./fixtures.js";

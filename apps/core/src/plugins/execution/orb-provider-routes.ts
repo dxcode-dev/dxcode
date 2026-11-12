@@ -26,6 +26,7 @@ import {
 import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
 import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../../http/types.js";
 import { orbProvidersLogger, settingsAuditLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
@@ -450,12 +451,18 @@ const respond = (c: Context<AppEnv>, run: () => Promise<OrbProviderListData>) =>
     },
   );
 
+// An Orb provider connection or policy body: up to 16 credential fields
+// of at most 4 KiB each, and a few settings.
+const MAX_ORB_PROVIDER_REQUEST_BYTES = 128 * 1024;
+
 const decodeBody = async <S extends Schema.Top>(
   c: Context<AppEnv>,
   schema: S & { readonly DecodingServices: never },
 ): Promise<S["Type"]> => {
   try {
-    return Schema.decodeUnknownSync(schema)(await c.req.json());
+    return Schema.decodeUnknownSync(schema)(
+      await readBoundedJson(c.req.raw, MAX_ORB_PROVIDER_REQUEST_BYTES),
+    );
   } catch {
     throw new OrbProviderFailure("INVALID_ORB_PROVIDER_REQUEST", 400);
   }

@@ -22,11 +22,11 @@ import {
 import worker from "../../src/cloudflare.js";
 import type { Bindings } from "../../src/http/types.js";
 import { THREAD_SWEEP_CRON } from "../../src/notifications/snooze-cron.js";
-import { artifactSaved } from "../../src/thread-artifacts/ask-effects.js";
 import {
   createTestBindings,
   TEST_CONFIG_ENCRYPTION_KEYS,
 } from "../../src/testing/bindings.js";
+import { artifactSaved } from "../../src/thread-artifacts/ask-effects.js";
 import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
 import { searchThreads } from "../../src/thread-search/service.js";
 import { project, thread } from "./fixtures.js";

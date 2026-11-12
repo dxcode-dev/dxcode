@@ -16,6 +16,7 @@ import {
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { settingsAuditLogger } from "../logging.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -223,7 +224,7 @@ const mount = (
       }
       const body = Schema.decodeUnknownOption(
         UpdateDictationVocabularyRequestSchema,
-      )(await c.req.json().catch(() => undefined));
+      )(await readBoundedJson(c.req.raw).catch(() => undefined));
       if (Option.isNone(body)) throw invalid("Enter the terms as text.");
       const terms = validTerms(body.value.terms);
       await db

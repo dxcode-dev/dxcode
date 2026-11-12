@@ -10,6 +10,10 @@ import {
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import {
+  RequestBodyTooLarge,
+  readBoundedFormData,
+} from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { bugReportLogger } from "../logging.js";
 import { redactBugReportText, redactBugReportValue } from "./redaction.js";
@@ -141,7 +145,13 @@ export const bugReportIntakeRoutes = new Hono<AppEnv>().post(
       )) >= INTAKE_REPORTS_PER_HOUR
     )
       return refuse(context, 429, "RATE_LIMITED");
-    const form = await context.req.formData().catch(() => undefined);
+    const form = await readBoundedFormData(context.req.raw, MAX_BYTES).catch(
+      (error: unknown) =>
+        error instanceof RequestBodyTooLarge
+          ? ("TOO_LARGE" as const)
+          : undefined,
+    );
+    if (form === "TOO_LARGE") return refuse(context, 413, "TOO_LARGE");
     const raw = form?.get("report");
     if (form === undefined || typeof raw !== "string")
       return refuse(context, 400, "INVALID_REQUEST");

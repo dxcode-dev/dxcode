@@ -15,6 +15,7 @@ import {
 import type { UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { notificationLogger } from "../logging.js";
 import { publishNotificationsInvalidation } from "../realtime/publication.js";
@@ -144,7 +145,7 @@ export const notificationRoutes = new Hono<AppEnv>()
     handle(context, async (db, userId) => {
       const body = Schema.decodeUnknownOption(
         MarkNotificationsReadRequestSchema,
-      )(await context.req.json().catch(() => undefined));
+      )(await readBoundedJson(context.req.raw).catch(() => undefined));
       if (Option.isNone(body))
         return failure(
           context,
@@ -172,7 +173,7 @@ export const notificationRoutes = new Hono<AppEnv>()
   .post("/push/devices", (context) =>
     handle(context, async (db, userId) => {
       const body = Schema.decodeUnknownOption(RegisterPushDeviceRequestSchema)(
-        await context.req.json().catch(() => undefined),
+        await readBoundedJson(context.req.raw).catch(() => undefined),
       );
       if (Option.isNone(body))
         return failure(
@@ -216,7 +217,7 @@ export const notificationRoutes = new Hono<AppEnv>()
   .delete("/push/devices", (context) =>
     handle(context, async (db, userId) => {
       const body = Schema.decodeUnknownOption(RemovePushDeviceRequestSchema)(
-        await context.req.json().catch(() => undefined),
+        await readBoundedJson(context.req.raw).catch(() => undefined),
       );
       if (Option.isNone(body))
         return failure(
@@ -319,7 +320,7 @@ export const notificationPreferenceRoutes = new Hono<AppEnv>()
     handle(context, async (db, userId) => {
       const body = Schema.decodeUnknownOption(
         UpdateNotificationPreferenceRequestSchema,
-      )(await context.req.json().catch(() => undefined));
+      )(await readBoundedJson(context.req.raw).catch(() => undefined));
       if (Option.isNone(body))
         return failure(
           context,

@@ -21,6 +21,7 @@ import type { ExperimentalFeatureId, ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { attachmentOrigin, sniffAttachmentType } from "../attachments/store.js";
+import { readBoundedBody, readBoundedText } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
@@ -137,10 +138,8 @@ const decodeBody = async <A, I>(
   context: Context<AppEnv>,
   schema: Schema.Codec<A, I>,
 ): Promise<A | undefined> => {
-  const length = Number(context.req.header("content-length") ?? "0");
-  if (Number.isFinite(length) && length > MAX_REQUEST_BYTES) return undefined;
-  const text = await context.req.text();
-  if (text.length > MAX_REQUEST_BYTES) return undefined;
+  const text = await readBoundedText(context.req.raw, MAX_REQUEST_BYTES);
+  if (text === undefined) return undefined;
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -317,11 +316,11 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
   .post(
     "/:threadId/artifacts/images",
     handle("upload-image", async (context) => {
-      const length = Number(context.req.header("content-length") ?? "0");
-      if (Number.isFinite(length) && length > ARTIFACT_IMAGE_MAX_BYTES)
-        return refuse(context, "ARTIFACT_IMAGE_TOO_LARGE");
-      const bytes = new Uint8Array(await context.req.arrayBuffer());
-      if (bytes.byteLength > ARTIFACT_IMAGE_MAX_BYTES)
+      const bytes = await readBoundedBody(
+        context.req.raw,
+        ARTIFACT_IMAGE_MAX_BYTES,
+      );
+      if (bytes === undefined)
         return refuse(context, "ARTIFACT_IMAGE_TOO_LARGE");
       // The type comes from the bytes, never the name or the header.
       const mimeType = sniffAttachmentType(bytes.subarray(0, 64));

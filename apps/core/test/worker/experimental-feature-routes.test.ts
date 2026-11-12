@@ -11,6 +11,7 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { settingsRoutes } from "../../src/settings/routes.js";
+import { chunkedBody } from "./chunked-body.js";
 
 const userId = "experimental-routes-user" as UserId;
 const workspaceId = "experimental-routes-workspace";
@@ -103,6 +104,40 @@ describe("experimental feature routes in workerd with real D1", () => {
         ]),
       },
     });
+  });
+
+  it("stops reading an oversized JSON body at the shared 8 MB cap", async () => {
+    // decodeJsonBody backs most settings and project routes; this one stands
+    // in for all of them.
+    const app = createApp(["personal", "workspace"]);
+    const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+      app.request(
+        "/settings/personal/experimental-features",
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json", ...headers },
+          body,
+        },
+        bindings,
+      );
+
+    // Chunked, with no Content-Length: Core stops just past 8 MB instead of
+    // holding all 64 MB, and answers with the route's usual 400.
+    const chunked = chunkedBody({
+      totalBytes: 64 * 1_024 * 1_024,
+      chunkBytes: 256 * 1_024,
+    });
+    const streamed = await send(chunked.stream);
+    expect(streamed.status).toBe(400);
+    expect(chunked.read.chunks).toBeLessThanOrEqual(34);
+
+    // A declared length over the cap is refused before any of it is read.
+    const declared = chunkedBody({ totalBytes: 16 * 1_024 * 1_024 });
+    const announced = await send(declared.stream, {
+      "content-length": String(16 * 1_024 * 1_024),
+    });
+    expect(announced.status).toBe(400);
+    expect(declared.read.chunks).toBe(0);
   });
 
   it("rejects unknown IDs and invalid prerequisite or incompatibility combinations", async () => {

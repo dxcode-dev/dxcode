@@ -14,6 +14,7 @@ import {
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import { settingsAuditLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
@@ -225,7 +226,9 @@ workspaceAgentInstructionsRoutes.put("/", (c) =>
     }
     let update: ReturnType<typeof validated>;
     try {
-      update = validated(await c.req.json().catch(() => undefined));
+      update = validated(
+        await readBoundedJson(c.req.raw).catch(() => undefined),
+      );
     } catch (error) {
       audit(c, target, "rejected");
       throw error;

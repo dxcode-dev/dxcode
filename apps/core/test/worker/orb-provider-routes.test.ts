@@ -26,6 +26,7 @@ import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import { encryptPluginCredential } from "../../src/plugins/settings-store-d1.js";
 import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import { chunkedBody } from "./chunked-body.js";
 
 const owner = "orb-owner" as UserId;
 const member = "orb-member" as UserId;
@@ -361,6 +362,38 @@ describe("Orb provider connections in workerd with real D1", () => {
     expect(apiKeyOf((await target(threadId, providerless)).credential)).toBe(
       "key-a-1",
     );
+  });
+
+  it("stops reading an oversized settings body at the 128 KB cap", async () => {
+    const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+      app(solo).request(
+        `${personal}/e2b/connection`,
+        {
+          method: "PUT",
+          headers: { "content-type": "application/json", ...headers },
+          body,
+        },
+        deployed,
+      );
+
+    // Chunked, with no Content-Length: Core stops at the cap instead of
+    // holding all 8 MB, and answers with its usual invalid-request error.
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const streamed = await send(chunked.stream);
+    expect(streamed.status).toBe(400);
+    expect(await streamed.json()).toMatchObject({
+      status: "error",
+      data: { code: "INVALID_ORB_PROVIDER_REQUEST" },
+    });
+    expect(chunked.read.chunks).toBeLessThanOrEqual(10);
+
+    // A declared length over the cap is refused before any of it is read.
+    const declared = chunkedBody({ totalBytes: 256 * 1_024 });
+    const announced = await send(declared.stream, {
+      "content-length": String(256 * 1_024),
+    });
+    expect(announced.status).toBe(400);
+    expect(declared.read.chunks).toBe(0);
   });
 
   it("prepares a personal connection, pins a Thread to its account, and fails closed when it goes", async () => {

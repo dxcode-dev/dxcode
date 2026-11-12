@@ -29,7 +29,11 @@ import { Effect, Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { createAuth } from "../auth/better-auth.js";
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
-import { readBoundedText } from "../http/bounded-body.js";
+import {
+  readBoundedFormData,
+  readBoundedJson,
+  readBoundedText,
+} from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
@@ -57,6 +61,8 @@ import { feedbackThreadPrompt, feedbackThreadTitle } from "./thread-prompt.js";
 const CHALLENGE = /^[0-9a-f]{64}$/;
 const VERIFIER = /^[A-Za-z0-9_-]{43,128}$/;
 const MAX_SEND_BYTES = 128 * 1024;
+// The consent form and the token exchange carry a short challenge or verifier.
+const MAX_SMALL_FORM_BYTES = 16 * 1024;
 
 const clientIdOf = (value: string | undefined) =>
   Option.getOrUndefined(
@@ -250,7 +256,10 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
         "Close this window and choose Continue with dx in the widget again.",
       );
     const widget = await widgetFor(context);
-    const form = await context.req.formData().catch(() => undefined);
+    const form = await readBoundedFormData(
+      context.req.raw,
+      MAX_SMALL_FORM_BYTES,
+    ).catch(() => undefined);
     const challenge = form?.get("challenge");
     if (
       widget === undefined ||
@@ -297,9 +306,10 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
         "FEEDBACK_WIDGET_NOT_FOUND",
         "This Feedback Widget is turned off.",
       );
-    const body = (await context.req.json().catch(() => undefined)) as
-      | { verifier?: unknown }
-      | undefined;
+    const body = (await readBoundedJson(
+      context.req.raw,
+      MAX_SMALL_FORM_BYTES,
+    ).catch(() => undefined)) as { verifier?: unknown } | undefined;
     const verifier = body?.verifier;
     if (typeof verifier !== "string" || !VERIFIER.test(verifier))
       return apiError(context, 400, "INVALID_REQUEST", "Invalid verifier.");

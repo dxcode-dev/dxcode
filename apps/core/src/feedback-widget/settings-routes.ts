@@ -20,6 +20,7 @@ import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
@@ -159,7 +160,7 @@ const withProject =
   };
 
 const originBody = async (context: Context<AppEnv>) => {
-  const body = await context.req.json().catch(() => undefined);
+  const body = await readBoundedJson(context.req.raw).catch(() => undefined);
   const decoded = Schema.decodeUnknownOption(FeedbackWidgetOriginRequestSchema)(
     body,
   );

@@ -12,6 +12,7 @@ import {
 } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
@@ -126,7 +127,7 @@ export const feedbackWidgetEmbedRoutes = new Hono<AppEnv>()
       return errorJson(context, FeedbackWidgetDisabledResponseSchema, 403);
     const decoded = Schema.decodeUnknownOption(
       UpdatePersonalFeedbackWidgetEmbedRequestSchema,
-    )(await context.req.json().catch(() => undefined));
+    )(await readBoundedJson(context.req.raw).catch(() => undefined));
     if (Option.isNone(decoded))
       return errorJson(
         context,

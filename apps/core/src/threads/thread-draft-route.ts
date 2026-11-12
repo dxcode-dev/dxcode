@@ -8,6 +8,7 @@ import {
 import type { UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { threadDraftLogger } from "../logging.js";
 import { canUseSharedThreads } from "../thread-sharing/access.js";
@@ -109,7 +110,9 @@ export const threadDraftRoutes = new Hono<AppEnv>()
   )
   .put("/:threadId/draft", (context) =>
     handle(context, async (db, threadId, userId) => {
-      const update = decodeUpdate(await context.req.json().catch(() => null));
+      const update = decodeUpdate(
+        await readBoundedJson(context.req.raw).catch(() => null),
+      );
       if (Option.isNone(update))
         return errorJson(
           context,

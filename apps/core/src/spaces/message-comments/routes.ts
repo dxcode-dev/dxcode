@@ -11,6 +11,7 @@ import {
 import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
 import { scheduleRealtimeInvalidation } from "../../realtime/publication.js";
@@ -144,7 +145,7 @@ const createMessageCommentRoutes = () => {
         const messageId = messageIdOf(context);
         const input = Option.getOrUndefined(
           Schema.decodeUnknownOption(CreateMessageCommentRequestSchema)(
-            await context.req.json().catch(() => undefined),
+            await readBoundedJson(context.req.raw).catch(() => undefined),
           ),
         );
         if (messageId === undefined || input === undefined)

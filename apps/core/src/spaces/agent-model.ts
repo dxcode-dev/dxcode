@@ -15,6 +15,7 @@ import {
 } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
+import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
 import { findCatalogModel } from "../settings/model-routing/catalog.js";
@@ -266,7 +267,7 @@ export const spaceAgentModelRoutes = new Hono<AppEnv>()
         "Persistence is temporarily unavailable.",
       );
     const body = Schema.decodeUnknownOption(UpdateSpaceAgentModelRequestSchema)(
-      await context.req.json().catch(() => undefined),
+      await readBoundedJson(context.req.raw).catch(() => undefined),
     );
     if (Option.isNone(body))
       return failure(
