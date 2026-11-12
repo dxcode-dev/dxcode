@@ -10,10 +10,20 @@
 //      gets 401. None of this touches the Thread execution object, so
 //      unauthenticated traffic to a private port never wakes a sandbox.
 
+import { readBoundedText } from "../http/bounded-body.js";
 import { portalLogger } from "../logging.js";
 import { recheckPortalSession } from "./access.js";
 import { redeemPortalCode } from "./codes.js";
 import { portalSigningKey, RANDOM_TOKEN, randomToken } from "./crypto.js";
+import {
+  injectFeedbackWidget,
+  PORTAL_FEEDBACK_SCRIPT_PATH,
+  PORTAL_FEEDBACK_SEND_PATH,
+  type PortalFeedbackService,
+  sendFeedback,
+  serveFeedbackScript,
+  wantsFeedbackWidget,
+} from "./feedback.js";
 import {
   type PortalBindings,
   type PortalConfiguration,
@@ -66,6 +76,8 @@ export interface PortalWorkerBindings extends PortalBindings {
   readonly DB?: D1Database;
   readonly THREAD_EXECUTION?: DurableObjectNamespace;
   readonly BETTER_AUTH_SECRET?: string;
+  /** Core's Feedback Widget for Portal pages (see feedback.ts). */
+  readonly PORTAL_FEEDBACK?: PortalFeedbackService;
 }
 
 /** Paths under this prefix belong to dx and never reach the guest. */
@@ -471,7 +483,10 @@ const servePortalRequest = async (
     );
   if (url.pathname === PORTAL_PUBLIC_CONTINUE_PATH)
     return acknowledgePublicLink(request, key, db, match, nowMs);
-  if (url.pathname.startsWith(PORTAL_RESERVED_PREFIX))
+  const feedbackPath =
+    url.pathname === PORTAL_FEEDBACK_SCRIPT_PATH ||
+    url.pathname === PORTAL_FEEDBACK_SEND_PATH;
+  if (url.pathname.startsWith(PORTAL_RESERVED_PREFIX) && !feedbackPath)
     return portalFailure(request, {
       status: 404,
       title: "Not found",
@@ -483,6 +498,20 @@ const servePortalRequest = async (
   const authenticated = await authenticate(request, key, db, match, nowMs);
   if ("session" in authenticated) {
     const { session, refresh } = authenticated;
+    if (feedbackPath) {
+      const response =
+        url.pathname === PORTAL_FEEDBACK_SCRIPT_PATH
+          ? await serveFeedbackScript(bindings.PORTAL_FEEDBACK, session.userId)
+          : await sendFeedback(request, bindings.PORTAL_FEEDBACK, {
+              threadId: match.threadId,
+              port: match.port,
+              origin: match.origin,
+              userId: session.userId,
+            });
+      for (const cookie of refresh)
+        response.headers.append("set-cookie", cookie);
+      return response;
+    }
     return relay(
       request,
       bindings,
@@ -497,6 +526,12 @@ const servePortalRequest = async (
       session,
     );
   }
+  // Only a signed-in member reaches the Feedback Widget; it never relays.
+  if (feedbackPath)
+    return new Response("Portal sign-in required", {
+      status: 401,
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
   const link =
     framedByApp(request) && startsHandshake(request)
       ? undefined
@@ -608,10 +643,8 @@ const acknowledgePublicLink = async (
     request.headers.get("origin") !== match.origin
   )
     return crossSiteRefusal();
-  if (Number(request.headers.get("content-length") ?? 0) > MAX_FORM_BYTES)
-    return new Response("Request too large", { status: 413 });
-  const body = await request.text();
-  if (body.length > MAX_FORM_BYTES)
+  const body = await readBoundedText(request, MAX_FORM_BYTES);
+  if (body === undefined)
     return new Response("Request too large", { status: 413 });
   const headers = new Headers({
     ...noStore,
@@ -677,6 +710,12 @@ const cookieOverflow = (
   });
 };
 
+const unencoded = (request: Request) => {
+  const headers = new Headers(request.headers);
+  headers.set("accept-encoding", "identity");
+  return new Request(request, { headers });
+};
+
 const relay = async (
   request: Request,
   bindings: PortalWorkerBindings,
@@ -698,6 +737,16 @@ const relay = async (
     protocol: configuration.protocol,
   };
   const websocket = isWebSocket(request);
+  const feedback = bindings.PORTAL_FEEDBACK;
+  // A member with the Feedback Widget on gets it on every page; the page is
+  // asked for unencoded so the script tag can be added to it.
+  const withWidget =
+    identity !== undefined &&
+    feedback !== undefined &&
+    !websocket &&
+    wantsFeedbackWidget(request) &&
+    (await feedback.enabled(identity.userId).catch(() => false));
+  const outgoing = withWidget ? unencoded(request) : request;
   let response: Response;
   try {
     if (websocket && request.method !== "GET")
@@ -717,7 +766,7 @@ const relay = async (
                 expiresAt: 0,
               },
         )
-      : await relayHttp(request, target, identity);
+      : await relayHttp(outgoing, target, identity);
   } catch {
     portalLogger.error("Portal relay failed.", {
       event: "portal_relay_failed",
@@ -741,7 +790,7 @@ const relay = async (
   }
   const forwarded = portalResponse(response, target, configuration.appOrigin);
   for (const cookie of refresh) forwarded.headers.append("set-cookie", cookie);
-  return forwarded;
+  return withWidget ? injectFeedbackWidget(forwarded) : forwarded;
 };
 
 /** A complete page for a request the app origin cannot authorize. */

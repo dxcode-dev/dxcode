@@ -9,6 +9,7 @@ import {
 import type { UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import { readBoundedText } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { threadPaneLayoutLogger } from "../logging.js";
 import {
@@ -180,8 +181,11 @@ export const threadPaneLayoutRoutes = new Hono<AppEnv>()
   )
   .put("/:threadId/layout", (context) =>
     handle(context, async (db, threadId, userId) => {
-      const text = await context.req.text().catch(() => "");
-      if (text.length > THREAD_PANE_LAYOUT_MAX_BYTES)
+      const text = await readBoundedText(
+        context.req.raw,
+        THREAD_PANE_LAYOUT_MAX_BYTES,
+      ).catch(() => "");
+      if (text === undefined)
         return errorJson(
           context,
           "INVALID_REQUEST",

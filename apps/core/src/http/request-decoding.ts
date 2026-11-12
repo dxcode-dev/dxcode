@@ -1,5 +1,6 @@
 import { Effect, Schema, type SchemaAST } from "effect";
 import type { HonoRequest } from "hono";
+import { readBoundedText } from "./bounded-body.js";
 
 const strictParseOptions = {
   onExcessProperty: "error",
@@ -36,30 +37,11 @@ export const decodeJsonBody = <S extends Schema.Constraint, E>(
 const readLimitedJsonBody = (request: Request, maxBytes: number) =>
   Effect.tryPromise({
     try: async () => {
-      const declaredLength = Number(request.headers.get("content-length"));
-      if (Number.isFinite(declaredLength) && declaredLength > maxBytes)
+      if (request.body === null) return undefined;
+      const text = await readBoundedText(request, maxBytes);
+      if (text === undefined)
         throw new Error("Request body exceeds the size limit.");
-      const reader = request.body?.getReader();
-      if (reader === undefined) return undefined;
-      const chunks: Array<Uint8Array> = [];
-      let length = 0;
-      while (true) {
-        const result = await reader.read();
-        if (result.done) break;
-        length += result.value.byteLength;
-        if (length > maxBytes) {
-          await reader.cancel();
-          throw new Error("Request body exceeds the size limit.");
-        }
-        chunks.push(result.value);
-      }
-      const bytes = new Uint8Array(length);
-      let offset = 0;
-      for (const chunk of chunks) {
-        bytes.set(chunk, offset);
-        offset += chunk.byteLength;
-      }
-      return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+      return JSON.parse(text) as unknown;
     },
     catch: () => new Error("Invalid JSON request body."),
   });

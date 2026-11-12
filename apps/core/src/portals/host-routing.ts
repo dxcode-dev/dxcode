@@ -1,4 +1,5 @@
 import type { MiddlewareHandler } from "hono";
+import { portalFeedbackService } from "../feedback-widget/portal-feedback.js";
 import type { AppEnv } from "../http/types.js";
 import { handlePortalRequest } from "./handler.js";
 import { matchPortalHost, portalConfiguration } from "./host.js";
@@ -19,5 +20,17 @@ export const portalHostRouting: MiddlewareHandler<AppEnv> = async (
       ? undefined
       : matchPortalHost(new URL(context.req.url), configuration);
   if (configuration === undefined || match === undefined) return next();
-  return handlePortalRequest(context.req.raw, bindings, configuration, match);
+  // Locally the Portal handler runs inside Core, so it calls Core's Feedback
+  // Widget service directly instead of through the Portal Worker's binding.
+  return handlePortalRequest(
+    context.req.raw,
+    {
+      ...bindings,
+      PORTAL_FEEDBACK: portalFeedbackService(bindings, (promise) =>
+        context.executionCtx.waitUntil(promise),
+      ),
+    },
+    configuration,
+    match,
+  );
 };

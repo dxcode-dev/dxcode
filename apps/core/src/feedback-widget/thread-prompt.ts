@@ -30,25 +30,50 @@ export const feedbackThreadPrompt = (
   const origins = [
     ...new Set(comments.map((comment) => new URL(comment.pageUrl).origin)),
   ];
-  const items = comments.map((comment, index) =>
-    [
-      `${index + 1}. ${indented(comment.comment)}`,
-      `   Page: ${comment.pageUrl}`,
-      ...(comment.selector === "" && comment.element === ""
-        ? []
-        : [
-            `   Element: ${[oneLine(comment.selector), oneLine(comment.element)]
-              .filter((part) => part !== "")
-              .join(" ")}`,
-          ]),
-      ...(comment.text === "" ? [] : [`   Text: "${oneLine(comment.text)}"`]),
-    ].join("\n"),
-  );
   return [
     `I left ${comments.length === 1 ? "a comment" : `${comments.length} comments`} on ${origins.join(", ")} with the dx Feedback Widget.`,
     "",
     "Make each change in this Project's repository. You have a copy of the repository, not the live site: find the code that renders each element from its page, element, and text, and change it there. When a comment is unclear, say what you assumed.",
     "",
-    items.join("\n\n"),
+    feedbackItems(comments),
   ].join("\n");
 };
+
+/** Each comment as a numbered item with its page, element, and text. */
+const feedbackItems = (comments: ReadonlyArray<FeedbackWidgetComment>) =>
+  comments
+    .map((comment, index) =>
+      [
+        `${index + 1}. ${indented(comment.comment)}`,
+        `   Page: ${comment.pageUrl}`,
+        ...(comment.selector === "" && comment.element === ""
+          ? []
+          : [
+              `   Element: ${[
+                oneLine(comment.selector),
+                oneLine(comment.element),
+              ]
+                .filter((part) => part !== "")
+                .join(" ")}`,
+            ]),
+        ...(comment.text === "" ? [] : [`   Text: "${oneLine(comment.text)}"`]),
+      ].join("\n"),
+    )
+    .join("\n\n");
+
+/**
+ * The message the Feedback Widget delivers to the Thread whose Portal shows
+ * the page. The page is served from this Thread's workspace, so the agent
+ * changes the code it is running there.
+ */
+export const portalFeedbackPrompt = (
+  comments: ReadonlyArray<FeedbackWidgetComment>,
+  port: number,
+) =>
+  [
+    `I left ${comments.length === 1 ? "a comment" : `${comments.length} comments`} on the page this Thread serves on port ${port}, through its Portal, with the dx Feedback Widget.`,
+    "",
+    "Find the code in this workspace that renders each element from its page, element, and text, and change it there. When a comment is unclear, say what you assumed.",
+    "",
+    feedbackItems(comments),
+  ].join("\n");

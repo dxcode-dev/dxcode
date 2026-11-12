@@ -13,6 +13,7 @@ import { portalSigningKey } from "../../src/portals/crypto.js";
 import { PUBLIC_LINK_CACHE_MS } from "../../src/portals/public-links.js";
 import { encodePortalSession } from "../../src/portals/session.js";
 import portalWorker from "../../src/portals/worker.js";
+import { chunkedBody } from "./chunked-body.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
 
@@ -1095,7 +1096,7 @@ describe("Public Portal links in workerd", () => {
   const acknowledge = (
     bindings: Bindings,
     origin: string,
-    body: string,
+    body: BodyInit,
     from = origin,
     site = from === origin ? "same-origin" : "cross-site",
   ) =>
@@ -1275,6 +1276,37 @@ describe("Public Portal links in workerd", () => {
         "x-portal-user-id": owner.userId,
       },
     );
+  });
+
+  it("caps the first-visit page's Continue form while reading it", async () => {
+    const owner = await signUp("public-cap");
+    const threadId = await createThread(owner.userId);
+    const bindings = {
+      ...baseBindings,
+      THREAD_EXECUTION: fakeExecution().namespace,
+    };
+    const origin = portalOriginFor(threadId, 5173);
+    expect((await publish(bindings, owner.cookie, threadId, 5173)).status).toBe(
+      200,
+    );
+
+    // An anonymous visitor's chunked form with no Content-Length is cut off
+    // at the 4 KB cap rather than read whole.
+    const chunked = chunkedBody({
+      totalBytes: 8 * 1_024 * 1_024,
+      chunkBytes: 1_024,
+      fill: 0x61,
+    });
+    const refused = await acknowledge(bindings, origin, chunked.stream);
+    expect(refused.status).toBe(413);
+    expect(await refused.text()).toBe("Request too large");
+    expect(setCookies(refused)).toEqual([]);
+    expect(chunked.read.chunks).toBeLessThanOrEqual(8);
+
+    // The real form still works.
+    const accepted = await acknowledge(bindings, origin, "return=%2Fapp");
+    expect(accepted.status).toBe(303);
+    expect(accepted.headers.get("location")).toBe("/app");
   });
 
   it("closes a public port on revocation, expiry, and archive", async () => {
@@ -1949,5 +1981,510 @@ describe("Portal hardening in workerd", () => {
     );
     expect(listed.status).toBe(200);
     expect(execution.calls[1]?.headers.get("x-dx-proxy-wake")).toBe("0");
+  });
+});
+
+describe("Feedback Widget in Portals in workerd", () => {
+  const page =
+    "<!doctype html><html><head></head><body><h1>Hi</h1></body></html>";
+  const scriptTag = '<script src="/__dx_portal/feedback.js" async></script>';
+  const sameOrigin = (origin: string) => ({
+    origin,
+    "sec-fetch-site": "same-origin",
+    "sec-fetch-mode": "cors",
+    "sec-fetch-dest": "empty",
+    "content-type": "application/json",
+  });
+  /** A guest serving an HTML page, a script, and a gzipped page. */
+  const guest = () =>
+    fakeExecution((request) => {
+      const target = request.headers.get("x-dx-proxy-target") ?? "/";
+      if (target === "/app.js")
+        return new Response("console.log('</body>')", {
+          headers: { "content-type": "text/javascript" },
+        });
+      if (target === "/gzipped")
+        return new Response(page, {
+          headers: { "content-type": "text/html", "content-encoding": "gzip" },
+          encodeBody: "manual",
+        });
+      return new Response(page, {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    });
+  const turnOn = async (bindings: Bindings, cookie: string) => {
+    const response = await app.request(
+      `${appOrigin}/v1/settings/personal/experimental-features`,
+      {
+        method: "PUT",
+        headers: {
+          cookie,
+          origin: appOrigin,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          featureId: "feedback-widget",
+          enabled: true,
+          expectedRevision: 0,
+        }),
+      },
+      bindings,
+    );
+    expect(response.status).toBe(200);
+  };
+  const comment = (pageUrl: string) => ({
+    pageUrl,
+    selector: "h1",
+    element: "<h1>",
+    tag: "h1",
+    text: "Hi",
+    comment: "Make the heading bigger",
+  });
+
+  it("adds the widget to a signed-in member's pages only while their flag is on", async () => {
+    const owner = await signUp("feedback-owner");
+    const threadId = await createThread(owner.userId);
+    const execution = guest();
+    const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
+    const origin = portalOriginFor(threadId, 5173);
+    const { cookie } = await signInToPortal(
+      bindings,
+      threadId,
+      5173,
+      owner.cookie,
+    );
+    const open = (path: string, headers: Record<string, string> = navigation) =>
+      app.request(
+        `${origin}${path}`,
+        { headers: { ...headers, cookie, "accept-encoding": "gzip, br" } },
+        bindings,
+      );
+
+    // Off: the guest's page passes as it is, encoded as the browser asked.
+    const off = await open("/");
+    expect(await off.text()).toBe(page);
+    expect(execution.calls.at(-1)?.headers.get("accept-encoding")).toBe(
+      "gzip, br",
+    );
+    const offScript = await open("/__dx_portal/feedback.js", {
+      "sec-fetch-dest": "script",
+      "sec-fetch-site": "same-origin",
+    });
+    expect(offScript.status).toBe(200);
+    expect(await offScript.text()).not.toContain("dxFeedbackWidget(");
+
+    await turnOn(bindings, owner.cookie);
+
+    // On: every page gets the script tag before </body>, asked for unencoded.
+    const on = await open("/docs?x=1");
+    expect(on.status).toBe(200);
+    const body = await on.text();
+    expect(body).toBe(page.replace("</body>", `${scriptTag}</body>`));
+    expect(on.headers.get("content-length")).toBeNull();
+    expect(execution.calls.at(-1)?.headers.get("accept-encoding")).toBe(
+      "identity",
+    );
+    // A framed page (the dx Preview pane) gets it too.
+    const framed = await open("/", {
+      ...navigation,
+      "sec-fetch-dest": "iframe",
+      "sec-fetch-site": "cross-site",
+    });
+    expect(await framed.text()).toContain(scriptTag);
+    // Not scripts, and not a page the guest still sent encoded.
+    const script = await open("/app.js", {
+      "sec-fetch-dest": "script",
+      "sec-fetch-site": "same-origin",
+    });
+    expect(await script.text()).toBe("console.log('</body>')");
+    const gzipped = await open("/gzipped");
+    expect(gzipped.headers.get("content-encoding")).toBe("gzip");
+
+    // The script is dx's, served by the Portal and pointed back at it.
+    const relayed = execution.calls.length;
+    const widget = await open("/__dx_portal/feedback.js", {
+      "sec-fetch-dest": "script",
+      "sec-fetch-site": "same-origin",
+    });
+    expect(widget.headers.get("content-type")).toBe(
+      "text/javascript; charset=utf-8",
+    );
+    const source = await widget.text();
+    expect(source).toContain("dxFeedbackWidget(");
+    expect(source).toContain('"sendPath":"/__dx_portal/feedback"');
+    expect(execution.calls).toHaveLength(relayed);
+  });
+
+  it("refuses sends that are not this member's comments on this Portal", async () => {
+    const owner = await signUp("feedback-sender");
+    const threadId = await createThread(owner.userId);
+    const execution = guest();
+    const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
+    const origin = portalOriginFor(threadId, 5173);
+    const { cookie } = await signInToPortal(
+      bindings,
+      threadId,
+      5173,
+      owner.cookie,
+    );
+    const send = (body: unknown, headers = sameOrigin(origin)) =>
+      app.request(
+        `${origin}/__dx_portal/feedback`,
+        {
+          method: "POST",
+          headers: { ...headers, cookie },
+          body: typeof body === "string" ? body : JSON.stringify(body),
+        },
+        bindings,
+      );
+    const valid = { comments: [comment(`${origin}/`)] };
+
+    // The flag is off.
+    const off = await send(valid);
+    expect(off.status).toBe(403);
+    expect(await off.json()).toMatchObject({
+      data: { code: "FEEDBACK_WIDGET_FEATURE_DISABLED" },
+    });
+    await turnOn(bindings, owner.cookie);
+
+    // Another site, even another Portal, cannot send as the member.
+    const otherPortal = portalOriginFor(threadId, 3000);
+    expect(
+      (
+        await send(valid, {
+          ...sameOrigin(otherPortal),
+          "sec-fetch-site": "same-site",
+        })
+      ).status,
+    ).toBe(403);
+    // A comment must be on a page of this Portal.
+    const elsewhere = await send({
+      comments: [comment(`${otherPortal}/`)],
+    });
+    expect(elsewhere.status).toBe(403);
+    expect(await elsewhere.json()).toMatchObject({
+      data: { code: "FEEDBACK_WIDGET_ORIGIN_NOT_ALLOWED" },
+    });
+    expect((await send("{not json")).status).toBe(400);
+    expect((await send({ comments: [] })).status).toBe(400);
+    expect(
+      (
+        await app.request(
+          `${origin}/__dx_portal/feedback`,
+          { headers: { ...sameOrigin(origin), cookie } },
+          bindings,
+        )
+      ).status,
+    ).toBe(405);
+    // None of it reached the guest.
+    expect(execution.calls).toHaveLength(0);
+  });
+
+  it("hands a member's comments to Core for the Thread from the standalone Portal Worker", async () => {
+    const owner = await signUp("feedback-worker");
+    const threadId = await createThread(owner.userId);
+    const execution = guest();
+    const sent: Array<unknown> = [];
+    const feedback = {
+      enabled: async (userId: string) => userId === owner.userId,
+      script: async () => "/* widget */",
+      send: async (input: unknown) => {
+        sent.push(input);
+        return { status: 201, body: { status: "success", data: { threadId } } };
+      },
+    };
+    const bindings = {
+      ...baseBindings,
+      THREAD_EXECUTION: execution.namespace,
+      PORTAL_FEEDBACK: feedback,
+    };
+    const origin = portalOriginFor(threadId, 5173);
+    const { cookie } = await signInToPortal(
+      bindings,
+      threadId,
+      5173,
+      owner.cookie,
+    );
+    const page = await portalWorker.fetch(
+      new Request(`${origin}/`, { headers: { ...navigation, cookie } }),
+      bindings,
+    );
+    expect(await page.text()).toContain(scriptTag);
+    const response = await portalWorker.fetch(
+      new Request(`${origin}/__dx_portal/feedback`, {
+        method: "POST",
+        headers: { ...sameOrigin(origin), cookie },
+        body: JSON.stringify({ comments: [comment(`${origin}/`)] }),
+      }),
+      bindings,
+    );
+    expect(response.status).toBe(201);
+    expect(sent).toEqual([
+      {
+        threadId,
+        port: 5173,
+        origin,
+        userId: owner.userId,
+        body: { comments: [comment(`${origin}/`)] },
+      },
+    ]);
+  });
+
+  it("caps a send's body while reading it, whatever length it declares", async () => {
+    const owner = await signUp("feedback-cap");
+    const threadId = await createThread(owner.userId);
+    const sent: Array<unknown> = [];
+    const feedback = {
+      enabled: async () => true,
+      script: async () => "/* widget */",
+      send: async (input: unknown) => {
+        sent.push(input);
+        return { status: 201, body: { status: "success", data: { threadId } } };
+      },
+    };
+    const bindings = {
+      ...baseBindings,
+      THREAD_EXECUTION: guest().namespace,
+      PORTAL_FEEDBACK: feedback,
+    };
+    const origin = portalOriginFor(threadId, 5173);
+    const { cookie } = await signInToPortal(
+      bindings,
+      threadId,
+      5173,
+      owner.cookie,
+    );
+    const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+      portalWorker.fetch(
+        new Request(`${origin}/__dx_portal/feedback`, {
+          method: "POST",
+          headers: { ...sameOrigin(origin), cookie, ...headers },
+          body,
+        }),
+        bindings,
+      );
+    const tooLarge = {
+      status: "error",
+      data: { code: "PAYLOAD_TOO_LARGE", message: "Too many comments." },
+    };
+
+    // Chunked, with no Content-Length: Core stops reading at the 128 KB cap
+    // instead of holding all 8 MB.
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const streamed = await send(chunked.stream);
+    expect(streamed.status).toBe(413);
+    expect(await streamed.json()).toEqual(tooLarge);
+    expect(chunked.read.chunks).toBeLessThanOrEqual(10);
+    expect(chunked.read.chunks).toBeLessThan(chunked.chunks);
+
+    // A declared length over the cap is refused before any of it is read.
+    const declared = chunkedBody({ totalBytes: 256 * 1_024 });
+    const announced = await send(declared.stream, {
+      "content-length": String(256 * 1_024),
+    });
+    expect(announced.status).toBe(413);
+    expect(await announced.json()).toEqual(tooLarge);
+    expect(declared.read.chunks).toBe(0);
+    expect(sent).toHaveLength(0);
+
+    // A normal body, chunked or not, still reaches Core.
+    const valid = JSON.stringify({ comments: [comment(`${origin}/`)] });
+    expect((await send(valid)).status).toBe(201);
+    const small = new TextEncoder().encode(valid);
+    expect(
+      (
+        await send(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(small.subarray(0, 10));
+              controller.enqueue(small.subarray(10));
+              controller.close();
+            },
+          }),
+        )
+      ).status,
+    ).toBe(201);
+    expect(sent).toHaveLength(2);
+    expect(sent.at(-1)).toMatchObject({
+      body: { comments: [comment(`${origin}/`)] },
+    });
+  });
+
+  it("caps the embedded widget's send body while reading it", async () => {
+    const owner = await signUp("embed-cap");
+    const threadId = await createThread(owner.userId);
+    const projectId = `prj_${threadId.slice(4)}`;
+    await turnOn(baseBindings, owner.cookie);
+    const enabled = await app.request(
+      `${appOrigin}/v1/projects/${projectId}/feedback-widget/enable`,
+      { method: "POST", headers: { cookie: owner.cookie, origin: appOrigin } },
+      baseBindings,
+    );
+    expect(enabled.status).toBe(200);
+    const { clientId } = (
+      (await enabled.json()) as { data: { clientId: string } }
+    ).data;
+    // The widget's sign-in: consent to a challenge, then claim a token.
+    const verifier = "v".repeat(43);
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(verifier),
+    );
+    const challenge = [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const consent = await app.request(
+      `${appOrigin}/api/feedback-widget/${clientId}/authorize`,
+      {
+        method: "POST",
+        headers: {
+          cookie: owner.cookie,
+          origin: appOrigin,
+          "content-type": "application/x-www-form-urlencoded",
+        },
+        body: `challenge=${challenge}`,
+      },
+      baseBindings,
+    );
+    expect(consent.status).toBe(200);
+    const claimed = await app.request(
+      `${appOrigin}/api/feedback-widget/${clientId}/token`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ verifier }),
+      },
+      baseBindings,
+    );
+    expect(claimed.status).toBe(200);
+    const { token } = ((await claimed.json()) as { data: { token: string } })
+      .data;
+    const send = (body: BodyInit, headers: Record<string, string> = {}) =>
+      app.request(
+        `${appOrigin}/api/feedback-widget/${clientId}/threads`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            ...headers,
+          },
+          body,
+        },
+        baseBindings,
+      );
+
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const streamed = await send(chunked.stream);
+    expect(streamed.status).toBe(413);
+    expect(await streamed.json()).toMatchObject({
+      data: { code: "PAYLOAD_TOO_LARGE" },
+    });
+    expect(chunked.read.chunks).toBeLessThanOrEqual(10);
+
+    const declared = chunkedBody({ totalBytes: 256 * 1_024 });
+    const announced = await send(declared.stream, {
+      "content-length": String(256 * 1_024),
+    });
+    expect(announced.status).toBe(413);
+    expect(declared.read.chunks).toBe(0);
+
+    // A normal-sized body is read and validated as before.
+    const small = await send(JSON.stringify({ comments: [] }));
+    expect(small.status).toBe(400);
+    expect(await small.json()).toMatchObject({
+      data: { code: "INVALID_REQUEST" },
+    });
+  });
+
+  it("never shows the widget to, or takes comments from, a public link's visitors", async () => {
+    const owner = await signUp("feedback-public");
+    const threadId = await createThread(owner.userId);
+    await turnOn(baseBindings, owner.cookie);
+    const execution = guest();
+    const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
+    const origin = portalOriginFor(threadId, 5173);
+    const published = await app.request(
+      `${appOrigin}/v1/threads/${threadId}/portals/5173/public`,
+      {
+        method: "PUT",
+        headers: {
+          cookie: owner.cookie,
+          origin: appOrigin,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ duration: "1h" }),
+      },
+      bindings,
+    );
+    expect(published.status).toBe(200);
+    const acknowledged = await app.request(
+      `${origin}/__dx_portal/public`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded",
+          origin,
+          "sec-fetch-site": "same-origin",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-dest": "document",
+        },
+        body: "return=%2F",
+      },
+      bindings,
+    );
+    const ack = cookieValue(acknowledged, "__Host-dx_portal_public");
+    const cookie = `__Host-dx_portal_public=${ack}`;
+
+    const visited = await app.request(
+      `${origin}/`,
+      { headers: { ...navigation, cookie } },
+      bindings,
+    );
+    expect(visited.status).toBe(200);
+    expect(await visited.text()).toBe(page);
+    expect(
+      (
+        await app.request(
+          `${origin}/__dx_portal/feedback.js`,
+          {
+            headers: {
+              cookie,
+              "sec-fetch-dest": "script",
+              "sec-fetch-site": "same-origin",
+            },
+          },
+          bindings,
+        )
+      ).status,
+    ).toBe(401);
+    const sent = await app.request(
+      `${origin}/__dx_portal/feedback`,
+      {
+        method: "POST",
+        headers: { ...sameOrigin(origin), cookie },
+        body: JSON.stringify({ comments: [comment(`${origin}/`)] }),
+      },
+      bindings,
+    );
+    expect(sent.status).toBe(401);
+    // Only the page itself reached the guest.
+    expect(execution.calls).toHaveLength(1);
+
+    // The owner, signed in on the same public port, still gets it.
+    const { cookie: member } = await signInToPortal(
+      bindings,
+      threadId,
+      5173,
+      owner.cookie,
+      "/",
+      "/__dx_portal/sign-in?return=%2F",
+    );
+    const signedIn = await app.request(
+      `${origin}/`,
+      { headers: { ...navigation, cookie: member } },
+      bindings,
+    );
+    expect(await signedIn.text()).toContain(scriptTag);
   });
 });

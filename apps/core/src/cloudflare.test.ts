@@ -15,6 +15,7 @@ const registration = vi.hoisted(() => ({
 
 vi.mock("cloudflare:workers", () => ({
   DurableObject: class {},
+  WorkerEntrypoint: class {},
   get env() {
     return registration.env;
   },

@@ -181,6 +181,16 @@ export const widgetScript = (
     },
   );
 
+/**
+ * The widget's source for a Thread's Portal page: it shows at once and posts
+ * its comments to the Portal, which delivers them to the Thread.
+ */
+export const portalWidgetSource = (config: {
+  readonly scriptPath: string;
+  readonly sendPath: string;
+}) =>
+  `/* dx Feedback Widget */\n(() => {\n${widgetSource}\ndxFeedbackWidget(${scriptJson({ clientId: "portal", allowedOrigins: [], ...config })});\n})();\n`;
+
 /** A first-party page in the sign-in popup; nothing may frame it. */
 export const popupPage = (
   status: number,

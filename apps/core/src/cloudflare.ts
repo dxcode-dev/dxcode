@@ -22,6 +22,7 @@ import {
   storeGeneratedTitle,
 } from "./threads/dx-title-agent.js";
 
+export { PortalFeedback } from "./feedback-widget/portal-feedback-entrypoint.js";
 export { OrbProviderPreparationObject } from "./plugins/execution/preparation-object.js";
 export { RealtimeHub } from "./realtime/realtime-hub.js";
 export { ByokCredentialCoordinatorObject } from "./settings/model-byok/invocation.js";

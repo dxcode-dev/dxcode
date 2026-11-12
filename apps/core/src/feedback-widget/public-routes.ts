@@ -29,6 +29,7 @@ import { Effect, Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { createAuth } from "../auth/better-auth.js";
 import { loadAuthenticationRequirements } from "../auth/requirements.js";
+import { readBoundedText } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { feedbackWidgetLogger } from "../logging.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
@@ -354,8 +355,11 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
   .post(
     "/:clientId/threads",
     withGrant(async (context, widget, holder) => {
-      const length = Number(context.req.header("content-length") ?? "0");
-      if (length > MAX_SEND_BYTES)
+      // A dropped upload reads as empty, which fails validation as before.
+      const text = await readBoundedText(context.req.raw, MAX_SEND_BYTES).catch(
+        () => "",
+      );
+      if (text === undefined)
         return apiError(
           context,
           413,
@@ -364,7 +368,15 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
         );
       const decoded = Schema.decodeUnknownOption(
         FeedbackWidgetSendRequestSchema,
-      )(await context.req.json().catch(() => undefined));
+      )(
+        (() => {
+          try {
+            return JSON.parse(text) as unknown;
+          } catch {
+            return undefined;
+          }
+        })(),
+      );
       if (Option.isNone(decoded))
         return apiError(
           context,

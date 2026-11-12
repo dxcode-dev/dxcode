@@ -3,8 +3,9 @@
 // website's page, so it holds no dx credential: sending happens in the panel
 // the dx origin serves in an iframe, shown in the same card.
 //
-// Hidden until the page is opened with `?dx`; the browser then remembers it
-// for the site. Cmd+. or Ctrl+. hides or shows it; so does the button's
+// On a website it stays hidden until the page is opened with `?dx`; the
+// browser then remembers it for the site. In a Thread's Portal (config.sendPath
+// set) it shows at once and sends to that Thread through the Portal itself. Cmd+. or Ctrl+. hides or shows it; so does the button's
 // context menu (right-click or long-press), and a triple tap where the
 // button was shows it on touch screens.
 
@@ -17,7 +18,10 @@ function dxFeedbackWidget(config) {
   const VISIBLE_KEY = `${prefix}:visible`;
   const COMMENTS_KEY = `${prefix}:comments`;
   const MAX_COMMENTS = 20;
-  const allowedHere = config.allowedOrigins.includes(location.origin);
+  const portal = typeof config.sendPath === "string";
+  const allowedHere = portal || config.allowedOrigins.includes(location.origin);
+  const scriptPath =
+    config.scriptPath ?? `/api/feedback-widget/${config.clientId}.js`;
 
   const storage = {
     get(key) {
@@ -57,6 +61,8 @@ function dxFeedbackWidget(config) {
   /** The comment being written: its element, text, and the one it edits. */
   let draft;
   let notice = "";
+  let noticeKind = "error";
+  let sending = false;
   let panelFrame;
   let panelHeight = 220;
 
@@ -65,7 +71,11 @@ function dxFeedbackWidget(config) {
     else storage.set(COMMENTS_KEY, JSON.stringify(comments));
   };
 
-  const visible = () => storage.get(VISIBLE_KEY) === "1";
+  // A Portal shows the widget until someone hides it.
+  const visible = () =>
+    portal
+      ? storage.get(VISIBLE_KEY) !== "0"
+      : storage.get(VISIBLE_KEY) === "1";
 
   // The page address a comment records, without the `?dx` switch.
   const pageUrl = () => {
@@ -91,7 +101,7 @@ function dxFeedbackWidget(config) {
   // `data-bottom` on the script tag lifts the button, in pixels, off a
   // site's own corner control.
   const tag = [...document.querySelectorAll("script[src]")].find((script) =>
-    script.src.includes(`/api/feedback-widget/${config.clientId}.js`),
+    script.src.includes(scriptPath),
   );
   const bottom = Math.min(
     Math.max(Number.parseInt(tag?.dataset.bottom ?? "20", 10) || 20, 0),
@@ -148,6 +158,7 @@ button.icon:hover { color: #f6fff5; background: rgba(246,255,245,.08); }
 button.icon:focus-visible, button.action:focus-visible, .launcher:focus-visible { outline: 2px solid #6ca0e0; outline-offset: 2px; }
 .empty { padding: 14px; color: #939b94; }
 .notice { margin: 0 14px 4px; padding: 8px 10px; border-radius: 8px; background: rgba(214,118,112,.14); color: #f0a49f; font-size: 12px; }
+.notice.ok { background: rgba(84,184,121,.14); color: #8fd6a8; }
 .highlight { position: fixed; pointer-events: none; border: 2px solid #f34e3f; background: rgba(243,78,63,.10); border-radius: 4px; display: none; }
 .highlight span { position: absolute; left: -2px; bottom: 100%; margin-bottom: 4px; padding: 1px 6px; border-radius: 4px; background: #f34e3f; color: #fff;
   font: 11px/16px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
@@ -538,7 +549,13 @@ button.icon:focus-visible, button.action:focus-visible, .launcher:focus-visible 
               ),
             ),
         ...(notice
-          ? [element("div", { class: "notice", role: "alert", text: notice })]
+          ? [
+              element("div", {
+                class: noticeKind === "ok" ? "notice ok" : "notice",
+                role: noticeKind === "ok" ? "status" : "alert",
+                text: notice,
+              }),
+            ]
           : []),
         element("footer", {}, [
           element("span", { class: "mark", text: "dx" }),
@@ -556,9 +573,9 @@ button.icon:focus-visible, button.action:focus-visible, .launcher:focus-visible 
             type: "button",
             title: "Send all comments",
             "aria-label": "Send",
-            html: `Send${icon("arrow")}`,
-            disabled: comments.length === 0 ? "" : undefined,
-            onclick: openPanel,
+            html: sending ? "Sending…" : `Send${icon("arrow")}`,
+            disabled: comments.length === 0 || sending ? "" : undefined,
+            onclick: portal ? sendToThread : openPanel,
           }),
         ]),
       ],
@@ -566,6 +583,7 @@ button.icon:focus-visible, button.action:focus-visible, .launcher:focus-visible 
 
   const newComment = () => {
     notice = "";
+    noticeKind = "error";
     draft = { text: "" };
     mode = "compose";
     render();
@@ -642,6 +660,46 @@ button.icon:focus-visible, button.action:focus-visible, .launcher:focus-visible 
     );
   };
 
+  // In a Portal the page's own origin carries the Portal session, so the
+  // comments go straight to the Thread.
+  const sendToThread = async () => {
+    if (sending || comments.length === 0) return;
+    sending = true;
+    notice = "";
+    render();
+    let failure;
+    try {
+      const response = await fetch(config.sendPath, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ comments }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => undefined);
+        failure =
+          payload?.data?.message ??
+          (response.status === 401
+            ? "Your Portal sign-in ended. Reload the page."
+            : "dx could not send the comments. Try again.");
+      }
+    } catch {
+      failure = "dx could not be reached. Try again.";
+    }
+    sending = false;
+    if (failure === undefined) {
+      comments = [];
+      saveComments();
+      notice = "Sent to this Thread.";
+      noticeKind = "ok";
+    } else {
+      notice = failure;
+      noticeKind = "error";
+    }
+    mode = "list";
+    render();
+  };
+
   const openPanel = () => {
     if (!allowedHere) {
       notice = `${location.origin} isn't an allowed origin for this dx Project. Add it in Project Settings → Feedback Widget.`;
@@ -687,6 +745,7 @@ button.icon:focus-visible, button.action:focus-visible, .launcher:focus-visible 
 
   const setVisible = (shown) => {
     if (shown) storage.set(VISIBLE_KEY, "1");
+    else if (portal) storage.set(VISIBLE_KEY, "0");
     else storage.remove(VISIBLE_KEY);
     if (!shown) {
       panelFrame = undefined;

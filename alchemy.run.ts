@@ -1156,6 +1156,11 @@ export default Alchemy.Stack(
             className: "ThreadExecutionObject",
             scriptName: worker.workerName,
           }),
+          // Core's Feedback Widget for Portal pages (portals/feedback.ts).
+          PORTAL_FEEDBACK: Cloudflare.WorkerEntrypoint(
+            worker,
+            "PortalFeedback",
+          ),
         },
         workersDev: false,
         routes: [{ pattern: `*.${portals.domain}/*`, zoneId: portals.zoneId }],

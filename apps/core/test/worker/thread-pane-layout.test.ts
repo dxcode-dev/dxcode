@@ -6,6 +6,7 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv } from "../../src/http/types.js";
 import { threadPaneLayoutRoutes } from "../../src/threads/pane-layout-route.js";
+import { chunkedBody } from "./chunked-body.js";
 import {
   bindings,
   createProjectViaApi,
@@ -46,7 +47,10 @@ const write = async (threadId: string, layout: unknown, who = principal) =>
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: typeof layout === "string" ? layout : JSON.stringify(layout),
+      body:
+        typeof layout === "string" || layout instanceof ReadableStream
+          ? layout
+          : JSON.stringify(layout),
     },
     bindings,
   );
@@ -141,6 +145,33 @@ describe("Thread pane layout", () => {
       expect(response.status).toBe(400);
     }
     expect((await read(thread.data.id)).body.data.layout).toBeNull();
+  });
+
+  it("stops reading a layout body at its size cap", async () => {
+    const project = await createProjectViaApi("Layout");
+    const thread = await createThreadViaApi(project.data.id);
+    const chunked = chunkedBody({ totalBytes: 8 * 1_024 * 1_024 });
+    const response = await write(thread.data.id, chunked.stream);
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      data: { code: "INVALID_REQUEST" },
+    });
+    expect(chunked.read.chunks).toBeLessThanOrEqual(4);
+    expect((await read(thread.data.id)).body.data.layout).toBeNull();
+    // A normal layout, sent chunked, still saves.
+    const bytes = new TextEncoder().encode(JSON.stringify(layout));
+    const saved = await write(
+      thread.data.id,
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes.subarray(0, 7));
+          controller.enqueue(bytes.subarray(7));
+          controller.close();
+        },
+      }),
+    );
+    expect(saved.status).toBe(200);
+    expect((await read(thread.data.id)).body.data.layout).toEqual(layout);
   });
 
   it("treats a stored row the schema rejects as none", async () => {
