@@ -1,3 +1,5 @@
+import { CLAUDE_CODE_HOOK_WAIT_SECONDS } from "./tool-gate.js";
+
 /**
  * The dx tool bridge: the program between the Claude Code CLI and the run's
  * output chunks. Claude reads its input, and every answer from dx, from the
@@ -23,6 +25,12 @@
  * tools under the names dx's own loop uses. Each tool is listed with
  * `anthropic/alwaysLoad`, so Claude calls it without a tool search.
  *
+ * 4. When the run's directory holds `dx-hooks.json`, installed plugins
+ *    gate tool calls: the bridge registers a PreToolUse hook, prints each of
+ *    Claude's own tool calls as a `dx_hook` line for dx, and answers the
+ *    hook with dx's decision from `hooks/<tool_use id>.json`, denying the
+ *    call when none arrives in time (tool-gate.ts).
+ *
  * Python's standard library only: it also runs where the local runtime's
  * namespace hides the developer's home-directory Node.js. Each call waits in
  * its own thread so other messages keep flowing.
@@ -31,7 +39,11 @@ export const CLAUDE_CODE_TOOL_BRIDGE = `import json, os, sys, threading, time
 
 tools_path, mcp_dir, input_path = sys.argv[1], sys.argv[2], sys.argv[3]
 results = os.path.join(mcp_dir, "results")
+hook_answers = os.path.join(mcp_dir, "hooks")
+gate_tools = os.path.exists(os.path.join(os.path.dirname(tools_path), "dx-hooks.json"))
+HOOK_SECONDS = ${CLAUDE_CODE_HOOK_WAIT_SECONDS}
 tools = json.load(open(tools_path))
+dx_tool_names = set(tool.get("name") for tool in tools)
 for tool in tools:
     tool.setdefault("_meta", {})["anthropic/alwaysLoad"] = True
 to_claude = os.fdopen(4, "w")
@@ -141,7 +153,57 @@ def mcp_message(request_id, message):
         mcp(request_id, {"jsonrpc": "2.0", "id": rpc_id, "result": {}})
 
 
-send({"type": "control_request", "request_id": "dx-initialize", "request": {"subtype": "initialize", "sdkMcpServers": ["dx"]}})
+def hook_output(decision, reason, updated=None):
+    output = {"hookEventName": "PreToolUse", "permissionDecision": decision}
+    if reason:
+        output["permissionDecisionReason"] = reason
+    if updated is not None:
+        output["updatedInput"] = updated
+    return {"hookSpecificOutput": output}
+
+
+def pre_tool_use(request_id, request):
+    try:
+        data = request.get("input") or {}
+        name = str(data.get("tool_name", ""))
+        tool_use = str(request.get("tool_use_id") or data.get("tool_use_id") or "")
+        # dx's own tools pass dx's gate inside dx.
+        if name in dx_tool_names:
+            reply(request_id, {})
+            return
+        if not tool_use.replace("_", "").replace("-", "").isalnum():
+            reply(request_id, hook_output("deny", "dx could not check this call: it has no tool_use id."))
+            return
+        path = os.path.join(hook_answers, tool_use + ".json")
+        with lock:
+            sys.stdout.write(json.dumps({"type": "dx_hook", "tool_use_id": tool_use, "tool_name": name, "tool_input": data.get("tool_input") or {}}) + "\\n")
+            sys.stdout.flush()
+        deadline = time.time() + HOOK_SECONDS
+        while time.time() < deadline:
+            if os.path.exists(path):
+                try:
+                    with open(path) as handle:
+                        answer = json.load(handle)
+                except ValueError:
+                    answer = None  # dx is still writing it
+                if isinstance(answer, dict):
+                    if answer.get("decision") == "allow":
+                        updated = answer.get("input")
+                        reply(request_id, hook_output("allow", "", updated) if isinstance(updated, dict) else {})
+                    else:
+                        reply(request_id, hook_output("deny", str(answer.get("reason") or "An installed plugin did not allow this call.")))
+                    return
+            time.sleep(0.2)
+        reply(request_id, hook_output("deny", "dx did not finish checking this call with the Thread's plugins in time, so it did not run."))
+    except Exception as error:  # every hook gets an answer, and it denies
+        reply(request_id, hook_output("deny", "dx could not check this call: %s" % error))
+
+
+initialize = {"subtype": "initialize", "sdkMcpServers": ["dx"]}
+if gate_tools:
+    # A failed answer blocks the call, and Claude Code waits past the bridge.
+    initialize["hooks"] = {"PreToolUse": [{"hookCallbackIds": ["dx-pre-tool-use"], "timeout": HOOK_SECONDS + 30, "onFailure": "block"}]}
+send({"type": "control_request", "request_id": "dx-initialize", "request": initialize})
 for line in sys.stdin:
     try:
         message = json.loads(line)
@@ -152,17 +214,37 @@ for line in sys.stdin:
         request = message.get("request") or {}
         if request.get("subtype") == "mcp_message" and request.get("server_name") == "dx":
             mcp_message(message.get("request_id"), request.get("message") or {})
+        elif request.get("subtype") == "hook_callback" and request.get("callback_id") == "dx-pre-tool-use":
+            threading.Thread(target=pre_tool_use, args=(message.get("request_id"), request), daemon=True).start()
         else:
             refuse(message.get("request_id"), "dx does not handle %s." % request.get("subtype"))
         continue
     if kind == "control_response":
-        if (message.get("response") or {}).get("request_id") == "dx-initialize":
+        response = message.get("response") or {}
+        if response.get("request_id") == "dx-initialize":
+            answer = response.get("response") or {}
+            # Plugins gate this run: go on only when Claude Code took the
+            # hook and honors onFailure "block", as Claude Code's own SDK
+            # requires; otherwise end the run before it does anything.
+            if gate_tools and (
+                response.get("subtype") != "success"
+                or answer.get("hook_on_failure_supported") is not True
+                or answer.get("hooks_applied") is False
+            ):
+                failed = "This Claude Code cannot apply the Thread's plugin checks to its own tools, so dx did not start the turn. Update Claude Code and try again."
+                with lock:
+                    sys.stdout.write(json.dumps({"type": "result", "subtype": "error_during_execution", "is_error": True, "result": failed, "errors": [failed]}) + "\\n")
+                    sys.stdout.flush()
+                close()
+                break
             write_input()
         continue
     if kind == "control_cancel_request":
         continue
-    sys.stdout.write(line)
-    sys.stdout.flush()
+    # Hook threads print their requests too; one line at a time.
+    with lock:
+        sys.stdout.write(line)
+        sys.stdout.flush()
     if kind == "result":
         close()
 close()

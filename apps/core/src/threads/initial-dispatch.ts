@@ -381,7 +381,12 @@ export const retryInitialDispatch = async (
 };
 
 /** A Thread's first message that has not started, for its detail. */
-export const readInitialDispatchState = async (
+interface InitialDispatchStateRow {
+  readonly state: "pending" | "failed";
+  readonly failureCode: InitialDispatchFailureCode | null;
+}
+
+export const initialDispatchStateStatement = (
   db: D1Database,
   threadId: ThreadId,
 ) =>
@@ -390,8 +395,14 @@ export const readInitialDispatchState = async (
       `SELECT state, failure_code AS failureCode
          FROM thread_initial_dispatch WHERE thread_id = ?`,
     )
-    .bind(threadId)
-    .first<{
-      state: "pending" | "failed";
-      failureCode: InitialDispatchFailureCode | null;
-    }>();
+    .bind(threadId);
+
+/** The first message's admission, from a batched read's first row. */
+export const initialDispatchStateOf = (row: unknown) =>
+  (row ?? null) as InitialDispatchStateRow | null;
+
+export const readInitialDispatchState = async (
+  db: D1Database,
+  threadId: ThreadId,
+) =>
+  initialDispatchStateStatement(db, threadId).first<InitialDispatchStateRow>();

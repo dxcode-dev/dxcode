@@ -25,6 +25,88 @@ const stranger = "ship-settings-stranger" as UserId;
 const bindings: Bindings = {
   DB: env.DB,
   DX_RUNNER_PROFILE_CATALOG: TEST_RUNNER_PROFILE_CATALOG,
+  LOADER: (env as unknown as { LOADER: WorkerLoader }).LOADER,
+};
+
+const sha256 = async (value: string) =>
+  Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+    ),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+/** A personal install of a plugin whose code handles changes.prompt. */
+const installPromptPlugin = async (name: string, source: string) => {
+  const entry = "dev.dxcode/index.js";
+  const moduleIntegrity = await sha256(source);
+  const integrity = await sha256(`${name}:${moduleIntegrity}`);
+  const version = `1.0.0+${integrity.slice(0, 12)}`;
+  const pluginId = `plg_${crypto.randomUUID()}`;
+  const at = "2026-11-11T00:00:00.000Z";
+  const manifest = {
+    format: "agent-plugins",
+    name,
+    displayName: name,
+    description: "Shapes the Ship prompt.",
+    skills: [],
+    mcpServers: [],
+    code: {
+      apiVersion: 1,
+      host: "worker",
+      entry,
+      modules: [
+        {
+          path: entry,
+          bytes: new TextEncoder().encode(source).byteLength,
+          integrity: moduleIntegrity,
+        },
+      ],
+      permissions: {
+        events: ["changes.prompt"],
+        network: [],
+        secrets: [],
+        tools: [],
+        ai: false,
+      },
+      settings: [],
+    },
+    skipped: [],
+  };
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO trusted_plugin (id, scope, target_id, name, enabled,
+         active_version, health_status, created_at, updated_at, kind)
+       VALUES (?, 'personal', ?, ?, 1, ?, 'unchecked', ?, ?, 'bundle')`,
+    ).bind(pluginId, owner, name, version, at, at),
+    env.DB.prepare(
+      `INSERT INTO trusted_plugin_version (plugin_id, version, manifest_json,
+         grants_json, source_json, integrity, trusted, trusted_at,
+         trusted_by_user_id)
+       VALUES (?, ?, ?, '{}', ?, ?, 1, ?, ?)`,
+    ).bind(
+      pluginId,
+      version,
+      JSON.stringify(manifest),
+      JSON.stringify({ type: "zip", label: `${name}.zip` }),
+      integrity,
+      at,
+      owner,
+    ),
+    env.DB.prepare(
+      `INSERT INTO trusted_plugin_file (plugin_id, version, path, media_type,
+         content, size_bytes, integrity)
+       VALUES (?, ?, ?, 'text/javascript', ?, ?, ?)`,
+    ).bind(
+      pluginId,
+      version,
+      entry,
+      source,
+      new TextEncoder().encode(source).byteLength,
+      moduleIntegrity,
+    ),
+  ]);
+  return pluginId;
 };
 
 const createApp = (userId: UserId) => {
@@ -237,6 +319,56 @@ describe("a project's own Ship Behavior (#1196)", () => {
       },
     });
     expect(builtInShipPrompt("ship", "trunk")).toContain("Push to `trunk`.");
+  });
+
+  it("lets installed plugins that handle changes.prompt rewrite the prompt, in order, skipping one that fails or never answers", {
+    timeout: 60_000,
+  }, async () => {
+    const { threadId } = await createProject("ship-plugins", "trunk");
+    // Plugin names sort the order: "a-" asks for tests, "b-" fails, "c-"
+    // signs off on what the first one returned.
+    const plugins = [
+      await installPromptPlugin(
+        "a-tests-first",
+        `export default (dx) => dx.on("changes.prompt", (event) => ({
+  prompt: event.prompt + "\\n\\nRun the test suite before you push to " + event.baseBranch + " (" + event.action + ").",
+}));`,
+      ),
+      await installPromptPlugin(
+        "b-broken",
+        `export default (dx) => dx.on("changes.prompt", () => { throw new Error("broken"); });`,
+      ),
+      await installPromptPlugin(
+        "d-never-answers",
+        `export default (dx) => dx.on("changes.prompt", () => new Promise(() => {}));`,
+      ),
+      await installPromptPlugin(
+        "c-sign-off",
+        `export default (dx) => dx.on("changes.prompt", (event) => ({
+  prompt: event.prompt.includes("Run the test suite") ? event.prompt + "\\nSigned-off-by: plugins" : event.prompt,
+}));`,
+      ),
+    ];
+    try {
+      const response = await shipPlan(threadId);
+      expect(response.status).toBe(200);
+      const { data } = await response.json<{
+        data: { action: string; prompt: string; shapedBy?: string[] };
+      }>();
+      // The pane names who changed the prompt, so it shows it before sending.
+      expect(data.shapedBy).toEqual(["a-tests-first", "c-sign-off"]);
+      expect(data.prompt).toBe(
+        `${builtInShipPrompt("ship", "trunk")}\n\nRun the test suite before you push to trunk (ship).\nSigned-off-by: plugins`,
+      );
+    } finally {
+      // The other cases expect dx's own prompt.
+      for (const id of plugins)
+        await env.DB.prepare(
+          "UPDATE trusted_plugin SET enabled = 0 WHERE id = ?",
+        )
+          .bind(id)
+          .run();
+    }
   });
 
   it("switches existing Threads to Push to Branch and Custom Ship, and keeps the custom prompt", async () => {

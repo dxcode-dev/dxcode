@@ -1,4 +1,5 @@
 import {
+  isClaudeCodeModel,
   THREAD_TITLE_MAX_LENGTH,
   type ThreadId,
   type ThreadModelSelection,
@@ -13,8 +14,12 @@ import { enqueueKnownThreadSearchIndex } from "../thread-search/enqueue.js";
  * DxTitleAgent: a single tool-free model call that replaces a new thread's
  * deterministic title. It is not a Flue agent and has no route, conversation,
  * or Durable Object of its own; the thread's credential coordinator runs the
- * call on the thread's current model with low thinking. Clients show a
- * loading title meanwhile; any failure reveals the deterministic title.
+ * call with low thinking on the owner's `low` mode, dx's fast tier, so a
+ * Thread on a slow model (Kimi K2.6 took longer than the budget) still gets
+ * its title; the Thread's own model is the fallback when the `low` mode
+ * cannot serve it. A Claude Code Thread's title comes from its own run.
+ * Clients show a loading title meanwhile; any failure reveals the
+ * deterministic title.
  */
 const DX_TITLE_AGENT_SYSTEM_PROMPT = `You are an assistant that generates short, descriptive titles (maximum 3 words, "Sentence case" with the first word capitalized not "Title Case") based on the first user message in an agentic coding tool thread. Your title should be concise (max 3 words) and capture the user's stated goal without guessing beyond the message. Omit generic words like "question", "request", etc. Be professional and precise. Use common software engineering terms and acronyms if they are helpful. The source material is enclosed in <user_message> tags and, when available, <agent_response> tags. Use only that tagged material to determine the title, and do not include the tags in your answer. Make the title information-dense like a strong commit subject: name the concrete component and change, problem, or goal. Titles should usually be noun phrases. Avoid generic leading verbs such as "Implement", "Clarify", "Improve", or "Find" when the nouns communicate the topic better. Do not add source-control prefixes such as "feat:", "fix:", "chore:", or "refactor:". Never include opaque identifiers such as bug IDs, thread IDs, commit hashes, or URLs. Follow title naming conventions explicitly stated in the supplied messages. Preserve only a requested prefix such as "BUG:"; the prefix counts toward the word limit. When a message requests work on a bug but provides no descriptive details beyond an opaque identifier, use "BUG: Investigation" until more context is available. Always render the dx product brand name as "dx", never "DX". Examples: "Fix OAuth callback retries when refresh tokens expire" becomes "OAuth refresh retries"; "Reduce SQLite actor wake latency" becomes "SQLite wake latency"; "BUG: Pasting multiple images fails on iOS" becomes "BUG: iOS paste"; "Fix dx_bug_…" becomes "BUG: Investigation". Use minimal reasoning and respond before the 2,048-token output limit. Respond with only the title and no other text.`;
 
@@ -97,48 +102,107 @@ export const claudeCodeTitleInput = (body: string): string | undefined => {
     : `${DX_TITLE_AGENT_SYSTEM_PROMPT}\n\n${message}`;
 };
 
+/** The fast selection titles are asked of first: the owner's `low` mode. */
+const TITLE_SELECTION: ThreadModelSelection = {
+  kind: "mode",
+  profileId: "default",
+  mode: "low",
+};
+
+/** A second attempt starts only with at least this long left. */
+const FALLBACK_MIN_MS = 8_000;
+
+const sameSelection = (
+  left: ThreadModelSelection,
+  right: ThreadModelSelection,
+) => JSON.stringify(left) === JSON.stringify(right);
+
+/** The selections a title is asked of, in order. */
+export const titleSelections = (
+  selection: ThreadModelSelection,
+): ReadonlyArray<ThreadModelSelection> =>
+  // A Claude Code Thread's title comes from its first run on its plan.
+  (selection.kind === "model" && isClaudeCodeModel(selection.model)) ||
+  sameSelection(selection, TITLE_SELECTION)
+    ? [selection]
+    : [TITLE_SELECTION, selection];
+
+/** One completion on one selection. */
+const completeTitle = async (
+  coordinator: DurableObjectNamespace,
+  job: DxTitleAgentJob,
+  message: string,
+  selection: ThreadModelSelection,
+  timeoutMs: number,
+): Promise<
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly code: string }
+> => {
+  try {
+    const response = await coordinator
+      .get(coordinator.idFromName(`byok-${job.threadId}`))
+      .fetch("https://dx-byok.invalid/complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threadId: job.threadId,
+          ownerUserId: job.ownerUserId,
+          selection,
+          systemPrompt: DX_TITLE_AGENT_SYSTEM_PROMPT,
+          message,
+          maxTokens: DX_TITLE_AGENT_MAX_OUTPUT_TOKENS,
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+    if (response.ok)
+      return { ok: true, text: (await response.json<{ text: string }>()).text };
+    const { code } = await response
+      .json<{ code?: string }>()
+      .catch(() => ({ code: undefined }));
+    return { ok: false, code: code ?? `HTTP_${response.status}` };
+  } catch {
+    return { ok: false, code: "TIMEOUT" };
+  }
+};
+
 /** Model call and sanitation; undefined keeps the stored fallback title. */
 const generateTitle = async (
   coordinator: DurableObjectNamespace,
   job: DxTitleAgentJob,
   message: string,
 ): Promise<string | typeof CLAUDE_CODE_TITLE | undefined> => {
-  const response = await coordinator
-    .get(coordinator.idFromName(`byok-${job.threadId}`))
-    .fetch("https://dx-byok.invalid/complete", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
+  const deadline = Date.now() + REQUEST_TIMEOUT_MS;
+  let failure = "NO_SELECTION";
+  for (const selection of titleSelections(job.selection)) {
+    const remaining = deadline - Date.now();
+    if (remaining < FALLBACK_MIN_MS && failure !== "NO_SELECTION") break;
+    const answer = await completeTitle(
+      coordinator,
+      job,
+      message,
+      selection,
+      remaining,
+    );
+    if (!answer.ok) {
+      if (answer.code === CLAUDE_CODE_TITLE_DEFERRED) return CLAUDE_CODE_TITLE;
+      failure = answer.code;
+      continue;
+    }
+    const title = sanitizeGeneratedTitle(answer.text);
+    if (title === undefined)
+      threadPersistenceLogger.warn("Thread title generation was unusable.", {
+        event: "thread_title_generation_failed",
         threadId: job.threadId,
-        ownerUserId: job.ownerUserId,
-        selection: job.selection,
-        systemPrompt: DX_TITLE_AGENT_SYSTEM_PROMPT,
-        message,
-        maxTokens: DX_TITLE_AGENT_MAX_OUTPUT_TOKENS,
-      }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  if (!response.ok) {
-    const { code } = await response
-      .json<{ code?: string }>()
-      .catch(() => ({ code: undefined }));
-    if (code === CLAUDE_CODE_TITLE_DEFERRED) return CLAUDE_CODE_TITLE;
-    threadPersistenceLogger.warn("Thread title generation failed.", {
-      event: "thread_title_generation_failed",
-      threadId: job.threadId,
-      code: code ?? `HTTP_${response.status}`,
-    });
-    return undefined;
+        code: "UNUSABLE_TITLE",
+      });
+    return title;
   }
-  const { text } = await response.json<{ text: string }>();
-  const title = sanitizeGeneratedTitle(text);
-  if (title === undefined)
-    threadPersistenceLogger.warn("Thread title generation was unusable.", {
-      event: "thread_title_generation_failed",
-      threadId: job.threadId,
-      code: "UNUSABLE_TITLE",
-    });
-  return title;
+  threadPersistenceLogger.warn("Thread title generation failed.", {
+    event: "thread_title_generation_failed",
+    threadId: job.threadId,
+    code: failure,
+  });
+  return undefined;
 };
 
 /** The owner of a Thread whose title is still pending, else undefined. */

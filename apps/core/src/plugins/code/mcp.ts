@@ -9,6 +9,12 @@ import {
   McpInvocationForbidden,
 } from "../../settings/mcp-servers/execution.js";
 import { McpNetworkRejected } from "../../settings/mcp-servers/transport.js";
+import { callLocalTool } from "./local-mcp.js";
+import {
+  type McpAppViewCollector,
+  mcpAppResourceUri,
+  readMcpAppView,
+} from "./mcp-apps.js";
 import type { CodeHostCall } from "./providers/quickjs.js";
 import { mcpResultValue } from "./results.js";
 
@@ -64,12 +70,29 @@ const watchedBody = (
 /**
  * Each call resolves its connection from current settings once, and its
  * initialize, listing, and tool call share it; the next call resolves again.
- * Core's authorized fetch adds the configured headers.
+ * Core's authorized fetch adds the configured headers. A tool whose result
+ * or definition names a `ui://` view (MCP Apps) has that view read over the
+ * same connection and added to `views`, while it wants more.
  */
 export const codeMcpCall =
-  (threadId: string, bindings: Bindings): CodeHostCall =>
+  (
+    threadId: string,
+    bindings: Bindings,
+    views?: Pick<McpAppViewCollector, "wants" | "add">,
+  ): CodeHostCall =>
   async (module, name, input, raw, signal) => {
     const connection = module.connection;
+    // A plugin's local server runs in the Orb, through dxd.
+    if (connection.local !== undefined)
+      return callLocalTool(
+        bindings,
+        threadId,
+        connection,
+        name,
+        input,
+        raw,
+        signal,
+      );
     if (!connection.tools.includes(name))
       throw new Error("MCP tool is not reviewed for this Thread.");
     signal.throwIfAborted();
@@ -137,6 +160,25 @@ export const codeMcpCall =
           { signal, timeout: connection.timeoutMs },
         ),
       );
+      const viewUri =
+        views?.wants() === true ? mcpAppResourceUri(tool, result) : undefined;
+      if (viewUri !== undefined) {
+        // Not raced against the stream: a view dx rejects, such as one too
+        // large, only leaves the call without a card.
+        const view = await readMcpAppView(client, viewUri, {
+          signal,
+          timeout: connection.timeoutMs,
+        });
+        if (view !== undefined)
+          views?.add({
+            server: connection.displayName ?? connection.name,
+            tool: name,
+            resourceUri: viewUri,
+            toolInput: input,
+            toolResult: result,
+            ...view,
+          });
+      }
       return mcpResultValue(result, tool.outputSchema, raw);
     } catch (error) {
       const rejection = rejectionOf(error);

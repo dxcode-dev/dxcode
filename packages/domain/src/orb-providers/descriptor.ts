@@ -67,6 +67,13 @@ export interface OrbProviderDescriptor<
    */
   readonly betaFeature?: string;
   /**
+   * Only a deployment's own account runs it, and only under the
+   * deployment's own name (`DeploymentOrbs.displayName`, such as a hosted offer):
+   * people and workspaces never connect their own, and it is never offered
+   * under the provider's name.
+   */
+  readonly deploymentOnly?: true;
+  /**
    * How a deployment installs the provider on its own account: a secret
    * binding holding its key, or a binding whose presence installs it.
    * Absent: only a person's or workspace's connection runs it.
@@ -79,6 +86,17 @@ export interface OrbProviderDescriptor<
      * person's Threads.
      */
     | { readonly secret: "BOAT_API_KEY"; readonly prepared: true }
+    | {
+        readonly secret: "LIZARD_API_KEY";
+        readonly prepared: true;
+        /**
+         * Credential fields the deployment sets beside its key, each from
+         * a binding: the account's project, and where it runs.
+         */
+        readonly settings: Readonly<
+          Record<string, "LIZARD_PROJECT_ID" | "LIZARD_REGION">
+        >;
+      }
     | { readonly binding: "ORB_CONTAINER" };
   /** The runner-profile configuration for this adapter. */
   readonly profile: ProfileSchema;

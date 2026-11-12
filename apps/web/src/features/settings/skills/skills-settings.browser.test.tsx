@@ -1,4 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRouter,
+  RouterProvider,
+} from "@tanstack/react-router";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -143,26 +149,35 @@ const authValue = {
   logout: () => undefined,
 };
 
-const mountSkills = async () => {
+const mountSkills = async (data: unknown = skillsListResponse.data) => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   queryClient.setQueryData(
     skillsQueryOptions(userId, target).queryKey,
-    skillsListResponse.data as never,
+    data as never,
   );
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  await act(() =>
+  // The page reads a linked proposal from the URL, so it needs a router.
+  const rootRoute = createRootRoute({
+    component: () => <SkillsSettings onDirtyChange={() => undefined} />,
+  });
+  const router = createRouter({
+    routeTree: rootRoute,
+    history: createMemoryHistory({ initialEntries: ["/settings/skills"] }),
+  });
+  await act(async () => {
     root.render(
       <AuthContext.Provider value={authValue}>
         <QueryClientProvider client={queryClient}>
-          <SkillsSettings onDirtyChange={() => undefined} />
+          <RouterProvider router={router} />
         </QueryClientProvider>
       </AuthContext.Provider>,
-    ),
-  );
+    );
+    await router.load();
+  });
   return { queryClient, container, root };
 };
 
@@ -216,28 +231,15 @@ const openSettingsFor = async (container: HTMLElement, name: string) => {
 
 describe("SkillsSettings import routing", () => {
   it("offers a prompt to copy when there are no personal skills", async () => {
-    const queryClient = new QueryClient();
-    queryClient.setQueryData(skillsQueryOptions(userId, target).queryKey, {
-      ...skillsListResponse.data,
-      items: [],
-    } as never);
     const copied: string[] = [];
     vi.stubGlobal("navigator", {
       ...navigator,
       clipboard: { writeText: async (text: string) => copied.push(text) },
     });
-    const container = document.createElement("div");
-    document.body.append(container);
-    const root = createRoot(container);
-    await act(() =>
-      root.render(
-        <AuthContext.Provider value={authValue}>
-          <QueryClientProvider client={queryClient}>
-            <SkillsSettings onDirtyChange={() => undefined} />
-          </QueryClientProvider>
-        </AuthContext.Provider>,
-      ),
-    );
+    const { container, root } = await mountSkills({
+      ...skillsListResponse.data,
+      items: [],
+    });
     const prompt = "Create a personal skill for writing our release notes";
     expect(container.textContent).toContain(prompt);
     await act(async () => findButtonByText(container, "Copy prompt").click());

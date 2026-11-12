@@ -21,6 +21,8 @@ export declare const viewDocument: (
     readonly kit: ViewKit;
     readonly palette?: string;
     readonly scheme?: "light" | "dark";
+    /** An MCP App's view: dx's CSP and bridge, without its kit or tokens. */
+    readonly mcpApp?: boolean;
   },
 ) => string;
 

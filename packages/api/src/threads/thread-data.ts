@@ -252,6 +252,20 @@ export const RetryInitialDispatchResponseSchema = Schema.Struct({
   ]),
 });
 
+export const ThreadPluginAgentDataSchema = Schema.Struct({
+  name: Schema.String.check(Schema.isMaxLength(24)),
+  label: Schema.String.check(Schema.isMaxLength(24)),
+  color: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^#[0-9a-fA-F]{6}$/)),
+  ),
+  plugin: Schema.String.check(Schema.isMaxLength(96)),
+  /** The declared mode it was started in; absent for a plugin's subagent. */
+  mode: Schema.optional(Schema.String.check(Schema.isMaxLength(24))),
+  model: Schema.optional(Schema.String.check(Schema.isMaxLength(200))),
+});
+
+export type ThreadPluginAgentData = typeof ThreadPluginAgentDataSchema.Type;
+
 export const ThreadDetailDataSchema = Schema.Struct({
   id: ThreadIdSchema,
   title: ThreadTitle,
@@ -289,6 +303,11 @@ export const ThreadDetailDataSchema = Schema.Struct({
    * read-only for good, and the Project can no longer be read.
    */
   projectDeleted: Schema.optional(Schema.Literal(true)),
+  /**
+   * The plugin agent the Thread runs as: its label and color, the plugin
+   * that defined it, and the model it chose, when it chose one.
+   */
+  pluginAgent: Schema.optional(ThreadPluginAgentDataSchema),
   /** Who messages go to; see ThreadConversationModeSchema. */
   conversationMode: Schema.optional(ThreadConversationModeSchema),
   /** Members only: whether they follow this shared Thread. */

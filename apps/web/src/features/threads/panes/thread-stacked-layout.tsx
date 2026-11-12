@@ -1,5 +1,5 @@
 import type { ThreadPaneLayout, ThreadPaneTab } from "@dx/api";
-import { Plus, X } from "lucide-react";
+import { Plus, Puzzle, X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import {
@@ -72,7 +72,8 @@ type RowEntry =
 
 /**
  * Agent, then each view (open or not) in phone order, then open files.
- * Every open Terminal has its entry, and New Terminal follows them.
+ * Every open Terminal has its entry, and New Terminal follows them. Open
+ * plugin panes follow the files.
  */
 const rowEntries = (
   layout: ThreadPaneLayout,
@@ -102,7 +103,10 @@ const rowEntries = (
     );
   }
   for (const entry of open)
-    if (entry.tab.kind === "file")
+    if (
+      entry.tab.kind === "file" ||
+      (entry.tab.kind === "plugin" && contents.plugin !== undefined)
+    )
       entries.push({ kind: "open", tab: entry.tab, pane: entry.pane });
   return entries;
 };
@@ -183,7 +187,9 @@ function RowButton({
       ? OrbIcon
       : tab.kind === "file"
         ? null
-        : PANE_VIEWS[tab.kind].Icon;
+        : tab.kind === "plugin"
+          ? Puzzle
+          : PANE_VIEWS[tab.kind].Icon;
   return (
     <div
       className="stacked-tab"
@@ -293,7 +299,9 @@ export function ThreadStackedLayout({
               ? renderPaneContent(contents.agent, active)
               : tab.kind === "file"
                 ? contents.file(tab.target, active)
-                : renderPaneContent(contents.views[tab.kind], active);
+                : tab.kind === "plugin"
+                  ? (contents.plugin?.(tab, active) ?? null)
+                  : renderPaneContent(contents.views[tab.kind], active);
           return (
             <section
               key={id}

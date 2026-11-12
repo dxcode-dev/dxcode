@@ -104,7 +104,30 @@ export const CreateThreadRequestSchema = /* @__PURE__ */ Schema.Struct({
    * `private`. A child takes its family's sharing, so it sets none.
    */
   visibility: Schema.optional(ThreadVisibility),
+  /**
+   * Starts the Thread in an installed plugin's agent mode,
+   * `plugin:<plugin name>/<key>`: it runs as the plugin's agent, on the
+   * agent's model when it chose one. Needs `threadId` and a first message.
+   */
+  pluginAgentMode: Schema.optional(
+    Schema.String.check(
+      Schema.isMaxLength(300),
+      Schema.isPattern(/^plugin:[a-z0-9][a-z0-9.-]*\/[a-z][a-z0-9-]{0,23}$/),
+    ),
+  ),
 })
+  .check(
+    Schema.makeFilter((request) =>
+      request.pluginAgentMode !== undefined &&
+      (request.initialMessage === undefined || request.threadId === undefined)
+        ? {
+            path: ["pluginAgentMode"],
+            issue:
+              "A plugin agent mode's Thread starts with a message and a stable Thread identifier.",
+          }
+        : undefined,
+    ),
+  )
   .check(
     Schema.makeFilter((request) =>
       request.visibility !== undefined && request.parentThreadId !== undefined
@@ -222,6 +245,20 @@ export const CreateThreadModelRouteUnavailableResponseSchema = Schema.Struct({
     reason: Schema.Literals(["no-connection", "disabled", "unknown-model"]),
   }),
 });
+
+/**
+ * The plugin agent mode asked for is not offered: no installed plugin
+ * declares and registers it for the person, or it may no longer run agents.
+ */
+export const CreateThreadPluginAgentModeUnavailableResponseSchema =
+  Schema.Struct({
+    status: Schema.Literal("error"),
+    data: Schema.Struct({
+      code: Schema.Literal("PLUGIN_AGENT_MODE_UNAVAILABLE"),
+      message: Schema.String,
+      requestId: Schema.String,
+    }),
+  });
 
 /** The Claude plan was not picked, cannot be used, or is used up. */
 export const CreateThreadClaudePlanRefusedResponseSchema = Schema.Struct({

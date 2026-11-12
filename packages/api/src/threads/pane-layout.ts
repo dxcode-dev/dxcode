@@ -61,6 +61,14 @@ export const ThreadPaneTabSchema = Schema.Union([
     kind: Schema.Literal("file"),
     target: ThreadPaneFileTargetSchema,
   }),
+  /** An installed plugin's pane (`registerPane`), by plugin name and id. */
+  Schema.Struct({
+    kind: Schema.Literal("plugin"),
+    plugin: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(96)),
+    pane: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,47}$/)),
+    /** The tab's label, kept so the tab draws before the plugin loads. */
+    title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(40)),
+  }),
 ]);
 export type ThreadPaneTab = typeof ThreadPaneTabSchema.Type;
 

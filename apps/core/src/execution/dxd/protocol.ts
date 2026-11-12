@@ -136,6 +136,11 @@ export const DxdTerminalCapability = Schema.Struct({
     Schema.Struct({ version: Schema.Literal(1) }),
   ),
   /**
+   * Version 1: Core may send `mcp.request`, which runs a plugin's local
+   * (stdio) MCP server in the guest and relays one request to it.
+   */
+  mcp: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
    * Version 1: Core may send `desktop.windows`, `desktop.open`, and
    * `desktop.focus`. Without it a daemon drops its connection on them.
    */
@@ -1078,6 +1083,84 @@ export const DxdStorageOperation = Schema.Union([
 ]);
 export type DxdStorageOperation = typeof DxdStorageOperation.Type;
 
+/** The longest dxd waits for a local MCP server's answer to one call. */
+export const DXD_MCP_MAX_CALL_TIMEOUT_MS = 120_000;
+/** A first start may install the server before it answers `initialize`. */
+export const DXD_MCP_START_TIMEOUT_MS = 120_000;
+
+const Hex64 = Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/));
+
+/**
+ * One request to a plugin's local MCP server: the server as the person
+ * reviewed it, where dxd downloads the plugin's files, and the MCP request.
+ * `key` digests everything about the server, so a change starts a new
+ * process. dxd relays only `tools/list` and `tools/call`.
+ */
+export const DxdMcpRequestOperation = Schema.Struct({
+  operation: Schema.Literal("mcp.request"),
+  server: Schema.Struct({
+    key: Hex64,
+    name: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(80)),
+    pluginId: Schema.String.check(
+      Schema.isPattern(/^plg_[A-Za-z0-9_-]{1,64}$/),
+    ),
+    command: Schema.String.check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(256),
+    ),
+    args: Schema.Array(Schema.String.check(Schema.isMaxLength(4_096))).check(
+      Schema.isMaxLength(64),
+    ),
+    env: Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(
+          Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/),
+        ),
+        value: Schema.String.check(Schema.isMaxLength(4_096)),
+      }),
+    ).check(Schema.isMaxLength(32)),
+    cwd: Schema.optional(Schema.String.check(Schema.isMaxLength(512))),
+    package: Schema.Struct({
+      url: Schema.String.check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(8_192),
+      ),
+      sha256: Hex64,
+      size: DxdBytes,
+    }),
+  }),
+  method: Schema.Literals(["tools/list", "tools/call"]),
+  params: Schema.Unknown,
+  timeoutMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 1_000, maximum: DXD_MCP_MAX_CALL_TIMEOUT_MS }),
+  ),
+});
+export type DxdMcpRequestOperation = typeof DxdMcpRequestOperation.Type;
+
+export const DxdMcpResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("result"), result: Schema.Unknown }),
+  Schema.Struct({
+    kind: Schema.Literal("error"),
+    code: Schema.Int,
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
+    data: Schema.optional(Schema.Unknown),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals([
+      "invalid",
+      "package",
+      "start-failed",
+      "timeout",
+      "exited",
+      "busy",
+      "too-large",
+    ]),
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
+  }),
+]);
+export type DxdMcpResult = typeof DxdMcpResult.Type;
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
@@ -1094,6 +1177,7 @@ export const DxdOperation = Schema.Union([
   DxdDiskDeleteOperation,
   DxdStorageExportOperation,
   DxdStorageImportOperation,
+  DxdMcpRequestOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 

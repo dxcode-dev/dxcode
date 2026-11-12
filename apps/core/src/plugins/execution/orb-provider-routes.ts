@@ -11,6 +11,7 @@ import {
   WorkspaceOrbProviderParamsSchema,
 } from "@dx/api";
 import {
+  isDeploymentOnlyOrbProvider,
   type Principal,
   type RunnerProfileId,
   SettingsScopeForbidden,
@@ -23,7 +24,10 @@ import {
   type DeploymentOrbs,
   presentedDeploymentProviders,
 } from "../../execution/deployment-orbs.js";
-import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
+import {
+  registeredClosedOrbProviders,
+  registeredDeploymentOrbs,
+} from "../../execution/deployment-orbs-registration.js";
 import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import { readBoundedJson } from "../../http/bounded-body.js";
@@ -214,6 +218,8 @@ const listData = async (
   connectors: OrbProviderConnectors,
   deploymentOrbs: DeploymentOrbs,
   hiddenProviders: ReadonlySet<string>,
+  /** Deployment accounts closed to the person (`registeredClosedOrbProviders`). */
+  closedProviders: ReadonlySet<string>,
 ): Promise<OrbProviderListData> => {
   const plugin = findPlugin("execution");
   const localRuntime = isLocalRuntime(bindings);
@@ -226,14 +232,19 @@ const listData = async (
   const providers: Array<OrbProviderData> = (plugin?.providers ?? []).flatMap(
     (provider) => {
       const id = provider.id as ExecutionProviderId;
-      // A beta provider the person has not turned on is not listed.
-      if (hiddenProviders.has(id)) return [];
+      // A beta provider the person has not turned on is not listed, nor a
+      // deployment account closed to them.
+      if (hiddenProviders.has(id) || closedProviders.has(id)) return [];
       // A deployment account the deployment presents under its own name
       // is offered in the Orb picker, not listed under the provider here.
       const deployment =
         deploymentProviders.some(({ providerId }) => providerId === id) &&
         deploymentOrbs[id]?.displayName === undefined;
-      const connector = connectors[id];
+      // A deployment-only provider takes no one's own account: its connector
+      // prepares the deployment's.
+      const connector = isDeploymentOnlyOrbProvider(id)
+        ? undefined
+        : connectors[id];
       const sizeIds = profiles
         .filter(({ adapter }) => adapter === id)
         .map(({ id: sizeId }) => sizeId);
@@ -287,6 +298,7 @@ const listData = async (
     },
   );
   const resolved = orbProviderSet({
+    closedProviders,
     deploymentProviders,
     profileAdapters: adapters,
     personal: scope.personal,
@@ -487,6 +499,8 @@ const connectableProvider = async (
     : connectors[params.value.providerId];
   if (
     connector === undefined ||
+    // Only the deployment's own account runs it (Lizard).
+    isDeploymentOnlyOrbProvider(connector.providerId) ||
     (!isLocalRuntime(c.env) &&
       !(await loadCatalog(c.env)).configuration.profiles.some(
         ({ adapter }) => adapter === connector.providerId,
@@ -539,6 +553,8 @@ export interface OrbProviderRouteOptions {
   readonly connectors?: OrbProviderConnectors;
   /** How the deployment presents its own accounts; tests pass their own. */
   readonly deploymentOrbs?: DeploymentOrbs;
+  /** Which of them are closed to a person; tests pass their own. */
+  readonly closedOrbProviders?: typeof registeredClosedOrbProviders;
 }
 
 const mount = (
@@ -548,6 +564,8 @@ const mount = (
 ) => {
   const connectors = options.connectors ?? orbProviderConnectors;
   const deploymentOrbs = options.deploymentOrbs ?? registeredDeploymentOrbs;
+  const closedOrbProviders =
+    options.closedOrbProviders ?? registeredClosedOrbProviders;
 
   router.get("/", (c) =>
     respond(c, async () => {
@@ -581,6 +599,7 @@ const mount = (
         connectors,
         deploymentOrbs,
         await hiddenOrbProviders(c.env, c.get("principal")),
+        await closedOrbProviders(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -674,6 +693,7 @@ const mount = (
         connectors,
         deploymentOrbs,
         await hiddenOrbProviders(c.env, c.get("principal")),
+        await closedOrbProviders(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -714,6 +734,7 @@ const mount = (
         connectors,
         deploymentOrbs,
         await hiddenOrbProviders(c.env, c.get("principal")),
+        await closedOrbProviders(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -744,6 +765,7 @@ const mount = (
         connectors,
         deploymentOrbs,
         await hiddenOrbProviders(c.env, c.get("principal")),
+        await closedOrbProviders(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -763,6 +785,8 @@ export const makeWorkspaceOrbProviderRoutes = (
   const router = new Hono<AppEnv>();
   const connectors = options.connectors ?? orbProviderConnectors;
   const deploymentOrbs = options.deploymentOrbs ?? registeredDeploymentOrbs;
+  const closedOrbProviders =
+    options.closedOrbProviders ?? registeredClosedOrbProviders;
   /**
    * The workspace's explicit opt-in for members' own Orb connections on
    * workspace projects, written through WorkspacePolicyService so revision,
@@ -809,6 +833,7 @@ export const makeWorkspaceOrbProviderRoutes = (
         connectors,
         deploymentOrbs,
         await hiddenOrbProviders(c.env, c.get("principal")),
+        await closedOrbProviders(c.env, c.get("principal").userId),
       );
     }),
   );

@@ -165,7 +165,10 @@ export const presentTool = (
       detail: path,
     };
   }
-  if (path !== undefined && (name.includes("read") || name.includes("file"))) {
+  if (
+    path !== undefined &&
+    (/(?:^|[^a-z])read/.test(name) || name.includes("file"))
+  ) {
     return {
       title: `${running ? "Reading" : "Read"} ${basename(path)}`,
       detail: path,

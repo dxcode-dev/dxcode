@@ -2,6 +2,7 @@ import type {
   ChoicesData,
   GraphData,
   OrbResolvedProvider,
+  PluginAgentModeData,
   ProjectData,
   ThreadMemberData,
 } from "@dx/api";
@@ -64,6 +65,9 @@ export function NewThreadComposer({
   onEffortChange,
   claudePlan,
   onClaudePlanChange,
+  pluginAgentModes,
+  pluginAgentMode,
+  onPluginAgentModeChange,
   choices,
   routingGraph,
   dictationControls,
@@ -105,6 +109,9 @@ export function NewThreadComposer({
   readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
   readonly claudePlan?: string;
   readonly onClaudePlanChange?: (connectionId: string | undefined) => void;
+  readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
+  readonly pluginAgentMode?: string;
+  readonly onPluginAgentModeChange?: (mode: string | undefined) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly dictationControls?: React.ReactNode;
@@ -251,6 +258,9 @@ export function NewThreadComposer({
         onEffortChange={onEffortChange}
         claudePlan={claudePlan}
         onClaudePlanChange={onClaudePlanChange}
+        pluginAgentModes={pluginAgentModes}
+        pluginAgentMode={pluginAgentMode}
+        onPluginAgentModeChange={onPluginAgentModeChange}
         dictationControls={dictationControls}
         dictationActive={dictationActive}
         dictationHideSubmit={dictationHideSubmit}

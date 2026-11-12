@@ -74,12 +74,40 @@ work=$(mktemp -d)
 cleanup_work() { rm -rf "$work"; }
 trap cleanup_work EXIT
 
+# untar <directory> <tar options...>: extracts into <directory>. Lizard's
+# sandboxes run on an overlay whose lower layer is / itself; on a large
+# extract it reports a new inode for a directory tar made, so tar cannot
+# restore that directory's mode and times afterwards and exits 2, with
+# every file in place, and the directory left owner-only (tar makes each
+# one so until it restores its mode last). That one error is accepted and
+# the directories this extract made are opened to everyone again, as the
+# archives have them (under UNTAR_FIX's directories, default <directory>);
+# any other error fails.
+untar() {
+  local directory=$1 log marker
+  shift
+  log=$(mktemp) marker=$(mktemp)
+  if tar "$@" -C "$directory" 2>"$log"; then
+    rm -f "$log" "$marker"
+    return 0
+  fi
+  if grep -v -e 'Directory renamed before its status could be extracted' -e 'Exiting with failure status due to previous errors' "$log" | grep -q .; then
+    cat "$log" >&2
+    rm -f "$log" "$marker"
+    return 1
+  fi
+  echo "untar: $(grep -c 'Directory renamed' "$log") directories in $directory keep their default times" >&2
+  # shellcheck disable=SC2086 # UNTAR_FIX is a list of directories.
+  find ${UNTAR_FIX:-$directory} -xdev -type d -newer "$marker" ! -perm -055 -exec chmod go+rx {} +
+  rm -f "$log" "$marker"
+}
+
 if want runtimes; then
 # 2. Node.js, current LTS, from nodejs.org; corepack provides yarn and pnpm.
 # It replaces any node the machine's image linked into /usr/local/bin.
 curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o "$work/node.tar.xz" https://nodejs.org/dist/v24.21.0/node-v24.21.0-linux-x64.tar.xz
 test "$(sha256sum "$work/node.tar.xz" | cut -d " " -f 1)" = fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6
-tar -xJf "$work/node.tar.xz" -C /usr/local --strip-components=1 --no-same-owner --exclude CHANGELOG.md --exclude README.md --exclude LICENSE
+untar /usr/local -xJf "$work/node.tar.xz" --strip-components=1 --no-same-owner --exclude CHANGELOG.md --exclude README.md --exclude LICENSE
 corepack enable
 node --version
 npm --version
@@ -88,7 +116,7 @@ npm --version
 # or later (source-tool-requirements.ts), newer than some distributions carry.
 curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o "$work/gh.tar.gz" https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz
 test "$(sha256sum "$work/gh.tar.gz" | cut -d " " -f 1)" = 4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d
-tar -xzf "$work/gh.tar.gz" -C "$work" --no-same-owner
+untar "$work" -xzf "$work/gh.tar.gz" --no-same-owner
 install -o root -g root -m 0755 "$work/gh_2.103.3_linux_amd64/bin/gh" /usr/local/bin/gh
 gh --version
 
@@ -147,7 +175,7 @@ fi
 fetch_toolbelt "$toolbelt" "$TOOLBELT_SHA256" "${sources[@]}"
 install -d -m 0755 /opt /nix /nix/store
 rm -rf /opt/dx/desktop /opt/dx/bin/tmux /opt/dx/bin/dx-orb-check
-tar --zstd -xf "$toolbelt" -C / --no-same-owner
+UNTAR_FIX="/nix/store /opt/dx" untar / --zstd -xf "$toolbelt" --no-same-owner
 rm -f "$toolbelt"
 chmod 0755 /opt/dx /opt/dx/bin /opt/dx/share /opt/dx/desktop
 echo "$TOOLBELT_VERSION" >/opt/dx/VERSION

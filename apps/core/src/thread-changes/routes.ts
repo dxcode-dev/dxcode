@@ -30,6 +30,7 @@ import { readBoundedJson } from "../http/bounded-body.js";
 import { requestServerTiming } from "../http/server-timing.js";
 import type { AppEnv } from "../http/types.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import { applyChangesPromptPlugins } from "../plugins/worker-host/changes-prompt.js";
 import { SourceMutationRejected } from "../source-control/operations.js";
 import {
   executeSourcePush,
@@ -382,6 +383,7 @@ const ShipPlanRow = Schema.Struct({
   ship_behavior: ProjectShipAction,
   ship_prompt: Schema.NullOr(ShipPrompt),
   default_branch: Schema.NullOr(Schema.String),
+  owner_user_id: Schema.String,
 });
 
 /**
@@ -399,7 +401,7 @@ threadChangesRoutes.get("/:threadId/changes/ship", async (context) => {
       await db
         .prepare(
           `SELECT project.ship_behavior, project.ship_prompt,
-             snapshot.default_branch
+             snapshot.default_branch, thread.owner_user_id
            FROM threads AS thread
            INNER JOIN projects AS project ON project.id = thread.project_id
            LEFT JOIN thread_source_snapshot AS snapshot
@@ -414,10 +416,20 @@ threadChangesRoutes.get("/:threadId/changes/ship", async (context) => {
       ...(row.ship_prompt === null ? {} : { shipPrompt: row.ship_prompt }),
     };
     const baseBranch = row.default_branch ?? undefined;
-    return success(context, GetThreadShipPlanResponseSchema, {
+    // Installed plugins that handle changes.prompt may rewrite it; the pane
+    // then shows the prompt and who changed it before anything is sent.
+    const shaped = await applyChangesPromptPlugins(context.env, db, {
+      threadId,
+      ownerUserId: row.owner_user_id,
       action: row.ship_behavior,
       ...(baseBranch === undefined ? {} : { baseBranch }),
       prompt: shipPromptFor(configuration, baseBranch),
+    });
+    return success(context, GetThreadShipPlanResponseSchema, {
+      action: row.ship_behavior,
+      ...(baseBranch === undefined ? {} : { baseBranch }),
+      prompt: shaped.prompt,
+      ...(shaped.shapedBy.length === 0 ? {} : { shapedBy: shaped.shapedBy }),
     });
   } catch {
     return error(context, "unavailable");

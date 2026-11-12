@@ -32,6 +32,12 @@ declare module "*.xml?raw" {
   export default source;
 }
 
+// The building-plugins skill's copy of the @dxcode/plugin types.
+declare module "*.ts.txt?raw" {
+  const source: string;
+  export default source;
+}
+
 // Built-in skill files (agents/built-in-skills/).
 declare module "*.md?raw" {
   const source: string;

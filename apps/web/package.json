@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.103",
+  "version": "0.2.104",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "dev": "vite dev",
     "doctor": "react-doctor . --yes --verbose --no-telemetry --blocking warning",
     "doctor:changed": "react-doctor . --yes --verbose --no-telemetry --scope changed --include-untracked --blocking warning",
+    "test:feedback-widget": "node test/feedback-widget-journey.mjs",
     "preview": "vite preview",
     "test:network": "vitest run --root ../.. --project web-browser src/testing/frontend-network-regression.browser.test.tsx",
     "typecheck": "tsc -b --pretty false"

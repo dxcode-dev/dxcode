@@ -61,12 +61,62 @@ export const SkillDataSchema = Schema.Struct({
 
 export type SkillData = typeof SkillDataSchema.Type;
 
+/**
+ * A skill change an agent proposed for this scope, waiting for a person who
+ * can change the scope's skills to approve or reject it. It holds everything
+ * approval would save.
+ */
+export const SkillProposalDataSchema = Schema.Struct({
+  id: Schema.String,
+  /** A new skill, or a new version of the skill with this name. */
+  change: Schema.Literals(["new", "update"]),
+  name: Schema.String,
+  /** The skill's active version when the agent proposed the update. */
+  currentVersion: Schema.optional(SkillVersion),
+  manifest: SkillManifest,
+  instructions: Schema.String,
+  resources: Schema.Array(
+    Schema.Struct({
+      ...SkillResourceDataSchema.fields,
+      content: Schema.String,
+    }),
+  ),
+  integrity: SkillIntegrity,
+  /** Why the agent proposed it, in its words. */
+  note: Schema.String,
+  threadId: Schema.String,
+  threadTitle: Schema.optional(Schema.String),
+  createdAt: Timestamp,
+});
+
+export type SkillProposalData = typeof SkillProposalDataSchema.Type;
+
 export const ListSkillsResponseSchema = successResponse(
   Schema.Struct({
     items: Schema.Array(SkillDataSchema),
     canMutate: Schema.Boolean,
     precedence: Schema.Literal("personal-over-workspace"),
     allowPersonalSkills: Schema.optional(Schema.Boolean),
+    /** Pending agent proposals; empty for people who cannot decide them. */
+    proposals: Schema.optional(Schema.Array(SkillProposalDataSchema)),
+  }),
+);
+
+export const SkillProposalParamsSchema = Schema.Struct({
+  proposalId: Schema.String.check(Schema.isPattern(/^apr_[0-9a-f-]{36}$/)),
+});
+
+export const ApproveSkillProposalRequestSchema = Schema.Struct({
+  /** The integrity the reviewer saw; approval fails if it changed. */
+  reviewedIntegrity: SkillIntegrity,
+});
+
+export const DecideSkillProposalResponseSchema = successResponse(
+  Schema.Struct({
+    proposalId: Schema.String,
+    status: Schema.Literals(["approved", "rejected"]),
+    /** The skill approval saved, when it saved one. */
+    skill: Schema.optional(SkillDataSchema),
   }),
 );
 
@@ -174,6 +224,16 @@ export const SkillMcpReferenceInvalidResponseSchema = errorResponse(
   "Every MCP dependency must be enabled and have a currently reviewed tool in this scope.",
 );
 
+export const SkillProposalNotFoundResponseSchema = errorResponse(
+  "SKILL_PROPOSAL_NOT_FOUND",
+  "Skill proposal not found.",
+);
+
+export const SkillProposalDecidedResponseSchema = errorResponse(
+  "SKILL_PROPOSAL_DECIDED",
+  "This proposal was already decided or replaced by a newer one.",
+);
+
 export const SkillsUnavailableResponseSchema = errorResponse(
   "SKILLS_UNAVAILABLE",
   "Skills are temporarily unavailable.",
@@ -186,5 +246,7 @@ export const SkillsErrorResponseSchema = Schema.Union([
   SkillLimitResponseSchema,
   SkillIntegrityConflictResponseSchema,
   SkillMcpReferenceInvalidResponseSchema,
+  SkillProposalNotFoundResponseSchema,
+  SkillProposalDecidedResponseSchema,
   SkillsUnavailableResponseSchema,
 ]);

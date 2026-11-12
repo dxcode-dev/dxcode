@@ -3,6 +3,7 @@ import {
   ARTIFACT_TOOL_NAME,
   isArtifactCardPart,
 } from "./artifact-tool-part.js";
+import { isMcpAppPart } from "./mcp-app-part.js";
 import { shellCommandOperations } from "./shell-command-operation.js";
 import {
   isSkillActivationTool,
@@ -67,6 +68,12 @@ export type TranscriptActivity =
   /** So is each artifact the agent creates, updates, or asks to delete. */
   | {
       readonly kind: "artifact";
+      readonly row: WorkRow;
+      readonly part: ToolPart;
+    }
+  /** So is each `code_exec` call that showed MCP App cards. */
+  | {
+      readonly kind: "mcp-app";
       readonly row: WorkRow;
       readonly part: ToolPart;
     }
@@ -145,7 +152,8 @@ export const categoryForTool = (
     return "edit";
   }
   if (
-    name.includes("read") ||
+    // `read` as its own word: `thread_digest` and `post_to_thread` read nothing.
+    /(?:^|[^a-z])read/.test(name) ||
     name.includes("file") ||
     name.includes("search") ||
     name.includes("grep") ||
@@ -190,6 +198,10 @@ export const projectTranscriptActivities = (
     }
     if (part !== undefined && isArtifactCardPart(part)) {
       activities.push({ kind: "artifact", row: work, part });
+      continue;
+    }
+    if (part !== undefined && isMcpAppPart(part)) {
+      activities.push({ kind: "mcp-app", row: work, part });
       continue;
     }
     if (part !== undefined && isSkillActivationTool(part.toolName)) {

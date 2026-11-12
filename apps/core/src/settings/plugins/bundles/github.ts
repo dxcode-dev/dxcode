@@ -67,11 +67,13 @@ export const parseGitHubPluginUrl = (
   return { repository: `${user}/${name}`, treeSegments: rest };
 };
 
-const readCapped = async (
+/** Reads a response body, stopping once it passes `limit` bytes. */
+export const readCapped = async (
   response: Response,
+  limit: number = MAX_PLUGIN_ARCHIVE_BYTES,
 ): Promise<Uint8Array | "too-large"> => {
   const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > MAX_PLUGIN_ARCHIVE_BYTES) {
+  if (declared > limit) {
     await response.body?.cancel().catch(() => undefined);
     return "too-large";
   }
@@ -83,7 +85,7 @@ const readCapped = async (
     const { done, value } = await reader.read();
     if (done) break;
     total += value.byteLength;
-    if (total > MAX_PLUGIN_ARCHIVE_BYTES) {
+    if (total > limit) {
       await reader.cancel().catch(() => undefined);
       return "too-large";
     }
@@ -103,6 +105,15 @@ export const fetchGitHubArchive = Effect.fn("fetchGitHubArchive")(function* (
   repository: string,
   ref: string,
 ) {
+  // A `.` or `..` segment would walk the URL to another repository.
+  if (
+    repository.split("/").some((part) => part === "." || part === "..") ||
+    ref.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    return yield* new PluginBundleRejected({
+      reason: "That GitHub repository or ref isn't valid.",
+    });
+  }
   const path = ref
     .split("/")
     .map((segment) => encodeURIComponent(segment))
@@ -173,3 +184,56 @@ export const fetchGitHubPlugin = Effect.fn("fetchGitHubPlugin")(function* (
       "GitHub has no public repository or branch at that URL. dx imports public repositories only.",
   });
 });
+
+/**
+ * Whether the plugin's folder changed on its ref since the installed commit,
+ * from GitHub's compare API: one request per plugin, no download. Undefined
+ * when GitHub can't say (rate limited, gone, or unreachable), so the caller
+ * shows no notice rather than a wrong one.
+ */
+export const gitHubFolderChanged = async (source: {
+  readonly repository: string;
+  readonly ref: string;
+  readonly path: string;
+  readonly commit: string;
+}): Promise<boolean | undefined> => {
+  const ref = source.ref
+    .split("/")
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://api.github.com/repos/${source.repository}/compare/${source.commit}...${ref}`,
+      {
+        headers: {
+          accept: "application/vnd.github+json",
+          "user-agent": "dx-plugin-update-check",
+        },
+        signal: AbortSignal.timeout(5_000),
+      },
+    );
+  } catch {
+    return undefined;
+  }
+  if (!response.ok) {
+    await response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
+  const body = (await response.json().catch(() => undefined)) as
+    | {
+        readonly status?: unknown;
+        readonly files?: ReadonlyArray<{ readonly filename?: unknown }>;
+      }
+    | undefined;
+  if (body === undefined) return undefined;
+  if (body.status === "identical" || body.status === "behind") return false;
+  if (!Array.isArray(body.files)) return undefined;
+  // GitHub lists at most 300 files; a full list may hide the folder's.
+  if (body.files.length >= 300) return true;
+  const prefix = source.path === "" ? "" : `${source.path}/`;
+  return body.files.some(
+    ({ filename }) =>
+      typeof filename === "string" && filename.startsWith(prefix),
+  );
+};

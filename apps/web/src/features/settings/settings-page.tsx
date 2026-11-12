@@ -1,6 +1,6 @@
 import type { SettingsWorkspaceData } from "@dx/api";
 import type { SettingsScope, WorkspaceRole, WorkspaceSlug } from "@dx/domain";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "@tanstack/react-router";
 import {
   AlertTriangle,
@@ -24,6 +24,7 @@ import {
 import { Button } from "../../shared/ui/button.js";
 import { UnsavedChangesGuard } from "../../shared/ui/unsaved-changes-guard.js";
 import { personalAccountQueryOptions } from "./account/personal-account-queries.js";
+import { deploymentAdminQueryOptions } from "./deployment-admin-queries.js";
 import { settingsManifest } from "./foundation-sections.js";
 import { isModeOnlyNavigation } from "./mode-search-navigation.js";
 import {
@@ -235,11 +236,29 @@ function SettingsTopBar({
   );
 }
 
+/**
+ * Each gated section's answer for the signed-in person (`shownWhen`): true
+ * to show it, false to leave it out, undefined while it loads. Sections
+ * without a gate are not in the map.
+ */
+const useShownWhen = (
+  registrations: ReadonlyArray<SettingsSectionRegistration>,
+): ReadonlyMap<string, boolean | undefined> => {
+  const gated = registrations.flatMap((registration) =>
+    registration.shownWhen === undefined
+      ? []
+      : [{ id: registration.id, query: registration.shownWhen() }],
+  );
+  const answers = useQueries({ queries: gated.map(({ query }) => query) });
+  return new Map(gated.map(({ id }, index) => [id, answers[index]?.data]));
+};
+
 type SettingsNavigationProps =
   | {
       readonly scope: "personal";
       readonly active: SettingsSectionRegistration;
       readonly settingsReturnTo?: string;
+      readonly deploymentAdmin: boolean;
     }
   | {
       readonly scope: "workspace";
@@ -258,10 +277,15 @@ function SettingsNavigation(props: SettingsNavigationProps) {
             (registration) => registration.slug === undefined,
           )
         : settingsManifest.workspace;
+  const shown = useShownWhen(allRegistrations);
   const sections = settingsNavigationSections(
     props.scope,
     allRegistrations,
     props.scope === "workspace" ? props.workspaceRole : undefined,
+    props.scope === "personal" && props.deploymentAdmin,
+    new Set(
+      [...shown].flatMap(([id, answer]) => (answer === true ? [] : [id])),
+    ),
   );
   const headingId = React.useId();
 
@@ -416,6 +440,14 @@ export function SettingsPage(props: SettingsPageProps) {
   );
   // The app-wide theme provider already loads this account; reuse its cache.
   const accountQuery = useQuery(personalAccountQueryOptions(identity.id));
+  // Only a deployment administrator sees deployment sections; the server
+  // checks it again on every request.
+  const deploymentAdminQuery = useQuery({
+    ...deploymentAdminQueryOptions(identity.id),
+    enabled: scope === "personal",
+  });
+  const deploymentAdmin = deploymentAdminQuery.data === true;
+  const shownHere = useShownWhen([registration]).get(registration.id);
   const Section = registration.component;
   const workspace = contextQuery.data?.workspace;
   const effectiveWorkspaceSlug =
@@ -494,6 +526,7 @@ export function SettingsPage(props: SettingsPageProps) {
               scope={props.scope}
               active={registration}
               settingsReturnTo={settingsReturnTo}
+              deploymentAdmin={deploymentAdmin}
             />
           ) : (
             <SettingsNavigation
@@ -531,6 +564,19 @@ export function SettingsPage(props: SettingsPageProps) {
                   <div className="settings-route-state" role="status">
                     <h1>{registration.title}</h1>
                     <p>Only workspace admins can view this section.</p>
+                  </div>
+                ) : registration.deploymentAdminOnly === true &&
+                  !deploymentAdmin ? (
+                  <div className="settings-route-state" role="status">
+                    <h1>{registration.title}</h1>
+                    <p>Only deployment administrators can view this section.</p>
+                  </div>
+                ) : shownHere === undefined && registration.shownWhen ? (
+                  <DxLoading label="Loading settings…" />
+                ) : shownHere === false ? (
+                  <div className="settings-route-state" role="status">
+                    <h1>{registration.title}</h1>
+                    <p>This section isn't available.</p>
                   </div>
                 ) : (
                   <Section

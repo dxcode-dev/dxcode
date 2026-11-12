@@ -147,15 +147,23 @@ describe("SigningKeyRepositoryD1.insertVerification", () => {
     });
   });
 
-  it.each(["active", "revoked"] as const)(
-    "reports an older %s row with the fingerprint as a conflict",
-    async (status) => {
-      await insertExisting("vrf_older", status);
-      await expect(
-        runInsert(rejectingInsertDb("before-commit")),
-      ).rejects.toBeInstanceOf(SigningKeyConflict);
-    },
-  );
+  it("reports an older active row with the fingerprint as a conflict", async () => {
+    await insertExisting("vrf_older", "active");
+    await expect(
+      runInsert(rejectingInsertDb("before-commit")),
+    ).rejects.toBeInstanceOf(SigningKeyConflict);
+  });
+
+  it("adds a key back after it was removed: the revoked row is replaced", async () => {
+    await insertExisting("vrf_older", "revoked");
+    await expect(runInsert(env.DB)).resolves.toBeUndefined();
+    const rows = await env.DB.prepare(
+      "SELECT id, status FROM personal_verification_key WHERE user_id = ? AND fingerprint = ?",
+    )
+      .bind(userId, key.fingerprint)
+      .all<{ id: string; status: string }>();
+    expect(rows.results).toEqual([{ id: key.id, status: "active" }]);
+  });
 
   it("reports a primary-key collision with another fingerprint as a conflict", async () => {
     await insertExisting(key.id, "active", {

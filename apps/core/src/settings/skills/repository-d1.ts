@@ -11,6 +11,7 @@ import {
   Timestamp,
 } from "@dx/domain";
 import { Effect, Layer, Schema, SchemaTransformation } from "effect";
+import { pluginRunsForOwnerSql } from "../plugins/bundles/overlap.js";
 
 const SkillRow = Schema.Struct({
   id: Schema.String,
@@ -77,16 +78,6 @@ const skillColumns = `
   created_at, updated_at, removed_at
 `;
 
-/** A skill a plugin bundle installed loads only while that bundle is on. */
-const pluginEnabledSql = `(
-  skill.plugin_id IS NULL OR EXISTS (
-    SELECT 1 FROM trusted_plugin
-     WHERE trusted_plugin.id = skill.plugin_id
-       AND trusted_plugin.enabled = 1
-       AND trusted_plugin.removed_at IS NULL
-  )
-)`;
-
 const unavailable = (operation: string) => (cause: unknown) =>
   PersistenceUnavailable.new({ operation }, cause);
 
@@ -119,14 +110,16 @@ const decodeSkill = (row: SkillRow) =>
     ...(row.removed_at === null ? {} : { removedAt: row.removed_at }),
   });
 
-/** True while a workspace the bound user belongs to blocks personal skills. */
-const personalBlockedSql = `EXISTS (
+/** True while a workspace the user `owner` belongs to blocks personal skills. */
+const personalBlockedSqlFor = (owner: string) => `EXISTS (
   SELECT 1 FROM member
   JOIN skill_workspace_policy policy
     ON policy.workspace_id = member.organizationId
- WHERE member.userId = ?
+ WHERE member.userId = ${owner}
    AND policy.allow_personal_skills = 0
 )`;
+
+const personalBlockedSql = personalBlockedSqlFor("?");
 
 export const SkillRepositoryD1 = (db: D1Database) =>
   Layer.effect(
@@ -554,22 +547,28 @@ export const SkillRepositoryD1 = (db: D1Database) =>
           function* (ownerUserId) {
             return yield* querySkills(
               `skill.enabled = 1 AND skill.removed_at IS NULL
-                 AND ${pluginEnabledSql}
+                 AND (
+                   skill.plugin_id IS NULL OR EXISTS (
+                     SELECT 1 FROM trusted_plugin
+                      WHERE trusted_plugin.id = skill.plugin_id
+                        AND ${pluginRunsForOwnerSql("trusted_plugin", "?1")}
+                   )
+                 )
                  AND (
                    (
-                     skill.scope = 'personal' AND skill.target_id = ?
-                     AND NOT ${personalBlockedSql}
+                     skill.scope = 'personal' AND skill.target_id = ?1
+                     AND NOT ${personalBlockedSqlFor("?1")}
                    )
                    OR (
                      skill.scope = 'workspace' AND EXISTS (
                        SELECT 1 FROM member
-                        WHERE member.userId = ?
+                        WHERE member.userId = ?1
                           AND member.organizationId = skill.target_id
                      )
                    )
                  )`,
               "skill.name, skill.scope, skill.id",
-              [ownerUserId, ownerUserId, ownerUserId],
+              [ownerUserId],
               "settings.skills.listThreadCandidates",
             );
           },

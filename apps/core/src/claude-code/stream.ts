@@ -4,6 +4,10 @@ import {
   secretMasker,
 } from "../settings/environment-variables/masking.js";
 import { claudePlanReadingFromEvent } from "./plan.js";
+import {
+  CLAUDE_CODE_HOOK_LINE,
+  type ClaudeCodeHookRequest,
+} from "./tool-gate.js";
 
 /**
  * Reads the Claude Code CLI's `--output-format stream-json` events and
@@ -231,6 +235,11 @@ export class ClaudeCodeStream {
   /** Each subagent's steps, by the tool_use id of the call that started it. */
   readonly subagents = new Map<string, ClaudeCodeSubagentStep[]>();
   result: ClaudeCodeRunResult | undefined;
+  /**
+   * PreToolUse requests the dx tool bridge printed, oldest first, that dx
+   * has not taken yet (tool-gate.ts).
+   */
+  readonly hookRequests: ClaudeCodeHookRequest[] = [];
   /** The plan's limits from the latest `rate_limit_event`. */
   planReading: ClaudePlanReading | undefined;
   /** When dx read `planReading` (epoch seconds). */
@@ -313,6 +322,20 @@ export class ClaudeCodeStream {
         this.#closeFallback();
         this.#finish(event);
         return;
+      case CLAUDE_CODE_HOOK_LINE: {
+        const input = record(event.tool_input);
+        if (
+          typeof event.tool_use_id === "string" &&
+          /^[A-Za-z0-9_-]+$/.test(event.tool_use_id) &&
+          typeof event.tool_name === "string"
+        )
+          this.hookRequests.push({
+            toolUseId: event.tool_use_id,
+            toolName: event.tool_name,
+            input: input ?? {},
+          });
+        return;
+      }
       case "rate_limit_event": {
         const reading = claudePlanReadingFromEvent(event.rate_limit_info);
         if (reading === undefined) return;

@@ -1,6 +1,13 @@
 import { Timestamp, UserId } from "@dx/domain";
 import { Schema } from "effect";
 import { successResponse } from "../http/response.js";
+import {
+  REACTIONS,
+  type Reaction,
+  type ReactionCount,
+  ReactionCountSchema,
+  ReactionSchema,
+} from "../threads/reactions.js";
 import { MessageCommentPersonSchema } from "./message-comments.js";
 
 /**
@@ -26,15 +33,9 @@ export const SpacePostIdSchema = Schema.String.check(
 export type SpacePostId = typeof SpacePostIdSchema.Type;
 
 /** The reactions a post takes, from people and from the agent. */
-export const SPACE_POST_REACTIONS = [
-  "thumbs_up",
-  "heart",
-  "joy",
-  "eyes",
-  "wave",
-] as const;
-export const SpacePostReactionSchema = Schema.Literals(SPACE_POST_REACTIONS);
-export type SpacePostReaction = typeof SpacePostReactionSchema.Type;
+export const SPACE_POST_REACTIONS = REACTIONS;
+export const SpacePostReactionSchema = ReactionSchema;
+export type SpacePostReaction = Reaction;
 
 export const SpacePostTextSchema = Schema.String.check(
   Schema.isMinLength(1),
@@ -55,15 +56,8 @@ export const SpacePostAuthorSchema = Schema.Struct({
 export type SpacePostAuthor = typeof SpacePostAuthorSchema.Type;
 
 /** One reaction on a post, counted over everyone who gave it. */
-export const SpacePostReactionCountSchema = Schema.Struct({
-  reaction: SpacePostReactionSchema,
-  count: Schema.Int,
-  /** The requester gave it. */
-  mine: Schema.Boolean,
-  /** The agent gave it (dx's `eyes` while it works on the post, or its own). */
-  agent: Schema.Boolean,
-});
-export type SpacePostReactionCount = typeof SpacePostReactionCountSchema.Type;
+export const SpacePostReactionCountSchema = ReactionCountSchema;
+export type SpacePostReactionCount = ReactionCount;
 
 /** A post's comments, for its "N replies" row. */
 export const SpacePostCommentsSchema = Schema.Struct({

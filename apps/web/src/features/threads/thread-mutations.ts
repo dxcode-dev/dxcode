@@ -66,6 +66,7 @@ const createThread = async (
   signal?: AbortSignal,
   claudeConnectionId?: string,
   visibility?: ThreadVisibility,
+  pluginAgentMode?: string,
 ): Promise<typeof CreateThreadResponseSchema.Type> =>
   request("/v1/threads", CreateThreadResponseSchema, {
     method: "POST",
@@ -79,6 +80,7 @@ const createThread = async (
       ...(threadId === undefined ? {} : { threadId }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       ...(visibility === undefined ? {} : { visibility }),
+      ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
     }),
   });
 
@@ -239,6 +241,7 @@ export const createThreadMutationOptions = (
               input.signal,
               input.claudeConnectionId,
               input.visibility,
+              input.pluginAgentMode,
             )
           : await createThread(
               input.project?.id,
@@ -283,6 +286,8 @@ interface CreateThreadWithInitialMessageMutationInput
   extends CreateBlankThreadMutationInput {
   readonly initialMessage: InitialThreadMessage;
   readonly threadId: ThreadId;
+  /** An installed plugin's agent mode: the Thread runs as its agent. */
+  readonly pluginAgentMode?: string;
   /** Abandons this send; the server still finishes what it admitted. */
   readonly signal?: AbortSignal;
 }

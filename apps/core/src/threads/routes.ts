@@ -16,6 +16,7 @@ import {
   CreateThreadModelRouteUnavailableResponseSchema,
   CreateThreadOrbUnavailableResponseSchema,
   CreateThreadPersistenceUnavailableResponseSchema,
+  CreateThreadPluginAgentModeUnavailableResponseSchema,
   CreateThreadPolicyDeniedResponseSchema,
   CreateThreadProjectlessForbiddenResponseSchema,
   CreateThreadProjectNotFoundResponseSchema,
@@ -83,6 +84,7 @@ import {
 import {
   ClaudePlanRefused,
   defaultThreadModelSelection,
+  isClaudeCodeModel,
   isThreadTitlePending,
   ModelNotServed,
   type PageCursor,
@@ -120,6 +122,7 @@ import {
   messageAttachmentBody,
   resolveMessageAttachments,
 } from "../attachments/message.js";
+import { registeredClosedOrbProviders } from "../execution/deployment-orbs-registration.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import { orbProviderConnectors } from "../execution/orb-providers.js";
 import {
@@ -144,6 +147,12 @@ import {
 } from "../observability/startup-runtime.js";
 import { submissionStartupObservations } from "../observability/submission-startup.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  bindPluginAgentMode,
+  PluginAgentModeNotOffered,
+  threadPluginAgentData,
+  threadPluginAgentStatement,
+} from "../plugins/agents/threads.js";
 import { hiddenOrbProviders } from "../plugins/execution/orb-provider-beta.js";
 import {
   betaProviderOffDetail,
@@ -157,14 +166,13 @@ import {
 } from "../realtime/publication.js";
 import { PersonalAgentInstructionsRepositoryD1 } from "../settings/agent-instructions/repository-d1.js";
 import { SettingsAudit } from "../settings/audit.js";
-import { EnvironmentVariableRepositoryD1 } from "../settings/environment-variables/repository-d1.js";
 import { signingBackendCapabilities } from "../settings/keys/backend.js";
 import { resolveMcpAgentConnectionsFor } from "../settings/mcp-servers/execution.js";
 import { McpServerRepositoryD1 } from "../settings/mcp-servers/repository-d1.js";
-import { resolveSelectionForUser } from "../settings/model-routing/submission.js";
-import { resolvePluginAgentData } from "../settings/plugins/execution.js";
-import { PluginRepositoryD1 } from "../settings/plugins/repository-d1.js";
-import { PluginService } from "../settings/plugins/service.js";
+import {
+  pluginAgentClaudePlan,
+  resolveSelectionForUser,
+} from "../settings/model-routing/submission.js";
 import { projectDefaultsLayersFor } from "../settings/project-defaults/routes.js";
 import { ProjectDefaultsService } from "../settings/project-defaults/service.js";
 import { SettingsService } from "../settings/service.js";
@@ -205,8 +213,9 @@ import {
   deliverInitialDispatch,
   INITIAL_IDEMPOTENCY_KEY,
   type InitialDispatchRequest,
+  initialDispatchStateOf,
+  initialDispatchStateStatement,
   initialSubmissionId,
-  readInitialDispatchState,
   retryInitialDispatch,
 } from "./initial-dispatch.js";
 import {
@@ -287,6 +296,12 @@ class InitialSubmissionConflict extends Schema.TaggedError<InitialSubmissionConf
 class ThreadAlreadyStarted extends Schema.TaggedError<ThreadAlreadyStarted>()(
   "ThreadAlreadyStarted",
   {},
+) {}
+
+/** The plugin agent mode asked for is not one the person may start. */
+class PluginAgentModeUnavailable extends Schema.TaggedError<PluginAgentModeUnavailable>()(
+  "PluginAgentModeUnavailable",
+  { message: Schema.String },
 ) {}
 
 /** Workspace visibility was asked for, but the owner has no workspace. */
@@ -428,7 +443,7 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
     executionWorkspace,
     parentColors,
     inboundMessages,
-    initialDispatch,
+    { dispatch: initialDispatch, agent: pluginAgent },
   ] = yield* Effect.all(
     [
       // The Thread in hand names its owner and Project, so the policy does
@@ -450,14 +465,7 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
             }),
         ),
       ),
-      resolvePluginAgentData(binding, thread).pipe(
-        Effect.mapError(
-          () =>
-            new PersistenceUnavailable({
-              operation: "resolve plugin snapshot",
-            }),
-        ),
-      ),
+      Effect.succeed([] as const),
       unpersisted
         ? Effect.succeed(NEW_THREAD_WORKSPACE)
         : Effect.tryPromise({
@@ -488,9 +496,23 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
               }),
           }),
       unpersisted
-        ? Effect.succeed(null)
+        ? Effect.succeed({ dispatch: null, agent: undefined })
         : Effect.tryPromise({
-            try: () => readInitialDispatchState(db, thread.id),
+            // The plugin agent it runs as, in the same round trip.
+            try: async () => {
+              const [dispatchRows, agentRows] = await db.batch([
+                initialDispatchStateStatement(db, thread.id),
+                threadPluginAgentStatement(db, thread.id),
+              ]);
+              return {
+                dispatch: initialDispatchStateOf(dispatchRows?.results[0]),
+                agent: threadPluginAgentData(
+                  agentRows?.results[0] as
+                    | Parameters<typeof threadPluginAgentData>[0]
+                    | undefined,
+                ),
+              };
+            },
             catch: () =>
               new PersistenceUnavailable({
                 operation: "resolve the first message's admission",
@@ -504,6 +526,7 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
     ...threadData(thread),
     ...parentColorField(parentColors, thread),
     ...(inboundMessages.length === 0 ? {} : { inboundMessages }),
+    ...(pluginAgent === undefined ? {} : { pluginAgent }),
     ...(initialDispatch === null
       ? {}
       : {
@@ -559,19 +582,8 @@ const threadServiceLayer = (db: D1Database) => {
       ),
     ),
   );
-  const pluginService = PluginService.layer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        PluginRepositoryD1(db),
-        EnvironmentVariableRepositoryD1(db),
-        McpServerRepositoryD1(db),
-        policy,
-        SettingsAudit.layer,
-      ),
-    ),
-  );
   const threads = ThreadService.layer.pipe(
-    Layer.provide(Layer.mergeAll(repositories, skillService, pluginService)),
+    Layer.provide(Layer.mergeAll(repositories, skillService)),
   );
   return Layer.merge(threads, policy);
 };
@@ -827,6 +839,63 @@ export const createThreadRoutes = (
       requestAdmittedAt = Date.now();
       const db = yield* decodeD1Binding(context.env.DB);
       const principal = context.get("principal");
+      // A Thread in a plugin's agent mode runs as the plugin's agent from
+      // its first message: the mode is checked and recorded before anything
+      // else, and the agent's model, when it names one, is the selection.
+      const pluginAgentThreadId = input.threadId;
+      const pluginAgentMode = input.pluginAgentMode;
+      const creationSelection =
+        pluginAgentMode === undefined || pluginAgentThreadId === undefined
+          ? input.selection
+          : yield* Effect.tryPromise({
+              try: () =>
+                bindPluginAgentMode({
+                  bindings: context.env,
+                  db,
+                  ownerUserId: principal.userId,
+                  threadId: pluginAgentThreadId,
+                  agentMode: pluginAgentMode,
+                  selection: input.selection,
+                  ...(input.parentThreadId === undefined
+                    ? {}
+                    : { parentThreadId: input.parentThreadId }),
+                }),
+              catch: (cause) =>
+                cause instanceof PluginAgentModeNotOffered
+                  ? new PluginAgentModeUnavailable({ message: cause.message })
+                  : PersistenceUnavailable.new(
+                      { operation: "thread.bindPluginAgentMode" },
+                      cause,
+                    ),
+            });
+      // An agent that names its own model decides it: a Claude plan the
+      // composer still held for another selection does not apply.
+      // A Claude Code agent with no plan picked takes the one with the most
+      // room that resets soonest, rather than asking.
+      const creationClaudeConnectionId =
+        pluginAgentMode === undefined
+          ? input.claudeConnectionId
+          : !(
+                creationSelection?.kind === "model" &&
+                isClaudeCodeModel(creationSelection.model)
+              )
+            ? undefined
+            : (input.claudeConnectionId ??
+              (yield* Effect.tryPromise({
+                try: () =>
+                  pluginAgentClaudePlan(
+                    context.env,
+                    principal.userId,
+                    creationSelection,
+                  ),
+                catch: (cause) =>
+                  cause instanceof ClaudePlanRefused
+                    ? cause
+                    : PersistenceUnavailable.new(
+                        { operation: "thread.pluginAgentClaudePlan" },
+                        cause,
+                      ),
+              })));
       // A Thread shared from its start passes the Share dialog's checks
       // before anything is read or written: a signed-in person, in an
       // active workspace, which the Thread is then shared with.
@@ -919,7 +988,7 @@ export const createThreadRoutes = (
           titleAgent(context.env, {
             threadId: requestedThreadId,
             ownerUserId: principal.userId,
-            selection: input.selection ?? defaultThreadModelSelection(),
+            selection: creationSelection ?? defaultThreadModelSelection(),
             message: titleMessage,
             persisted: new Promise<boolean>((resolve) => {
               settleTitlePersisted = resolve;
@@ -999,8 +1068,8 @@ export const createThreadRoutes = (
                   resolveSelectionForUser(
                     context.env,
                     principal.userId,
-                    input.selection ?? defaultThreadModelSelection(),
-                    input.claudeConnectionId,
+                    creationSelection ?? defaultThreadModelSelection(),
+                    creationClaudeConnectionId,
                   ),
                 catch: (cause) => {
                   if (
@@ -1097,6 +1166,11 @@ export const createThreadRoutes = (
                           userId: principal.userId,
                           hiddenProviders: () =>
                             hiddenOrbProviders(context.env, principal),
+                          closedProviders: () =>
+                            registeredClosedOrbProviders(
+                              context.env,
+                              principal.userId,
+                            ),
                           projectId:
                             project.kind === "project"
                               ? project.projectId
@@ -1127,7 +1201,7 @@ export const createThreadRoutes = (
                         principal,
                         project,
                         input.title ?? UNTITLED_THREAD_TITLE,
-                        input.selection,
+                        creationSelection,
                         requestedThreadId,
                         requestedRunnerProfileId,
                         titlePending,
@@ -1678,6 +1752,20 @@ export const createThreadRoutes = (
               },
             }),
             400,
+          ),
+        PluginAgentModeUnavailable: (failure: PluginAgentModeUnavailable) =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadPluginAgentModeUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PLUGIN_AGENT_MODE_UNAVAILABLE",
+                message: failure.message,
+                requestId,
+              },
+            }),
+            422,
           ),
         ProjectNotFound: () =>
           context.json(

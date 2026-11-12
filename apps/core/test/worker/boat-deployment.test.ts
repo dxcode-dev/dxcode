@@ -251,8 +251,16 @@ describe("Boat on the deployment's own account", () => {
         displayName: "Hosted Orb",
         description: "Stops after an hour idle.",
         inactivityMs: 3_600_000,
+        costLabels: { "bt.medium": "Example cost label" },
       },
     };
+    const sizeCost = async (bindings: Bindings) =>
+      (
+        await Effect.runPromise(loadRunnerProfileCatalog(bindings, hosted))
+      ).publicCatalog.profiles.find(({ id }) => id === "bt.medium")?.costLabel;
+    // The deployment's price shows only where its account runs the size.
+    expect(await sizeCost(withoutBoat)).toBeUndefined();
+    expect(await sizeCost(withBoat)).toBe("Example cost label");
     const providerNames = async (bindings: Bindings) =>
       (
         await Effect.runPromise(loadRunnerProfileCatalog(bindings, hosted))

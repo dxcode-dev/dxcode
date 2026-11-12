@@ -341,6 +341,17 @@ export const SELFHOST_SETTINGS = Object.freeze([
     when: (config) => config.integrations.includes("sarvam"),
   },
   {
+    id: "deploymentAdminEmails",
+    group: "Sign-in",
+    kind: "list",
+    label: "Deployment administrators",
+    description:
+      "Verified emails that open the deployment's admin pages. None by default.",
+    example: "ops@example.com",
+    binding: "DX_DEPLOYMENT_ADMIN_EMAILS",
+    ...field("deploymentAdminEmails"),
+  },
+  {
     id: "bugReportReaders",
     group: "Bug reports",
     kind: "list",
@@ -469,6 +480,13 @@ export const INSTALLER_SETTING_IDS = Object.freeze([
  * setting above or listed here (deploy/selfhost/settings.test.mjs).
  */
 export const DERIVED_BINDINGS = Object.freeze([
+  // Read only by modules a deployment registers itself; a self-host has none.
+  "DX_DEPLOYMENT_PRIVATE_CONFIG",
+  // Lizard runs only on a hosted deployment's own account; a self-host's
+  // deploy never sets them.
+  "LIZARD_API_KEY",
+  "LIZARD_PROJECT_ID",
+  "LIZARD_REGION",
   "DX_ATTACHMENT_R2_CREDENTIALS",
   "DX_ATTACHMENT_R2_ENDPOINT",
   "DX_AUTH_TRUSTED_ORIGINS",

@@ -9,11 +9,14 @@ export function CommandPalette({
   commands,
   onOpenChange,
   onDispatch,
+  extra,
 }: {
   readonly open: boolean;
   readonly commands: ReadonlyArray<CommandView>;
   readonly onOpenChange: (open: boolean) => void;
   readonly onDispatch: (id: CommandId) => void;
+  /** More entries for the search: the open Thread's plugin commands. */
+  readonly extra?: (query: string, close: () => void) => React.ReactNode;
 }) {
   const [query, setQuery] = React.useState("");
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -72,6 +75,7 @@ export function CommandPalette({
             </button>
           ))
         )}
+        {extra?.(normalizedQuery, () => changeOpen(false))}
       </div>
     </CommandSurfaceDialog>
   );

@@ -4,6 +4,7 @@ export interface FixtureEntry {
   readonly content?: string | Uint8Array;
   readonly method?: 0 | 8 | 12;
   readonly symlink?: boolean;
+  readonly executable?: boolean;
   readonly encrypted?: boolean;
   /** Declared uncompressed size, to forge a lying header. */
   readonly declaredSize?: number;
@@ -65,7 +66,9 @@ export const buildZip = async (
       ? 0o120777
       : entry.name.endsWith("/")
         ? 0o040755
-        : 0o100644;
+        : entry.executable
+          ? 0o100755
+          : 0o100644;
     cv.setUint32(38, (mode << 16) >>> 0, true);
     cv.setUint32(42, entry.localOffset ?? offset, true);
     central.set(name, 46);

@@ -368,3 +368,45 @@ export const threadSeenWorking = (
       ),
     );
 };
+
+/**
+ * Installed plugins' UI in one Thread: prompts waiting on a person, recent
+ * notices, quick actions, palette commands, and link patterns as a remark
+ * plugin for the transcript. On the Thread page's first load, so the page
+ * reads link patterns and realtime refreshes it; the request, its schemas,
+ * and the remark plugin load with the first fetch, after the page paints.
+ */
+export const pluginUiQueryOptions = (threadId: ThreadId) =>
+  queryOptions({
+    queryKey: ["plugin-ui", threadId] as const,
+    queryFn: ({ signal }) =>
+      import("./plugin-ui/plugin-ui-fetch-queries.js").then((module) =>
+        module.loadPluginUi(threadId, signal),
+      ),
+    // The remark plugin is a function, not JSON: keep it as returned.
+    structuralSharing: false,
+    staleTime: 30_000,
+    retry: 1,
+    refetchOnWindowFocus: true,
+  });
+
+/** The Thread's link patterns as a remark plugin, or null without any. */
+export const pluginLinkRemarkQueryOptions = (threadId: ThreadId) =>
+  queryOptions({
+    ...pluginUiQueryOptions(threadId),
+    select: (data) => data.linkRemark,
+  });
+
+/** `plugin-ui.invalidated`: a plugin's prompt, notice, or action changed. */
+export const invalidatePluginUi = (client: QueryClient, threadId: ThreadId) =>
+  client.invalidateQueries({ queryKey: ["plugin-ui", threadId] });
+
+/** The query key of a Thread's plugin panes' posts. */
+export const pluginPaneMessagesKey = (threadId: ThreadId) =>
+  ["plugin-pane", threadId] as const;
+
+/** `plugin-pane.invalidated`: a plugin posted to one of its panes. */
+export const invalidatePluginPaneMessages = (
+  client: QueryClient,
+  threadId: ThreadId,
+) => client.invalidateQueries({ queryKey: pluginPaneMessagesKey(threadId) });

@@ -162,6 +162,13 @@ pub struct StorageCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may send `mcp.request`, which runs a plugin's local MCP
+/// server; see [`crate::mcp`].
+#[derive(Serialize)]
+pub struct McpCapability {
+    pub version: u8,
+}
+
 /// Version 1: Core may name Terminals besides `default` (up to eight run at
 /// once) and send `terminal.close`; heartbeats list them as `terminals`. See
 /// [`crate::terminals`].
@@ -181,6 +188,7 @@ pub struct Capabilities {
     pub disk: DiskCapability,
     pub storage: StorageCapability,
     pub terminal_sessions: TerminalSessionsCapability,
+    pub mcp: McpCapability,
     pub desktop: DesktopCapability,
 }
 
@@ -197,6 +205,7 @@ impl Capabilities {
             disk: DiskCapability { version: 1 },
             storage: StorageCapability { version: 1 },
             terminal_sessions: TerminalSessionsCapability { version: 1 },
+            mcp: McpCapability { version: 1 },
             desktop: DesktopCapability { version: 1 },
         }
     }
@@ -457,6 +466,7 @@ pub enum OperationResult {
     Memory(crate::memory::MemoryResult),
     Disk(crate::disk::DiskResult),
     Storage(crate::storage::TransferResult),
+    Mcp(crate::mcp::McpResult),
 }
 
 /// Requests that serve Portals and the Desktop rather than one stream.
@@ -540,6 +550,21 @@ pub enum StorageOperation {
     },
 }
 
+/// One request to a plugin's local MCP server; see [`crate::mcp`].
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum McpOperation {
+    #[serde(rename = "mcp.request")]
+    Request {
+        server: crate::mcp::ServerSpec,
+        method: String,
+        #[serde(default)]
+        params: serde_json::Value,
+        #[serde(rename = "timeoutMs")]
+        timeout_ms: u64,
+    },
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum RequestOperation {
@@ -549,6 +574,7 @@ pub enum RequestOperation {
     Memory(MemoryOperation),
     Disk(DiskOperation),
     Storage(StorageOperation),
+    Mcp(McpOperation),
 }
 
 #[derive(Deserialize)]
@@ -568,7 +594,8 @@ impl RequestOperation {
             | Self::Portal(_)
             | Self::Memory(_)
             | Self::Disk(_)
-            | Self::Storage(_) => None,
+            | Self::Storage(_)
+            | Self::Mcp(_) => None,
         }
     }
 }

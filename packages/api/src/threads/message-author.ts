@@ -44,8 +44,9 @@ export interface MessageAuthorTag {
   readonly messageId?: string;
   /**
    * What delivered this message on the owner's behalf after a turn ended:
-   * the Thread's schedule, a GitHub subscription, or a person ticking or
-   * answering an ask in one of its artifacts. Only the server sets it.
+   * the Thread's schedule, a GitHub subscription, a person ticking or
+   * answering an ask in one of its artifacts, or text from outside dx (a
+   * feedback widget or a plugin's webhook). Only the server sets it.
    */
   readonly automation?: MessageAutomation;
   /**
@@ -61,10 +62,30 @@ export interface MessageAuthorTag {
    * files, artifacts, and other Threads stays. Only the server sets it.
    */
   readonly edited?: boolean;
+  /**
+   * The installed plugin whose code posted this message on the owner's
+   * behalf with `ctx.thread.append` or `note`. Only the server sets it;
+   * clients show the message as the plugin's, not the person's.
+   */
+  readonly plugin?: MessagePlugin;
+}
+
+/** The plugin that posted a message, as its tag records it. */
+export interface MessagePlugin {
+  /** The install's id. */
+  readonly id: string;
+  /** Its display name when it posted. */
+  readonly name: string;
+  /** Who installed it: the owner, their workspace, or the repository. */
+  readonly scope: "personal" | "workspace" | "repository";
 }
 
 /** Senders that wake a Thread on the owner's behalf. */
-export type MessageAutomation = "schedule" | "github" | "artifact";
+/**
+ * `external`: text from outside dx started the Thread, such as a website's
+ * feedback widget or a plugin's webhook trigger.
+ */
+export type MessageAutomation = "schedule" | "github" | "artifact" | "external";
 
 /** Tagging the agent sends a message to it, even beside member tags. */
 export const AGENT_MENTION = "dx";
@@ -99,6 +120,7 @@ export const formatMessageAuthor = ({
   automation,
   commentOn,
   edited,
+  plugin,
 }: MessageAuthorTag) =>
   `<${TAG} role="${author.role}" user_id="${escapeAttribute(author.userId)}" identifier="${escapeAttribute(author.name)}"${
     author.handle === undefined
@@ -116,7 +138,11 @@ export const formatMessageAuthor = ({
     messageId === undefined ? "" : ` message_id="${escapeAttribute(messageId)}"`
   }${automation === undefined ? "" : ` automation="${automation}"`}${
     commentOn === undefined ? "" : ` comment_on="${escapeAttribute(commentOn)}"`
-  }${edited === true ? ' edited="true"' : ""} />\n`;
+  }${edited === true ? ' edited="true"' : ""}${
+    plugin === undefined
+      ? ""
+      : ` plugin="${escapeAttribute(plugin.name)}" plugin_id="${escapeAttribute(plugin.id)}" plugin_scope="${plugin.scope}"`
+  } />\n`;
 
 /**
  * Removes every author tag from text a person wrote, repeating until none is
@@ -138,6 +164,19 @@ export const stripMessageAuthorTags = (text: string) => {
 export const withMessageAuthor = (tag: MessageAuthorTag, body: string) =>
   `${formatMessageAuthor(tag)}${stripMessageAuthorTags(body)}`;
 
+const pluginOf = (
+  fields: ReadonlyMap<string, string>,
+): MessagePlugin | undefined => {
+  const id = fields.get("plugin_id");
+  const name = fields.get("plugin");
+  const scope = fields.get("plugin_scope");
+  return id &&
+    name &&
+    (scope === "personal" || scope === "workspace" || scope === "repository")
+    ? { id, name, scope }
+    : undefined;
+};
+
 /** Splits a leading author tag from a user message. */
 export const parseMessageAuthor = (
   text: string,
@@ -150,6 +189,7 @@ export const parseMessageAuthor = (
   readonly automation?: MessageAutomation;
   readonly commentOn?: string;
   readonly edited?: true;
+  readonly plugin?: MessagePlugin;
   readonly text: string;
 } => {
   const match = leadingTag.exec(text);
@@ -190,13 +230,15 @@ export const parseMessageAuthor = (
       : {}),
     ...(fields.get("automation") === "schedule" ||
     fields.get("automation") === "github" ||
-    fields.get("automation") === "artifact"
+    fields.get("automation") === "artifact" ||
+    fields.get("automation") === "external"
       ? { automation: fields.get("automation") as MessageAutomation }
       : {}),
     ...(fields.get("comment_on")
       ? { commentOn: fields.get("comment_on") }
       : {}),
     ...(fields.get("edited") === "true" ? { edited: true as const } : {}),
+    ...(pluginOf(fields) === undefined ? {} : { plugin: pluginOf(fields) }),
     text: rest,
   };
 };

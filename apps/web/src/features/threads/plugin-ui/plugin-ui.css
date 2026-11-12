@@ -1,0 +1,254 @@
+/* Installed plugins' prompts and quick actions above the composer; they
+   share the Orb notices' frame. */
+.plugin-ui-row {
+  display: flex;
+  width: 100%;
+  max-width: 41rem;
+  margin: 0 auto 8px;
+  padding-right: 64px;
+}
+.plugin-prompt-card {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  pointer-events: auto;
+  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--background) 96%, transparent);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(8px);
+  animation: plugin-prompt-in 160ms ease-out;
+}
+.plugin-prompt-card > svg {
+  width: 14px;
+  height: 14px;
+  margin-top: 2px;
+  color: var(--primary);
+}
+.plugin-prompt-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 17px;
+}
+.plugin-prompt-copy strong {
+  color: var(--foreground);
+  font-size: 13px;
+  font-weight: 650;
+}
+.plugin-prompt-source {
+  font-size: 11px;
+}
+.plugin-prompt-message {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.plugin-prompt-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.plugin-prompt-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.plugin-prompt-option {
+  height: auto;
+  min-height: 32px;
+  justify-content: flex-start;
+  flex-direction: column;
+  align-items: flex-start;
+  padding-block: 6px;
+  text-align: left;
+  white-space: normal;
+}
+.plugin-prompt-option-detail {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
+.plugin-prompt-error {
+  margin: 0;
+  color: var(--destructive);
+}
+.plugin-prompt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.plugin-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: auto;
+}
+@keyframes plugin-prompt-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .plugin-prompt-card {
+    animation: none;
+  }
+}
+
+/* A plugin's pane fills its tab; its view brings its own styles. */
+.plugin-pane,
+.plugin-pane-view {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.plugin-pane-slot {
+  flex: 1;
+  min-height: 0;
+}
+.plugin-pane-slot > .plugin-pane-frame {
+  height: 100%;
+}
+.plugin-pane-state {
+  padding: 16px;
+  color: var(--muted-foreground);
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .plugin-ui-row {
+    padding-right: 0;
+  }
+}
+
+/* dx's own cards (manage_dx): a settings change to apply, or a secret. */
+.dx-prompt-card[data-destructive="true"] {
+  border-color: color-mix(in srgb, var(--destructive) 35%, var(--border));
+}
+.dx-prompt-card[data-destructive="true"] > svg {
+  color: var(--destructive);
+}
+.dx-prompt-card code {
+  color: var(--foreground);
+  font: 12px / 17px var(--font-mono-family);
+}
+.dx-prompt-hint {
+  font-size: 11px;
+}
+.dx-change-items {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: min(42vh, 360px);
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  overscroll-behavior: contain;
+}
+.dx-change-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.dx-change-text p {
+  margin: 0;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.dx-change-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dx-change-file {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--foreground) 3%, transparent);
+}
+.dx-change-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  color: inherit;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+.dx-change-toggle:hover {
+  background: color-mix(in srgb, var(--foreground) 5%, transparent);
+}
+.dx-change-toggle:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+.dx-change-toggle > svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  transition: transform 120ms ease-out;
+}
+.dx-change-file[data-open="true"] .dx-change-toggle > svg {
+  transform: rotate(90deg);
+}
+.dx-change-toggle .dx-change-label {
+  flex: 1;
+  color: var(--foreground);
+  font: 12px / 18px var(--font-mono-family);
+}
+.dx-change-count {
+  flex: none;
+  font: 11px / 18px var(--font-mono-family);
+}
+.dx-change-count .diff-removed {
+  color: var(--destructive);
+}
+.dx-change-code {
+  max-height: 240px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: auto;
+  color: var(--foreground);
+  border-top: 1px solid var(--border);
+  font: 11px / 17px var(--font-mono-family);
+  tab-size: 2;
+  white-space: pre;
+}
+.dx-change-code [data-line="add"] {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, transparent);
+}
+.dx-change-code [data-line="remove"] {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 9%, transparent);
+}
+.dx-change-code [data-line="hunk"] {
+  color: var(--muted-foreground);
+}
+.dx-change-code > span {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dx-change-toggle > svg {
+    transition: none;
+  }
+}

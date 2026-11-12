@@ -325,9 +325,26 @@ export default Alchemy.Stack(
         Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
       ),
       exaApiKey: Config.option(Config.Redacted("EXA_API_KEY")),
+      // Deployment administrators' emails; none unless set (self-host opt-in).
+      deploymentAdminEmails: Config.option(
+        Config.String("DX_DEPLOYMENT_ADMIN_EMAILS"),
+      ),
       // Optional: Boat on the deployment's own account. Self-host opts in
       // with the `boat` integration.
       boatApiKey: Config.option(Config.Redacted("BOAT_API_KEY")),
+      // Optional: Lizard on the deployment's own account (a hosted offer's Orbs):
+      // its key, the project its sandboxes run in, and their region.
+      lizardApiKey: Config.option(Config.Redacted("LIZARD_API_KEY")),
+      lizardProjectId: Config.option(
+        Config.NonEmptyString("LIZARD_PROJECT_ID"),
+      ),
+      lizardRegion: Config.option(Config.NonEmptyString("LIZARD_REGION")),
+      // Optional: secret configuration for the modules a deployment registers
+      // itself (the registration files the public export replaces), as one
+      // opaque JSON object. Public dx registers none, so it is never set.
+      deploymentPrivateConfig: Config.option(
+        Config.Redacted("DX_DEPLOYMENT_PRIVATE_CONFIG"),
+      ),
       // Self-host sign-in providers and admission, validated by the runner.
       signIn: Config.option(Config.NonEmptyString("DX_DEPLOYMENT_SIGN_IN")),
       googleClientSecret: Config.option(
@@ -530,6 +547,10 @@ export default Alchemy.Stack(
           })).value
         : undefined
       : Option.getOrUndefined(configuration.boatApiKey);
+    // Lizard on the deployment's own account: hosted targets only.
+    const lizardApiKey = selfhost
+      ? undefined
+      : Option.getOrUndefined(configuration.lizardApiKey);
     // Bug report forwarding (#1661). Hosted targets take both settings from
     // the deploy environment on every deploy. A self-host's
     // `bugReportForwarding` and `bugReportIntake` integrations hold them across
@@ -807,6 +828,7 @@ export default Alchemy.Stack(
     const d1Binding = productionBindingByType("d1");
     const r2Binding = productionBindingByType("r2");
     const aiBinding = productionBindingByType("workers-ai");
+    const loaderBinding = productionBindingByType("worker-loader");
     const durableObjectBindings = Object.fromEntries(
       durableObjectBindingContract().map(({ name, className }) => [
         name,
@@ -898,6 +920,23 @@ export default Alchemy.Stack(
           ? {}
           : { DX_INSTALLED_PLUGINS: installedPlugins }),
         ...(configuration.signupEnabled ? { DX_SIGNUP_ENABLED: "true" } : {}),
+        ...(lizardApiKey === undefined
+          ? {}
+          : {
+              ...(Option.isSome(configuration.lizardProjectId)
+                ? { LIZARD_PROJECT_ID: configuration.lizardProjectId.value }
+                : {}),
+              ...(Option.isSome(configuration.lizardRegion)
+                ? { LIZARD_REGION: configuration.lizardRegion.value }
+                : {}),
+            }),
+        ...(Option.isSome(configuration.deploymentAdminEmails) &&
+        configuration.deploymentAdminEmails.value.trim() !== ""
+          ? {
+              DX_DEPLOYMENT_ADMIN_EMAILS:
+                configuration.deploymentAdminEmails.value.trim(),
+            }
+          : {}),
         ...(signIn === undefined
           ? {}
           : {
@@ -989,6 +1028,13 @@ export default Alchemy.Stack(
           ? { DX_BUG_REPORT_INTAKE_SECRET: bugReportIntakeSecret }
           : {}),
         ...(boatApiKey !== undefined ? { BOAT_API_KEY: boatApiKey } : {}),
+        ...(lizardApiKey !== undefined ? { LIZARD_API_KEY: lizardApiKey } : {}),
+        ...(Option.isSome(configuration.deploymentPrivateConfig)
+          ? {
+              DX_DEPLOYMENT_PRIVATE_CONFIG:
+                configuration.deploymentPrivateConfig.value,
+            }
+          : {}),
         ...(googleClientSecret !== undefined
           ? { DX_GOOGLE_CLIENT_SECRET: googleClientSecret }
           : {}),
@@ -1005,6 +1051,11 @@ export default Alchemy.Stack(
         : {},
       "workers-ai": {
         [aiBinding.name]: Cloudflare.Workers.AI(aiBinding.name),
+      },
+      // Plugin code runs in Dynamic Workers this loader starts
+      // (apps/core/src/plugins/worker-host).
+      "worker-loader": {
+        [loaderBinding.name]: Cloudflare.WorkerLoader(loaderBinding.name),
       },
       "durable-object": {
         ...durableObjectBindings,

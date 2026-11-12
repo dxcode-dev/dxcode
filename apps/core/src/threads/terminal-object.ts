@@ -54,6 +54,7 @@ import {
   DXD_MAX_REQUEST_FRAME_BYTES,
   DXD_MAX_RESPONSE_FRAME_BYTES,
   DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
+  DXD_MCP_START_TIMEOUT_MS,
   DXD_PROTOCOL_MAJOR,
   DXD_PROXY_MAX_HEAD_FRAME_BYTES,
   DXD_PROXY_MAX_STREAM_ID,
@@ -76,6 +77,7 @@ import {
   DxdFilesListResult,
   DxdFilesOperation,
   DxdFilesReadResult,
+  DxdMcpRequestOperation,
   type DxdOperation,
   DxdProxyClientMessage,
   DxdProxyPortsResult,
@@ -401,6 +403,8 @@ interface DaemonAuthority {
   readonly disk?: boolean;
   /** The connected daemon serves `storage.export` and `storage.import`. */
   readonly storage?: boolean;
+  /** The connected daemon runs plugins' local MCP servers (`mcp.request`). */
+  readonly mcp?: boolean;
   /** The connected daemon runs Terminals besides `default`. */
   readonly terminalSessions?: boolean;
   /** The connected daemon lists, opens, and focuses Desktop windows. */
@@ -905,6 +909,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       return Response.json(this.#orbMetrics().read());
     }
     if (path === "/storage/transfer") return this.#transferStorage(request);
+    if (path === "/mcp/request") return this.#requestMcp(request);
     if (path === "/terminal/close") return this.#closeTerminal(request);
     if (path === "/diagnostics") return this.#diagnostics(request);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
@@ -1277,6 +1282,76 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
+   * Relay one request to a plugin's local MCP server for an already
+   * authorized caller (`plugins/code/local-mcp.ts`): wake the Orb, wait for
+   * an older daemon to update to one with the `mcp` capability, and count
+   * the call as workspace activity while dxd starts the server and answers.
+   */
+  async #requestMcp(request: Request): Promise<Response> {
+    if (
+      request.method !== "POST" ||
+      request.headers.get("x-dx-mcp-request") !== "1"
+    )
+      return new Response(null, { status: 404 });
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    let operation: DxdMcpRequestOperation;
+    try {
+      operation = Schema.decodeUnknownSync(DxdMcpRequestOperation)(
+        await request.json(),
+        { onExcessProperty: "error" },
+      );
+    } catch {
+      return new Response(null, { status: 400 });
+    }
+    if (!(await this.#activateWithRetry(threadId.value)).ok)
+      return daemonFailureResponse("known");
+    const updateDeadline = Date.now() + STORAGE_DAEMON_UPDATE_WAIT_MS;
+    while (
+      this.#authority?.threadId === threadId.value &&
+      this.#authority.mcp !== true &&
+      Date.now() < updateDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+      if (
+        this.#currentDaemonSocket() === undefined &&
+        !(await this.#activateWithRetry(threadId.value)).ok
+      )
+        return daemonFailureResponse("known");
+    }
+    const current = this.#authority;
+    if (current?.threadId !== threadId.value)
+      return daemonFailureResponse("known");
+    if (current.mcp !== true)
+      return Response.json(
+        { kind: "unavailable", reason: "outdated" },
+        { status: 409 },
+      );
+    const recordActivity = () =>
+      ExecutionWorkspaces.recordResidentTerminalInput(threadId.value).catch(
+        () => undefined,
+      );
+    await recordActivity();
+    const activity = setInterval(
+      () => void recordActivity(),
+      STORAGE_TRANSFER_ACTIVITY_MS,
+    );
+    try {
+      return await this.#dispatchDaemonOperation(
+        current,
+        operation,
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        // dxd may start the server (up to its start limit) before the call.
+        DXD_MCP_START_TIMEOUT_MS + operation.timeoutMs + 10_000,
+      );
+    } finally {
+      clearInterval(activity);
+    }
+  }
+
+  /**
    * Orb disk for an already authorized caller: usage from the last
    * heartbeat, a folder snapshot, or a delete, relayed only to a live
    * daemon. None wakes a paused workspace or renews its inactivity deadline.
@@ -1327,6 +1402,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
                 memory: authority.memory === true,
                 disk: authority.disk === true,
                 storage: authority.storage === true,
+                mcp: authority.mcp === true,
                 chunkAcks: authority.chunkAcks === true,
               },
               lastSeenAgoMs: ago(authority.lastSeen),
@@ -4591,6 +4667,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         memory: control.value.capabilities.memory !== undefined,
         disk: control.value.capabilities.disk !== undefined,
         storage: control.value.capabilities.storage !== undefined,
+        mcp: control.value.capabilities.mcp !== undefined,
         terminalSessions:
           control.value.capabilities.terminalSessions !== undefined,
         desktop: control.value.capabilities.desktop !== undefined,

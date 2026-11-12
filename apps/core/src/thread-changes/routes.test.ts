@@ -18,6 +18,16 @@ const mocks = vi.hoisted(() => ({
   push: vi.fn(),
 }));
 
+// No plugin is installed in these Threads: the Ship plan's prompt comes back
+// as the project wrote it. project-ship-settings.test.ts covers plugins that
+// rewrite it, on the real Worker runtime this module needs.
+vi.mock("../plugins/worker-host/changes-prompt.js", () => ({
+  applyChangesPromptPlugins: async (
+    _bindings: unknown,
+    _db: unknown,
+    input: { readonly prompt: string },
+  ) => ({ prompt: input.prompt, shapedBy: [] }),
+}));
 vi.mock("../persistence/d1-binding.js", async () => {
   const { Effect } = await import("effect");
   return { decodeD1Binding: () => Effect.succeed({}) };

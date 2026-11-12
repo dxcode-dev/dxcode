@@ -33,6 +33,8 @@ const pluginHost = vi.hoisted(() => ({
   resolveAgentWorkspaceInstructions: vi.fn(async () => ""),
   resolveAgentSpace: vi.fn(async () => undefined),
   resolveAgentStartingSpace: vi.fn(async () => undefined),
+  resolveAgentCodePlugins: vi.fn(async () => undefined),
+  resolveAgentRepositoryPlugins: vi.fn(async () => undefined),
   resolveAgentOrbThreadState: vi.fn(async () => ({ kind: "thread" })),
 }));
 
@@ -43,10 +45,6 @@ const skills = vi.hoisted(() => ({
   readThreadSkillResource: vi.fn(
     async (): Promise<string | undefined> => undefined,
   ),
-}));
-const plugins = vi.hoisted(() => ({
-  createPluginTool: vi.fn((_threadId, { name }) => ({ name, run: vi.fn() })),
-  invokePluginLive: vi.fn(),
 }));
 const threadTools = vi.hoisted(() => ({
   createThreadTools: vi.fn((): unknown[] => []),
@@ -64,6 +62,12 @@ const artifactTools = vi.hoisted(() => ({
   ARTIFACTS_EDITED_SIGNAL: "artifacts_edited",
   artifactsEditedByPeopleNote: vi.fn(async () => undefined),
   createArtifactTools: vi.fn((): unknown[] => []),
+}));
+const manageDxTool = vi.hoisted(() => ({
+  createManageDxTool: vi.fn((): unknown => ({
+    name: "manage_dx",
+    run: () => "",
+  })),
 }));
 const ownerAskTools = vi.hoisted(() => ({
   createOwnerAskTools: vi.fn((): unknown[] => []),
@@ -90,21 +94,23 @@ vi.mock("../runtime/agent-composition.js", () => ({
 }));
 vi.mock("../settings/mcp-servers/execution.js", () => mcp);
 vi.mock("../settings/skills/execution.js", () => skills);
-vi.mock("../settings/plugins/execution.js", () => ({
-  invokePluginLive: plugins.invokePluginLive,
-}));
 vi.mock("../plugins/agent-context.js", () => pluginHost);
+// Plugin code runs in Dynamic Workers; test/worker/plugin-worker-host.test.ts
+// covers it in workerd.
+vi.mock("../plugins/worker-host/worker.js", () => ({
+  callPluginTool: vi.fn(),
+  dispatchPluginEvent: vi.fn(),
+  logPluginFailure: vi.fn(),
+}));
 vi.mock("../threads/agent-tools.js", () => threadTools);
 vi.mock("../automations/agent-tools.js", () => automationTools);
 vi.mock("../thread-storage/agent-tools.js", () => storageTools);
 vi.mock("../owner-asks/agent-tools.js", () => ownerAskTools);
+vi.mock("../settings/manage-dx/tool.js", () => manageDxTool);
 vi.mock("../thread-artifacts/agent-tools.js", () => artifactTools);
 vi.mock("../bug-reports/agent-tools.js", () => bugReportTools);
 vi.mock("../portals/prompt.js", () => ({ threadPortalPrompt: () => "" }));
 vi.mock("../plugins/code/providers/wasm.js", () => ({ getCodeWasm: vi.fn() }));
-vi.mock("../settings/plugins/flue.js", () => ({
-  createPluginTool: plugins.createPluginTool,
-}));
 // A Space on Claude Code runs on its executor; this deployment has one.
 vi.mock("../executor/sandbox.js", async (importActual) => ({
   ...(await importActual<typeof import("../executor/sandbox.js")>()),
@@ -131,8 +137,6 @@ describe("DxAgent", () => {
     hooks.useSandbox.mockClear();
     hooks.useTool.mockReset();
     skills.readThreadSkillResource.mockClear();
-    plugins.createPluginTool.mockClear();
-    plugins.invokePluginLive.mockReset();
     runtime.execution.createSandbox.mockReset().mockResolvedValue({});
     runtime.selectModel.mockReset().mockImplementation(() => ({
       model: "cloudflare/@cf/zai-org/glm-5.3-flash",
@@ -168,16 +172,20 @@ describe("DxAgent", () => {
       } as never);
       DxAgent({ id: "thr_code" });
       expect(
-        hooks.useTool.mock.calls.map(
-          ([tool]) => (tool as { name: string }).name,
-        ),
+        hooks.useTool.mock.calls
+          .map(([tool]) => (tool as { name: string }).name)
+          // manage_dx is built in, mounted in every workspace Thread.
+          .filter((name) => name !== "manage_dx"),
       ).toEqual(expected);
     }
   });
 
   it("mounts first-party Search tools from the submission's resolved tool set", () => {
     const toolNames = () =>
-      hooks.useTool.mock.calls.map(([tool]) => (tool as { name: string }).name);
+      hooks.useTool.mock.calls
+        .map(([tool]) => (tool as { name: string }).name)
+        // manage_dx is built in, mounted in every workspace Thread.
+        .filter((name) => name !== "manage_dx");
     const submission = (tools: unknown) => ({
       plugins: { submissionId: "sub_1", tools },
     });
@@ -275,6 +283,7 @@ describe("DxAgent", () => {
       "artifact",
       "set_schedule",
       "request_attention",
+      "manage_dx",
     ]);
     // Only a report reader's submission gets the bug report tools.
     expect(bugReportTools.createBugReportTools).not.toHaveBeenCalled();
@@ -797,115 +806,43 @@ describe("DxAgent", () => {
     });
   });
 
-  it("mounts trusted plugin tools and dispatches lifecycle hooks through the isolated runtime", async () => {
-    const plugin = {
-      id: "plg_00000000-0000-4000-8000-000000000045",
-      version: "1.0.0",
-      name: "review-helper",
-      scope: "personal",
-      integrity: "a".repeat(64),
-      displayName: "Review helper",
-      description: "Review input.",
-      tools: [{ name: "summarize", description: "Summarize input." }],
-      lifecycle: ["agent-start", "agent-finish"],
-    };
-    hooks.useInitialData.mockReturnValue({
-      personalInstructions: "",
-      settingsRevision: 0,
-      settingsVersion: 1,
-      plugins: [plugin],
-    });
-    const threadId = "thr_00000000-0000-4000-8000-000000000045";
-    DxAgent({ id: threadId });
-
-    expect(plugins.createPluginTool).toHaveBeenCalledWith(threadId, {
-      id: plugin.id,
-      version: "1.0.0",
-      name: "summarize",
-      description: "Summarize input.",
-    });
-    expect(hooks.useTool).toHaveBeenCalledWith(
-      expect.objectContaining({ name: "summarize" }),
-    );
-    expect(hooks.useAgentStart).toHaveBeenCalledOnce();
-    expect(hooks.useAgentFinish).toHaveBeenCalledOnce();
-
-    const sandbox = {};
-    const log = { error: vi.fn() };
-    await hooks.useAgentStart.mock.calls[0]?.[0]({
-      harness: { sandbox },
-      log,
-    });
-    await hooks.useAgentFinish.mock.calls[0]?.[0]({
-      harness: { sandbox },
-      log,
-    });
-    expect(plugins.invokePluginLive).toHaveBeenNthCalledWith(
-      1,
-      threadId,
-      plugin.id,
-      "1.0.0",
-      { kind: "lifecycle", name: "agent-start" },
-      null,
-      sandbox,
-    );
-    expect(plugins.invokePluginLive).toHaveBeenNthCalledWith(
-      2,
-      threadId,
-      plugin.id,
-      "1.0.0",
-      { kind: "lifecycle", name: "agent-finish" },
-      null,
-      sandbox,
-    );
-  });
-
   it("names tool failures whose error has no message", async () => {
-    class PluginExecutionLimited extends Error {
-      override name = "PluginExecutionLimited";
+    class ToolLimited extends Error {
+      override name = "ToolLimited";
     }
-    const described = new Error("Plugin input is too large.");
-    plugins.createPluginTool
-      .mockReturnValueOnce({
+    const described = new Error("The input is too large.");
+    threadTools.createThreadTools.mockReturnValueOnce([
+      {
         name: "silent",
         run: vi.fn(async () => {
-          throw new PluginExecutionLimited();
+          throw new ToolLimited();
         }),
-      })
-      .mockReturnValueOnce({
+      },
+      {
         name: "described",
         run: vi.fn(async () => {
           throw described;
         }),
-      });
+      },
+    ]);
     hooks.useInitialData.mockReturnValue({
       personalInstructions: "",
       settingsRevision: 0,
       settingsVersion: 1,
-      plugins: [
-        {
-          id: "plg_00000000-0000-4000-8000-000000000046",
-          version: "1.0.0",
-          name: "limits",
-          scope: "personal",
-          integrity: "a".repeat(64),
-          displayName: "Limits",
-          description: "Limits.",
-          tools: [
-            { name: "silent", description: "Fails silently." },
-            { name: "described", description: "Fails with a message." },
-          ],
-          lifecycle: [],
-        },
-      ],
     });
     DxAgent({ id: "thr_00000000-0000-4000-8000-000000000046" });
 
-    const [silent, withMessage] = hooks.useTool.mock.calls.map(
-      ([tool]) => tool as { run: (context: unknown) => Promise<unknown> },
+    const mounted = hooks.useTool.mock.calls.map(
+      ([tool]) =>
+        tool as {
+          name: string;
+          run: (context: unknown) => Promise<unknown>;
+        },
     );
+    const silent = mounted.find(({ name }) => name === "silent");
+    const withMessage = mounted.find(({ name }) => name === "described");
     await expect(silent?.run({})).rejects.toThrow(
-      "silent failed: PluginExecutionLimited.",
+      "silent failed: ToolLimited.",
     );
     await expect(withMessage?.run({})).rejects.toBe(described);
   });

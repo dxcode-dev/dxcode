@@ -635,3 +635,17 @@
 .changes-toolbar[data-placeholder] {
   min-height: 38px;
 }
+
+.changes-ship-prompt summary {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+
+.changes-ship-prompt pre {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.75rem;
+  margin: 0.25rem 0 0;
+}

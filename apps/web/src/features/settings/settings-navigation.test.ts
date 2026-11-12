@@ -1,15 +1,23 @@
 import type { SettingsScope, WorkspaceRole } from "@dx/domain";
 import { describe, expect, it } from "vitest";
+import { registeredDeploymentSettingsSections } from "./deployment-settings-registration.js";
 import { settingsManifest } from "./foundation-sections.js";
 import { settingsNavigationSections } from "./settings-navigation.js";
 
+// What a deployment registers on top (none in the public export).
+const deploymentSections = new Set(
+  registeredDeploymentSettingsSections.map(({ id }) => id),
+);
+
 const menu = (scope: SettingsScope, workspaceRole?: WorkspaceRole) =>
-  settingsNavigationSections(scope, settingsManifest[scope], workspaceRole).map(
-    ({ heading, registrations }) => [
-      heading ?? null,
-      registrations.map(({ label }) => label),
-    ],
-  );
+  settingsNavigationSections(
+    scope,
+    settingsManifest[scope].filter(({ id }) => !deploymentSections.has(id)),
+    workspaceRole,
+  ).map(({ heading, registrations }) => [
+    heading ?? null,
+    registrations.map(({ label }) => label),
+  ]);
 
 describe("settings navigation", () => {
   it("shows only the settings features currently exposed in each menu", () => {
@@ -17,7 +25,7 @@ describe("settings navigation", () => {
       [null, ["Account", "Integrations & MCP", "Experimental Features"]],
       ["Usage", ["Model", "Orb", "Plugin usage"]],
       ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
-      ["Library", ["Secrets & Env Vars", "Skills", "Plugins"]],
+      ["Library", ["Secrets & Env Vars", "Skills", "Plugins", "Triggers"]],
       ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],
       [
         "Interface",

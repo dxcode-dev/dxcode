@@ -4,6 +4,7 @@ import type {
   ChoicesData,
   GraphData,
   OrbResolvedProvider,
+  PluginAgentModeData,
   ProjectData,
 } from "@dx/api";
 import {
@@ -20,6 +21,7 @@ import {
 } from "@dx/domain";
 import {
   ArrowRight,
+  Bot,
   Check,
   ChevronRight,
   Folder,
@@ -167,6 +169,15 @@ function RawModelList({
   );
 }
 
+type PickerTab = "modes" | "raw" | "plugins";
+
+/** The Plugin Agents tab's list, loaded when the tab first opens. */
+const PluginAgentList = React.lazy(() =>
+  import("./plugin-agent-list.js").then(({ PluginAgentList: List }) => ({
+    default: List,
+  })),
+);
+
 function ReasoningModeConsole({
   profile,
   onProfileChange,
@@ -180,7 +191,13 @@ function ReasoningModeConsole({
   effort,
   onEffortChange,
   onClaudeCodeSelect,
+  pluginAgentModes,
+  pluginAgentMode,
+  onPluginAgentSelect,
 }: {
+  readonly pluginAgentModes: ReadonlyArray<PluginAgentModeData>;
+  readonly pluginAgentMode: string | undefined;
+  readonly onPluginAgentSelect: (mode: string) => void;
   readonly profile: ModeId;
   readonly onProfileChange: (profile: ModeId) => void;
   readonly onFocusDial: () => void;
@@ -191,8 +208,8 @@ function ReasoningModeConsole({
   readonly routingGraph?: GraphData;
   readonly selectedModel: string | undefined;
   readonly onModelChange: (model: string | undefined) => void;
-  readonly pickerTab: "modes" | "raw";
-  readonly onPickerTabChange: (tab: "modes" | "raw") => void;
+  readonly pickerTab: PickerTab;
+  readonly onPickerTabChange: (tab: PickerTab) => void;
 }) {
   const [query, setQuery] = React.useState("");
   const mode =
@@ -265,7 +282,19 @@ function ReasoningModeConsole({
   return (
     <div className="reasoning-console">
       <div className="reasoning-console-toolbar">
-        {pickerTab === "raw" ? (
+        {pickerTab === "plugins" ? (
+          <input
+            className="reasoning-picker-search"
+            type="search"
+            aria-label="Search plugin agents"
+            placeholder="Choose a Plugin Agent…"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Escape") event.stopPropagation();
+            }}
+          />
+        ) : pickerTab === "raw" ? (
           <input
             className="reasoning-picker-search"
             type="search"
@@ -307,9 +336,39 @@ function ReasoningModeConsole({
           >
             Raw Models
           </button>
+          {pluginAgentModes.length === 0 ? null : (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={pickerTab === "plugins"}
+              data-active={pickerTab === "plugins" || undefined}
+              onClick={() => onPickerTabChange("plugins")}
+            >
+              Plugin Agents
+            </button>
+          )}
         </div>
       </div>
-      {pickerTab === "raw" ? (
+      {pickerTab === "plugins" ? (
+        <React.Suspense
+          fallback={
+            <p className="reasoning-raw-empty">Loading plugin agents…</p>
+          }
+        >
+          <PluginAgentList
+            modelName={(model) =>
+              modelDisplayName(
+                choices?.models.find(({ canonical }) => canonical === model)
+                  ?.name ?? model,
+              )
+            }
+            modes={pluginAgentModes}
+            selected={pluginAgentMode}
+            query={query}
+            onSelect={onPluginAgentSelect}
+          />
+        </React.Suspense>
+      ) : pickerTab === "raw" ? (
         <RawModelList
           choices={choices}
           routingGraph={routingGraph}
@@ -390,7 +449,13 @@ function ModePicker({
   onModelChange,
   effort,
   onEffortChange,
+  pluginAgentModes = [],
+  pluginAgentMode,
+  onPluginAgentModeChange,
 }: {
+  readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
+  readonly pluginAgentMode?: string;
+  readonly onPluginAgentModeChange?: (mode: string | undefined) => void;
   readonly profile: ModeId;
   readonly model: string | undefined;
   readonly choices: ChoicesData | undefined;
@@ -403,8 +468,15 @@ function ModePicker({
   readonly effort: ClaudeCodeEffort;
   readonly onEffortChange: (effort: ClaudeCodeEffort) => void;
 }) {
-  const [pickerTab, setPickerTab] = React.useState<"modes" | "raw">("modes");
-  const claudeCode = model !== undefined && isClaudeCodeModel(model);
+  const agent = pluginAgentModes.find(({ mode }) => mode === pluginAgentMode);
+  const [chosenTab, setPickerTab] = React.useState<PickerTab>();
+  // A Thread set to a plugin agent opens the picker on its tab.
+  const pickerTab =
+    chosenTab === "plugins" && pluginAgentModes.length === 0
+      ? "modes"
+      : (chosenTab ?? (agent === undefined ? "modes" : "plugins"));
+  const claudeCode =
+    agent === undefined && model !== undefined && isClaudeCodeModel(model);
   const modelName = (canonical: string) =>
     modelDisplayName(
       choices?.models.find((choice) => choice.canonical === canonical)?.name ??
@@ -413,8 +485,9 @@ function ModePicker({
 
   return (
     <Select.Root
-      // A pinned model (Claude Code or raw) means no mode is selected.
-      value={model === undefined ? profile : null}
+      // A pinned model (Claude Code or raw) or a plugin agent means no mode
+      // is selected.
+      value={model === undefined && agent === undefined ? profile : null}
       disabled={locked}
       open={open}
       onOpenChange={onOpenChange}
@@ -428,27 +501,44 @@ function ModePicker({
       <Select.Trigger
         className="new-thread-config-pill new-thread-mode"
         data-claude-code={claudeCode || undefined}
+        data-plugin-agent={agent === undefined ? undefined : true}
+        style={
+          agent?.color === undefined
+            ? undefined
+            : ({ "--plugin-agent-color": agent.color } as React.CSSProperties)
+        }
         aria-label={
-          claudeCode
-            ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
-            : model === undefined
-              ? `Reasoning mode: ${profile}`
-              : `Model: ${model}`
+          agent !== undefined
+            ? `Plugin agent: ${agent.label} from ${agent.plugin}`
+            : claudeCode
+              ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
+              : model === undefined
+                ? `Reasoning mode: ${profile}`
+                : `Model: ${model}`
         }
         title={
-          claudeCode
-            ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
-            : model === undefined
-              ? `Reasoning mode: ${profile}`
-              : `Model: ${model}`
+          agent !== undefined
+            ? `Plugin agent: ${agent.label} from ${agent.plugin}${agent.model === undefined ? "" : ` on ${agent.model}`}`
+            : claudeCode
+              ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
+              : model === undefined
+                ? `Reasoning mode: ${profile}`
+                : `Model: ${model}`
         }
       >
-        {claudeCode ? (
+        {agent !== undefined ? (
+          <Bot className="new-thread-mode-dial-icon new-thread-plugin-agent-icon" />
+        ) : claudeCode ? (
           <ClaudeIcon className="new-thread-mode-dial-icon" />
         ) : (
           <ModeDialIcon profile={profile} />
         )}
-        {claudeCode ? (
+        {agent !== undefined ? (
+          <>
+            <span className="new-thread-mode-label">Agent: </span>
+            <span className="new-thread-mode-value">{agent.label}</span>
+          </>
+        ) : claudeCode ? (
           <span className="new-thread-mode-value">
             {claudeCodeChipLabel(modelName(model), effort)}
           </span>
@@ -492,6 +582,12 @@ function ModePicker({
               }}
               pickerTab={pickerTab}
               onPickerTabChange={setPickerTab}
+              pluginAgentModes={pluginAgentModes}
+              pluginAgentMode={agent?.mode}
+              onPluginAgentSelect={(mode) => {
+                onPluginAgentModeChange?.(mode);
+                onOpenChange(false);
+              }}
               effort={effort}
               onEffortChange={onEffortChange}
               onClaudeCodeSelect={(next, close) => {
@@ -1022,6 +1118,9 @@ export function NewThreadConfigurationStrip({
   onModelChange,
   claudePlan,
   onClaudePlanChange,
+  pluginAgentModes,
+  pluginAgentMode,
+  onPluginAgentModeChange,
   dictationControls,
   dictationActive = false,
   dictationHideSubmit = false,
@@ -1063,6 +1162,9 @@ export function NewThreadConfigurationStrip({
   /** The Claude plan a Claude Code Thread is bound to; unset, dx picks one. */
   readonly claudePlan?: string;
   readonly onClaudePlanChange?: (connectionId: string | undefined) => void;
+  readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
+  readonly pluginAgentMode?: string;
+  readonly onPluginAgentModeChange?: (mode: string | undefined) => void;
   readonly dictationControls?: ReactNode;
   readonly dictationActive?: boolean;
   readonly dictationHideSubmit?: boolean;
@@ -1221,8 +1323,14 @@ export function NewThreadConfigurationStrip({
         onModelChange={onModelChange}
         effort={effort}
         onEffortChange={onEffortChange}
+        {...(pluginAgentModes === undefined ? {} : { pluginAgentModes })}
+        {...(pluginAgentMode === undefined ? {} : { pluginAgentMode })}
+        {...(onPluginAgentModeChange === undefined
+          ? {}
+          : { onPluginAgentModeChange })}
       />
-      {model !== undefined &&
+      {pluginAgentMode === undefined &&
+      model !== undefined &&
       isClaudeCodeModel(model) &&
       onClaudePlanChange !== undefined ? (
         <ClaudePlanPicker

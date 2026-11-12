@@ -19,6 +19,8 @@ import { makeE2BConnector } from "./e2b/connector.js";
 import { e2bExecutionProvider } from "./e2b/provider.js";
 import { makeFreestyleConnector } from "./freestyle/connector.js";
 import { freestyleExecutionProvider } from "./freestyle/provider.js";
+import { makeLizardConnector } from "./lizard/connector.js";
+import { lizardExecutionProvider } from "./lizard/provider.js";
 import { localExecutionProvider } from "./local/provider.js";
 
 /**
@@ -87,6 +89,12 @@ export const ORB_PROVIDER_MODULES: Readonly<
   boat: {
     execution: boatExecutionProvider as ExecutionProvider,
     connector: makeBoatConnector(),
+  },
+  // Deployment-only: its connector prepares the deployment's own account,
+  // and people can never connect one (`deploymentOnly`).
+  lizard: {
+    execution: lizardExecutionProvider as ExecutionProvider,
+    connector: makeLizardConnector(),
   },
   local: { execution: localExecutionProvider },
 });

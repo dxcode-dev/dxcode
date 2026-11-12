@@ -154,6 +154,8 @@ const bridge = `(() => {
 const shell = `(() => {
   let view = document.querySelector("iframe");
   let scheme;
+  // An MCP App's view hears only MCP Apps JSON-RPC, never dx's own messages.
+  let mcpApp = false;
   let loads = 0;
   const watch = (frame) => frame.addEventListener("load", () => {
     if (++loads > 1) parent.postMessage({ source: "${VIEW_FRAME_MESSAGE}", type: "escaped" }, "*");
@@ -162,11 +164,19 @@ const shell = `(() => {
   if (view) watch(view);
   addEventListener("message", (event) => {
     const data = event.data;
-    if (view && event.source === view.contentWindow && data?.source === "${VIEW_FRAME_MESSAGE}")
-      parent.postMessage(data, "*");
-    else if (event.source === parent && data?.source === "${VIEW_HOST_MESSAGE}") {
+    if (view && event.source === view.contentWindow) {
+      if (data?.source === "${VIEW_FRAME_MESSAGE}") parent.postMessage(data, "*");
+      // MCP Apps JSON-RPC, wrapped so the transcript knows which frame sent it.
+      else if (data?.jsonrpc === "2.0")
+        parent.postMessage({ source: "${VIEW_FRAME_MESSAGE}", type: "mcp", message: data }, "*");
+    } else if (event.source === parent && data?.source === "${VIEW_HOST_MESSAGE}") {
+      if (data.type === "mcp") {
+        if (data.message?.jsonrpc === "2.0") view?.contentWindow?.postMessage(data.message, "*");
+        return;
+      }
       if (data.type === "document") {
         if (view || typeof data.document !== "string") return;
+        mcpApp = data.mcpApp === true;
         view = document.createElement("iframe");
         view.setAttribute("sandbox", "allow-scripts");
         view.srcdoc = data.document;
@@ -174,6 +184,7 @@ const shell = `(() => {
         document.body.append(view);
         return;
       }
+      if (mcpApp) return;
       if (data.type === "scheme" && (data.scheme === "light" || data.scheme === "dark")) {
         scheme = data.scheme;
         document.documentElement.style.colorScheme = "only " + scheme;
@@ -211,6 +222,23 @@ export const viewFrameShell = () =>
 
 const leadingDoctype = /^(?:\s|<!--[\s\S]*?-->)*<!doctype[^>]*>/i;
 
+/**
+ * `head` placed first, so it applies before any of the view's own markup;
+ * the parser folds a later <html> or <head> tag into the same elements.
+ */
+const withHead = (source, head) => {
+  const doctype = leadingDoctype.exec(source);
+  return doctype === null
+    ? `<!doctype html>${head}${source}`
+    : `${source.slice(0, doctype[0].length)}${head}${source.slice(doctype[0].length)}`;
+};
+
+const mcpAppHead =
+  `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${contentSecurityPolicy}">` +
+  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  "<style>:root{color-scheme:light dark}html{background:transparent}</style>" +
+  `<script>${bridge}</script>`;
+
 const escapeAttribute = (value) =>
   value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
 
@@ -219,10 +247,21 @@ const escapeAttribute = (value) =>
  * bridge placed before anything of its own. `scheme` fixes light or dark, as
  * a preview does; without it the view follows the transcript.
  *
+ * An MCP App's view (`mcpApp`) gets the same CSP and bridge but neither
+ * dx's kit nor its tokens: it brings its own styles, and talks to the
+ * transcript in MCP Apps JSON-RPC, which the shell relays. Its resource's
+ * declared `connectDomains` and `resourceDomains` are not granted yet, so
+ * its CSP allows no request, which the MCP Apps spec lets a host require.
+ * The shell, told the view is an MCP App, relays it only JSON-RPC.
+ *
  * @param {string} source
- * @param {{ kit: { css: string; js: string; icons: string }; palette?: string; scheme?: "light" | "dark" }} options
+ * @param {{ kit: { css: string; js: string; icons: string }; palette?: string; scheme?: "light" | "dark"; mcpApp?: boolean }} options
  */
-export const viewDocument = (source, { kit, palette = "daydream", scheme }) => {
+export const viewDocument = (
+  source,
+  { kit, palette = "daydream", scheme, mcpApp = false },
+) => {
+  if (mcpApp) return withHead(source, mcpAppHead);
   const icons = kit.icons.replace(/<!--[\s\S]*?-->/g, "");
   const kitScript = kit.js.replace("'__DX_VIEW_ICONS__'", () =>
     JSON.stringify(icons),
@@ -238,12 +277,7 @@ export const viewDocument = (source, { kit, palette = "daydream", scheme }) => {
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     `<style>:root{${tokens(palette)}}${kit.css}${fixedScheme}</style>` +
     `<script>${bridge}</script><script>${kitScript}</script>`;
-  const doctype = leadingDoctype.exec(source);
-  // The head goes first so it applies before any of the view's own markup;
-  // the parser folds a later <html> or <head> tag into the same elements.
-  return doctype === null
-    ? `<!doctype html>${head}${source}`
-    : `${source.slice(0, doctype[0].length)}${head}${source.slice(doctype[0].length)}`;
+  return withHead(source, head);
 };
 
 /**

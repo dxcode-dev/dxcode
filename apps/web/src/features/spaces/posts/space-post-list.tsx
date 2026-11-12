@@ -6,7 +6,7 @@ import {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { MessagesSquare, Pencil, SmilePlus } from "lucide-react";
+import { MessagesSquare, Pencil } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
@@ -16,6 +16,10 @@ import {
   CommentText,
 } from "../../../shared/comments/comment-text.js";
 import { useTimeText } from "../../../shared/hooks/use-clock.js";
+import {
+  ReactionChips,
+  ReactionPicker,
+} from "../../../shared/reactions/reactions.js";
 import { Avatar, ParticipantStack } from "../../../shared/ui/avatar.js";
 import { Button } from "../../../shared/ui/button.js";
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
@@ -27,15 +31,8 @@ import { compactAge, dayLabel } from "../space-format.js";
 import { showLinkedPost } from "./focus-post.js";
 import { useSpacePeople } from "./space-people.js";
 import { SpacePostImages, SpacePostLinks } from "./space-post-files.js";
+import { postContent, postFailureText, postTime } from "./space-post-format.js";
 import {
-  postContent,
-  postFailureText,
-  postTime,
-  REACTION_EMOJI,
-  REACTION_NAME,
-} from "./space-post-format.js";
-import {
-  SPACE_POST_REACTIONS,
   type SpacePost,
   type SpacePostReaction,
   spacePostRevisionsQueryOptions,
@@ -57,91 +54,6 @@ function DayDivider({ at }: { readonly at: number }) {
 export interface SpacePostPermissions {
   readonly react: boolean;
   readonly comment: boolean;
-}
-
-/** One reaction's chip: its emoji and count, pressed when it is the viewer's. */
-function ReactionChip({
-  reaction,
-  enabled,
-  onToggle,
-}: {
-  readonly reaction: SpacePost["reactions"][number];
-  readonly enabled: boolean;
-  readonly onToggle: (reaction: SpacePostReaction, on: boolean) => void;
-}) {
-  const who = [
-    ...(reaction.mine ? ["You"] : []),
-    ...(reaction.agent ? ["dx"] : []),
-  ];
-  const others = reaction.count - who.length;
-  const label = `${REACTION_NAME[reaction.reaction]}: ${[
-    ...who,
-    ...(others > 0 ? [`${others} more`] : []),
-  ].join(", ")}`;
-  return (
-    <button
-      type="button"
-      className="space-reaction"
-      data-reaction={reaction.reaction}
-      data-agent={reaction.agent ? "" : undefined}
-      aria-pressed={reaction.mine}
-      aria-label={label}
-      title={label}
-      disabled={!enabled}
-      onClick={() => onToggle(reaction.reaction, !reaction.mine)}
-    >
-      <span aria-hidden="true">{REACTION_EMOJI[reaction.reaction]}</span>
-      <span className="space-reaction-count">{reaction.count}</span>
-    </button>
-  );
-}
-
-/** The five reactions, from the post's Add Reaction button. */
-function ReactionPicker({
-  post,
-  onToggle,
-}: {
-  readonly post: SpacePost;
-  readonly onToggle: (reaction: SpacePostReaction, on: boolean) => void;
-}) {
-  const [open, setOpen] = React.useState(false);
-  return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
-        className="space-post-action"
-        aria-label="Add Reaction"
-        title="Add Reaction"
-      >
-        <SmilePlus aria-hidden="true" />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner side="top" align="end" sideOffset={6}>
-          <Popover.Popup className="space-reaction-picker">
-            {SPACE_POST_REACTIONS.map((reaction) => {
-              const mine =
-                post.reactions.find((item) => item.reaction === reaction)
-                  ?.mine === true;
-              return (
-                <button
-                  key={reaction}
-                  type="button"
-                  aria-label={REACTION_NAME[reaction]}
-                  title={REACTION_NAME[reaction]}
-                  aria-pressed={mine}
-                  onClick={() => {
-                    setOpen(false);
-                    onToggle(reaction, !mine);
-                  }}
-                >
-                  {REACTION_EMOJI[reaction]}
-                </button>
-              );
-            })}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
-  );
 }
 
 /** The "edited" marker, which opens the post's earlier versions. */
@@ -459,7 +371,11 @@ function SpacePostRow({
         {editing || !(permissions.react || permissions.comment) ? null : (
           <div className="space-post-actions" data-side={side}>
             {permissions.react ? (
-              <ReactionPicker post={post} onToggle={toggle} />
+              <ReactionPicker
+                reactions={post.reactions}
+                onToggle={toggle}
+                triggerClassName="space-post-action"
+              />
             ) : null}
             {permissions.comment ? (
               <button
@@ -491,18 +407,11 @@ function SpacePostRow({
           {edited ? (
             <EditedMarker spaceThreadId={spaceThreadId} post={post} />
           ) : null}
-          {reactions.length > 0 ? (
-            <div className="space-reactions">
-              {reactions.map((reaction) => (
-                <ReactionChip
-                  key={reaction.reaction}
-                  reaction={reaction}
-                  enabled={permissions.react}
-                  onToggle={toggle}
-                />
-              ))}
-            </div>
-          ) : null}
+          <ReactionChips
+            reactions={reactions}
+            enabled={permissions.react}
+            onToggle={toggle}
+          />
         </div>
       ) : null}
       <RepliesRow spaceThreadId={spaceThreadId} post={post} side={side} />

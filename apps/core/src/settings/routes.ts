@@ -62,9 +62,9 @@ import {
   workspacePluginBundleRoutes,
 } from "./plugins/bundles/routes.js";
 import {
-  personalPluginRoutes,
-  workspacePluginRoutes,
-} from "./plugins/routes.js";
+  personalPluginCatalogRoutes,
+  workspacePluginCatalogRoutes,
+} from "./plugins/catalogs/routes.js";
 import {
   personalProjectDefaultsRoutes,
   workspaceProjectDefaultsRoutes,
@@ -257,7 +257,7 @@ settingsRoutes.route(
 );
 settingsRoutes.route("/personal/orb-providers", personalOrbProviderRoutes);
 settingsRoutes.route("/personal/plugin-bundles", personalPluginBundleRoutes);
-settingsRoutes.route("/personal/plugins", personalPluginRoutes);
+settingsRoutes.route("/personal/plugin-catalogs", personalPluginCatalogRoutes);
 settingsRoutes.route("/personal/skills", personalSkillRoutes);
 settingsRoutes.route("/personal/usage", personalUsageRoutes);
 settingsRoutes.route("/personal/orb-usage", personalOrbUsageRoutes);
@@ -301,8 +301,8 @@ settingsRoutes.route(
   workspacePluginBundleRoutes,
 );
 settingsRoutes.route(
-  "/workspaces/:workspaceSlug/plugins",
-  workspacePluginRoutes,
+  "/workspaces/:workspaceSlug/plugin-catalogs",
+  workspacePluginCatalogRoutes,
 );
 settingsRoutes.route("/workspaces/:workspaceSlug/skills", workspaceSkillRoutes);
 settingsRoutes.route(

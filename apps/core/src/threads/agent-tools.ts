@@ -7,6 +7,7 @@ import {
   claudePlanBlockedUntil,
   claudePlanWindowName,
   isClaudeCodeModel,
+  isDeploymentOnlyOrbProvider,
   ModeId,
   orbProviderBetaFeature,
   pickClaudePlan,
@@ -526,6 +527,80 @@ export const createThreadTools = (
   };
 
   /**
+   * create_thread in a plugin's agent mode: the child runs as the plugin's
+   * agent, on the agent's model or this Thread's, in the caller's Project.
+   */
+  const startPluginModeChild = async (
+    context: ThreadToolsContext,
+    owner: CallingThread,
+    request: {
+      readonly agentMode: string;
+      readonly prompt: string | undefined;
+      readonly title: string | undefined;
+      readonly projectId: string | undefined;
+      readonly bugReport: boolean;
+      readonly orbChoice: boolean;
+    },
+  ) => {
+    if (owner.space)
+      throw new Error(
+        "A Space runs no plugin code, so it cannot start a plugin's agent mode. Start the child in a dx mode instead.",
+      );
+    if (request.bugReport || request.prompt === undefined)
+      throw new Error("A plugin agent mode's Thread needs a prompt.");
+    if (request.orbChoice)
+      throw new Error(
+        "A plugin agent mode decides its own model; omit orb_provider, orb_size, and claude_plan.",
+      );
+    const [{ findPluginAgentMode }, { startAgentThread }] = await Promise.all([
+      import("../plugins/agents/modes.js"),
+      import("../plugins/agents/threads.js"),
+    ]);
+    const mode = await findPluginAgentMode(
+      context.bindings,
+      context.db,
+      callingThreadId,
+      request.agentMode,
+    );
+    const started = await startAgentThread({
+      bindings: context.bindings,
+      db: context.db,
+      install: mode.install,
+      ownerUserId: owner.ownerUserId,
+      definition: mode.definition,
+      modeKey: mode.key,
+      prompt: request.prompt,
+      ...(request.title === undefined ? {} : { title: request.title }),
+      parent: {
+        threadId: callingThreadId,
+        ...(request.projectId === undefined
+          ? {}
+          : { projectId: request.projectId }),
+        selection: owner.selection,
+      },
+      startedBy: "agent",
+      ...(context.waitUntil === undefined
+        ? {}
+        : { waitUntil: context.waitUntil }),
+    });
+    // The child counts as working until its activity shows.
+    if (started.submissionId !== undefined) {
+      const children = startedChildren.get(callingThreadId) ?? new Map();
+      children.set(started.threadId, {
+        submissionId: started.submissionId,
+        until: Date.now() + STARTED_CHILD_MS,
+      });
+      startedChildren.set(callingThreadId, children);
+    }
+    return {
+      threadId: started.threadId,
+      projectId: request.projectId ?? null,
+      agentMode: request.agentMode,
+      agent: mode.label,
+    };
+  };
+
+  /**
    * The project a child joins when the call names none: the caller's. A
    * projectless Thread's child is projectless too; the route resolves the
    * owner's projectless defaults when no project is named.
@@ -720,7 +795,7 @@ export const createThreadTools = (
           v.pipe(
             v.string(),
             v.description(
-              "How much model effort the child gets: low, medium, high, or ultra. Or claude-code, or claude-code/<model> from list_agent_modes, to run the child through Claude Code on the owner's Claude Pro/Max plan. Defaults to this Thread's mode.",
+              "How much model effort the child gets: low, medium, high, or ultra. Or claude-code, or claude-code/<model> from list_agent_modes, to run the child through Claude Code on the owner's Claude Pro/Max plan. Or plugin:<plugin>/<key> from list_agent_modes' pluginModes, to run the child as an installed plugin's agent, with its instructions, tools, and model. Defaults to this Thread's mode.",
             ),
           ),
         ),
@@ -740,6 +815,23 @@ export const createThreadTools = (
             throw new Error(
               "create_thread needs either prompt or bug_report, not both.",
             );
+          if (data.agent_mode?.startsWith("plugin:"))
+            return {
+              output: await startPluginModeChild(context, owner, {
+                agentMode: data.agent_mode,
+                prompt: data.prompt,
+                title: data.title,
+                projectId:
+                  data.project_id === undefined
+                    ? defaultProjectId(owner)
+                    : data.project_id,
+                bugReport: data.bug_report !== undefined,
+                orbChoice:
+                  data.orb_provider !== undefined ||
+                  data.orb_size !== undefined ||
+                  data.claude_plan !== undefined,
+              }),
+            };
           const selection: ThreadModelSelection | undefined =
             data.agent_mode === undefined
               ? owner.selection
@@ -1212,11 +1304,13 @@ export const createThreadTools = (
                   ...new Set(settings.catalog.profiles.map((p) => p.adapter)),
                 ].map((adapter) => ({ adapter, displayName: adapter }))
               )
-                // A beta provider the owner has not turned on (#1924) is
-                // not offered, so it is not listed either.
+                // A beta provider the owner has not turned on (#1924), or a
+                // deployment-only one not offered to them (a deployment's
+                // own offer before it launches), is not listed either.
                 .filter(
                   ({ adapter }) =>
-                    orbProviderBetaFeature(adapter) === undefined ||
+                    (orbProviderBetaFeature(adapter) === undefined &&
+                      !isDeploymentOnlyOrbProvider(adapter)) ||
                     resolved.some(({ providerId }) => providerId === adapter),
                 )
                 .map((provider) => {
@@ -1252,18 +1346,31 @@ export const createThreadTools = (
     defineTool({
       name: "list_agent_modes",
       description: description([
-        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. When the owner has turned on the automatic plan pick, each plan also shows its running Threads, and claudeAutoPlan names the plan dx picks for a Claude Code child that names none, and why. Also returns this Thread's mode, which a child gets by default.",
+        "List the agent modes a child Thread can run in (low, medium, high, ultra) with the model and thinking level each uses for this Thread's owner, and whether a connection serves that model now. pluginModes lists agents installed plugins offer, each with its own instructions, tools, and model; pass its mode, plugin:<plugin>/<key>, as agent_mode. When the owner has connected a Claude Pro/Max plan, it also lists claude-code/<model> modes, which run the child through Claude Code, and claudePlans: each plan's ID, its limits and reset times as Claude Code last reported them, and until when it is used up. When the owner has turned on the automatic plan pick, each plan also shows its running Threads, and claudeAutoPlan names the plan dx picks for a Claude Code child that names none, and why. Also returns this Thread's mode, which a child gets by default.",
         "Call it before create_thread when the user asks for a mode or a model. Pass the mode to create_thread as agent_mode. For Claude Code, pass a plan's ID as claude_plan; when claudeAutoPlan is listed, omit claude_plan to take it unless the user names a plan. A child stays on its plan; it never moves to another.",
       ]),
       input: v.object({}),
       run: async () =>
         withContext(async (context, owner) => {
-          const { response, payload } = await ownerRequest(
-            context,
-            owner,
-            "GET",
-            "/v1/settings/personal/model-routing/choices",
-          );
+          // A Space runs no plugin code, so it has no plugin modes.
+          const [{ response, payload }, pluginModes] = await Promise.all([
+            ownerRequest(
+              context,
+              owner,
+              "GET",
+              "/v1/settings/personal/model-routing/choices",
+            ),
+            owner.space
+              ? []
+              : import("../plugins/agents/modes.js").then(
+                  ({ listPluginAgentModes }) =>
+                    listPluginAgentModes(
+                      context.bindings,
+                      context.db,
+                      callingThreadId,
+                    ),
+                ),
+          ]);
           if (!response.ok)
             throw routeFailure("list_agent_modes", response.status, payload);
           const choices = payload?.data as
@@ -1329,6 +1436,22 @@ export const createThreadTools = (
                     agent: "Claude Code",
                   })),
               ],
+              ...(pluginModes.length === 0
+                ? {}
+                : {
+                    pluginModes: pluginModes.map((mode) => ({
+                      mode: mode.agentMode,
+                      label: mode.label,
+                      plugin: mode.install.displayName,
+                      ...(mode.description === undefined
+                        ? {}
+                        : { description: mode.description }),
+                      model: mode.definition.model ?? "this Thread's mode",
+                      ...(mode.definition.reasoningEffort === undefined
+                        ? {}
+                        : { reasoningEffort: mode.definition.reasoningEffort }),
+                    })),
+                  }),
               ...((choices?.claudePlans ?? []).length === 0
                 ? {}
                 : {

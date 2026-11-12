@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import {
+  type PluginPaneRequest,
   THREAD_OPEN_VIEW_EVENT,
   takeThreadViewRequest,
 } from "../../../shared/commands/thread-open-view-event.js";
@@ -35,11 +36,13 @@ const eventSnapshot = () => 0;
 
 /**
  * Runs `open` for each view a Thread command asks this Thread's page to
- * open, and for one asked of it just before it opened.
+ * open, and for one asked of it just before it opened; `openPlugin` for each
+ * plugin pane a plugin asks it to open.
  */
 export const useOpenViewCommands = (
   threadId: ThreadId,
   open: (view: PaneViewKind) => void,
+  openPlugin?: (request: PluginPaneRequest) => void,
 ) => {
   const subscribe = (_notify: () => void) => {
     const listener = (event: Event) => {
@@ -48,6 +51,10 @@ export const useOpenViewCommands = (
       ).detail;
       if (detail?.threadId !== undefined && detail.threadId !== threadId)
         return;
+      if (detail?.view === "plugin") {
+        openPlugin?.(detail as unknown as PluginPaneRequest);
+        return;
+      }
       if (detail?.threadId !== undefined) takeThreadViewRequest(threadId);
       if (isViewKind(detail?.view)) open(detail.view);
     };
@@ -63,7 +70,9 @@ export const useOpenViewCommands = (
 const servable = (contents: PaneContents) => (tab: ThreadPaneTab) =>
   tab.kind === "file"
     ? contents.dirtyTabs.has(tabId(tab))
-    : tab.kind === "agent" || contents.views[tab.kind] !== undefined;
+    : tab.kind === "plugin"
+      ? contents.plugin !== undefined
+      : tab.kind === "agent" || contents.views[tab.kind] !== undefined;
 
 /**
  * The layout an archived Thread shows. Its Orb is stopped, so the saved
@@ -136,7 +145,18 @@ export function ThreadPageLayout({
     if (contents.views[view] === undefined) return;
     React.startTransition(() => dispatch({ type: "open-view", view }));
   };
-  useOpenViewCommands(threadId, openView);
+  const openPluginPane = (tab: {
+    readonly plugin: string;
+    readonly pane: string;
+    readonly title: string;
+  }) => {
+    if (contents.plugin === undefined) return;
+    const { plugin, pane, title } = tab;
+    React.startTransition(() =>
+      dispatch({ type: "open-plugin-pane", tab: { plugin, pane, title } }),
+    );
+  };
+  useOpenViewCommands(threadId, openView, openPluginPane);
   const page = mode.stacked ? (
     <div className="mobile-thread-region thread-page" data-stacked="">
       {renderTitleBar({ views: null, stacked: true })}
@@ -155,6 +175,7 @@ export function ThreadPageLayout({
               layout={layout}
               contents={contents}
               onOpen={openView}
+              onOpenPluginPane={openPluginPane}
               onNewTerminal={() =>
                 React.startTransition(() => dispatch({ type: "new-terminal" }))
               }

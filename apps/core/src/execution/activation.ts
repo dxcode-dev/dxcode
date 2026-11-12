@@ -28,6 +28,7 @@ import type {
   ExecutionContext,
   ExecutionGuest,
   ExecutionProvider,
+  ExecutionProviderId,
   ExecutionRunAdmission,
   ExecutionWorkspaceCreateOptions,
   ExecutionWorkspaceHandle,
@@ -451,6 +452,17 @@ export const admitExecutionRun = (threadId: string): ExecutionRunAdmission =>
     Effect.runSync(decodeD1Binding((env as Bindings).DB)),
     threadId,
   );
+
+/** Failures of the person's own setup or account, not of dx. */
+const PERSON_CAUSED_FAILURES = new Set([
+  "workspace_disk_full",
+  "pre_clone_script_failed",
+  "source_authorization_denied",
+  "orb_start_refused",
+]);
+
+const personCaused = (cause: unknown) =>
+  cause instanceof FlueError && PERSON_CAUSED_FAILURES.has(cause.type);
 
 /**
  * Starts a daemon activation's Thread check (`assertThreadActive`) beside
@@ -1093,6 +1105,28 @@ const activationFor =
         );
       } catch (cause) {
         timing.log("error");
+        // dx could not make the Orb usable: the person is not charged for
+        // it. Their own setup failing (a pre-clone script, a full disk, a
+        // revoked source) or a billing refusal is theirs.
+        if (!personCaused(cause))
+          await (hooks.orbBilling ?? noOrbBilling)
+            .startFailed?.({
+              threadId,
+              operation: existingOnly ? "connect" : "create",
+              account: context.account,
+              providerId: context.profile.adapter as ExecutionProviderId,
+              runnerProfileId: context.profile.id,
+            })
+            .catch((error: unknown) => {
+              executionWorkspaceLogger.warn(
+                "An unusable Orb's charges could not be refunded.",
+                {
+                  event: "orb_unusable_refund_failed",
+                  threadId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              );
+            });
         if (needsFirstReadiness) reportPreparation(null);
         // Queued after waking, ready clears it in the browser.
         else if (wakeStatusPublished)

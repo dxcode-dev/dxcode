@@ -234,6 +234,9 @@ export const deleteWorkspace = async (
       `UPDATE trusted_plugin SET enabled = 0, removed_at = ?2, updated_at = ?2
         WHERE scope = 'workspace' AND target_id = ?1 AND removed_at IS NULL`,
     ),
+    statement(
+      `DELETE FROM plugin_catalog WHERE scope = 'workspace' AND target_id = ?1`,
+    ),
     // Settings and policies.
     ...[
       "workspace_project_defaults",

@@ -6,6 +6,7 @@ import type { OrbProviderPricing } from "./descriptor.js";
 import { dockerOrbProvider } from "./docker.js";
 import { e2bOrbProvider } from "./e2b.js";
 import { freestyleOrbProvider } from "./freestyle.js";
+import { lizardOrbProvider } from "./lizard.js";
 import { localOrbProvider } from "./local.js";
 
 /**
@@ -19,6 +20,7 @@ export const ORB_PROVIDERS = [
   freestyleOrbProvider,
   dockerOrbProvider,
   boatOrbProvider,
+  lizardOrbProvider,
   localOrbProvider,
 ] as const;
 
@@ -62,6 +64,16 @@ export const orbProviderBetaFeature = (
   const provider: { readonly betaFeature?: string } | undefined =
     findOrbProvider(providerId);
   return provider?.betaFeature;
+};
+
+/**
+ * Whether only a deployment's own account runs the provider, under the
+ * deployment's own name: people and workspaces never connect it.
+ */
+export const isDeploymentOnlyOrbProvider = (providerId: string): boolean => {
+  const provider: { readonly deploymentOnly?: true } | undefined =
+    findOrbProvider(providerId);
+  return provider?.deploymentOnly === true;
 };
 
 /** One runner-profile configuration, whichever provider it names. */

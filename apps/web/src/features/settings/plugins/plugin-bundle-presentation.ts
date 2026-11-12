@@ -20,12 +20,19 @@ export const plural = (count: number, one: string, many: string) =>
   `${count} ${count === 1 ? one : many}`;
 
 export const sourceLabel = (source: PluginBundleData["source"]) =>
-  source.type === "zip"
+  source.type !== "github"
     ? source.label
-    : `${source.repository}${source.path === "" ? "" : `/${source.path}`} @ ${source.commit.slice(0, 7)}`;
+    : `${source.catalog === undefined ? "" : `${source.catalog.name} catalog · `}${source.repository}${source.path === "" ? "" : `/${source.path}`} @ ${source.commit.slice(0, 7)}`;
 
 /** The row hint: only when the plugin cannot fully work as shown. */
-export const bundleHint = (bundle: PluginBundleData) =>
-  bundle.enabled && bundle.mcpServers.some(({ reviewed }) => !reviewed)
-    ? "Review MCP tools"
+export const bundleHint = (bundle: PluginBundleData) => {
+  if (bundle.overlap?.kind === "paused") {
+    return `Paused: ${bundle.overlap.workspaceName} provides it`;
+  }
+  if (bundle.enabled && bundle.mcpServers.some(({ reviewed }) => !reviewed)) {
+    return "Review MCP tools";
+  }
+  return bundle.overlap?.kind === "replacing"
+    ? `Used instead of ${bundle.overlap.workspaceName}'s copy`
     : undefined;
+};

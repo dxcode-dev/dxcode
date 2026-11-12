@@ -209,6 +209,19 @@ const boatApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("boat")
     ? operatorEnvironment.BOAT_API_KEY?.trim()
     : undefined;
+// Lizard on the deployment's own account (a hosted offer's Orbs): hosted
+// targets only, with its project and optional region; a self-host never.
+const lizardSettings =
+  target === "selfhost"
+    ? {}
+    : Object.fromEntries(
+        ["LIZARD_API_KEY", "LIZARD_PROJECT_ID", "LIZARD_REGION"].flatMap(
+          (name) => {
+            const value = operatorEnvironment[name]?.trim();
+            return value ? [[name, value]] : [];
+          },
+        ),
+      );
 // Bug report forwarding (#1661). Hosted targets read the environment: the
 // central deployment and its intake key, and the intake secret that makes
 // this one central. A self-host opts in with the `bugReportForwarding` and
@@ -240,6 +253,30 @@ const bugReportReaders =
         .map((email) => email.trim())
         .filter(Boolean)
         .join(",");
+// Deployment administrators. Self-host records the list in its config;
+// hosted targets read the environment. None unless set.
+const deploymentAdminEmails =
+  selfhostConfig !== undefined
+    ? (selfhostConfig.deploymentAdminEmails ?? []).join(",")
+    : (process.env.DX_DEPLOYMENT_ADMIN_EMAILS ?? "")
+        .split(",")
+        .map((email) => email.trim())
+        .filter(Boolean)
+        .join(",");
+// Secret configuration for the modules a deployment registers itself, as
+// one JSON object. Public dx registers none; only dx's own deploys set it.
+const deploymentPrivateConfig =
+  operatorEnvironment.DX_DEPLOYMENT_PRIVATE_CONFIG?.trim() || undefined;
+if (deploymentPrivateConfig !== undefined) {
+  let parsed;
+  try {
+    parsed = JSON.parse(deploymentPrivateConfig);
+  } catch {
+    throw new Error("DX_DEPLOYMENT_PRIVATE_CONFIG must be a JSON object.");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("DX_DEPLOYMENT_PRIVATE_CONFIG must be a JSON object.");
+}
 // Attachment bytes move straight between browsers, dxd, and R2 when the
 // deployment can mint the bucket-scoped token Core signs URLs with. Alchemy
 // OAuth cannot create tokens, so those self-hosts carry the bytes through
@@ -734,6 +771,13 @@ const environment = {
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
   ...(boatApiKey ? { BOAT_API_KEY: boatApiKey } : {}),
+  ...lizardSettings,
+  ...(deploymentAdminEmails
+    ? { DX_DEPLOYMENT_ADMIN_EMAILS: deploymentAdminEmails }
+    : {}),
+  ...(deploymentPrivateConfig
+    ? { DX_DEPLOYMENT_PRIVATE_CONFIG: deploymentPrivateConfig }
+    : {}),
   ...(bugReportReaders ? { DX_BUG_REPORT_READERS: bugReportReaders } : {}),
   ...(bugReportDestination
     ? { DX_BUG_REPORT_DESTINATION: bugReportDestination }

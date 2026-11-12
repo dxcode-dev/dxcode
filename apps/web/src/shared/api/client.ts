@@ -74,7 +74,6 @@ import {
   type EnvironmentVariableData,
   EnvironmentVariablesErrorResponseSchema,
   ExperimentalFeaturesErrorResponseSchema,
-  ExportSkillResponseSchema,
   ExportWorkspaceUsageAuditResponseSchema,
   ExportWorkspaceUsageResponseSchema,
   type ExternalApiApplicationAuditEventData,
@@ -105,9 +104,7 @@ import {
   GitHubDisconnectResponseSchema,
   type GitHubGrantData,
   GraphResponseSchema,
-  ImportSkillResponseSchema,
   InspectWorkspacePrivateThreadResponseSchema,
-  InstallPluginBundleResponseSchema,
   IntegrationsErrorResponseSchema,
   LeaveWorkspaceResponseSchema,
   ListBrowserSessionsResponseSchema,
@@ -122,12 +119,9 @@ import {
   ListPersonalApiTokensResponseSchema,
   ListPersonalIntegrationsResponseSchema,
   ListPersonalModelSubscriptionsResponseSchema,
-  ListPluginBundlesResponseSchema,
-  ListPluginsResponseSchema,
   ListPluginTriggersResponseSchema,
   ListProjectsResponseSchema,
   ListSharedThreadsResponseSchema,
-  ListSkillsResponseSchema,
   ListThreadsResponseSchema,
   ListWorkspaceInviteLinksResponseSchema,
   ListWorkspaceMembersResponseSchema,
@@ -159,17 +153,10 @@ import {
   PersonalUsageErrorResponseSchema,
   type PersonalUsageExportData,
   PinThreadResponseSchema,
-  type PluginBundlePreviewData,
   PluginBundlesErrorResponseSchema,
-  type PluginBundleUpdatePreviewData,
-  PluginsErrorResponseSchema,
   PluginTriggersErrorResponseSchema,
   PollPersonalModelSubscriptionAuthorizationResponseSchema,
   PreviewBulkEnvironmentVariablesResponseSchema,
-  PreviewPluginBundleResponseSchema,
-  PreviewPluginBundleUpdateResponseSchema,
-  PreviewPluginResponseSchema,
-  PreviewSkillResponseSchema,
   ProfileResponseSchema,
   type ProjectData,
   type ProjectDefaultsData,
@@ -177,17 +164,12 @@ import {
   ProjectIconNotImageResponseSchema,
   ProjectIconTooLargeResponseSchema,
   ProjectOrbScriptsForbiddenResponseSchema,
-  PublishPluginVersionResponseSchema,
-  PublishSkillVersionResponseSchema,
   PushStateResponseSchema,
   type PutModeRequestSchema,
   RebindProjectSourceResponseSchema,
   RefreshPersonalModelSubscriptionResponseSchema,
   type RegisterPushDeviceRequest,
-  RemovePluginBundleResponseSchema,
-  RemovePluginResponseSchema,
   type RemovePushDeviceRequest,
-  RemoveSkillResponseSchema,
   RemoveWorkspaceMemberResponseSchema,
   type ReorderConnectionsRequestSchema,
   ReorderConnectionsResponseSchema,
@@ -224,7 +206,6 @@ import {
   type SigningKeysData,
   SigningKeysErrorResponseSchema,
   SignOutMcpOAuthResponseSchema,
-  type SkillData,
   SkillsErrorResponseSchema,
   SnoozeThreadResponseSchema,
   SourceControlDeniedResponseSchema,
@@ -243,7 +224,6 @@ import {
   ThreadPortalPublicErrorResponseSchema,
   ThreadSharingErrorResponseSchema,
   TimeZoneResponseSchema,
-  TrustPluginResponseSchema,
   type UpdateConnectionRequestSchema,
   UpdateEnvironmentVariableResponseSchema,
   type UpdateExternalApiApplicationRequest,
@@ -258,16 +238,10 @@ import {
   type UpdatePersonalComposerDefaultsRequest,
   UpdatePersonalComposerDefaultsResponseSchema,
   UpdatePersonalExperimentalFeatureResponseSchema,
-  UpdatePluginBundleResponseSchema,
-  UpdatePluginBundleSourceResponseSchema,
-  UpdatePluginStateResponseSchema,
   UpdatePluginTriggerStateResponseSchema,
-  UpdatePluginWorkspacePolicyResponseSchema,
   UpdateProjectDefaultsResponseSchema,
   UpdateProjectNameConflictResponseSchema,
   UpdateProjectResponseSchema,
-  UpdateSkillStateResponseSchema,
-  UpdateSkillWorkspacePolicyResponseSchema,
   type UpdateSpaceAgentModelRequestSchema,
   type UpdateThreadRequest,
   UpdateThreadResponseSchema,
@@ -307,10 +281,7 @@ import type {
   OrbProviderCredentials,
   PageCursor,
   PersonalApiTokenId,
-  PluginGrantedPermissions,
   PluginId,
-  PluginImportBundle,
-  PluginIntegrity,
   PluginTriggerDeliveryId,
   PluginTriggerId,
   PluginVersion,
@@ -318,10 +289,6 @@ import type {
   ProjectId,
   ProviderRepositoryId,
   RunnerProfileId,
-  SkillId,
-  SkillImportBundle,
-  SkillIntegrity,
-  SkillVersion,
   ThreadId,
   WorkspacePermission,
   WorkspacePolicyRestrictions,
@@ -366,6 +333,33 @@ export class ApiError extends Error {
 type RefusalSchema = Schema.ConstraintDecoder<{
   readonly data: { readonly code: string; readonly message: string };
 }>;
+
+/**
+ * A dx route that answers with a file, such as a plugin export: its bytes,
+ * or an ApiError carrying the route's refusal message.
+ */
+export const requestBlob = async (
+  path: string,
+  init?: RequestInit,
+): Promise<Blob> => {
+  const response = await observeRequest(path, init?.method, () =>
+    fetch(path, { ...init, credentials: "same-origin" }),
+  );
+  noticeUnauthenticated(response);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => undefined)) as
+      | { data?: { message?: unknown; code?: unknown } }
+      | undefined;
+    throw new ApiError(
+      response.status,
+      typeof body?.data?.message === "string"
+        ? body.data.message
+        : "Request failed.",
+      typeof body?.data?.code === "string" ? body.data.code : undefined,
+    );
+  }
+  return response.blob();
+};
 
 export const request = async <
   SchemaType extends Schema.ConstraintDecoder<unknown>,
@@ -455,7 +449,6 @@ export const request = async <
         WorkspaceUsageErrorResponseSchema,
         McpServersErrorResponseSchema,
         SkillsErrorResponseSchema,
-        PluginsErrorResponseSchema,
         PluginBundlesErrorResponseSchema,
         FirstPartyPluginErrorResponseSchema,
         DictationVocabularyErrorResponseSchema,
@@ -718,261 +711,9 @@ export type SkillsTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
 
-const skillsBase = (target: SkillsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/skills"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/skills`;
-
-export const listSkills = async (target: SkillsTarget, signal?: AbortSignal) =>
-  (await request(skillsBase(target), ListSkillsResponseSchema, { signal }))
-    .data;
-
-export const previewSkill = async (
-  target: SkillsTarget,
-  bundle: SkillImportBundle,
-) =>
-  (
-    await request(`${skillsBase(target)}/preview`, PreviewSkillResponseSchema, {
-      method: "POST",
-      body: JSON.stringify(bundle),
-    })
-  ).data;
-
-export const importSkill = async (
-  target: SkillsTarget,
-  bundle: SkillImportBundle,
-  reviewedIntegrity: SkillIntegrity,
-  enabled = false,
-): Promise<SkillData> =>
-  (
-    await request(skillsBase(target), ImportSkillResponseSchema, {
-      method: "POST",
-      body: JSON.stringify({ bundle, reviewedIntegrity, enabled }),
-    })
-  ).data;
-
-export const publishSkillVersion = async (
-  target: SkillsTarget,
-  skillId: SkillId,
-  bundle: SkillImportBundle,
-  reviewedIntegrity: SkillIntegrity,
-  activate: boolean,
-): Promise<SkillData> =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}/versions`,
-      PublishSkillVersionResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({ bundle, reviewedIntegrity, activate }),
-      },
-    )
-  ).data;
-
-export const updateSkillState = async (
-  target: SkillsTarget,
-  skillId: SkillId,
-  input: {
-    readonly enabled?: boolean;
-    readonly activeVersion?: SkillVersion;
-    readonly pinned?: boolean;
-  },
-): Promise<SkillData> =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}`,
-      UpdateSkillStateResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify(input),
-      },
-    )
-  ).data;
-
-export const removeSkill = async (target: SkillsTarget, skillId: SkillId) =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}`,
-      RemoveSkillResponseSchema,
-      {
-        method: "DELETE",
-      },
-    )
-  ).data.removedSkillId;
-
-export const exportSkill = async (
-  target: SkillsTarget,
-  skillId: SkillId,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(
-      `${skillsBase(target)}/${encodeURIComponent(skillId)}/export`,
-      ExportSkillResponseSchema,
-      { signal },
-    )
-  ).data;
-
-export const updateSkillWorkspacePolicy = async (
-  target: Extract<SkillsTarget, { readonly scope: "workspace" }>,
-  allowPersonalSkills: boolean,
-) =>
-  (
-    await request(
-      `${skillsBase(target)}/policy`,
-      UpdateSkillWorkspacePolicyResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ allowPersonalSkills }),
-      },
-    )
-  ).data;
-
 export type PluginsTarget =
   | { readonly scope: "personal" }
   | { readonly scope: "workspace"; readonly workspaceSlug: WorkspaceSlug };
-
-const pluginsBase = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/plugins"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugins`;
-
-/** Plugin bundles in Claude Code's format: skills, commands, and MCP servers. */
-const pluginBundlesBase = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/plugin-bundles"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugin-bundles`;
-
-export type PluginBundleUpload =
-  | { readonly type: "zip"; readonly file: File }
-  | { readonly type: "github"; readonly url: string };
-
-export const listPluginBundles = async (
-  target: PluginsTarget,
-  signal?: AbortSignal,
-) =>
-  (
-    await request(pluginBundlesBase(target), ListPluginBundlesResponseSchema, {
-      signal,
-    })
-  ).data;
-
-const zipInit = (file: File): RequestInit => ({
-  method: "POST",
-  body: file,
-  headers: { "content-type": "application/zip" },
-});
-
-export const previewPluginBundle = async (
-  target: PluginsTarget,
-  upload: PluginBundleUpload,
-) =>
-  (
-    await request(
-      upload.type === "zip"
-        ? `${pluginBundlesBase(target)}/preview?name=${encodeURIComponent(upload.file.name)}`
-        : `${pluginBundlesBase(target)}/preview`,
-      PreviewPluginBundleResponseSchema,
-      upload.type === "zip"
-        ? zipInit(upload.file)
-        : { method: "POST", body: JSON.stringify({ url: upload.url }) },
-    )
-  ).data;
-
-/** Installs what the person reviewed: the same ZIP, or the pinned commit. */
-export const installPluginBundle = async (
-  target: PluginsTarget,
-  upload: PluginBundleUpload,
-  preview: PluginBundlePreviewData,
-) =>
-  (
-    await request(
-      upload.type === "zip"
-        ? `${pluginBundlesBase(target)}?name=${encodeURIComponent(upload.file.name)}&integrity=${preview.integrity}`
-        : pluginBundlesBase(target),
-      InstallPluginBundleResponseSchema,
-      upload.type === "zip"
-        ? zipInit(upload.file)
-        : {
-            method: "POST",
-            body: JSON.stringify({
-              source: preview.source,
-              reviewedIntegrity: preview.integrity,
-            }),
-          },
-    )
-  ).data;
-
-/**
- * Reads an installed plugin's source again: the latest commit of its GitHub
- * ref, or `file` for a plugin imported from a ZIP.
- */
-export const previewPluginBundleUpdate = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-  file?: File,
-) =>
-  (
-    await request(
-      file === undefined
-        ? `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update/preview`
-        : `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update/preview?name=${encodeURIComponent(file.name)}`,
-      PreviewPluginBundleUpdateResponseSchema,
-      file === undefined
-        ? { method: "POST", body: JSON.stringify({}) }
-        : zipInit(file),
-    )
-  ).data;
-
-/** Installs the reviewed update: the same ZIP, or the previewed commit. */
-export const updatePluginBundle = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-  preview: PluginBundleUpdatePreviewData,
-  file?: File,
-) =>
-  (
-    await request(
-      file === undefined
-        ? `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update`
-        : `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/update?name=${encodeURIComponent(file.name)}&integrity=${preview.integrity}`,
-      UpdatePluginBundleSourceResponseSchema,
-      file === undefined
-        ? {
-            method: "POST",
-            body: JSON.stringify({
-              source: preview.source,
-              reviewedIntegrity: preview.integrity,
-            }),
-          }
-        : zipInit(file),
-    )
-  ).data;
-
-export const setPluginBundleEnabled = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-  enabled: boolean,
-) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}`,
-      UpdatePluginBundleResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ enabled }) },
-    )
-  ).data;
-
-export const removePluginBundle = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}`,
-      RemovePluginBundleResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
 
 /** First-party plugins (Search, …): enablement, provider, and credential per scope. */
 const firstPartyPluginsBase = (target: PluginsTarget) =>
@@ -1148,105 +889,6 @@ export const setOrbProviderWorkspacePolicy = async (
     )
   ).data;
 
-export const listPlugins = async (
-  target: PluginsTarget,
-  signal?: AbortSignal,
-) =>
-  (await request(pluginsBase(target), ListPluginsResponseSchema, { signal }))
-    .data;
-
-export const previewPlugin = async (
-  target: PluginsTarget,
-  bundle: PluginImportBundle,
-) =>
-  (
-    await request(
-      `${pluginsBase(target)}/preview`,
-      PreviewPluginResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify(bundle),
-      },
-    )
-  ).data;
-
-export const trustPlugin = async (
-  target: PluginsTarget,
-  bundle: PluginImportBundle,
-  reviewedIntegrity: PluginIntegrity,
-  grants: PluginGrantedPermissions,
-) =>
-  (
-    await request(pluginsBase(target), TrustPluginResponseSchema, {
-      method: "POST",
-      body: JSON.stringify({ bundle, reviewedIntegrity, grants }),
-    })
-  ).data;
-
-export const publishPluginVersion = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-  bundle: PluginImportBundle,
-  reviewedIntegrity: PluginIntegrity,
-  grants: PluginGrantedPermissions,
-) =>
-  (
-    await request(
-      `${pluginsBase(target)}/${encodeURIComponent(pluginId)}/versions`,
-      PublishPluginVersionResponseSchema,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          bundle,
-          reviewedIntegrity,
-          grants,
-          activate: true,
-        }),
-      },
-    )
-  ).data;
-
-export const updatePluginState = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-  input: { readonly enabled?: boolean; readonly activeVersion?: PluginVersion },
-) =>
-  (
-    await request(
-      `${pluginsBase(target)}/${encodeURIComponent(pluginId)}`,
-      UpdatePluginStateResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify(input),
-      },
-    )
-  ).data;
-
-export const removePlugin = async (target: PluginsTarget, pluginId: PluginId) =>
-  (
-    await request(
-      `${pluginsBase(target)}/${encodeURIComponent(pluginId)}`,
-      RemovePluginResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data.removedPluginId;
-
-export const updatePluginWorkspacePolicy = async (
-  target: Extract<PluginsTarget, { readonly scope: "workspace" }>,
-  allowPersonalPlugins: boolean,
-) =>
-  (
-    await request(
-      `${pluginsBase(target)}/policy`,
-      UpdatePluginWorkspacePolicyResponseSchema,
-      {
-        method: "PATCH",
-        body: JSON.stringify({ allowPersonalPlugins }),
-      },
-    )
-  ).data.allowPersonalPlugins;
-
-/** Records the browser's IANA zone, where schedules without DTSTART anchor. */
 export const updateTimeZone = async (timeZone: string) =>
   (
     await request("/v1/settings/personal/time-zone", TimeZoneResponseSchema, {

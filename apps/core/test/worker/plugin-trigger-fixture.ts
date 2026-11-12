@@ -1,11 +1,24 @@
 import { env } from "cloudflare:test";
-import { pluginPermissionsEmpty } from "@dx/domain";
-import { Effect } from "effect";
-import { previewPluginImport } from "../../src/settings/plugins/import.js";
 
 export const pluginTriggerOwner = "plugin-trigger-owner";
 const timestamp = "2026-08-23T00:00:00.000Z";
 
+/** The event a code plugin's webhook trigger takes. */
+export const PLUGIN_TRIGGER_EVENT = "trigger.received";
+
+const sha256 = async (value: string) =>
+  Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+    ),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+/**
+ * A personal install of a plugin whose code handles `trigger.received`,
+ * with an active webhook trigger for it. The handler succeeds unless the
+ * delivery's data has `fail: true`.
+ */
 export const setupPluginTrigger = async (
   options: {
     readonly idempotent?: boolean;
@@ -16,65 +29,43 @@ export const setupPluginTrigger = async (
   const idempotent = options.idempotent ?? true;
   const pluginId = `plg_${crypto.randomUUID()}`;
   const triggerId = `trg_${crypto.randomUUID()}`;
+  const name = `com.example.trigger-${crypto.randomUUID().slice(0, 8)}`;
+  const entry = "dev.dxcode/index.js";
+  const source = `export default (dx) => dx.on("trigger.received", (event) => {
+  if (event.data && event.data.fail) throw new Error("The delivery failed.");
+});`;
+  const moduleIntegrity = await sha256(source);
+  const integrity = await sha256(`${name}:${moduleIntegrity}`);
+  const version = `1.0.0+${integrity.slice(0, 12)}`;
   const manifest = {
-    schemaVersion: 1,
-    name: `trigger-${crypto.randomUUID().slice(0, 8)}`,
+    format: "agent-plugins",
+    name,
     displayName: "Webhook receiver",
-    description: "Receives an authenticated webhook in the isolated runtime.",
+    description: "Receives a webhook in its Dynamic Worker.",
     version: "1.0.0",
-    entrypoint: "main.mjs",
-    tools: [],
-    commands: [],
-    lifecycle: [],
-    triggers: [
-      {
-        name: "receive-event",
-        description: "Receive the bounded webhook event.",
-        source: "webhook",
-        event: "build.completed",
-        action: "receive-event",
-        idempotent,
-      },
-    ],
-    uiSurfaces: [],
-    permissions: {
-      tools: [],
-      commands: [],
-      lifecycle: [],
-      triggers: ["receive-event"],
-      uiSurfaces: [],
-      networkDestinations: [],
-      secretNames: [],
-      filesystem: [],
-      mcpServerIds: [],
-      agentCapabilities: [],
-    },
-  };
-  const preview = await Effect.runPromise(
-    previewPluginImport({
-      source: { type: "browser-files", label: "Trigger fixture" },
-      files: [
+    skills: [],
+    mcpServers: [],
+    code: {
+      apiVersion: 1,
+      host: "worker",
+      entry,
+      modules: [
         {
-          path: "plugin.json",
-          kind: "file",
-          mediaType: "application/json",
-          encoding: "utf-8",
-          content: JSON.stringify(manifest),
-        },
-        {
-          path: "main.mjs",
-          kind: "file",
-          mediaType: "text/javascript",
-          encoding: "utf-8",
-          content:
-            "export const triggers = { 'receive-event': async ({ input }) => input };",
+          path: entry,
+          bytes: new TextEncoder().encode(source).byteLength,
+          integrity: moduleIntegrity,
         },
       ],
-    }),
-  );
-  const grants = {
-    ...pluginPermissionsEmpty(),
-    triggers: ["receive-event"],
+      permissions: {
+        events: [PLUGIN_TRIGGER_EVENT],
+        network: [],
+        secrets: [],
+        tools: [],
+        ai: false,
+      },
+      settings: [],
+    },
+    skipped: [],
   };
   await env.DB.batch([
     env.DB.prepare(
@@ -89,48 +80,48 @@ export const setupPluginTrigger = async (
     env.DB.prepare(
       `INSERT INTO trusted_plugin (
          id, scope, target_id, name, enabled, active_version, health_status,
-         created_at, updated_at
-       ) VALUES (?, 'personal', ?, ?, 1, '1.0.0', 'unchecked', ?, ?)`,
-    ).bind(pluginId, pluginTriggerOwner, manifest.name, timestamp, timestamp),
+         created_at, updated_at, kind
+       ) VALUES (?, 'personal', ?, ?, 1, ?, 'unchecked', ?, ?, 'bundle')`,
+    ).bind(pluginId, pluginTriggerOwner, name, version, timestamp, timestamp),
     env.DB.prepare(
       `INSERT INTO trusted_plugin_version (
          plugin_id, version, manifest_json, grants_json, source_json,
          integrity, trusted, trusted_at, trusted_by_user_id
-       ) VALUES (?, '1.0.0', ?, ?, ?, ?, 1, ?, ?)`,
+       ) VALUES (?, ?, ?, '{}', ?, ?, 1, ?, ?)`,
     ).bind(
       pluginId,
-      JSON.stringify(preview.manifest),
-      JSON.stringify(grants),
-      JSON.stringify(preview.source),
-      preview.integrity,
+      version,
+      JSON.stringify(manifest),
+      JSON.stringify({ type: "zip", label: "trigger.zip" }),
+      integrity,
       timestamp,
       pluginTriggerOwner,
     ),
-    ...preview.files.map((file) =>
-      env.DB.prepare(
-        `INSERT INTO trusted_plugin_file (
-           plugin_id, version, path, media_type, content, size_bytes, integrity
-         ) VALUES (?, '1.0.0', ?, ?, ?, ?, ?)`,
-      ).bind(
-        pluginId,
-        file.path,
-        file.mediaType,
-        file.content,
-        file.sizeBytes,
-        file.integrity,
-      ),
+    env.DB.prepare(
+      `INSERT INTO trusted_plugin_file (
+         plugin_id, version, path, media_type, content, size_bytes, integrity
+       ) VALUES (?, ?, ?, 'text/javascript', ?, ?, ?)`,
+    ).bind(
+      pluginId,
+      version,
+      entry,
+      source,
+      new TextEncoder().encode(source).byteLength,
+      moduleIntegrity,
     ),
     env.DB.prepare(
       `INSERT INTO plugin_trigger (
          id, owner_user_id, plugin_id, plugin_version, capability_name,
          source, event_type, action_name, idempotent, status, capability_hash,
          hmac_reference_json, created_at, updated_at, rotated_at
-       ) VALUES (?, ?, ?, '1.0.0', 'receive-event', 'webhook',
-                 'build.completed', 'receive-event', ?, 'active', ?, ?, ?, ?, ?)`,
+       ) VALUES (?, ?, ?, ?, 'webhook', 'webhook', ?, 'webhook', ?, 'active',
+                 ?, ?, ?, ?, ?)`,
     ).bind(
       triggerId,
       pluginTriggerOwner,
       pluginId,
+      version,
+      PLUGIN_TRIGGER_EVENT,
       idempotent ? 1 : 0,
       options.capabilityHash ??
         crypto.randomUUID().replaceAll("-", "").repeat(2),

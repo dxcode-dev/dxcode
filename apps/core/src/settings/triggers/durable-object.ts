@@ -8,12 +8,8 @@ import {
 } from "@dx/domain";
 import { Effect, Result } from "effect";
 import type { Bindings } from "../../http/types.js";
-import {
-  invokePluginTrigger,
-  PluginExecutionForbidden,
-  PluginExecutionLimited,
-  PluginIsolationLive,
-} from "../plugins/execution.js";
+import { deliverCodePluginTrigger } from "../../plugins/worker-host/triggers.js";
+import { logPluginFailure } from "../../plugins/worker-host/worker.js";
 import {
   loadAuthorizedTriggerDelivery,
   TriggerDeliveryForbidden,
@@ -493,18 +489,27 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
       await this.#schedule();
       return;
     }
-    const outcome = await Effect.runPromise(
-      Effect.result(
-        invokePluginTrigger(
-          this.env,
-          triggerId,
-          delivery.id,
-          delivery.event_id,
-          delivery.idempotency_key,
-          delivery.attempts,
-          payload,
-        ).pipe(Effect.provide(PluginIsolationLive(this.env))),
-      ),
+    const authorized = authorization.success;
+    // The trigger's plugin code runs on its Dynamic Worker.
+    const outcome = await deliverCodePluginTrigger(
+      this.env,
+      this.env.DB as D1Database,
+      {
+        install: authorized.install,
+        ownerUserId: authorized.trigger.ownerUserId,
+        triggerId,
+        deliveryId: delivery.id,
+        eventId: delivery.event_id,
+        idempotencyKey: delivery.idempotency_key,
+        attempt: delivery.attempts,
+        payload,
+      },
+    ).then(
+      (value) => Result.succeed(value),
+      (error: unknown) => {
+        logPluginFailure(authorized.install, "trigger.received", error);
+        return Result.fail(error);
+      },
     );
     const currentAuthorization = await this.#authorization(triggerId);
     const now = Date.now();
@@ -522,10 +527,9 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
       );
       action = "plugin_trigger.delivery_succeeded";
     } else if (
-      (Result.isFailure(currentAuthorization) &&
-        currentAuthorization.failure instanceof TriggerDeliveryForbidden &&
-        currentAuthorization.failure.reason !== "paused") ||
-      outcome.failure instanceof PluginExecutionForbidden
+      Result.isFailure(currentAuthorization) &&
+      currentAuthorization.failure instanceof TriggerDeliveryForbidden &&
+      currentAuthorization.failure.reason !== "paused"
     ) {
       this.#sql.exec(
         `UPDATE trigger_delivery
@@ -539,7 +543,11 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
       );
       action = "plugin_trigger.delivery_cancelled";
     } else {
-      const limited = outcome.failure instanceof PluginExecutionLimited;
+      // The worker host names a timed-out handler; that is a limit, not an
+      // outage.
+      const limited =
+        outcome.failure instanceof Error &&
+        /took longer than/.test(outcome.failure.message);
       const maximumAttempts = delivery.idempotent
         ? MAX_TRIGGER_DELIVERY_ATTEMPTS
         : 1;

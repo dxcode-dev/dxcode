@@ -17,11 +17,17 @@ export interface ZipEntry {
   readonly size: number;
   readonly localOffset: number;
   readonly symlink: boolean;
+  /** A Unix entry with any execute bit set. */
+  readonly executable: boolean;
   readonly encrypted: boolean;
 }
 
 export type ZipText =
   | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly reason: string };
+
+export type ZipBytes =
+  | { readonly ok: true; readonly bytes: Uint8Array }
   | { readonly ok: false; readonly reason: string };
 
 export interface ZipArchive {
@@ -33,6 +39,11 @@ export interface ZipArchive {
     entry: ZipEntry,
     maxBytes: number,
   ) => Effect.Effect<ZipText, PluginBundleRejected>;
+  /** Reads a file's bytes, for binary files such as an icon. */
+  readonly readBytes: (
+    entry: ZipEntry,
+    maxBytes: number,
+  ) => Effect.Effect<ZipBytes, PluginBundleRejected>;
 }
 
 export interface ZipLimits {
@@ -201,11 +212,12 @@ export const readZipArchive = Effect.fn("readZipArchive")(function* (
       size,
       localOffset,
       symlink: unix && ((external >>> 16) & S_IFMT) === S_IFLNK,
+      executable: unix && ((external >>> 16) & 0o111) !== 0,
       encrypted: (flags & 1) === 1,
     });
   }
 
-  const readText = Effect.fn("ZipArchive.readText")(function* (
+  const readBytes = Effect.fn("ZipArchive.readBytes")(function* (
     entry: ZipEntry,
     maxBytes: number,
   ) {
@@ -262,8 +274,17 @@ export const readZipArchive = Effect.fn("readZipArchive")(function* (
       if (inflated.byteLength !== entry.size) return yield* notZip();
       content = inflated;
     }
+    return { ok: true, bytes: content } as const;
+  });
+
+  const readText = Effect.fn("ZipArchive.readText")(function* (
+    entry: ZipEntry,
+    maxBytes: number,
+  ) {
+    const read = yield* readBytes(entry, maxBytes);
+    if (!read.ok) return read;
     try {
-      const text = decoder.decode(content);
+      const text = decoder.decode(read.bytes);
       if (text.includes("\0")) {
         return { ok: false, reason: "The file is not UTF-8 text." } as const;
       }
@@ -273,5 +294,5 @@ export const readZipArchive = Effect.fn("readZipArchive")(function* (
     }
   });
 
-  return { comment, entries, readText } satisfies ZipArchive;
+  return { comment, entries, readText, readBytes } satisfies ZipArchive;
 });

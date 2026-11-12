@@ -1,41 +1,11 @@
 import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
-import { CircleAlert, Library, PlugZap } from "lucide-react";
+import { CircleAlert, KeyRound, Library, PlugZap } from "lucide-react";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
-import {
-  PluginBundleGroup,
-  type PluginBundleGroupItem,
-} from "./plugin-bundle-group.js";
+import { changeItems, permissionItems } from "./plugin-bundle-changes.js";
+import { PluginBundleGroup } from "./plugin-bundle-group.js";
 import { type BundleRun, plural } from "./plugin-bundle-presentation.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
-
-const label = {
-  added: "Added",
-  changed: "Changed",
-  removed: "Removed",
-  unchanged: "Unchanged",
-} as const;
-
-// Changes first, in the order a person checks them.
-const order = { added: 0, changed: 1, removed: 2, unchanged: 3 } as const;
-
-const changeItems = (
-  items: ReadonlyArray<{
-    readonly name: string;
-    readonly endpoint?: string;
-    readonly change: keyof typeof label;
-    readonly credentialsCleared?: boolean;
-  }>,
-): ReadonlyArray<PluginBundleGroupItem> =>
-  items
-    .toSorted((left, right) => order[left.change] - order[right.change])
-    .map(({ name, endpoint, change, credentialsCleared }) => ({
-      key: name,
-      name,
-      ...(endpoint === undefined ? {} : { detail: endpoint }),
-      status: credentialsCleared ? "Credentials cleared" : label[change],
-      tone: credentialsCleared ? "removed" : change,
-    }));
 
 /** The reviewed update of an installed plugin: what changes, then Update. */
 export function PluginBundleUpdate({
@@ -62,7 +32,8 @@ export function PluginBundleUpdate({
     credentialsCleared ? [name] : [],
   );
   const serversToReview = update.mcpServers.some(
-    ({ change }) => change === "added" || change === "changed",
+    ({ change, command }) =>
+      command === undefined && (change === "added" || change === "changed"),
   );
   return (
     <div className="plugin-bundle-form">
@@ -71,17 +42,27 @@ export function PluginBundleUpdate({
         <PluginBundleSourceLine
           source={update.source}
           version={update.manifest.version}
+          signature={update.signature}
         />
         <DialogDescription>
           {update.upToDate
             ? "This plugin already matches its source."
             : changed === 0
-              ? "Only details that dx does not import changed."
+              ? update.manifest.code === undefined
+                ? "Only details that dx does not import changed."
+                : update.permissions.changes.length === 0
+                  ? "Its code changed; it asks for the same permissions."
+                  : "Its code and permissions changed."
               : `${plural(changed, "item changes", "items change")}. Unchanged items keep their settings.`}
         </DialogDescription>
       </header>
       {update.upToDate ? null : (
         <div className="plugin-bundle-items">
+          <PluginBundleGroup
+            icon={<KeyRound aria-hidden="true" />}
+            title="Permissions"
+            items={permissionItems(update.permissions.changes)}
+          />
           <PluginBundleGroup
             icon={<Library aria-hidden="true" />}
             title="Skills"
@@ -113,6 +94,14 @@ export function PluginBundleUpdate({
           )}
         </div>
       )}
+      {!update.upToDate && update.permissions.widens ? (
+        <p className="plugin-bundle-help plugin-bundle-warning" role="note">
+          This version asks for more than you approved.
+          {bundle.scope === "workspace"
+            ? " Updating grants it for every member of the workspace."
+            : ""}
+        </p>
+      ) : null}
       {!update.upToDate && cleared.length > 0 ? (
         <p className="plugin-bundle-help plugin-bundle-warning" role="note">
           Credentials cleared because the server address changed:{" "}
@@ -158,13 +147,19 @@ export function PluginBundleUpdate({
                   pluginId: bundle.id,
                   preview: update,
                   ...(file === undefined ? {} : { file }),
+                  // Pressing Update here accepts the grants listed above.
+                  acceptPermissions: update.permissions.widens,
                 },
                 `${bundle.displayName} updated.`,
               );
               if (updated) onDone();
             }}
           >
-            {busy ? "Updating…" : "Update"}
+            {busy
+              ? "Updating…"
+              : update.permissions.widens
+                ? "Accept and update"
+                : "Update"}
           </Button>
         )}
       </footer>

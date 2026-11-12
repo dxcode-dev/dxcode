@@ -153,6 +153,13 @@ export const deleteProject = async (
       `DELETE FROM environment_variable
         WHERE scope = 'project' AND target_id = ?1 AND ${deletedNow}`,
     ),
+    // Storage of the plugins the project's repository carried.
+    statement(
+      `DELETE FROM repository_plugin_storage
+        WHERE substr(plugin_id, 1, length('repository:' || ?1 || ':'))
+              = 'repository:' || ?1 || ':'
+          AND ${deletedNow}`,
+    ),
     // A kept Thread is read-only for good: everyone's unsent drafts go.
     statement(
       `DELETE FROM thread_draft

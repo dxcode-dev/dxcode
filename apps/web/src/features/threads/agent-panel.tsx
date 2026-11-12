@@ -66,6 +66,7 @@ import {
 import {
   INBOUND_MESSAGE_PREFIX,
   ThreadTranscript,
+  TRANSCRIPT_FOLLOW_ON_SEND,
   type TranscriptFocus,
 } from "./thread-transcript.js";
 import type { TranscriptAccess } from "./transcript-access.js";
@@ -307,6 +308,8 @@ type ThreadErrorPresentation = {
   readonly failedSend?: FailedSend;
   /** A Claude plan limit: the card carries the Claude mark and a usage link. */
   readonly claudePlan?: boolean;
+  /** An app page that fixes it, such as where to add credits. */
+  readonly link?: { readonly actionLabel: string; readonly actionHref: string };
 };
 
 const CLAUDE_USAGE_URL = "https://claude.ai/settings/usage";
@@ -448,6 +451,26 @@ const preCloneFailurePresentation = (
 };
 
 /**
+ * The Thread runs a plugin's agent, and the plugin no longer runs for its
+ * owner: dx refused the turn rather than run it as plain dx. Retry once the
+ * plugin is enabled or installed again.
+ */
+const pluginAgentFailurePresentation = (
+  id: string,
+  text: string,
+): ThreadErrorPresentation | undefined => {
+  const stamp = /\(dx_failure:[a-z]+:PLUGIN_AGENT_UNAVAILABLE\)/.exec(text);
+  if (stamp === null) return undefined;
+  const start = text.indexOf("This Thread runs the");
+  return {
+    id,
+    title: "Plugin agent unavailable",
+    message: text.slice(Math.max(start, 0), stamp.index).trim(),
+    action: "resume",
+  };
+};
+
+/**
  * Core refused the run at Orb start: its source grant changed, or the
  * deployment's Orb billing policy refused it with a reason. Or the Orb's
  * disk became read-only, and the details say what dx did about it.
@@ -471,11 +494,15 @@ const orbStartDenial = (error: unknown) => {
       title: typeof message === "string" ? message : "The Orb is slow to start",
       message: typeof details === "string" ? details : "",
     };
-  if (type === "orb_start_refused")
+  if (type === "orb_start_refused") {
+    const action = (error as { meta?: ThreadErrorPresentation["link"] }).meta;
     return {
       title: "Orb not started",
       message: typeof message === "string" ? message : "",
+      // Only a page of this app: never a link the error could send elsewhere.
+      link: /^\/\w/.test(action?.actionHref ?? "") ? action : undefined,
     };
+  }
   if (type !== "source_authorization_denied") return undefined;
   return {
     title: typeof message === "string" ? message : "Source access needed",
@@ -535,6 +562,13 @@ const threadErrorPresentation = (
         )
       : undefined;
     if (preCloneFailure !== undefined) return preCloneFailure;
+    const pluginAgentFailure = latestSettlementFailed
+      ? pluginAgentFailurePresentation(
+          `settlement:${latestSettlement.submissionId}`,
+          errorSearchText(latestSettlement.error),
+        )
+      : undefined;
+    if (pluginAgentFailure !== undefined) return pluginAgentFailure;
     const startDenied = latestSettlementFailed
       ? orbStartDenial(latestSettlement.error)
       : undefined;
@@ -599,6 +633,9 @@ const threadErrorPresentation = (
     const preCloneFailure = preCloneFailurePresentation(id, failureText);
     if (!dismissed.has(id) && preCloneFailure !== undefined)
       return preCloneFailure;
+    const pluginAgentFailure = pluginAgentFailurePresentation(id, failureText);
+    if (!dismissed.has(id) && pluginAgentFailure !== undefined)
+      return pluginAgentFailure;
     if (!dismissed.has(id)) {
       return {
         id,
@@ -649,8 +686,16 @@ function ThreadErrorCard({
         <div className="thread-error-copy">
           <strong>{error.title}</strong>
           <span>{error.message}</span>
-          {retryAction || settingsAction || error.claudePlan ? (
+          {retryAction || settingsAction || error.claudePlan || error.link ? (
             <div className="thread-error-actions">
+              {error.link && (
+                <a
+                  className={buttonVariants({ variant: "ghost", size: "xs" })}
+                  href={error.link.actionHref}
+                >
+                  {error.link.actionLabel}
+                </a>
+              )}
               {retryAction ? (
                 <Button
                   type="button"
@@ -808,11 +853,19 @@ const observeComposerDock = (node: HTMLDivElement) => {
     // Read both before writing, so one layout serves both. A hidden pane
     // measures zero; keep its heights so showing it changes nothing.
     const dockHeight = node.offsetHeight;
-    // The editing bar sits on the box; the transcript's controls clear both.
+    // The editing bar or the quick-action chips sit on the box; the
+    // transcript's controls clear them too. Measured from the top of what
+    // shows (a chip, not the row's scroll padding).
+    const above =
+      node.querySelector<HTMLElement>(".composer-editing-bar") ??
+      node.querySelector<HTMLElement>(".thread-quick-action");
     const composerHeight =
-      composer.offsetHeight +
-      (node.querySelector<HTMLElement>(".composer-editing-bar")?.offsetHeight ??
-        0);
+      above === null
+        ? composer.offsetHeight
+        : Math.round(
+            composer.getBoundingClientRect().bottom -
+              above.getBoundingClientRect().top,
+          );
     if (dockHeight === 0 && composerHeight === 0) return;
     pane.style.setProperty("--agent-composer-dock-height", `${dockHeight}px`);
     pane.style.setProperty("--agent-composer-height", `${composerHeight}px`);
@@ -1814,6 +1867,11 @@ export function AgentPanel({
     ReadonlySet<string>
   >("discarded-sends", () => new Set());
   const retainedDraft = useThreadPresentationValue("draft", "");
+  // The transcript's jump to the end, called when the person sends.
+  const followOnSend = useThreadPresentationValue<(() => void) | undefined>(
+    TRANSCRIPT_FOLLOW_ON_SEND,
+    undefined,
+  );
   const draftValue = ownerDraft ?? retainedDraft;
   // The composer's Reply, which a transcript selection quotes into.
   const composerReply = React.useRef<TranscriptReply>(undefined);
@@ -2042,11 +2100,12 @@ export function AgentPanel({
             onRemoveImage={(image) => {
               setImages(imageCollection.remove(image.id));
             }}
-            onSubmit={(submittedDraft) =>
+            onSubmit={(submittedDraft) => {
+              followOnSend.get()?.();
               void (isEditing
                 ? messageEditing.submit(submittedDraft)
-                : submit(submittedDraft))
-            }
+                : submit(submittedDraft));
+            }}
             onTakeScreenshot={() => void takeScreenshot()}
             ref={composerLifetimeRef}
           />

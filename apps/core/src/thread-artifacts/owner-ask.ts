@@ -173,3 +173,65 @@ export const addOwnerAsk = async (
     "People kept saving the artifact while the ask was added. Read it, add the ask yourself, and call request_attention again with its artifact_id.",
   );
 };
+
+/**
+ * Ticks the owner's open ask in `artifactId` whose text holds `marker`, and
+ * appends `outcome`, as `writer`'s save. A tick by a person wakes the
+ * Thread (`ask-effects.ts`), so the agent hears the outcome of something it
+ * asked about that was decided elsewhere, such as a skill proposal decided
+ * on the Skills settings page. Best effort: an ask already ticked, edited
+ * away, or lost to newer saves is left as it is.
+ */
+export const settleOwnerAsk = async (
+  bindings: ThreadToolsContext["bindings"],
+  input: {
+    readonly threadId: string;
+    readonly artifactId: string;
+    readonly marker: string;
+    readonly outcome: string;
+    /** A person's save wakes the Thread; the agent's own does not. */
+    readonly writer: ArtifactWriter;
+  },
+): Promise<boolean> => {
+  const { writer } = input;
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    const current = await readArtifact(
+      bindings,
+      input.threadId,
+      input.artifactId,
+    );
+    if (current === undefined) return false;
+    const lines = current.markdown.split("\n");
+    const index = lines.findIndex(
+      (line) => /^\s*[-*+] \[ \] /.test(line) && line.includes(input.marker),
+    );
+    if (index === -1) return false;
+    lines[index] =
+      `${(lines[index] ?? "").replace(/\[ \]/, "[x]").trimEnd()} ${input.outcome}`;
+    const result = await saveArtifact(bindings, {
+      threadId: input.threadId,
+      artifactId: input.artifactId,
+      baseRevision: current.artifact.revision,
+      markdown: lines.join("\n"),
+      writer,
+    });
+    if (result.kind === "conflict") continue;
+    if (result.kind !== "saved") return false;
+    await publishRealtimeInvalidation(
+      bindings,
+      input.threadId as ThreadId,
+      "artifacts.invalidated",
+    );
+    await artifactSaved(bindings, {
+      threadId: input.threadId,
+      artifactId: result.value.artifact.id,
+      title: result.value.artifact.title,
+      revision: result.value.artifact.revision,
+      before: result.previous,
+      after: result.value.markdown,
+      writer,
+    });
+    return true;
+  }
+  return false;
+};

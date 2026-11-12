@@ -32,6 +32,7 @@ import { automationKeys } from "../features/threads/automations/automations-quer
 import { bugReportAccessQueryOptions } from "../features/threads/bug-reports/bug-report-queries.js";
 import { cacheCreatedThread } from "../features/threads/thread-mutations.js";
 import {
+  pluginUiQueryOptions,
   threadKeys,
   threadsQueryOptions,
 } from "../features/threads/thread-queries.js";
@@ -473,6 +474,16 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
       issues: [],
       pullRequests: [],
       ciRuns: [],
+    });
+    // So are the Thread's plugin prompts, actions, and link patterns.
+    client.setQueryData(pluginUiQueryOptions(thread.id).queryKey, {
+      prompts: [],
+      notices: [],
+      quickActions: [],
+      commands: [],
+      linkPatterns: [],
+      panes: [],
+      linkRemark: null,
     });
     const routeIdentities = new Set<symbol>();
     const ThreadRoute = () => {

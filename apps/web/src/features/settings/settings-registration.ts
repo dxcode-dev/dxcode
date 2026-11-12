@@ -4,6 +4,7 @@ import {
   SettingsSectionSlug,
   type WorkspaceSlug,
 } from "@dx/domain";
+import type { UseQueryOptions } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import type { ComponentType, SVGProps } from "react";
 
@@ -43,6 +44,19 @@ export interface SettingsSectionRegistration {
   readonly component: ComponentType<SettingsSectionProps>;
   /** Hidden from workspace members who are not admins. */
   readonly adminOnly?: boolean;
+  /** Shown only to deployment administrators (`DX_DEPLOYMENT_ADMIN_EMAILS`). */
+  readonly deploymentAdminOnly?: boolean;
+  /**
+   * Shown only when this query answers true for the signed-in person: a
+   * deployment's own feature before it launches. The server refuses the
+   * section's requests too.
+   */
+  readonly shownWhen?: () => UseQueryOptions<
+    boolean,
+    unknown,
+    boolean,
+    ReadonlyArray<unknown>
+  >;
 }
 
 export interface SettingsRouteNotFound {
@@ -137,3 +151,9 @@ export const settingsPath = (input: SettingsPathInput): string => {
     ? root
     : `${root}/${encodeURIComponent(input.section)}`;
 };
+
+/** A card a deployment adds to the Account page, such as its plan. */
+export interface AccountCardRegistration {
+  readonly id: string;
+  readonly component: ComponentType;
+}

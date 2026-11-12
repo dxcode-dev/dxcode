@@ -1,3 +1,4 @@
+import type { MessageAutomation, MessagePlugin } from "@dx/api";
 import type { Principal, ThreadLifecycleState } from "@dx/domain";
 import type { DxAuth } from "../auth/better-auth.js";
 import type { BrowserSessionLookup } from "../auth/request-auth.js";
@@ -112,8 +113,25 @@ export interface Bindings {
   readonly DX_PUSH_VAPID_PUBLIC_KEY?: string;
   readonly DX_PUSH_VAPID_PRIVATE_KEY?: string;
   readonly E2B_API_KEY?: string;
+  /**
+   * Deployment administrators: comma-separated emails, matched against a
+   * person's verified primary email. Absent: no administrators.
+   */
+  readonly DX_DEPLOYMENT_ADMIN_EMAILS?: string;
   /** The deployment's own Boat account; Boat is installed only with it. */
   readonly BOAT_API_KEY?: string;
+  /**
+   * The deployment's own Lizard account (a hosted offer's Orbs): its API key, the
+   * project its sandboxes run in, and optionally their region.
+   */
+  readonly LIZARD_API_KEY?: string;
+  readonly LIZARD_PROJECT_ID?: string;
+  readonly LIZARD_REGION?: string;
+  /**
+   * Secret JSON for the modules a deployment registers itself; only they
+   * read it. Public dx registers none, so it is absent.
+   */
+  readonly DX_DEPLOYMENT_PRIVATE_CONFIG?: string;
   readonly FLUE_DX_AGENT_AGENT?: DurableObjectNamespace;
   readonly PLUGIN_TRIGGER_DELIVERY?: DurableObjectNamespace;
   readonly THREAD_EXECUTION?: DurableObjectNamespace;
@@ -145,6 +163,13 @@ export interface Bindings {
     import("../executor/executor-object.js").ThreadExecutorObject
   >;
   readonly AI?: Ai;
+  /** Starts the Dynamic Workers plugin code runs in (plugins/worker-host). */
+  readonly LOADER?: WorkerLoader;
+  /**
+   * `quickjs` runs plugin code in QuickJS inside this Worker when there is
+   * no `LOADER` (plugins/worker-host/quickjs-host.ts); an operator's choice.
+   */
+  readonly DX_PLUGIN_HOST?: string;
   readonly DB?: D1Database;
   readonly EMAIL?: SendEmail;
   readonly DX_STORAGE?: R2Bucket;
@@ -190,7 +215,16 @@ export interface Variables {
    * Set only in-process by the automation sweep: the schedule or GitHub
    * subscription that delivers this request's message.
    */
-  readonly messageAutomation?: "schedule" | "github" | "artifact";
+  readonly messageAutomation?: MessageAutomation;
+  /**
+   * Set only in-process by a plugin's thread access (plugins/worker-host/
+   * thread-access.ts): the plugin that posts this request's message, and
+   * whether it is a note, recorded without a model call.
+   */
+  readonly messagePlugin?: {
+    readonly plugin: MessagePlugin;
+    readonly note: boolean;
+  };
   /**
    * Set only in-process by a Space's message comments: the Flue message a
    * person commented on, when their comment mentions dx and goes to the

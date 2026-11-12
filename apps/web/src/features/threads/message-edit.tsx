@@ -93,6 +93,7 @@ export const canEditMessage = (
   row.automation === undefined &&
   row.sourceThreadId === undefined &&
   row.commentOn === undefined &&
+  row.plugin === undefined &&
   messageEntryId(row) !== undefined;
 
 /** A user message's first text part, as Flue holds it. */

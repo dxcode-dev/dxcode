@@ -169,7 +169,8 @@ export const createThreadMessageEditRoutes = (agent: MessageEditAgent) =>
         sent.chat === true ||
         sent.automation !== undefined ||
         sent.sourceThreadId !== undefined ||
-        sent.commentOn !== undefined
+        sent.commentOn !== undefined ||
+        sent.plugin !== undefined
       )
         return refuse(context, "MESSAGE_NOT_YOURS", 403);
 

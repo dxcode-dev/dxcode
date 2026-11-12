@@ -2,6 +2,7 @@ import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
+import { buildZip } from "../../src/settings/plugins/bundles/zip-fixture.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 
 // A person's Triggers settings, through the same HTTP calls the page and a
@@ -61,107 +62,81 @@ const settings =
     };
   };
 
-const manifest = {
-  schemaVersion: 1,
-  name: "trigger-list-proof",
-  displayName: "Build notifier",
-  description: "Receives a build webhook.",
-  version: "1.0.0",
-  entrypoint: "main.mjs",
-  tools: [],
-  commands: [],
-  lifecycle: [],
-  triggers: [
+/** An Agent Plugins ZIP whose code handles trigger.received. */
+const pluginZip = () =>
+  buildZip([
     {
-      name: "build-finished",
-      description: "Receive a finished build.",
-      source: "webhook",
-      event: "build.completed",
-      action: "build-finished",
-      idempotent: true,
+      name: "plugin.json",
+      content: JSON.stringify({
+        $schema: "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json",
+        name: "com.example.build-notifier",
+        displayName: "Build notifier",
+        version: "1.0.0",
+        extensions: {
+          "dev.dxcode": {
+            apiVersion: 1,
+            entry: "dev.dxcode/index.js",
+            permissions: { events: ["trigger.received"] },
+          },
+        },
+      }),
     },
-  ],
-  uiSurfaces: [],
-  permissions: {
-    tools: [],
-    commands: [],
-    lifecycle: [],
-    triggers: ["build-finished"],
-    uiSurfaces: [],
-    networkDestinations: [],
-    secretNames: [],
-    filesystem: [],
-    mcpServerIds: [],
-    agentCapabilities: [],
-  },
-};
+    {
+      name: "dev.dxcode/index.js",
+      content: "export default (dx) => dx.on('trigger.received', () => {});",
+    },
+  ]);
 
-const bundle = {
-  source: { type: "browser-files", label: "Trigger list test" },
-  files: [
+const zipCall = (cookie: string, path: string, zip: Uint8Array) =>
+  app.request(
+    path,
     {
-      path: "plugin.json",
-      kind: "file",
-      mediaType: "application/json",
-      encoding: "utf-8",
-      content: JSON.stringify(manifest),
+      method: "POST",
+      headers: { cookie, origin, "content-type": "application/zip" },
+      body: zip.slice(),
     },
-    {
-      path: "main.mjs",
-      kind: "file",
-      mediaType: "text/javascript",
-      encoding: "utf-8",
-      content:
-        "export const triggers = { 'build-finished': async ({ input }) => input };",
-    },
-  ],
-};
+    bindings,
+  );
 
 describe("personal plugin triggers with deliveries", () => {
   it("lists a trigger and changes its state after a webhook arrives", async () => {
-    const call = settings(await signUp());
-
-    const preview = await call("/v1/settings/personal/plugins/preview", {
-      method: "POST",
-      body: bundle,
-    });
+    const cookie = await signUp();
+    const call = settings(cookie);
+    const zip = await pluginZip();
+    const preview = await zipCall(
+      cookie,
+      "/v1/settings/personal/plugin-bundles/preview?name=n.zip",
+      zip,
+    );
     expect(preview.status).toBe(200);
-    const trusted = await call("/v1/settings/personal/plugins", {
-      method: "POST",
-      body: {
-        bundle,
-        reviewedIntegrity: preview.body.data.integrity,
-        grants: {
-          tools: [],
-          commands: [],
-          lifecycle: [],
-          uiSurfaces: [],
-          networkDestinations: [],
-          secretReferences: [],
-          filesystem: [],
-          mcpServerIds: [],
-          agentCapabilities: [],
-          triggers: ["build-finished"],
-        },
-      },
-    });
-    expect(trusted.status).toBe(201);
-    const pluginId = trusted.body.data.id as string;
-    expect(
-      (
-        await call(`/v1/settings/personal/plugins/${pluginId}`, {
-          method: "PATCH",
-          body: { enabled: true },
-        })
-      ).status,
-    ).toBe(200);
+    const { data: reviewed } = await preview.json<{
+      data: { integrity: string };
+    }>();
+    const installed = await zipCall(
+      cookie,
+      `/v1/settings/personal/plugin-bundles?name=n.zip&integrity=${reviewed.integrity}`,
+      zip,
+    );
+    expect(installed.status).toBe(201);
+    const { data: plugin } = await installed.json<{ data: { id: string } }>();
+    const pluginId = plugin.id;
+    // Settings → Triggers offers the plugin's webhook with dx's version.
+    const offered = (
+      (await call("/v1/settings/personal/triggers")).body.data
+        .availableCapabilities as Array<{
+        pluginId: string;
+        version: string;
+        capabilityName: string;
+      }>
+    ).find((capability) => capability.pluginId === pluginId);
+    expect(offered?.capabilityName).toBe("webhook");
 
     const created = await call("/v1/settings/personal/triggers", {
       method: "POST",
       body: {
         pluginId,
-        pluginVersion: "1.0.0",
-        capabilityName: "build-finished",
+        pluginVersion: offered?.version,
+        capabilityName: "webhook",
       },
     });
     expect(created.status).toBe(201);
@@ -181,7 +156,7 @@ describe("personal plugin triggers with deliveries", () => {
           "x-dx-event-id": eventId,
           "x-dx-idempotency-key": eventId,
         },
-        body: JSON.stringify({ event: "build.completed", data: { build: 7 } }),
+        body: JSON.stringify({ event: "trigger.received", data: { build: 7 } }),
       },
       bindings,
     );

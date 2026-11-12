@@ -247,10 +247,21 @@ const privateSeed = (
   return rawPrivate.value.slice(0, ED25519_KEY_BYTES);
 };
 
-export const signGitPayload = async (
+export const signGitPayload = (
   privateKey: SigningPrivateKeyPlaintext,
   publicKey: SigningPublicKey,
   payload: Uint8Array,
+): Promise<string> => signSshPayload(privateKey, publicKey, payload, "git");
+
+/**
+ * An armored SSH signature (PROTOCOL.sshsig, as `ssh-keygen -Y sign -n
+ * <namespace>` writes) over `payload`.
+ */
+export const signSshPayload = async (
+  privateKey: SigningPrivateKeyPlaintext,
+  publicKey: SigningPublicKey,
+  payload: Uint8Array,
+  namespace: string,
 ): Promise<string> => {
   let seed: Uint8Array | undefined;
   let pkcs8: Uint8Array | undefined;
@@ -269,7 +280,7 @@ export const signGitPayload = async (
     );
     const signedData = concat(
       new TextEncoder().encode("SSHSIG"),
-      sshString("git"),
+      sshString(namespace),
       sshString(new Uint8Array()),
       sshString("sha512"),
       sshString(digest),
@@ -287,7 +298,7 @@ export const signGitPayload = async (
       new TextEncoder().encode("SSHSIG"),
       uint32(1),
       sshString(decodePublicBlob(encodedPublicKey)),
-      sshString("git"),
+      sshString(namespace),
       sshString(new Uint8Array()),
       sshString("sha512"),
       sshString(concat(sshString("ssh-ed25519"), sshString(signature))),
@@ -340,3 +351,101 @@ export const generateManagedSshKey = Effect.fn("generateManagedSshKey")(
     });
   },
 );
+
+/**
+ * Verifies an armored SSH signature (`ssh-keygen -Y sign`, PROTOCOL.sshsig)
+ * over `payload` in `namespace`. Only Ed25519 keys and sha256 or sha512
+ * message hashes. Returns the signer's public key line and fingerprint, or
+ * undefined when the signature is malformed, made for another namespace, or
+ * does not match.
+ */
+export const verifySshSignature = async (
+  armored: string,
+  payload: Uint8Array,
+  namespace: string,
+): Promise<
+  | {
+      readonly publicKey: SigningPublicKey;
+      readonly fingerprint: SigningKeyFingerprint;
+    }
+  | undefined
+> => {
+  try {
+    const body =
+      /-----BEGIN SSH SIGNATURE-----([\s\S]*?)-----END SSH SIGNATURE-----/.exec(
+        armored,
+      )?.[1];
+    if (body === undefined) return undefined;
+    const blob = base64ToBytes(body.replace(/\s+/g, ""));
+    const magic = new TextDecoder().decode(blob.slice(0, 6));
+    if (magic !== "SSHSIG" || blob.byteLength < 10) return undefined;
+    const version = new DataView(blob.buffer, blob.byteOffset + 6, 4).getUint32(
+      0,
+      false,
+    );
+    if (version !== 1) return undefined;
+    const publicKeyBlob = readSshString(blob, 10);
+    const signedNamespace = readSshString(blob, publicKeyBlob.offset);
+    const reserved = readSshString(blob, signedNamespace.offset);
+    const hashAlgorithm = readSshString(blob, reserved.offset);
+    const signatureBlob = readSshString(blob, hashAlgorithm.offset);
+    if (signatureBlob.offset !== blob.byteLength) return undefined;
+    if (new TextDecoder().decode(signedNamespace.value) !== namespace)
+      return undefined;
+    const hash = new TextDecoder().decode(hashAlgorithm.value);
+    if (hash !== "sha512" && hash !== "sha256") return undefined;
+    const keyAlgorithm = readSshString(publicKeyBlob.value, 0);
+    const rawKey = readSshString(publicKeyBlob.value, keyAlgorithm.offset);
+    if (
+      new TextDecoder().decode(keyAlgorithm.value) !== "ssh-ed25519" ||
+      rawKey.value.byteLength !== ED25519_KEY_BYTES ||
+      rawKey.offset !== publicKeyBlob.value.byteLength
+    )
+      return undefined;
+    const signatureAlgorithm = readSshString(signatureBlob.value, 0);
+    const rawSignature = readSshString(
+      signatureBlob.value,
+      signatureAlgorithm.offset,
+    );
+    if (
+      new TextDecoder().decode(signatureAlgorithm.value) !== "ssh-ed25519" ||
+      rawSignature.value.byteLength !== 64 ||
+      rawSignature.offset !== signatureBlob.value.byteLength
+    )
+      return undefined;
+    const digest = new Uint8Array(
+      await crypto.subtle.digest(
+        hash === "sha512" ? "SHA-512" : "SHA-256",
+        Uint8Array.from(payload),
+      ),
+    );
+    const signedData = concat(
+      new TextEncoder().encode("SSHSIG"),
+      sshString(namespace),
+      sshString(reserved.value),
+      sshString(hash),
+      sshString(digest),
+    );
+    const key = await crypto.subtle.importKey(
+      "raw",
+      Uint8Array.from(rawKey.value),
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
+    const valid = await crypto.subtle.verify(
+      "Ed25519",
+      key,
+      Uint8Array.from(rawSignature.value),
+      Uint8Array.from(signedData),
+    );
+    if (!valid) return undefined;
+    return await Effect.runPromise(
+      canonicalizeSigningPublicKey(
+        `ssh-ed25519 ${encodeBase64(publicKeyBlob.value)}`,
+      ),
+    );
+  } catch {
+    return undefined;
+  }
+};

@@ -4,6 +4,7 @@ export const DX_WORKSPACE_SKILL = "dx-workspace";
 /** The built-in skills, one directory each under `built-in-skills/`. */
 export const BUILT_IN_SKILL_NAMES = [
   "browser-use",
+  "building-plugins",
   "building-schedules",
   "building-skills",
   "creating-views",

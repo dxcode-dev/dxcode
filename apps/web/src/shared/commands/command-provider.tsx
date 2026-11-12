@@ -275,10 +275,12 @@ export function CommandProvider({
   children,
   registry: registryOverride,
   onOpenNewThread,
+  paletteExtra,
 }: {
   readonly children: React.ReactNode;
   readonly registry?: CommandRegistry;
   readonly onOpenNewThread?: () => void;
+  readonly paletteExtra?: React.ComponentProps<typeof CommandPalette>["extra"];
 }) {
   // Only the command context re-renders the provider; the settings return link
   // is read when a command runs, so navigating keeps the runtime and listener.
@@ -334,6 +336,7 @@ export function CommandProvider({
         commands={commands}
         onOpenChange={setPaletteOpen}
         onDispatch={dispatch}
+        extra={paletteExtra}
       />
       <KeymapDialog
         open={keymapOpen}

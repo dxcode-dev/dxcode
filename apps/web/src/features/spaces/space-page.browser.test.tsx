@@ -757,12 +757,12 @@ it("lays the Space out with no title bar: the Space chat tab, its posts, and Spa
 
   // Reactions, dx's told apart, and the replies row.
   expect(
-    all(".space-reaction", post(2) as HTMLElement).map((chip) =>
+    all(".reaction-chip", post(2) as HTMLElement).map((chip) =>
       chip.getAttribute("aria-label"),
     ),
   ).toEqual(["Eyes: dx"]);
   expect(
-    all(".space-reaction", post(4) as HTMLElement).map((chip) => [
+    all(".reaction-chip", post(4) as HTMLElement).map((chip) => [
       chip.getAttribute("aria-label"),
       chip.getAttribute("aria-pressed"),
     ]),
@@ -829,7 +829,7 @@ it("adds and removes the viewer's reactions", async () => {
   // The viewer's own reaction comes off at once and on the server.
   await userEvent.click(thumbs());
   await until(() => thumbs().getAttribute("aria-pressed") === "false");
-  expect(q(".space-reaction-count", thumbs())?.textContent).toBe("1");
+  expect(q(".reaction-chip-count", thumbs())?.textContent).toBe("1");
   await until(() => server.requests.some(({ method }) => method === "DELETE"));
   expect(
     server.requests.filter(({ path }) => path.includes("/reactions/")),
@@ -843,9 +843,9 @@ it("adds and removes the viewer's reactions", async () => {
   // And from the picker, a new one goes on.
   await userEvent.hover(post(2) as HTMLElement);
   await userEvent.click(button("Add Reaction", post(2) as HTMLElement));
-  await until(() => q(".space-reaction-picker") !== null);
+  await until(() => q(".reaction-picker") !== null);
   await shot("space-reaction-picker-1440");
-  await userEvent.click(button("Heart", q(".space-reaction-picker") as never));
+  await userEvent.click(button("Heart", q(".reaction-picker") as never));
   await until(
     () => q("[data-reaction='heart']", post(2) as HTMLElement) !== null,
   );

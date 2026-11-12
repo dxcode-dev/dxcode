@@ -173,7 +173,7 @@ export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
 
 /**
  * The deployment's name for its own account of a provider, which the Orb
- * picker groups that provider's sizes under.
+ * picker groups that provider's sizes under, and its price for each size.
  */
 const withDeploymentNames = (
   catalog: LoadedRunnerProfileCatalog,
@@ -183,6 +183,13 @@ const withDeploymentNames = (
   ...catalog,
   publicCatalog: {
     ...catalog.publicCatalog,
+    profiles: catalog.publicCatalog.profiles.map((profile) => {
+      const costLabel =
+        profile.costLabel ??
+        deploymentOrbSettings(bindings, profile.adapter, deploymentOrbs)
+          ?.costLabels?.[profile.id];
+      return costLabel === undefined ? profile : { ...profile, costLabel };
+    }),
     ...(catalog.publicCatalog.providers === undefined
       ? {}
       : {

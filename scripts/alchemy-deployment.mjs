@@ -90,6 +90,9 @@ const preThreadSearchIndexBindingOmission = "THREAD_SEARCH_INDEX";
 const preOrbProviderPreparationBindingOmission = "ORB_PROVIDER_PREPARATION";
 const preBitbucketTokenCoordinatorBindingOmission =
   "BITBUCKET_TOKEN_COORDINATOR";
+// Plugin code's Dynamic Worker loader. Stages deployed before it, and the
+// props Alchemy records for a worker_loader binding, lack it.
+const preWorkerLoaderBindingOmission = "LOADER";
 const preAuthenticationEmailBindingOmissions = ["DX_AUTH_EMAIL_FROM", "EMAIL"];
 const preTurnstileBindingOmissions = [
   "DX_TURNSTILE_SECRET_KEY",
@@ -1043,6 +1046,15 @@ export const loadSelfhostConfig = ({ environment, workspaceRoot }) => {
             .filter(Boolean),
         }
       : {}),
+    ...(environment.DX_DEPLOYMENT_ADMIN_EMAILS?.trim()
+      ? {
+          deploymentAdminEmails: environment.DX_DEPLOYMENT_ADMIN_EMAILS.split(
+            ",",
+          )
+            .map((email) => email.trim())
+            .filter(Boolean),
+        }
+      : {}),
   });
   const accountId = environment.CLOUDFLARE_ACCOUNT_ID?.trim();
   if (!accountId || !/^[a-f0-9]{32}$/.test(accountId))
@@ -1399,6 +1411,13 @@ const validateWorkerProps = (
         !current &&
         (representation === "persisted" || representation === "prior") &&
         name === preDeploymentTargetBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" ||
+          representation === "prior" ||
+          allowDestroyWorkerBindingOmissions) &&
+        name === preWorkerLoaderBindingOmission
       ) &&
       !(
         preWorkloadIdentity &&
@@ -3005,6 +3024,11 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "SARVAM_API_KEY",
           "EXA_API_KEY",
           "BOAT_API_KEY",
+          "LIZARD_API_KEY",
+          "LIZARD_PROJECT_ID",
+          "LIZARD_REGION",
+          "DX_DEPLOYMENT_ADMIN_EMAILS",
+          "DX_DEPLOYMENT_PRIVATE_CONFIG",
           // The runner forwards the validated reader list itself.
           "DX_BUG_REPORT_READERS",
           // And bug report forwarding's settings, for the target.

@@ -12,7 +12,9 @@ const variable = (name: string) => `\${${name}}`;
 // - no plugin at the root, or a marketplace instead of a plugin;
 // - a plugin.json that is not JSON or names the plugin badly;
 // - manifest paths that leave the plugin folder;
-// - stdio, SSE, non-HTTPS, and variable-URL MCP servers;
+// - SSE, non-HTTPS, and variable-URL MCP servers;
+// - stdio servers that read a variable dx cannot supply, besides
+//   ${CLAUDE_PLUGIN_ROOT} and ${CLAUDE_PLUGIN_DATA};
 // - header values read from variables, and reserved headers;
 // - agents, hooks, and other components dx does not run;
 // - skills without a description, oversize, or with binary resources;
@@ -163,6 +165,13 @@ describe("readClaudeBundle", () => {
           headers: [],
         },
         {
+          transport: "stdio",
+          name: "local",
+          command: "npx",
+          args: ["some-server"],
+          env: [],
+        },
+        {
           name: "tokened",
           endpoint: "https://tokened.example.com/mcp",
           authType: "none",
@@ -179,10 +188,6 @@ describe("readClaudeBundle", () => {
             "Commands are Claude Code only; dx imports skills and MCP servers.",
         },
         { path: "hooks/hooks.json", reason: "Hooks are not supported yet." },
-        {
-          path: ".mcp.json#local",
-          reason: "Local (stdio) MCP servers are not supported.",
-        },
         {
           path: ".mcp.json#streaming",
           reason: "dx connects to MCP servers over streamable HTTP only.",
@@ -362,9 +367,57 @@ describe("readClaudeBundle", () => {
       await rejected([
         {
           name: ".mcp.json",
-          content: JSON.stringify({ local: { command: "server" } }),
+          content: JSON.stringify({
+            streaming: { type: "sse", url: "https://sse.example.com/sse" },
+          }),
         },
       ]),
     ).toMatch(/nothing dx can import/);
+  });
+
+  it("imports stdio servers in the plugin, rewriting Claude Code's directory variables", async () => {
+    const bundle = await parsed([
+      {
+        name: ".claude-plugin/plugin.json",
+        content: JSON.stringify({ name: "local-tools" }),
+      },
+      { name: "servers/db.js", content: "console.log(1)" },
+      {
+        name: ".mcp.json",
+        content: JSON.stringify({
+          mcpServers: {
+            db: {
+              command: variable("CLAUDE_PLUGIN_ROOT") + "/servers/db.js",
+              args: ["--data", `${variable("CLAUDE_PLUGIN_DATA")}/db`],
+              env: {
+                CONFIG: `${variable("CLAUDE_PLUGIN_ROOT")}/config.json`,
+                API_KEY: variable("API_KEY"),
+              },
+            },
+            secret: {
+              command: "npx",
+              args: ["server", "--token", variable("TOKEN")],
+            },
+          },
+        }),
+      },
+    ]);
+    expect(bundle.manifest.mcpServers).toEqual([
+      {
+        transport: "stdio",
+        name: "db",
+        command: "./servers/db.js",
+        args: ["--data", `${variable("PLUGIN_DATA")}/db`],
+        // API_KEY passes through from the Orb's own environment.
+        env: [
+          { name: "CONFIG", value: `${variable("PLUGIN_ROOT")}/config.json` },
+        ],
+      },
+    ]);
+    expect(bundle.manifest.package?.files).toBe(3);
+    expect(bundle.manifest.skipped).toContainEqual({
+      path: ".mcp.json#secret",
+      reason: `The server reads ${variable("TOKEN")}, which dx cannot supply.`,
+    });
   });
 });

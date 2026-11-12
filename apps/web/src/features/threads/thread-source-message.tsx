@@ -1,16 +1,25 @@
-import type { MessageAuthor, MessageAutomation } from "@dx/api";
+import type { MessageAuthor, MessageAutomation, MessagePlugin } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { ChevronDown, Clock, FileText, MessagesSquare } from "lucide-react";
+import {
+  ChevronDown,
+  Clock,
+  FileText,
+  Globe,
+  MessagesSquare,
+  Puzzle,
+} from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
+import { TimeText } from "../../shared/ui/time-text.js";
 import { GitHubEventRows } from "./automations/github-event-rows.js";
 import {
   MessageAuthorLabel,
   useMessageAuthor,
 } from "./sharing/message-authors.js";
+import { conciseAge } from "./sharing/sharing-format.js";
 import { threadQueryOptions } from "./thread-queries.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 
@@ -171,6 +180,7 @@ export function AutomationMessage({
   if (automation === "github")
     return <GitHubEventRows text={text} pending={pending} />;
   const artifact = automation === "artifact";
+  const external = automation === "external";
   return (
     <div className="thread-source-message" data-open={open ? "" : undefined}>
       <button
@@ -179,9 +189,19 @@ export function AutomationMessage({
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
       >
-        {artifact ? <FileText strokeWidth={2} /> : <Clock strokeWidth={2} />}
+        {artifact ? (
+          <FileText strokeWidth={2} />
+        ) : external ? (
+          <Globe strokeWidth={2} />
+        ) : (
+          <Clock strokeWidth={2} />
+        )}
         <span>
-          {artifact ? "Artifact ask ticked or answered" : "Scheduled wake-up"}
+          {artifact
+            ? "Artifact ask ticked or answered"
+            : external
+              ? "Sent from outside dx"
+              : "Scheduled wake-up"}
         </span>
         {pending ? <small>Steering</small> : null}
         <ChevronDown className="thread-source-chevron" aria-hidden />
@@ -234,6 +254,62 @@ export function CommentPromptMessage({
           <p className="message-text">{text.replace(COMMENTED_MESSAGE, "")}</p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/**
+ * A message or note an installed plugin's code posted: the plugin's name in
+ * place of a person's, so nobody reads it as the owner's own words, and the
+ * text below. A note started no agent turn.
+ */
+export function PluginPostMessage({
+  plugin,
+  note,
+  text,
+  pending,
+  sentAt,
+}: {
+  readonly plugin: MessagePlugin;
+  readonly note: boolean;
+  readonly text: string;
+  readonly pending: boolean;
+  readonly sentAt?: string;
+}) {
+  const kind = note ? "Note" : "Plugin";
+  return (
+    <div className="plugin-post-message">
+      <div
+        className="plugin-post-author"
+        title={`Posted by the ${plugin.name} plugin${
+          plugin.scope === "repository"
+            ? " from the repository"
+            : plugin.scope === "workspace"
+              ? ", installed for the workspace"
+              : ""
+        }`}
+      >
+        <span className="plugin-post-icon" aria-hidden="true">
+          <Puzzle />
+        </span>
+        <span className="plugin-post-name">{plugin.name}</span>
+        <span className="plugin-post-kind">{kind}</span>
+        {plugin.scope === "personal" ? null : (
+          <span className="plugin-post-kind">
+            {plugin.scope === "workspace" ? "Workspace" : "Repository"}
+          </span>
+        )}
+        {pending ? (
+          <span className="plugin-post-kind">Steering</span>
+        ) : sentAt === undefined ? null : (
+          <time dateTime={sentAt} title={new Date(sentAt).toLocaleString()}>
+            <TimeText text={(now) => conciseAge(sentAt, now)} />
+          </time>
+        )}
+      </div>
+      <div className="plugin-post-body message-text">
+        <TranscriptMarkdown streaming={false}>{text}</TranscriptMarkdown>
+      </div>
     </div>
   );
 }

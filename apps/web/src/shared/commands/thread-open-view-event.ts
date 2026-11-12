@@ -34,3 +34,22 @@ export const takeThreadViewRequest = (threadId: string) => {
     ? request.view
     : undefined;
 };
+
+/**
+ * A plugin pane to open on one Thread's open page: the same event, with
+ * `view: "plugin"`. A plugin's `open-pane` quick action, or its code's
+ * `ctx.panes.get(id).open()`, asks for it.
+ */
+export interface PluginPaneRequest {
+  readonly threadId: string;
+  readonly plugin: string;
+  readonly pane: string;
+  readonly title: string;
+}
+
+export const requestPluginPane = (request: PluginPaneRequest) =>
+  document.dispatchEvent(
+    new CustomEvent(THREAD_OPEN_VIEW_EVENT, {
+      detail: { ...request, view: "plugin" },
+    }),
+  );

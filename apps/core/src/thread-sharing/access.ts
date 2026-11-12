@@ -140,5 +140,8 @@ export const viewerMayRequest = (method: string, path: string) =>
   ["GET", "HEAD", "OPTIONS"].includes(method) ||
   // Following changes only the viewer's own sidebar.
   (["PUT", "DELETE"].includes(method) && /\/follow\/?$/.test(path)) ||
+  // Viewers react to messages too: a reaction never reaches the agent.
+  (["PUT", "DELETE"].includes(method) &&
+    /\/message-reactions\/[^/]+\/[^/]+\/?$/.test(path)) ||
   // A bug report is the viewer's own and changes nothing in the Thread.
   (method === "POST" && /\/bug-reports\/?$/.test(path));

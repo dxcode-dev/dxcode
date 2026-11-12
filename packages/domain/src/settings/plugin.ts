@@ -20,10 +20,15 @@ export const MAX_PLUGIN_TRIGGERS = 20;
 
 export { PluginId };
 
+/**
+ * A plugin's portable name, by the Agent Plugins rule: lowercase letters,
+ * digits, hyphens, and periods, starting and ending with a letter or digit,
+ * with no repeated hyphen or period.
+ */
 export const PluginName = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(64),
-  Schema.isPattern(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  Schema.isPattern(/^(?!.*(?:--|\.\.))[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/),
 ).pipe(Schema.brand("@dx/PluginName"));
 
 export type PluginName = typeof PluginName.Type;

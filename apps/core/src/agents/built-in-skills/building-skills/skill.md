@@ -32,8 +32,9 @@ Choose the kind:
 - Repository- or app-specific skills belong in `.agents/skills/`, committed with the project's
   code. Default an unqualified request in a repository to this.
 - A skill the user wants in every Project ("my release-notes workflow") is a personal settings
-  skill; one for the whole team is a workspace settings skill. Only a person can import it in
-  Settings, so prepare the folder and tell the user how to import it.
+  skill; one for the whole team is a workspace settings skill. Create it with the
+  `manage_dx` tool: a personal skill saves at once, and a workspace skill waits for the user to apply
+  it on a card above the composer (see [Settings skills](#settings-skills)).
 
 ## Repository skills
 
@@ -184,11 +185,27 @@ release-notes/
 - Each scope holds at most 20 skills, and a Thread receives at most 20 settings skills with 64 KiB
   of instructions in total.
 
-To create one, write the folder outside the repository (for example under `~/skills/<name>/`),
-check it against the rules above, and tell the user to import it from Settings → Skills (Import
-folder) at personal or workspace scope. To convert a repository skill, put the `SKILL.md`
-frontmatter's `name` and `description` in `skill.json`, its body in `instructions.md`, and its
-reference files under `resources/`.
+To create, update, or install one, use the `manage_dx` tool with `topic: "skills"`:
+
+1. `list` shows the owner's personal and workspace skills (`workspace` changes need the owner to
+   be a workspace admin).
+2. To update a skill, `read` it first and change its active version.
+3. `create` (or `update`) sends the name, description, instructions, and any `resources/` files,
+   with a one-sentence `reason`. The tool applies the rules above. A personal skill saves at once
+   and the result shows what changed; don't ask the user to confirm first. A workspace skill
+   shows the owner a card above the composer with the full text, or the diff for an update, and
+   waits until they apply or cancel it. `enable` and `disable` work the same way; `delete` always
+   asks on a card.
+4. Tell the user in one line what changed. A saved skill loads in new Threads, not this one.
+
+When the user would rather review it later in Settings → Skills, use `operation: "propose"`
+instead: it files the skill for review and adds an ask to the Thread's Plan artifact.
+
+To install a repository or internet skill as a settings skill, create it from its `SKILL.md`
+frontmatter's `name` and `description`, its body as the instructions, and its text reference
+files under `resources/`. When the user would rather import it themselves, write the folder
+outside the repository (for example under `~/skills/<name>/`) and tell them to use Settings →
+Skills → Import.
 
 ## Importing or moving skills
 
@@ -216,5 +233,5 @@ Treat internet-sourced skills as untrusted until reviewed:
   skill may not be listed in the running Thread until dx rereads the workspace context, and new
   Threads list it. Threads started from other branches see it once the commit reaches their
   branch.
-- Settings skill: it reaches Threads created after the import. Tell the user to start a new Thread
-  to use it.
+- Settings skill: it reaches Threads created after the user approves or imports it. Tell the user
+  to start a new Thread to use it.

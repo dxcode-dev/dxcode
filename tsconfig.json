@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/domain" },
     { "path": "./packages/api" },
+    { "path": "./packages/plugin" },
     { "path": "./apps/core" },
     { "path": "./apps/web" }
   ]

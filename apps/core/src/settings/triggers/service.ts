@@ -2,7 +2,6 @@ import type { TriggerPluginCapabilityData } from "@dx/api";
 import {
   EnvironmentVariableRepository,
   MAX_PLUGIN_TRIGGERS_PER_USER,
-  PluginRepository,
   PluginTriggerCapability,
   PluginTriggerCapabilityForbidden,
   PluginTriggerCapabilityHash,
@@ -16,6 +15,10 @@ import {
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
 import { encodeBase64Url } from "../../encoding/base64.js";
+import {
+  CODE_TRIGGER_EVENT,
+  CodePluginTriggerCapabilities,
+} from "../../plugins/worker-host/triggers.js";
 import { SettingsAudit } from "../audit.js";
 import { WorkspacePolicyService } from "../workspace-policy/service.js";
 
@@ -104,6 +107,26 @@ export const capabilityHashesEqual = (left: string, right: string): boolean => {
   return difference === 0;
 };
 
+/**
+ * Whether a listed capability is the one a trigger uses. A plugin with code
+ * delivers to its install's active version, so its triggers match across
+ * updates; a legacy plugin's trigger stays on the version it was made for.
+ */
+export const capabilityMatchesTrigger = (
+  candidate: TriggerPluginCapabilityData,
+  trigger: {
+    readonly pluginId: string;
+    readonly pluginVersion: string;
+    readonly capabilityName: string;
+    readonly event: string;
+  },
+) =>
+  candidate.pluginId === trigger.pluginId &&
+  candidate.capabilityName === trigger.capabilityName &&
+  (candidate.version === trigger.pluginVersion ||
+    (trigger.event === CODE_TRIGGER_EVENT &&
+      candidate.event === CODE_TRIGGER_EVENT));
+
 export class PluginTriggerService extends Context.Service<
   PluginTriggerService,
   PluginTriggerServiceShape
@@ -112,71 +135,17 @@ export class PluginTriggerService extends Context.Service<
     PluginTriggerService,
     Effect.gen(function* () {
       const triggers = yield* PluginTriggerRepository;
-      const plugins = yield* PluginRepository;
       const environment = yield* EnvironmentVariableRepository;
       const settingsAudit = yield* SettingsAudit;
       const workspacePolicies = yield* WorkspacePolicyService;
+      const codeCapabilities = yield* CodePluginTriggerCapabilities;
 
       const availableCapabilities = Effect.fn(
         "PluginTriggerService.availableCapabilities",
       )(function* (ownerUserId: UserId) {
-        const effective = yield* plugins.listEffectiveForUser(ownerUserId);
         const capabilities: Array<TriggerPluginCapabilityData> = [];
-        for (const { plugin, active } of effective) {
-          if (!active.trusted) continue;
-          if (plugin.target.scope === "personal") {
-            if (active.grants.secretReferences.length > 0) {
-              const allowed = yield* workspacePolicies
-                .evaluateForUser(ownerUserId, {
-                  kind: "secret.use-personal-override",
-                })
-                .pipe(
-                  Effect.as(true),
-                  Effect.catchTag("WorkspacePolicyDenied", (denial) =>
-                    denial.reason === "personal-secret-overrides-disabled"
-                      ? Effect.succeed(false)
-                      : Effect.fail(denial),
-                  ),
-                );
-              if (!allowed) continue;
-            }
-            if (active.grants.mcpServerIds.length > 0) {
-              const allowed = yield* workspacePolicies
-                .evaluateForUser(ownerUserId, {
-                  kind: "mcp.use-personal-override",
-                })
-                .pipe(
-                  Effect.as(true),
-                  Effect.catchTag("WorkspacePolicyDenied", (denial) =>
-                    denial.reason === "personal-mcp-overrides-disabled"
-                      ? Effect.succeed(false)
-                      : Effect.fail(denial),
-                  ),
-                );
-              if (!allowed) continue;
-            }
-          }
-          capabilities.push(
-            ...active.manifest.triggers
-              .filter(({ name }) => active.grants.triggers.includes(name))
-              .map(
-                (declaration): TriggerPluginCapabilityData => ({
-                  pluginId: plugin.id,
-                  pluginName: plugin.name,
-                  pluginDisplayName: active.manifest.displayName,
-                  version: active.version,
-                  source: declaration.source,
-                  sourceLabel: active.source.label,
-                  capabilityName: declaration.name,
-                  description: declaration.description,
-                  event: declaration.event,
-                  action: declaration.action,
-                  permission: "trigger-delivery",
-                  idempotent: declaration.idempotent,
-                }),
-              ),
-          );
-        }
+        // Plugins whose code runs on the worker host handle trigger.received.
+        capabilities.push(...(yield* codeCapabilities.list(ownerUserId)));
         return capabilities;
       });
 
@@ -298,11 +267,8 @@ export class PluginTriggerService extends Context.Service<
               }
               const capabilities = yield* availableCapabilities(ownerUserId);
               if (
-                !capabilities.some(
-                  (candidate) =>
-                    candidate.pluginId === current.pluginId &&
-                    candidate.version === current.pluginVersion &&
-                    candidate.capabilityName === current.capabilityName,
+                !capabilities.some((candidate) =>
+                  capabilityMatchesTrigger(candidate, current),
                 )
               ) {
                 return yield* new PluginTriggerCapabilityForbidden();

@@ -34,7 +34,6 @@ import {
   type WorkspacePolicyDenied,
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
-import { PluginService } from "../settings/plugins/service.js";
 import type { ProjectCreationSnapshot } from "../settings/project-defaults/service.js";
 import { SkillService } from "../settings/skills/service.js";
 
@@ -173,7 +172,6 @@ export class ThreadService extends Context.Service<
       const projects = yield* ProjectRepository;
       const threads = yield* ThreadRepository;
       const instructions = yield* PersonalAgentInstructionsRepository;
-      const pluginService = yield* PluginService;
       const skillService = yield* SkillService;
 
       return ThreadService.of({
@@ -219,27 +217,21 @@ export class ThreadService extends Context.Service<
                     project.snapshot,
                   );
             // Every read below is independent once the Project is known.
-            const [
-              parentThread,
-              ownedProject,
-              agentInstructions,
-              plugins,
-              skills,
-            ] = yield* Effect.all(
-              [
-                parent,
-                project.kind === "project"
-                  ? projects.findOwnedById(
-                      projectId,
-                      projectReaderOf(principal),
-                    )
-                  : Effect.succeed(undefined),
-                currentInstructions,
-                pluginService.resolveForThread(principal, projectId),
-                skillService.resolveForThread(principal, projectId),
-              ],
-              { concurrency: "unbounded" },
-            );
+            const [parentThread, ownedProject, agentInstructions, skills] =
+              yield* Effect.all(
+                [
+                  parent,
+                  project.kind === "project"
+                    ? projects.findOwnedById(
+                        projectId,
+                        projectReaderOf(principal),
+                      )
+                    : Effect.succeed(undefined),
+                  currentInstructions,
+                  skillService.resolveForThread(principal, projectId),
+                ],
+                { concurrency: "unbounded" },
+              );
             const thread = yield* createThread({
               ...(threadId === undefined ? {} : { id: threadId }),
               title,
@@ -272,7 +264,8 @@ export class ThreadService extends Context.Service<
                       ? {}
                       : { visibility: parentThread.visibility }),
                   }),
-              plugins,
+              // Installed plugins resolve per submission, never at creation.
+              plugins: [],
               skills,
             });
             return {

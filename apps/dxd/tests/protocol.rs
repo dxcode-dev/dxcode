@@ -3373,6 +3373,171 @@ async fn real_daemon_runs_several_login_shells() {
     assert!(heartbeat.get("terminals").is_none(), "{heartbeat}");
 }
 
+/// A `DXPK1` plugin package, as Core's `plugin-package.ts` writes one.
+fn plugin_package(files: &[(&str, &str, bool)]) -> Vec<u8> {
+    let mut bytes = b"DXPK1\n".to_vec();
+    for (path, content, executable) in files {
+        bytes.extend_from_slice(&(path.len() as u16).to_be_bytes());
+        bytes.extend_from_slice(path.as_bytes());
+        bytes.push(u8::from(*executable));
+        bytes.extend_from_slice(&(content.len() as u32).to_be_bytes());
+        bytes.extend_from_slice(content.as_bytes());
+    }
+    bytes
+}
+
+/// A stdio MCP server in Bash: it prints a non-JSON line first (as a login
+/// profile might), sends a notification before one answer, and reports the
+/// environment dx gave it.
+const FAKE_MCP_SERVER: &str = r#"#!/bin/bash
+echo "starting in $PWD" >&2
+echo "profile noise"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"fake","version":"1"}}}\n' "$id" ;;
+    *'"method":"tools/list"'*)
+      printf '{"jsonrpc":"2.0","method":"notifications/message","params":{"level":"info","data":"hi"}}\n'
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"whoami","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
+    *'"method":"tools/call"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"root=%s|data=%s|pwd=%s|arg=%s|config=%s|path=%s|greeting=%s|pid=%s"}]}}\n' "$id" "$PLUGIN_ROOT" "$PLUGIN_DATA" "$PWD" "$1" "$CONFIG" "$PATH" "$GREETING" "$$" ;;
+  esac
+done
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_runs_a_plugins_local_mcp_server() {
+    use sha2::Digest;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let register = next_text(&mut socket).await;
+    assert_eq!(register["capabilities"]["mcp"]["version"], 1, "{register}");
+    let generation = format!("gen-{}", rand::random::<u32>());
+    send(
+        &mut socket,
+        json!({"type": "registered", "generation": generation, "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000}),
+    )
+    .await;
+    let mock = serve_storage(listener, port);
+    // Packaged without the execute bit, as some ZIP tools do.
+    let package = plugin_package(&[
+        ("bin/server", FAKE_MCP_SERVER, false),
+        ("config.json", "{}", false),
+    ]);
+    let digest = format!("{:x}", sha2::Sha256::digest(&package));
+    mock.lock()
+        .unwrap()
+        .objects
+        .insert("pkg".into(), package.clone());
+    let server = |key: &str, sha256: &str| {
+        json!({
+            "key": key,
+            "name": "fake",
+            "pluginId": "plg_0123abcd-4567-4abc-8def-0123456789ab",
+            "command": "./bin/server",
+            "args": ["--data", "${PLUGIN_DATA}/cache"],
+            "env": [
+                {"name": "CONFIG", "value": "${PLUGIN_ROOT}/config.json"},
+                // A login profile resets PATH; configured env still wins (§9.1).
+                {"name": "PATH", "value": "/opt/plugin-bin:/usr/bin:/bin"},
+                {"name": "GREETING", "value": "a b=c $HOME"},
+            ],
+            "cwd": "${PLUGIN_DATA}",
+            "package": {"url": format!("http://localhost:{port}/r2/pkg"), "sha256": sha256, "size": package.len()},
+        })
+    };
+    let key = "a".repeat(64);
+
+    let listed = memory_request(
+        &mut socket,
+        &generation,
+        "mcp-list-1",
+        json!({"operation": "mcp.request", "server": server(&key, &digest), "method": "tools/list", "params": {}, "timeoutMs": 10000}),
+    )
+    .await;
+    assert_eq!(listed["kind"], "result", "{listed}");
+    assert_eq!(listed["result"]["tools"][0]["name"], "whoami");
+
+    let called = memory_request(
+        &mut socket,
+        &generation,
+        "mcp-call-1",
+        json!({"operation": "mcp.request", "server": server(&key, &digest), "method": "tools/call", "params": {"name": "whoami", "arguments": {}}, "timeoutMs": 10000}),
+    )
+    .await;
+    assert_eq!(called["kind"], "result", "{called}");
+    let text = called["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let root = fixture
+        .home
+        .join(format!(".local/share/dx/plugins/{digest}"));
+    let data = fixture
+        .home
+        .join(".local/share/dx/plugin-data/plg_0123abcd-4567-4abc-8def-0123456789ab");
+    let fields: std::collections::HashMap<&str, &str> = text
+        .split('|')
+        .filter_map(|field| field.split_once('='))
+        .collect();
+    assert_eq!(fields["root"], root.to_str().unwrap(), "{text}");
+    assert_eq!(fields["data"], data.to_str().unwrap(), "{text}");
+    assert_eq!(
+        Path::new(fields["pwd"]).canonicalize().unwrap(),
+        data.canonicalize().unwrap(),
+        "cwd ${{PLUGIN_DATA}}: {text}"
+    );
+    assert_eq!(fields["arg"], "--data", "{text}");
+    assert_eq!(
+        fields["config"],
+        root.join("config.json").to_str().unwrap(),
+        "{text}"
+    );
+    assert_eq!(fields["path"], "/opt/plugin-bin:/usr/bin:/bin", "{text}");
+    assert_eq!(fields["greeting"], "a b=c $HOME", "{text}");
+    let first_pid = fields["pid"].to_owned();
+
+    // The same key reuses the running process.
+    let again = memory_request(
+        &mut socket,
+        &generation,
+        "mcp-call-2",
+        json!({"operation": "mcp.request", "server": server(&key, &digest), "method": "tools/call", "params": {"name": "whoami", "arguments": {}}, "timeoutMs": 10000}),
+    )
+    .await;
+    let again = again["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(again.ends_with(&format!("pid={first_pid}")), "{again}");
+
+    // Files that do not match the reviewed digest never run.
+    let tampered = memory_request(
+        &mut socket,
+        &generation,
+        "mcp-list-2",
+        json!({"operation": "mcp.request", "server": server(&"b".repeat(64), &"c".repeat(64)), "method": "tools/list", "params": {}, "timeoutMs": 10000}),
+    )
+    .await;
+    assert_eq!(tampered["kind"], "unavailable", "{tampered}");
+    assert_eq!(tampered["reason"], "package", "{tampered}");
+
+    // Only tools/list and tools/call are relayed.
+    let other = memory_request(
+        &mut socket,
+        &generation,
+        "mcp-other-1",
+        json!({"operation": "mcp.request", "server": server(&key, &digest), "method": "resources/list", "params": {}, "timeoutMs": 10000}),
+    )
+    .await;
+    assert_eq!(other["kind"], "unavailable", "{other}");
+    assert_eq!(other["reason"], "invalid", "{other}");
+}
+
 /// Runs `dxd git-credential get` for a github.com repository, as Git does,
 /// and returns its output once it exits.
 fn git_credential_helper(fixture: &Fixture) -> Helper {

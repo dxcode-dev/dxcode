@@ -18,6 +18,7 @@ const CONFIG_KEYS = new Set([
   "modelDeploymentProviders",
   "modelEndpointAllowlist",
   "bugReportReaders",
+  "deploymentAdminEmails",
   "bugReportDestination",
   "dxdBinary",
   "integrations",
@@ -335,6 +336,16 @@ export const validateSelfhostConfig = (input) => {
     )
   )
     throw new Error("bugReportReaders must be a list of email addresses.");
+  // Deployment administrators: verified emails, none by default.
+  const deploymentAdminEmails = input.deploymentAdminEmails ?? [];
+  if (
+    !Array.isArray(deploymentAdminEmails) ||
+    deploymentAdminEmails.some(
+      (value) =>
+        typeof value !== "string" || !/^[^\s@,]+@[^\s@,]+$/.test(value),
+    )
+  )
+    throw new Error("deploymentAdminEmails must be a list of email addresses.");
   // Configs written before Containers existed installed E2B. An empty list
   // offers no provider on the deployment's account: people and workspaces
   // connect their own.
@@ -428,6 +439,15 @@ export const validateSelfhostConfig = (input) => {
       : {
           bugReportReaders: [
             ...new Set(bugReportReaders.map((email) => email.toLowerCase())),
+          ].sort(),
+        }),
+    ...(deploymentAdminEmails.length === 0
+      ? {}
+      : {
+          deploymentAdminEmails: [
+            ...new Set(
+              deploymentAdminEmails.map((email) => email.toLowerCase()),
+            ),
           ].sort(),
         }),
     ...(forwarding ? { bugReportDestination } : {}),

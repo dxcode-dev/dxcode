@@ -72,6 +72,7 @@ import {
 } from "../model-subscriptions/github-copilot/provider.js";
 import { PersonalModelSubscriptionRepositoryD1 } from "../model-subscriptions/repository-d1.js";
 import { PersonalModelSubscriptionService } from "../model-subscriptions/service.js";
+import { recordPluginModelUsage } from "../usage/recorder.js";
 import {
   pruneSubmissionUsageAttributions,
   readSubmissionUsageAttribution,
@@ -410,7 +411,27 @@ interface CompleteEnvelope {
    * completion with attachments never joins another one.
    */
   readonly attachments?: ReadonlyArray<CompleteAttachment>;
+  /**
+   * A plugin's own model call (`ctx.ai.generate`): it never joins another
+   * completion, runs at the plugin's effort, and is recorded in the usage
+   * ledger against the Thread, as the agent's own turns are.
+   */
+  readonly plugin?: { readonly id: string; readonly name: string };
+  /** The plugin's effort; `none` sends no reasoning. Default low. */
+  readonly reasoning?: CompleteReasoning;
 }
+
+const COMPLETE_REASONING = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+type CompleteReasoning = (typeof COMPLETE_REASONING)[number];
 
 interface CompleteAttachment {
   readonly data: string;
@@ -438,6 +459,14 @@ const isCompleteEnvelope = (value: unknown): value is CompleteEnvelope => {
     envelope.message !== "" &&
     Number.isInteger(envelope.maxTokens) &&
     (envelope.maxTokens ?? 0) > 0 &&
+    (envelope.plugin === undefined ||
+      (typeof envelope.plugin?.id === "string" &&
+        envelope.plugin.id !== "" &&
+        typeof envelope.plugin.name === "string")) &&
+    (envelope.reasoning === undefined ||
+      (COMPLETE_REASONING as ReadonlyArray<unknown>).includes(
+        envelope.reasoning,
+      )) &&
     (envelope.attachments === undefined ||
       (Array.isArray(envelope.attachments) &&
         envelope.attachments.length <= 4 &&
@@ -491,6 +520,8 @@ const anthropicDocuments = (payload: unknown) => {
 };
 
 const COMPLETE_TIMEOUT_MS = 25_000;
+/** A plugin's call may reason longer; the plugin host waits 60 seconds. */
+const COMPLETE_PLUGIN_TIMEOUT_MS = 55_000;
 
 const completionRequest = (envelope: CompleteEnvelope) =>
   JSON.stringify([
@@ -1408,7 +1439,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     envelope: CompleteEnvelope,
     requestSignal: AbortSignal,
   ) {
-    if (envelope.attachments !== undefined) {
+    // Media analysis and plugins' own calls are each their own completion:
+    // only the Thread's owner may ask, and nothing joins them.
+    if (envelope.attachments !== undefined || envelope.plugin !== undefined) {
       const owner = await this.#db()
         .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
         .bind(envelope.threadId)
@@ -1461,9 +1494,11 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     const started = performance.now();
     const attachments = envelope.attachments ?? [];
     const timeoutMs =
-      attachments.length === 0
-        ? COMPLETE_TIMEOUT_MS
-        : COMPLETE_ATTACHMENTS_TIMEOUT_MS;
+      envelope.plugin !== undefined
+        ? COMPLETE_PLUGIN_TIMEOUT_MS
+        : attachments.length === 0
+          ? COMPLETE_TIMEOUT_MS
+          : COMPLETE_ATTACHMENTS_TIMEOUT_MS;
     const signal = AbortSignal.any([
       requestSignal,
       AbortSignal.timeout(timeoutMs),
@@ -1490,8 +1525,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     // Code Thread's title waits for its first run (see claude-code/registration.ts).
     if (route.model.api === CLAUDE_CODE_API)
       return jsonResponse({ code: CLAUDE_CODE_TITLE_DEFERRED }, 409);
-    // Low effort is supported across the catalog, unlike "off" (GLM 5.3 Flash).
-    const reasoning = "low";
+    // Low effort is supported across the catalog, unlike "off" (GLM 5.3
+    // Flash); a plugin may ask for another, and `none` sends none.
+    const asked = envelope.reasoning ?? "low";
+    const reasoning = asked === "none" ? undefined : asked;
     // pi's API adapters read the prompt only from the transcript's leading
     // system message; a raw `systemPrompt` field is ignored.
     const pdf = attachments.some(
@@ -1621,7 +1658,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         ? failureResponse(adapterFailure, adapterFailure.status)
         : jsonResponse({ code: "COMPLETION_FAILED" }, 502);
     }
-    // Not recorded in the usage ledger; this log is its only accounting.
+    const durationMs = Math.round(performance.now() - started);
     settingsPersistenceLogger.info("One-shot completion finished.", {
       event: "model_one_shot_completed",
       threadId: pin.threadId,
@@ -1629,8 +1666,31 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       model: canonical,
       inputTokens: final.message.usage.input,
       outputTokens: final.message.usage.output,
-      durationMs: Math.round(performance.now() - started),
+      durationMs,
+      ...(envelope.plugin === undefined
+        ? {}
+        : { pluginId: envelope.plugin.id, plugin: envelope.plugin.name }),
     });
+    // A title or media analysis is dx's own; a plugin's call is the
+    // owner's, so it counts in the Thread's usage and cost like a turn.
+    if (envelope.plugin !== undefined)
+      await recordPluginModelUsage(this.env as Bindings, {
+        threadId: pin.threadId,
+        pluginName: envelope.plugin.name,
+        connectionId: pin.connection.id,
+        providerId: route.model.provider,
+        modelId: route.model.id,
+        observedProviderName: pin.connection.name,
+        usage: final.message.usage,
+        durationMs,
+      }).catch((error: unknown) => {
+        settingsPersistenceLogger.warn("Plugin model usage was not recorded.", {
+          event: "plugin_model_usage_record_failed",
+          threadId: pin.threadId,
+          pluginId: envelope.plugin?.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     return jsonResponse(
       {
         text: final.message.content

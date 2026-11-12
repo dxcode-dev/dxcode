@@ -17,6 +17,8 @@ import {
   DxdFilesSaveResult,
   type DxdFilesWriteOperation,
   DxdFilesWriteResult,
+  type DxdMcpRequestOperation,
+  DxdMcpResult,
   DxdSandboxChunkHeader,
   type DxdStorageExportOperation,
   DxdStorageExportResult,
@@ -403,6 +405,56 @@ export async function transferThreadStorage(
     throw unavailable("unknown");
   }
 }
+
+/**
+ * Relay one request to a plugin's local MCP server in the Thread's Orb: the
+ * execution object wakes the Orb and its dxd starts the server if needed.
+ * Throws when the workspace is unavailable or its daemon cannot run servers.
+ */
+export const requestThreadMcp = async (
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdMcpRequestOperation,
+): Promise<DxdMcpResult> => {
+  const namespace = bindings.THREAD_EXECUTION;
+  if (namespace === undefined) throw unavailable("known");
+  try {
+    const response = await namespace
+      .get(namespace.idFromName(threadId))
+      .fetch("https://thread.internal/mcp/request", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-dx-mcp-request": "1",
+          "x-dx-thread-id": threadId,
+        },
+        body: JSON.stringify(operation),
+      });
+    if (response.status === 409) {
+      await response.body?.cancel();
+      throw new McpDaemonOutdated();
+    }
+    if (!response.ok) {
+      const failure = Schema.decodeUnknownOption(DaemonFailureResponse)(
+        await response.json().catch(() => undefined),
+      );
+      throw unavailable(
+        Option.isSome(failure) ? failure.value.outcome : "unknown",
+      );
+    }
+    return Schema.decodeUnknownSync(DxdMcpResult)(await response.json());
+  } catch (cause) {
+    if (
+      cause instanceof DaemonUnavailable ||
+      cause instanceof McpDaemonOutdated
+    )
+      throw cause;
+    throw unavailable("unknown");
+  }
+};
+
+/** The Thread's daemon predates local MCP servers and has not updated yet. */
+export class McpDaemonOutdated extends Data.TaggedError("McpDaemonOutdated") {}
 
 /** The Thread's daemon predates storage transfers and has not updated yet. */
 export class StorageTransferOutdated extends Data.TaggedError(

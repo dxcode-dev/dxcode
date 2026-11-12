@@ -77,7 +77,7 @@ describe("plugin trigger webhook ingress", () => {
   it("authenticates the capability and deduplicates accepted events", async () => {
     const { triggerId, capability } = await fixture();
     const body = JSON.stringify({
-      event: "build.completed",
+      event: "trigger.received",
       data: { build: 49 },
     });
     const headers = signedHeaders();
@@ -130,7 +130,7 @@ describe("plugin trigger webhook ingress", () => {
 
   it("rejects wrong tokens, stale timestamps, invalid events, media, and size", async () => {
     const { triggerId, capability } = await fixture();
-    const body = JSON.stringify({ event: "build.completed", data: {} });
+    const body = JSON.stringify({ event: "trigger.received", data: {} });
     expect(
       (
         await ingress(
@@ -177,7 +177,7 @@ describe("plugin trigger webhook ingress", () => {
           triggerId,
           capability,
           JSON.stringify({
-            event: "build.completed",
+            event: "trigger.received",
             data: "x".repeat(65_536),
           }),
           signedHeaders(),
@@ -213,7 +213,7 @@ describe("plugin trigger webhook ingress", () => {
 
     // A chunked body under the cap still lands.
     const small = new TextEncoder().encode(
-      JSON.stringify({ event: "build.completed", data: { build: 50 } }),
+      JSON.stringify({ event: "trigger.received", data: { build: 50 } }),
     );
     const accepted = await send(
       new ReadableStream<Uint8Array>({
@@ -270,7 +270,7 @@ describe("plugin trigger webhook ingress", () => {
       )
       .run();
     const body = JSON.stringify({
-      event: "build.completed",
+      event: "trigger.received",
       data: { exact: true },
     });
     const timestamp = String(Date.now());
@@ -309,7 +309,7 @@ describe("plugin trigger webhook ingress", () => {
         await ingress(
           triggerId,
           capability,
-          JSON.stringify({ event: "build.completed", data: {} }),
+          JSON.stringify({ event: "trigger.received", data: {} }),
           signedHeaders(),
         )
       ).status,

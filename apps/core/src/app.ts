@@ -9,6 +9,12 @@ import { attachmentRoutes } from "./attachments/routes.js";
 import { authenticate } from "./auth/authenticate.js";
 import { authorizeApiTokenScope } from "./auth/authorize-api-token-scope.js";
 import { authorizeThread } from "./auth/authorize-thread.js";
+import { makeDeploymentAdminRoutes } from "./auth/deployment-admin.js";
+import {
+  registeredDeploymentAdminRoutes,
+  registeredDeploymentHookRoutes,
+  registeredDeploymentRoutes,
+} from "./auth/deployment-admin-registration.js";
 import { enforceThreadActive } from "./auth/enforce-thread-active.js";
 import { authRoutes } from "./auth/routes.js";
 import { threadAutomationRoutes } from "./automations/routes.js";
@@ -35,6 +41,9 @@ import { installRuntimeTracing } from "./observability/platform-tracing.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
 import { confirmMissesAtPrimary, d1Session } from "./persistence/d1-session.js";
+import { pluginAgentRoutes } from "./plugins/agents/routes.js";
+import { mcpAppViewRoutes } from "./plugins/code/mcp-apps-route.js";
+import { pluginThreadUiRoutes } from "./plugins/thread-ui/routes.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
 import { threadPortalRoutes } from "./portals/routes.js";
@@ -69,6 +78,7 @@ import { threadDesktopRoutes } from "./thread-desktop/routes.js";
 import { threadFilesRoutes } from "./thread-files/routes.js";
 import { threadSandboxFileRoutes } from "./thread-files/sandbox.js";
 import { threadSearchRoutes } from "./thread-search/routes.js";
+import { messageReactionRoutes } from "./thread-sharing/message-reactions.js";
 import { shareThreadReads } from "./thread-sharing/middleware.js";
 import {
   sharedThreadRoutes,
@@ -78,11 +88,11 @@ import {
 import { threadStorageRoutes } from "./thread-storage/routes.js";
 import { threadUsageRoutes } from "./thread-usage/routes.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
+import { createThreadMessageEditRoutes } from "./threads/message-edit-route.js";
 import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
 import { threadDraftRoutes } from "./threads/thread-draft-route.js";
-import { createThreadMessageEditRoutes } from "./threads/message-edit-route.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
 
 installRuntimeTracing();
@@ -113,6 +123,10 @@ app.route("/api/notifications/unsubscribe", notificationUnsubscribeRoutes);
 app.route("/api/feedback-widget", feedbackWidgetPublicRoutes);
 app.route("/api/source/bitbucket/git", bitbucketGitGatewayRoutes);
 app.route("/v1/integrations/github", githubWebhookRoutes);
+// A deployment's own hooks that outside services call, signing each request
+// themselves, so no session. Other /v1/deployment paths fall through to the
+// signed-in routes below.
+app.route("/v1/deployment", registeredDeploymentHookRoutes);
 app.route("/v1", threadDaemonRoutes);
 // Navigated to, not fetched: it redirects to sign-in instead of answering 401.
 app.route("/v1/portal-auth", portalAuthRoutes);
@@ -127,11 +141,18 @@ useSpacesGate(app);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);
+app.route(
+  "/v1/deployment-admin",
+  makeDeploymentAdminRoutes(registeredDeploymentAdminRoutes),
+);
+// A deployment's own routes for every signed-in person.
+app.route("/v1/deployment", registeredDeploymentRoutes);
 app.route("/v1/dictation", dictationRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
 app.route("/v1/integrations/github", githubControlPlaneRoutes);
+app.route("/v1/plugin-agents", pluginAgentRoutes);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/projects", projectRepositoryBrowseRoutes);
 app.route("/v1/realtime", realtimeRoutes);
@@ -171,6 +192,10 @@ app.route("/v1/threads", threadArtifactRoutes);
 // A Space's message comments; `/message-comments/*` also matches the list.
 app.use("/v1/threads/:threadId/message-comments/*", authorizeThread);
 app.route("/v1/threads", messageCommentRoutes);
+// Reactions on a shared Thread's messages; `/message-reactions/*` also
+// matches the list.
+app.use("/v1/threads/:threadId/message-reactions/*", authorizeThread);
+app.route("/v1/threads", messageReactionRoutes);
 // `/terminal/*` also matches `/terminal`: the attach and its warm-up.
 app.use("/v1/threads/:threadId/terminal/*", authorizeThread);
 app.use("/v1/threads/:threadId/terminal/*", enforceThreadActive);
@@ -206,6 +231,11 @@ app.route(
     routes: async () => dxAgentRoutes,
   }),
 );
+// Installed plugins' prompts, notices, quick actions, and commands; the
+// list is `/plugin-ui`, everything else is under it.
+app.use("/v1/threads/:threadId/plugin-ui", authorizeThread);
+app.use("/v1/threads/:threadId/plugin-ui/*", authorizeThread);
+app.route("/v1/threads", pluginThreadUiRoutes);
 app.use("/v1/threads/:threadId/quick-actions", authorizeThread);
 app.route("/v1/threads", threadQuickActionsRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
@@ -213,6 +243,8 @@ app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
 app.route("/v1/threads", threadDesktopRoutes);
 // Per person, not per Thread: a member's panes never replace the owner's.
 app.route("/v1/threads", threadPaneLayoutRoutes);
+app.use("/v1/threads/:threadId/mcp-apps/*", authorizeThread);
+app.route("/v1/threads", mcpAppViewRoutes);
 // Per person too: each member of a shared Thread has their own draft.
 app.route("/v1/threads", threadDraftRoutes);
 app.route("/v1/agents/dx", dxAgentRoutes);

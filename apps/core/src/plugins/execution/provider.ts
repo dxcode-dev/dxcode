@@ -40,6 +40,7 @@ import {
   findProvider,
   providerCapabilities,
 } from "../registry.js";
+import { deploymentSettings } from "./deployment-preparation.js";
 import { executionWorkspaceTools } from "./tools.js";
 
 /**
@@ -807,7 +808,13 @@ export const composeExecutionWorkspaces = (
         deploymentOrbs[entry.provider.providerId]?.inactivityMs;
       return {
         account: { scope: "deployment" },
-        credentials: key === "" ? undefined : Redacted.make({ apiKey: key }),
+        credentials:
+          key === ""
+            ? undefined
+            : Redacted.make({
+                ...deploymentSettings(bindings, entry.provider.providerId),
+                apiKey: key,
+              }),
         profile,
         ...(inactivityMs === undefined ? {} : { inactivityMs }),
       };

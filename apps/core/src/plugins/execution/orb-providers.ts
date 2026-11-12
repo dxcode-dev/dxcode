@@ -88,6 +88,12 @@ export interface OrbProviderSetInput {
    * deployment presents it under its own name (`presentedDeployment`).
    */
   readonly hiddenProviders?: ReadonlySet<string>;
+  /**
+   * Deployment accounts closed to the person (a deployment's own offer
+   * before it launches, `registeredClosedOrbProviders`): neither listed nor
+   * started, even when presented under the deployment's name.
+   */
+  readonly closedProviders?: ReadonlySet<string>;
   /** Providers whose deployment account is presented as the deployment's own Orb. */
   readonly presentedDeployment?: ReadonlySet<string>;
 }
@@ -173,6 +179,7 @@ export const orbProviderSet = (
   return plugin.providers.flatMap((provider): Array<OrbProviderMember> => {
     const providerId = provider.id as ExecutionProviderId;
     if (!input.profileAdapters.has(providerId)) return [];
+    if (input.closedProviders?.has(providerId) === true) return [];
     const hidden = input.hiddenProviders?.has(providerId) === true;
     const deployment =
       input.deploymentProviders.some(
@@ -368,6 +375,11 @@ export const resolveThreadExecutionPin = async (input: {
    * spend no D1 call on it.
    */
   readonly hiddenProviders?: () => Promise<ReadonlySet<string>>;
+  /**
+   * The deployment accounts closed to the person (`registeredClosedOrbProviders`);
+   * a Thread on one is refused as if the deployment had no such provider.
+   */
+  readonly closedProviders?: () => Promise<ReadonlySet<string>>;
   /** How the deployment presents its own accounts; defaults to the registered ones. */
   readonly deploymentOrbs?: DeploymentOrbs;
 }): Promise<ThreadExecutionPin | undefined> => {
@@ -411,7 +423,9 @@ export const resolveThreadExecutionPin = async (input: {
     )
       ? deploymentPin
       : undefined;
+  const closedProviders = await input.closedProviders?.();
   const member = orbProviderSet({
+    ...(closedProviders === undefined ? {} : { closedProviders }),
     deploymentProviders,
     profileAdapters: new Set(
       catalog.configuration.profiles.map(({ adapter }) => adapter as string),

@@ -314,6 +314,19 @@ export const SigningKeyRepositoryD1 = (db: D1Database) =>
         insertVerification: Effect.fn(
           "SigningKeyRepository.insertVerification",
         )(function* (key) {
+          // A key removed earlier stays as a revoked row, and (user,
+          // fingerprint) is unique: adding the key back replaces that row.
+          yield* Effect.tryPromise({
+            try: () =>
+              db
+                .prepare(
+                  `DELETE FROM personal_verification_key
+                   WHERE user_id = ? AND fingerprint = ? AND status = 'revoked'`,
+                )
+                .bind(key.userId, key.fingerprint)
+                .run(),
+            catch: unavailable("settings.signingKeys.insertVerification"),
+          });
           const result = yield* Effect.result(
             Effect.tryPromise({
               try: () =>

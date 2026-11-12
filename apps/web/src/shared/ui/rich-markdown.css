@@ -516,3 +516,12 @@
   flex: none;
   font-variant-numeric: tabular-nums;
 }
+/* An MCP App's card in its tool row; the view paints its own surface. */
+.markdown-view.is-mcp-app {
+  margin: 6px 0 0;
+}
+.markdown-view.is-mcp-app.is-bordered .markdown-view-slot {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}

@@ -2,7 +2,6 @@ import {
   type MessageAttachment,
   parseMessageAttachments,
   type SpacePost,
-  type SpacePostReaction,
 } from "@dx/api";
 import { epochOf } from "../space-format.js";
 
@@ -29,22 +28,6 @@ const sameContent = (posted: string, text: string) => {
     a.attachments.map(({ id }) => id).join() ===
       b.attachments.map(({ id }) => id).join()
   );
-};
-
-export const REACTION_EMOJI: Record<SpacePostReaction, string> = {
-  thumbs_up: "👍",
-  heart: "❤️",
-  joy: "😂",
-  eyes: "👀",
-  wave: "👋",
-};
-
-export const REACTION_NAME: Record<SpacePostReaction, string> = {
-  thumbs_up: "Thumbs Up",
-  heart: "Heart",
-  joy: "Joy",
-  eyes: "Eyes",
-  wave: "Wave",
 };
 
 /** Epoch milliseconds of a post's timestamp. */

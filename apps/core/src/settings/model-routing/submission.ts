@@ -555,3 +555,39 @@ export const resolveRouteSubmission = async (
     thinking: slot.thinking,
   };
 };
+
+/**
+ * The Claude plan a plugin agent's Thread runs on when its model is a Claude
+ * Code model and nobody picked one. A plugin agent has no composer to ask
+ * in, so with several enabled plans dx picks as the automatic pick does
+ * (`pickClaudePlan`: room left, then the soonest reset), whether or not the
+ * owner turned the automatic pick on. With one plan or none it leaves the
+ * choice to creation. When every plan is used up it refuses with the first
+ * reset time, as the automatic pick does.
+ */
+export const pluginAgentClaudePlan = async (
+  bindings: Bindings,
+  userId: UserId,
+  selection: ThreadModelSelection | undefined,
+): Promise<string | undefined> => {
+  const db = bindings.DB;
+  if (
+    db === undefined ||
+    selection?.kind !== "model" ||
+    !isClaudeCodeModel(selection.model)
+  )
+    return undefined;
+  const plans = (await loadRoutableConnections(db, userId)).filter(
+    ({ providerId, enabled }) =>
+      providerId === CLAUDE_CODE_PROVIDER_ID && enabled,
+  );
+  if (plans.length <= 1) return undefined;
+  const auto = await autoClaudePlan(db, plans, selection.model);
+  if (auto?.kind === "used-up")
+    throw new ClaudePlanRefused({
+      reason: "used-up",
+      message: `Every Claude plan is used up; ${auto.name} resets first, at ${resetText(auto.resetsAt)}. Start the Thread after then.`,
+      resetsAt: auto.resetsAt,
+    });
+  return auto?.connectionId;
+};

@@ -16,9 +16,11 @@ import {
   MessageAuthorLabel,
   useMessageAuthor,
 } from "./sharing/message-authors.js";
+import { MessageReactionChips } from "./sharing/message-reactions.js";
 import {
   AutomationMessage,
   CommentPromptMessage,
+  PluginPostMessage,
   ThreadSourceMessage,
 } from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
@@ -32,7 +34,14 @@ import {
   transcriptRowsByTurn,
 } from "./transcript-view-model.js";
 import { TranscriptTurn } from "./transcript-work.js";
-import { useThreadPresentation } from "./use-thread-presentation.js";
+import {
+  useThreadPresentation,
+  useThreadPresentationValue,
+} from "./use-thread-presentation.js";
+
+/** The presentation key of the transcript's jump to the end on send. */
+export const TRANSCRIPT_FOLLOW_ON_SEND = "transcript-follow-on-send";
+
 import { useTranscriptVirtualizer } from "./use-transcript-virtualizer.js";
 
 const ROW_ESTIMATE_PX = 56;
@@ -166,6 +175,7 @@ function TranscriptRowShellContent({
   const fromThread = user ? row.sourceThreadId : undefined;
   const automation = user ? row.automation : undefined;
   const commentOn = user ? row.commentOn : undefined;
+  const plugin = user ? row.plugin : undefined;
   const author = useMessageAuthor(
     user ? row.author : undefined,
     user ? row.admitted : true,
@@ -173,29 +183,46 @@ function TranscriptRowShellContent({
   );
   const editing = React.use(MessageEditContext)?.editingRowId === row.id;
   // What people and the agent wrote has a menu; tool work does not.
+  // The viewer's own prompts sit on the right; replies, other people's
+  // messages, and messages from other Threads on the left.
+  const side =
+    user &&
+    fromThread === undefined &&
+    automation === undefined &&
+    commentOn === undefined &&
+    plugin === undefined &&
+    (author === undefined || author.mine)
+      ? "right"
+      : "left";
   const withMenu = (article: React.ReactElement, content: React.ReactNode) =>
     row.kind === "user-prompt" ||
     row.kind === "assistant-prose" ||
     row.kind === "final-answer" ? (
-      <MessageActions
-        row={row}
-        render={article}
-        // The viewer's own prompts sit on the right; replies, other people's
-        // messages, and messages from other Threads on the left.
-        side={
-          user &&
-          fromThread === undefined &&
-          automation === undefined &&
-          commentOn === undefined &&
-          (author === undefined || author.mine)
-            ? "right"
-            : "left"
-        }
-      >
+      <MessageActions row={row} render={article} side={side}>
         {content}
+        <MessageReactionChips row={row} side={side} />
       </MessageActions>
     ) : (
       React.cloneElement(article, undefined, content)
+    );
+  if (plugin !== undefined && row.kind === "user-prompt")
+    return withMenu(
+      <article
+        id={row.id}
+        data-row-id={row.id}
+        data-row-kind={row.kind}
+        data-plugin={plugin.id}
+        ref={measureElement}
+        tabIndex={-1}
+        className="transcript-row conversation-message plugin-post-row"
+      />,
+      <PluginPostMessage
+        plugin={plugin}
+        note={row.chat === true}
+        text={row.text}
+        pending={!row.admitted || steering}
+        {...(row.sentAt === undefined ? {} : { sentAt: row.sentAt })}
+      />,
     );
   if (fromThread !== undefined && row.kind === "user-prompt")
     return withMenu(
@@ -686,6 +713,12 @@ function useTranscriptViewport({
     createTranscriptPositionStore,
   );
   const [restored] = React.useState(() => position.saved());
+  // Where the transcript leaves its jump to the end while it is attached,
+  // so the composer (agent-panel.tsx) brings the reader down on send.
+  const followOnSend = useThreadPresentationValue<(() => void) | undefined>(
+    TRANSCRIPT_FOLLOW_ON_SEND,
+    undefined,
+  );
   const [scrollMargin, setScrollMargin] = React.useState(restored?.margin ?? 0);
   const [scrollElement, setScrollElement] =
     React.useState<HTMLDivElement | null>(null);
@@ -946,6 +979,17 @@ function useTranscriptViewport({
       lastReadRef.current = lastRowId;
     },
   );
+  // Sending a message shows it and the reply, even when the reader had
+  // scrolled up: the virtualizer follows appends only at the end. Its own
+  // ref, so the viewport's attach keeps its identity.
+  const followRef = (element: HTMLSpanElement | null) => {
+    if (element === null) return;
+    const follow = () => jumpToEnd(lastReadRef.current);
+    followOnSend.set(follow);
+    return () => {
+      if (followOnSend.get() === follow) followOnSend.set(undefined);
+    };
+  };
   // The virtualizer keeps its identity, so navigation never changes and the
   // outline need not re-render while a reply streams.
   const [navigateToRow] = React.useState(
@@ -981,6 +1025,7 @@ function useTranscriptViewport({
     historySentinelRef,
     scheduleHistoryDrain,
     jumpToEnd,
+    followRef,
     navigateToRow,
   };
 }
@@ -1050,6 +1095,7 @@ export function TranscriptViewport(
     refreshVisiblePromptRows,
     historySentinelRef,
     jumpToEnd,
+    followRef,
     navigateToRow,
   } = useTranscriptViewport(props);
   const focusRef = useMessageFocus({
@@ -1178,6 +1224,7 @@ export function TranscriptViewport(
         />
       </div>
       {focus === undefined ? null : <span hidden ref={focusRef} />}
+      <span hidden ref={followRef} />
     </>
   );
 }

@@ -5,11 +5,11 @@ import { PluginTriggersSettings } from "./triggers-settings.js";
 export const personalPluginTriggersSettingsSection = {
   id: "personal-triggers",
   slug: "triggers",
-  group: "projects-orbs",
+  group: "library",
   scope: "personal",
   label: "Triggers",
   title: "Triggers",
-  description: "Manage authenticated webhooks and durable plugin deliveries.",
+  description: "Webhook URLs that send deliveries to your plugins' code.",
   icon: Webhook,
   component: PluginTriggersSettings,
 } satisfies SettingsSectionRegistration;

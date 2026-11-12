@@ -14,6 +14,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
+import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { snoozeWakeText } from "../../shared/thread-snooze-presets.js";
 import { Avatar } from "../../shared/ui/avatar.js";
@@ -36,7 +37,6 @@ import {
   ThreadParticipantsMenuContent,
 } from "./sharing/thread-participants.js";
 import { ThreadMenu, ThreadMenuSubmenu } from "./thread-menu.js";
-import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { TitleBarItemSlot } from "./title-bar-item.js";
 import { useTitleBarOverflow } from "./title-bar-overflow.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
@@ -344,9 +344,25 @@ export function ThreadHeader({
             hidden={hidden}
           />
         ) : null}
-        {compact ? null : (
+        {compact ? null : thread.pluginAgent === undefined ? (
           <span className="thread-title-meta" title={summary.title}>
             {selectionLabel}
+          </span>
+        ) : (
+          <span
+            className="thread-title-meta thread-title-agent"
+            title={`Runs the ${thread.pluginAgent.label} agent from the ${thread.pluginAgent.plugin} plugin, on ${summary.title}`}
+            style={
+              thread.pluginAgent.color === undefined
+                ? undefined
+                : ({
+                    "--thread-agent-color": thread.pluginAgent.color,
+                  } as React.CSSProperties)
+            }
+          >
+            <span className="thread-title-agent-dot" aria-hidden="true" />
+            {thread.pluginAgent.label}
+            <span className="thread-title-agent-model">{summary.label}</span>
           </span>
         )}
         {shared ? (

@@ -38,6 +38,7 @@ const sameRequest = (
   previous.model === next.model &&
   previous.effort === next.effort &&
   previous.claudeConnectionId === next.claudeConnectionId &&
+  previous.pluginAgentMode === next.pluginAgentMode &&
   previous.runnerProfileId === next.runnerProfileId &&
   previous.visibility === next.visibility &&
   previous.body === next.body &&
@@ -60,6 +61,7 @@ export async function submitNewThread({
   model,
   effort,
   claudePlan,
+  pluginAgentMode,
   runnerProfileId,
   visibility,
   projects,
@@ -81,6 +83,8 @@ export async function submitNewThread({
   readonly effort?: ClaudeCodeEffort;
   /** The Claude plan, sent only with a Claude Code model. */
   readonly claudePlan?: string;
+  /** An installed plugin's agent mode the Thread starts in. */
+  readonly pluginAgentMode?: string;
   readonly runnerProfileId?: RunnerProfileId;
   /** `workspace` shares the Thread with the workspace from its start. */
   readonly visibility?: ThreadVisibility;
@@ -130,16 +134,21 @@ export async function submitNewThread({
     const selectedProfile = reasoningModeId(profile);
     // Effort belongs to Claude Code models only; other selections have none,
     // so a recovered attempt without one still matches.
-    const claudeEffort =
-      model !== undefined && isClaudeCodeModel(model) ? effort : undefined;
-    const claudeConnectionId =
-      model !== undefined && isClaudeCodeModel(model) ? claudePlan : undefined;
+    // A plugin agent's Thread runs on the agent's model, so a Claude Code
+    // pick the composer still holds sends no effort or plan with it.
+    const claudeCode =
+      pluginAgentMode === undefined &&
+      model !== undefined &&
+      isClaudeCodeModel(model);
+    const claudeEffort = claudeCode ? effort : undefined;
+    const claudeConnectionId = claudeCode ? claudePlan : undefined;
     const request = {
       projectId: project?.id,
       profile: selectedProfile,
       model,
       ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
+      ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
       runnerProfileId,
       ...(visibility === "workspace" ? { visibility } : {}),
       body,
@@ -181,6 +190,7 @@ export async function submitNewThread({
             },
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
+      ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
       ...(visibility === "workspace" ? { visibility } : {}),
       threadId,
       initialMessage: {

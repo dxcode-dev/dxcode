@@ -1,4 +1,5 @@
 import type { Sandbox } from "@flue/runtime";
+import { claudeCodeToolGate } from "./tool-gate.js";
 import {
   ClaudeCodeRun,
   claudeCodeAttemptKey,
@@ -43,8 +44,12 @@ class ClaudeCodeRuns {
     const runs = this.#runs(threadId);
     let run = runs.get(key);
     if (run === undefined) {
-      run = new ClaudeCodeRun(key, sandbox, base, () =>
-        reconnectClaudeCodeSandbox(threadId),
+      run = new ClaudeCodeRun(
+        key,
+        sandbox,
+        base,
+        () => reconnectClaudeCodeSandbox(threadId),
+        () => claudeCodeToolGate(threadId),
       );
       runs.set(key, run);
     }

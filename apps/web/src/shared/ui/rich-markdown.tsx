@@ -36,6 +36,7 @@ import {
   requestMermaid,
   subscribeMermaid,
 } from "./markdown-mermaid.js";
+import { MarkdownRemarkContext } from "./markdown-remark-context.js";
 import { MarkdownView } from "./markdown-view.js";
 import {
   ThreadReferenceContext,
@@ -874,13 +875,16 @@ const MarkdownDocument = React.memo(function MarkdownDocument({
   const resolveFile = React.useContext(MarkdownFileLinkContext);
   const mentions = React.useContext(MarkdownMentionContext);
   const references = React.useContext(ThreadReferenceContext);
+  const extra = React.useContext(MarkdownRemarkContext);
   const components = markdownComponents(resolveFile, mentions, references);
   const handles = mentions?.handles;
   const base = hardWrapped ? documentRemarkPlugins : remarkPlugins;
-  const plugins =
+  const mentioned =
     handles === undefined || handles.length === 0
       ? base
       : [...(base ?? []), remarkMentions(handles)];
+  const plugins =
+    extra === undefined ? mentioned : [...(mentioned ?? []), extra];
   return (
     <UnsettledMarkdown value={unsettled}>
       <ReactMarkdown

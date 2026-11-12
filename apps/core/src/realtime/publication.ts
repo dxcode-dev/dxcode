@@ -14,8 +14,11 @@ export type RealtimeThreadEventType =
   | "memory.invalidated"
   | "disk.invalidated"
   | "artifacts.invalidated"
+  | "plugin-ui.invalidated"
+  | "plugin-pane.invalidated"
   | "comments.invalidated"
   | "space.posts.invalidated"
+  | "reactions.invalidated"
   | "workspace.status";
 export type InvalidationType = Exclude<
   RealtimeThreadEventType,

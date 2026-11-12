@@ -1,6 +1,5 @@
 import {
   ListSpacePostsResponseSchema,
-  SPACE_POST_REACTIONS,
   SPACE_POSTS_DEFAULT_LIMIT,
   type SpacePost,
   type SpacePostReaction,
@@ -19,6 +18,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { request } from "../../../shared/api/client.js";
+import { toggledReactions } from "../../../shared/reactions/reaction-set.js";
 import { THREAD_FRESHNESS_SLO_MS } from "../../threads/thread-queries.js";
 import { refetchSpacePosts, spaceKeys } from "../space-cache-queries.js";
 
@@ -27,7 +27,6 @@ import { refetchSpacePosts, spaceKeys } from "../space-cache-queries.js";
 // posts.
 
 export type { SpacePost, SpacePostReaction, SpacePostRevision };
-export { SPACE_POST_REACTIONS };
 
 type SpacePostPage = (typeof ListSpacePostsResponseSchema.Type)["data"];
 
@@ -287,25 +286,6 @@ export const useEditSpacePost = (userId: UserId, spaceThreadId: ThreadId) => {
   });
 };
 
-/** The viewer's reaction toggled on a post's counts. */
-const toggledReactions = (
-  post: SpacePost,
-  reaction: SpacePostReaction,
-  on: boolean,
-): SpacePost["reactions"] => {
-  const existing = post.reactions.find((item) => item.reaction === reaction);
-  if (existing === undefined)
-    return on
-      ? [...post.reactions, { reaction, count: 1, mine: true, agent: false }]
-      : post.reactions;
-  if (existing.mine === on) return post.reactions;
-  return post.reactions.flatMap((item) => {
-    if (item.reaction !== reaction) return [item];
-    const count = item.count + (on ? 1 : -1);
-    return count <= 0 ? [] : [{ ...item, count, mine: on }];
-  });
-};
-
 /**
  * Adds or removes the viewer's reaction. The count changes at once; a
  * failure puts the server's counts back.
@@ -327,7 +307,7 @@ export const useSetSpacePostReaction = (
       await client.cancelQueries({ queryKey: key });
       updateCachedPost(client, key, input.postId, (post) => ({
         ...post,
-        reactions: toggledReactions(post, input.reaction, input.on),
+        reactions: toggledReactions(post.reactions, input.reaction, input.on),
       }));
     },
     onSuccess: (post) => updateCachedPost(client, key, post.id, () => post),

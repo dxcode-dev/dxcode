@@ -65,10 +65,13 @@ export interface NormalizedMessage {
   readonly role: "user" | "assistant" | "info";
   /**
    * User messages only: `human` is a person, `thread` another thread's
-   * agent (sent with a Thread tool), `tool_result` the results of the
-   * preceding assistant message's tool calls.
+   * agent (sent with a Thread tool), `plugin` an installed plugin's code,
+   * `tool_result` the results of the preceding assistant message's tool
+   * calls.
    */
-  readonly origin?: "human" | "thread" | "tool_result";
+  readonly origin?: "human" | "thread" | "plugin" | "tool_result";
+  /** The plugin that posted a plugin message; `sender` is not its author. */
+  readonly fromPlugin?: { readonly id: string; readonly name: string };
   /** The person who sent a human message. */
   readonly fromUserID?: string;
   /** The thread whose agent sent a cross-thread message. */
@@ -111,17 +114,23 @@ export const normalizeHistory = (page: HistoryPage): Normalized => {
       const raw = parts
         .flatMap(({ type, text }) => (type === "text" && text ? [text] : []))
         .join("\n");
-      const { author, sourceThreadId } = parseMessageAuthor(raw);
+      const { author, sourceThreadId, plugin } = parseMessageAuthor(raw);
       const text = stripMessageAuthorTags(raw).trim();
       const index = push({
         role: "user",
-        ...(sourceThreadId === undefined
+        ...(plugin !== undefined
           ? {
-              origin: "human" as const,
-              ...(author === undefined ? {} : { fromUserID: author.userId }),
+              origin: "plugin" as const,
+              fromPlugin: { id: plugin.id, name: plugin.name },
             }
-          : { origin: "thread" as const, fromThreadID: sourceThreadId }),
-        ...(author === undefined
+          : sourceThreadId === undefined
+            ? {
+                origin: "human" as const,
+                ...(author === undefined ? {} : { fromUserID: author.userId }),
+              }
+            : { origin: "thread" as const, fromThreadID: sourceThreadId }),
+        // A plugin posts as its owner; naming them would read as their words.
+        ...(author === undefined || plugin !== undefined
           ? {}
           : {
               sender: {

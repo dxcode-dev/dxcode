@@ -15,10 +15,15 @@ const job = {
   persisted: Promise.resolve(true),
 };
 
-const fakeBindings = (response: Response | Error, changes = 1) => {
+const fakeBindings = (
+  response: Response | Error | ReadonlyArray<Response>,
+  changes = 1,
+) => {
+  const answers = Array.isArray(response) ? [...response] : undefined;
   const fetch = vi.fn(async (_url: string, _init: RequestInit) => {
+    if (answers !== undefined) return answers.shift() ?? Response.error();
     if (response instanceof Error) throw response;
-    return response;
+    return (response as Response).clone();
   });
   const run = vi.fn(async () => ({ meta: { changes } }));
   const bind = vi.fn(() => ({ run }));
@@ -59,7 +64,7 @@ describe("DxTitleAgent", () => {
     expect(sanitizeGeneratedTitle("x".repeat(81))).toBeUndefined();
   });
 
-  it("replaces the pending fallback title with the generated title", async () => {
+  it("asks the owner's fast low mode for a title, not the Thread's model", async () => {
     const { bindings, fetch, prepare, bind } = fakeBindings(
       Response.json({ text: "OAuth refresh retries" }),
     );
@@ -72,7 +77,7 @@ describe("DxTitleAgent", () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({
       threadId: job.threadId,
       ownerUserId: job.ownerUserId,
-      selection: job.selection,
+      selection: { kind: "mode", profileId: "default", mode: "low" },
       message: `<user_message>\n${job.message}\n</user_message>`,
     });
     expect(prepare).toHaveBeenCalledOnce();
@@ -102,6 +107,44 @@ describe("DxTitleAgent", () => {
       /UPDATE threads SET title_pending_until = NULL\s+WHERE id = \? AND title_pending_until IS NOT NULL/,
     );
     expect(bind).toHaveBeenLastCalledWith(job.threadId);
+  });
+
+  it("falls back to the Thread's own model when the low mode cannot serve", async () => {
+    const { bindings, fetch, bind } = fakeBindings([
+      Response.json({ code: "MODEL_NOT_SERVED" }, { status: 400 }),
+      Response.json({ text: "OAuth refresh retries" }),
+    ]);
+
+    await runDxTitleAgent(bindings, job);
+
+    expect(
+      fetch.mock.calls.map(
+        ([, init]) => JSON.parse(String(init?.body)).selection,
+      ),
+    ).toEqual([
+      { kind: "mode", profileId: "default", mode: "low" },
+      job.selection,
+    ]);
+    expect(bind).toHaveBeenCalledWith("OAuth refresh retries", job.threadId);
+  });
+
+  it("asks a Claude Code Thread's own run, never another model", async () => {
+    const selection = {
+      kind: "model" as const,
+      model: "claude-code/claude-opus-5-5" as never,
+      thinking: "high" as const,
+    };
+    const { bindings, fetch, prepare } = fakeBindings(
+      Response.json({ code: "CLAUDE_CODE_TITLE_DEFERRED" }, { status: 409 }),
+    );
+
+    await runDxTitleAgent(bindings, { ...job, selection });
+
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(
+      JSON.parse(String(fetch.mock.calls[0]?.[1]?.body)).selection,
+    ).toEqual(selection);
+    expect(prepare).not.toHaveBeenCalled();
   });
 
   it("leaves a Claude Code Thread's title pending for its first run", async () => {

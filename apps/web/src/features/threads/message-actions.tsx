@@ -5,6 +5,7 @@ import * as React from "react";
 import { copyFocusedMessage, type MessageMenuKind } from "./message-copy.js";
 import { canEditMessage, MessageEditContext } from "./message-edit.js";
 import { MessageMenuItems } from "./message-menu-items.js";
+import { MessageReactionAction } from "./sharing/message-reactions.js";
 import type { TranscriptRow } from "./transcript-view-model.js";
 
 export type MessageMenuRow = Extract<
@@ -85,6 +86,7 @@ export function MessageActions({
             selected, so ⋯ stays in view as a long message scrolls. */}
         <div className="message-actions-anchor" data-side={side}>
           <div className="message-actions-controls">
+            <MessageReactionAction row={row} />
             <Menu.Root>
               <Menu.Trigger
                 className="message-actions-button"

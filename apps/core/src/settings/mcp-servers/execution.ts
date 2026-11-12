@@ -14,6 +14,7 @@ import { D1Client } from "@effect/sql-d1";
 import { DateTime, Effect, Layer, Option, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import { readRepositoryMcpConnection } from "../../plugins/repository/repository-mcp.js";
 import { SettingsAudit } from "../audit.js";
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import {
@@ -33,6 +34,7 @@ import {
   workspacePolicyDenial,
 } from "../workspace-policy/service.js";
 import { readMcpServerCredential } from "./credential.js";
+import type { LocalMcpServerData } from "./local-servers.js";
 import { mcpOAuthAccessToken } from "./oauth.js";
 import {
   decodeThreadExecutionServer,
@@ -83,6 +85,11 @@ export interface McpAgentConnectionData {
   readonly timeoutMs: number;
   readonly authenticated: boolean;
   readonly tools: ReadonlyArray<string>;
+  /**
+   * A plugin's local (stdio) server, which dxd runs in the Thread's Orb.
+   * Its tools are listed from the running server, not stored.
+   */
+  readonly local?: LocalMcpServerData;
 }
 
 const dependencies = (db: D1Database) => {
@@ -576,9 +583,23 @@ export const authorizeMcpCall = async (
   timeoutMs: number,
   toolName: string,
 ): Promise<AuthorizedMcpCall> => {
-  const connection = await Effect.runPromise(
+  const connection: AuthorizedConnection = await Effect.runPromise(
     resolveAuthorizedConnection(bindings, rawThreadId, rawServerId),
-  );
+  ).catch(async (error: unknown) => {
+    // Not one of the owner's servers: maybe one a repository plugin
+    // declared, as this Thread's latest submission recorded it
+    // (plugins/repository/repository-mcp.ts). Owner servers keep their one
+    // D1 round trip.
+    if (!(error instanceof McpInvocationForbidden) || bindings.DB === undefined)
+      throw error;
+    const repository = await readRepositoryMcpConnection(
+      bindings.DB,
+      rawThreadId,
+      rawServerId,
+    );
+    if (repository === undefined) throw error;
+    return repository;
+  });
   if (connection.server.endpoint !== expectedEndpoint) {
     throw new McpInvocationForbidden();
   }

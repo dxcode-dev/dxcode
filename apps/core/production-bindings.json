@@ -90,6 +90,18 @@
       "provenance": "authored-wrangler"
     },
     {
+      "name": "DX_DEPLOYMENT_ADMIN_EMAILS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_DEPLOYMENT_PRIVATE_CONFIG",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_DEPLOYMENT_REVISION",
       "type": "text",
       "provenance": "alchemy"
@@ -346,6 +358,29 @@
       "name": "FLUE_DX_AGENT_AGENT",
       "type": "durable-object",
       "provenance": "generated-flue"
+    },
+    {
+      "name": "LIZARD_API_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "LIZARD_PROJECT_ID",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "LIZARD_REGION",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "LOADER",
+      "type": "worker-loader",
+      "provenance": "authored-wrangler"
     },
     {
       "name": "ORB_CONTAINER",

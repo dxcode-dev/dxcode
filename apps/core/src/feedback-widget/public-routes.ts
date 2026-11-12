@@ -429,6 +429,9 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
         {
           bindings: context.env,
           ownerUserId: holder.userId as UserId,
+          // A visitor's text, not the owner's: tools that act only on the
+          // owner's own word (manage_dx) refuse it.
+          automation: "external",
           waitUntil: (promise) => context.executionCtx.waitUntil(promise),
         },
         "POST",

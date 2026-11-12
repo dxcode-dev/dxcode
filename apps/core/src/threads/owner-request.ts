@@ -1,3 +1,4 @@
+import type { MessageAutomation, MessagePlugin } from "@dx/api";
 import type { Principal, UserId } from "@dx/domain";
 import { Hono } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
@@ -32,7 +33,12 @@ export interface OwnerRequestContext {
   /** The Thread whose agent sends any message this request delivers. */
   readonly sourceThreadId?: string;
   /** The schedule or GitHub subscription delivering this request's message. */
-  readonly automation?: "schedule" | "github" | "artifact";
+  readonly automation?: MessageAutomation;
+  /**
+   * The plugin whose code posts this request's message; `note` records it
+   * in the transcript without a model call.
+   */
+  readonly plugin?: { readonly plugin: MessagePlugin; readonly note: boolean };
   /** Keeps work a route starts, such as title generation, running. */
   readonly waitUntil?: (promise: Promise<unknown>) => void;
   /** A Space's child Thread records the person it was started for. */
@@ -46,9 +52,11 @@ export interface OwnerRequestContext {
  */
 export const ownerRequest = async (
   context: OwnerRequestContext,
-  method: "GET" | "POST" | "PATCH",
+  method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
   path: string,
   body?: unknown,
+  /** A ZIP archive sent as the request body instead of JSON. */
+  zip?: Uint8Array,
 ) => {
   const [{ threadRoutes }, { dxAgentRoutes }, { settingsRoutes }] =
     await ownerRoutes();
@@ -64,6 +72,8 @@ export const ownerRequest = async (
       honoContext.set("messageSourceThreadId", context.sourceThreadId);
     if (context.automation !== undefined)
       honoContext.set("messageAutomation", context.automation);
+    if (context.plugin !== undefined)
+      honoContext.set("messagePlugin", context.plugin);
     if (context.requestedByUserId !== undefined)
       honoContext.set("threadCreation", {
         requestedByUserId: context.requestedByUserId,
@@ -79,12 +89,14 @@ export const ownerRequest = async (
     path,
     {
       method,
-      ...(body === undefined
-        ? {}
-        : {
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify(body),
-          }),
+      ...(zip !== undefined
+        ? { headers: { "content-type": "application/zip" }, body: zip.slice() }
+        : body === undefined
+          ? {}
+          : {
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(body),
+            }),
     },
     context.bindings,
     {
@@ -97,8 +109,11 @@ export const ownerRequest = async (
       props: {},
     } as unknown as ExecutionContext,
   );
-  const payload = (await response.json().catch(() => undefined)) as
-    | Record<string, unknown>
-    | undefined;
+  // A download, such as a plugin export, stays unread for the caller.
+  const payload = (
+    /json/i.test(response.headers.get("content-type") ?? "json")
+      ? await response.json().catch(() => undefined)
+      : undefined
+  ) as Record<string, unknown> | undefined;
   return { response, payload };
 };

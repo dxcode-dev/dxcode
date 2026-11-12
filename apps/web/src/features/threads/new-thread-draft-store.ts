@@ -44,6 +44,7 @@ export interface InitialThreadCreationAttempt {
   readonly model?: string;
   readonly effort?: ClaudeCodeEffort;
   readonly claudeConnectionId?: string;
+  readonly pluginAgentMode?: string;
   readonly runnerProfileId?: RunnerProfileId;
   readonly visibility?: ThreadVisibility;
   readonly body: string;

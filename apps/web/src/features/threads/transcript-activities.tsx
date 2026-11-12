@@ -1,3 +1,4 @@
+import { lazyRouteComponent } from "@tanstack/react-router";
 import { ChevronRight, FileSymlink, Sparkles } from "lucide-react";
 import * as React from "react";
 import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
@@ -7,6 +8,7 @@ import {
   ARTIFACT_TOOL_NAME,
   isArtifactCardPart,
 } from "./artifact-tool-part.js";
+import { isMcpAppPart, mcpAppCardSet } from "./mcp-app-part.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
   parseShellResult,
@@ -553,7 +555,27 @@ function ToolPartRow({
       <SkillActivationRow activation={skillActivation(part)} part={part} />
     );
   if (isArtifactCardPart(part)) return <ArtifactToolCard part={part} />;
+  if (isMcpAppPart(part)) return <McpAppToolRow part={part} />;
   return <GenericToolPartRow category={category} part={part} />;
+}
+
+/** The cards and their query load with the first call that showed any. */
+const McpAppCards = lazyRouteComponent(
+  () => import("./mcp-app-cards.js"),
+  "McpAppCards",
+);
+
+/** A `code_exec` call that showed MCP App cards: its row, then the cards. */
+function McpAppToolRow({ part }: { readonly part: ToolPart }) {
+  const cardSetId = mcpAppCardSet(part);
+  return (
+    <div className="transcript-mcp-app">
+      <GenericToolPartRow category={categoryForPart(part)} part={part} />
+      <React.Suspense fallback={<div className="markdown-view-pending" />}>
+        {cardSetId === undefined ? null : <McpAppCards cardSetId={cardSetId} />}
+      </React.Suspense>
+    </div>
+  );
 }
 
 function GenericToolPartRow({
@@ -684,6 +706,8 @@ export function TranscriptActivityList({
           />
         ) : activity.kind === "artifact" ? (
           <ArtifactToolCard key={activity.row.id} part={activity.part} />
+        ) : activity.kind === "mcp-app" ? (
+          <McpAppToolRow key={activity.row.id} part={activity.part} />
         ) : activity.kind === "skill" ? (
           <SkillActivationRow
             activation={activity.activation}

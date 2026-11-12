@@ -35,6 +35,7 @@ import * as claudeCodeProvider from "./provider.js";
 import { createClaudeCodeProvider } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
 import { ClaudeCodeStream } from "./stream.js";
+import { setClaudeCodeToolGate } from "./tool-gate.js";
 import { claudeCodeMirrorTools, claudeCodeReadTool } from "./tools.js";
 import { createClaudeCodeViewMediaTool } from "./view-media.js";
 import { claudeCodeAnswer } from "./workspace-run.js";
@@ -127,6 +128,62 @@ done
 `;
 
 /**
+ * A Claude Code that speaks the stream-json control protocol, for runs that
+ * go through the dx tool bridge: it answers the bridge's initialize (saving
+ * the request to ~/fake-initialize.json), reads the turn's input, then
+ * prints ~/claude-script.jsonl. A \`#hook <tool_use id>\` line fires a
+ * PreToolUse hook_callback for that call, waits for the bridge's answer
+ * (saved to ~/hook-<id>.json), and prints the call's result as Claude Code
+ * would: the deny reason as an error, or "ran: <command>" with the input
+ * the hook allowed.
+ */
+const PROTOCOL_CLAUDE = `#!/usr/bin/env python3
+import json, os, sys
+if len(sys.argv) > 1 and sys.argv[1] == "--version":
+    print("2.1.322 (Claude Code)")
+    sys.exit(0)
+home = os.environ["HOME"]
+calls = {}
+def out(message):
+    sys.stdout.write(json.dumps(message) + "\\n")
+    sys.stdout.flush()
+def read():
+    line = sys.stdin.readline()
+    return json.loads(line) if line else None
+initialize = read()
+json.dump(initialize, open(os.path.join(home, "fake-initialize.json"), "w"))
+out({"type": "control_response", "response": {"subtype": "success", "request_id": initialize["request_id"], "response": {"hook_on_failure_supported": True, "hooks_applied": True}}})
+read()
+for raw in open(os.path.join(home, "claude-script.jsonl")):
+    raw = raw.rstrip("\\n")
+    if raw.startswith("#hook "):
+        tool_use = raw.split(" ", 1)[1]
+        name, tool_input = calls[tool_use]
+        out({"type": "control_request", "request_id": "hook-" + tool_use, "request": {"subtype": "hook_callback", "callback_id": initialize["request"]["hooks"]["PreToolUse"][0]["hookCallbackIds"][0], "tool_use_id": tool_use, "input": {"hook_event_name": "PreToolUse", "tool_name": name, "tool_input": tool_input, "tool_use_id": tool_use}}})
+        answer = read()
+        json.dump(answer, open(os.path.join(home, "hook-" + tool_use + ".json"), "w"))
+        output = (answer["response"].get("response") or {}).get("hookSpecificOutput") or {}
+        if output.get("permissionDecision") == "deny":
+            content, error = output.get("permissionDecisionReason", "denied"), True
+        else:
+            content, error = "ran: " + str((output.get("updatedInput") or tool_input).get("command")), False
+        out({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use, "content": content, "is_error": error}]}, "parent_tool_use_id": None})
+        continue
+    if raw.strip() == "":
+        continue
+    line = json.loads(raw)
+    event = line.get("event") or {}
+    block = event.get("content_block") or {}
+    if block.get("type") == "tool_use":
+        calls[block["id"]] = (block["name"], None)
+        pending = block["id"]
+    delta = event.get("delta") or {}
+    if delta.get("type") == "input_json_delta":
+        calls[pending] = (calls[pending][0], json.loads(delta["partial_json"]))
+    out(line)
+`;
+
+/**
  * A Claude Code release older than dx can run: it fails on a flag dx passes,
  * as a real one does, before it reads any token.
  */
@@ -137,6 +194,40 @@ echo "error: unknown option '--effort'" >&2
 exit 1
 `;
 
+/**
+ * A Claude Code that discovers skills as the real CLI does, from
+ * ~/.claude/skills/<name>/SKILL.md, following links. It reads the turn's
+ * input, writes what it found to ~/skills-seen.json (each skill's name and
+ * the last line of its SKILL.md, read through the link), and answers with
+ * the names.
+ */
+const SKILLS_CLAUDE = `#!/usr/bin/env python3
+import glob, json, os, sys
+if sys.argv[1:2] == ["--version"]:
+    print("2.1.310 (Claude Code)")
+    sys.exit(0)
+sys.stdin.read()
+home = os.environ["HOME"]
+seen = {}
+for path in sorted(glob.glob(home + "/.claude/skills/*/SKILL.md")):
+    name = os.path.basename(os.path.dirname(path))
+    seen[name] = open(path).read().strip().splitlines()[-1]
+with open(home + "/skills-seen.json", "w") as out:
+    json.dump(seen, out)
+text = "skills: " + ",".join(seen)
+def emit(value):
+    print(json.dumps(value), flush=True)
+def event(value):
+    emit({"type": "stream_event", "event": value, "parent_tool_use_id": None})
+emit({"type": "system", "subtype": "init", "session_id": "skills-1", "skills": list(seen)})
+event({"type": "message_start", "message": {"id": "m1", "usage": {"input_tokens": 1, "output_tokens": 1}}})
+event({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
+event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}})
+event({"type": "content_block_stop", "index": 0})
+event({"type": "message_stop"})
+emit({"type": "result", "subtype": "success", "is_error": False, "result": text})
+`;
+
 const createGuest = async (
   options: {
     readonly claude?: boolean;
@@ -144,6 +235,8 @@ const createGuest = async (
     readonly oldClaude?: string;
     /** The downloaded installer installs the current Claude Code. */
     readonly installerWorks?: boolean;
+    /** This program as the installed Claude Code instead of the fake. */
+    readonly claudeProgram?: string;
   } = {},
 ) => {
   const root = await mkdtemp(join(tmpdir(), "dx-claude-code-"));
@@ -188,6 +281,8 @@ exec /usr/bin/awk "$@"
   const installClaude = () => claudeAt(FAKE_CLAUDE);
   if (options.oldClaude !== undefined)
     await claudeAt(OLD_CLAUDE(options.oldClaude));
+  else if (options.claudeProgram !== undefined)
+    await claudeAt(options.claudeProgram);
   else if (options.claude !== false) await installClaude();
   const base = await local({
     cwd: join(home, "workspace/repo"),
@@ -1755,6 +1850,257 @@ exec /usr/bin/tr "$@"
       content: [{ type: "text", text: "Tool mcp__dx__gone not found" }],
       isError: true,
     });
+  });
+
+  it("decides each of Claude's own tool calls the bridge asks about with the Thread's plugin gate", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    // The bridge prints a dx_hook line per PreToolUse request and waits for
+    // dx's decision file; here the CLI prints them as the bridge would.
+    const hook = (id: string, command: string) =>
+      line({
+        type: "dx_hook",
+        tool_use_id: id,
+        tool_name: "Bash",
+        tool_input: { command },
+      });
+    await guest.script([
+      init(),
+      ...response("m1", [
+        {
+          id: "toolu_force",
+          name: "Bash",
+          input: { command: "git push --force" },
+        },
+        { id: "toolu_ls", name: "Bash", input: { command: "ls" } },
+      ]),
+      "#wait gate-set",
+      hook("toolu_force", "git push --force"),
+      "#wait .local/state/dx-claude-code/mcp/hooks/toolu_force.json",
+      toolResult("toolu_force", "Force pushes are blocked."),
+      hook("toolu_ls", "ls"),
+      "#wait .local/state/dx-claude-code/mcp/hooks/toolu_ls.json",
+      toolResult("toolu_ls", "README.md"),
+      ...response("m2", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const tools = claudeCodeMirrorTools(claude.threadId);
+    expect(
+      await claude.answer({
+        messages: [user("Push, then list", 80)],
+        tools: tools.map(({ name, description }) => ({
+          name,
+          description,
+          parameters: { type: "object" } as never,
+        })),
+      }),
+    ).toMatchObject({ type: "done", reason: "toolUse" });
+    const asked: Array<string> = [];
+    setClaudeCodeToolGate(claude.threadId, async (request) => {
+      asked.push(`${request.toolName}:${String(request.input.command)}`);
+      return String(request.input.command).includes("--force")
+        ? { decision: "deny", reason: "Force pushes are blocked." }
+        : { decision: "allow", input: { command: "ls -1" } };
+    });
+    guest.release("gate-set");
+    try {
+      const bash = tools.find(({ name }) => name === "Bash");
+      const run = (toolCallId: string) =>
+        bash?.run({
+          toolCallId,
+          signal: AbortSignal.timeout(15_000),
+          harness: { sandbox: guest.sandbox },
+          log: console,
+        } as never);
+      // A denied call reaches the mirror as Claude's error result.
+      await expect(run("toolu_force")).resolves.toBe(
+        "Force pushes are blocked.",
+      );
+      await expect(run("toolu_ls")).resolves.toBe("README.md");
+    } finally {
+      setClaudeCodeToolGate(claude.threadId, undefined);
+    }
+    expect(asked).toEqual(["Bash:git push --force", "Bash:ls"]);
+    expect(
+      JSON.parse(guest.file(`${STATE}/mcp/hooks/toolu_force.json`) ?? "null"),
+    ).toEqual({ decision: "deny", reason: "Force pushes are blocked." });
+    expect(
+      JSON.parse(guest.file(`${STATE}/mcp/hooks/toolu_ls.json`) ?? "null"),
+    ).toEqual({ decision: "allow", input: { command: "ls -1" } });
+  });
+
+  it("gates Claude's own tools end to end: the bridge registers the hook, dx decides each call, Claude Code acts on the answer", {
+    timeout: 60_000,
+  }, async () => {
+    const guest = await createGuest({ claudeProgram: PROTOCOL_CLAUDE });
+    await guest.script([
+      init(),
+      ...response("m1", [
+        {
+          id: "toolu_push",
+          name: "Bash",
+          input: { command: "git push --force origin main" },
+        },
+        { id: "toolu_ls", name: "Bash", input: { command: "ls" } },
+      ]),
+      "#hook toolu_push",
+      "#hook toolu_ls",
+      ...response("m2", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const asked: Array<string> = [];
+    // The Thread's plugins: force pushes are rejected, ls is rewritten.
+    setClaudeCodeToolGate(claude.threadId, async (request) => {
+      asked.push(`${request.toolName}:${String(request.input.command)}`);
+      return String(request.input.command).includes("--force")
+        ? {
+            decision: "deny",
+            reason: "Blocked by Push Guard: no force pushes.",
+          }
+        : { decision: "allow", input: { command: "ls -1" } };
+    });
+    try {
+      const tools = claudeCodeMirrorTools(claude.threadId);
+      expect(
+        await claude.answer({
+          messages: [user("Push, then list", 90)],
+          tools: tools.map(({ name, description }) => ({
+            name,
+            description,
+            parameters: { type: "object" } as never,
+          })),
+        }),
+      ).toMatchObject({ type: "done", reason: "toolUse" });
+      const bash = tools.find(({ name }) => name === "Bash");
+      const run = (toolCallId: string) =>
+        bash?.run({
+          toolCallId,
+          signal: AbortSignal.timeout(30_000),
+          harness: { sandbox: guest.sandbox },
+          log: console,
+        } as never);
+      // Claude Code never ran the push: its result is the plugin's reason.
+      await expect(run("toolu_push")).rejects.toThrow(
+        "Blocked by Push Guard: no force pushes.",
+      );
+      // It ran ls with the input the plugin's modify gave.
+      await expect(run("toolu_ls")).resolves.toBe("ran: ls -1");
+    } finally {
+      setClaudeCodeToolGate(claude.threadId, undefined);
+    }
+    expect(asked).toEqual(["Bash:git push --force origin main", "Bash:ls"]);
+    // The bridge asked Claude Code for the hook, set to block on failure.
+    expect(JSON.parse(guest.home("fake-initialize.json"))).toMatchObject({
+      request: {
+        subtype: "initialize",
+        hooks: {
+          PreToolUse: [
+            { hookCallbackIds: ["dx-pre-tool-use"], onFailure: "block" },
+          ],
+        },
+      },
+    });
+    expect(JSON.parse(guest.home("hook-toolu_push.json"))).toMatchObject({
+      response: {
+        response: {
+          hookSpecificOutput: {
+            permissionDecision: "deny",
+            permissionDecisionReason: "Blocked by Push Guard: no force pushes.",
+          },
+        },
+      },
+    });
+  });
+
+  it("links the repository plugins' skills for Claude Code, as the dx agent mounts them, and drops them when a later turn has none", {
+    timeout: 60_000,
+  }, async () => {
+    const guest = await createGuest({ claudeProgram: SKILLS_CLAUDE });
+    const repo = `${GUEST_HOME}/workspace/repo`;
+    const skill = (name: string, word: string) =>
+      `---\nname: ${name}\ndescription: Use ${name}.\n---\n\nSay ${word}.\n`;
+    // A committed plugin with two skills, one named like the repository's
+    // own skill, which keeps its place.
+    guest.write(
+      `${repo}/.agents/plugins/release/skills/release-notes/SKILL.md`,
+      skill("release-notes", "RELEASE-WORD"),
+    );
+    guest.write(
+      `${repo}/.agents/plugins/release/skills/own/SKILL.md`,
+      skill("own", "PLUGIN-OWN"),
+    );
+    guest.write(
+      `${repo}/.agents/skills/own/SKILL.md`,
+      skill("own", "REPO-OWN"),
+    );
+    const turn = async (
+      timestamp: number,
+      repositorySkills: ReadonlyArray<{ name: string; directory: string }>,
+    ) => {
+      const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+      claudeCodeProvider.rememberClaudeCodePrompt(
+        claude.threadId,
+        "dx's Claude Code prompt.",
+        "",
+        repositorySkills,
+      );
+      const done = await claude.answer({
+        messages: [user("Which skills?", timestamp)],
+      });
+      expect(done).toMatchObject({ type: "done" });
+      return JSON.parse(guest.home("skills-seen.json")) as Record<
+        string,
+        string
+      >;
+    };
+    const plugin = `${repo}/.agents/plugins/release/skills`;
+    const seen = await turn(95, [
+      { name: "own", directory: `${plugin}/own` },
+      // Neither may become a link: a path out of the checkout, and a name
+      // the shell could misread.
+      { name: "escape", directory: `${repo}/../../etc` },
+      { name: "bad name", directory: `${plugin}/release-notes` },
+      // Last, where an unterminated line would be dropped.
+      { name: "release-notes", directory: `${plugin}/release-notes` },
+    ]);
+    expect(seen["release-notes"]).toBe("Say RELEASE-WORD.");
+    expect(seen.own).toBe("Say REPO-OWN.");
+    expect(Object.keys(seen)).not.toContain("escape");
+    expect(Object.keys(seen)).not.toContain("bad name");
+    // The link is relative, so it resolves in the local runtime's namespace.
+    expect(
+      await guest.sandbox.exec(
+        `readlink ${GUEST_HOME}/.claude/skills/release-notes`,
+      ),
+    ).toMatchObject({
+      stdout:
+        "../../workspace/repo/.agents/plugins/release/skills/release-notes\n",
+    });
+
+    // The next submission loads no repository plugin (it was removed from
+    // the repository, or the workspace turned them off): its skill goes,
+    // though the folder is still on disk, and the repository's own stays.
+    const after = await turn(96, []);
+    expect(Object.keys(after)).not.toContain("release-notes");
+    expect(after.own).toBe("Say REPO-OWN.");
+  });
+
+  it("starts Claude Code without the bridge's hook for a Thread whose plugins do not gate tool calls", async () => {
+    const guest = await createGuest({ claudeProgram: PROTOCOL_CLAUDE });
+    await guest.script([
+      init(),
+      ...response("m1", [{ text: "Hi." }]),
+      result("Hi."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    // No gate, and no dx tools: the CLI runs without the bridge at all.
+    await claude.answer({ messages: [user("Hi", 91)] }).catch(() => undefined);
+    expect(guest.ops.some(({ path }) => path.includes("dx-hooks.json"))).toBe(
+      false,
+    );
   });
 
   it("re-runs a read-only dx call a restart interrupted, so Flue records and Claude receives its real result", {

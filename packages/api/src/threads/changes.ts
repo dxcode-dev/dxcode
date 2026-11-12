@@ -211,6 +211,11 @@ export const ThreadShipPlanSchema = Schema.Struct({
   /** The branch the Thread's checkout started from, when it has one. */
   baseBranch: Schema.optional(Schema.String),
   prompt: Schema.String,
+  /**
+   * Installed plugins that rewrote the project's prompt (`changes.prompt`),
+   * in order; the pane shows the prompt itself when any did.
+   */
+  shapedBy: Schema.optional(Schema.Array(Schema.String)),
 });
 
 export type ThreadShipPlan = typeof ThreadShipPlanSchema.Type;

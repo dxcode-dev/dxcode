@@ -41,6 +41,25 @@ const preparedSecret = (providerId: string) => {
 export const deploymentPrepared = (providerId: string) =>
   preparedSecret(providerId) !== undefined;
 
+/**
+ * The credential fields a deployment sets beside its key, each from its
+ * binding (`deployment.settings`, such as Lizard's project), leaving out
+ * unset ones.
+ */
+export const deploymentSettings = (
+  bindings: Bindings,
+  providerId: string,
+): Readonly<Record<string, string>> => {
+  const deployment = findOrbProvider(providerId)?.deployment;
+  if (deployment === undefined || !("settings" in deployment)) return {};
+  return Object.fromEntries(
+    Object.entries(deployment.settings).flatMap(([field, binding]) => {
+      const value = (bindings[binding] ?? "").trim();
+      return value === "" ? [] : [[field, value] as const];
+    }),
+  );
+};
+
 /** The deployment's credentials for a prepared provider; never returned. */
 const deploymentCredentials = (
   bindings: Bindings,
@@ -48,7 +67,9 @@ const deploymentCredentials = (
 ): OrbProviderCredentials | undefined => {
   const secret = preparedSecret(providerId);
   const apiKey = secret === undefined ? "" : (bindings[secret] ?? "").trim();
-  return apiKey === "" ? undefined : { apiKey };
+  return apiKey === ""
+    ? undefined
+    : { ...deploymentSettings(bindings, providerId), apiKey };
 };
 
 export interface DeploymentPreparation extends OrbPreparation {

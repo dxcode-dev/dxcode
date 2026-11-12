@@ -27,6 +27,8 @@ const bindings: Bindings = {
   DX_AUTH_TRUSTED_ORIGINS: origin,
   BETTER_AUTH_SECRET: "plugin-bundle-route-secret-0000000000",
   DX_CONFIG_ENCRYPTION_KEYS: TEST_CONFIG_ENCRYPTION_KEYS,
+  // A plugin with a local MCP server keeps its files here.
+  DX_STORAGE: env.DX_STORAGE,
 };
 const endpoint = "/v1/settings/personal/plugin-bundles";
 const commit = "d4dfed4e1c578cfea8bd6e64873e4f5e5b7e36f0";
@@ -168,16 +170,18 @@ describe("plugin bundle routes with D1", () => {
     expect(reviewed.data.manifest.skills.map(({ name }) => name)).toEqual([
       "bundle-skill",
     ]);
+    // The local (stdio) server stays in the manifest, for dxd to run.
     expect(reviewed.data.manifest.mcpServers.map(({ name }) => name)).toEqual([
       "docs",
+      "local",
     ]);
     expect(reviewed.data.manifest.skipped.map(({ path }) => path)).toEqual(
-      expect.arrayContaining([
-        ".mcp.json#local",
-        "hooks/hooks.json",
-        "commands/",
-      ]),
+      expect.arrayContaining(["hooks/hooks.json", "commands/"]),
     );
+    const packageDigest = (
+      reviewed.data.manifest as { package?: { sha256: string } }
+    ).package?.sha256;
+    expect(packageDigest).toMatch(/^[0-9a-f]{64}$/);
     // Previewing installed nothing.
     expect(await resolution(userId)).toEqual({ skills: [], mcp: [] });
 
@@ -194,6 +198,10 @@ describe("plugin bundle routes with D1", () => {
       { zip: archive },
     );
     expect(installed.status).toBe(201);
+    // Installing kept the plugin's files, under their digest.
+    expect(
+      await env.DX_STORAGE.head(`plugin-packages/${packageDigest}`),
+    ).not.toBeNull();
     const bundle = await installed.json<{
       data: {
         id: string;
@@ -206,6 +214,7 @@ describe("plugin bundle routes with D1", () => {
       enabled: true,
       skills: [{ name: "bundle-skill" }],
       mcpServers: [{ name: "docs", reviewed: false }],
+      localMcpServers: [{ name: "local", command: "npx server" }],
     });
 
     const listed = await call(endpoint, cookie);
@@ -269,6 +278,66 @@ describe("plugin bundle routes with D1", () => {
       { zip: archive },
     );
     expect(reimport.status).toBe(201);
+  });
+
+  it("skips only an unusable icon candidate or header, as Agent Plugins 1.1.0 requires", async () => {
+    const { cookie } = await signup("bundle-spec-skips@example.com");
+    const preview = await call(`${endpoint}/preview?name=spec.zip`, cookie, {
+      zip: await buildZip([
+        {
+          name: "plugin.json",
+          content: JSON.stringify({
+            $schema:
+              "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json",
+            name: "spec-skips",
+          }),
+        },
+        { name: "skills/spec-skill/SKILL.md", content: skill("spec-skill") },
+        // §4.3.1: a PNG that is not one leaves the SVG candidate usable.
+        { name: "assets/icon.png", content: "GIF89a not a png" },
+        {
+          name: "assets/icon.svg",
+          content:
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><path d="M0 0h1v1H0z"/></svg>',
+        },
+        {
+          name: "mcp.json",
+          content: JSON.stringify({
+            $schema: "https://agent-plugins.org/schemas/1.1.0/mcp.schema.json",
+            mcpServers: {
+              good: {
+                type: "streamable-http",
+                url: "https://mcp.example.com/mcp",
+                headers: { "X-Team": "caf\u00e9 bar" },
+              },
+              // §7.2.1: header values must be valid HTTP field values.
+              wide: {
+                type: "streamable-http",
+                url: "https://mcp.example.com/mcp",
+                headers: { "X-Team": "\u4e2d" },
+              },
+              padded: {
+                type: "streamable-http",
+                url: "https://mcp.example.com/mcp",
+                headers: { "X-Team": " team" },
+              },
+            },
+          }),
+        },
+      ]),
+    });
+    expect(preview.status).toBe(200);
+    const { data } = await preview.json<
+      PreviewBody & { data: { manifest: { icon?: { mediaType: string } } } }
+    >();
+    expect(data.manifest.icon?.mediaType).toBe("image/svg+xml");
+    expect(data.manifest.skipped.map(({ path }) => path)).toEqual(
+      expect.arrayContaining([
+        "assets/icon.png",
+        "mcp.json#wide",
+        "mcp.json#padded",
+      ]),
+    );
   });
 
   it("refuses hostile archives", async () => {
@@ -605,6 +674,12 @@ describe("plugin bundle routes with D1", () => {
     ]);
     expect(changes.data.mcpServers).toEqual([
       {
+        name: "local",
+        command: "npx server",
+        change: "removed",
+        credentialsCleared: false,
+      },
+      {
         name: "docs",
         endpoint: "https://mcp.example.com/mcp",
         change: "removed",
@@ -622,6 +697,10 @@ describe("plugin bundle routes with D1", () => {
     }>();
     expect(after.data.source).toEqual({ type: "zip", label: "example-2.zip" });
     expect(after.data.mcpServers).toEqual([]);
+    expect(
+      (after.data as { localMcpServers?: ReadonlyArray<unknown> })
+        .localMcpServers,
+    ).toEqual([]);
   });
 
   it("clears a server's secrets when an update moves it to another origin, and keeps them for a new path on the same origin", async () => {
@@ -833,6 +912,107 @@ describe("plugin bundle routes with D1", () => {
         ({ headers }) => headers["x-api-key"] === secret,
       ),
     ).toBe(true);
+  });
+
+  it("reads and saves a code plugin's install settings, checking each against its declaration", async () => {
+    const { cookie } = await signup("bundle-settings@example.com");
+    const archive = await buildZip([
+      {
+        name: "plugin.json",
+        content: JSON.stringify({
+          $schema: "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json",
+          name: "com.acme.configured",
+          version: "1.0.0",
+          extensions: {
+            "dev.dxcode": {
+              apiVersion: 1,
+              entry: "dev.dxcode/index.js",
+              settings: [
+                { key: "team", label: "Team", type: "string", required: true },
+                { key: "limit", label: "Limit", type: "number", default: 3 },
+                { key: "strict", label: "Strict", type: "boolean" },
+              ],
+            },
+          },
+        }),
+      },
+      { name: "dev.dxcode/index.js", content: "export default () => {};" },
+    ]);
+    const preview = await call(`${endpoint}/preview?name=c.zip`, cookie, {
+      zip: archive,
+    });
+    const reviewed = await preview.json<PreviewBody>();
+    const installed = await call(
+      `${endpoint}?name=c.zip&integrity=${reviewed.data.integrity}`,
+      cookie,
+      { zip: archive },
+    );
+    expect(installed.status).toBe(201);
+    const { data } = await installed.json<{ data: { id: string } }>();
+    const settings = `${endpoint}/${data.id}/settings`;
+
+    const read = await call(settings, cookie);
+    expect(read.status).toBe(200);
+    expect((await read.json<{ data: unknown }>()).data).toEqual({
+      settings: [
+        { key: "team", label: "Team", type: "string", required: true },
+        {
+          key: "limit",
+          label: "Limit",
+          type: "number",
+          required: false,
+          default: 3,
+        },
+        { key: "strict", label: "Strict", type: "boolean", required: false },
+      ],
+    });
+
+    const saved = await call(settings, cookie, {
+      method: "PUT",
+      json: { values: { team: "core", limit: 7, strict: true } },
+    });
+    expect(saved.status).toBe(200);
+    expect(
+      (
+        await saved.json<{ data: { settings: Array<{ value?: unknown }> } }>()
+      ).data.settings.map(({ value }) => value),
+    ).toEqual(["core", 7, true]);
+    const row = await env.DB.prepare(
+      "SELECT value_json FROM plugin_install_setting WHERE plugin_id = ? AND key = 'limit'",
+    )
+      .bind(data.id)
+      .first<{ value_json: string }>();
+    expect(row?.value_json).toBe("7");
+
+    // A wrong type, an unknown key, and clearing a required setting with no
+    // default are refused, and nothing changes.
+    for (const values of [
+      { limit: "seven" },
+      { color: "blue" },
+      { team: null },
+    ]) {
+      const refused = await call(settings, cookie, {
+        method: "PUT",
+        json: { values },
+      });
+      expect(refused.status).toBe(400);
+    }
+    // Clearing an optional one goes back to its default.
+    const cleared = await call(settings, cookie, {
+      method: "PUT",
+      json: { values: { limit: null } },
+    });
+    expect(
+      (
+        await cleared.json<{
+          data: { settings: Array<{ key: string; value?: unknown }> };
+        }>()
+      ).data.settings.find(({ key }) => key === "limit")?.value,
+    ).toBeUndefined();
+
+    // Another person cannot read them.
+    const other = await signup("bundle-settings-other@example.com");
+    expect((await call(settings, other.cookie)).status).toBe(404);
   });
 });
 

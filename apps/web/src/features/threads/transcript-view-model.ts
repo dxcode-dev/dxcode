@@ -3,6 +3,7 @@ import {
   type MessageAuthor,
   type MessageAutomation,
   type MessageMention,
+  type MessagePlugin,
   parseMessageAttachments,
   parseMessageAuthor,
   type ThreadSettlementProvenance,
@@ -16,6 +17,7 @@ import type {
 } from "@flue/react";
 import { isArtifactCardPart } from "./artifact-tool-part.js";
 import { presentableToolPart } from "./claude-code-tools.js";
+import { isMcpAppPart } from "./mcp-app-part.js";
 import { isSkillActivationTool } from "./skill-activation.js";
 import { terminalToolActivityRowIds } from "./transcript-activity-projection.js";
 
@@ -52,6 +54,8 @@ export type TranscriptRow =
       readonly automation?: MessageAutomation;
       /** A person's comment on this Flue message, sent to the agent. */
       readonly commentOn?: string;
+      /** An installed plugin's code posted it on the owner's behalf. */
+      readonly plugin?: MessagePlugin;
       /** dx's name for a message that tags someone; notifications link to it. */
       readonly dxMessageId?: string;
       /**
@@ -273,6 +277,7 @@ const messageRows = (
           messageId,
           automation,
           commentOn,
+          plugin,
         } = parsedAuthor;
         const { attachments, text } = parseMessageAttachments(
           parsedAuthor.text,
@@ -293,6 +298,7 @@ const messageRows = (
           ...(sourceThreadId === undefined ? {} : { sourceThreadId }),
           ...(automation === undefined ? {} : { automation }),
           ...(commentOn === undefined ? {} : { commentOn }),
+          ...(plugin === undefined ? {} : { plugin }),
           ...(messageId === undefined ? {} : { dxMessageId: messageId }),
           ...(flueMessageId === undefined || flueMessageId === message.id
             ? {}
@@ -365,7 +371,8 @@ const continuesPrompt = (
   // A message another Thread sent carries the owner's id; it neither
   // continues nor is continued by the owner's own messages.
   previous.sourceThreadId === row.sourceThreadId &&
-  previous.automation === row.automation;
+  previous.automation === row.automation &&
+  previous.plugin?.id === row.plugin?.id;
 
 /** What a turn derives from; the same inputs give the same turn. */
 interface TurnInputs {
@@ -452,7 +459,9 @@ const deriveTurn = (id: TranscriptTurnId, inputs: TurnInputs): DerivedTurn => {
       : terminalToolActivityRowIds(rows);
   const pinnedRowIds = toolRows.flatMap((row) =>
     row.part.type === "dynamic-tool" &&
-    (isSkillActivationTool(row.part.toolName) || isArtifactCardPart(row.part))
+    (isSkillActivationTool(row.part.toolName) ||
+      isArtifactCardPart(row.part) ||
+      isMcpAppPart(row.part))
       ? [row.id]
       : [],
   );
@@ -1066,6 +1075,7 @@ export const sameTranscriptRow = (a: TranscriptRow, b: TranscriptRow) => {
       a.sourceThreadId !== b.sourceThreadId ||
       a.automation !== b.automation ||
       a.commentOn !== b.commentOn ||
+      a.plugin?.id !== b.plugin?.id ||
       a.mentions?.length !== b.mentions?.length)
   )
     return false;

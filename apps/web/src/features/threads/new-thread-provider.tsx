@@ -15,6 +15,16 @@ import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 // The New Thread dialog and its composer load when it first opens, not with
 // every page. `lazyRouteComponent` reloads the page once if a deploy removed
 // the chunk.
+// The open Thread's plugin commands load when the palette opens.
+const PluginPaletteCommands = lazyRouteComponent(
+  () => import("./plugin-ui/plugin-palette-commands.js"),
+  "PluginPaletteCommands",
+);
+const pluginPaletteCommands = (query: string, close: () => void) => (
+  <React.Suspense fallback={null}>
+    <PluginPaletteCommands query={query} onRun={close} />
+  </React.Suspense>
+);
 const NewThreadModal = lazyRouteComponent(
   () => import("./new-thread-page.js"),
   "NewThreadModal",
@@ -66,7 +76,10 @@ export function NewThreadProvider({
 
   return (
     <NewThreadSurfaceContext.Provider value={value}>
-      <CommandProvider onOpenNewThread={value.openNewThread}>
+      <CommandProvider
+        onOpenNewThread={value.openNewThread}
+        paletteExtra={pluginPaletteCommands}
+      >
         {children}
       </CommandProvider>
       {invocation === undefined ? null : (

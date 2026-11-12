@@ -65,7 +65,8 @@ const seedDelivery = (
       deliveryId,
       `event-${deliveryId}`,
       `intent-${deliveryId}`,
-      JSON.stringify({ accepted: true }),
+      // The fixture's handler throws for this data: the delivery fails.
+      JSON.stringify({ fail: true }),
       options.status ?? "pending",
       options.attempts ?? 0,
       options.idempotent === false ? 0 : 1,
@@ -247,7 +248,8 @@ describe("plugin trigger durable delivery", () => {
 
   it("cancels queued work after revoke or plugin disable", async () => {
     const revoked = await setup();
-    await enqueue(revoked.stub, revoked.triggerId, "revoke-event");
+    // Queued with its alarm a minute out, so it is still queued at revoke.
+    await seedDelivery(revoked.stub, revoked.triggerId);
     await revoked.stub.fetch("https://trigger.invalid/control", {
       method: "POST",
       headers: { "content-type": "application/json" },

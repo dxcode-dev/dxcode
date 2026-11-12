@@ -149,6 +149,9 @@ export const tombstoneStatements = (
     db
       .prepare(`DELETE FROM space_comment WHERE ${tombstoneOf("thread_id")}`)
       .bind(ids, ownerUserId),
+    db
+      .prepare(`DELETE FROM thread_reaction WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
   ];
 };
 

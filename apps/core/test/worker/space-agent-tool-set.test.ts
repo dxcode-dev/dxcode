@@ -148,6 +148,7 @@ const ORDINARY_TOOLS = [
   "list_agent_modes",
   "list_github_subscriptions",
   "list_orbs",
+  "manage_dx",
   "notify_user",
   "read_thread",
   "read_web_page",

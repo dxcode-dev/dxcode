@@ -1,0 +1,83 @@
+/* Reaction chips under a message and the picker beside it
+   (reactions.tsx), in a Space's posts and a shared Thread's messages. */
+.reaction-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.reaction-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 7px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.reaction-chip:hover:not(:disabled) {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.reaction-chip[aria-pressed="true"] {
+  color: var(--foreground);
+  border-color: color-mix(in srgb, var(--unread) 55%, transparent);
+  background: color-mix(in srgb, var(--unread) 12%, transparent);
+}
+.reaction-chip:disabled {
+  cursor: default;
+}
+.reaction-picker {
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--outline);
+  border-radius: 999px;
+  background: var(--popover);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
+}
+.reaction-picker > button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 16px;
+}
+.reaction-picker > button:hover,
+.reaction-picker > button[aria-pressed="true"] {
+  background: var(--accent);
+}
+
+/* A shared Thread's messages (threads/sharing/message-reactions.tsx): Add
+   Reaction sits beside ⋯, which keeps its place at the message's corner.
+   On the right it grows leftwards over the bubble; on the left it sits in
+   the gutter where there is room, and after ⋯ on a narrow screen. */
+.message-actions-controls:has(> .message-reaction-action) {
+  gap: 4px;
+}
+.message-actions-anchor:not([data-side="right"])
+  > .message-actions-controls:has(> .message-reaction-action) {
+  flex-direction: row-reverse;
+}
+@media (min-width: 768px) {
+  .message-actions-anchor:not([data-side="right"])
+    > .message-actions-controls:has(> .message-reaction-action) {
+    left: calc(-12px - var(--message-actions-size));
+    flex-direction: row;
+  }
+}
+.message-reactions {
+  display: flex;
+  margin-top: 6px;
+}
+.message-reactions[data-side="right"] {
+  justify-content: flex-end;
+}

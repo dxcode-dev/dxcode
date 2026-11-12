@@ -5,14 +5,15 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { Copy, Plus, Settings } from "lucide-react";
+import { Link, useRouterState } from "@tanstack/react-router";
+import { Plus, Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import { AskDxPrompt } from "../ask-dx-prompt.js";
 import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
@@ -28,6 +29,7 @@ import {
   SkillDetailsDialog,
   SkillFormDialog,
   SkillImportDialog,
+  SkillProposalDialog,
   SkillReviewDialog,
 } from "./skill-dialogs.js";
 import {
@@ -47,6 +49,7 @@ import {
 } from "./skills-mutations.js";
 import {
   type SkillData,
+  type SkillProposalData,
   type SkillsTarget,
   skillsQueryOptions,
 } from "./skills-queries.js";
@@ -126,6 +129,7 @@ type OpenDialog =
         readonly failure: SkillSaveFailure;
       };
     }
+  | { readonly kind: "proposal"; readonly proposalId: string }
   | {
       readonly kind: "review";
       readonly preview: SkillPreview;
@@ -273,27 +277,6 @@ function SkillsHeading({
   );
 }
 
-/** An example request to dx, copied with one click. */
-function SkillPrompt({ text }: { readonly text: string }) {
-  const [copied, setCopied] = React.useState<boolean>();
-  const copy = async () => {
-    const outcome = await settle(() => navigator.clipboard.writeText(text));
-    setCopied(outcome.ok);
-  };
-  return (
-    <div className="skills-prompt">
-      <code>"{text}"</code>
-      <Button size="xs" variant="ghost" onClick={() => void copy()}>
-        <Copy aria-hidden="true" />
-        Copy prompt
-      </Button>
-      <span aria-live="polite">
-        {copied === undefined ? null : copied ? "Copied" : "Copy failed"}
-      </span>
-    </div>
-  );
-}
-
 function SkillList({
   skills,
   canMutate,
@@ -316,14 +299,14 @@ function SkillList({
   return (
     <SettingsCard>
       {skills.length === 0 ? (
-        <div className="settings-card-empty skills-empty">
+        <div className="settings-card-empty ask-dx-empty">
           <p>
             {canMutate
               ? `No ${scopeLabel} skills yet. Create one with New Skill, import a skill folder, or ask dx in any Thread:`
               : `No ${scopeLabel} skills yet.`}
           </p>
           {canMutate ? (
-            <SkillPrompt
+            <AskDxPrompt
               text={`Create a ${scopeLabel} skill for writing our release notes`}
             />
           ) : null}
@@ -341,6 +324,54 @@ function SkillList({
         ))
       )}
     </SettingsCard>
+  );
+}
+
+/** Skill changes dx proposed for this scope, each waiting for a decision. */
+function SkillProposals({
+  proposals,
+  skills,
+  onReview,
+}: {
+  readonly proposals: ReadonlyArray<SkillProposalData>;
+  readonly skills: ReadonlyArray<SkillData>;
+  readonly onReview: (
+    proposal: SkillProposalData,
+    trigger: HTMLButtonElement,
+  ) => void;
+}) {
+  return (
+    <section className="skill-proposals" aria-label="Proposed by dx">
+      <h3>Proposed by dx</h3>
+      <SettingsCard>
+        {proposals.map((proposal) => {
+          const current = skills.find(({ name }) => name === proposal.name);
+          return (
+            <div key={proposal.id} className="skill-row">
+              <div className="skill-row-copy">
+                <div className="skill-row-title">
+                  <strong>{proposal.name}</strong>
+                  <span>
+                    {current === undefined
+                      ? "New skill"
+                      : `Version ${Math.max(...current.versions) + 1}`}
+                  </span>
+                  <span>from {proposal.threadTitle ?? "a Thread"}</span>
+                </div>
+                <p>{proposal.note || proposal.manifest.description}</p>
+              </div>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={(event) => onReview(proposal, event.currentTarget)}
+              >
+                Review
+              </Button>
+            </div>
+          );
+        })}
+      </SettingsCard>
+    </section>
   );
 }
 
@@ -413,6 +444,134 @@ function useSkillToggles(
   return { toggling, toggle };
 }
 
+/** Exports a skill's active version as a download, reporting the outcome. */
+function useSkillExport(
+  target: SkillsTarget,
+  report: (message: string | undefined) => void,
+) {
+  const { identity } = useAuthenticatedIdentity();
+  const exportMutation = useMutation(
+    skillExportMutationOptions(identity.id, target),
+  );
+  return async (skill: SkillData) => {
+    const outcome = await settle(() => exportMutation.mutateAsync(skill.id));
+    exportMutation.reset();
+    if (outcome.ok) {
+      download(
+        outcome.value,
+        `${skill.name}-v${skill.activeVersion}.skill.json`,
+      );
+      report(`${skill.name} exported.`);
+    } else {
+      report(errorMessage(outcome.error));
+    }
+  };
+}
+
+/**
+ * dx's skill proposals: the list, and the review dialog a Review button or a
+ * review link (`?proposal=`) opens. A linked proposal stays closed once the
+ * person closes it.
+ */
+function SkillProposalReview({
+  proposals,
+  skills,
+  dialog,
+  busy,
+  pending,
+  onReview,
+  onDialogChange,
+  onAction,
+}: {
+  readonly proposals: ReadonlyArray<SkillProposalData>;
+  readonly skills: ReadonlyArray<SkillData>;
+  readonly dialog: OpenDialog | undefined;
+  readonly busy: boolean;
+  readonly pending: string | undefined;
+  readonly onReview: (
+    proposal: SkillProposalData,
+    trigger: HTMLButtonElement,
+  ) => void;
+  readonly onDialogChange: (dialog: OpenDialog | undefined) => void;
+  readonly onAction: (
+    action: SkillsMutationAction,
+    success: string,
+    key?: string,
+  ) => Promise<boolean>;
+}) {
+  const requestedProposal = useRouterState({
+    select: (routerState) =>
+      new URLSearchParams(routerState.location.searchStr).get("proposal") ??
+      undefined,
+  });
+  /** The linked proposal the person closed, so it stays closed. */
+  const [dismissedProposal, setDismissedProposal] = React.useState<string>();
+  const linked =
+    requestedProposal !== undefined && requestedProposal !== dismissedProposal
+      ? requestedProposal
+      : undefined;
+  const reviewing = proposals.find(
+    ({ id }) =>
+      id ===
+      (dialog?.kind === "proposal"
+        ? dialog.proposalId
+        : dialog === undefined
+          ? linked
+          : undefined),
+  );
+  const closeProposal = () => {
+    setDismissedProposal(requestedProposal);
+    onDialogChange(undefined);
+  };
+  const decide = async (
+    proposal: SkillProposalData,
+    decision: "approve" | "reject",
+  ) => {
+    const done = await onAction(
+      decision === "approve"
+        ? {
+            type: "approveProposal",
+            proposalId: proposal.id,
+            reviewedIntegrity: proposal.integrity,
+          }
+        : { type: "rejectProposal", proposalId: proposal.id },
+      decision === "approve"
+        ? `${proposal.name} saved. New Threads load it.`
+        : `Rejected dx's proposal for ${proposal.name}.`,
+      `proposal-${decision}`,
+    );
+    if (done) closeProposal();
+  };
+  return (
+    <>
+      {proposals.length === 0 ? null : (
+        <SkillProposals
+          proposals={proposals}
+          skills={skills}
+          onReview={onReview}
+        />
+      )}
+      {reviewing === undefined ? null : (
+        <SkillProposalDialog
+          proposal={reviewing}
+          current={skills.find(({ name }) => name === reviewing.name)}
+          busy={busy}
+          pending={
+            pending === "proposal-approve"
+              ? "approve"
+              : pending === "proposal-reject"
+                ? "reject"
+                : undefined
+          }
+          onApprove={() => void decide(reviewing, "approve")}
+          onReject={() => void decide(reviewing, "reject")}
+          onClose={closeProposal}
+        />
+      )}
+    </>
+  );
+}
+
 export function SkillsSettings({
   workspace,
   workspaceSlug,
@@ -434,9 +593,6 @@ export function SkillsSettings({
   );
   const previewMutation = useMutation(
     skillPreviewMutationOptions(identity.id, target),
-  );
-  const exportMutation = useMutation(
-    skillExportMutationOptions(identity.id, target),
   );
   const [dialog, setDialog] = React.useState<OpenDialog>();
   /** The skill a folder selection becomes a new version of. */
@@ -464,6 +620,7 @@ export function SkillsSettings({
     return outcome.ok;
   };
   const { toggling, toggle } = useSkillToggles(target, setMessage);
+  const exportSkill = useSkillExport(target, setMessage);
   const closeDialog = () => {
     setDialog(undefined);
     onDirtyChange(false);
@@ -545,19 +702,6 @@ export function SkillsSettings({
       uploadFor.current = undefined;
     }
   };
-  const exportSkill = async (skill: SkillData) => {
-    const outcome = await settle(() => exportMutation.mutateAsync(skill.id));
-    exportMutation.reset();
-    if (outcome.ok) {
-      download(
-        outcome.value,
-        `${skill.name}-v${skill.activeVersion}.skill.json`,
-      );
-      setMessage(`${skill.name} exported.`);
-    } else {
-      setMessage(errorMessage(outcome.error));
-    }
-  };
 
   const data = state.data;
   const skills = data?.items ?? [];
@@ -584,6 +728,19 @@ export function SkillsSettings({
         settingsReturnTo={settingsReturnTo}
         onNew={() => setDialog({ kind: "new" })}
         onImport={() => setDialog({ kind: "import" })}
+      />
+      <SkillProposalReview
+        proposals={data?.proposals ?? []}
+        skills={skills}
+        dialog={dialog}
+        busy={busy}
+        pending={pending}
+        onReview={(proposal, trigger) => {
+          finalFocus.current = trigger;
+          setDialog({ kind: "proposal", proposalId: proposal.id });
+        }}
+        onDialogChange={setDialog}
+        onAction={run}
       />
       {data === undefined ? null : (
         <SkillList

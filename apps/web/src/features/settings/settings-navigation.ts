@@ -8,12 +8,8 @@ import {
 const hiddenNavigationIds: Readonly<
   Record<SettingsScope, ReadonlySet<string>>
 > = {
-  personal: new Set([
-    "personal-custom-plugins",
-    "personal-triggers",
-    "personal-signing-keys",
-  ]),
-  workspace: new Set(["workspace-custom-plugins"]),
+  personal: new Set(["personal-signing-keys"]),
+  workspace: new Set(),
 };
 
 export const isWorkspaceAdmin = (role: WorkspaceRole | undefined) =>
@@ -36,10 +32,15 @@ export const settingsNavigationSections = (
   scope: SettingsScope,
   registrations: ReadonlyArray<SettingsSectionRegistration>,
   workspaceRole?: WorkspaceRole,
+  deploymentAdmin = false,
+  /** Sections whose `shownWhen` does not answer true for this person. */
+  notShown: ReadonlySet<string> = new Set(),
 ): ReadonlyArray<SettingsNavigationSection> => {
   const visible = registrations.filter(
     (registration) =>
       !hiddenNavigationIds[scope].has(registration.id) &&
+      !notShown.has(registration.id) &&
+      (registration.deploymentAdminOnly !== true || deploymentAdmin) &&
       (scope === "personal" ||
         registration.adminOnly !== true ||
         isWorkspaceAdmin(workspaceRole)),

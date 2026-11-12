@@ -11,6 +11,7 @@ import {
   Download,
   Grid2x2Plus,
   Plus,
+  Puzzle,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -27,10 +28,13 @@ import {
 import {
   canOpenTerminal,
   findViewTab,
+  locateTab,
   PANE_VIEW_KINDS,
   type PaneLayoutAction,
   type PaneSide,
   type PaneViewKind,
+  type PluginPaneTab,
+  pluginPaneTabId,
   tabId,
   tabLabel,
   terminalSession,
@@ -65,11 +69,13 @@ function ViewMenuItems({
   contents,
   onOpen,
   onNewTerminal,
+  onOpenPluginPane,
 }: {
   readonly layout: ThreadPaneLayout;
   readonly contents: PaneContents;
   readonly onOpen: (view: PaneViewKind) => void;
   readonly onNewTerminal?: () => void;
+  readonly onOpenPluginPane?: (tab: Omit<PluginPaneTab, "kind">) => void;
 }) {
   const keycaps = useCommandKeycaps();
   const warm = useTerminalWarmIntent();
@@ -99,6 +105,34 @@ function ViewMenuItems({
           </Menu.Item>
         );
       })}
+      {onOpenPluginPane === undefined
+        ? null
+        : contents.pluginMenu?.({
+            renderItem: (option) => {
+              const id = pluginPaneTabId(option);
+              return (
+                <Menu.Item
+                  key={id}
+                  className="thread-menu-item pane-view-menu-item"
+                  data-view={id}
+                  title={option.pluginTitle}
+                  onClick={() =>
+                    onOpenPluginPane({
+                      plugin: option.plugin,
+                      pane: option.pane,
+                      title: option.title,
+                    })
+                  }
+                >
+                  <Puzzle aria-hidden="true" />
+                  <span>{option.title}</span>
+                  {locateTab(layout, id) === undefined ? null : (
+                    <small className="pane-view-menu-open">Open</small>
+                  )}
+                </Menu.Item>
+              );
+            },
+          })}
     </>
   );
 }
@@ -144,12 +178,14 @@ export function ViewsMenuButton({
   contents,
   onOpen,
   onNewTerminal,
+  onOpenPluginPane,
   className,
 }: {
   readonly layout: ThreadPaneLayout;
   readonly contents: PaneContents;
   readonly onOpen: (view: PaneViewKind) => void;
   readonly onNewTerminal?: () => void;
+  readonly onOpenPluginPane?: (tab: Omit<PluginPaneTab, "kind">) => void;
   readonly className?: string;
 }) {
   if (availableViews(contents).length === 0) return null;
@@ -174,6 +210,7 @@ export function ViewsMenuButton({
               contents={contents}
               onOpen={onOpen}
               onNewTerminal={onNewTerminal}
+              onOpenPluginPane={onOpenPluginPane}
             />
           </Menu.Popup>
         </Menu.Positioner>
@@ -188,11 +225,13 @@ export function OpenTabMenuButton({
   contents,
   onOpen,
   onNewTerminal,
+  onOpenPluginPane,
 }: {
   readonly layout: ThreadPaneLayout;
   readonly contents: PaneContents;
   readonly onOpen: (view: PaneViewKind) => void;
   readonly onNewTerminal?: () => void;
+  readonly onOpenPluginPane?: (tab: Omit<PluginPaneTab, "kind">) => void;
 }) {
   if (availableViews(contents).length === 0) return null;
   return (
@@ -216,6 +255,7 @@ export function OpenTabMenuButton({
               contents={contents}
               onOpen={onOpen}
               onNewTerminal={onNewTerminal}
+              onOpenPluginPane={onOpenPluginPane}
             />
           </Menu.Popup>
         </Menu.Positioner>

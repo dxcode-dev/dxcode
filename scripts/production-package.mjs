@@ -167,6 +167,7 @@ export const loadProductionBindingContract = () => {
     "durable-object",
     "send-email",
     "workers-ai",
+    "worker-loader",
   ]);
   const allowedProvenance = new Set([
     "authored-wrangler",
@@ -227,6 +228,10 @@ const bindingsFromWrangler = (config, authoredNames) => {
     ...(config.ai?.binding
       ? [{ name: config.ai.binding, type: "workers-ai" }]
       : []),
+    ...(config.worker_loaders ?? []).map(({ binding: name }) => ({
+      name,
+      type: "worker-loader",
+    })),
   ];
   return bindings
     .map(({ name, type }) => {

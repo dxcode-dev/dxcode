@@ -47,6 +47,11 @@ export type PaneLayoutAction =
       readonly target: ThreadPaneFileTarget;
       readonly pane?: string;
     }
+  | {
+      readonly type: "open-plugin-pane";
+      readonly tab: Omit<PluginPaneTab, "kind">;
+      readonly pane?: string;
+    }
   | { readonly type: "activate"; readonly pane: string; readonly tab: string }
   | { readonly type: "close"; readonly tab: string }
   | {
@@ -87,6 +92,15 @@ export const PANE_MIN_SHARE = 0.1;
 
 const AGENT_TAB: ThreadPaneTab = { kind: "agent" };
 
+/** An installed plugin's pane tab. */
+export type PluginPaneTab = Extract<ThreadPaneTab, { kind: "plugin" }>;
+
+/** `plugin:<plugin name>/<pane id>`: one tab per plugin pane and Thread. */
+export const pluginPaneTabId = (tab: {
+  readonly plugin: string;
+  readonly pane: string;
+}) => `plugin:${tab.plugin}/${tab.pane}`;
+
 export const fileTargetKey = (target: ThreadPaneFileTarget) =>
   target.kind === "sandbox"
     ? `sandbox:${target.path}`
@@ -99,6 +113,8 @@ export const tabId = (tab: ThreadPaneTab): string => {
       return `terminal:${tab.ordinal}`;
     case "file":
       return `file:${fileTargetKey(tab.target)}`;
+    case "plugin":
+      return pluginPaneTabId(tab);
     default:
       return tab.kind;
   }
@@ -124,6 +140,8 @@ export const tabLabel = (tab: ThreadPaneTab): string => {
       return tab.ordinal === 1 ? "Terminal" : `Terminal ${tab.ordinal}`;
     case "file":
       return filename(tab.target.path);
+    case "plugin":
+      return tab.title;
   }
 };
 
@@ -785,6 +803,13 @@ export const reducePaneLayout = (
             )
           : undefined;
       return placeTab(layout, tab, action.pane ?? filesPane?.id);
+    }
+    case "open-plugin-pane": {
+      const tab: ThreadPaneTab = { kind: "plugin", ...action.tab };
+      const existing = locateTab(layout, tabId(tab));
+      if (existing !== undefined)
+        return activateTab(layout, existing.pane, existing.index);
+      return placeTab(layout, tab, action.pane);
     }
     case "activate": {
       const pane = paneOf(layout, action.pane);

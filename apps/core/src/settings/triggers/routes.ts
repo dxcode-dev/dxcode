@@ -49,13 +49,13 @@ import {
 } from "../../http/request-decoding.js";
 import type { AppEnv } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import { CodePluginTriggerCapabilities } from "../../plugins/worker-host/triggers.js";
 import { SettingsAudit } from "../audit.js";
 import {
   decryptEnvironmentVariable,
   loadConfigEncryptionKeyring,
 } from "../environment-variables/encryption.js";
 import { EnvironmentVariableRepositoryD1 } from "../environment-variables/repository-d1.js";
-import { PluginRepositoryD1 } from "../plugins/repository-d1.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
@@ -63,6 +63,7 @@ import { WorkspacePolicyService } from "../workspace-policy/service.js";
 import { PluginTriggerRepositoryD1 } from "./repository-d1.js";
 import {
   capabilityHashesEqual,
+  capabilityMatchesTrigger,
   hashPluginTriggerCapability,
   PluginTriggerService,
 } from "./service.js";
@@ -113,7 +114,6 @@ const invalid = (field: string, message: string) =>
 const layers = (db: D1Database) => {
   const d1 = D1Client.layer({ db });
   const triggers = PluginTriggerRepositoryD1(db);
-  const plugins = PluginRepositoryD1(db);
   const environment = EnvironmentVariableRepositoryD1(db);
   const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
   const settings = SettingsService.layer.pipe(Layer.provide(workspace));
@@ -131,16 +131,15 @@ const layers = (db: D1Database) => {
     Layer.provide(
       Layer.mergeAll(
         triggers,
-        plugins,
         environment,
         policy,
         SettingsAudit.layer,
+        CodePluginTriggerCapabilities.layer(db),
       ),
     ),
   );
   return Layer.mergeAll(
     triggers,
-    plugins,
     environment,
     workspace,
     settings,
@@ -199,11 +198,8 @@ const triggerData = (
   >,
   status: DurableStatus,
 ): PluginTriggerData => {
-  const capability = available.find(
-    (item) =>
-      item.pluginId === trigger.pluginId &&
-      item.version === trigger.pluginVersion &&
-      item.capabilityName === trigger.capabilityName,
+  const capability = available.find((item) =>
+    capabilityMatchesTrigger(item, trigger),
   );
   return {
     id: trigger.id,

@@ -207,6 +207,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_SIGNUP_ENABLED: "",
     DX_SIGN_IN_ADMISSION: "",
     DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS: "",
+    DX_DEPLOYMENT_ADMIN_EMAILS: "",
     DX_SIGN_IN_PROVIDERS: "",
     DX_GOOGLE_CLIENT_ID: "",
     DX_GOOGLE_CLIENT_SECRET: "",
@@ -249,6 +250,10 @@ export const smokeProductionPackage = async (packageRoot) => {
     SARVAM_API_KEY: "",
     EXA_API_KEY: "",
     BOAT_API_KEY: "",
+    LIZARD_API_KEY: "",
+    LIZARD_PROJECT_ID: "",
+    LIZARD_REGION: "",
+    DX_DEPLOYMENT_PRIVATE_CONFIG: "",
     DX_TURNSTILE_SITE_KEY: "package-smoke-not-a-site-key",
     DX_TURNSTILE_SECRET_KEY: "package-smoke-not-a-secret",
   };
@@ -274,6 +279,7 @@ export const smokeProductionPackage = async (packageRoot) => {
   const r2 = exactlyOne("r2");
   const ai = exactlyOne("workers-ai");
   const email = exactlyOne("send-email");
+  const loader = exactlyOne("worker-loader");
   const durableObjects = deriveDurableObjectBindings({
     authoredConfig: JSON.parse(
       readFileSync(resolve(workspaceRoot, "apps/core/wrangler.jsonc"), "utf8"),
@@ -287,6 +293,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     r2.name,
     ai.name,
     email.name,
+    loader.name,
     ...durableObjects.map(({ name }) => name),
     // Another Worker's namespace (the Orb Worker's), bound only when that
     // provider is installed; the smoke runs without it.
@@ -324,6 +331,7 @@ export const smokeProductionPackage = async (packageRoot) => {
       },
     ],
     r2_buckets: [{ binding: r2.name, bucket_name: "dx-package-smoke" }],
+    worker_loaders: [{ binding: loader.name }],
     send_email: [
       {
         name: email.name,

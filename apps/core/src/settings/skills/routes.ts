@@ -1,4 +1,6 @@
 import {
+  ApproveSkillProposalRequestSchema,
+  DecideSkillProposalResponseSchema,
   ExportSkillResponseSchema,
   ImportSkillRequestSchema,
   ImportSkillResponseSchema,
@@ -15,6 +17,9 @@ import {
   SkillMcpReferenceInvalidResponseSchema,
   SkillNotFoundResponseSchema,
   SkillParamsSchema,
+  SkillProposalDecidedResponseSchema,
+  SkillProposalNotFoundResponseSchema,
+  SkillProposalParamsSchema,
   SkillsForbiddenResponseSchema,
   SkillsInvalidRequestResponseSchema,
   SkillsUnavailableResponseSchema,
@@ -37,8 +42,7 @@ import {
   type SkillWithVersion,
   WorkspaceSlug,
 } from "@dx/domain";
-import { D1Client } from "@effect/sql-d1";
-import { Effect, Layer, Option, Result, Schema } from "effect";
+import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { readBoundedJson } from "../../http/bounded-body.js";
 import {
@@ -48,13 +52,19 @@ import {
 import type { AppEnv } from "../../http/types.js";
 import { authorizationLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
-import { SettingsAudit } from "../audit.js";
-import { McpServerRepositoryD1 } from "../mcp-servers/repository-d1.js";
+import { settleOwnerAsk } from "../../thread-artifacts/owner-ask.js";
 import { SettingsService } from "../service.js";
-import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { exportSkillVersion, SkillImportRejected } from "./import.js";
+import { skillLayers } from "./layers.js";
 import { threadSkills } from "./precedence.js";
-import { SkillRepositoryD1 } from "./repository-d1.js";
+import {
+  approveProposal,
+  pendingProposals,
+  proposalData,
+  rejectProposal,
+  SkillProposalDecided,
+  SkillProposalNotFound,
+} from "./proposals.js";
 import { SkillService } from "./service.js";
 
 class InvalidSkillRequest extends Schema.TaggedError<InvalidSkillRequest>()(
@@ -84,17 +94,7 @@ const fieldError = (field: string, message: string): SettingsFieldError => ({
 const invalid = (field: string, message: string) =>
   new InvalidSkillRequest({ fieldErrors: [fieldError(field, message)] });
 
-const layers = (db: D1Database) => {
-  const d1 = D1Client.layer({ db });
-  const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
-  const skills = SkillRepositoryD1(db);
-  const mcp = McpServerRepositoryD1(db);
-  const settings = SettingsService.layer.pipe(Layer.provide(workspace));
-  const service = SkillService.layer.pipe(
-    Layer.provide(Layer.mergeAll(skills, mcp, SettingsAudit.layer)),
-  );
-  return Layer.mergeAll(workspace, skills, mcp, settings, service);
-};
+const layers = skillLayers;
 
 const authorize = Effect.fn("authorizeSkills")(function* (
   route: RouteScope,
@@ -279,6 +279,22 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
       "Skill not found.",
     );
   }
+  if (failure instanceof SkillProposalNotFound) {
+    return response(
+      SkillProposalNotFoundResponseSchema,
+      404,
+      "SKILL_PROPOSAL_NOT_FOUND",
+      "Skill proposal not found.",
+    );
+  }
+  if (failure instanceof SkillProposalDecided) {
+    return response(
+      SkillProposalDecidedResponseSchema,
+      409,
+      "SKILL_PROPOSAL_DECIDED",
+      "This proposal was already decided or replaced by a newer one.",
+    );
+  }
   if (failure instanceof SkillLimitExceeded) {
     return response(
       SkillLimitResponseSchema,
@@ -360,12 +376,32 @@ const registerRoutes = (
   router.get("/", (context) =>
     run(
       context,
-      operation(context, (_db, access) =>
+      operation(context, (db, access) =>
         Effect.gen(function* () {
-          const data = yield* listData(access, context.get("principal"));
+          const [data, proposals] = yield* Effect.all(
+            [
+              listData(access, context.get("principal")),
+              // Only people who could save a proposal see it.
+              access.canMutate
+                ? pendingProposals(db, access.target).pipe(
+                    Effect.flatMap((rows) =>
+                      Effect.forEach(rows, (row) =>
+                        // A row today's import rules refuse is left out
+                        // rather than failing the whole page.
+                        proposalData(row, context.get("principal").userId).pipe(
+                          Effect.option,
+                        ),
+                      ),
+                    ),
+                    Effect.map((rows) => rows.flatMap(Option.toArray)),
+                  )
+                : Effect.succeed([]),
+            ],
+            { concurrency: "unbounded" },
+          );
           return yield* Schema.encodeUnknownEffect(ListSkillsResponseSchema)({
             status: "success",
-            data,
+            data: { ...data, proposals },
           });
         }),
       ),
@@ -469,6 +505,107 @@ const registerRoutes = (
         }),
       ),
       201,
+    ),
+  );
+
+  const parseProposalId = (context: Context<AppEnv>) =>
+    decodeRequestInput(
+      SkillProposalParamsSchema,
+      { proposalId: context.req.param("proposalId") },
+      () => invalid("proposalId", "Use a valid proposal identifier."),
+    ).pipe(Effect.map(({ proposalId }) => proposalId));
+
+  /**
+   * Ticks the owner's review ask in the proposing Thread, which wakes it
+   * with the outcome. Best effort: the decision already stands.
+   */
+  const settleAsk = (
+    context: Context<AppEnv>,
+    row: {
+      readonly id: string;
+      readonly thread_id: string;
+      readonly ask_artifact_id: string | null;
+    },
+    outcome: string,
+  ) =>
+    row.ask_artifact_id === null
+      ? Effect.void
+      : Effect.promise(() =>
+          settleOwnerAsk(context.env, {
+            threadId: row.thread_id,
+            artifactId: row.ask_artifact_id ?? "",
+            marker: row.id,
+            outcome,
+            writer: { kind: "user", userId: context.get("principal").userId },
+          }).catch(() => false),
+        );
+
+  router.post("/proposals/:proposalId/approve", (context) =>
+    run(
+      context,
+      operation(context, (db, access) =>
+        Effect.gen(function* () {
+          const proposalId = yield* parseProposalId(context);
+          const body = yield* decodeJsonBody(
+            context.req,
+            ApproveSkillProposalRequestSchema,
+            () => invalid("request", "Use reviewedIntegrity."),
+          );
+          yield* mutate(access);
+          const approved = yield* approveProposal(
+            db,
+            access.target,
+            proposalId,
+            body.reviewedIntegrity,
+            audit(context),
+          );
+          yield* settleAsk(
+            context,
+            approved.row,
+            !approved.activated
+              ? `Approved: version ${approved.version} is published; the pinned version stays active.`
+              : approved.enabled
+                ? `Approved: version ${approved.version} loads in new Threads.`
+                : `Approved: version ${approved.version} is active, but the skill is switched off.`,
+          );
+          const listed = yield* listData(access, context.get("principal"));
+          const skill = listed.items.find(
+            (item) => item.id === approved.skillId,
+          );
+          return yield* Schema.encodeUnknownEffect(
+            DecideSkillProposalResponseSchema,
+          )({
+            status: "success",
+            data: {
+              proposalId,
+              status: "approved",
+              ...(skill === undefined ? {} : { skill }),
+            },
+          });
+        }),
+      ),
+    ),
+  );
+
+  router.post("/proposals/:proposalId/reject", (context) =>
+    run(
+      context,
+      operation(context, (db, access) =>
+        Effect.gen(function* () {
+          const proposalId = yield* parseProposalId(context);
+          yield* mutate(access);
+          const rejected = yield* rejectProposal(
+            db,
+            access.target,
+            proposalId,
+            audit(context),
+          );
+          yield* settleAsk(context, rejected.row, "Rejected.");
+          return yield* Schema.encodeUnknownEffect(
+            DecideSkillProposalResponseSchema,
+          )({ status: "success", data: { proposalId, status: "rejected" } });
+        }),
+      ),
     ),
   );
 

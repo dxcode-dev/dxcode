@@ -6,7 +6,7 @@ import type {
   ThreadPaneTab,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { X } from "lucide-react";
+import { Puzzle, X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import { absolutePathFor, sandboxFileUrl } from "../transcript-file-link.js";
@@ -184,6 +184,7 @@ const fileLocationLabel = (tab: Extract<ThreadPaneTab, { kind: "file" }>) =>
 function TabIcon({ tab }: { readonly tab: ThreadPaneTab }) {
   if (tab.kind === "agent") return <OrbIcon aria-hidden="true" />;
   if (tab.kind === "file") return null;
+  if (tab.kind === "plugin") return <Puzzle aria-hidden="true" />;
   const { Icon } = PANE_VIEWS[tab.kind];
   return <Icon aria-hidden="true" />;
 }
@@ -364,6 +365,9 @@ function PaneTabStrip({
           onNewTerminal={() =>
             dispatch({ type: "new-terminal", pane: pane.id })
           }
+          onOpenPluginPane={(tab) =>
+            dispatch({ type: "open-plugin-pane", tab, pane: pane.id })
+          }
         />
       </div>
       <div className="pane-strip-actions" ref={onToolbarSlot} />
@@ -388,7 +392,9 @@ function PaneTabPanel({
       ? renderPaneContent(contents.agent, active)
       : tab.kind === "file"
         ? contents.file(tab.target, active)
-        : renderPaneContent(contents.views[tab.kind], active);
+        : tab.kind === "plugin"
+          ? (contents.plugin?.(tab, active) ?? null)
+          : renderPaneContent(contents.views[tab.kind], active);
   return (
     <div
       id={panelDomId(id)}

@@ -515,6 +515,13 @@ function ShipConfirmation({
     >
       <strong id="changes-ship-confirmation-title">{copy.title}</strong>
       <p>{copy.body}</p>
+      {plan.shapedBy === undefined || plan.shapedBy.length === 0 ? null : (
+        // Plugins changed the prompt: show exactly what will be sent.
+        <details className="changes-ship-prompt" open>
+          <summary>Changed by {plan.shapedBy.join(", ")}</summary>
+          <pre>{plan.prompt}</pre>
+        </details>
+      )}
       {error ? <div role="alert">{errorMessage(error)}</div> : null}
       <div>
         <button type="button" onClick={onCancel}>

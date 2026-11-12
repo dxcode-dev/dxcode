@@ -42,9 +42,11 @@ import {
 import { type ClaudePlanAccess, claudePlanBlockedCause } from "./plan.js";
 import { claudeCodeRuns, forgetClaudeCodeThread } from "./runs.js";
 import type { ClaudeCodeBlock, ClaudeCodeSegment } from "./stream.js";
+import { claudeCodeToolGate } from "./tool-gate.js";
 import { mirroredToolCall } from "./tools.js";
 import {
   type ClaudeCodeInputBlock,
+  type ClaudeCodeRepositorySkill,
   type ClaudeCodeRun,
   claudeCodeAnswer,
   claudeCodeRunKey,
@@ -151,15 +153,30 @@ const rememberPlan = (threadId: string, plan: ClaudePlanAccess) => {
  */
 const prompts = new Map<
   string,
-  { readonly prompt: string; readonly personalInstructions: string }
+  {
+    readonly prompt: string;
+    readonly personalInstructions: string;
+    readonly repositorySkills: ReadonlyArray<ClaudeCodeRepositorySkill>;
+    /** A plugin agent's Thread keeps only these of Claude's own tools. */
+    readonly builtInTools?: ReadonlyArray<string>;
+  }
 >();
 
 export const rememberClaudeCodePrompt = (
   threadId: string,
   prompt: string,
   personalInstructions: string,
+  /** Skills of the repository's plugins this submission loads. */
+  repositorySkills: ReadonlyArray<ClaudeCodeRepositorySkill> = [],
+  /** Claude's own tools to keep, for a plugin agent's tool list. */
+  builtInTools?: ReadonlyArray<string>,
 ) => {
-  prompts.set(threadId, { prompt, personalInstructions });
+  prompts.set(threadId, {
+    prompt,
+    personalInstructions,
+    repositorySkills,
+    ...(builtInTools === undefined ? {} : { builtInTools }),
+  });
 };
 
 /** A failed recording is tried again after these delays, in milliseconds. */
@@ -884,6 +901,9 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
               systemPrompt:
                 remembered?.prompt ?? getCurrentSystemPrompt(context.messages),
               personalInstructions: remembered?.personalInstructions,
+              ...(remembered === undefined
+                ? {}
+                : { repositorySkills: remembered.repositorySkills }),
               input: input(),
               ...(earlier === undefined
                 ? {}
@@ -895,13 +915,19 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
                   }),
               token: credential.token,
               tools: claudeCodeDxToolList(threadId),
-              // A Thread on its executor keeps only its profile's built-ins.
-              ...(claudeCodeExecutor(threadId) === undefined
+              ...(claudeCodeToolGate(threadId) === undefined
                 ? {}
-                : {
+                : { gateTools: true }),
+              // A Thread on its executor keeps only its profile's built-ins;
+              // a plugin agent's Thread, only those its tool list keeps.
+              ...(claudeCodeExecutor(threadId) !== undefined
+                ? {
                     builtInTools:
                       claudeCodeExecutor(threadId)?.builtInTools ?? [],
-                  }),
+                  }
+                : remembered?.builtInTools === undefined
+                  ? {}
+                  : { builtInTools: remembered.builtInTools }),
             },
             signal,
           );

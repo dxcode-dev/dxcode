@@ -11,6 +11,7 @@ import {
 } from "@dx/domain";
 import { Effect, Layer, Schema, SchemaTransformation } from "effect";
 import { settingsPersistenceLogger } from "../../logging.js";
+import { pluginRunsForOwnerSql } from "../plugins/bundles/overlap.js";
 
 const McpServerRow = Schema.Struct({
   id: Schema.String,
@@ -168,7 +169,8 @@ const decodeTools = (input: unknown) =>
 /**
  * The servers a user's Thread in a Project may call: enabled, from a trusted
  * plugin if any, granted to the user (a personal server unless the workspace
- * blocks personal servers, a workspace server for the member's role), granted
+ * blocks personal servers, a workspace server for the member's role), from
+ * the one copy of a plugin that runs for the user (see plugins/bundles/overlap.ts), granted
  * to the Project, and signed in to for OAuth. `owner` and `project` are SQL
  * expressions, such as parameters or a Thread subquery.
  */
@@ -177,8 +179,7 @@ const executionFilter = (owner: string, project: string) => `enabled = 1
     plugin_id IS NULL OR EXISTS (
       SELECT 1 FROM trusted_plugin
        WHERE trusted_plugin.id = mcp_server.plugin_id
-         AND trusted_plugin.enabled = 1
-         AND trusted_plugin.removed_at IS NULL
+         AND ${pluginRunsForOwnerSql("trusted_plugin", owner)}
     )
   )
   AND (

@@ -78,6 +78,33 @@ export const RealtimeInvalidationEvent = Schema.Union([
     threadId: ThreadId,
     revision: Revision,
   }),
+  /**
+   * Reactions on a shared Thread's messages changed. Content-free; refetch
+   * the Thread's message reactions.
+   */
+  Schema.Struct({
+    type: Schema.Literal("reactions.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
+  /**
+   * Installed plugins' prompts, notices, or quick actions in the Thread
+   * changed. Content-free; refetch them.
+   */
+  Schema.Struct({
+    type: Schema.Literal("plugin-ui.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
+  /**
+   * A plugin posted to one of its panes in the Thread. Content-free;
+   * open panes fetch their new messages.
+   */
+  Schema.Struct({
+    type: Schema.Literal("plugin-pane.invalidated"),
+    threadId: ThreadId,
+    revision: Revision,
+  }),
   /** The Thread's Orb disk is filling up; refetch its disk. */
   Schema.Struct({
     type: Schema.Literal("disk.invalidated"),

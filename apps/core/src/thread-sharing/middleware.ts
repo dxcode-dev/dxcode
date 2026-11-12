@@ -180,6 +180,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   const access = context.get("threadAccess");
   const sourceThreadId = context.get("messageSourceThreadId");
   const automation = context.get("messageAutomation");
+  const posted = context.get("messagePlugin");
   const commentOn = context.get("messageCommentOn");
   const edit = context.get("messageEdit") === true;
   const delivered: unknown = await context.req.raw
@@ -245,11 +246,15 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
             members,
             actor.userId,
           );
-    const { mentions } = classified;
+    // A plugin's post never tags anyone: a mention would notify people in
+    // the owner's name with the plugin's words.
+    const mentions = posted === undefined ? classified.mentions : [];
     // A shared Thread's kind and current mode. A Space is always in agent
     // mode, so tags never switch it.
     const conversation =
-      sourceThreadId !== undefined || automation !== undefined
+      sourceThreadId !== undefined ||
+      automation !== undefined ||
+      posted !== undefined
         ? undefined
         : shared.conversation;
     space = conversation?.space === true;
@@ -268,7 +273,9 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     mentioned = mentions.flatMap(({ userId }) =>
       userId === actor.userId ? [] : [userId as UserId],
     );
-    const chat = !edit && mode === "chat";
+    // A plugin's note is recorded for everyone without a model call, as
+    // chat is, in any Thread.
+    const chat = !edit && (posted?.note === true || mode === "chat");
     if (
       chat &&
       (parseMessageAttachments(userMessage.body).attachments.length > 0 ||
@@ -353,6 +360,8 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         ...(messageId === undefined ? {} : { messageId }),
         ...(commentOn === undefined ? {} : { commentOn }),
         ...(edit ? { edited: true } : {}),
+        // Set only by a plugin's in-process thread access.
+        ...(posted === undefined ? {} : { plugin: posted.plugin }),
       },
       admittedBody,
     );
@@ -435,6 +444,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     userMessage !== undefined &&
     sourceThreadId === undefined &&
     automation === undefined &&
+    posted === undefined &&
     context.get("threadSnoozed") === true
   )
     await afterResponse(

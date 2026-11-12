@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { AskDxPrompt } from "../ask-dx-prompt.js";
 import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
@@ -22,7 +23,10 @@ import {
   SettingsToggle,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
-import { ImportPluginDialog } from "./import-plugin-dialog.js";
+import {
+  ImportPluginDialog,
+  useSharedPluginLink,
+} from "./import-plugin-dialog.js";
 import { PluginBundleDetails } from "./plugin-bundle-details.js";
 import {
   pluginBundlePreviewMutationOptions,
@@ -31,7 +35,9 @@ import {
 } from "./plugin-bundle-mutations.js";
 import type { BundleRun } from "./plugin-bundle-presentation.js";
 import { pluginBundlesQueryOptions } from "./plugin-bundle-queries.js";
+import { usePluginBundleQuickUpdate } from "./plugin-bundle-quick-update.js";
 import { PluginBundleRow } from "./plugin-bundle-row.js";
+import { PluginProposals } from "./plugin-proposals.js";
 import {
   type FirstPartyPluginAction,
   firstPartyPluginsMutationOptions,
@@ -274,6 +280,25 @@ function OtherScopeLink({
   );
 }
 
+/** Where nothing is installed yet: ask dx to build a plugin, as on Skills. */
+function BuildHint({
+  shown,
+  target,
+}: {
+  readonly shown: boolean;
+  readonly target: { readonly scope: string };
+}) {
+  if (!shown) return null;
+  return (
+    <div className="settings-card-empty ask-dx-empty">
+      <p>Build your own: describe it to dx in any Thread, or use Import.</p>
+      <AskDxPrompt
+        text={`Create a ${target.scope} plugin that adds a tool to check our deploy status`}
+      />
+    </div>
+  );
+}
+
 export function PluginsSettings({
   workspace,
   workspaceSlug,
@@ -317,6 +342,7 @@ export function PluginsSettings({
     pluginBundleUpdatePreviewMutationOptions(target),
   );
   const [importing, setImporting] = React.useState(false);
+  const shareLink = useSharedPluginLink();
   const runBundle: BundleRun = async (action, success) => {
     setBusy(true);
     setMessage(undefined);
@@ -329,8 +355,20 @@ export function PluginsSettings({
     bundleMutation.reset();
     return outcome.ok;
   };
+  const quickUpdate = usePluginBundleQuickUpdate({
+    userId: identity.id,
+    target,
+    bundles: bundles.data?.items ?? [],
+    canMutate: bundles.data?.canMutate ?? false,
+    previewUpdate: (pluginId) =>
+      updatePreviewMutation.mutateAsync({ pluginId }),
+    run: runBundle,
+    report: setMessage,
+    review: setEditing,
+  });
   const close = () => {
     setEditing(undefined);
+    quickUpdate.clearReview();
     onDirtyChange(false);
   };
   const data = resource.data;
@@ -380,6 +418,11 @@ export function PluginsSettings({
           </span>
         }
       />
+      <PluginProposals
+        target={target}
+        proposals={bundles.data?.proposals ?? []}
+        report={setMessage}
+      />
       {data === undefined ? null : (
         <SettingsCard>
           {plugins.length === 0 && installed.length === 0 ? (
@@ -402,6 +445,7 @@ export function PluginsSettings({
               />
             ))
           )}
+          <BuildHint shown={canImport && !installed.length} target={target} />
           {installed.map((bundle) => (
             <PluginBundleRow
               key={bundle.id}
@@ -409,12 +453,55 @@ export function PluginsSettings({
               canMutate={canImport}
               busy={busy}
               run={runBundle}
+              updateAvailable={quickUpdate.available.has(bundle.id)}
+              updating={quickUpdate.checking === bundle.id}
+              onUpdate={() => void quickUpdate.update(bundle)}
               onOpen={(trigger) => {
                 finalFocus.current = trigger;
                 setEditing(bundle.id);
               }}
             />
           ))}
+          {target.scope === "workspace" && bundles.data !== undefined ? (
+            <SettingsRow
+              title="Members can use their own copy of a plugin"
+              control={
+                <MemberPolicyToggle
+                  checked={bundles.data.personalOverridesAllowed === true}
+                  disabled={!canImport || busy}
+                  label="Members can use their own copy of a plugin"
+                  subject="personal plugin overrides"
+                  description="When on, a member's own copy of a plugin this workspace installs runs instead of the workspace's, for that member only. When off, their copy is paused. The two never run together."
+                  onConfirm={(value) =>
+                    runBundle(
+                      { type: "policy", allowPersonalOverrides: value },
+                      "Workspace plugin policy updated.",
+                    )
+                  }
+                />
+              }
+            />
+          ) : null}
+          {target.scope === "workspace" && bundles.data !== undefined ? (
+            <SettingsRow
+              title="Load plugins from repositories"
+              control={
+                <MemberPolicyToggle
+                  checked={bundles.data.repositoryPluginsAllowed !== false}
+                  disabled={!canImport || busy}
+                  label="Load plugins from repositories"
+                  subject="repository plugins"
+                  description="When on, plugins a project's repository commits in .agents/plugins load in its Threads. An installed plugin of the same name is used instead."
+                  onConfirm={(value) =>
+                    runBundle(
+                      { type: "policy", allowRepositoryPlugins: value },
+                      "Workspace plugin policy updated.",
+                    )
+                  }
+                />
+              }
+            />
+          ) : null}
           {target.scope === "workspace" && plugins.length > 0 ? (
             <SettingsRow
               title="Members can use their own keys"
@@ -440,11 +527,18 @@ export function PluginsSettings({
         </SettingsCard>
       )}
       <ImportPluginDialog
+        userId={identity.id}
+        target={target}
+        installedNames={new Set(installed.map(({ name }) => name))}
         open={importing}
+        share={canImport ? shareLink.token : undefined}
         busy={busy}
         preview={(upload) => previewMutation.mutateAsync(upload)}
         run={runBundle}
-        onClose={() => setImporting(false)}
+        onClose={() => {
+          setImporting(false);
+          shareLink.dismiss();
+        }}
       />
       <DialogRoot
         open={editingBundle !== undefined}
@@ -470,6 +564,7 @@ export function PluginsSettings({
               }
               workspace={workspace}
               settingsReturnTo={settingsReturnTo}
+              initialUpdate={quickUpdate.reviewFor(editingBundle.id)}
               onDone={close}
               key={editingBundle.id}
             />

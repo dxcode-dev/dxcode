@@ -23,6 +23,7 @@ declare module "cloudflare:test" {
       import("../../src/source-control/bitbucket/token-coordinator.js").BitbucketTokenCoordinatorObject
     >;
     readonly DX_STORAGE: R2Bucket;
+    readonly LOADER: WorkerLoader;
     readonly TEST_MIGRATIONS: D1Migration[];
     readonly TEST_SCHEMA_SNAPSHOT: ReadonlyArray<{
       readonly sql: string;

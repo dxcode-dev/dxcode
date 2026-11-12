@@ -2,6 +2,7 @@ import type { PluginTriggerDeliveryId } from "@dx/domain";
 import { Webhook } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../../shared/ui/button.js";
+import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
 import { SettingsSelect } from "../settings-primitives.js";
@@ -218,6 +219,7 @@ export function TriggerDetails({
   readonly onDone: () => void;
 }) {
   const [confirming, setConfirming] = React.useState(false);
+  const [revokeFailed, setRevokeFailed] = React.useState(false);
   const retry = (deliveryId: PluginTriggerDeliveryId) =>
     void run(
       { type: "retryDelivery", triggerId: trigger.id, deliveryId },
@@ -299,56 +301,49 @@ export function TriggerDetails({
           {error}
         </p>
       )}
-      {confirming ? (
-        <footer className="plugin-bundle-actions plugin-bundle-confirm">
-          <p>Revoke its URL? Events stop at once, and it can't be undone.</p>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => setConfirming(false)}
-          >
-            Cancel
-          </Button>
-          <Button
-            size="xs"
-            variant="destructive"
-            disabled={busy}
-            onClick={async () => {
-              const done = await run(
-                { type: "revoke", triggerId: trigger.id },
-                `${trigger.pluginDisplayName} trigger revoked.`,
-              );
-              if (done) onDone();
-            }}
-          >
-            {busy ? "Revoking…" : "Revoke"}
-          </Button>
-        </footer>
-      ) : (
-        <footer className="plugin-bundle-actions">
-          <Button
-            size="xs"
-            variant="ghost"
-            className="plugin-bundle-remove"
-            disabled={busy}
-            onClick={() => setConfirming(true)}
-          >
-            Revoke
-          </Button>
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={busy}
-            onClick={onRotate}
-          >
-            New URL
-          </Button>
-          <Button size="xs" onClick={onDone}>
-            Done
-          </Button>
-        </footer>
-      )}
+      <ConfirmDialog
+        open={confirming}
+        onOpenChange={(open) => {
+          setRevokeFailed(false);
+          setConfirming(open);
+        }}
+        {...(revokeFailed
+          ? { error: "The URL wasn't revoked. Try again." }
+          : {})}
+        title={`Revoke ${trigger.pluginDisplayName}'s webhook URL?`}
+        description="Events stop at once, and it can't be undone."
+        confirmLabel={busy ? "Revoking…" : "Revoke"}
+        destructive
+        pending={busy}
+        onConfirm={async () => {
+          setRevokeFailed(false);
+          const done = await run(
+            { type: "revoke", triggerId: trigger.id },
+            `${trigger.pluginDisplayName} trigger revoked.`,
+          );
+          // A failure stays in the dialog, where the person is looking.
+          if (!done) return setRevokeFailed(true);
+          setConfirming(false);
+          onDone();
+        }}
+      />
+      <footer className="plugin-bundle-actions">
+        <Button
+          size="xs"
+          variant="ghost"
+          className="plugin-bundle-remove"
+          disabled={busy}
+          onClick={() => setConfirming(true)}
+        >
+          Revoke
+        </Button>
+        <Button size="xs" variant="outline" disabled={busy} onClick={onRotate}>
+          New URL
+        </Button>
+        <Button size="xs" onClick={onDone}>
+          Done
+        </Button>
+      </footer>
     </div>
   );
 }

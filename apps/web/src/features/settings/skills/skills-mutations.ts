@@ -1,20 +1,20 @@
 import type { SkillImportBundle, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
+import { ApiError } from "../../../shared/api/client.js";
 import {
-  ApiError,
+  approveSkillProposal,
   exportSkill,
   importSkill,
   type listSkills,
   previewSkill,
   publishSkillVersion,
+  rejectSkillProposal,
   removeSkill,
-  updateSkillState,
-  updateSkillWorkspacePolicy,
-} from "../../../shared/api/client.js";
-import {
   type SkillData,
   type SkillsTarget,
   skillKeys,
+  updateSkillState,
+  updateSkillWorkspacePolicy,
 } from "./skills-queries.js";
 
 type SkillList = Awaited<ReturnType<typeof listSkills>>;
@@ -123,7 +123,13 @@ export type SkillsMutationAction =
       readonly type: "remove";
       readonly skillId: Parameters<typeof removeSkill>[1];
     }
-  | { readonly type: "updatePolicy"; readonly allowPersonalSkills: boolean };
+  | { readonly type: "updatePolicy"; readonly allowPersonalSkills: boolean }
+  | {
+      readonly type: "approveProposal";
+      readonly proposalId: string;
+      readonly reviewedIntegrity: Parameters<typeof approveSkillProposal>[2];
+    }
+  | { readonly type: "rejectProposal"; readonly proposalId: string };
 
 const firstFieldError = (error: unknown) =>
   error instanceof ApiError ? error.fieldErrors?.[0] : undefined;
@@ -171,6 +177,14 @@ const mutateSkills = async (
       return await updateSkillState(target, action.skillId, action.input);
     case "remove":
       return await removeSkill(target, action.skillId);
+    case "approveProposal":
+      return await approveSkillProposal(
+        target,
+        action.proposalId,
+        action.reviewedIntegrity,
+      );
+    case "rejectProposal":
+      return await rejectSkillProposal(target, action.proposalId);
     case "updatePolicy": {
       if (target.scope !== "workspace")
         throw new Error("Skill workspace policy requires a workspace target.");

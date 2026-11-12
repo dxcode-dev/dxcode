@@ -1,12 +1,14 @@
 import {
   PersistenceUnavailable,
   PluginBundleRepository,
+  type PluginCodeModuleContent,
   PluginIntegrityConflict,
   PluginNotFound,
   StoredPluginBundle,
   Timestamp,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
+import { workspaceCopiesFor } from "./overlap.js";
 
 const BundleRow = Schema.Struct({
   id: Schema.String,
@@ -73,6 +75,30 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
         if (found[0] === undefined) return yield* new PluginNotFound();
         return found[0];
       }),
+      codeModules: Effect.fn("PluginBundleRepository.codeModules")(
+        function* (id, version) {
+          const result = yield* Effect.tryPromise({
+            try: () =>
+              db
+                .prepare(
+                  `SELECT path, content FROM trusted_plugin_file
+                    WHERE plugin_id = ? AND version = ? ORDER BY path`,
+                )
+                .bind(id, version)
+                .all<{ path: string; content: string }>(),
+            catch: unavailable("settings.pluginBundles.codeModules"),
+          });
+          return result.results.map(({ path, content }) => ({ path, content }));
+        },
+      ),
+      workspaceCopies: Effect.fn("PluginBundleRepository.workspaceCopies")(
+        function* (userId) {
+          return yield* Effect.tryPromise({
+            try: () => workspaceCopiesFor(db, userId),
+            catch: unavailable("settings.pluginBundles.workspaceCopies"),
+          });
+        },
+      ),
       names: Effect.fn("PluginBundleRepository.names")(function* (target) {
         const result = yield* Effect.tryPromise({
           try: () =>
@@ -87,7 +113,11 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
         });
         return result.results.map(({ name }) => name);
       }),
-      insert: Effect.fn("PluginBundleRepository.insert")(function* (bundle) {
+      insert: Effect.fn("PluginBundleRepository.insert")(function* (
+        bundle,
+        codeModules = [],
+      ) {
+        const files = yield* codeFileStatements(db, bundle, codeModules);
         yield* Effect.tryPromise({
           try: () =>
             db.batch([
@@ -133,6 +163,7 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
                   encodedTimestamp(bundle.installedAt),
                   bundle.installedByUserId,
                 ),
+              ...files,
             ]),
           catch: (cause) =>
             String(cause).includes("UNIQUE")
@@ -141,7 +172,8 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
         });
       }),
       insertVersion: Effect.fn("PluginBundleRepository.insertVersion")(
-        function* (bundle) {
+        function* (bundle, codeModules = []) {
+          const files = yield* codeFileStatements(db, bundle, codeModules);
           const results = yield* Effect.tryPromise({
             try: () =>
               db.batch([
@@ -176,6 +208,7 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
                     bundle.target.scope,
                     bundle.target.id,
                   ),
+                ...files,
               ]),
             catch: (cause) =>
               String(cause).includes("UNIQUE") ||
@@ -221,6 +254,42 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
         },
       ),
     }),
+  );
+
+const sha256 = async (value: string) =>
+  Array.from(
+    new Uint8Array(
+      await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
+    ),
+    (byte) => byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+/** The version's code modules, stored immutably beside it. */
+const codeFileStatements = (
+  db: D1Database,
+  bundle: StoredPluginBundle,
+  modules: ReadonlyArray<PluginCodeModuleContent>,
+) =>
+  Effect.promise(() =>
+    Promise.all(
+      modules.map(async ({ path, content }) =>
+        db
+          .prepare(
+            `INSERT INTO trusted_plugin_file (
+               plugin_id, version, path, media_type, content, size_bytes,
+               integrity
+             ) VALUES (?, ?, ?, 'text/javascript', ?, ?, ?)`,
+          )
+          .bind(
+            bundle.id,
+            bundle.version,
+            path,
+            content,
+            new TextEncoder().encode(content).byteLength,
+            await sha256(content),
+          ),
+      ),
+    ),
   );
 
 const change = (

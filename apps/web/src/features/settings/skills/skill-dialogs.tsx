@@ -4,6 +4,7 @@ import {
   SkillName,
   type SkillVersion,
 } from "@dx/domain";
+import { Link } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
 import { Button } from "../../../shared/ui/button.js";
@@ -26,7 +27,7 @@ import type {
   SkillSaveFailure,
   SkillsMutationAction,
 } from "./skills-mutations.js";
-import type { SkillData } from "./skills-queries.js";
+import type { SkillData, SkillProposalData } from "./skills-queries.js";
 
 const textEncoder = new TextEncoder();
 
@@ -463,6 +464,203 @@ export function SkillReviewDialog({
                 : updating.pinned
                   ? "Publish version"
                   : "Publish and activate"}
+          </Button>
+        </footer>
+      </DialogContent>
+    </DialogRoot>
+  );
+}
+
+/** Above this many line pairs the dialog shows both texts instead of a diff. */
+const MAX_DIFF_CELLS = 1_000_000;
+
+/**
+ * Each line of `before` and `after`, marked kept, removed, or added, or
+ * undefined when the texts are too long to compare in the browser.
+ */
+const lineDiff = (before: string, after: string) => {
+  const a = before.split("\n");
+  const b = after.split("\n");
+  if (a.length * b.length > MAX_DIFF_CELLS) return undefined;
+  // Longest common subsequence lengths from each pair of suffixes.
+  const lengths = Array.from({ length: a.length + 1 }, () =>
+    new Array<number>(b.length + 1).fill(0),
+  );
+  for (let i = a.length - 1; i >= 0; i--)
+    for (let j = b.length - 1; j >= 0; j--)
+      (lengths[i] as number[])[j] =
+        a[i] === b[j]
+          ? ((lengths[i + 1] as number[])[j + 1] ?? 0) + 1
+          : Math.max(
+              (lengths[i + 1] as number[])[j] ?? 0,
+              (lengths[i] as number[])[j + 1] ?? 0,
+            );
+  const lines: Array<{
+    readonly kind: " " | "-" | "+";
+    readonly text: string;
+  }> = [];
+  let i = 0;
+  let j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) {
+      lines.push({ kind: " ", text: a[i] ?? "" });
+      i++;
+      j++;
+    } else if (
+      i < a.length &&
+      (j >= b.length ||
+        ((lengths[i + 1] as number[])[j] ?? 0) >=
+          ((lengths[i] as number[])[j + 1] ?? 0))
+    ) {
+      // Removed lines come before the lines that replace them.
+      lines.push({ kind: "-", text: a[i] ?? "" });
+      i++;
+    } else {
+      lines.push({ kind: "+", text: b[j] ?? "" });
+      j++;
+    }
+  }
+  return lines;
+};
+
+/**
+ * An agent's skill proposal, with everything approving it saves. A new skill
+ * is saved switched on; an update becomes the next version, active unless
+ * the skill is pinned.
+ */
+export function SkillProposalDialog({
+  proposal,
+  current,
+  busy,
+  pending,
+  onApprove,
+  onReject,
+  onClose,
+}: {
+  readonly proposal: SkillProposalData;
+  /** The skill an update changes, as it is now. */
+  readonly current?: SkillData;
+  readonly busy: boolean;
+  /** Which decision is saving. */
+  readonly pending?: "approve" | "reject";
+  readonly onApprove: () => void;
+  readonly onReject: () => void;
+  readonly onClose: () => void;
+}) {
+  const next =
+    current === undefined ? undefined : Math.max(...current.versions) + 1;
+  const diff =
+    current === undefined
+      ? undefined
+      : lineDiff(current.active.instructions.trimEnd(), proposal.instructions);
+  const descriptionChanged =
+    current !== undefined &&
+    current.active.manifest.description !== proposal.manifest.description;
+  return (
+    <DialogRoot open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="skill-dialog skill-import-review">
+        <DialogTitle>
+          {current === undefined
+            ? `Review new skill ${proposal.name}`
+            : `Review ${proposal.name} version ${next}`}
+        </DialogTitle>
+        <DialogDescription>
+          dx proposed this in{" "}
+          <Link
+            to="/threads/$threadId"
+            params={{ threadId: proposal.threadId }}
+          >
+            {proposal.threadTitle ?? "a Thread"}
+          </Link>
+          .{" "}
+          {current === undefined
+            ? "Approving saves it switched on, and new Threads load it."
+            : current.pinned
+              ? `Approving publishes version ${next}; version ${current.activeVersion} stays pinned.`
+              : `Approving makes version ${next} active in new Threads.`}
+        </DialogDescription>
+        {proposal.note === "" ? null : (
+          <blockquote className="skill-proposal-note">
+            {proposal.note}
+          </blockquote>
+        )}
+        <div className="skill-dialog-rows">
+          <SettingsRow title="Name" control={proposal.manifest.name} />
+          <SettingsRow
+            title={descriptionChanged ? "Description (changed)" : "Description"}
+            description={proposal.manifest.description}
+          />
+        </div>
+        {diff === undefined ? (
+          <>
+            {current === undefined ? null : (
+              <details className="skill-contents">
+                <summary>
+                  Current instructions (version {current.activeVersion})
+                </summary>
+                <pre>{current.active.instructions}</pre>
+              </details>
+            )}
+            <details className="skill-contents" open>
+              <summary>
+                {current === undefined
+                  ? "Instructions"
+                  : "Proposed instructions"}
+              </summary>
+              <pre>{proposal.instructions}</pre>
+            </details>
+          </>
+        ) : (
+          <details className="skill-contents" open>
+            <summary>
+              Instructions: changes from version {current?.activeVersion}
+            </summary>
+            <pre className="skill-proposal-diff">
+              {diff.map((line, index) => (
+                <span
+                  // biome-ignore lint/suspicious/noArrayIndexKey: lines repeat, so a line's position is its identity.
+                  key={index}
+                  data-kind={line.kind}
+                >
+                  {line.kind} {line.text}
+                  {"\n"}
+                </span>
+              ))}
+            </pre>
+          </details>
+        )}
+        <details className="skill-contents">
+          <summary>Files ({proposal.resources.length})</summary>
+          {proposal.resources.map((resource) => (
+            <div key={resource.path}>
+              <p>
+                <code>{resource.path}</code>{" "}
+                {resource.sizeBytes.toLocaleString()} bytes
+              </p>
+              <pre>{resource.content}</pre>
+            </div>
+          ))}
+        </details>
+        <details className="skill-contents">
+          <summary>Manifest and integrity</summary>
+          <pre>{JSON.stringify(proposal.manifest, null, 2)}</pre>
+          <code className="skill-review-hash">{proposal.integrity}</code>
+        </details>
+        <footer className="skill-dialog-actions">
+          <Button size="xs" variant="ghost" disabled={busy} onClick={onClose}>
+            Later
+          </Button>
+          <Button size="xs" variant="ghost" disabled={busy} onClick={onReject}>
+            {pending === "reject" ? "Rejecting…" : "Reject"}
+          </Button>
+          <Button size="xs" disabled={busy} onClick={onApprove}>
+            {pending === "approve"
+              ? "Saving…"
+              : current === undefined
+                ? "Approve and turn on"
+                : current.pinned
+                  ? "Approve and publish"
+                  : "Approve and activate"}
           </Button>
         </footer>
       </DialogContent>

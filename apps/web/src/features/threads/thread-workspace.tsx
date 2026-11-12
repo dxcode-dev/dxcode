@@ -39,6 +39,7 @@ import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,
 } from "../../shared/ui/markdown-file-link-context.js";
+import { MarkdownRemarkContext } from "../../shared/ui/markdown-remark-context.js";
 import {
   listedProject,
   projectQueryOptions,
@@ -59,6 +60,7 @@ import type { PendingAttachment } from "./image-attachments.js";
 import type { MessageEditOptions } from "./message-edit.js";
 import { editThreadMessageMutationOptions } from "./message-edit-mutations.js";
 import { isMessageLinkId } from "./message-link.js";
+import type { PluginPaneTab } from "./panes/pane-layout.js";
 import {
   fileTargetKey,
   focusedTab,
@@ -72,7 +74,7 @@ import {
   usePaneLayoutDispatch,
   usePaneLayoutReader,
 } from "./panes/pane-layout-queries.js";
-import type { PaneContents } from "./panes/pane-views.js";
+import type { PaneContents, PluginPaneMenuProps } from "./panes/pane-views.js";
 import { useThreadLayoutMode } from "./panes/thread-layout-mode.js";
 import { ThreadPageLayout } from "./panes/thread-page-layout.js";
 import { ThreadPortalsPane } from "./portals/portals-pane-loader.js";
@@ -82,6 +84,7 @@ import {
 } from "./realtime/realtime-provider.js";
 import type { ComposerMentions } from "./sharing/chat-composer.js";
 import { MessageAuthorsProvider } from "./sharing/message-authors.js";
+import { ThreadMessageReactions } from "./sharing/message-reactions.js";
 import {
   setConversationMode,
   useSetThreadFollowing,
@@ -97,6 +100,7 @@ import { ThreadHeader } from "./thread-header.js";
 import { retryInitialThreadDispatch } from "./thread-mutations.js";
 import {
   invalidateThreadQueries,
+  pluginLinkRemarkQueryOptions,
   threadQueryOptions,
 } from "./thread-queries.js";
 import {
@@ -145,6 +149,19 @@ const ArtifactSheet = lazyRouteComponent(
 const OrbNotices = lazyRouteComponent(
   () => import("./orb-notices.js"),
   "OrbNotices",
+);
+/** A plugin's pane and its sandboxed frame load with the first pane shown. */
+const PluginPane = lazyRouteComponent(
+  () => import("./plugin-ui/plugin-pane.js"),
+  "PluginPane",
+);
+const PluginPaneMenuItems = lazyRouteComponent(
+  () => import("./plugin-ui/plugin-pane.js"),
+  "PluginPaneMenuItems",
+);
+const PluginThreadUi = lazyRouteComponent(
+  () => import("./plugin-ui/plugin-thread-ui.js"),
+  "PluginThreadUi",
 );
 const loadingArtifacts = (
   <div className="thread-files-state" role="status">
@@ -1094,6 +1111,13 @@ function orbComposerNotice(
           />
         </React.Suspense>
       ) : null}
+      <React.Suspense fallback={null}>
+        <PluginThreadUi
+          threadId={thread.id}
+          isOwner={thread.access === undefined || thread.access === "owner"}
+          onSend={send}
+        />
+      </React.Suspense>
       <ShipOutcomeActions
         threadId={thread.id}
         source={source}
@@ -1231,32 +1255,48 @@ function ThreadSessionContent({
   // which its agent URL serves to everyone who can read the Thread.
   const toolMediaSource = (attachmentId: string) =>
     `${thread.agentUrl}/attachments/${encodeURIComponent(attachmentId)}`;
-  const agent = (active: boolean) => (
-    <ToolMediaSourceContext value={toolMediaSource}>
-      <ThreadAgentPanel
-        {...retainedImageProps}
-        source={agentSource}
-        onOpenModelRouting={archived ? undefined : openModelRouting}
-        archived={archived}
-        showArchivedNotice={archived}
-        projectDeleted={thread.projectDeleted === true}
-        dictationAvailable={dictationAvailable}
+  const linkRemark =
+    useQuery(pluginLinkRemarkQueryOptions(thread.id)).data ?? undefined;
+  const pluginPane = (tab: PluginPaneTab, active: boolean) => (
+    <React.Suspense fallback={null}>
+      <PluginPane
+        threadId={thread.id}
+        tab={tab}
         active={active}
-        transcriptAccess={transcriptAccess}
-        {...(archived ? {} : { draft })}
-        workspaceReady={thread.executionWorkspace.ready}
-        workspaceStatus={workspaceStatus}
-        composerNotice={composerNotice}
-        {...(quickActions === undefined ? {} : { quickActions })}
-        optimisticCreation={optimisticCreation}
-        onInitialSubmissionObserved={onInitialSubmissionObserved}
-        initialDispatch={thread.initialDispatch}
-        onRetryInitialDispatch={() =>
-          retryInitialThreadDispatch(queryClient, identity.id, thread.id)
-        }
-        {...sharedPanelProps}
+        canPost={thread.access !== "view"}
       />
-    </ToolMediaSourceContext>
+    </React.Suspense>
+  );
+  const agent = (active: boolean) => (
+    <MarkdownRemarkContext value={linkRemark}>
+      <ToolMediaSourceContext value={toolMediaSource}>
+        <ThreadMessageReactions thread={thread}>
+          <ThreadAgentPanel
+            {...retainedImageProps}
+            source={agentSource}
+            onOpenModelRouting={archived ? undefined : openModelRouting}
+            archived={archived}
+            showArchivedNotice={archived}
+            projectDeleted={thread.projectDeleted === true}
+            dictationAvailable={dictationAvailable}
+            active={active}
+            transcriptAccess={transcriptAccess}
+            {...(archived ? {} : { draft })}
+            workspaceReady={thread.executionWorkspace.ready}
+            workspaceStatus={workspaceStatus}
+            composerNotice={composerNotice}
+            {...(quickActions === undefined ? {} : { quickActions })}
+            optimisticCreation={optimisticCreation}
+            onInitialSubmissionObserved={onInitialSubmissionObserved}
+            initialDispatch={thread.initialDispatch}
+            onRetryInitialDispatch={() =>
+              retryInitialThreadDispatch(queryClient, identity.id, thread.id)
+            }
+            {...sharedPanelProps}
+          />
+        </ThreadMessageReactions>
+      </ToolMediaSourceContext>
+    </MarkdownRemarkContext>
   );
   const contents: PaneContents = {
     agent,
@@ -1271,6 +1311,17 @@ function ThreadSessionContent({
     // so its text can still be copied.
     file: renderFile,
     dirtyTabs,
+    // Plugin code runs for active Threads only.
+    ...(archived
+      ? {}
+      : {
+          plugin: pluginPane,
+          pluginMenu: (props: PluginPaneMenuProps) => (
+            <React.Suspense fallback={null}>
+              <PluginPaneMenuItems threadId={thread.id} {...props} />
+            </React.Suspense>
+          ),
+        }),
   };
   const page = (
     <ThreadPageLayout

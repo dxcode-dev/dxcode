@@ -50,10 +50,30 @@ export type PaneTabContent =
 export const renderPaneContent = (content: PaneTabContent, active: boolean) =>
   typeof content === "function" ? content(active) : content;
 
+/** A pane an installed plugin offers in the Thread. */
+export interface PluginPaneOption {
+  readonly plugin: string;
+  readonly pane: string;
+  readonly title: string;
+  readonly pluginTitle: string;
+}
+
+/** What the Views menu hands the plugins' pane items, which load lazily. */
+export interface PluginPaneMenuProps {
+  readonly renderItem: (option: PluginPaneOption) => React.ReactNode;
+}
+
 /** What the pane tree renders in each tab; a view absent here is unavailable. */
 export interface PaneContents {
   readonly agent: PaneTabContent;
   readonly views: Partial<Record<PaneViewKind, PaneTabContent>>;
+  /** Installed plugins' panes; absent where plugin code cannot run. */
+  readonly plugin?: (
+    tab: import("./pane-layout.js").PluginPaneTab,
+    active: boolean,
+  ) => React.ReactNode;
+  /** The Views menu's items for the plugins' panes, loaded lazily. */
+  readonly pluginMenu?: (props: PluginPaneMenuProps) => React.ReactNode;
   readonly file: (
     target: import("@dx/api").ThreadPaneFileTarget,
     active: boolean,

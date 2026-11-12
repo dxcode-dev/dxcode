@@ -2294,6 +2294,11 @@ getLogger([
 ]);
 getLogger([
 	"dx",
+	"plugins",
+	"mcp-apps"
+]);
+getLogger([
+	"dx",
 	"threads",
 	"draft"
 ]);

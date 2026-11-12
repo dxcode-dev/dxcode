@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("cloudflare:workers", () => ({
   DurableObject: class {},
+  RpcTarget: class {},
   env: { DX_RUNTIME_MODE: "deployed" },
 }));
 vi.mock("./auth/better-auth.js", async (importOriginal) => {

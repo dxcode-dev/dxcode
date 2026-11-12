@@ -47,6 +47,20 @@ vi.mock("./routes.js", async () => {
   return { threadRoutes };
 });
 
+// Plugin agent modes come from the owner's plugins' Dynamic Workers; this
+// owner has none.
+vi.mock("../plugins/agents/modes.js", () => ({
+  listPluginAgentModes: async () => [],
+  findPluginAgentMode: async (
+    _bindings: unknown,
+    _db: unknown,
+    _thread: unknown,
+    mode: string,
+  ) => {
+    throw new Error(`No installed plugin offers the agent mode ${mode}.`);
+  },
+}));
+
 vi.mock("../agents/routes.js", async () => {
   const { Hono } = await import("hono");
   const dxAgentRoutes = new Hono();

@@ -61,6 +61,8 @@ const updateBody = (
     allowPersonalSecretOverrides: true,
     allowPersonalPluginOverrides: true,
     allowPersonalExecutionOverrides: false,
+    allowPersonalPluginInstallOverrides: false,
+    allowRepositoryPlugins: true,
   },
 });
 

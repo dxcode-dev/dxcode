@@ -14,13 +14,10 @@ const api = vi.hoisted(() => ({
   listEnvironmentVariableHistory: vi.fn(),
   listEnvironmentVariables: vi.fn(),
   listMcpServers: vi.fn(),
-  listPlugins: vi.fn(),
   listPluginTriggers: vi.fn(),
   listSkills: vi.fn(),
   previewBulkEnvironmentVariables: vi.fn(),
-  previewPlugin: vi.fn(),
   previewSkill: vi.fn(),
-  removePlugin: vi.fn(),
   removeSkill: vi.fn(),
   revokePluginTrigger: vi.fn(),
   updatePersonalProjectDefaults: vi.fn(),
@@ -30,12 +27,14 @@ vi.mock("../../../shared/api/client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../shared/api/client.js")>()),
   ...api,
 }));
+// The skills API lives with the Skills settings, not the shared client.
+vi.mock("../skills/skills-queries.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../skills/skills-queries.js")>()),
+  listSkills: api.listSkills,
+  previewSkill: api.previewSkill,
+  removeSkill: api.removeSkill,
+}));
 
-import {
-  pluginPreviewMutationOptions,
-  pluginsMutationOptions,
-} from "../custom-plugins/custom-plugins-mutations.js";
-import { pluginKeys } from "../custom-plugins/custom-plugins-queries.js";
 import { mcpServersMutationOptions } from "../integrations/mcp-mutations.js";
 import { mcpServerKeys } from "../integrations/mcp-queries.js";
 import { projectDefaultsMutationOptions } from "../project-defaults/project-defaults-mutations.js";
@@ -138,14 +137,12 @@ describe("runtime settings data ownership", () => {
       personal,
     );
     const mcpKey = mcpServerKeys.list(userId, personal);
-    const pluginKey = pluginKeys.list(userId, personal);
     const skillKey = skillKeys.list(userId, personal);
     const triggerKey = triggerKeys.list(userId);
     for (const key of [
       environmentKey,
       environmentHistoryKey,
       mcpKey,
-      pluginKey,
       skillKey,
       triggerKey,
     ])
@@ -171,10 +168,6 @@ describe("runtime settings data ownership", () => {
       .execute({ type: "delete", serverId: "mcp_test" as never });
     await client
       .getMutationCache()
-      .build(client, pluginsMutationOptions(client, userId, personal))
-      .execute({ type: "remove", pluginId: "plg_test" as never });
-    await client
-      .getMutationCache()
       .build(client, skillsMutationOptions(client, userId, personal))
       .execute({ type: "remove", skillId: "skl_test" as never });
     await client
@@ -186,7 +179,6 @@ describe("runtime settings data ownership", () => {
       environmentKey,
       environmentHistoryKey,
       mcpKey,
-      pluginKey,
       skillKey,
       triggerKey,
     ])
@@ -255,15 +247,10 @@ describe("runtime settings data ownership", () => {
     api.previewBulkEnvironmentVariables.mockResolvedValueOnce({
       previewMarker,
     });
-    api.previewPlugin.mockResolvedValueOnce({ previewMarker });
     api.previewSkill.mockResolvedValueOnce({ previewMarker });
     const environmentObserver = new MutationObserver(
       client,
       environmentVariablesPreviewMutationOptions(userId, personal),
-    );
-    const pluginObserver = new MutationObserver(
-      client,
-      pluginPreviewMutationOptions(userId, personal),
     );
     const skillObserver = new MutationObserver(
       client,
@@ -275,18 +262,12 @@ describe("runtime settings data ownership", () => {
         kind: "variable",
         contents: "NAME=value",
       }),
-      pluginObserver.mutate({} as never),
       skillObserver.mutate({} as never),
     ]);
-    expect(delivered).toEqual([
-      { previewMarker },
-      { previewMarker },
-      { previewMarker },
-    ]);
+    expect(delivered).toEqual([{ previewMarker }, { previewMarker }]);
     expect(client.getQueryCache().getAll()).toEqual([]);
 
     environmentObserver.reset();
-    pluginObserver.reset();
     skillObserver.reset();
     await vi.waitFor(() => expect(mutationData(client)).toEqual([]));
     expect(JSON.stringify(mutationData(client))).not.toContain(previewMarker);

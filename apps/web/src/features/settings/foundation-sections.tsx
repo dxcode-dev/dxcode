@@ -6,10 +6,7 @@ import {
   personalComposerSettingsSection,
   workspaceComposerSettingsSection,
 } from "./composer/registration.js";
-import {
-  personalCustomPluginsSettingsSection,
-  workspaceCustomPluginsSettingsSection,
-} from "./custom-plugins/registration.js";
+import { registeredDeploymentSettingsSections } from "./deployment-settings-registration.js";
 import {
   personalEnvironmentVariablesSettingsSection,
   workspaceEnvironmentVariablesSettingsSection,
@@ -67,6 +64,10 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
   [
     personalAccountSettingsSection,
     personalIntegrationsSettingsSection,
+    // A deployment's own top-level sections follow Integrations.
+    ...registeredDeploymentSettingsSections.filter(
+      ({ group }) => group === "top-level",
+    ),
     personalExperimentalFeaturesSettingsSection,
     personalUsageSettingsSection,
     personalOrbUsageSettingsSection,
@@ -77,7 +78,6 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     personalEnvironmentVariablesSettingsSection,
     personalSkillsSettingsSection,
     personalPluginsSettingsSection,
-    personalCustomPluginsSettingsSection,
     personalProjectDefaultsSettingsSection,
     personalOrbProvidersSettingsSection,
     personalPluginTriggersSettingsSection,
@@ -99,10 +99,12 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     workspaceSkillsSettingsSection,
     workspacePluginsSettingsSection,
     workspaceApplicationsSettingsSection,
-    workspaceCustomPluginsSettingsSection,
     workspaceProjectDefaultsSettingsSection,
     workspaceOrbProvidersSettingsSection,
     workspaceComposerSettingsSection,
+    ...registeredDeploymentSettingsSections.filter(
+      ({ group }) => group !== "top-level",
+    ),
   ];
 
 export const settingsManifest = createSettingsManifest(

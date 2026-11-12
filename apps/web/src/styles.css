@@ -641,6 +641,22 @@ a {
   line-height: 16px;
   white-space: nowrap;
 }
+.thread-title-agent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.thread-title-agent-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--thread-agent-color, var(--muted-foreground));
+}
+.thread-title-agent-model {
+  color: var(--muted-foreground);
+  font-weight: 400;
+}
 .thread-privacy-badge {
   display: inline-flex;
   align-items: center;
@@ -1784,6 +1800,65 @@ a {
 .thread-request-source:hover {
   color: var(--chat-foreground);
   text-decoration: underline;
+}
+/* A message or note a plugin's code posted: the plugin's name where a
+   person's would be, and its text in a quiet frame on the left. */
+.plugin-post-row {
+  margin-bottom: 8px;
+  padding: 4px 0;
+}
+.plugin-post-message {
+  display: grid;
+  gap: 4px;
+  max-width: min(100%, 36rem);
+}
+.plugin-post-author {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 10.5px;
+  line-height: 16px;
+}
+.plugin-post-icon {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  place-items: center;
+  border-radius: 999px;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.plugin-post-icon > svg {
+  width: 10px;
+  height: 10px;
+}
+.plugin-post-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-post-kind {
+  flex: none;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+.plugin-post-body {
+  max-height: 320px;
+  padding: 8px 12px;
+  overflow: auto;
+  border-radius: 12px;
+  color: var(--chat-foreground);
+  box-shadow: inset 0 0 0 1px
+    light-dark(rgb(80 80 55 / 0.12), rgb(246 255 245 / 0.072));
+  font-size: 13px;
+  overflow-wrap: anywhere;
 }
 @media (prefers-reduced-motion: reduce) {
   .thread-source-toggle > .thread-source-chevron {
@@ -8633,6 +8708,22 @@ img.orb-provider-logo {
 .reasoning-raw-option-meta {
   color: var(--foreground);
 }
+.plugin-agent-option {
+  position: relative;
+}
+.plugin-agent-option-dot {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--plugin-agent-color, var(--muted-foreground));
+  transform: translateY(-50%);
+}
+.new-thread-mode[data-plugin-agent] .new-thread-plugin-agent-icon {
+  color: var(--plugin-agent-color, currentColor);
+}
 .reasoning-raw-option-meta svg {
   width: 14px;
   height: 14px;
@@ -10638,6 +10729,13 @@ div.claude-code-mode-main {
   width: 13px;
   height: 13px;
 }
+/* A bundle's own icon fills its tile, clipped to the tile's corners. */
+.first-party-plugin-creator .plugin-bundle-icon {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  object-fit: contain;
+}
 /* Import and details dialogs for plugin bundles: the MCP connect dialog's
    field layout and the MCP tool list's bordered rows. */
 .dialog-popup.plugin-bundle-dialog {
@@ -10675,6 +10773,16 @@ div.claude-code-mode-main {
   gap: 6px;
   font-size: 11px;
 }
+.plugin-bundle-signature {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted-foreground);
+}
+.plugin-bundle-signature:not([data-signer="key"]) {
+  color: var(--foreground);
+}
 .plugin-bundle-source-line svg {
   flex: none;
   width: 12px;
@@ -10709,6 +10817,14 @@ div.claude-code-mode-main {
 .dialog-popup p.plugin-bundle-help {
   font-size: 11px;
   line-height: 1.45;
+}
+.plugin-bundle-share {
+  display: grid;
+  gap: 6px;
+}
+.plugin-bundle-share-actions {
+  display: flex;
+  gap: 6px;
 }
 .plugin-bundle-or {
   display: flex;
@@ -10761,6 +10877,99 @@ div.claude-code-mode-main {
   color: var(--muted-foreground);
   font-size: 11px;
 }
+/* Import Plugin's Catalog tab: the bundle item list, with each plugin a
+   button that opens the review. */
+.usage-tabs.plugin-bundle-tabs {
+  justify-self: start;
+}
+.usage-tabs.plugin-bundle-tabs button {
+  padding: 4px 10px;
+  font-size: 11px;
+  text-transform: none;
+}
+.plugin-bundle-panel,
+.plugin-catalog-tab {
+  display: grid;
+  gap: 12px;
+}
+.plugin-catalog-tab > input {
+  height: 30px;
+  font-size: 12px;
+}
+.plugin-catalog-list {
+  max-height: min(360px, 50dvh);
+  overflow-y: auto;
+}
+.plugin-catalog-list .plugin-bundle-group h3 {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+}
+.plugin-catalog-actions {
+  display: flex;
+  gap: 2px;
+  margin: -4px -8px -4px 0;
+}
+.plugin-catalog-actions svg[data-spinning] {
+  animation: spin 1s linear infinite;
+}
+.plugin-bundle-group li:has(> .plugin-catalog-entry) {
+  padding: 0;
+}
+.plugin-catalog-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 7px 14px;
+  color: var(--foreground);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  cursor: pointer;
+}
+.plugin-catalog-entry:hover:not(:disabled) {
+  background: var(--accent);
+}
+.plugin-catalog-entry:disabled {
+  cursor: default;
+}
+.plugin-catalog-entry:disabled > code,
+.plugin-catalog-entry:disabled > span {
+  opacity: 0.6;
+}
+.plugin-catalog-entry > code {
+  flex: 0 1 auto;
+  max-width: 50%;
+  overflow: hidden;
+  font: 11.5px / 1.4 var(--font-mono-family);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-catalog-entry > span {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-catalog-empty {
+  color: var(--muted-foreground);
+}
+.plugin-catalog-add {
+  display: flex;
+  gap: 6px;
+}
+.plugin-catalog-add > :first-child {
+  flex: 1;
+}
+.plugin-catalog-add > button {
+  height: 30px;
+}
 .dialog-popup p.plugin-bundle-error {
   color: var(--destructive);
   font-size: 11px;
@@ -10771,6 +10980,32 @@ div.claude-code-mode-main {
   border: 1px solid var(--border);
   border-radius: 8px;
 }
+/* A bordered box like the bundle's item list, with rows on its padding. */
+.plugin-bundle-settings {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.dialog-popup .plugin-bundle-settings > p.plugin-bundle-help {
+  margin: 0;
+  padding: 8px 14px 0;
+  color: var(--muted-foreground);
+}
+.plugin-bundle-settings form {
+  display: grid;
+}
+.plugin-bundle-settings .settings-row {
+  padding: 8px 14px;
+}
+.plugin-bundle-settings .settings-form-actions {
+  margin-top: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--divider);
+}
+.plugin-bundle-setting-input {
+  width: min(14rem, 45vw);
+}
+
 .plugin-bundle-group + .plugin-bundle-group {
   border-top: 1px solid var(--divider);
 }
@@ -10876,6 +11111,7 @@ div.claude-code-mode-main {
 .plugin-bundle-actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding-top: 2px;
@@ -10883,11 +11119,6 @@ div.claude-code-mode-main {
 .plugin-bundle-actions .plugin-bundle-remove {
   margin-right: auto;
   color: var(--destructive);
-}
-.dialog-popup .plugin-bundle-confirm p {
-  flex: 1;
-  color: var(--foreground);
-  font-size: 12px;
 }
 
 .skills-page {
@@ -10909,15 +11140,15 @@ div.claude-code-mode-main {
 .settings-heading .skills-heading-actions a {
   text-decoration: none;
 }
-.skills-empty {
+.ask-dx-empty {
   display: grid;
   justify-items: center;
   gap: 10px;
 }
-.skills-empty > p {
+.ask-dx-empty > p {
   margin: 0;
 }
-.skills-prompt {
+.ask-dx-prompt {
   display: flex;
   max-width: 100%;
   flex-wrap: wrap;
@@ -10925,7 +11156,7 @@ div.claude-code-mode-main {
   justify-content: center;
   gap: 6px;
 }
-.skills-prompt > code {
+.ask-dx-prompt > code {
   max-width: 100%;
   padding: 4px 8px;
   border-radius: 4px;
@@ -15938,4 +16169,38 @@ body:has(.new-project-dialog[data-nested]) .repository-combobox-positioner {
   background: var(--background);
   font-family: var(--font-mono, ui-monospace, monospace);
   font-size: 12px;
+}
+.skill-proposals {
+  display: grid;
+  gap: 8px;
+}
+.skill-proposals > h3 {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.skill-proposal-note {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 2px solid var(--divider);
+  color: var(--muted-foreground);
+  font-size: 11px;
+  line-height: 17px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.skill-contents p {
+  margin: 8px 0 0;
+  font-size: 11px;
+}
+.skill-proposal-diff > span[data-kind] {
+  display: block;
+}
+.skill-proposal-diff > span[data-kind="+"] {
+  color: var(--success);
+  background: color-mix(in srgb, currentColor 10%, transparent);
+}
+.skill-proposal-diff > span[data-kind="-"] {
+  color: var(--destructive);
+  background: color-mix(in srgb, currentColor 10%, transparent);
 }

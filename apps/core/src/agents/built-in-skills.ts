@@ -11,6 +11,9 @@ import {
   type BuiltInSkillName,
 } from "./built-in-skill-names.js";
 import browserUse from "./built-in-skills/browser-use/skill.md?raw";
+import buildingPluginsApi from "./built-in-skills/building-plugins/reference/plugin-api.ts.txt?raw";
+import buildingPluginsReadme from "./built-in-skills/building-plugins/reference/README.md?raw";
+import buildingPlugins from "./built-in-skills/building-plugins/skill.md?raw";
 import buildingSchedules from "./built-in-skills/building-schedules/skill.md?raw";
 import buildingSkills from "./built-in-skills/building-skills/skill.md?raw";
 import creatingViewsPreview from "./built-in-skills/creating-views/scripts/preview.mjs?raw";
@@ -61,6 +64,16 @@ const sources: ReadonlyArray<{
   readonly files: Readonly<Record<string, string>>;
 }> = [
   { name: "browser-use", files: { "SKILL.md": browserUse } },
+  {
+    name: "building-plugins",
+    // The full @dxcode/plugin reference, kept equal to packages/plugin by
+    // building-plugins-reference.test.ts; manage_dx plugins docs serves it too.
+    files: {
+      "SKILL.md": buildingPlugins,
+      "reference/README.md": buildingPluginsReadme,
+      "reference/plugin-api.ts.txt": buildingPluginsApi,
+    },
+  },
   { name: "building-schedules", files: { "SKILL.md": buildingSchedules } },
   { name: "building-skills", files: { "SKILL.md": buildingSkills } },
   {

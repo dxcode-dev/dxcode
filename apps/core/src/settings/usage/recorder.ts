@@ -252,3 +252,61 @@ export const runnerResourceAttribution = (
   memoryMb: observed.memoryMb ?? profile?.resources.memoryMb ?? null,
   diskGb: profile?.resources.diskGb ?? null,
 });
+
+/**
+ * A plugin's own model call (`ctx.ai.generate`), recorded as one model
+ * request of its Thread on the connection that served it, so the Thread's
+ * cost, the Usage pages, and By Model count it with the agent's own turns.
+ * Its turn ID names the plugin; it belongs to no submission.
+ */
+export const recordPluginModelUsage = (
+  bindings: Bindings,
+  call: {
+    readonly threadId: string;
+    readonly pluginName: string;
+    readonly connectionId: string;
+    readonly providerId: string;
+    readonly modelId: string;
+    readonly observedProviderName: string;
+    readonly usage: {
+      readonly input: number;
+      readonly output: number;
+      readonly cacheRead: number;
+      readonly cacheWrite: number;
+      readonly cacheWrite1h?: number;
+      readonly reasoning?: number;
+      readonly totalTokens: number;
+    };
+    readonly durationMs: number;
+  },
+): Promise<void> => {
+  const turnId = `plugin:${call.pluginName}:${crypto.randomUUID()}`;
+  return Effect.runPromise(
+    Schema.decodeUnknownEffect(ModelUsageEventInput)({
+      id: `plugin:model:${call.threadId}:${turnId}`,
+      kind: "model",
+      threadId: call.threadId,
+      occurredAt: new Date().toISOString(),
+      outcome: "success",
+      durationMs: Math.max(0, Math.round(call.durationMs)),
+      submissionId: null,
+      turnId,
+      purpose: "agent",
+      observedProviderId: call.providerId,
+      observedProviderName: call.observedProviderName,
+      observedModelId: call.modelId,
+      routeAttribution: {
+        connectionId: call.connectionId,
+        providerId: call.providerId,
+        modelId: call.modelId,
+      },
+      inputTokens: call.usage.input,
+      outputTokens: call.usage.output,
+      cacheReadTokens: call.usage.cacheRead,
+      cacheWriteTokens: call.usage.cacheWrite,
+      cacheWrite1hTokens: call.usage.cacheWrite1h ?? null,
+      reasoningTokens: call.usage.reasoning ?? null,
+      totalTokens: call.usage.totalTokens,
+    }).pipe(Effect.flatMap((event) => record(bindings, event))),
+  );
+};

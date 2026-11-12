@@ -1278,61 +1278,6 @@ button.space-tab:hover,
   color: var(--foreground);
   text-decoration: underline;
 }
-.space-reactions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.space-reaction {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 7px;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.space-reaction:hover:not(:disabled) {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-reaction[aria-pressed="true"] {
-  color: var(--foreground);
-  border-color: color-mix(in srgb, var(--unread) 55%, transparent);
-  background: color-mix(in srgb, var(--unread) 12%, transparent);
-}
-.space-reaction:disabled {
-  cursor: default;
-}
-.space-reaction-picker {
-  display: flex;
-  gap: 2px;
-  padding: 4px;
-  border: 1px solid var(--outline);
-  border-radius: 999px;
-  background: var(--popover);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
-}
-.space-reaction-picker > button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  font-size: 16px;
-}
-.space-reaction-picker > button:hover,
-.space-reaction-picker > button[aria-pressed="true"] {
-  background: var(--accent);
-}
 .space-post-revisions {
   width: min(380px, calc(100vw - 32px));
   max-height: 360px;

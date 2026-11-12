@@ -1,18 +1,17 @@
 import {
   PersistenceUnavailable,
-  PluginNotFound,
-  PluginRepository,
   type PluginTarget,
   PluginTriggerId,
   PluginTriggerNotFound,
   PluginTriggerRepository,
   type StoredPluginTrigger,
-  type StoredPluginVersion,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Schema } from "effect";
+import type { PluginInstallRecord } from "../../plugins/worker-host/host.js";
+import { findCodePluginTriggerInstall } from "../../plugins/worker-host/triggers.js";
 import { SettingsAudit } from "../audit.js";
-import { PluginRepositoryD1 } from "../plugins/repository-d1.js";
+import { pluginRunsForOwnerSql } from "../plugins/bundles/overlap.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../workspace-policy/repository-d1.js";
@@ -34,12 +33,16 @@ export class TriggerDeliveryForbidden extends Schema.TaggedError<TriggerDelivery
 const PluginAuthorizationRow = Schema.Struct({
   scope: Schema.Literals(["personal", "workspace"]),
   target_id: Schema.String,
+  kind: Schema.String,
 });
 
-export interface AuthorizedTriggerDelivery {
+/** A webhook trigger of an installed plugin whose code runs on the worker host. */
+export interface AuthorizedCodeTriggerDelivery {
+  readonly kind: "code";
   readonly trigger: StoredPluginTrigger;
   readonly target: PluginTarget;
-  readonly version: StoredPluginVersion;
+  /** The install's active version, which the delivery runs. */
+  readonly install: PluginInstallRecord;
 }
 
 const policyDependencies = (db: D1Database) => {
@@ -68,10 +71,7 @@ export const loadAuthorizedTriggerDelivery = Effect.fn(
       () => new TriggerDeliveryForbidden({ reason: "not-found" }),
     ),
   );
-  const layer = Layer.merge(
-    PluginTriggerRepositoryD1(db),
-    PluginRepositoryD1(db),
-  );
+  const layer = PluginTriggerRepositoryD1(db);
   const trigger = yield* Effect.gen(function* () {
     const repository = yield* PluginTriggerRepository;
     return yield* repository.findIngress(triggerId);
@@ -90,58 +90,20 @@ export const loadAuthorizedTriggerDelivery = Effect.fn(
     try: () =>
       db
         .prepare(
-          `SELECT plugin.scope, plugin.target_id
+          `SELECT plugin.scope, plugin.target_id, plugin.kind
              FROM trusted_plugin plugin
-            WHERE plugin.id = ?
-              AND plugin.enabled = 1
-              AND plugin.removed_at IS NULL
+            WHERE plugin.id = ?1
+              AND plugin.kind = 'bundle'
               AND EXISTS (
                 SELECT 1 FROM trusted_plugin_version version
                  WHERE version.plugin_id = plugin.id
-                   AND version.version = ?
+                   AND version.version = ?2
                    AND version.trusted = 1
               )
-              AND (
-                (
-                  plugin.scope = 'workspace'
-                  AND EXISTS (
-                    SELECT 1 FROM member
-                     WHERE member.userId = ?
-                       AND member.organizationId = plugin.target_id
-                  )
-                )
-                OR (
-                  plugin.scope = 'personal'
-                  AND plugin.target_id = ?
-                  AND NOT EXISTS (
-                    SELECT 1 FROM member
-                    JOIN trusted_plugin_workspace_policy policy
-                      ON policy.workspace_id = member.organizationId
-                   WHERE member.userId = ?
-                     AND policy.allow_personal_plugins = 0
-                  )
-                  AND NOT EXISTS (
-                    SELECT 1 FROM member
-                    JOIN trusted_plugin workspace_plugin
-                      ON workspace_plugin.scope = 'workspace'
-                     AND workspace_plugin.target_id = member.organizationId
-                     AND workspace_plugin.name = plugin.name
-                     AND workspace_plugin.enabled = 1
-                     AND workspace_plugin.removed_at IS NULL
-                   WHERE member.userId = ?
-                  )
-                )
-              )
+              AND ${pluginRunsForOwnerSql("plugin", "?3")}
             LIMIT 1`,
         )
-        .bind(
-          trigger.pluginId,
-          trigger.pluginVersion,
-          trigger.ownerUserId,
-          trigger.ownerUserId,
-          trigger.ownerUserId,
-          trigger.ownerUserId,
-        )
+        .bind(trigger.pluginId, trigger.pluginVersion, trigger.ownerUserId)
         .first(),
     catch: (cause) =>
       PersistenceUnavailable.new(
@@ -155,67 +117,49 @@ export const loadAuthorizedTriggerDelivery = Effect.fn(
   const authorized = yield* Schema.decodeUnknownEffect(PluginAuthorizationRow)(
     row,
   );
-  const version = yield* Effect.gen(function* () {
-    const repository = yield* PluginRepository;
-    return yield* repository.findVersion(
-      trigger.pluginId,
-      trigger.pluginVersion,
-    );
-  }).pipe(
-    Effect.provide(layer),
-    Effect.mapError((failure) =>
-      failure instanceof PluginNotFound
-        ? new TriggerDeliveryForbidden({ reason: "plugin-disabled" })
-        : failure,
-    ),
-  );
-  const declaration = version.manifest.triggers.find(
-    ({ name }) => name === trigger.capabilityName,
-  );
-  if (
-    declaration === undefined ||
-    !version.grants.triggers.includes(trigger.capabilityName) ||
-    declaration.source !== trigger.source ||
-    declaration.event !== trigger.event ||
-    declaration.action !== trigger.action ||
-    declaration.idempotent !== trigger.idempotent
-  ) {
-    return yield* new TriggerDeliveryForbidden({ reason: "plugin-disabled" });
-  }
-  const target = {
-    scope: authorized.scope,
-    id: authorized.target_id,
-  } as PluginTarget;
-  const personalSecretRequired =
-    trigger.hmacSecretReference !== undefined ||
-    (target.scope === "personal" && version.grants.secretReferences.length > 0);
-  const personalMcpRequired =
-    target.scope === "personal" && version.grants.mcpServerIds.length > 0;
-  if (personalSecretRequired || personalMcpRequired) {
-    yield* Effect.gen(function* () {
-      const policies = yield* WorkspacePolicyService;
-      if (personalSecretRequired) {
+  if (authorized.kind === "bundle") {
+    const install = yield* Effect.tryPromise({
+      try: () =>
+        findCodePluginTriggerInstall(db, trigger.pluginId, trigger.ownerUserId),
+      catch: (cause) =>
+        PersistenceUnavailable.new(
+          { operation: "settings.triggers.authorize-code" },
+          cause,
+        ),
+    });
+    if (install === undefined)
+      return yield* new TriggerDeliveryForbidden({ reason: "plugin-disabled" });
+    // A personal secret (the trigger's HMAC key, or one a personal install
+    // reads) needs the workspace to allow personal secret overrides.
+    if (
+      trigger.hmacSecretReference !== undefined ||
+      (install.scope === "personal" &&
+        install.code.permissions.secrets.length > 0)
+    )
+      yield* Effect.gen(function* () {
+        const policies = yield* WorkspacePolicyService;
         yield* policies.evaluateForUser(trigger.ownerUserId, {
           kind: "secret.use-personal-override",
         });
-      }
-      if (personalMcpRequired) {
-        yield* policies.evaluateForUser(trigger.ownerUserId, {
-          kind: "mcp.use-personal-override",
-        });
-      }
-    }).pipe(
-      Effect.provide(policyDependencies(db)),
-      Effect.catchTag("WorkspacePolicyDenied", () =>
-        Effect.fail(
-          new TriggerDeliveryForbidden({ reason: "plugin-disabled" }),
+      }).pipe(
+        Effect.provide(policyDependencies(db)),
+        Effect.catchTag("WorkspacePolicyDenied", () =>
+          Effect.fail(
+            new TriggerDeliveryForbidden({ reason: "plugin-disabled" }),
+          ),
         ),
-      ),
-    );
+      );
+    return {
+      kind: "code",
+      trigger,
+      target: {
+        scope: authorized.scope,
+        id: authorized.target_id,
+      } as PluginTarget,
+      install,
+    } satisfies AuthorizedCodeTriggerDelivery;
   }
-  return {
-    trigger,
-    target,
-    version,
-  } satisfies AuthorizedTriggerDelivery;
+  // Legacy code plugins ran on the per-call E2B host, which is gone: their
+  // triggers deliver nothing.
+  return yield* new TriggerDeliveryForbidden({ reason: "plugin-disabled" });
 });

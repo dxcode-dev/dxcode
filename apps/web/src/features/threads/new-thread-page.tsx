@@ -68,6 +68,7 @@ import { getBrowserNewThreadDraftStore } from "./new-thread-draft-store.js";
 import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { submitNewThread } from "./new-thread-submission.js";
 import { NewThreadToasts } from "./new-thread-toasts.js";
+import { pluginAgentModesQueryOptions } from "./plugin-agent-modes-queries.js";
 import { createThreadMutationOptions } from "./thread-mutations.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 
@@ -312,7 +313,11 @@ function useComposerModeSelection(
     CLAUDE_CODE_DEFAULT_EFFORT,
   );
   const [chosenPlan, chooseClaudePlan] = React.useState<string>();
+  // A plugin's agent mode, chosen for this composer only; any mode or model
+  // choice replaces it.
+  const [pluginAgentMode, choosePluginAgentMode] = React.useState<string>();
   const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(userId));
+  const pluginAgentModesQuery = useQuery(pluginAgentModesQueryOptions(userId));
   const profile = chosenProfile ?? startingMode(remembered.mode);
   const model =
     chosenModel === undefined
@@ -322,6 +327,7 @@ function useComposerModeSelection(
         )
       : chosenModel.value;
   const chooseProfile = (nextProfile: ModeId) => {
+    choosePluginAgentMode(undefined);
     setChosenProfile(nextProfile);
     // Choosing a mode replaces any pinned model, including one that is
     // remembered but hidden because it is not currently offered.
@@ -332,6 +338,7 @@ function useComposerModeSelection(
     });
   };
   const chooseModel = (nextModel: string | undefined) => {
+    if (nextModel !== undefined) choosePluginAgentMode(undefined);
     setChosenModel({ value: nextModel });
     // Clearing the model only happens alongside a mode choice, which
     // saves both together.
@@ -353,6 +360,14 @@ function useComposerModeSelection(
     chooseModel,
     chooseEffort,
     chooseClaudePlan,
+    pluginAgentModes: pluginAgentModesQuery.data,
+    // A mode a plugin no longer offers is not sent.
+    pluginAgentMode: pluginAgentModesQuery.data?.some(
+      ({ mode }) => mode === pluginAgentMode,
+    )
+      ? pluginAgentMode
+      : undefined,
+    choosePluginAgentMode,
   };
 }
 
@@ -500,6 +515,9 @@ function ScopedNewThreadModal({
     chooseModel,
     chooseEffort,
     chooseClaudePlan,
+    pluginAgentModes,
+    pluginAgentMode,
+    choosePluginAgentMode,
   } = useComposerModeSelection(identity.id, remembered, rememberComposer);
   const routingGraphQuery = useQuery(
     modelRoutingGraphQueryOptions({ scope: "personal" }, identity.id),
@@ -586,6 +604,7 @@ function ScopedNewThreadModal({
         model,
         effort,
         claudePlan,
+        ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
         runnerProfileId: effectiveRunnerProfileId,
         visibility,
         projects,
@@ -696,6 +715,9 @@ function ScopedNewThreadModal({
           onEffortChange={chooseEffort}
           claudePlan={claudePlan}
           onClaudePlanChange={chooseClaudePlan}
+          pluginAgentModes={pluginAgentModes}
+          pluginAgentMode={pluginAgentMode}
+          onPluginAgentModeChange={choosePluginAgentMode}
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}

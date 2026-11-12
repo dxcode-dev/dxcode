@@ -3,6 +3,7 @@ import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
+  Bot,
   CircleCheck,
   DollarSign,
   FolderGit2,
@@ -12,11 +13,11 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { threadOrbMemoryQueryOptions } from "./orb-memory/orb-memory-queries.js";
 import { threadArchiveInFlight, threadKeys } from "./thread-queries.js";
-import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { formatUsd } from "./thread-usage/thread-usage-format.js";
 import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
 
@@ -79,6 +80,7 @@ export default function ThreadMenuDetails({
     <>
       <Menu.Separator className="thread-menu-separator" />
       <SelectionMenuItem Menu={Menu} thread={thread} />
+      <PluginAgentMenuItem Menu={Menu} thread={thread} />
       {canUseOrb(thread) ? (
         <OrbMenuItem Menu={Menu} threadId={thread.id} />
       ) : null}
@@ -117,6 +119,7 @@ function ThreadDetailItems({
     <>
       <Menu.Separator className="thread-menu-separator" />
       <SelectionMenuItem Menu={Menu} thread={thread} />
+      <PluginAgentMenuItem Menu={Menu} thread={thread} />
       {canUseOrb(thread) ? (
         <OrbMenuItem Menu={Menu} threadId={thread.id} />
       ) : null}
@@ -144,6 +147,28 @@ function ThreadDetailItems({
         />
       ) : null}
     </>
+  );
+}
+
+/** The plugin agent the Thread runs as, and the plugin that defined it. */
+function PluginAgentMenuItem({
+  Menu,
+  thread,
+}: {
+  readonly Menu: MenuParts;
+  readonly thread: ThreadDetailData;
+}) {
+  const agent = thread.pluginAgent;
+  if (agent === undefined) return null;
+  return (
+    <Menu.Item
+      className="thread-menu-item thread-menu-detail-item"
+      title={`Runs the ${agent.label} agent from the ${agent.plugin} plugin`}
+    >
+      <Bot />
+      <span className="thread-menu-detail-label">{agent.label}</span>
+      <span className="thread-menu-detail-value">{agent.plugin}</span>
+    </Menu.Item>
   );
 }
 

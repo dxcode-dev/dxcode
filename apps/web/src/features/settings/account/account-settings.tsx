@@ -9,6 +9,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
+import { registeredDeploymentAccountCards } from "../deployment-settings-registration.js";
 import { ProfilePicture, ProfilePictureEditor } from "../profile-picture.js";
 import {
   initialSettingsFormState,
@@ -375,6 +376,10 @@ export function PersonalAccountSettings({
         avatarSaving={setAvatar.isPending}
         threadCount={threadCount.data?.threadCount}
       />
+      {/* A deployment's own cards, such as its plan; public dx has none. */}
+      {registeredDeploymentAccountCards.map(({ id, component: Card }) => (
+        <Card key={id} />
+      ))}
       <AccountUsageSummary userId={identity.id} />
     </>
   );

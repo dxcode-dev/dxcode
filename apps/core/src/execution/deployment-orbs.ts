@@ -19,6 +19,11 @@ export interface DeploymentOrbSettings {
   readonly description?: string;
   /** How long an idle Orb on the deployment's account waits to stop. */
   readonly inactivityMs?: number;
+  /**
+   * What each size costs on the deployment's account, by size ID, as the
+   * size cards show it. A size the deployment's catalog labels keeps that.
+   */
+  readonly costLabels?: Readonly<Record<string, string>>;
 }
 
 export type DeploymentOrbs = Readonly<

@@ -18,6 +18,19 @@ export const WorkspacePolicyRestrictions = Schema.Struct({
    * own provider account, so it needs the admin's explicit opt-in.
    */
   allowPersonalExecutionOverrides: Schema.Boolean,
+  /**
+   * "Allow personal plugin overrides" for installed plugins. Off by default:
+   * a member's personal copy of a plugin this workspace installs is paused.
+   * On: the member's own copy runs instead of the workspace's, for that
+   * member only. The two copies never run in one Thread.
+   */
+  allowPersonalPluginInstallOverrides: Schema.Boolean,
+  /**
+   * Plugins a project's repository carries in `.agents/plugins` or
+   * `.dx/plugins` load in its Threads. On by default: the repository is the
+   * trust (owner, 2026-11-10); a workspace can turn them off.
+   */
+  allowRepositoryPlugins: Schema.Boolean,
 });
 
 export type WorkspacePolicyRestrictions =
@@ -50,6 +63,8 @@ export const defaultWorkspacePolicy = (
     allowPersonalSecretOverrides: true,
     allowPersonalPluginOverrides: true,
     allowPersonalExecutionOverrides: false,
+    allowPersonalPluginInstallOverrides: false,
+    allowRepositoryPlugins: true,
   },
   revision: 0,
   updatedAt: Schema.decodeUnknownSync(Schema.DateTimeUtcFromString)(

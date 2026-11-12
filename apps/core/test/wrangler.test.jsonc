@@ -12,6 +12,7 @@
     "DX_AUTH_URL": "https://dx.test",
     "DX_INTEGRATION_BITBUCKET_OAUTH": "{\"version\":1,\"clientId\":\"client\",\"clientSecret\":\"secret\",\"callbackUrl\":\"https://dx.test/v1/integrations/bitbucket/oauth/callback\"}"
   },
+  "worker_loaders": [{ "binding": "LOADER" }],
   "d1_databases": [
     {
       "binding": "DB",

@@ -17,12 +17,13 @@ use crate::disk::Disk;
 use crate::environment::{EnvironmentOutcome, EnvironmentResult, EnvironmentRuntime, Materialized};
 use crate::files::{FilesContext, FilesDone, FilesResult, FilesWorkers};
 use crate::files_sandbox::{self, SandboxReadResult};
+use crate::mcp::{McpPaths, McpServers};
 use crate::memory::{self, Memory};
 use crate::observer::Observer;
 use crate::protocol::{
-    Capabilities, ClientMessage, DiskOperation, EnvironmentOperation, MemoryOperation,
-    OperationResult, PortalOperation, PortalResult, RequestOperation, ServerMessage,
-    StorageOperation, UpdateStatus, WorkloadIdentityResult,
+    Capabilities, ClientMessage, DiskOperation, EnvironmentOperation, McpOperation,
+    MemoryOperation, OperationResult, PortalOperation, PortalResult, RequestOperation,
+    ServerMessage, StorageOperation, UpdateStatus, WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
 use crate::services::{ServicePaths, Services};
@@ -161,6 +162,8 @@ pub struct Daemon {
     memory: Memory,
     /// The workspace filesystem: heartbeats' usage, snapshots, deletions.
     disk: Disk,
+    /// Plugins' local MCP servers; they outlive a session.
+    mcp: McpServers,
     /// The Desktop whose windows the viewer's app row lists. A local runtime
     /// has none unless `DXD_DESKTOP` names one (tests).
     desktop_paths: Option<desktop::DesktopPaths>,
@@ -199,6 +202,18 @@ impl Daemon {
                 |local| PathBuf::from(&local.state_directory),
             ),
         );
+        let mcp = McpServers::new(match &config.local_runtime {
+            Some(local) => McpPaths {
+                home: PathBuf::from(&local.home_directory),
+                user: std::env::var("USER").unwrap_or_else(|_| "user".into()),
+                log_directory: PathBuf::from(&local.state_directory).join("mcp"),
+            },
+            None => McpPaths {
+                home: PathBuf::from(crate::GUEST_HOME),
+                user: "user".into(),
+                log_directory: PathBuf::from(crate::STATE_DIR).join("mcp"),
+            },
+        });
         let desktop_paths = match &config.local_runtime {
             None => Some(desktop::DesktopPaths::default()),
             Some(local) => std::env::var_os("DXD_DESKTOP")
@@ -234,6 +249,7 @@ impl Daemon {
             desktop_start: Arc::default(),
             memory,
             disk,
+            mcp,
             desktop_paths,
         })
     }
@@ -1066,6 +1082,43 @@ impl Daemon {
                                 request_id: &request_id,
                                 result: OperationResult::Disk(result),
                             }) {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
+                    RequestOperation::Mcp(McpOperation::Request {
+                        server,
+                        method,
+                        params,
+                        timeout_ms,
+                    }) => {
+                        // A server may take minutes to start and answer: its
+                        // answer returns through the proxy's lane.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let mcp = self.mcp.clone();
+                        tokio::task::spawn_blocking(move || {
+                            let result = mcp.request(&server, &method, params, timeout_ms);
+                            let encode = |result| {
+                                serde_json::to_string(&ClientMessage::Response {
+                                    generation: &generation,
+                                    request_id: &request_id,
+                                    result: OperationResult::Mcp(result),
+                                })
+                            };
+                            // Core drops a daemon whose frame passes its limit.
+                            let text = encode(result)
+                                .ok()
+                                .filter(|text| text.len() <= crate::mcp::MAX_RESPONSE_FRAME_BYTES);
+                            let text = text.or_else(|| {
+                                encode(crate::mcp::McpResult::Unavailable {
+                                    reason: "too-large",
+                                    message: "The server's answer is too large for dx to relay."
+                                        .into(),
+                                })
+                                .ok()
+                            });
+                            if let Some(text) = text {
                                 let _ = sender.send(Outbound::Text(text));
                             }
                         });

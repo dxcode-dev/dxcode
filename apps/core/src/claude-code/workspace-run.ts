@@ -12,6 +12,10 @@ import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import { environmentMaskerOf } from "../settings/environment-variables/sandbox.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 import { CLAUDE_CODE_TOOL_BRIDGE } from "./tool-bridge.js";
+import type {
+  ClaudeCodeHookDecision,
+  ClaudeCodeToolGate,
+} from "./tool-gate.js";
 
 /**
  * One attempt at answering one user turn with the Claude Code CLI in the
@@ -28,6 +32,13 @@ const STATE_ROOT = "/home/user/.local/state/dx-claude-code";
 export const claudeCodeRunsRoot = `${STATE_ROOT}/runs`;
 /** Title answers, each in its own directory; see `claudeCodeAnswer`. */
 const claudeCodeAnswersRoot = `${STATE_ROOT}/answers`;
+
+/** Where dx writes its PreToolUse decision for the bridge (tool-gate.ts). */
+export const claudeCodeHookDecisionPath = (toolUseId: string) => {
+  if (!/^[A-Za-z0-9_-]+$/.test(toolUseId))
+    throw new Error("Invalid Claude Code tool call id.");
+  return `${STATE_ROOT}/mcp/hooks/${toolUseId}.json`;
+};
 
 /** Where dx writes a dx tool's result for the \`dx\` MCP server to return. */
 export const claudeCodeToolResultPath = (toolCallId: string) => {
@@ -206,6 +217,40 @@ export interface ClaudeCodeDxTool {
   readonly inputSchema: unknown;
 }
 
+/** A skill of a repository plugin, by its folder in the workspace. */
+export interface ClaudeCodeRepositorySkill {
+  readonly name: string;
+  readonly directory: string;
+}
+
+const safeSkillName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The skills to link, one `name<TAB>target` line each, the target relative
+ * to ~/.claude/skills so it resolves inside the local runtime's namespace
+ * too. A skill outside the repository checkout, or with a name or path the
+ * shell could misread, is left out.
+ */
+export const repositorySkillLinks = (
+  skills: ReadonlyArray<ClaudeCodeRepositorySkill>,
+) =>
+  skills
+    .flatMap(({ name, directory }) => {
+      const path = directory.replace(/\/+$/, "");
+      if (
+        !safeSkillName.test(name) ||
+        !path.startsWith(`${WORKSPACE}/`) ||
+        !/^[A-Za-z0-9._/-]+$/.test(path) ||
+        path.split("/").some((segment) => segment === "..")
+      )
+        return [];
+      // Every line ends in a newline: \`read\` drops an unterminated last line.
+      return [
+        `${name}\t../../workspace/repo/${path.slice(WORKSPACE.length + 1)}\n`,
+      ];
+    })
+    .join("");
+
 export interface ClaudeCodeLaunch {
   readonly model: string;
   readonly effort: string;
@@ -216,6 +261,12 @@ export interface ClaudeCodeLaunch {
    * undefined, for a prompt not rendered in this isolate, leaves it.
    */
   readonly personalInstructions?: string;
+  /**
+   * Skills of the repository's plugins this submission loads, linked into
+   * ~/.claude/skills like the dx agent mounts them; undefined, for a prompt
+   * not rendered in this isolate, leaves the last launch's links.
+   */
+  readonly repositorySkills?: ReadonlyArray<ClaudeCodeRepositorySkill>;
   readonly input: ReadonlyArray<ClaudeCodeInputBlock>;
   /**
    * The input when no session is resumed: the conversation so far, then the
@@ -226,6 +277,11 @@ export interface ClaudeCodeLaunch {
   readonly token: string;
   /** dx's own tools, served to Claude by the \`dx\` MCP server. */
   readonly tools: ReadonlyArray<ClaudeCodeDxTool>;
+  /**
+   * Installed plugins gate tool calls: the bridge asks dx before each of
+   * Claude's own tools runs (tool-gate.ts).
+   */
+  readonly gateTools?: boolean;
   /**
    * Claude's own tools to offer (\`--tools\`), or all of them when absent.
    * A Thread on its Claude host has no workspace for Bash or the file tools.
@@ -450,6 +506,15 @@ fi
 # are relative, so they resolve inside the local runtime's namespace too.
 mkdir -p "$HOME/.claude/skills"
 find "$HOME/.claude/skills" -maxdepth 1 -xtype l -delete
+# Repository plugin skills the last launch linked go first, so a plugin the
+# repository dropped stops loading.
+REPO_SKILLS="$HOME/.claude/skills/.dx-repository-plugin-skills"
+if [ -f "$D/repository-skills.tsv" ] && [ -f "$REPO_SKILLS" ]; then
+  while IFS= read -r name; do
+    [ -n "$name" ] && [ -L "$HOME/.claude/skills/$name" ] && rm -f "$HOME/.claude/skills/$name"
+  done < "$REPO_SKILLS"
+  rm -f "$REPO_SKILLS"
+fi
 for skill in "$HOME/.local/share/dx/skills"/*/; do
   name=$(basename "$skill")
   [ -f "$skill/SKILL.md" ] && ln -sfn "../../.local/share/dx/skills/$name" "$HOME/.claude/skills/$name"
@@ -460,6 +525,19 @@ if [ -d ${quote(`${WORKSPACE}/.agents/skills`)} ]; then
     case " ${[...BUILT_IN_SKILL_NAMES].join(" ")} " in *" $name "*) continue ;; esac
     [ -f "$skill/SKILL.md" ] && ln -sfn "../../workspace/repo/.agents/skills/$name" "$HOME/.claude/skills/$name"
   done
+fi
+# Skills of the repository's plugins (.agents/plugins) this submission
+# loads, after the repository's own skills; dx already left out any name
+# those or dx's built-in skills have.
+if [ -f "$D/repository-skills.tsv" ]; then
+  : > "$REPO_SKILLS"
+  while IFS=$'\t' read -r name target || [ -n "$name" ]; do
+    [ -n "$name" ] && [ -n "$target" ] || continue
+    [ -e "$HOME/.claude/skills/$name" ] && continue
+    [ -f "$HOME/.claude/skills/$target/SKILL.md" ] || continue
+    ln -sfn "$target" "$HOME/.claude/skills/$name"
+    echo "$name" >> "$REPO_SKILLS"
+  done < "$D/repository-skills.tsv"
 fi
 for skill in "$HOME/.local/share/dx/settings-skills"/*/; do
   name=$(basename "$skill")
@@ -636,6 +714,14 @@ for candidate in /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 |
 done
 BRIDGE=""
 NO_PREFIX=""
+# Plugins gate this run's tools through the bridge: without Python there is
+# no bridge, so the run fails instead of running ungated.
+if [ -e "$D/dx-hooks.json" ] && [ -z "$PYTHON" ]; then
+  echo "dx needs python3 in the workspace to check Claude Code's tools with the Thread's plugins." > "$D/stderr.log"
+  echo 1 > "$D/exit.tmp"
+  mv "$D/exit.tmp" "$D/exit"
+  exit 1
+fi
 if [ -s "$D/dx-tools.json" ] && [ -n "$PYTHON" ]; then
   rm -f "$D/control"
   mkfifo -m 600 "$D/control"
@@ -750,6 +836,9 @@ export type ClaudeCodeSessionPath =
   | "seeded"
   | "fork-session-gone";
 
+/** PreToolUse requests being decided in this isolate, by tool_use id. */
+const decidingHooks = new Set<string>();
+
 export class ClaudeCodeRun {
   readonly stream = new ClaudeCodeStream();
   readonly dir: string;
@@ -778,10 +867,51 @@ export class ClaudeCodeRun {
     base?: number,
     /** Opens a new handle on the Thread's sandbox, when one can be opened. */
     private readonly reconnect?: () => Promise<Sandbox | undefined>,
+    /** The Thread's plugin gate for Claude Code's own tools (tool-gate.ts). */
+    private readonly gate?: () => ClaudeCodeToolGate | undefined,
   ) {
     this.dir = `${claudeCodeRunsRoot}/${key}`;
     this.#sandbox = sandbox;
     this.#base = base;
+  }
+
+  /**
+   * Decides each PreToolUse request the bridge printed and writes the
+   * answer it waits for. A request with no gate, or whose gate fails, is
+   * denied: the bridge also denies on its own when no answer arrives.
+   */
+  #answerHooks() {
+    const requests = this.stream.hookRequests.splice(0);
+    for (const request of requests) {
+      // Shared across readers: a reader rebuilt while a plugin still waits
+      // on a person must not ask again.
+      if (decidingHooks.has(request.toolUseId)) continue;
+      decidingHooks.add(request.toolUseId);
+      const path = claudeCodeHookDecisionPath(request.toolUseId);
+      void (async () => {
+        // A re-read after a restart finds requests it already answered.
+        if (await this.#sandbox.exists(path).catch(() => false)) return;
+        const gate = this.gate?.();
+        const decision: ClaudeCodeHookDecision =
+          gate === undefined
+            ? {
+                decision: "deny",
+                reason:
+                  "dx could not check this call with the Thread's plugins, so it did not run.",
+              }
+            : await gate(request).catch(
+                (error: unknown): ClaudeCodeHookDecision => ({
+                  decision: "deny",
+                  reason: `dx could not check this call with the Thread's plugins (${error instanceof Error ? error.message : String(error)}).`,
+                }),
+              );
+        await this.#sandbox.writeFile(path, JSON.stringify(decision));
+      })()
+        .catch(() => {
+          // An unwritten answer lets the bridge deny the call on its own.
+        })
+        .finally(() => decidingHooks.delete(request.toolUseId));
+    }
   }
 
   #forgetReadFailures() {
@@ -804,6 +934,7 @@ export class ClaudeCodeRun {
       this.#sandbox,
       this.#base,
       this.reconnect,
+      this.gate,
     );
     reader.#chunk = index;
     return reader;
@@ -845,12 +976,21 @@ export class ClaudeCodeRun {
       ...(launch.personalInstructions === undefined
         ? {}
         : { "user-instructions.md": launch.personalInstructions }),
-      ...(launch.tools.length > 0
+      ...(launch.repositorySkills === undefined
+        ? {}
+        : {
+            "repository-skills.tsv": repositorySkillLinks(
+              launch.repositorySkills,
+            ),
+          }),
+      ...(launch.tools.length > 0 || launch.gateTools === true
         ? {
             "dx-tools.json": JSON.stringify(launch.tools),
             "dx-bridge.py": CLAUDE_CODE_TOOL_BRIDGE,
           }
         : {}),
+      // The bridge registers its PreToolUse hook when this file exists.
+      ...(launch.gateTools === true ? { "dx-hooks.json": "{}" } : {}),
       "input.jsonl": inputLine(launch.input),
       ...(launch.freshInput === undefined
         ? {}
@@ -929,6 +1069,7 @@ export class ClaudeCodeRun {
         }
         this.stream.push(line);
       }
+      this.#answerHooks();
       if (!ended) break;
       this.#chunk += 1;
       this.#lines = 0;

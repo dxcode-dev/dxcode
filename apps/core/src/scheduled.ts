@@ -2,11 +2,13 @@ import { purgeUnsentAttachments } from "./attachments/store.js";
 import { attachmentTransfer } from "./attachments/transfer.js";
 import { sweepAutomations } from "./automations/sweep.js";
 import { sweepBugReportForwards } from "./bug-reports/forwarding.js";
+import { sweepIdleDeadlines } from "./execution/idle-deadlines.js";
 import type { Bindings } from "./http/types.js";
 import {
   attachmentLogger,
   bugReportLogger,
   notificationLogger,
+  orbProvidersLogger,
   sourceControlLogger,
   threadDeletionLogger,
   threadPersistenceLogger,
@@ -177,6 +179,34 @@ export const scheduled = (
         cause,
       }),
     ),
+  );
+  // An idle Orb whose provider cannot pause it by itself (Lizard) pauses
+  // within a minute of its deadline.
+  context.waitUntil(
+    import("./execution/lizard/provider.js")
+      .then(({ pauseIdleLizardSandbox }) =>
+        sweepIdleDeadlines(
+          bindings,
+          {
+            lizard: (sweepBindings, sandboxId) =>
+              pauseIdleLizardSandbox(sweepBindings, sandboxId),
+          },
+          controller.scheduledTime,
+        ),
+      )
+      .then((paused) => {
+        if (paused > 0)
+          orbProvidersLogger.info("Idle Orbs paused.", {
+            event: "orb_idle_paused",
+            paused,
+          });
+      })
+      .catch((cause) =>
+        orbProvidersLogger.error("Idle Orb sweep failed.", {
+          event: "orb_idle_sweep_failed",
+          cause,
+        }),
+      ),
   );
   scheduleWorkspaceUsageBackfill(bindings, context);
   if (controller.cron === THREAD_SWEEP_CRON) return;

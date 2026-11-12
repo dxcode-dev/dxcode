@@ -40,8 +40,11 @@ import {
   invalidateAllOrbMemory,
   invalidateOrbMemory,
 } from "../orb-memory/orb-memory-queries.js";
+import { invalidateMessageReactions } from "../sharing/message-reactions-cache-queries.js";
 import {
   invalidateAllThreadQueries,
+  invalidatePluginPaneMessages,
+  invalidatePluginUi,
   invalidateReadinessQuery,
 } from "../thread-queries.js";
 import { ThreadListRows } from "../thread-row-queries.js";
@@ -442,8 +445,18 @@ export class RealtimeClient {
         this.#userId,
         event.threadId,
       );
+    } else if (event.type === "plugin-ui.invalidated") {
+      void invalidatePluginUi(this.#queryClient, event.threadId);
+    } else if (event.type === "plugin-pane.invalidated") {
+      void invalidatePluginPaneMessages(this.#queryClient, event.threadId);
     } else if (event.type === "space.posts.invalidated") {
       void invalidateSpacePosts(
+        this.#queryClient,
+        this.#userId,
+        event.threadId,
+      );
+    } else if (event.type === "reactions.invalidated") {
+      void invalidateMessageReactions(
         this.#queryClient,
         this.#userId,
         event.threadId,

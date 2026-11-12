@@ -33,6 +33,26 @@ export interface OrbBillingPolicy {
    */
   readonly recordUsage: (usage: OrbUsage) => Promise<OrbUsageOutcome>;
   /**
+   * A metered start's create or connect failed, so the policy can refund
+   * what it charged at admission. Its failures are logged, never thrown.
+   */
+  readonly startFailed?: (request: OrbStartRequest) => Promise<void>;
+  /**
+   * Until when (epoch ms) a Thread's Orb time is paid. When `recordUsage`
+   * says `stop`, Core pins the Orb's deadline there, or stops the Orb when
+   * that time is over. Without it a `stop` keeps the deadline where it is.
+   */
+  readonly paidUntil?: (threadId: ThreadId) => Promise<number>;
+  /**
+   * What the Thread shows when a start's first Orb time is stopped with no
+   * paid time left: Core stops that Orb at once, keeping its files, and
+   * refuses the start with this reason.
+   */
+  readonly stopRefusal?: {
+    readonly reason: string;
+    readonly action?: OrbStartRefusalAction;
+  };
+  /**
    * The Orb time this deployment metered for `userId`'s Threads between
    * `from` and `until` (epoch ms), in milliseconds per Thread ID. Display
    * only: Settings → Usage → Orb prefers it to the Thread's own run record
@@ -70,8 +90,21 @@ export type OrbStartDecision =
   | { readonly outcome: "allow" }
   /** Allow, and report the Orb's running time to `recordUsage`. */
   | { readonly outcome: "meter" }
-  /** Refuse; the Thread shows `reason` as the run's error. */
-  | { readonly outcome: "refuse"; readonly reason: string };
+  /**
+   * Refuse; the Thread shows `reason` as the run's error, and `action` as a
+   * button to an app page (an app path), such as where to add credits.
+   */
+  | {
+      readonly outcome: "refuse";
+      readonly reason: string;
+      readonly action?: OrbStartRefusalAction;
+    };
+
+export interface OrbStartRefusalAction {
+  readonly label: string;
+  /** An app path, starting with `/`. */
+  readonly href: string;
+}
 
 /**
  * A metered Orb runs at least from `from` until `until` (epoch ms): each
@@ -95,28 +128,85 @@ export const noOrbBilling: OrbBillingPolicy = {
  * The policy refused an Orb start. A `FlueError`, so a run settles with the
  * reason and the Thread can show it.
  */
-export const orbStartRefused = (reason: string) =>
+export const orbStartRefused = (
+  reason: string,
+  action?: OrbStartRefusalAction,
+) =>
   new FlueError({
     type: "orb_start_refused",
     message: reason,
     details: "",
     dev: "",
-    meta: { code: "ORB_START_REFUSED" },
+    meta: {
+      code: "ORB_START_REFUSED",
+      // Only a page of the app: a path, never `//host`.
+      ...(action === undefined || !/^\/\w/.test(action.href)
+        ? {}
+        : { actionLabel: action.label, actionHref: action.href }),
+    },
   });
 
+/**
+ * How much earlier than its paid time a pinned Orb is told to stop: a
+ * provider rounds the deadline up and takes a moment to stop (a busy Boat
+ * sandbox ran 4 s past its deadline on 2026-11-05), so this keeps the whole
+ * stop inside the paid time.
+ */
+const ORB_STOP_MARGIN_MS = 15_000;
+
+/**
+ * A metered Orb's handle. When the policy stops its Orb time, the provider's
+ * deadline is pinned to the time already paid, whatever moved it (a create
+ * or resume sets its own), so nothing runs the Orb past it; with none left
+ * the Orb is stopped. A start refused that way shows the policy's reason.
+ */
 const meteredHandle = async <Handle extends ExecutionWorkspaceHandle>(
   handle: Handle,
   report: (from: number, durationMs: number) => Promise<OrbUsageOutcome>,
+  paidUntil: (() => Promise<number>) | undefined,
+  /** Stops the Orb; false when the stop is still pending or failed. */
+  stop: () => Promise<boolean>,
+  refuse: () => never,
 ): Promise<Handle> => {
-  // The start already set the provider's first deadline.
-  await report(
-    Date.now(),
-    handle.inactivityMs ?? DEFAULT_WORKSPACE_INACTIVITY_MS,
-  );
+  /** True when the Orb may keep running, pinned to its paid time. */
+  const pinToPaid = async () => {
+    const remaining =
+      paidUntil === undefined
+        ? 0
+        : (await paidUntil()) - Date.now() - ORB_STOP_MARGIN_MS;
+    if (remaining > 0) {
+      await handle.setIdleDeadline(remaining);
+      return true;
+    }
+    // A stop the provider still owes (or one that failed) leaves the Orb up
+    // for now: its deadline is pinned to now as well, so nothing renews it.
+    if (!(await stop()))
+      await handle.setIdleDeadline(0).catch((error: unknown) => {
+        orbProvidersLogger.error(
+          "An unpaid Orb's deadline could not be pinned.",
+          {
+            event: "orb_unpaid_pin_failed",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      });
+    return false;
+  };
+  if (
+    (await report(
+      Date.now(),
+      handle.inactivityMs ?? DEFAULT_WORKSPACE_INACTIVITY_MS,
+    )) === "stop" &&
+    !(await pinToPaid())
+  )
+    refuse();
   return {
     ...handle,
     setIdleDeadline: async (durationMs: number) => {
-      if ((await report(Date.now(), durationMs)) === "stop") return;
+      if ((await report(Date.now(), durationMs)) === "stop") {
+        if (paidUntil !== undefined) await pinToPaid();
+        return;
+      }
       await handle.setIdleDeadline(durationMs);
     },
   };
@@ -135,6 +225,27 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
     authorize: () => Promise<void>,
     open: (authorize: () => Promise<void>) => Promise<Handle>,
   ) => {
+    const { paidUntil } = policy;
+    // `stopping` means the provider still owes the stop and finishes it on
+    // its own (#1740).
+    const stopUnpaid = (): Promise<boolean> =>
+      provider.workspace
+        .release(context, { threadId }, "archive")
+        .then((answer) => answer !== "stopping")
+        .catch((error: unknown) => {
+          orbProvidersLogger.error("An unpaid Orb could not be stopped.", {
+            event: "orb_unpaid_stop_failed",
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return false;
+        });
+    const refuseUnpaid = (): never => {
+      throw orbStartRefused(
+        policy.stopRefusal?.reason ?? "This Orb's time could not be paid.",
+        policy.stopRefusal?.action,
+      );
+    };
     const request: OrbStartRequest = {
       threadId,
       operation,
@@ -146,7 +257,8 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
     // runs `authorize` before it starts or resumes an Orb, so the decision
     // still gates the start; it is awaited again after, for any that did not.
     const decision = policy.admitOrbStart(request).then((decided) => {
-      if (decided.outcome === "refuse") throw orbStartRefused(decided.reason);
+      if (decided.outcome === "refuse")
+        throw orbStartRefused(decided.reason, decided.action);
       return decided;
     });
     decision.catch(() => undefined);
@@ -154,27 +266,41 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
       await Promise.all([authorize(), decision]);
     }).catch(async (cause: unknown) => {
       // A refusal reports itself, however the provider wrapped it.
-      await decision;
+      const decided = await decision;
+      // What the policy charged at admission comes back.
+      if (decided.outcome === "meter")
+        await policy.startFailed?.(request).catch((error: unknown) => {
+          orbProvidersLogger.warn("A failed Orb start could not be refunded.", {
+            event: "orb_start_refund_failed",
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
       throw cause;
     });
     if ((await decision).outcome === "allow") return handle;
     const { operation: _operation, ...usage } = request;
-    return meteredHandle(handle, (from, durationMs) =>
-      policy
-        .recordUsage({
-          kind: "orb-time",
-          ...usage,
-          from,
-          until: from + durationMs,
-        })
-        .catch((error: unknown): OrbUsageOutcome => {
-          orbProvidersLogger.warn("Orb usage could not be recorded.", {
-            event: "orb_usage_record_failed",
-            threadId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return "continue";
-        }),
+    return meteredHandle(
+      handle,
+      (from, durationMs) =>
+        policy
+          .recordUsage({
+            kind: "orb-time",
+            ...usage,
+            from,
+            until: from + durationMs,
+          })
+          .catch((error: unknown): OrbUsageOutcome => {
+            orbProvidersLogger.warn("Orb usage could not be recorded.", {
+              event: "orb_usage_record_failed",
+              threadId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return "continue";
+          }),
+      paidUntil === undefined ? undefined : () => paidUntil(threadId),
+      stopUnpaid,
+      refuseUnpaid,
     );
   };
   return {
