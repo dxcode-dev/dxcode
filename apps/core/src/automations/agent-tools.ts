@@ -54,6 +54,8 @@ import {
 
 /** notify_user sends at most this many per Thread per hour. */
 export const NOTIFY_PER_HOUR = 10;
+/** A tool call id a notification can link to: `?message=call:<id>`. */
+const TOOL_CALL_LINK = /^[\w.-]{1,160}$/;
 
 const description = (lines: ReadonlyArray<string>) => lines.join("\n\n");
 
@@ -907,7 +909,7 @@ export const createAutomationTools = (
     defineTool({
       name: "notify_user",
       description: description([
-        "Send a push notification to this Thread's owner, on the devices where they turned on dx notifications. Tapping it opens this Thread.",
+        "Send a push notification to this Thread's owner, on the devices where they turned on dx notifications, and an email only if they turned on agent emails. Tapping it opens this Thread at this turn.",
         'Use it when the owner asked to be told about something, such as "notify me when the deploy finishes", at the moment it happens. dx already notifies the owner when a turn ends, so never send one for that. Only the owner receives it; at most 10 per Thread per hour.',
       ]),
       input: v.object({
@@ -923,7 +925,8 @@ export const createAutomationTools = (
           const sent = await context.db
             .prepare(
               `SELECT COUNT(*) AS count FROM notification
-                WHERE topic = 'agent_notification' AND thread_id = ? AND created_at > ?`,
+                WHERE topic = 'agent_notification' AND source_key LIKE 'agent:%'
+                  AND thread_id = ? AND created_at > ?`,
             )
             .bind(callingThreadId, since)
             .first<number>("count");
@@ -944,6 +947,10 @@ export const createAutomationTools = (
             sourceKey,
             recipients: [owner.ownerUserId as UserId],
             threadId: callingThreadId as ThreadId,
+            // Opens the Thread at this call in its transcript.
+            ...(TOOL_CALL_LINK.test(toolCallId)
+              ? { messageId: `call:${toolCallId}` }
+              : {}),
             subject: data.title,
             excerpt: data.body,
           });

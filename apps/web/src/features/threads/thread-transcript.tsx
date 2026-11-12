@@ -9,7 +9,7 @@ import { Button } from "../../shared/ui/button.js";
 import { MessageActions } from "./message-actions.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
 import { MessageEditContext } from "./message-edit.js";
-import { rowMatchesMessageLink } from "./message-link.js";
+import { messageLinkRow } from "./message-link.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
@@ -545,9 +545,7 @@ function useMessageFocus({
   const messageId = focus?.messageId;
   const requestKey = focus?.requestKey;
   const target =
-    messageId === undefined
-      ? undefined
-      : model.rows.find((row) => rowMatchesMessageLink(row, messageId));
+    messageId === undefined ? undefined : messageLinkRow(model.rows, messageId);
   const targetIndex =
     target === undefined
       ? -1

@@ -10,6 +10,7 @@ import { type AppRouter, createAppRouter } from "./router.js";
 import { useIdentity } from "./shared/auth/auth-context.js";
 import { ReportBugSlot } from "./shared/bug-reports/report-bug-slot.js";
 import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
+import { artifactLinkHere } from "./shared/navigation/open-artifact.js";
 import { Toaster } from "./shared/ui/sonner.js";
 import { toastOffsets } from "./shared/ui/toast-offsets.js";
 import { useMobile } from "./shared/use-mobile.js";
@@ -34,14 +35,26 @@ const AppBugReportDialog = lazy(() =>
  * installed app, so each changes route in place instead of reloading dx.
  */
 function InAppNavigation({ router }: { readonly router: AppRouter }) {
-  useMountEffect(() =>
-    attachInAppNavigation((url) => {
+  useMountEffect(() => {
+    // A notification that opened dx: show its artifact where this screen
+    // shows artifacts.
+    const opened = new URL(window.location.href);
+    const here = artifactLinkHere(opened);
+    if (here !== opened)
+      void router.navigate({
+        href: here.pathname + here.search + here.hash,
+        replace: true,
+      });
+    return attachInAppNavigation((url) => {
       // Paths the router has no page for, such as `/v1/…`, load as documents.
       if (router.getMatchedRoutes(url.pathname)[2] === undefined) return false;
-      void router.navigate({ href: url.pathname + url.search + url.hash });
+      const target = artifactLinkHere(url);
+      void router.navigate({
+        href: target.pathname + target.search + target.hash,
+      });
       return true;
-    }),
-  );
+    });
+  });
   return null;
 }
 

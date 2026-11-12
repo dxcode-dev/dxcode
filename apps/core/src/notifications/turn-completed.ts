@@ -147,13 +147,13 @@ export const notifyTurnCompleted = async (
       ownerUserId,
       completion.threadId,
       completion.submissionId,
-    ).catch((cause) => {
+    ).catch((cause): Awaited<ReturnType<typeof settledTurn>> => {
       notificationLogger.warn("The finished turn's reply was not read.", {
         event: "turn_completion_reply_read_failed",
         threadId: completion.threadId,
         cause,
       });
-      return { submissionId: completion.submissionId, reply: undefined };
+      return { submissionId: completion.submissionId };
     });
     // Keyed by the turn, not the submission: messages that joined a running
     // turn settle with it, and the person is told about that turn once.
@@ -162,6 +162,10 @@ export const notifyTurnCompleted = async (
       sourceKey: `turn:${turn.submissionId}`,
       recipients: [ownerUserId],
       threadId: completion.threadId,
+      // Opens the Thread at the reply it quotes.
+      ...(completion.outcome === "completed" && turn.replyRow !== undefined
+        ? { messageId: turn.replyRow }
+        : {}),
       excerpt:
         completion.outcome === "completed"
           ? (turn.reply ?? FINISHED_WITHOUT_REPLY)

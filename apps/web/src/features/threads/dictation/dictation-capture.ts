@@ -1,6 +1,7 @@
 import { DICTATION_MAX_SAMPLES, DICTATION_SAMPLE_RATE } from "@dx/api";
 import { audioInputStore } from "../../../shared/audio-input/audio-input-store.js";
 import pcmCaptureWorkletUrl from "./pcm-capture-worklet.mjs?url&no-inline";
+import { ScreenWakeLock } from "./screen-wake-lock.js";
 
 export type CaptureSnapshot =
   | { readonly state: "idle"; readonly waveform: ReadonlyArray<number> }
@@ -92,6 +93,7 @@ export class DictationCapture {
   private samples = 0;
   private finishLimit?: () => void;
   private wallTimer?: number;
+  private readonly wakeLock = new ScreenWakeLock();
   readonly subscribe = (listener: () => void) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -224,6 +226,7 @@ export class DictationCapture {
         source.connect(fallbackNode);
         fallbackNode.connect(context.destination);
       }
+      this.wakeLock.hold();
       this.publish({ state: "recording", waveform });
       this.wallTimer = window.setTimeout(onLimit, 900_000);
     } catch (cause) {
@@ -275,6 +278,7 @@ export class DictationCapture {
       this.publish({ state: "idle", waveform: [] });
   }
   private async release() {
+    this.wakeLock.release();
     if (this.wallTimer !== undefined) clearTimeout(this.wallTimer);
     this.wallTimer = undefined;
     this.node?.disconnect();

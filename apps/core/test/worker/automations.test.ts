@@ -22,6 +22,7 @@ import {
 import worker from "../../src/cloudflare.js";
 import type { Bindings } from "../../src/http/types.js";
 import { THREAD_SWEEP_CRON } from "../../src/notifications/snooze-cron.js";
+import { artifactSaved } from "../../src/thread-artifacts/ask-effects.js";
 import {
   createTestBindings,
   TEST_CONFIG_ENCRYPTION_KEYS,
@@ -1353,6 +1354,33 @@ describe("notify_user", () => {
     await expect(
       call(main.id, "notify_user", { title: "One more", body: "Too many." }),
     ).rejects.toThrow(/10 notifications in the last hour/);
+  });
+
+  it("opens the Thread at its call, and counts only its own sends toward the limit", async () => {
+    // Ten asks the agent wrote for the owner are agent notifications too,
+    // but they do not use up notify_user's hourly allowance.
+    for (let revision = 1; revision <= 10; revision++)
+      await artifactSaved(bindings, {
+        threadId: main.id,
+        artifactId: "art_0123456789abcdef0123456789abcdef",
+        title: "Plan",
+        revision,
+        before: "",
+        after: `- [ ] @[Owner](user:${owner}) Question ${revision}\n`,
+        writer: { kind: "agent" },
+      });
+    await call(
+      main.id,
+      "notify_user",
+      { title: "Deploy finished", body: "v2 is live." },
+      "toolu_deploy",
+    );
+    const sent = await env.DB.prepare(
+      "SELECT message_id FROM notification WHERE thread_id = ? AND source_key LIKE 'agent:%'",
+    )
+      .bind(main.id)
+      .all<{ message_id: string | null }>();
+    expect(sent.results).toEqual([{ message_id: "call:toolu_deploy" }]);
   });
 
   it("sends a retried call once", async () => {

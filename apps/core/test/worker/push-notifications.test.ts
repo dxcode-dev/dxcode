@@ -28,6 +28,7 @@ import {
 import { THREAD_SWEEP_CRON } from "../../src/notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "../../src/notifications/snooze-wake.js";
 import { notifyTurnCompleted } from "../../src/notifications/turn-completed.js";
+import { artifactSaved } from "../../src/thread-artifacts/ask-effects.js";
 import { observeFlueEvent } from "../../src/observability/flue.js";
 import {
   TEST_AUTH_SECRET,
@@ -411,7 +412,13 @@ interface CapturedPush {
 let pushes: Array<CapturedPush> = [];
 let pushStatus = 201;
 
-const createApp = (userId: UserId) => {
+/** A message another Thread's agent or an automation sends as the owner. */
+interface Relay {
+  readonly sourceThreadId?: string;
+  readonly automation?: "schedule" | "github";
+}
+
+const createApp = (userId: UserId, relay: Relay = {}) => {
   const app = new Hono<AppEnv>();
   app.use("*", requestId);
   app.use("/v1/*", async (context, next) => {
@@ -422,6 +429,10 @@ const createApp = (userId: UserId) => {
         credentialScopes: ["personal", "workspace"],
       }),
     );
+    if (relay.sourceThreadId !== undefined)
+      context.set("messageSourceThreadId", relay.sourceThreadId);
+    if (relay.automation !== undefined)
+      context.set("messageAutomation", relay.automation);
     await next();
   });
   app.route("/v1/notifications", notificationRoutes);
@@ -448,9 +459,9 @@ const createApp = (userId: UserId) => {
 const send = (
   userId: UserId,
   path: string,
-  init: { method?: string; body?: unknown } = {},
+  init: { method?: string; body?: unknown; relay?: Relay } = {},
 ) =>
-  createApp(userId).request(
+  createApp(userId, init.relay).request(
     path,
     {
       method: init.method ?? "GET",
@@ -465,10 +476,12 @@ const message = async (
   threadId: string,
   body: string,
   idempotencyKey: string,
+  relay?: Relay,
 ) => {
   const response = await send(userId, `/v1/agents/${threadId}`, {
     method: "POST",
     body: { kind: "user", body, idempotencyKey },
+    ...(relay === undefined ? {} : { relay }),
   });
   expect(response.status).toBe(202);
 };
@@ -714,7 +727,9 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
       {
         title: "Test thread",
         body: "Done. I pushed the branch and opened the PR: example-org/app#1040. It has 13 commits on current main. It ends at e5e6416.",
-        url: `https://dx.test/threads/${sharedThread.id}`,
+        // Tapping it opens the Thread at the reply it quotes: the second
+        // text part of the reply's message.
+        url: `https://dx.test/threads/${sharedThread.id}?message=${encodeURIComponent("row:msg-reply:text:1")}`,
         topic: "turn_completed",
         tag: `turn_completed:${sharedThread.id}`,
       },
@@ -1154,7 +1169,7 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
     expect((await inbox(member)).unreadCount).toBe(1);
   });
 
-  it("offers email for a mention only, and push for every topic", async () => {
+  it("offers email for a person's mention by default and for an agent's only on request, and push for every topic", async () => {
     expect(
       (await subscriptions(member)).map(
         ({ topic, channel, title, enabled }) => ({
@@ -1188,6 +1203,12 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
         channel: "push",
         title: "Snoozed Thread push",
         enabled: true,
+      },
+      {
+        topic: "agent_notification",
+        channel: "email",
+        title: "Agent notification emails",
+        enabled: false,
       },
       {
         topic: "agent_notification",
@@ -1346,5 +1367,135 @@ describe("Push notifications, in workerd with real D1 and WebCrypto", () => {
       expect(response.status).toBe(400);
     }
     expect((await pushState(member)).devices).toEqual([]);
+  });
+});
+
+/**
+ * The inbox and email are for people; anything an agent sends goes to push,
+ * and to email only for someone who opted in. Ways this could go wrong:
+ *  1. An agent's ask or mention lands in the Mentions inbox.
+ *  2. An agent's ask is emailed to someone who never opted in.
+ *  3. Opting in to agent emails sends none.
+ *  4. Tapping an ask's push opens the Thread but not the artifact it is in.
+ *  5. A person's mention stops reaching the inbox or email.
+ *  6. A tag in a message another Thread's agent or an automation sent, which
+ *     arrives as the owner's, counts as the owner's mention.
+ */
+describe("Agent notifications go to push, people's mentions to the inbox", () => {
+  const ARTIFACT = "art_0123456789abcdef0123456789abcdef";
+  let emails: Array<{ to: string; subject: string; text: string }> = [];
+
+  beforeEach(() => {
+    emails = [];
+    bindings = {
+      ...baseBindings,
+      DX_AUTH_EMAIL_FROM: "dx@dx.test",
+      EMAIL: {
+        send: async (email: { to: string; subject: string; text: string }) => {
+          emails.push(email);
+          return { messageId: "email-1" };
+        },
+      } as unknown as Bindings["EMAIL"],
+    };
+  });
+
+  /** The agent writes an ask for Ben in the Thread's Plan artifact. */
+  const agentAsks = (revision: number, ask: string) =>
+    artifactSaved(bindings, {
+      threadId: sharedThread.id,
+      artifactId: ARTIFACT,
+      title: "Plan",
+      revision,
+      before: "",
+      after: `- [ ] @[Ben Member](user:${member}) ${ask}\n`,
+      writer: { kind: "agent" },
+    });
+
+  it("pushes an agent's ask, opening its artifact, with no inbox item or email unless the person opts in", async () => {
+    const device = await newDevice("https://push.test/member-device");
+    await registerDevice(member, device);
+
+    await agentAsks(1, "Approve merging #1240");
+
+    expect(pushes).toHaveLength(1);
+    expect(await decryptPush(device, (pushes[0] as CapturedPush).body)).toEqual(
+      {
+        title: "Test thread",
+        body: "Plan: - [ ] @Ben Member Approve merging #1240",
+        url: `https://dx.test/threads/${sharedThread.id}?artifact=${ARTIFACT}&sheet=artifact`,
+        topic: "agent_notification",
+        tag: `agent_notification:${sharedThread.id}`,
+      },
+    );
+    expect(await inbox(member)).toEqual({ unreadCount: 0, items: [] });
+    expect(emails).toEqual([]);
+
+    // "Agent emails" on: the next ask is emailed too, still not in the inbox.
+    const optIn = await send(member, "/v1/settings/personal/notifications", {
+      method: "PUT",
+      body: { topic: "agent_notification", channel: "email", enabled: true },
+    });
+    expect(optIn.status).toBe(200);
+    await agentAsks(2, "Which region?");
+    expect(pushes).toHaveLength(2);
+    expect(emails).toEqual([
+      expect.objectContaining({
+        to: `${member}@example.com`,
+        subject: "Update from Test thread",
+        text: expect.stringContaining(
+          `Open thread: https://dx.test/threads/${sharedThread.id}?artifact=${ARTIFACT}&sheet=artifact`,
+        ),
+      }),
+    ]);
+    expect((await inbox(member)).unreadCount).toBe(0);
+  });
+
+  it("still sends a person's mention to the inbox, email, and push", async () => {
+    const device = await newDevice("https://push.test/member-device");
+    await registerDevice(member, device);
+
+    await message(owner, sharedThread.id, "@ben can you look?", "m-person");
+
+    expect(pushes).toHaveLength(1);
+    expect(emails).toEqual([
+      expect.objectContaining({
+        to: `${member}@example.com`,
+        subject: "Ada Owner mentioned you in Test thread",
+      }),
+    ]);
+    expect(await inbox(member)).toMatchObject({
+      unreadCount: 1,
+      items: [{ topic: "mention" }],
+    });
+  });
+
+  it("treats a tag in a message another Thread's agent or an automation sent as the agent's, not the owner's", async () => {
+    const device = await newDevice("https://push.test/member-device");
+    await registerDevice(member, device);
+
+    await message(
+      owner,
+      sharedThread.id,
+      "@ben the build is green",
+      "m-relay",
+      {
+        sourceThreadId: childThread.id,
+      },
+    );
+    await message(owner, sharedThread.id, "@ben nightly report", "m-cron", {
+      automation: "schedule",
+    });
+
+    expect(pushes).toHaveLength(2);
+    const [first] = pushes as [CapturedPush];
+    expect(await decryptPush(device, first.body)).toMatchObject({
+      body: "@ben the build is green",
+      topic: "agent_notification",
+      url: expect.stringContaining(
+        `https://dx.test/threads/${sharedThread.id}?message=msg_`,
+      ),
+    });
+    expect(emails).toEqual([]);
+    expect(await inbox(member)).toEqual({ unreadCount: 0, items: [] });
   });
 });

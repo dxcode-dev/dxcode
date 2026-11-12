@@ -2,24 +2,47 @@ import type { UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import {
   finalReplyText,
+  type HistoryMessage,
   type HistoryPage,
   readHistory,
 } from "../thread-search/history.js";
 import { plainPreview } from "./plain-preview.js";
 
 /**
- * The final reply in a history page, preferring the given submission's, as
- * a plain preview. Nothing when the response ended on a tool call.
+ * The final reply in a history page, preferring the given submission's.
+ * Nothing when the response ended on a tool call.
  */
-const replyPreview = (page: HistoryPage, submissionId?: string) => {
+const finalReply = (page: HistoryPage, submissionId?: string) => {
   const replies = page.messages.filter(
     ({ role, purpose }) => role === "assistant" && purpose === "assistant",
   );
-  const reply =
+  return (
     replies.findLast((message) => message.submissionId === submissionId) ??
-    replies.at(-1);
+    replies.at(-1)
+  );
+};
+
+const replyPreview = (reply: HistoryMessage | undefined) => {
   const text = plainPreview(finalReplyText(reply?.parts ?? []));
   return text === "" ? undefined : text;
+};
+
+/**
+ * The transcript row of a reply's last words, which a notification opens
+ * at: `row:<message id>:text:<n>`, n counting the message's text parts as
+ * the web transcript does.
+ */
+const replyRow = (reply: HistoryMessage) => {
+  const parts = reply.parts ?? [];
+  let occurrence = -1;
+  let row: string | undefined;
+  for (const part of parts) {
+    if (part.type !== "text") continue;
+    occurrence += 1;
+    if ((part.text ?? "").trim() !== "")
+      row = `row:${reply.id}:text:${occurrence}`;
+  }
+  return row;
 };
 
 /**
@@ -34,7 +57,9 @@ export const latestAgentReply = async (
   threadId: string,
 ) => {
   const history = await readHistory(bindings, ownerUserId, threadId, 1);
-  return history.kind === "page" ? replyPreview(history.page) : undefined;
+  return history.kind === "page"
+    ? replyPreview(finalReply(history.page))
+    : undefined;
 };
 
 /**
@@ -48,14 +73,26 @@ export const settledTurn = async (
   ownerUserId: UserId,
   threadId: string,
   submissionId: string,
-): Promise<{ readonly submissionId: string; readonly reply?: string }> => {
+): Promise<{
+  readonly submissionId: string;
+  readonly reply?: string;
+  /** The reply's transcript row, to open the Thread at. */
+  readonly replyRow?: string;
+}> => {
   const history = await readHistory(bindings, ownerUserId, threadId, 1, [
     submissionId,
   ]);
   if (history.kind !== "page") return { submissionId };
   const turn = history.page.answeredBy.get(submissionId) ?? submissionId;
-  const reply = replyPreview(history.page, turn);
-  return reply === undefined
-    ? { submissionId: turn }
-    : { submissionId: turn, reply };
+  const message = finalReply(history.page, turn);
+  const reply = replyPreview(message);
+  const row =
+    reply === undefined || message === undefined
+      ? undefined
+      : replyRow(message);
+  return {
+    submissionId: turn,
+    ...(reply === undefined ? {} : { reply }),
+    ...(row === undefined ? {} : { replyRow: row }),
+  };
 };

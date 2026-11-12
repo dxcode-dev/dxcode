@@ -2,7 +2,10 @@ import { AGENT_MENTION, parseMessageAttachments } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
-import { publishNotification } from "../../notifications/publish.js";
+import {
+  mentionFrom,
+  publishNotification,
+} from "../../notifications/publish.js";
 import { publishRealtimeInvalidation } from "../../realtime/publication.js";
 import { threadMembers } from "../../thread-sharing/members.js";
 import { spaceAppOrigin } from "../agent-prompt.js";
@@ -191,14 +194,14 @@ export const notifyPostMentions = async (
         recipients.push(userId as UserId);
     if (recipients.length === 0) return;
     await publishNotification(bindings, {
-      topic: "mention",
+      // The Space agent's post is its notification, not a mention.
+      ...mentionFrom(
+        authorId === undefined ? "agent" : { userId: authorId as UserId },
+      ),
       sourceKey: `space-post-mention:${input.postId}`,
       recipients,
       threadId: input.spaceThreadId as ThreadId,
       messageId: input.postId,
-      ...(authorId === undefined
-        ? { actorName: "dx" }
-        : { actorUserId: authorId as UserId }),
       // Picked mentions stay tokens, which the inbox shows as chips.
       excerpt: words,
     });

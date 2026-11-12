@@ -390,8 +390,12 @@ describe("asks in artifacts", () => {
       threadId,
       "- [ ] @[Olive](user:asks-owner) Decide\n- [ ] @[Otto](user:asks-outsider) Sneaky\n",
     );
+    // The agent's mention is its notification, not a person's mention.
     expect(await notifications(owner)).toEqual([
-      expect.objectContaining({ topic: "mention", actor_user_id: null }),
+      expect.objectContaining({
+        topic: "agent_notification",
+        actor_user_id: null,
+      }),
     ]);
     expect((await notifications(owner))[0]?.excerpt).toBe(
       "Plan: - [ ] @Olive Decide",
@@ -475,7 +479,7 @@ describe("asks in artifacts", () => {
       "- [ ] @[Olive Owner](user:asks-owner) Approve the release notes\n",
     );
     expect((await notifications(owner)).at(-1)).toMatchObject({
-      topic: "mention",
+      topic: "agent_notification",
     });
     expect(await attentionRows(threadId)).toBe(0);
   });
@@ -525,7 +529,7 @@ describe("asks in artifacts", () => {
     expect(await attentionRows(threadId)).toBe(0);
     // The owner's mention notifies them.
     expect((await notifications(owner)).at(-1)).toMatchObject({
-      topic: "mention",
+      topic: "agent_notification",
     });
 
     // The same ask again adds nothing; another joins the same list.

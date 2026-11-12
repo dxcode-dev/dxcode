@@ -1,5 +1,8 @@
 import { type NavigateOptions, useNavigate } from "@tanstack/react-router";
-import { THREAD_OPEN_VIEW_EVENT } from "../commands/thread-open-view-event.js";
+import {
+  requestThreadView,
+  THREAD_OPEN_VIEW_EVENT,
+} from "../commands/thread-open-view-event.js";
 
 /**
  * Below this width the Thread page stacks its views (a phone); the same
@@ -67,4 +70,24 @@ export const useShowArtifact = () => {
         artifact: artifactId,
       }),
     });
+};
+
+/**
+ * Where a link that opens an artifact lands on this screen. A notification
+ * links to `?artifact=…&sheet=artifact`, the artifact full screen, which is
+ * what a phone shows; a wide page instead shows it in its Artifacts view,
+ * so this asks the Thread's page for that view and drops the sheet.
+ */
+export const artifactLinkHere = (url: URL): URL => {
+  const threadId = /^\/threads\/([^/]+)\/?$/.exec(url.pathname)?.[1];
+  if (
+    threadId === undefined ||
+    url.searchParams.get("sheet") !== "artifact" ||
+    window.matchMedia(STACKED).matches
+  )
+    return url;
+  requestThreadView(threadId, "artifacts");
+  const here = new URL(url);
+  here.searchParams.delete("sheet");
+  return here;
 };

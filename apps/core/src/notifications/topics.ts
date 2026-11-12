@@ -53,10 +53,15 @@ export interface NotificationTopicDefinition {
   }) => NotificationContent;
 }
 
+/**
+ * A person @-mentioned you. Only people's mentions reach the Mentions inbox
+ * and email, so nothing an agent writes buries them: an agent's mention is
+ * an `agent_notification`.
+ */
 const mention: NotificationTopicDefinition = {
   id: "mention",
   noun: "mention",
-  trigger: "someone @-mentions you in a shared Thread",
+  trigger: "a person @-mentions you in a shared Thread",
   inbox: true,
   defaults: { email: true, push: true },
   content: ({ actorName, threadTitle, excerpt }) => ({
@@ -120,29 +125,32 @@ const snoozeWoke: NotificationTopicDefinition = {
 };
 
 /**
- * The agent's `notify_user` tool: something the owner asked to hear about
- * happened, such as a deploy finishing. The agent writes the headline and
- * the text. Push only, like the agent update; it never reaches the inbox.
+ * Anything an agent sends a person: its `notify_user` tool, an ask
+ * (`request_attention`) or mention it writes in an artifact or comment, a
+ * Space agent's post that mentions them, and a mention in a message another
+ * Thread's agent or an automation sent. It never reaches the Mentions inbox,
+ * which is for people. Push by default; email only for someone who opts in,
+ * since agents write far more often than people tag you.
  */
 const agentNotification: NotificationTopicDefinition = {
   id: "agent_notification",
   noun: "agent notification",
-  trigger: "an agent notifies you about something you asked it to watch",
+  trigger: "an agent asks for you, mentions you, or sends you an update",
   inbox: false,
-  defaults: { push: true },
+  defaults: { email: false, push: true },
   content: ({ threadTitle, excerpt, subject }) => ({
     subject: subject ?? `Update from ${threadTitle}`,
-    headline: subject ?? "The agent sent an update",
+    headline: subject ?? "An agent sent you an update",
     title: threadTitle,
-    body: excerpt,
+    body: tokensAsNames(excerpt),
     // Like every push, the Thread's title on top; the agent's own headline
     // leads the preview.
     preview:
       subject === undefined
-        ? plainPreview(excerpt) || excerpt
-        : `${subject}: ${plainPreview(excerpt) || excerpt}`,
+        ? tokensAsNames(plainPreview(excerpt) || excerpt)
+        : `${subject}: ${tokensAsNames(plainPreview(excerpt) || excerpt)}`,
     actorName: "dx",
-    reason: "you asked an agent to notify you",
+    reason: "an agent in one of your Threads notified you",
   }),
 };
 

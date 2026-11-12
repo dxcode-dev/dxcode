@@ -28,8 +28,13 @@ export interface NotificationEvent {
   readonly sourceKey: string;
   readonly recipients: ReadonlyArray<UserId>;
   readonly threadId: ThreadId;
-  /** The message to open the Thread at. */
+  /**
+   * The message to open the Thread at: a dx message id, a transcript row, a
+   * Space post, or `call:<tool call id>` for the agent's own tool call.
+   */
   readonly messageId?: string;
+  /** The artifact to open, full screen on a phone. */
+  readonly artifactId?: string;
   readonly actorUserId?: UserId;
   /** Who acted when no person did, such as the agent: "dx". */
   readonly actorName?: string;
@@ -40,6 +45,33 @@ export interface NotificationEvent {
 }
 
 const EXCERPT_LENGTH = 280;
+
+/**
+ * Who a mention came from decides where it goes: a person's is a `mention`,
+ * for the inbox, email, and push; an agent's is an `agent_notification`,
+ * push unless the person opted in to agent emails, and never the inbox.
+ */
+export const mentionFrom = (
+  author: { readonly userId: UserId } | "agent",
+): Pick<NotificationEvent, "topic" | "actorUserId" | "actorName"> =>
+  author === "agent"
+    ? { topic: "agent_notification", actorName: "dx" }
+    : { topic: "mention", actorUserId: author.userId };
+
+/** Where tapping or clicking a notification lands, below the origin. */
+export const notificationPath = (
+  event: Pick<NotificationEvent, "threadId" | "messageId" | "artifactId">,
+) => {
+  const search = new URLSearchParams();
+  if (event.messageId !== undefined) search.set("message", event.messageId);
+  if (event.artifactId !== undefined) {
+    search.set("artifact", event.artifactId);
+    // A phone shows it full screen; a wide page opens its Artifacts view.
+    search.set("sheet", "artifact");
+  }
+  const query = search.toString();
+  return `/threads/${encodeURIComponent(event.threadId)}${query === "" ? "" : `?${query}`}`;
+};
 
 /**
  * A message's text without the tags dx adds for agents: a post's
@@ -135,11 +167,7 @@ export const publishNotification = async (
     excerpt,
     ...(event.subject === undefined ? {} : { subject: event.subject }),
   });
-  const open = `${origin}/threads/${encodeURIComponent(event.threadId)}${
-    event.messageId === undefined
-      ? ""
-      : `?message=${encodeURIComponent(event.messageId)}`
-  }`;
+  const open = `${origin}${notificationPath(event)}`;
   await Promise.all(
     created.flatMap(({ id, recipientUserId }) =>
       channels.map(async (channel) => {

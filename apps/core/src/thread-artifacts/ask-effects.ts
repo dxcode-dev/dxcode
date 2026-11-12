@@ -8,7 +8,7 @@ import {
 import { Schema } from "effect";
 import { deliverMessage } from "../automations/wake.js";
 import type { Bindings } from "../http/types.js";
-import { publishNotification } from "../notifications/publish.js";
+import { mentionFrom, publishNotification } from "../notifications/publish.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
 import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import { threadMembers } from "../thread-sharing/members.js";
@@ -249,13 +249,14 @@ export const artifactSaved = async (
             recipients.some((userId) => text.includes(`(user:${userId})`)),
           ) ?? event.title;
       return publishNotification(bindings, {
-        topic: "mention",
+        // The agent's asks and mentions are its notifications, not mentions.
+        ...mentionFrom(
+          writerId === undefined ? "agent" : { userId: writerId as UserId },
+        ),
         sourceKey: `artifact-mention:${event.artifactId}:${event.revision}`,
         recipients: recipients.map((userId) => userId as UserId),
         threadId: event.threadId as ThreadId,
-        ...(writerId === undefined
-          ? { actorName: "dx" }
-          : { actorUserId: writerId as UserId }),
+        artifactId: event.artifactId,
         excerpt: `${event.title}: ${line.replace(/@\[([^\]]+)\]\((?:user:[^)]+|agent)\)/g, "@$1")}`,
       });
     });
@@ -361,13 +362,13 @@ export const artifactCommented = async (
   try {
     if (recipients.length > 0)
       await publishNotification(bindings, {
-        topic: "mention",
+        ...mentionFrom(
+          writerId === undefined ? "agent" : { userId: writerId as UserId },
+        ),
         sourceKey: `artifact-comment-mention:${event.commentId}`,
         recipients: recipients.map((userId) => userId as UserId),
         threadId: event.threadId as ThreadId,
-        ...(writerId === undefined
-          ? { actorName: "dx" }
-          : { actorUserId: writerId as UserId }),
+        artifactId: event.artifactId,
         excerpt: `${title}: ${event.body.replace(/@\[([^\]]+)\]\((?:user:[^)]+|agent|here)\)/g, "@$1")}`,
       });
     if (writerId === undefined || !AGENT_MENTION.test(event.body)) return;

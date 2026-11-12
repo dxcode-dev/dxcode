@@ -19,7 +19,7 @@ import {
 } from "../attachments/message.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
-import { scheduleNotification } from "../notifications/publish.js";
+import { mentionFrom, scheduleNotification } from "../notifications/publish.js";
 import {
   publishRealtimeInvalidation,
   scheduleRealtimeInvalidation,
@@ -417,12 +417,17 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     ));
   if (mention !== undefined)
     await scheduleNotification(() => context.executionCtx, context.env, {
-      topic: "mention",
+      // Another Thread's agent and an automation send as the owner, but no
+      // person wrote it: their tags are agent notifications.
+      ...mentionFrom(
+        sourceThreadId !== undefined || automation !== undefined
+          ? "agent"
+          : { userId: actor.userId as UserId },
+      ),
       sourceKey: `mention:${threadId.value}:${mention.messageId}`,
       recipients: mentioned,
       threadId: threadId.value,
       messageId: mention.messageId,
-      actorUserId: actor.userId as UserId,
       excerpt: mention.excerpt,
     });
   // Only a snoozed Thread pays for the write; authorization read its row.

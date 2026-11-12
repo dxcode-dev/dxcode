@@ -346,13 +346,16 @@ describe("The Space agent's post tools", () => {
     expect(notified.results).toEqual([
       { recipient_user_id: member, message_id: tagged.post_id },
     ]);
-    // Their Mentions inbox names dx as the sender, not someone unknown.
-    const [mention] = await listNotifications(env.DB, member);
-    expect(mention).toMatchObject({
-      topic: "mention",
-      messageId: tagged.post_id,
-      actor: { kind: "agent", name: "dx" },
-    });
+    // The agent's post is an agent notification: pushed, and kept out of
+    // the Mentions inbox, which is for people.
+    expect(
+      await env.DB.prepare(
+        "SELECT topic FROM notification WHERE source_key = ?",
+      )
+        .bind(`space-post-mention:${tagged.post_id}`)
+        .first<string>("topic"),
+    ).toBe("agent_notification");
+    expect(await listNotifications(env.DB, member)).toEqual([]);
   });
 
   it("reads posts with IDs, authors, edits, and reactions, newest last", async () => {
