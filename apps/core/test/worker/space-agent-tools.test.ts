@@ -358,6 +358,39 @@ describe("The Space agent's post tools", () => {
     expect(await listNotifications(env.DB, member)).toEqual([]);
   });
 
+  it("posts when the model's tool call ID carries a long encrypted suffix", async () => {
+    // OpenAI Responses models send `call_…|<encrypted reasoning>`: a call ID
+    // of several hundred characters (seen in production, Nov 2026).
+    const spaceId = await createSpace();
+    const tools = toolsFor(spaceId);
+    const longId = `call_Eb8LTEqIxqSEN6mc5lHMTze0|${"D2hVRS9N8JAZpknSSVcF+/".repeat(16)}=`;
+    const first = await call(tools, "post", { text: "Welcome, Ada." }, longId);
+    expect(first.duplicate).toBe(false);
+    // A retry of that call is still the same post.
+    expect(
+      await call(tools, "post", { text: "Welcome, Ada." }, longId),
+    ).toEqual({ post_id: first.post_id, duplicate: true });
+    // Another long ID that shares the first 256 characters is another call.
+    const other = await call(
+      tools,
+      "post",
+      { text: "Second." },
+      `${longId.slice(0, -1)}A`,
+    );
+    expect(other.post_id).not.toBe(first.post_id);
+    // A member who is not the owner reads both, like the owner does.
+    for (const reader of [member, owner])
+      expect(
+        (await posts(reader, spaceId)).map(({ author, text }) => [
+          author.kind,
+          text,
+        ]),
+      ).toEqual([
+        ["agent", "Welcome, Ada."],
+        ["agent", "Second."],
+      ]);
+  });
+
   it("reads posts with IDs, authors, edits, and reactions, newest last", async () => {
     const spaceId = await createSpace();
     const tools = toolsFor(spaceId);

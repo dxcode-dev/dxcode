@@ -22,7 +22,10 @@ import {
   ownerWorkspaceId,
   userIdentity,
 } from "../../thread-sharing/service.js";
-import type { ThreadToolsContext } from "../../threads/agent-tools.js";
+import {
+  sha256Hex,
+  type ThreadToolsContext,
+} from "../../threads/agent-tools.js";
 import { ownerRequest } from "../../threads/owner-request.js";
 import {
   announcePosts,
@@ -190,7 +193,9 @@ export const createSpaceTools = (
           authorKind: "agent",
           authorUserId: null,
           text: data.text,
-          requestKey: `tool:${callSeed(toolCallId)}`,
+          // Hashed: some models' call IDs run to hundreds of characters,
+          // past the key's 256-character limit.
+          requestKey: `tool:${await sha256Hex(callSeed(toolCallId))}`,
         });
         if (created) {
           await announcePosts(context.bindings, spaceThreadId);
