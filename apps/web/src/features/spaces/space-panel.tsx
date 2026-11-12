@@ -25,6 +25,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { requestThreadView } from "../../shared/commands/thread-open-view-event.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
+import { HuddleSlot } from "../../shared/huddle/huddle-slot.js";
 import type { ThreadAutomationView } from "../../shared/thread-automations-slot.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { copyThreadUrl } from "../../shared/thread-copy.js";
@@ -554,6 +555,19 @@ export function SpaceProjectChip({ space }: { readonly space: SpaceData }) {
  * Huddle's place (voice is not built in dx yet) and who the Space is shared
  * with; the owner's opens Edit Space.
  */
+/** The Huddle button while Huddle is off for this person. */
+const HUDDLE_OFF = (
+  <button
+    type="button"
+    className="space-icon-button"
+    aria-label="Huddle"
+    title="Huddle is not available yet"
+    disabled
+  >
+    <Headphones aria-hidden="true" />
+  </button>
+);
+
 export function SpaceCallAndSharing({
   space,
   onShare,
@@ -565,17 +579,19 @@ export function SpaceCallAndSharing({
     space.sharing === "private"
       ? "Private: only you"
       : `Shared with your workspace: ${space.members.map(({ name }) => name).join(", ")}`;
+  const Huddle = React.use(HuddleSlot);
   return (
     <>
-      <button
-        type="button"
-        className="space-icon-button"
-        aria-label="Huddle"
-        title="Huddle is not available yet"
-        disabled
-      >
-        <Headphones aria-hidden="true" />
-      </button>
+      {Huddle === undefined ? (
+        HUDDLE_OFF
+      ) : (
+        <Huddle
+          kind="space"
+          threadId={space.threadId}
+          name={space.name}
+          fallback={HUDDLE_OFF}
+        />
+      )}
       <button
         type="button"
         className="space-icon-button"

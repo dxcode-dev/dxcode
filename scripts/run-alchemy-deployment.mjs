@@ -864,6 +864,18 @@ const environment = {
           : "false",
       }
     : {}),
+  // Huddle costs money, so it is a deploy-time choice: the self-host config's
+  // `huddle` integration, else the operator's DX_DEPLOYMENT_HUDDLE (staging);
+  // unset, previews have it and everything else does not.
+  ...(selfhostConfig !== undefined
+    ? {
+        DX_DEPLOYMENT_HUDDLE: selfhostConfig.integrations.includes("huddle")
+          ? "true"
+          : "false",
+      }
+    : process.env.DX_DEPLOYMENT_HUDDLE?.trim()
+      ? { DX_DEPLOYMENT_HUDDLE: process.env.DX_DEPLOYMENT_HUDDLE.trim() }
+      : {}),
   // Self-host config is authoritative; previews inherit the operator's env.
   ...(selfhostConfig !== undefined
     ? {

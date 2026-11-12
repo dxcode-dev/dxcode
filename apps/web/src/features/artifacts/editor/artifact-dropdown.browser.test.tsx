@@ -34,6 +34,7 @@ const userId = "usr_dropdown" as UserId;
 const artifact: ThreadArtifact = {
   id: `art_${"d".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Status",
   revision: 1,

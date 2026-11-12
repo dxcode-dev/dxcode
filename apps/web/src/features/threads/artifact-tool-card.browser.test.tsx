@@ -138,6 +138,7 @@ const listed = (present: boolean) => ({
           {
             id: ARTIFACT,
             threadId: THREAD,
+            kind: "document",
             folder: "",
             title: "Old notes",
             revision: 4,

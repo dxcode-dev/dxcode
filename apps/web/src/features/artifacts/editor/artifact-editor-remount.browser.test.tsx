@@ -54,6 +54,7 @@ const MEMBERS = [
 const artifact = (revision: number): ThreadArtifact => ({
   id: artifactId,
   threadId,
+  kind: "document",
   folder: "",
   title: "Release plan",
   revision,

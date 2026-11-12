@@ -144,4 +144,6 @@ export const viewerMayRequest = (method: string, path: string) =>
   (["PUT", "DELETE"].includes(method) &&
     /\/message-reactions\/[^/]+\/[^/]+\/?$/.test(path)) ||
   // A bug report is the viewer's own and changes nothing in the Thread.
-  (method === "POST" && /\/bug-reports\/?$/.test(path));
+  (method === "POST" && /\/bug-reports\/?$/.test(path)) ||
+  // Joining a huddle is talking, which changes nothing in the Thread.
+  (method === "POST" && /\/huddle\/join\/?$/.test(path));

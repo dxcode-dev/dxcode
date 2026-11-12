@@ -1,7 +1,7 @@
 import { Menu } from "@base-ui/react/menu";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderInput, Trash2 } from "lucide-react";
+import { FolderInput, Link2, Trash2 } from "lucide-react";
 import * as React from "react";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
@@ -9,7 +9,7 @@ import {
   deleteArtifactMutation,
   isMissingArtifact,
 } from "../artifact-document-queries.js";
-import type { ArtifactSession } from "./artifact-session.js";
+import { artifactHref } from "./artifact-embed-links.js";
 
 /** A folder name the artifact store takes: one name, no `/`. */
 const folderProblem = (folder: string) =>
@@ -32,7 +32,8 @@ export function useArtifactFileActions({
   folder,
   readOnly,
 }: {
-  readonly session: ArtifactSession;
+  /** The open artifact's session, of any type: it moves the artifact. */
+  readonly session: { readonly moveTo: (folder: string) => void };
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly folder: string;
@@ -49,11 +50,37 @@ export function useArtifactFileActions({
   const folders = new Set<string>();
   for (const artifact of listed ?? [])
     if (artifact.folder !== "") folders.add(artifact.folder);
-  if (readOnly) return { items: null, dialogs: null };
+  // Copy Link: pasted on a line of its own in a document, a board shows
+  // its preview there.
+  const copyLink = (
+    <Menu.Item
+      className="thread-menu-item"
+      onClick={() =>
+        void navigator.clipboard?.writeText(
+          new URL(artifactHref(threadId, artifactId), window.location.href)
+            .href,
+        )
+      }
+    >
+      <Link2 aria-hidden="true" />
+      Copy Link
+    </Menu.Item>
+  );
+  if (readOnly)
+    return {
+      items: (
+        <>
+          <Menu.Separator className="thread-menu-separator" />
+          {copyLink}
+        </>
+      ),
+      dialogs: null,
+    };
   const problem = folderProblem(target.trim());
   const items = (
     <>
       <Menu.Separator className="thread-menu-separator" />
+      {copyLink}
       <Menu.Item
         className="thread-menu-item"
         onClick={() => {

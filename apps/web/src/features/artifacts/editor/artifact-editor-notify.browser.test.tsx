@@ -28,6 +28,7 @@ const userId = "usr_notify" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"a".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Notify",
   revision: 1,

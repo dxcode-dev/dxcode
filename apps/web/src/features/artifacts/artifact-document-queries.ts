@@ -1,3 +1,4 @@
+import type { ThreadArtifactKind } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
   mutationOptions,
@@ -58,8 +59,11 @@ export const createArtifactMutation = (
   onCreated: (created: ArtifactDocument) => void,
 ) =>
   mutationOptions({
-    mutationFn: (input: { readonly title: string; readonly folder?: string }) =>
-      artifactsApi.create(threadId, { ...input, markdown: "" }),
+    mutationFn: (input: {
+      readonly title: string;
+      readonly folder?: string;
+      readonly kind?: ThreadArtifactKind;
+    }) => artifactsApi.create(threadId, { ...input, markdown: "" }),
     onSuccess: (created) => {
       acceptSavedArtifact(client, threadId, created);
       onCreated(created);

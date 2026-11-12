@@ -7,11 +7,17 @@ import {
 } from "@dx/api";
 import type { Bindings } from "../http/types.js";
 import { findQuote } from "./anchors.js";
-import { type ArtifactWriter, readArtifact } from "./store.js";
+import { artifactKind } from "./kinds.js";
+import {
+  type ArtifactWithMarkdown,
+  type ArtifactWriter,
+  readArtifact,
+} from "./store.js";
 
 /**
  * Comments on an artifact, stored in D1 beside its revisions, never in its
- * Markdown. A top-level comment sits on quoted text; each save moves it to
+ * body. On a board, a top-level comment sits on a shape (`target`) and is
+ * detached once the shape is deleted. In a document, it sits on quoted text; each save moves it to
  * that text in the new revision (`saveArtifact`), and a read moves one still
  * anchored to an older revision, so callers always see anchors into the
  * current Markdown. Replies follow their parent, and resolving the parent
@@ -25,6 +31,7 @@ interface CommentRow {
   readonly artifact_id: string;
   readonly parent_id: string | null;
   readonly quote: string;
+  readonly target: string | null;
   readonly anchor_revision: number | null;
   readonly anchor_start: number | null;
   readonly anchor_end: number | null;
@@ -49,24 +56,34 @@ const SELECT_COMMENT = `
     FROM thread_artifact_comment AS comment
     LEFT JOIN "user" AS person ON person.id = comment.author_user_id`;
 
-/** The comment as the API shows it, anchored into `markdown` at `revision`. */
+/** The comment as the API shows it, anchored into the current revision. */
 const commentData = (
   row: CommentRow,
-  revision: number,
-  markdown: string,
+  current: ArtifactWithMarkdown,
 ): ThreadArtifactComment => {
+  const { revision } = current.artifact;
+  const markdown = current.markdown;
+  const handler = artifactKind(current.artifact.kind);
   const anchor =
-    row.parent_id !== null
+    row.parent_id !== null || handler.comments !== "quote"
       ? undefined
       : row.anchor_revision === revision && row.anchor_start !== null
         ? { start: row.anchor_start, end: row.anchor_end ?? row.anchor_start }
         : // Saved after an older revision: find the quote in this one.
           findQuote(markdown, row.quote, row.anchor_start ?? 0);
+  // A target is shown while it is still there.
+  const target =
+    row.parent_id === null &&
+    row.target !== null &&
+    handler.target?.label(markdown, row.target) !== undefined
+      ? row.target
+      : null;
   return {
     id: row.id,
     artifactId: row.artifact_id,
     parentId: row.parent_id,
     quote: row.quote,
+    target,
     anchor: anchor === undefined ? null : { revision, ...anchor },
     author:
       row.author_kind === "user"
@@ -96,9 +113,7 @@ export const listArtifactComments = async (
   )
     .bind(artifactId)
     .all<CommentRow>();
-  return results.map((row) =>
-    commentData(row, current.artifact.revision, current.markdown),
-  );
+  return results.map((row) => commentData(row, current));
 };
 
 export type ArtifactCommentResult =
@@ -133,6 +148,7 @@ export const addArtifactComment = async (
   } & (
     | { readonly quote: string; readonly near?: number }
     | { readonly parentId: string }
+    | { readonly target: string }
   ),
 ): Promise<ArtifactCommentResult> => {
   const body = input.body.trim();
@@ -159,13 +175,34 @@ export const addArtifactComment = async (
   if (count >= ARTIFACT_COMMENT_LIMIT) return { kind: "limit" };
   let parentId: string | null = null;
   let quote = "";
+  let target: string | null = null;
   let anchor: { start: number; end: number } | undefined;
+  const handler = artifactKind(current.artifact.kind);
   if ("parentId" in input) {
     if (!isArtifactCommentId(input.parentId))
       return { kind: "comment-not-found" };
     const parent = await findComment(db, input.artifactId, input.parentId);
     if (parent === null) return { kind: "comment-not-found" };
     parentId = parent.parent_id ?? parent.id;
+  } else if (handler.target !== undefined) {
+    // A part of the artifact by id; the agent may name it by its words.
+    const found =
+      "target" in input
+        ? handler.target.label(current.markdown, input.target) === undefined
+          ? undefined
+          : input.target
+        : handler.target.find(current.markdown, input.quote);
+    if (found === undefined) return { kind: "quote-not-found" };
+    target = found;
+    quote = (handler.target.label(current.markdown, found) ?? "").slice(
+      0,
+      ARTIFACT_COMMENT_QUOTE_MAX_LENGTH,
+    );
+  } else if ("target" in input) {
+    return {
+      kind: "invalid",
+      message: "Comments in a document sit on quoted text, not a target.",
+    };
   } else {
     quote = input.quote;
     if (quote.length === 0 || quote.length > ARTIFACT_COMMENT_QUOTE_MAX_LENGTH)
@@ -183,8 +220,8 @@ export const addArtifactComment = async (
       `INSERT INTO thread_artifact_comment
          (id, artifact_id, parent_id, quote, anchor_revision, anchor_start,
           anchor_end, author_kind, author_user_id, submission_id, body,
-          created_at, resolved_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL)`,
+          created_at, resolved_at, target)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, NULL, ?13)`,
     )
     .bind(
       id,
@@ -201,13 +238,14 @@ export const addArtifactComment = async (
         : null,
       body,
       input.now ?? Date.now(),
+      target,
     )
     .run();
   const row = await findComment(db, input.artifactId, id);
   if (row === null) return { kind: "not-found" };
   return {
     kind: "saved",
-    comment: commentData(row, current.artifact.revision, current.markdown),
+    comment: commentData(row, current),
   };
 };
 
@@ -248,6 +286,6 @@ export const resolveArtifactComment = async (
   if (row === null) return { kind: "comment-not-found" };
   return {
     kind: "saved",
-    comment: commentData(row, current.artifact.revision, current.markdown),
+    comment: commentData(row, current),
   };
 };

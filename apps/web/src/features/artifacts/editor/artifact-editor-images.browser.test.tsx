@@ -50,6 +50,7 @@ const URL_OF = (name: string) =>
 const artifact = (): ThreadArtifact => ({
   id: `art_${"e".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Images",
   revision: 1,

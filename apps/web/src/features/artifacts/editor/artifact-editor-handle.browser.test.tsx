@@ -32,6 +32,7 @@ const userId = "usr_handle" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"f".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Handle",
   revision: 1,

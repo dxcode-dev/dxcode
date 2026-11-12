@@ -22,6 +22,7 @@ const userId = "usr_table_tools" as UserId;
 const artifact: ThreadArtifact = {
   id: `art_${"9".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Launch checklist",
   revision: 1,

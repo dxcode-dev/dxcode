@@ -243,6 +243,12 @@
       "optional": true
     },
     {
+      "name": "DX_REALTIMEKIT",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_RUNNER_PROFILE_CATALOG",
       "type": "text",
       "provenance": "authored-wrangler"

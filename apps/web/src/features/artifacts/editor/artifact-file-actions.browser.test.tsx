@@ -1,12 +1,14 @@
 /**
  * The artifact switcher's file actions, as the reference editor has them
  * (audit 2026-11-06): Move to Folder… and Delete Artifact…, beside New
- * Artifact.
+ * Artifact; and Copy Link, for anyone who can open it.
  *
  * Ways it can fail, each covered below:
  *  1. Move saves no folder, saves the wrong one, or rewrites the content.
  *  2. Delete deletes without asking, or Cancel still deletes.
  *  3. A reader who cannot edit is offered either action.
+ *  4. Copy Link copies something other than the link that opens this
+ *     artifact (and embeds a board in a document), or a reader lacks it.
  */
 import { Menu } from "@base-ui/react/menu";
 import type { ThreadArtifact } from "@dx/api";
@@ -27,6 +29,7 @@ const userId = "usr_files" as UserId;
 const artifact: ThreadArtifact = {
   id: `art_${"a".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Plan",
   revision: 4,
@@ -126,7 +129,12 @@ describe("the switcher's file actions", () => {
   it("moves the artifact to a folder, saving only the folder", async () => {
     await mount();
     await openSwitcher();
-    expect(items()).toEqual(["Plan", "Move to Folder…", "Delete Artifact…"]);
+    expect(items()).toEqual([
+      "Plan",
+      "Copy Link",
+      "Move to Folder…",
+      "Delete Artifact…",
+    ]);
     await userEvent.click(
       page.getByRole("menuitem", { name: "Move to Folder…" }),
     );
@@ -174,9 +182,19 @@ describe("the switcher's file actions", () => {
     ]);
   });
 
-  it("offers neither to a reader", async () => {
+  it("offers neither to a reader, who can still copy its link", async () => {
     await mount(true);
     await openSwitcher();
-    expect(items()).toEqual(["Plan"]);
+    expect(items()).toEqual(["Plan", "Copy Link"]);
+    const copied: string[] = [];
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: async (text: string) => void copied.push(text) },
+    });
+    await userEvent.click(page.getByRole("menuitem", { name: "Copy Link" }));
+    await settle(50);
+    expect(copied).toEqual([
+      `${window.location.origin}/threads/${artifact.threadId}?artifact=${artifact.id}&sheet=artifact`,
+    ]);
   });
 });

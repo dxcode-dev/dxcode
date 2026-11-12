@@ -1,4 +1,5 @@
 import {
+  ARTIFACT_BOARDS_FEATURE,
   ARTIFACT_IMAGE_MAX_BYTES,
   ARTIFACT_MAX_BYTES,
   ARTIFACT_NOTIFY_AGENT_FEATURE,
@@ -41,6 +42,7 @@ import {
   listArtifactComments,
   resolveArtifactComment,
 } from "./comments.js";
+import { artifactKind } from "./kinds.js";
 import { threadArtifactLogger } from "./logger.js";
 import {
   ArtifactsUnavailableError,
@@ -76,6 +78,8 @@ const MESSAGES: Record<ThreadArtifactErrorCode, string> = {
   ARTIFACTS_UNAVAILABLE: "Artifacts are temporarily unavailable.",
   ARTIFACT_NOTIFY_DISABLED:
     "Notify agent is an experimental feature. Turn it on in Settings, Experimental Features.",
+  ARTIFACT_KIND_DISABLED:
+    "Drawing boards are an experimental feature. Turn them on in Settings, Experimental Features.",
 };
 
 const STATUS = {
@@ -92,6 +96,7 @@ const STATUS = {
   ARTIFACT_STORAGE_FULL: 413,
   ARTIFACTS_UNAVAILABLE: 503,
   ARTIFACT_NOTIFY_DISABLED: 404,
+  ARTIFACT_KIND_DISABLED: 403,
 } as const satisfies Record<ThreadArtifactErrorCode, number>;
 
 const refuse = (
@@ -207,8 +212,9 @@ const answerWrite = async (
   status: 200 | 201,
 ) => {
   switch (result.kind) {
-    case "saved":
+    case "saved": {
       await invalidate(context);
+      const text = artifactKind(result.value.artifact.kind).toText;
       afterResponse(
         context,
         artifactSaved(
@@ -218,8 +224,8 @@ const answerWrite = async (
             artifactId: result.value.artifact.id,
             title: result.value.artifact.title,
             revision: result.value.artifact.revision,
-            before: result.previous,
-            after: result.value.markdown,
+            before: text(result.previous),
+            after: text(result.value.markdown),
             writer: writer(context),
           },
           { waitUntil: (promise) => afterResponse(context, promise) },
@@ -230,6 +236,7 @@ const answerWrite = async (
         { status: "success", data: result.value },
         status,
       );
+    }
     case "not-found":
       return refuse(context, "ARTIFACT_NOT_FOUND");
     case "invalid":
@@ -300,11 +307,21 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
         CreateThreadArtifactRequestSchema,
       );
       if (input === undefined) return refuse(context, "INVALID_REQUEST");
+      if (
+        input.kind === "board" &&
+        !(await experimentalFeatureEnabled(
+          context.env,
+          context.get("principal"),
+          ARTIFACT_BOARDS_FEATURE as ExperimentalFeatureId,
+        ).catch(() => false))
+      )
+        return refuse(context, "ARTIFACT_KIND_DISABLED");
       return answerWrite(
         context,
         await createArtifact(context.env, {
           threadId: param(context, "threadId"),
           title: input.title,
+          ...(input.kind === undefined ? {} : { kind: input.kind }),
           ...(input.folder === undefined ? {} : { folder: input.folder }),
           markdown: input.markdown,
           writer: writer(context),
@@ -478,11 +495,13 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
         context.env,
         "parentId" in input
           ? { ...common, parentId: input.parentId }
-          : {
-              ...common,
-              quote: input.quote,
-              ...(input.near === undefined ? {} : { near: input.near }),
-            },
+          : "target" in input
+            ? { ...common, target: input.target }
+            : {
+                ...common,
+                quote: input.quote,
+                ...(input.near === undefined ? {} : { near: input.near }),
+              },
       );
       if (added.kind === "saved")
         afterResponse(

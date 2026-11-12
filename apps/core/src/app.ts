@@ -50,6 +50,7 @@ import { threadPortalRoutes } from "./portals/routes.js";
 import { projectRepositoryBrowseRoutes } from "./projects/repository-browse.js";
 import { projectRoutes } from "./projects/routes.js";
 import { threadQuickActionsRoutes } from "./quick-actions/routes.js";
+import { threadHuddleRoutes } from "./huddles/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
 import { contentSecurityPolicy } from "./security/headers.js";
@@ -236,6 +237,10 @@ app.route(
 app.use("/v1/threads/:threadId/plugin-ui", authorizeThread);
 app.use("/v1/threads/:threadId/plugin-ui/*", authorizeThread);
 app.route("/v1/threads", pluginThreadUiRoutes);
+// A Thread's huddle, a Space's included (experimental flag `huddle`).
+app.use("/v1/threads/:threadId/huddle", authorizeThread);
+app.use("/v1/threads/:threadId/huddle/*", authorizeThread);
+app.route("/v1/threads", threadHuddleRoutes);
 app.use("/v1/threads/:threadId/quick-actions", authorizeThread);
 app.route("/v1/threads", threadQuickActionsRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);

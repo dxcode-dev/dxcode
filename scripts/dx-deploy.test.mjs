@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import {
+  INSTALLER_SETTING_IDS,
+  SELFHOST_SETTINGS,
+  unseenSettings,
+} from "../deploy/selfhost/settings.mjs";
+import {
   assertInstallerDefaults,
   BROWSER_LOGIN_SWITCH_PROMPT,
   CLOUDFLARE_ORB_PROMPT,
@@ -202,6 +207,31 @@ describe("common deployment installer", () => {
         offeredPlugins: ["search", "speech"],
       }),
     ).toThrow("The sarvam integration requires the speech plugin.");
+  });
+
+  it("asks an existing deployment about Huddle, which costs money, and keeps it off until someone turns it on", () => {
+    const huddle = SELFHOST_SETTINGS.find(({ id }) => id === "huddle");
+    const config = validateSelfhostConfig({
+      name: "selfhost",
+      adminEmail: "owner@example.com",
+      cloudflareAuth: "api-token",
+      configuredSettings: [...INSTALLER_SETTING_IDS],
+    });
+    // An install from before Huddle has never been asked, and it is off.
+    expect(unseenSettings(config).map(({ id }) => id)).toContain("huddle");
+    expect(huddle?.get(config)).toBe(false);
+    // Turning it on records the huddle integration, which the deploy reads.
+    const on = validateSelfhostConfig(huddle?.set(config, true));
+    expect(on.integrations).toContain("huddle");
+    expect(
+      validateSelfhostConfig(huddle?.set(on, false)).integrations,
+    ).not.toContain("huddle");
+    // Alchemy OAuth cannot mint Huddle's token, so it is never offered there.
+    expect(
+      unseenSettings({ ...config, cloudflareAuth: "alchemy-oauth" }).map(
+        ({ id }) => id,
+      ),
+    ).not.toContain("huddle");
   });
 
   it("rejects unknown plugins and a provider key without its plugin", () => {

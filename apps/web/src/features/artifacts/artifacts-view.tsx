@@ -1,9 +1,9 @@
 import { Menu } from "@base-ui/react/menu";
-import type { ThreadArtifact } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
+import type { ThreadArtifact, ThreadArtifactKind } from "@dx/api";
+import { parseBoard, type ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { lazyRouteComponent, useSearch } from "@tanstack/react-router";
-import { Check, ChevronDown, FileText, Plus } from "lucide-react";
+import { useSearch } from "@tanstack/react-router";
+import { Check, ChevronDown, FileText } from "lucide-react";
 import * as React from "react";
 import { useShowArtifact } from "../../shared/navigation/open-artifact.js";
 import {
@@ -11,16 +11,15 @@ import {
   artifactOptions,
   createArtifactMutation,
 } from "./artifact-document-queries.js";
+import type { ArtifactDocument } from "./artifacts-api.js";
+import { BoardPreview } from "./board/board-preview.js";
+import {
+  type ArtifactKindView,
+  artifactKindView,
+  useEnabledArtifactKinds,
+} from "./kinds.js";
 import "./artifacts-view.css";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
-
-// ProseMirror and the Markdown codec load only when an artifact opens, so
-// the Thread page's first load does not grow. `lazyRouteComponent` reloads
-// the page once if a deploy removed the chunk.
-const ArtifactEditor = lazyRouteComponent(
-  () => import("./editor/artifact-editor.js"),
-  "ArtifactEditor",
-);
 
 const loading = (
   <div className="artifacts-state" role="status">
@@ -50,21 +49,26 @@ function ArtifactSwitcher({
   selected,
   onSelect,
   onCreate,
+  creatable,
   canCreate,
   extra,
 }: {
   readonly artifacts: ReadonlyArray<ThreadArtifact>;
   readonly selected: ThreadArtifact | undefined;
   readonly onSelect: (artifactId: string) => void;
-  readonly onCreate: () => void;
+  readonly onCreate: (kind: ThreadArtifactKind) => void;
+  /** The types this person may create. */
+  readonly creatable: ReadonlyArray<ArtifactKindView>;
   readonly canCreate: boolean;
   /** The open artifact's file actions, from the editor. */
   readonly extra?: React.ReactNode;
 }) {
+  const SelectedIcon =
+    selected === undefined ? FileText : artifactKindView(selected.kind).icon;
   return (
     <Menu.Root>
       <Menu.Trigger className="artifact-switcher" aria-label="Switch Artifact">
-        <FileText aria-hidden="true" />
+        <SelectedIcon aria-hidden="true" />
         <span>
           {selected === undefined
             ? "Artifacts"
@@ -91,21 +95,29 @@ function ArtifactSwitcher({
                     {folder}
                   </Menu.GroupLabel>
                 )}
-                {list.map((artifact) => (
-                  <Menu.Item
-                    key={artifact.id}
-                    className="thread-menu-item"
-                    data-folder={folder === "" ? undefined : true}
-                    onClick={() => onSelect(artifact.id)}
-                  >
-                    <span className="artifact-switcher-title">
-                      {artifact.title}
-                    </span>
-                    {artifact.id === selected?.id ? (
-                      <Check aria-hidden="true" />
-                    ) : null}
-                  </Menu.Item>
-                ))}
+                {list.map((artifact) => {
+                  const Icon = artifactKindView(artifact.kind).icon;
+                  return (
+                    <Menu.Item
+                      key={artifact.id}
+                      className="thread-menu-item"
+                      data-folder={folder === "" ? undefined : true}
+                      data-kind={artifact.kind}
+                      onClick={() => onSelect(artifact.id)}
+                    >
+                      <Icon
+                        className="artifact-switcher-kind"
+                        aria-hidden="true"
+                      />
+                      <span className="artifact-switcher-title">
+                        {artifact.title}
+                      </span>
+                      {artifact.id === selected?.id ? (
+                        <Check aria-hidden="true" />
+                      ) : null}
+                    </Menu.Item>
+                  );
+                })}
               </Menu.Group>
             ))}
             {canCreate ? (
@@ -113,10 +125,16 @@ function ArtifactSwitcher({
                 {artifacts.length === 0 ? null : (
                   <Menu.Separator className="thread-menu-separator" />
                 )}
-                <Menu.Item className="thread-menu-item" onClick={onCreate}>
-                  <Plus aria-hidden="true" />
-                  New Artifact
-                </Menu.Item>
+                {creatable.map((view) => (
+                  <Menu.Item
+                    key={view.kind}
+                    className="thread-menu-item"
+                    onClick={() => onCreate(view.kind)}
+                  >
+                    <view.icon aria-hidden="true" />
+                    {creatable.length > 1 ? view.newLabel : "New Artifact"}
+                  </Menu.Item>
+                ))}
               </>
             ) : null}
             {extra}
@@ -127,6 +145,41 @@ function ArtifactSwitcher({
   );
 }
 
+/**
+ * A board whose type this person has not turned on: its preview, read only,
+ * and how to turn it on.
+ */
+function KindOff({
+  document,
+  switcher,
+}: {
+  readonly document: ArtifactDocument;
+  readonly switcher: React.ReactNode;
+}) {
+  const parsed = parseBoard(document.markdown);
+  const view = artifactKindView(document.artifact.kind);
+  return (
+    <section className="artifact-view">
+      <header className="artifact-header">{switcher}</header>
+      <div className="board-off">
+        {parsed.ok ? (
+          <div className="board-off-preview">
+            <BoardPreview
+              className="board-preview"
+              board={parsed.board}
+              label={`Preview of ${document.artifact.title}`}
+            />
+          </div>
+        ) : null}
+        <p className="board-off-note">
+          This is a drawing {view.noun}. Turn on Drawing boards in Settings,
+          Experimental Features, to edit it.
+        </p>
+      </div>
+    </section>
+  );
+}
+
 function OpenArtifact({
   threadId,
   artifactId,
@@ -134,7 +187,10 @@ function OpenArtifact({
   readOnly,
   switcher,
   dictation,
+  enabled,
 }: {
+  /** The types this person has turned on. */
+  readonly enabled: ReadonlyArray<ArtifactKindView>;
   readonly threadId: ThreadId;
   readonly artifactId: string;
   readonly active: boolean;
@@ -156,6 +212,9 @@ function OpenArtifact({
         )}
       </section>
     );
+  const view = artifactKindView(query.data.artifact.kind);
+  if (!enabled.includes(view))
+    return <KindOff document={query.data} switcher={switcher()} />;
   return (
     <React.Suspense
       fallback={
@@ -165,7 +224,7 @@ function OpenArtifact({
         </section>
       }
     >
-      <ArtifactEditor
+      <view.Editor
         threadId={threadId}
         initial={query.data}
         readOnly={readOnly}
@@ -218,13 +277,19 @@ export function ArtifactsView({
     selected.id !== pinned
   )
     setPinned(selected.id);
-  const startBlank = () => create.mutate({ title: "Untitled" });
+  const enabled = useEnabledArtifactKinds();
+  const startBlank = (kind: ThreadArtifactKind) =>
+    create.mutate({
+      title: kind === "board" ? "Untitled board" : "Untitled",
+      kind,
+    });
   const switcher = (extra?: React.ReactNode) => (
     <ArtifactSwitcher
       artifacts={artifacts}
       selected={selected}
       onSelect={openArtifact}
       onCreate={startBlank}
+      creatable={enabled}
       canCreate={!readOnly && !create.isPending}
       extra={extra}
     />
@@ -242,19 +307,25 @@ export function ArtifactsView({
       <div className="artifacts-empty">
         <FileText aria-hidden="true" />
         <p>
-          No artifacts yet. Ask the agent to write one, or start a blank
-          artifact.
+          {enabled.length > 1
+            ? "No artifacts yet. Ask the agent to write or draw one, or start a blank one."
+            : "No artifacts yet. Ask the agent to write one, or start a blank artifact."}
         </p>
         {readOnly ? null : (
-          <button
-            type="button"
-            className="artifacts-new"
-            disabled={create.isPending}
-            onClick={startBlank}
-          >
-            <Plus aria-hidden="true" />
-            New Artifact
-          </button>
+          <div className="artifacts-new-row">
+            {enabled.map((view) => (
+              <button
+                key={view.kind}
+                type="button"
+                className="artifacts-new"
+                disabled={create.isPending}
+                onClick={() => startBlank(view.kind)}
+              >
+                <view.icon aria-hidden="true" />
+                {enabled.length > 1 ? view.newLabel : "New Artifact"}
+              </button>
+            ))}
+          </div>
         )}
         {create.isError ? (
           <p className="artifacts-error" role="alert">
@@ -272,6 +343,7 @@ export function ArtifactsView({
       readOnly={readOnly}
       switcher={switcher}
       dictation={dictation}
+      enabled={enabled}
     />
   );
 }

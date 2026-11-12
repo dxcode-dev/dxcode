@@ -246,6 +246,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     }),
     DX_WORKSPACE_INACTIVITY_MS: "300000",
     DX_WORKER_LOGS: "",
+    DX_REALTIMEKIT: "",
     E2B_API_KEY: "package-smoke-not-a-provider-key",
     SARVAM_API_KEY: "",
     EXA_API_KEY: "",

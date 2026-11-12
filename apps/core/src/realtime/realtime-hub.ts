@@ -1,4 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
+import { BOARD_LIVE_MAX_BYTES, BoardLivePayload } from "@dx/api";
 import { ThreadId, UserId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { Hono } from "hono";
@@ -12,7 +13,10 @@ import {
 } from "../auth/session-sockets.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { realtimeLogger } from "../logging.js";
-import { sharedThreadVisibleSql } from "../thread-sharing/access.js";
+import {
+  sharedThreadAccessSql,
+  sharedThreadVisibleSql,
+} from "../thread-sharing/access.js";
 import {
   AUDIENCE_HEADER,
   type AudienceKey,
@@ -37,6 +41,8 @@ interface SocketAttachment {
   readonly topic?: PresenceTopic;
   /** When that presence was last confirmed, so a wake does not renew it. */
   readonly heartbeatAt?: number;
+  /** The participant may edit the joined Thread (owner or Contribute). */
+  readonly edit?: boolean;
   /** The browser session that opened the socket; it closes when that ends. */
   readonly session?: BrowserSessionBinding;
 }
@@ -44,6 +50,7 @@ interface SocketAttachment {
 interface PresenceEntry {
   readonly topic: PresenceTopic;
   readonly heartbeatAt: number;
+  readonly edit?: boolean;
 }
 
 interface ThreadEvent {
@@ -62,6 +69,8 @@ const ClientId = Schema.String.check(
 );
 /** What a typing indicator is about: a commented message's id. */
 const TYPING_SCOPE = /^[\w.-]{1,160}$/;
+/** What live drawing is on: a board artifact's id. */
+const BOARD_SCOPE = /^art_[0-9a-f]{32}$/;
 const revisionKey = (userId: UserId) => `revision:${userId}`;
 
 const readCursor = (url: URL): number | undefined => {
@@ -170,6 +179,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
         this.#presence.set(socket, {
           topic: attachment.topic,
           heartbeatAt: attachment.heartbeatAt ?? 0,
+          ...(attachment.edit === true ? { edit: true } : {}),
         });
     }
   }
@@ -180,6 +190,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
       ...attachment,
       topic: entry.topic,
       heartbeatAt: entry.heartbeatAt,
+      edit: entry.edit === true,
     });
     this.#presence.set(socket, entry);
   }
@@ -190,7 +201,12 @@ export class RealtimeHub extends DurableObject<Bindings> {
       | SocketAttachment
       | undefined;
     if (attachment?.topic === undefined) return;
-    const { topic: _topic, heartbeatAt: _heartbeatAt, ...rest } = attachment;
+    const {
+      topic: _topic,
+      heartbeatAt: _heartbeatAt,
+      edit: _edit,
+      ...rest
+    } = attachment;
     try {
       socket.serializeAttachment(rest);
     } catch {
@@ -262,6 +278,8 @@ export class RealtimeHub extends DurableObject<Bindings> {
     message: string | ArrayBuffer,
   ): Promise<void> {
     if (typeof message !== "string") return;
+    // Live drawing is the largest message; anything bigger is dropped unread.
+    if (message.length > BOARD_LIVE_MAX_BYTES) return;
     let input: unknown;
     try {
       input = JSON.parse(message);
@@ -282,7 +300,8 @@ export class RealtimeHub extends DurableObject<Bindings> {
     this.#restorePresence();
     this.#prunePresence(now);
     if (input.type === "presence.join" && topic !== undefined) {
-      if (!(await this.#authorizePresence(socket, topic))) {
+      const access = await this.#authorizePresence(socket, topic);
+      if (access === undefined) {
         // Denied, not "rejoin": the client would retry immediately forever.
         const previous = this.#presence.get(socket)?.topic;
         this.#clearPresence(socket);
@@ -291,7 +310,11 @@ export class RealtimeHub extends DurableObject<Bindings> {
         return;
       }
       const previous = this.#presence.get(socket)?.topic;
-      this.#setPresence(socket, { topic, heartbeatAt: now });
+      this.#setPresence(socket, {
+        topic,
+        heartbeatAt: now,
+        edit: access === "edit",
+      });
       if (previous !== undefined && previous !== topic)
         this.#broadcastPresence(previous);
       this.#broadcastPresence(topic);
@@ -303,13 +326,18 @@ export class RealtimeHub extends DurableObject<Bindings> {
       topic !== undefined &&
       current?.topic === topic
     ) {
-      if (!(await this.#authorizePresence(socket, topic))) {
+      const access = await this.#authorizePresence(socket, topic);
+      if (access === undefined) {
         this.#clearPresence(socket);
         this.#broadcastPresence(topic);
         socket.send(JSON.stringify({ type: "presence.denied", topic }));
         return;
       }
-      this.#setPresence(socket, { topic, heartbeatAt: now });
+      this.#setPresence(socket, {
+        topic,
+        heartbeatAt: now,
+        edit: access === "edit",
+      });
       socket.send(JSON.stringify({ type: "presence.heartbeat", topic }));
       return;
     }
@@ -330,6 +358,23 @@ export class RealtimeHub extends DurableObject<Bindings> {
       const scope = "scope" in input ? input.scope : undefined;
       if (typeof scope === "string" && TYPING_SCOPE.test(scope))
         this.#broadcastTyping(socket, topic, scope);
+      return;
+    }
+    if (
+      input.type === "presence.board" &&
+      topic !== undefined &&
+      current?.topic === topic
+    ) {
+      const scope = "scope" in input ? input.scope : undefined;
+      const payload = Schema.decodeUnknownOption(BoardLivePayload)(
+        "payload" in input ? input.payload : undefined,
+      );
+      if (
+        typeof scope === "string" &&
+        BOARD_SCOPE.test(scope) &&
+        Option.isSome(payload)
+      )
+        this.#broadcastBoard(socket, topic, scope, payload.value, current);
       return;
     }
     if (
@@ -554,18 +599,22 @@ export class RealtimeHub extends DurableObject<Bindings> {
    * refused), so their home workspace, the owner's, and the Thread's
    * `shared_workspace_id` coincide whenever HTTP grants access.
    */
-  async #authorizePresence(socket: WebSocket, topic: PresenceTopic) {
-    if (this.env.DB === undefined) return false;
+  async #authorizePresence(
+    socket: WebSocket,
+    topic: PresenceTopic,
+  ): Promise<"edit" | "view" | undefined> {
+    if (this.env.DB === undefined) return undefined;
     const attachment = socket.deserializeAttachment() as
       | SocketAttachment
       | undefined;
-    if (attachment === undefined) return false;
+    if (attachment === undefined) return undefined;
     const threadId = topic.slice("thread:".length);
     const workspaceId = attachment.audience.startsWith("workspace:")
       ? attachment.audience.slice("workspace:".length)
       : undefined;
     const row = await this.env.DB.prepare(
-      `SELECT 1 AS authorized
+      `SELECT CASE WHEN thread.owner_user_id = ?2 THEN 'contribute'
+                   ELSE ${sharedThreadAccessSql("thread", "?4")} END AS access
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
         WHERE thread.id = ?1
@@ -580,9 +629,15 @@ export class RealtimeHub extends DurableObject<Bindings> {
           )
         LIMIT 1`,
     )
-      .bind(threadId, attachment.participant, workspaceId ?? null)
-      .first();
-    return row !== null;
+      .bind(
+        threadId,
+        attachment.participant,
+        workspaceId ?? null,
+        new Date().toISOString(),
+      )
+      .first<{ access: string }>();
+    if (row === null) return undefined;
+    return row.access === "contribute" ? "edit" : "view";
   }
 
   #prunePresence(now: number) {
@@ -608,6 +663,41 @@ export class RealtimeHub extends DurableObject<Bindings> {
       userId: sender.participant,
       clientId: sender.clientId,
       scope,
+    });
+    for (const [socket, entry] of this.#presence) {
+      if (entry.topic !== topic || socket === from) continue;
+      try {
+        socket.send(event);
+      } catch {
+        this.#presence.delete(socket);
+      }
+    }
+  }
+
+  /**
+   * Someone is drawing on a board: everyone else present on the Thread sees
+   * their pointer, selection, and, when they may edit, the elements they are
+   * changing. Memory only; the editor's save is what keeps a change.
+   */
+  #broadcastBoard(
+    from: WebSocket,
+    topic: PresenceTopic,
+    scope: string,
+    payload: BoardLivePayload,
+    sender: PresenceEntry,
+  ) {
+    const attachment = from.deserializeAttachment() as SocketAttachment;
+    const { elements, ...rest } = payload;
+    const event = JSON.stringify({
+      type: "presence.board",
+      topic,
+      userId: attachment.participant,
+      clientId: attachment.clientId,
+      scope,
+      payload:
+        sender.edit === true && elements !== undefined
+          ? { ...rest, elements }
+          : rest,
     });
     for (const [socket, entry] of this.#presence) {
       if (entry.topic !== topic || socket === from) continue;

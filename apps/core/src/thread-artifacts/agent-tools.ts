@@ -20,6 +20,7 @@ import {
   listArtifactComments,
   resolveArtifactComment,
 } from "./comments.js";
+import { artifactKind } from "./kinds.js";
 import { personMention } from "./owner-ask.js";
 import { editedByPeopleSince } from "./people-edits.js";
 import { UNTRUSTED_NOTE, wrapPeopleText } from "./people-text.js";
@@ -127,8 +128,13 @@ export const pageArtifact = (
   };
 };
 
+/** The link that opens an artifact, and embeds a board in a document. */
+const artifactLink = (artifact: ThreadArtifact) =>
+  `/threads/${artifact.threadId}?artifact=${artifact.id}&sheet=artifact`;
+
 const listing = (artifact: ThreadArtifact) => ({
   artifact_id: artifact.id,
+  type: artifact.kind,
   folder: artifact.folder,
   title: artifact.title,
   revision: artifact.revision,
@@ -155,9 +161,11 @@ const commentView = (
     comments: open.slice(0, COMMENTS_SHOWN).map((comment) => ({
       comment_id: comment.id,
       quote: wrapPeopleText(comment.quote, ARTIFACT_COMMENT_QUOTE_MAX_LENGTH),
-      ...(comment.anchor === null
-        ? { detached: true }
-        : { line: lineOf(comment.anchor.start) }),
+      ...(comment.target !== null
+        ? { on: comment.target }
+        : comment.anchor === null
+          ? { detached: true }
+          : { line: lineOf(comment.anchor.start) }),
       author: authorName(comment.author),
       text: text(comment),
       replies: comments
@@ -272,7 +280,7 @@ const commentOperation = v.object({
         v.minLength(1),
         v.maxLength(ARTIFACT_COMMENT_QUOTE_MAX_LENGTH),
         v.description(
-          "Text in the artifact the comment sits on, copied exactly; the first occurrence is used.",
+          "Text in the artifact the comment sits on, copied exactly; the first occurrence is used. On a board: the shape's id, or words of its label.",
         ),
       ),
       text: v.pipe(
@@ -311,6 +319,11 @@ const DESCRIPTION = [
   UNTRUSTED_NOTE,
 ].join("\n\n");
 
+const BOARD_DESCRIPTION = [
+  'Drawing boards: create one with type "board" for a diagram, flowchart, sketch, or whiteboard people draw on with you. You read and write a board as text, one element per line, in the markdown field: `<kind> <id> "label" key=value …`, where the label and the keys are optional. Kinds: rect, ellipse, diamond, text (its words in quotes are required), arrow, line, frame (a labelled area), and freehand and image, which only people draw (their lines only move or resize them). Connect shapes with `arrow <id> <from_id> -> <to_id> "label"`, as in `arrow a1 cart -> pay "next"` (the id and the label may be left out); dx routes it. In a flowchart, draw steps as rect, decisions as diamond, and start or end as ellipse, each with its label in quotes; use text only for free notes. Keys: x, y, w, h (pixels; leave positions out for new shapes and dx lays them out below what is there, in rows following the arrows), fill and stroke (#rrggbb, fill=none), width (stroke width), dash (solid, dashed, dotted), rough (0 clean, 1 hand-drawn, 2 sketchy), opacity, font (hand, normal, code), size (font size), align (text), head and tail (arrowheads: arrow, triangle, dot, bar, none), points (a line\'s or unconnected arrow\'s points relative to x,y, as 0,0;120,40), frame (the id of the frame it sits in), link. An optional first line `board background=#rrggbb` sets the canvas color.',
+  "Writing a board back: a line read and written back unchanged changes nothing; a changed attribute changes that element; a line left out deletes its element; a new id creates one. Ids are letters, digits, _ and -. Keep the ids people's shapes have. Use edits (old_str/new_str on whole lines) for small changes. Comments on a board sit on a shape: add one with quote set to the shape's id. To show a board inside a document, put the board's link (create and read return it) on a line of its own in the document, as a Markdown link such as `[Checkout flow](link)`: people see the board's preview there and open it to edit.",
+].join("\n\n");
+
 /**
  * Who can be mentioned in this Thread's artifacts: its owner first, then
  * its members while it is shared, each with the mention to copy. A name is
@@ -345,14 +358,31 @@ export const createArtifactTools = (
   threadId: string,
   getContext: () => ThreadToolsContext,
   submissionId?: string,
+  options: {
+    /** The owner turned on drawing boards (`artifact-boards`). */
+    readonly boards?: boolean;
+  } = {},
 ): ToolDefinition[] => [
   defineTool({
     name: "artifact",
-    description: DESCRIPTION,
+    description:
+      options.boards === true
+        ? `${DESCRIPTION}\n\n${BOARD_DESCRIPTION}`
+        : DESCRIPTION,
     input: v.object({
       action: v.pipe(
         v.picklist(["list", "read", "create", "update", "delete"]),
         v.description("What to do."),
+      ),
+      type: v.optional(
+        v.pipe(
+          v.picklist(["document", "board"]),
+          v.description(
+            options.boards === true
+              ? "create: document (Markdown, the default) or board (a drawing board, written as board text)."
+              : "create: leave out; artifacts are Markdown documents.",
+          ),
+        ),
       ),
       artifact_id: v.optional(
         v.pipe(
@@ -381,7 +411,9 @@ export const createArtifactTools = (
         v.pipe(
           v.string(),
           v.description(
-            "create: the whole artifact. update: the whole new artifact, instead of edits.",
+            options.boards === true
+              ? "create: the whole artifact (for a board, its board text). update: the whole new artifact, instead of edits."
+              : "create: the whole artifact. update: the whole new artifact, instead of edits.",
           ),
         ),
       ),
@@ -504,15 +536,22 @@ export const createArtifactTools = (
             current.artifact.id,
           )) ?? [];
         const edited = await editedByPeopleSince(context, threadId, current);
+        const text = artifactKind(current.artifact.kind).toText(
+          current.markdown,
+        );
         return {
           output: {
             artifact_id: current.artifact.id,
+            type: current.artifact.kind,
+            ...(current.artifact.kind === "document"
+              ? {}
+              : { link: artifactLink(current.artifact) }),
             title: current.artifact.title,
             folder: current.artifact.folder,
             revision: current.artifact.revision,
             last_saved_by: authorName(current.artifact.updatedBy),
-            ...pageArtifact(current.markdown, data.start_line, data.end_line),
-            ...commentView(comments, current.markdown),
+            ...pageArtifact(text, data.start_line, data.end_line),
+            ...commentView(comments, text),
             ...(edited === undefined ? {} : { edited_by_people_since: edited }),
             note: UNTRUSTED_NOTE,
           },
@@ -547,10 +586,22 @@ export const createArtifactTools = (
       /** The Markdown a save replaced; unset when nothing was saved. */
       let previous: string | undefined;
       if (data.action === "create") {
+        if (data.type === "board" && options.boards !== true)
+          throw new Error(
+            "Drawing boards are off for this Thread's owner. Create a document instead.",
+          );
+        const kind = data.type ?? "document";
+        const handler = artifactKind(kind);
+        const body = handler.fromText(
+          need(data.markdown, "markdown"),
+          handler.emptyBody(),
+        );
+        if (!body.ok) throw new Error(body.message);
         const result = await createArtifact(context.bindings, {
           threadId,
           title: need(data.title, "title"),
-          markdown: need(data.markdown, "markdown"),
+          kind,
+          markdown: body.body,
           ...(data.folder === undefined ? {} : { folder: data.folder }),
           writer,
         });
@@ -581,26 +632,42 @@ export const createArtifactTools = (
         if (rewrites) {
           if (data.force !== true && current.artifact.revision !== base)
             return conflictOutput(current, base);
-          let markdown = data.markdown ?? current.markdown;
+          // Edits apply to the text the agent read: a board's lines.
+          const handler = artifactKind(current.artifact.kind);
+          const currentText = handler.toText(current.markdown);
+          let text = data.markdown ?? currentText;
           if (data.edits !== undefined) {
-            const applied = applyArtifactEdits(current.markdown, data.edits);
+            const applied = applyArtifactEdits(currentText, data.edits);
             if (!applied.ok) throw new Error(applied.message);
-            markdown = applied.markdown;
+            text = applied.markdown;
           }
-          const result = await saveArtifact(context.bindings, {
-            threadId,
-            artifactId: current.artifact.id,
-            baseRevision: current.artifact.revision,
-            markdown,
-            ...(data.title === undefined ? {} : { title: data.title }),
-            ...(data.folder === undefined ? {} : { folder: data.folder }),
-            ...(data.force === true ? { force: true } : {}),
-            writer,
-          });
-          if (result.kind === "conflict")
-            return conflictOutput(result.current, base);
-          saved = settle(result);
-          if (result.kind === "saved") previous = result.previous;
+          const body =
+            text === currentText
+              ? { ok: true as const, body: current.markdown }
+              : handler.fromText(text, current.markdown);
+          if (!body.ok) throw new Error(body.message);
+          const markdown = body.body;
+          // Written back as read, with nothing renamed or moved: no revision.
+          const unchanged =
+            markdown === current.markdown &&
+            data.title === undefined &&
+            data.folder === undefined;
+          if (!unchanged) {
+            const result = await saveArtifact(context.bindings, {
+              threadId,
+              artifactId: current.artifact.id,
+              baseRevision: current.artifact.revision,
+              markdown,
+              ...(data.title === undefined ? {} : { title: data.title }),
+              ...(data.folder === undefined ? {} : { folder: data.folder }),
+              ...(data.force === true ? { force: true } : {}),
+              writer,
+            });
+            if (result.kind === "conflict")
+              return conflictOutput(result.current, base);
+            saved = settle(result);
+            if (result.kind === "saved") previous = result.previous;
+          }
         }
       }
 
@@ -615,6 +682,7 @@ export const createArtifactTools = (
       if (previous !== undefined) {
         // Mentions the agent wrote notify their people; asks it wrote are
         // indexed. An agent's own save never wakes its Thread.
+        const text = artifactKind(saved.artifact.kind).toText;
         const effects = artifactSaved(
           context.bindings,
           {
@@ -622,8 +690,8 @@ export const createArtifactTools = (
             artifactId: saved.artifact.id,
             title: saved.artifact.title,
             revision: saved.artifact.revision,
-            before: previous,
-            after: saved.markdown,
+            before: text(previous),
+            after: text(saved.markdown),
             writer,
           },
           context.waitUntil === undefined
@@ -637,6 +705,12 @@ export const createArtifactTools = (
         output: {
           saved: true,
           artifact_id: saved.artifact.id,
+          ...(saved.artifact.kind === "document"
+            ? {}
+            : {
+                type: saved.artifact.kind,
+                link: artifactLink(saved.artifact),
+              }),
           title: saved.artifact.title,
           folder: saved.artifact.folder,
           revision: saved.artifact.revision,
@@ -671,8 +745,17 @@ const settle = (
   }
 };
 
-/** A refused update: the current Markdown to merge into, bounded. */
-const conflictOutput = (current: ArtifactWithMarkdown, base: number) => ({
+/** A refused update: the current text to merge into, bounded. */
+const conflictOutput = (current: ArtifactWithMarkdown, base: number) => {
+  const markdown = artifactKind(current.artifact.kind).toText(current.markdown);
+  return conflictText(current, markdown, base);
+};
+
+const conflictText = (
+  current: ArtifactWithMarkdown,
+  markdown: string,
+  base: number,
+) => ({
   output: {
     saved: false,
     error: "ARTIFACT_CONFLICT",
@@ -680,10 +763,10 @@ const conflictOutput = (current: ArtifactWithMarkdown, base: number) => ({
     artifact_id: current.artifact.id,
     revision: current.artifact.revision,
     last_saved_by: authorName(current.artifact.updatedBy),
-    ...(current.markdown.length <= CONFLICT_MARKDOWN_CHARS
-      ? { markdown: current.markdown }
+    ...(markdown.length <= CONFLICT_MARKDOWN_CHARS
+      ? { markdown }
       : {
-          ...pageArtifact(current.markdown),
+          ...pageArtifact(markdown),
           note_on_length:
             "The artifact is long: this is its start. Read other parts with start_line and end_line before merging.",
         }),

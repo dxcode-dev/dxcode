@@ -36,6 +36,7 @@ const MAYA_IMAGE = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
 const artifact = (): ThreadArtifact => ({
   id: `art_${"c".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Comments",
   revision: 1,
@@ -125,6 +126,7 @@ const entry = (
   artifactId: artifact().id,
   parentId,
   quote: parentId === null ? QUOTE : "",
+  target: null,
   anchor:
     parentId === null ? { revision: 1, start: 0, end: QUOTE.length } : null,
   author,

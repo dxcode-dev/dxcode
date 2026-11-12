@@ -34,6 +34,7 @@ const userId = "usr_links" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"e".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Links",
   revision: 1,
@@ -150,6 +151,7 @@ const comment = (
   artifactId: artifact().id,
   parentId: null,
   quote: text,
+  target: null,
   anchor: { revision: 1, start: at, end: at + text.length },
   author: { kind: "agent" },
   body,

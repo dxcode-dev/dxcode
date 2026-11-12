@@ -1493,3 +1493,70 @@ span.artifact-image-upload {
   width: 16px;
   height: 16px;
 }
+
+/* An artifact embedded by its link (a board): a preview card below the
+   link, read only; clicking it opens the board. */
+.artifact-embed {
+  margin: 2px 0 14px;
+  user-select: none;
+}
+.artifact-embed-board {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 680px;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--divider);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease;
+}
+.artifact-embed-board:hover,
+.artifact-embed-board:focus-visible {
+  border-color: color-mix(in srgb, var(--foreground) 30%, transparent);
+}
+.artifact-embed-preview {
+  display: block;
+  width: 100%;
+  height: 240px;
+  border-bottom: 1px solid var(--divider);
+}
+.artifact-embed-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}
+.artifact-embed-bar > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+}
+.artifact-embed-title {
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-embed-open {
+  margin-left: auto;
+  flex: none;
+}
+.artifact-embed-board:hover .artifact-embed-open {
+  color: var(--foreground);
+}
+.artifact-embed-missing {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: 12px;
+}

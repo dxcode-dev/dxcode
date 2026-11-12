@@ -50,6 +50,7 @@ const userId = "usr_narrow" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"c".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Release checklist",
   revision: 1,

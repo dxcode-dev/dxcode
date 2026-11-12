@@ -1,3 +1,26 @@
+export {
+  BOARD_BODY_TYPE,
+  BOARD_BODY_VERSION,
+  BOARD_ELEMENT_TYPES,
+  BOARD_MAX_ELEMENTS,
+  type BoardDocument,
+  type BoardElement,
+  type BoardFile,
+  type BoardParseResult,
+  type BoardPoint,
+  boardElementLabel,
+  boardPlainText,
+  emptyBoard,
+  liveBoardElements,
+  parseBoard,
+  serializeBoard,
+} from "./artifacts/board.js";
+export {
+  type BoardTextResult,
+  boardFromText,
+  boardTextElementCount,
+  boardToText,
+} from "./artifacts/board-text.js";
 export { Principal } from "./auth/principal.js";
 export {
   AllowedEmailDomain,

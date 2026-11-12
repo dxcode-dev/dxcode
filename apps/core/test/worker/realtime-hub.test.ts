@@ -328,6 +328,97 @@ describe("RealtimeHub", () => {
     absentSocket.socket.close();
   });
 
+  it("relays live drawing on a board to others present, with elements only from people who can edit", async () => {
+    const audience = `workspace:${workspace}`;
+    const ownerSocket = await connect(audience, owner, client(31));
+    // This Thread is shared for View: the member may watch, not draw.
+    const memberSocket = await connect(audience, member, client(32));
+    const absentSocket = await connect(audience, member, client(33));
+    await Promise.all([
+      ownerSocket.first,
+      memberSocket.first,
+      absentSocket.first,
+    ]);
+    for (const socket of [ownerSocket.socket, memberSocket.socket]) {
+      const joined = nextMessage(socket);
+      socket.send(
+        JSON.stringify({ type: "presence.join", topic: `thread:${threadId}` }),
+      );
+      await joined;
+    }
+    const seen = (socket: WebSocket) => {
+      const events: Array<Record<string, unknown>> = [];
+      socket.addEventListener(
+        "message",
+        (event) => void events.push(JSON.parse(event.data as string)),
+      );
+      return () => events.filter(({ type }) => type === "presence.board");
+    };
+    const ownerSeen = seen(ownerSocket.socket);
+    const memberSeen = seen(memberSocket.socket);
+    const absentSeen = seen(absentSocket.socket);
+    const board = `art_${"b".repeat(32)}`;
+    const element = { id: "shape1", type: "rectangle", version: 3 };
+    const draw = (socket: WebSocket, payload: unknown, scope = board) =>
+      socket.send(
+        JSON.stringify({
+          type: "presence.board",
+          topic: `thread:${threadId}`,
+          scope,
+          payload,
+        }),
+      );
+    draw(ownerSocket.socket, {
+      pointer: { x: 10, y: 20, tool: "pointer" },
+      button: "down",
+      selected: ["shape1"],
+      elements: [element],
+    });
+    draw(memberSocket.socket, {
+      pointer: { x: 5, y: 6 },
+      elements: [{ ...element, version: 99 }],
+    });
+    // Not a board id, a malformed payload, and a socket that never joined
+    // are dropped; so is a message over the size cap.
+    draw(ownerSocket.socket, { pointer: { x: 1, y: 1 } }, "msg-1");
+    draw(ownerSocket.socket, { pointer: "here" });
+    draw(absentSocket.socket, { pointer: { x: 1, y: 1 } });
+    draw(ownerSocket.socket, {
+      elements: [{ id: "big", blob: "x".repeat(300 * 1024) }],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(memberSeen()).toEqual([
+      {
+        type: "presence.board",
+        topic: `thread:${threadId}`,
+        userId: owner,
+        clientId: client(31),
+        scope: board,
+        payload: {
+          pointer: { x: 10, y: 20, tool: "pointer" },
+          button: "down",
+          selected: ["shape1"],
+          elements: [element],
+        },
+      },
+    ]);
+    // The View member's pointer arrives; the shapes they sent do not.
+    expect(ownerSeen()).toEqual([
+      {
+        type: "presence.board",
+        topic: `thread:${threadId}`,
+        userId: member,
+        clientId: client(32),
+        scope: board,
+        payload: { pointer: { x: 5, y: 6 } },
+      },
+    ]);
+    expect(absentSeen()).toEqual([]);
+    ownerSocket.socket.close();
+    memberSocket.socket.close();
+    absentSocket.socket.close();
+  });
+
   it("tells members present on a Space when a thread it started changes its artifacts", async () => {
     const audience = `workspace:${workspace}`;
     const space = thread(911);

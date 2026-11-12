@@ -13,6 +13,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
+import { HuddleSlot } from "../../shared/huddle/huddle-slot.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
@@ -159,6 +160,7 @@ export function ThreadHeader({
   readonly menuOnly?: boolean;
 }) {
   const [localShareOpen, setLocalShareOpen] = React.useState(false);
+  const Huddle = React.use(HuddleSlot);
   const shareOpen = controlledShareOpen ?? localShareOpen;
   const setShareOpen = onShareOpenChange ?? setLocalShareOpen;
   const archived = thread.lifecycleState === "archived";
@@ -395,6 +397,9 @@ export function ThreadHeader({
                 ? "View only"
                 : "Contributor"}
           </span>
+        )}
+        {archived || Huddle === undefined ? null : (
+          <Huddle kind="thread" threadId={thread.id} name={thread.title} />
         )}
         {views}
         {compact ? <span className="thread-title-menu">{menu}</span> : null}

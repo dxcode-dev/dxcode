@@ -79,6 +79,7 @@ import {
   agentPluginHostContext,
   agentThreadToolsContext,
   type ResolvedThreadAgent,
+  resolveAgentArtifactBoards,
   resolveAgentBugReportReader,
   resolveAgentCodePlugins,
   resolveAgentOrbThreadState,
@@ -169,6 +170,8 @@ interface DxAgentPromptData {
   };
   /** The owner is a report reader, so the bug report tools mount. */
   readonly bugReportReader?: true;
+  /** The owner turned on drawing boards: the artifact tool offers them. */
+  readonly artifactBoards?: true;
   /** The AGENTS.md of the owner's workspace, as of this submission. */
   readonly workspaceInstructions?: string;
   /**
@@ -313,6 +316,7 @@ const dxTools = (
     threadId,
     agentThreadToolsContext,
     promptData?.plugins?.submissionId,
+    { boards: promptData?.artifactBoards === true },
   ))
     tools.push(withToolFailureMessage(tool));
   // Schedules, GitHub subscriptions, and notify_user: work after the turn.
@@ -1008,6 +1012,7 @@ DxAgent.resolvePromptData = async (
     startingSpace,
     installedCodePlugins,
     repositoryPlugins,
+    artifactBoards,
   ] = await traceSpan(
     "agent.resolvePromptData",
     "phase",
@@ -1064,6 +1069,10 @@ DxAgent.resolvePromptData = async (
                   ),
             )
           : Promise.resolve(undefined),
+        agentRuntimeComposition.capabilities === "workspace" &&
+        scope?.kind === "prompt"
+          ? resolveAgentArtifactBoards(context.instanceId)
+          : Promise.resolve(false),
       ]),
   ).catch(async (error: unknown) => {
     // A failed read leaves no started sandbox behind.
@@ -1131,7 +1140,8 @@ DxAgent.resolvePromptData = async (
     startingSpace === undefined &&
     codePlugins === undefined &&
     repositoryPluginData === undefined &&
-    !orbFree
+    !orbFree &&
+    !artifactBoards
   )
     return undefined;
   return {
@@ -1146,6 +1156,7 @@ DxAgent.resolvePromptData = async (
     ...(repositoryPluginData === undefined
       ? {}
       : { repositoryPlugins: repositoryPluginData }),
+    ...(artifactBoards ? { artifactBoards: true as const } : {}),
   };
 };
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {

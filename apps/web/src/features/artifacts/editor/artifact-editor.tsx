@@ -31,6 +31,7 @@ import {
   type Transaction,
 } from "prosemirror-state";
 import {
+  DecorationSet,
   type DirectEditorProps,
   type EditorProps,
   EditorView,
@@ -52,6 +53,8 @@ import {
   artifactNodeViews,
   placeholderDecorations,
 } from "./artifact-editor-state.js";
+import { embedDecorations } from "./artifact-embed-links.js";
+import { ArtifactEmbeds } from "./artifact-embeds.js";
 import { useArtifactFileActions } from "./artifact-file-actions.js";
 import type {
   ArtifactSession,
@@ -526,7 +529,12 @@ const artifactEditorProps = (
   openComments: () => void,
 ): Omit<DirectEditorProps, "state"> => ({
   editable: () => !readOnly,
-  ...(readOnly ? {} : { decorations: placeholderDecorations }),
+  // Placeholders while editing; embedded boards below their links always.
+  decorations: (state) =>
+    (readOnly ? DecorationSet.empty : placeholderDecorations(state)).add(
+      state.doc,
+      embedDecorations(state, session),
+    ),
   nodeViews: artifactNodeViews({
     // A reader may still flip toggles; only editors open pickers.
     onChip: (pos, chip) => {
@@ -1253,6 +1261,7 @@ export function ArtifactEditor({
             )}
             {readOnly ? null : <ImageFileInput session={session} />}
             <ViewFrames views={snapshot.views} />
+            <ArtifactEmbeds embeds={snapshot.embeds} />
             <SelectionToolbar
               key={JSON.stringify(snapshot.selection.box)}
               threadId={threadId}

@@ -27,11 +27,13 @@ import {
 } from "../artifact-comments-queries.js";
 import { ArtifactApiError } from "../artifacts-api.js";
 
-/** A comment being written on a quote in the current revision. */
-export interface CommentDraft {
-  readonly quote: string;
-  readonly near: number;
-}
+/**
+ * A comment being written: on a quote in the current revision, or on a part
+ * of an artifact by id (a board's shape), with what that part is called.
+ */
+export type CommentDraft =
+  | { readonly quote: string; readonly near: number }
+  | { readonly target: string; readonly label: string };
 
 const authorName = (author: ThreadArtifactComment["author"]) =>
   author.kind === "agent" ? "dx" : (author.name ?? "Someone");
@@ -394,11 +396,13 @@ export function CommentCard({
                 focus
                 onSubmit={(body, failed) =>
                   create.mutate(
-                    {
-                      quote: target.draft.quote,
-                      near: target.draft.near,
-                      body,
-                    },
+                    "target" in target.draft
+                      ? { target: target.draft.target, body }
+                      : {
+                          quote: target.draft.quote,
+                          near: target.draft.near,
+                          body,
+                        },
                     {
                       onSuccess: (posted) => onPosted(posted.id),
                       onError: failed,
@@ -439,7 +443,13 @@ export function CommentsMenu({
   anchors,
   loadFailed,
   onSelect,
+  emptyText = "No comments yet. Select text and choose Comment.",
+  detachedHeading = "Text no longer here",
 }: {
+  /** What the menu says when there are no open comments. */
+  readonly emptyText?: string;
+  /** The heading over comments whose text or shape is gone. */
+  readonly detachedHeading?: string;
   readonly comments: ReadonlyArray<ThreadArtifactComment>;
   /** Open comments whose text the editor holds, in document order. */
   readonly anchors: ReadonlyArray<{
@@ -508,15 +518,13 @@ export function CommentsMenu({
                 Couldn't load the comments.
               </p>
             ) : open.length === 0 ? (
-              <p className="artifact-comments-empty">
-                No comments yet. Select text and choose Comment.
-              </p>
+              <p className="artifact-comments-empty">{emptyText}</p>
             ) : null}
             {anchored.map(item)}
             {detached.length === 0 ? null : (
               <Menu.Group>
                 <Menu.GroupLabel className="artifact-comments-heading">
-                  Text no longer here
+                  {detachedHeading}
                 </Menu.GroupLabel>
                 {detached.map(item)}
               </Menu.Group>

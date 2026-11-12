@@ -64,6 +64,10 @@ import {
   conflictFlagsKey,
   createArtifactEditorState,
 } from "./artifact-editor-state.js";
+import type {
+  ArtifactEmbedFrame,
+  ArtifactLink,
+} from "./artifact-embed-links.js";
 import {
   insertBlock,
   insertChip,
@@ -129,6 +133,8 @@ export interface ArtifactSessionSnapshot {
   readonly chip: { readonly pos: number; readonly chip: Chip } | undefined;
   /** The `dx-view` blocks on screen, each framed into its container. */
   readonly views: ReadonlyArray<ArtifactViewFrame>;
+  /** Artifacts embedded by a link on a line of its own, such as boards. */
+  readonly embeds: ReadonlyArray<ArtifactEmbedFrame>;
   /** The open `/` or `@` menu: its options, the chosen one, and where it shows. */
   readonly suggest: ArtifactSuggestMenu | undefined;
   /** Every comment and reply, as last read. */
@@ -318,6 +324,7 @@ export class ArtifactSession {
       headed: headed(this.#state),
       chip: undefined,
       views: [],
+      embeds: [],
       suggest: undefined,
       comments: [],
       anchors: [],
@@ -656,6 +663,20 @@ export class ArtifactSession {
   readonly chipElement = (pos: number) => {
     const dom = this.#view?.nodeDOM(pos);
     return dom instanceof Element ? dom : null;
+  };
+
+  #embeds = 0;
+  /** Shows a linked artifact in `container`, a widget below its link. */
+  readonly showEmbed = (container: HTMLElement, link: ArtifactLink) => {
+    this.#embeds += 1;
+    const id = this.#embeds;
+    this.#publish({
+      embeds: [...this.#snapshot.embeds, { id, container, link }],
+    });
+    return () =>
+      this.#publish({
+        embeds: this.#snapshot.embeds.filter((embed) => embed.id !== id),
+      });
   };
 
   #views = 0;

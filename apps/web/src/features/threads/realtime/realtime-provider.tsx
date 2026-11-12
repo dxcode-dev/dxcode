@@ -2,6 +2,10 @@ import type { ThreadId, UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import {
+  BoardLiveContext,
+  type BoardLiveHub,
+} from "../../../shared/realtime/board-live.js";
 import { RealtimeClient, type ThreadTyping } from "./realtime-client.js";
 
 const RealtimeContext = React.createContext<RealtimeClient | undefined>(
@@ -24,7 +28,18 @@ export function RealtimeProvider({
     client.start();
     return () => client.stop();
   });
-  return <RealtimeContext value={client}>{children}</RealtimeContext>;
+  // Boards reach the socket through shared context, not this feature.
+  const [boards] = React.useState<BoardLiveHub>(() => ({
+    send: (threadId, artifactId, payload) =>
+      client.sendBoard(threadId, artifactId, payload),
+    observe: (threadId, artifactId, listener) =>
+      client.observeBoard(threadId, artifactId, listener),
+  }));
+  return (
+    <RealtimeContext value={client}>
+      <BoardLiveContext value={boards}>{children}</BoardLiveContext>
+    </RealtimeContext>
+  );
 }
 
 const presenceSnapshot = () => undefined;

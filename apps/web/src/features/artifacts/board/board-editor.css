@@ -1,0 +1,168 @@
+/* A drawing board: the artifact header over a canvas that fills the rest. */
+.board-view .artifact-header {
+  gap: 4px;
+}
+
+.board-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* The editor fills its box; its own panels keep their font. */
+.board-canvas .excalidraw {
+  --ui-font: var(--font-sans, system-ui, sans-serif);
+  border-radius: 0;
+}
+.board-canvas .excalidraw .App-menu_top {
+  /* The artifact header names the board; the editor's top bar sits lower. */
+  padding-top: 2px;
+}
+
+/* Comment pins: on each commented shape's top-right corner. */
+.board-pins {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+}
+.board-pin {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 5px;
+  border: 1.5px solid var(--surface);
+  border-radius: 12px 12px 12px 3px;
+  background: var(--accent-strong, #f59f00);
+  color: var(--accent-strong-foreground, #1e1e1e);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+  font: 600 11px / 1 var(--font-sans, system-ui, sans-serif);
+  transform: translate(-4px, -100%);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.board-pin svg {
+  width: 13px;
+  height: 13px;
+}
+.board-pin:hover,
+.board-pin[data-active] {
+  transform: translate(-4px, -100%) scale(1.12);
+}
+.board-pin[data-draft] {
+  background: var(--surface);
+  color: var(--foreground);
+  border-color: var(--border);
+  cursor: default;
+}
+
+/* Who else is on the board: overlapping pictures in their cursor colors. */
+.board-presence {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: auto;
+  padding-right: 4px;
+}
+.board-presence-person {
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--board-person);
+}
+.board-presence-person:first-child {
+  margin-left: 0;
+}
+.board-presence-person .dx-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
+}
+.board-presence-more {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+.board-presence + .artifact-save {
+  margin-left: 4px;
+}
+
+/* The editor in dx's own colors and type, in light and dark: dx's tokens
+   switch with the app's appearance (light-dark()), so these follow it. The
+   doubled class outranks Excalidraw's own `.excalidraw.theme--dark`. */
+.board-canvas {
+  background: var(--surface);
+}
+.board-canvas .excalidraw.excalidraw {
+  --ui-font: var(--font-ui);
+  --color-primary: var(--ring);
+  --color-primary-darker: color-mix(
+    in srgb,
+    var(--ring) 85%,
+    var(--foreground)
+  );
+  --color-primary-darkest: color-mix(
+    in srgb,
+    var(--ring) 70%,
+    var(--foreground)
+  );
+  --color-primary-hover: color-mix(in srgb, var(--ring) 85%, var(--foreground));
+  --color-primary-light: color-mix(in srgb, var(--ring) 22%, transparent);
+  --color-primary-light-darker: color-mix(
+    in srgb,
+    var(--ring) 32%,
+    transparent
+  );
+  --color-brand-hover: var(--color-primary-hover);
+  --color-brand-active: var(--color-primary-darker);
+  --color-on-primary-container: var(--foreground);
+  --color-surface-primary-container: var(--color-primary-light);
+  --color-on-surface: var(--foreground);
+  --text-primary-color: var(--foreground);
+  --icon-fill-color: var(--foreground);
+  --keybinding-color: var(--muted-foreground);
+  --default-bg-color: var(--surface);
+  --island-bg-color: var(--popover);
+  --popup-bg-color: var(--popover);
+  --popup-secondary-bg-color: var(--muted);
+  --popup-text-color: var(--popover-foreground);
+  --sidebar-bg-color: var(--surface);
+  --input-bg-color: var(--surface);
+  --input-hover-bg-color: var(--accent);
+  --input-border-color: var(--border);
+  --color-surface-lowest: var(--surface);
+  --color-surface-low: var(--popover);
+  --color-surface-mid: color-mix(
+    in srgb,
+    var(--popover) 92%,
+    var(--foreground)
+  );
+  --color-surface-high: color-mix(
+    in srgb,
+    var(--popover) 86%,
+    var(--foreground)
+  );
+  --button-hover-bg: var(--accent);
+  --button-active-border: var(--ring);
+  --button-gray-1: var(--accent);
+  --button-gray-2: var(--muted);
+  --button-gray-3: var(--accent);
+  --default-border-color: var(--border);
+  --dialog-border-color: var(--border);
+  --sidebar-border-color: var(--border);
+  --list-border-color: var(--border);
+  --overlay-bg-color: color-mix(in srgb, var(--background) 70%, transparent);
+  --select-highlight-color: var(--ring);
+  --shadow-island: 0 0 0 1px var(--border), 0 4px 14px rgb(0 0 0 / 0.12);
+  --avatar-border-color: var(--surface);
+  font-family: var(--font-ui);
+}

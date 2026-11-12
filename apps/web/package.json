@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.105",
+  "version": "0.2.106",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -18,8 +18,10 @@
     "@base-ui/react": "1.7.0",
     "@better-auth/api-key": "1.7.7",
     "@better-auth/utils": "0.4.2",
+    "@cloudflare/realtimekit": "^2.0.4",
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
+    "@excalidraw/excalidraw": "0.18.1",
     "@flue/react": "file:../../third-party/flue/react-40ad547deb58ab7f9f80fa072e9d267079c30735.tgz",
     "@flue/sdk": "file:../../third-party/flue/sdk-40ad547deb58ab7f9f80fa072e9d267079c30735.tgz",
     "@fontsource/dm-mono": "5.3.0",

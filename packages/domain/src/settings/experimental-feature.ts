@@ -280,6 +280,28 @@ export const productionExperimentalFeatureRegistry =
         },
       },
       {
+        id: "artifact-boards",
+        title: "Drawing boards",
+        description:
+          "Adds drawing boards to artifacts: shapes, arrows, text, and freehand that you, your collaborators, and the agent draw on together.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/artifacts" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "low",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration: "Boards stay stored; off, they open as a preview.",
+          graduation: "Drop the flag checks.",
+          removal: "Delete board artifacts and the board kind.",
+        },
+      },
+      {
         id: "composer-quick-actions",
         title: "Composer quick actions",
         description:
@@ -349,6 +371,31 @@ export const productionExperimentalFeatureRegistry =
             "Drop the flag checks from the settings tab, the settings routes, and the send route.",
           removal:
             "Turn every widget off, drop its tables, and delete the public widget routes and the settings tab.",
+        },
+      },
+      {
+        id: "huddle",
+        title: "Huddle",
+        description:
+          "Adds Huddle to every Space and Thread you can open: a live audio and video call on Cloudflare RealtimeKit, with screen sharing and a floating window that stays while you move around dx. Off, you see no huddles.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/spaces" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "medium",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration:
+            "Each Thread keeps its RealtimeKit meeting in thread_huddles; turning the flag off hides the button and refuses joining.",
+          graduation:
+            "Drop the flag checks from the huddle routes and the Huddle slot.",
+          removal:
+            "Delete the huddle routes, the Huddle UI, and the deploy's RealtimeKit app wiring, and drop thread_huddles.",
         },
       },
       {

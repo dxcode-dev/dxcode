@@ -1,4 +1,4 @@
-import { RealtimeServerEvent } from "@dx/api";
+import { type BoardLivePayload, RealtimeServerEvent } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
@@ -7,6 +7,7 @@ import {
   reportSessionEnded,
 } from "../../../shared/auth/session-ended.js";
 import { recordConnectionEvent } from "../../../shared/diagnostics/client-diagnostics.js";
+import type { BoardLiveEvent } from "../../../shared/realtime/board-live.js";
 import {
   invalidateAllArtifacts,
   invalidateArtifacts,
@@ -120,6 +121,11 @@ export class RealtimeClient {
   readonly #slowWakeTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   readonly #workspaceStatusListeners = new Map<ThreadId, Set<() => void>>();
   readonly #presentUsers = new Map<ThreadId, ReadonlyArray<UserId>>();
+  /** Live drawing listeners, by `<threadId>\n<artifactId>`. */
+  readonly #boardListeners = new Map<
+    string,
+    Set<(event: BoardLiveEvent) => void>
+  >();
   readonly #presenceListeners = new Map<ThreadId, Set<() => void>>();
   /** Who is typing a comment, per Thread, by client, until it lapses. */
   readonly #typing = new Map<
@@ -276,6 +282,46 @@ export class RealtimeClient {
     this.#socket.send(
       JSON.stringify({ type: "presence.typing", topic, scope }),
     );
+  }
+
+  /**
+   * Tells the others with this Thread open where the viewer's pointer is on
+   * a board and what they are drawing. Only for the Thread the viewer has
+   * open; callers throttle it.
+   */
+  sendBoard(threadId: ThreadId, artifactId: string, payload: BoardLivePayload) {
+    const topic = `thread:${threadId}` as const;
+    if (
+      this.#topic !== topic ||
+      this.#deniedTopic === topic ||
+      this.#socket?.readyState !== WebSocket.OPEN
+    )
+      return false;
+    this.#socket.send(
+      JSON.stringify({
+        type: "presence.board",
+        topic,
+        scope: artifactId,
+        payload,
+      }),
+    );
+    return true;
+  }
+
+  /** Others' live drawing on one board, as it arrives. */
+  observeBoard(
+    threadId: ThreadId,
+    artifactId: string,
+    listener: (event: BoardLiveEvent) => void,
+  ) {
+    const key = `${threadId}\n${artifactId}`;
+    const listeners = this.#boardListeners.get(key) ?? new Set();
+    listeners.add(listener);
+    this.#boardListeners.set(key, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.#boardListeners.delete(key);
+    };
   }
 
   #receiveTyping(
@@ -477,6 +523,16 @@ export class RealtimeClient {
         clientId: event.clientId,
         scope: event.scope,
       });
+    } else if (event.type === "presence.board") {
+      if (event.userId === this.#userId && event.clientId === this.#clientId)
+        return;
+      const key = `${event.topic.slice("thread:".length)}\n${event.scope}`;
+      for (const listener of this.#boardListeners.get(key) ?? [])
+        listener({
+          userId: event.userId,
+          clientId: event.clientId,
+          payload: event.payload,
+        });
     } else if (event.type === "disk.invalidated") {
       void invalidateOrbDisk(this.#queryClient, event.threadId);
     } else if (event.type === "notifications.invalidated") {

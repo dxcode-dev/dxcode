@@ -40,6 +40,7 @@ const userId = "usr_selection" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"d".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Launch notes",
   revision: 1,

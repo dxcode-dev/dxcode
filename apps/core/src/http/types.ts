@@ -97,6 +97,11 @@ export interface Bindings {
    * Absent marks Worker logs unavailable.
    */
   readonly DX_WORKER_LOGS?: string;
+  /**
+   * `{ accountId, token }`: the RealtimeKit-only token the deploy mints for
+   * Huddle. Absent marks huddles unavailable.
+   */
+  readonly DX_REALTIMEKIT?: string;
   readonly DX_INTEGRATION_BITBUCKET_OAUTH?: string;
   readonly DX_GITHUB_COPILOT_CLIENT_ID?: string;
   readonly DX_INTEGRATION_GITLAB_OAUTH?: string;

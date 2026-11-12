@@ -40,6 +40,7 @@ import { decodeGitHubAppDeploymentConfiguration } from "./packages/domain/src/so
 import {
   attachmentBucketCors,
   attachmentSigningTokenProps,
+  realtimeKitTokenProps,
   workerLogsTokenProps,
 } from "./scripts/attachment-deployment.mjs";
 
@@ -324,6 +325,9 @@ export default Alchemy.Stack(
       cloudflareAccountId: Config.option(
         Config.NonEmptyString("CLOUDFLARE_ACCOUNT_ID"),
       ),
+      // Huddle's RealtimeKit token. Previews always get it; other
+      // deployments opt in once their account has RealtimeKit.
+      huddle: Config.option(Config.Boolean("DX_DEPLOYMENT_HUDDLE")),
       exaApiKey: Config.option(Config.Redacted("EXA_API_KEY")),
       // Deployment administrators' emails; none unless set (self-host opt-in).
       deploymentAdminEmails: Config.option(
@@ -760,6 +764,31 @@ export default Alchemy.Stack(
         ),
       };
     });
+    // Huddle (experimental flag `huddle`) on Cloudflare RealtimeKit: a token
+    // that can only manage RealtimeKit on this account, which destroying
+    // the stage deletes. Core finds or creates the account's shared app
+    // with it, since deploy tokens may mint the token without holding
+    // RealtimeKit access themselves.
+    const realtimeKit = yield* Effect.gen(function* () {
+      const wanted = Option.getOrElse(
+        configuration.huddle,
+        () => configuration.environment === "preview",
+      );
+      if (!wanted || configuration.attachmentSigning === "operator")
+        return undefined;
+      const accountId = Option.isSome(configuration.cloudflareAccountId)
+        ? configuration.cloudflareAccountId.value
+        : yield* Effect.die("CLOUDFLARE_ACCOUNT_ID is required for Huddle.");
+      const token = yield* Cloudflare.ApiToken.AccountApiToken(
+        "HuddleToken",
+        realtimeKitTokenProps(accountId, configuration.workerName),
+      );
+      return Output.map(token.value, (value) =>
+        Redacted.make(
+          JSON.stringify({ accountId, token: Redacted.value(value) }),
+        ),
+      );
+    });
     // Turnstile protects magic-link requests. A self-host sender may serve
     // notification email alone, which needs no widget; hosted targets always
     // offer magic link with their sender.
@@ -1015,6 +1044,7 @@ export default Alchemy.Stack(
         ...(attachmentSigning.workerLogs === undefined
           ? {}
           : { DX_WORKER_LOGS: attachmentSigning.workerLogs }),
+        ...(realtimeKit === undefined ? {} : { DX_REALTIMEKIT: realtimeKit }),
         DX_INTEGRATION_GITHUB_APP: githubApp,
         DX_WORKLOAD_IDENTITY_SIGNING_KEYS: workloadIdentitySigningKeys,
         ...(e2bApiKey === undefined ? {} : { E2B_API_KEY: e2bApiKey }),

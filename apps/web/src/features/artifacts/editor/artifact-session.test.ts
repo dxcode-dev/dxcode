@@ -31,6 +31,7 @@ const artifactId = `art_${"0".repeat(32)}`;
 const artifact = (revision: number, title = "Plan"): ThreadArtifact => ({
   id: artifactId,
   threadId,
+  kind: "document",
   folder: "",
   title,
   revision,

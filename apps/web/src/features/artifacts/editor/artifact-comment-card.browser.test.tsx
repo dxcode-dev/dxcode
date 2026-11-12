@@ -38,6 +38,7 @@ const userId = "usr_olive" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"7".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Card",
   revision: 1,
@@ -57,6 +58,7 @@ const seeded: ThreadArtifactComment = {
   artifactId: artifact().id,
   parentId: null,
   quote: QUOTE,
+  target: null,
   anchor: { revision: 1, start: 0, end: QUOTE.length },
   author: { kind: "user", userId: "usr_maya", name: "Maya Member" },
   body: "Is today right?",

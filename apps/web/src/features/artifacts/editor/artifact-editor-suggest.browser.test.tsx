@@ -51,6 +51,7 @@ const MEMBERS = [
 const artifact = (): ThreadArtifact => ({
   id: `art_${"c".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Suggest",
   revision: 1,

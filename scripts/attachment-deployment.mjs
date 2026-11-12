@@ -96,3 +96,22 @@ export const workerLogsTokenProps = (accountId, workerName) => ({
     },
   ],
 });
+
+export const REALTIMEKIT_PERMISSION = "Realtime Admin";
+
+/**
+ * The account token a deployment mints for Huddle: RealtimeKit on the
+ * deployment's account and nothing else, so Core can create meetings and
+ * add participants.
+ */
+export const realtimeKitTokenProps = (accountId, workerName) => ({
+  name: `dx huddle · ${workerName}`,
+  accountId,
+  policies: [
+    {
+      effect: "allow",
+      permissionGroups: [REALTIMEKIT_PERMISSION],
+      resources: { [`com.cloudflare.api.account.${accountId}`]: "*" },
+    },
+  ],
+});

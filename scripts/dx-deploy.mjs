@@ -1044,7 +1044,15 @@ export const runDxDeploy = async ({
           workerName: resourceName("app", selfhostStage(config.name)),
         });
   let secretsSupplied = [];
-  if (flags.has("--configure") || existing === undefined) {
+  // An interactive upgrade asks a new release's settings (Huddle, which
+  // costs money, among them) instead of only naming them.
+  const unseenAtStart =
+    existing === undefined ? [] : unseenSettings(config, settings);
+  if (
+    flags.has("--configure") ||
+    existing === undefined ||
+    (interactive && unseenAtStart.length > 0)
+  ) {
     if (interactive)
       stdout.write(
         flags.has("--all")
@@ -1101,7 +1109,7 @@ export const runDxDeploy = async ({
         }
     }
   } else {
-    const unseen = unseenSettings(config, settings);
+    const unseen = unseenAtStart;
     if (unseen.length > 0)
       stdout.write(
         `This release has settings this deployment has never been asked about: ${unseen

@@ -420,6 +420,19 @@ export const SELFHOST_SETTINGS = Object.freeze([
     when: (config) => config.integrations.includes("bugReportIntake"),
   },
   {
+    id: "huddle",
+    group: "Plugins",
+    kind: "boolean",
+    label: "Huddle (audio and video calls)",
+    description:
+      "Calls in Spaces and Threads on Cloudflare RealtimeKit, billed per participant minute to this Cloudflare account. People still turn it on under Experimental Features.",
+    example: "false",
+    binding: "DX_REALTIMEKIT",
+    // Alchemy OAuth cannot mint the RealtimeKit token Huddle needs.
+    when: (config) => config.cloudflareAuth !== "alchemy-oauth",
+    ...integration("huddle"),
+  },
+  {
     id: "workerTraces",
     group: "Observability",
     kind: "boolean",
@@ -504,6 +517,7 @@ export const DERIVED_BINDINGS = Object.freeze([
   "DX_PREVIEW_ORB_IMAGE",
   "DX_PUSH_VAPID_PRIVATE_KEY",
   "DX_PUSH_VAPID_PUBLIC_KEY",
+  "DX_REALTIMEKIT",
   "DX_SOURCE_CONTROL_SCHEMA_VERSION",
   "DX_SOURCE_SHALLOW_CLONE",
   "DX_TURNSTILE_SECRET_KEY",

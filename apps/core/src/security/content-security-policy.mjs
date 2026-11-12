@@ -29,6 +29,9 @@ const TURNSTILE = "https://challenges.cloudflare.com";
  * HTML response, and the beacon posts page timings back.
  */
 const ANALYTICS_SCRIPT = "https://static.cloudflareinsights.com";
+/** Huddle (experimental): Cloudflare RealtimeKit's API and WebSockets. */
+const REALTIMEKIT =
+  "https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com";
 const ANALYTICS_REPORTS = "https://cloudflareinsights.com";
 /** Google sign-in profile pictures. */
 const GOOGLE_AVATARS = "https://*.googleusercontent.com";
@@ -96,10 +99,12 @@ export const appPolicy = ({
     "style-src 'self' 'unsafe-inline'",
     `img-src 'self' data: blob: ${GOOGLE_AVATARS}${storage}`,
     "font-src 'self'",
-    // 'self' covers the same-origin WebSockets too.
-    `connect-src 'self' ${ANALYTICS_REPORTS}${storage}`,
+    // 'self' covers the same-origin WebSockets too. Huddle's RealtimeKit
+    // SDK reaches its API and media signalling there.
+    `connect-src 'self' ${ANALYTICS_REPORTS} ${REALTIMEKIT}${storage}`,
     `media-src 'self' blob:${storage}`,
-    "worker-src 'self'",
+    // Huddle's RealtimeKit SDK runs a worker it builds from a blob.
+    "worker-src 'self' blob:",
     [
       "frame-src 'self' blob:",
       TURNSTILE,

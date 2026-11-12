@@ -278,6 +278,7 @@ export const validateSelfhostConfig = (input) => {
     if (input[key] !== undefined && typeof input[key] !== "boolean")
       throw new Error(`${key} must be true or false.`);
   // `boat`: Boat Orbs on the deployment's own Boat account (BOAT_API_KEY).
+  // `huddle`: Huddle's RealtimeKit token (billed per participant minute).
   // `bugReportForwarding`: share each bug report with `bugReportDestination`
   // (DX_BUG_REPORT_DESTINATION_KEY). `bugReportIntake`: take reports other
   // deployments forward (DX_BUG_REPORT_INTAKE_SECRET).
@@ -292,6 +293,7 @@ export const validateSelfhostConfig = (input) => {
           "sarvam",
           "exa",
           "boat",
+          "huddle",
           "bugReportForwarding",
           "bugReportIntake",
         ]).has(value),
@@ -299,7 +301,7 @@ export const validateSelfhostConfig = (input) => {
     new Set(integrations).size !== integrations.length
   )
     throw new Error(
-      "integrations may contain github, bitbucket, sarvam, exa, boat, bugReportForwarding, and bugReportIntake once each.",
+      "integrations may contain github, bitbucket, sarvam, exa, boat, huddle, bugReportForwarding, and bugReportIntake once each.",
     );
   // The central dx deployment this one shares bug reports with: an `https`
   // origin, required while `bugReportForwarding` is on and dropped when off.

@@ -1,16 +1,19 @@
 import {
   ARTIFACT_FOLDER_MAX_LENGTH,
   ARTIFACT_ID_PATTERN,
+  ARTIFACT_KINDS,
   ARTIFACT_MAX_BYTES,
   ARTIFACT_RECENT_REVISIONS_KEPT,
   ARTIFACT_TITLE_MAX_LENGTH,
   THREAD_ARTIFACT_MAX_STORED_BYTES,
   type ThreadArtifact,
   type ThreadArtifactAuthor,
+  type ThreadArtifactKind,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { moveQuote } from "./anchors.js";
+import { artifactKind } from "./kinds.js";
 
 /**
  * A Thread's artifacts: one D1 row per artifact, one D1 row per kept
@@ -29,6 +32,7 @@ export type ArtifactWriter =
 export interface ArtifactRow {
   readonly id: string;
   readonly thread_id: string;
+  readonly kind: ThreadArtifactKind;
   readonly folder: string;
   readonly title: string;
   readonly current_revision: number;
@@ -186,6 +190,7 @@ const author = (
 const artifactData = (row: ArtifactListRow): ThreadArtifact => ({
   id: row.id,
   threadId: row.thread_id as ThreadId,
+  kind: row.kind,
   folder: row.folder,
   title: row.title,
   revision: row.current_revision,
@@ -353,9 +358,10 @@ const putBody = (
   key: string,
   bytes: Uint8Array,
   sha256: string,
+  kind: ThreadArtifactKind,
 ) =>
   bucket.put(key, bytes, {
-    httpMetadata: { contentType: "text/markdown; charset=utf-8" },
+    httpMetadata: { contentType: artifactKind(kind).contentType },
     sha256,
   });
 
@@ -375,12 +381,21 @@ export const createArtifact = async (
     readonly threadId: string;
     readonly title: string;
     readonly folder?: string;
+    /** `document` when left out. */
+    readonly kind?: ThreadArtifactKind;
     readonly markdown: string;
     readonly writer: ArtifactWriter;
     readonly now?: number;
   },
 ): Promise<ArtifactWriteResult> => {
   const { db, bucket } = bindingsOf(bindings);
+  const kind = input.kind ?? "document";
+  const handler = artifactKind(kind);
+  const checked = handler.check(
+    input.markdown === "" ? handler.emptyBody() : input.markdown,
+  );
+  if (!checked.ok) return { kind: "invalid", message: checked.message };
+  const body = checked.body;
   const title = normalizeArtifactTitle(input.title);
   if (title === undefined)
     return {
@@ -389,7 +404,7 @@ export const createArtifact = async (
     };
   const folder = normalizeArtifactFolder(input.folder ?? "");
   if (folder === undefined) return { kind: "invalid", message: FOLDER_MESSAGE };
-  const { bytes, sha256 } = await prepareBody(input.markdown);
+  const { bytes, sha256 } = await prepareBody(body);
   if (bytes.byteLength > ARTIFACT_MAX_BYTES)
     return { kind: "too-large", sizeBytes: bytes.byteLength };
   const stored = await threadStoredBytes(db, input.threadId);
@@ -400,15 +415,15 @@ export const createArtifact = async (
   const key = artifactRevisionKey(input.threadId, id, 1, sha256);
   const writer = writerColumns(input.writer);
   // The body first: a row never points at a missing object.
-  await putBody(bucket, key, bytes, sha256);
+  await putBody(bucket, key, bytes, sha256, kind);
   const [inserted] = await db.batch([
     db
       .prepare(
         `INSERT INTO thread_artifact
            (id, thread_id, folder, title, current_revision, size_bytes,
             stored_bytes, created_by_kind, created_by_user_id, created_at,
-            updated_at, deleted_at)
-         SELECT ?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?8, NULL
+            updated_at, deleted_at, kind)
+         SELECT ?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?8, NULL, ?9
           WHERE EXISTS (
             SELECT 1 FROM threads WHERE id = ?2 AND lifecycle_state != 'deleted'
           )`,
@@ -422,6 +437,7 @@ export const createArtifact = async (
         writer.kind,
         writer.userId,
         now,
+        kind,
       ),
     db
       .prepare(
@@ -446,7 +462,7 @@ export const createArtifact = async (
   }
   const row = await findArtifact(db, input.threadId, id);
   if (row === null) return { kind: "not-found" };
-  rememberBody(key, input.markdown, bytes.byteLength);
+  rememberBody(key, body, bytes.byteLength);
   return {
     kind: "saved",
     value: await withMarkdown(bucket, row),
@@ -490,14 +506,23 @@ export const saveArtifact = async (
       : normalizeArtifactFolder(input.folder);
   if (input.folder !== undefined && folder === undefined)
     return { kind: "invalid", message: FOLDER_MESSAGE };
-  const { bytes, sha256 } = await prepareBody(input.markdown);
+  const existing = await findArtifact(db, input.threadId, input.artifactId);
+  if (existing === null) return { kind: "not-found" };
+  const handler = artifactKind(existing.kind);
+  const checked = handler.check(input.markdown);
+  if (!checked.ok) return { kind: "invalid", message: checked.message };
+  const markdown = checked.body;
+  const { bytes, sha256 } = await prepareBody(markdown);
   if (bytes.byteLength > ARTIFACT_MAX_BYTES)
     return { kind: "too-large", sizeBytes: bytes.byteLength };
   const writer = writerColumns(input.writer);
   // A forced save retries when another save lands between its read and its
   // write; an ordinary one reports that save as the conflict.
   for (let attempt = 0; ; attempt++) {
-    const current = await findArtifact(db, input.threadId, input.artifactId);
+    const current =
+      attempt === 0
+        ? existing
+        : await findArtifact(db, input.threadId, input.artifactId);
     if (current === null) return { kind: "not-found" };
     if (input.force !== true && current.current_revision !== input.baseRevision)
       return { kind: "conflict", current: await withMarkdown(bucket, current) };
@@ -514,13 +539,11 @@ export const saveArtifact = async (
       sha256,
     );
     const previous = (await withMarkdown(bucket, current)).markdown;
-    const anchors = await moveCommentAnchors(
-      db,
-      current,
-      previous,
-      input.markdown,
-    );
-    await putBody(bucket, key, bytes, sha256);
+    const anchors =
+      handler.comments === "quote"
+        ? await moveCommentAnchors(db, current, previous, markdown)
+        : [];
+    await putBody(bucket, key, bytes, sha256, current.kind);
     // One transaction: the artifact moves only from `base`, the revision row
     // is written only when it did, and comments move only onto that row.
     const [moved] = await db.batch([
@@ -594,7 +617,7 @@ export const saveArtifact = async (
           ]),
     ]);
     if (moved?.meta.changes === 1) {
-      rememberBody(key, input.markdown, bytes.byteLength);
+      rememberBody(key, markdown, bytes.byteLength);
       await compactArtifactRevisions(
         bindings,
         input.threadId,
@@ -676,8 +699,10 @@ const revisionExists = async (
 
 /**
  * The retention rule: keep the newest `ARTIFACT_RECENT_REVISIONS_KEPT`
- * revisions, every revision a person saved, and the agent's newest; remove
- * the rest, bodies first so a failure leaves rows a later save retries.
+ * revisions, every revision a person saved (for types that keep them; a
+ * board saves after every gesture and does not), and the agent's newest;
+ * remove the rest, bodies first so a failure leaves rows a later save
+ * retries.
  */
 export const compactArtifactRevisions = async (
   bindings: ArtifactBindings,
@@ -691,16 +716,27 @@ export const compactArtifactRevisions = async (
          FROM thread_artifact_revision AS revision
          JOIN thread_artifact AS artifact ON artifact.id = revision.artifact_id
         WHERE revision.artifact_id = ?1 AND artifact.thread_id = ?2
-          AND revision.author_kind = 'agent'
+          AND (revision.author_kind = 'agent' OR artifact.kind IN (
+            SELECT value FROM json_each(?4)
+          ))
           AND revision.revision <= artifact.current_revision - ?3
-          AND revision.revision < (
+          AND (revision.author_kind != 'agent' OR revision.revision < (
             SELECT MAX(newest.revision) FROM thread_artifact_revision AS newest
              WHERE newest.artifact_id = ?1 AND newest.author_kind = 'agent'
-          )
+          ))
         ORDER BY revision.revision
         LIMIT 100`,
     )
-    .bind(artifactId, threadId, ARTIFACT_RECENT_REVISIONS_KEPT)
+    .bind(
+      artifactId,
+      threadId,
+      ARTIFACT_RECENT_REVISIONS_KEPT,
+      JSON.stringify(
+        ARTIFACT_KINDS.filter(
+          (kind) => !artifactKind(kind).keepsEveryPersonRevision,
+        ),
+      ),
+    )
     .all<{ revision: number; sha256: string }>();
   if (results.length === 0) return 0;
   await bucket.delete(

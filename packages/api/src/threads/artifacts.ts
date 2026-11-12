@@ -3,7 +3,7 @@ import { Schema } from "effect";
 import { successResponse } from "../http/response.js";
 
 /**
- * Artifacts: Markdown documents that belong to one Thread, which its agent,
+ * Artifacts: documents and drawing boards that belong to one Thread, which its agent,
  * its owner, and the people it is shared with for Contribute edit together.
  * Every save is a new revision, made only against the revision it started
  * from (`baseRevision`); a save against an older revision is refused with
@@ -33,6 +33,20 @@ export const ARTIFACT_COMMENT_QUOTE_MAX_LENGTH = 1_000;
 /** The most comments, replies included, one artifact holds. */
 export const ARTIFACT_COMMENT_LIMIT = 500;
 
+/**
+ * An artifact's type. A `document` is Markdown; a `board` is a drawing board
+ * whose body is JSON in Excalidraw's element format (`@dx/domain`'s
+ * `BoardDocument`). Every type shares revisions, comments, and sharing; each
+ * registers how its body is checked, read by the agent, and edited in
+ * apps/core/src/thread-artifacts/kinds.ts and the web app's kinds registry.
+ */
+export const ARTIFACT_KINDS = ["document", "board"] as const;
+export const ThreadArtifactKindSchema = Schema.Literals(ARTIFACT_KINDS);
+export type ThreadArtifactKind = typeof ThreadArtifactKindSchema.Type;
+
+/** The experimental flag for drawing boards. */
+export const ARTIFACT_BOARDS_FEATURE = "artifact-boards";
+
 export const ARTIFACT_ID_PATTERN = /^art_[0-9a-f]{32}$/;
 export const ThreadArtifactIdSchema = Schema.String.check(
   Schema.isPattern(ARTIFACT_ID_PATTERN),
@@ -49,7 +63,11 @@ export const ThreadArtifactTitleSchema = Schema.String.check(
 export const ThreadArtifactFolderSchema = Schema.String.check(
   Schema.isMaxLength(ARTIFACT_FOLDER_MAX_LENGTH * 2),
 );
-/** The size is checked in UTF-8 bytes against `ARTIFACT_MAX_BYTES`. */
+/**
+ * An artifact's body: Markdown for a document, board JSON for a board. The
+ * field keeps the name `markdown` for every type. The size is checked in
+ * UTF-8 bytes against `ARTIFACT_MAX_BYTES`.
+ */
 export const ThreadArtifactMarkdownSchema = Schema.String;
 
 /** Who saved a revision: a person, or the Thread's agent. */
@@ -67,6 +85,7 @@ export type ThreadArtifactAuthor = typeof ThreadArtifactAuthorSchema.Type;
 export const ThreadArtifactSchema = Schema.Struct({
   id: ThreadArtifactIdSchema,
   threadId: ThreadId,
+  kind: ThreadArtifactKindSchema,
   folder: Schema.String,
   title: Schema.String,
   /** The current revision; a save names it as its `baseRevision`. */
@@ -123,6 +142,8 @@ export type ThreadArtifactRevisionResponse =
 /** `POST /v1/threads/:threadId/artifacts`. */
 export const CreateThreadArtifactRequestSchema = Schema.Struct({
   title: ThreadArtifactTitleSchema,
+  /** `document` when left out. A board needs the `artifact-boards` flag. */
+  kind: Schema.optional(ThreadArtifactKindSchema),
   folder: Schema.optional(ThreadArtifactFolderSchema),
   markdown: ThreadArtifactMarkdownSchema,
 });
@@ -167,8 +188,16 @@ export const ThreadArtifactCommentSchema = Schema.Struct({
   artifactId: ThreadArtifactIdSchema,
   /** The comment this one replies to; null for a top-level comment. */
   parentId: Schema.NullOr(ThreadArtifactCommentIdSchema),
-  /** The text the comment sits on; `''` for a reply. */
+  /**
+   * The text the comment sits on; `''` for a reply. On a board, what the
+   * shape said when the comment was made, such as `Rectangle: Log in`.
+   */
   quote: Schema.String,
+  /**
+   * On a board, the shape the comment sits on; null for a document's
+   * comments, replies, and a board comment whose shape was deleted.
+   */
+  target: Schema.NullOr(Schema.String),
   anchor: Schema.NullOr(
     Schema.Struct({
       revision: Revision,
@@ -215,6 +244,14 @@ export const CreateThreadArtifactCommentRequestSchema = Schema.Union([
   }),
   Schema.Struct({
     parentId: ThreadArtifactCommentIdSchema,
+    body: Schema.String.check(
+      Schema.isMinLength(1),
+      Schema.isMaxLength(ARTIFACT_COMMENT_MAX_LENGTH),
+    ),
+  }),
+  /** A comment on one shape of a board, by the shape's id. */
+  Schema.Struct({
+    target: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/)),
     body: Schema.String.check(
       Schema.isMinLength(1),
       Schema.isMaxLength(ARTIFACT_COMMENT_MAX_LENGTH),
@@ -271,6 +308,7 @@ export const ThreadArtifactErrorCodeSchema = Schema.Literals([
   "ARTIFACT_STORAGE_FULL",
   "ARTIFACTS_UNAVAILABLE",
   "ARTIFACT_NOTIFY_DISABLED",
+  "ARTIFACT_KIND_DISABLED",
 ]);
 export type ThreadArtifactErrorCode = typeof ThreadArtifactErrorCodeSchema.Type;
 

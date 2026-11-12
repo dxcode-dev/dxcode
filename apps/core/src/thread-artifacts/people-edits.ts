@@ -1,4 +1,5 @@
 import { createTwoFilesPatch } from "diff";
+import { artifactKind } from "./kinds.js";
 import { wrapPeopleText } from "./people-text.js";
 import {
   type ArtifactBindings,
@@ -50,8 +51,9 @@ const diffFrom = async (
   const patch = createTwoFilesPatch(
     `revision ${from} (${label})`,
     `revision ${current.artifact.revision} (current)`,
-    before.markdown,
-    current.markdown,
+    // Each type's text, so a board's diff reads as lines of shapes.
+    artifactKind(current.artifact.kind).toText(before.markdown),
+    artifactKind(current.artifact.kind).toText(current.markdown),
     undefined,
     undefined,
     { context: 2 },

@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import {
   VIEW_FRAME_CONTENT_SECURITY_POLICY,
   VIEW_FRAME_PATH,
@@ -34,6 +36,74 @@ const viewFrame: Plugin = {
       fileName: `${VIEW_FRAME_PATH.slice(1)}.html`,
       source: viewFrameShell(),
     });
+  },
+};
+
+/**
+ * Excalidraw's fonts, served at `/excalidraw/fonts/…` where the board editor
+ * points `EXCALIDRAW_ASSET_PATH`: the CSP allows fonts only from dx's own
+ * origin. The CJK family (Xiaolai, 13 MB) stays out; CJK text falls back to
+ * the system's font. Each file is listed among the assets of the chunk that
+ * loads Excalidraw, so the production package (which ships only what the
+ * manifest reaches) carries them.
+ */
+const EXCALIDRAW_FONT_FAMILIES_LEFT_OUT = new Set(["Xiaolai"]);
+const excalidrawFontsDirectory = () =>
+  // The package exports no package.json; its entry is dist/prod/index.js.
+  join(
+    dirname(createRequire(import.meta.url).resolve("@excalidraw/excalidraw")),
+    "fonts",
+  );
+const excalidrawFonts = () => {
+  const root = excalidrawFontsDirectory();
+  return readdirSync(root)
+    .filter(
+      (family) =>
+        !EXCALIDRAW_FONT_FAMILIES_LEFT_OUT.has(family) &&
+        statSync(join(root, family)).isDirectory(),
+    )
+    .flatMap((family) =>
+      readdirSync(join(root, family))
+        .filter((file) => file.endsWith(".woff2"))
+        .map((file) => ({
+          path: join(root, family, file),
+          fileName: `excalidraw/fonts/${family}/${file}`,
+        })),
+    );
+};
+const excalidrawAssets: Plugin = {
+  name: "dx:excalidraw-assets",
+  configureServer(server) {
+    server.middlewares.use((request, response, next) => {
+      const path = request.url?.split("?")[0] ?? "";
+      if (!path.startsWith("/excalidraw/fonts/")) return next();
+      const font = excalidrawFonts().find(
+        ({ fileName }) => `/${fileName}` === path,
+      );
+      if (font === undefined) return next();
+      response.setHeader("content-type", "font/woff2");
+      response.setHeader("cache-control", "public, max-age=31536000");
+      response.end(readFileSync(font.path));
+    });
+  },
+  generateBundle(_, bundle) {
+    if (this.meta.watchMode) return;
+    const fonts = excalidrawFonts();
+    for (const font of fonts)
+      this.emitFile({
+        type: "asset",
+        fileName: font.fileName,
+        source: readFileSync(font.path),
+      });
+    for (const chunk of Object.values(bundle))
+      if (
+        chunk.type === "chunk" &&
+        chunk.moduleIds.some((id) =>
+          id.includes("@excalidraw/excalidraw/dist/prod/index.js"),
+        )
+      )
+        for (const font of fonts)
+          chunk.viteMetadata?.importedAssets.add(font.fileName);
   },
 };
 
@@ -92,7 +162,12 @@ export default defineConfig(({ mode }) => {
     define: {
       "import.meta.env.DX_ENV": JSON.stringify(dxEnvironment),
     },
-    plugins: [...appPlugins(), localTranscriptCapture, workersInManifest],
+    plugins: [
+      ...appPlugins(),
+      localTranscriptCapture,
+      workersInManifest,
+      excalidrawAssets,
+    ],
     build: {
       manifest: true,
       // Shiki grammars (cpp, emacs-lisp) and the terminal emulator are large

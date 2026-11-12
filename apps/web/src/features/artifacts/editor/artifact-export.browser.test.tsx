@@ -42,6 +42,7 @@ const TITLE = 'Plan <script>alert("x")</script>';
 const artifact: ThreadArtifact = {
   id: `art_${"e".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: TITLE,
   revision: 1,
@@ -82,6 +83,7 @@ const comment: ThreadArtifactComment = {
   artifactId: artifact.id,
   parentId: null,
   quote: "Ship it",
+  target: null,
   anchor: { revision: 1, start: 0, end: 7 },
   author: { kind: "agent" },
   body: "Sure?",

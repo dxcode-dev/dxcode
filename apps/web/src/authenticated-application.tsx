@@ -10,6 +10,10 @@ import { type AppRouter, createAppRouter } from "./router.js";
 import { useIdentity } from "./shared/auth/auth-context.js";
 import { ReportBugSlot } from "./shared/bug-reports/report-bug-slot.js";
 import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
+import {
+  HuddleSlot,
+  type HuddleSlotProps,
+} from "./shared/huddle/huddle-slot.js";
 import { artifactLinkHere } from "./shared/navigation/open-artifact.js";
 import { Toaster } from "./shared/ui/sonner.js";
 import { toastOffsets } from "./shared/ui/toast-offsets.js";
@@ -87,6 +91,26 @@ function AppToaster({ router }: { readonly router: AppRouter }) {
   );
 }
 
+// Huddle is experimental: none of it ships on first load.
+const HuddleButtonEntry = lazy(() =>
+  import("./features/huddle/huddle-entry.js").then((module) => ({
+    default: module.HuddleButtonEntry,
+  })),
+);
+const HuddleLayerEntry = lazy(() =>
+  import("./features/huddle/huddle-entry.js").then((module) => ({
+    default: module.HuddleLayerEntry,
+  })),
+);
+
+function HuddleButtonSlot(props: HuddleSlotProps) {
+  return (
+    <Suspense fallback={props.fallback ?? null}>
+      <HuddleButtonEntry {...props} />
+    </Suspense>
+  );
+}
+
 /** Builds the signed-in product router with the application-owned query client. */
 export function AuthenticatedApplication({
   queryClient,
@@ -110,11 +134,24 @@ export function AuthenticatedApplication({
     >
       <RealtimeProvider queryClient={queryClient} userId={auth.identity.id}>
         <ReportBugSlot.Provider value={AppBugReportDialog}>
-          <RouterProvider router={router} />
+          <HuddleSlot.Provider value={HuddleButtonSlot}>
+            <RouterProvider router={router} />
+          </HuddleSlot.Provider>
         </ReportBugSlot.Provider>
         <InAppNavigation key={auth.identity.id} router={router} />
         <RecordTimeZone key={auth.identity.id} />
         <FeedbackWidgetOnDx key={auth.identity.id} />
+        <Suspense fallback={null}>
+          <HuddleLayerEntry
+            key={`huddle-${auth.identity.id}`}
+            onOpenPlace={(place) =>
+              void router.navigate({
+                to: "/threads/$threadId",
+                params: { threadId: place.threadId },
+              })
+            }
+          />
+        </Suspense>
         <AppToaster router={router} />
         {ReactQueryDevtools === undefined ? null : (
           <Suspense fallback={null}>

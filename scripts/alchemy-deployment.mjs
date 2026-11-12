@@ -8,6 +8,7 @@ import { alchemyStage } from "./alchemy-stage.mjs";
 import {
   attachmentBucketCors,
   attachmentSigningTokenProps,
+  realtimeKitTokenProps,
   workerLogsTokenProps,
 } from "./attachment-deployment.mjs";
 
@@ -238,6 +239,7 @@ const deploymentResourceTypes = ({
   orbProviders = ["e2b"],
   attachmentSigning = "token",
   portals = undefined,
+  huddle = false,
 }) =>
   new Map([
     // Portals: their own Worker on a zone route plus a proxied wildcard record.
@@ -259,6 +261,11 @@ const deploymentResourceTypes = ({
           ["WorkerLogsToken", "Cloudflare.ApiToken.AccountApiToken"],
         ]
       : [["AttachmentR2Credentials", "Dx.HeldSecret"]]),
+    // Huddle's RealtimeKit-only token, where Huddle is on and the deploy
+    // can mint tokens.
+    ...(huddle && attachmentSigning === "token"
+      ? [["HuddleToken", "Cloudflare.ApiToken.AccountApiToken"]]
+      : []),
     ...(orbProviders.includes("cloudflare")
       ? [["OrbContainers", "Dx.OrbContainers"]]
       : []),
@@ -2316,6 +2323,32 @@ const assertExactWorkerLogsTokenIdentity = (node, selection) => {
     );
 };
 
+/**
+ * Huddle's token: exactly one allow policy, Realtime Admin on this
+ * deployment's account. Nothing broader is ever minted.
+ */
+const assertExactHuddleTokenIdentity = (node, selection) => {
+  const expected = JSON.stringify(
+    realtimeKitTokenProps(selection.accountId, selection.workerName),
+  );
+  for (const props of [
+    node.resource?.Props,
+    node.props,
+    node.state?.props,
+    node.state?.old?.props,
+  ].filter(Boolean)) {
+    if (JSON.stringify(props) !== expected)
+      throw new Error(
+        "HuddleToken plan identity is outside the exact allowlist.",
+      );
+  }
+  const attr = node.state?.attr ?? node.state?.old?.attr;
+  if (attr && attr.accountId !== selection.accountId)
+    throw new Error(
+      "Persisted HuddleToken identity is outside the exact allowlist.",
+    );
+};
+
 const assertExactTurnstileIdentity = (node, selection) => {
   const expectedProps = {
     domains: [selection.domain],
@@ -2791,6 +2824,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     (id === "AccessTurnstile" ||
       id === "AttachmentSigningToken" ||
       id === "WorkerLogsToken" ||
+      id === "HuddleToken" ||
       id === "PortalDns") &&
     node.mode !== undefined
   )
@@ -2865,6 +2899,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     assertExactAttachmentSigningTokenIdentity(node, selection);
   if (id === "WorkerLogsToken")
     assertExactWorkerLogsTokenIdentity(node, selection);
+  if (id === "HuddleToken") assertExactHuddleTokenIdentity(node, selection);
   if (id === "Bootstrap" || id === "Verify")
     assertExactCommandIdentity(node, operation, selection, id, context);
 };

@@ -1,12 +1,18 @@
 import { env, waitUntil } from "cloudflare:workers";
-import { mcpModuleIdFor } from "@dx/domain";
+import { ARTIFACT_BOARDS_FEATURE } from "@dx/api";
+import {
+  type ExperimentalFeatureId,
+  mcpModuleIdFor,
+  Principal,
+} from "@dx/domain";
 import { FlueError } from "@flue/runtime";
 import { getLogger } from "@logtape/logtape";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { readOrbThreadState } from "../agents/orb-free.js";
 import { mayUseBugReportTools } from "../bug-reports/agent-tools.js";
 import type { Bindings } from "../http/types.js";
 import { markRunFailure } from "../runtime/run-failure.js";
+import { experimentalFeatureEnabled } from "../settings/experimental-features/routes.js";
 import {
   type McpAgentConnectionData,
   resolveMcpAgentConnections,
@@ -99,6 +105,32 @@ export const resolveAgentPluginTools = async (
 export const resolveAgentBugReportReader = async (threadId: string) => {
   try {
     return await mayUseBugReportTools(agentPluginHostContext(), threadId);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Whether the Thread's owner turned on drawing boards, so its agent's
+ * `artifact` tool creates and edits them. Read per submission; a failed read
+ * offers documents only.
+ */
+export const resolveAgentArtifactBoards = async (threadId: string) => {
+  try {
+    const context = agentPluginHostContext();
+    const owner = await context.db
+      .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
+      .bind(threadId)
+      .first<string>("owner_user_id");
+    if (owner === null) return false;
+    return await experimentalFeatureEnabled(
+      context.bindings,
+      Schema.decodeUnknownSync(Principal)({
+        userId: owner,
+        credentialScopes: ["personal", "workspace"],
+      }),
+      ARTIFACT_BOARDS_FEATURE as ExperimentalFeatureId,
+    );
   } catch {
     return false;
   }

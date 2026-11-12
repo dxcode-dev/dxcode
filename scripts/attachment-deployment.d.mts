@@ -36,3 +36,16 @@ export function workerLogsTokenProps(
     resources: Record<`com.cloudflare.api.account.${string}`, string>;
   }[];
 };
+export const REALTIMEKIT_PERMISSION: "Realtime Admin";
+export function realtimeKitTokenProps(
+  accountId: string,
+  workerName: string,
+): {
+  name: string;
+  accountId: string;
+  policies: {
+    effect: "allow";
+    permissionGroups: "Realtime Admin"[];
+    resources: Record<`com.cloudflare.api.account.${string}`, string>;
+  }[];
+};

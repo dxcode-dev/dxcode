@@ -95,6 +95,7 @@ const userId = "usr_dictate" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"d".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Dictate",
   revision: 1,
@@ -262,6 +263,7 @@ describe("dictation in an artifact", () => {
           artifactId: artifact().id,
           parentId: null,
           quote,
+          target: null,
           anchor: {
             revision: 1,
             start: MARKDOWN.indexOf(quote),

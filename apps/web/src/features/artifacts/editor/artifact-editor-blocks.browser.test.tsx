@@ -33,6 +33,7 @@ const userId = "usr_blocks" as UserId;
 const artifact = (): ThreadArtifact => ({
   id: `art_${"b".repeat(32)}`,
   threadId,
+  kind: "document",
   folder: "",
   title: "Blocks",
   revision: 1,

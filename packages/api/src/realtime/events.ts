@@ -146,6 +146,45 @@ export const RealtimeTypingEvent = Schema.Struct({
   scope: Schema.String.check(Schema.isPattern(/^[\w.-]{1,160}$/)),
 });
 
+/**
+ * Live drawing on a board (`scope` is the artifact's id): where the sender's
+ * pointer is, what they have selected, and the elements they are changing
+ * right now, before their save. Memory only, like typing: the next save
+ * carries the same change, and the hub relays `elements` only from people
+ * who can edit the Thread.
+ */
+export const BoardLivePayload = Schema.Struct({
+  pointer: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        x: Schema.Number,
+        y: Schema.Number,
+        tool: Schema.optional(Schema.Literals(["pointer", "laser"])),
+      }),
+    ),
+  ),
+  button: Schema.optional(Schema.Literals(["up", "down"])),
+  selected: Schema.optional(
+    Schema.Array(Schema.String).check(Schema.isMaxLength(500)),
+  ),
+  elements: Schema.optional(
+    Schema.Array(Schema.Unknown).check(Schema.isMaxLength(1000)),
+  ),
+});
+export type BoardLivePayload = typeof BoardLivePayload.Type;
+
+/** The most bytes one live board message carries; larger ones are dropped. */
+export const BOARD_LIVE_MAX_BYTES = 256 * 1024;
+
+export const RealtimeBoardEvent = Schema.Struct({
+  type: Schema.Literal("presence.board"),
+  topic: PresenceTopic,
+  userId: UserId,
+  clientId: ClientId,
+  scope: Schema.String.check(Schema.isPattern(/^art_[0-9a-f]{32}$/)),
+  payload: BoardLivePayload,
+});
+
 export const RealtimeWorkspaceStatusEvent = Schema.Struct({
   type: Schema.Literal("workspace.status"),
   threadId: ThreadId,
@@ -162,6 +201,7 @@ export const RealtimeServerEvent = Schema.Union([
   RealtimeSidebarLayoutEvent,
   RealtimePresenceSnapshotEvent,
   RealtimeTypingEvent,
+  RealtimeBoardEvent,
   Schema.Struct({
     type: Schema.Literal("presence.heartbeat"),
     topic: PresenceTopic,

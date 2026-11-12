@@ -103,6 +103,15 @@ const selection = {
       "DX_DEPLOYMENT_TURNSTILE_TEST_KEYS must be true (branch only) or false.",
     );
   })(),
+  // Huddle's RealtimeKit token: previews always, others opt in.
+  huddle: (() => {
+    const value = process.env.DX_DEPLOYMENT_HUDDLE;
+    if (value === undefined || value === "")
+      return required("DX_DEPLOYMENT_ENVIRONMENT") === "preview";
+    if (value === "true") return true;
+    if (value === "false") return false;
+    throw new Error("DX_DEPLOYMENT_HUDDLE must be true or false.");
+  })(),
   workerTraces: (() => {
     const value = process.env.DX_DEPLOYMENT_WORKER_TRACES;
     if (value === undefined || value === "false") return false;
