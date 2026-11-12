@@ -15,6 +15,7 @@ export const BUILT_IN_SKILL_NAMES = [
   "reviewing-code",
   "searching-code",
   "using-agent-browser",
+  "using-workload-identity",
   "writing-prompts",
 ] as const;
 

@@ -26,6 +26,17 @@ import reviewingCode from "./built-in-skills/reviewing-code/skill.md?raw";
 import searchingCode from "./built-in-skills/searching-code/skill.md?raw";
 import actionVideo from "./built-in-skills/using-agent-browser/scripts/action-video.mjs?raw";
 import usingAgentBrowser from "./built-in-skills/using-agent-browser/skill.md?raw";
+import workloadIdentityAws from "./built-in-skills/using-workload-identity/reference/aws.md?raw";
+import workloadIdentityAzure from "./built-in-skills/using-workload-identity/reference/azure.md?raw";
+import workloadIdentityGcp from "./built-in-skills/using-workload-identity/reference/gcp.md?raw";
+import workloadIdentityGeneric from "./built-in-skills/using-workload-identity/reference/generic.md?raw";
+import workloadIdentityAwsCredentials from "./built-in-skills/using-workload-identity/scripts/aws-credentials.mjs?raw";
+import workloadIdentityAzureAccessToken from "./built-in-skills/using-workload-identity/scripts/azure-access-token.mjs?raw";
+import workloadIdentityClaims from "./built-in-skills/using-workload-identity/scripts/claims.mjs?raw";
+import workloadIdentityFindConnections from "./built-in-skills/using-workload-identity/scripts/find-connections.mjs?raw";
+import workloadIdentityGcpAccessToken from "./built-in-skills/using-workload-identity/scripts/gcp-access-token.mjs?raw";
+import workloadIdentityToken from "./built-in-skills/using-workload-identity/scripts/workload-token.mjs?raw";
+import usingWorkloadIdentity from "./built-in-skills/using-workload-identity/skill.md?raw";
 import writingPrompts from "./built-in-skills/writing-prompts/skill.md?raw";
 
 /**
@@ -87,6 +98,22 @@ const sources: ReadonlyArray<{
     files: {
       "SKILL.md": usingAgentBrowser,
       "scripts/action-video.mjs": actionVideo,
+    },
+  },
+  {
+    name: "using-workload-identity",
+    files: {
+      "SKILL.md": usingWorkloadIdentity,
+      "reference/aws.md": workloadIdentityAws,
+      "reference/azure.md": workloadIdentityAzure,
+      "reference/gcp.md": workloadIdentityGcp,
+      "reference/generic.md": workloadIdentityGeneric,
+      "scripts/aws-credentials.mjs": workloadIdentityAwsCredentials,
+      "scripts/azure-access-token.mjs": workloadIdentityAzureAccessToken,
+      "scripts/claims.mjs": workloadIdentityClaims,
+      "scripts/find-connections.mjs": workloadIdentityFindConnections,
+      "scripts/gcp-access-token.mjs": workloadIdentityGcpAccessToken,
+      "scripts/workload-token.mjs": workloadIdentityToken,
     },
   },
   { name: "writing-prompts", files: { "SKILL.md": writingPrompts } },
