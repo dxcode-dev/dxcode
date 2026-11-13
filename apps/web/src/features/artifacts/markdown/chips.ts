@@ -6,6 +6,7 @@
  * - `{{dropdown:Todo|*Doing:blue|Done:green}}`, `*` marking the selection
  * - `{{toggle:key|Label}}`, which shows or hides chips tagged `#key`, as in
  *   `{{time#key:…}}`, for each reader
+ * - `{{project:PROJECT_ID|Name}}` for a dx Project, which opens it
  * - `@[Name](user:USER_ID)` for a person and `@[dx](agent)` for the agent
  */
 
@@ -34,11 +35,19 @@ export type Chip =
       readonly options: ReadonlyArray<DropdownOption>;
     }
   | { readonly kind: "toggle"; readonly key: string; readonly label: string }
+  | {
+      readonly kind: "project";
+      readonly projectId: string;
+      readonly name: string;
+    }
   | { readonly kind: "mention"; readonly name: string; readonly userId: string }
   | { readonly kind: "agent"; readonly name: string };
 
 const KEY = /^[A-Za-z0-9_-]{1,40}$/;
 const BRACED = /^\{\{([a-z]+)(?:#([A-Za-z0-9_-]{1,40}))?:([^\n]*)\}\}$/;
+/** A Project's ID, as `@dx/domain`'s `ProjectId` writes it. */
+const PROJECT_ID =
+  /^prj_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MENTION = /^@\[([^\]\n]+)\]\((?:user:([A-Za-z0-9_-]+)|(agent))\)$/;
 
 /**
@@ -136,6 +145,15 @@ export const parseChip = (source: string): Chip | undefined => {
         ? { kind: "toggle", key, label }
         : undefined;
     }
+    case "project": {
+      if (tag !== undefined) return undefined;
+      const bar = body.indexOf("|");
+      const projectId = body.slice(0, bar);
+      const name = body.slice(bar + 1);
+      return bar > 0 && PROJECT_ID.test(projectId) && validLabel(name)
+        ? { kind: "project", projectId, name }
+        : undefined;
+    }
     default:
       return undefined;
   }
@@ -165,6 +183,9 @@ const writeChip = (chip: Chip): string => {
       break;
     case "toggle":
       source = `{{toggle:${chip.key}|${chip.label}}}`;
+      break;
+    case "project":
+      source = `{{project:${chip.projectId}|${chip.name}}}`;
       break;
     case "mention":
       source = `@[${chip.name}](user:${chip.userId})`;
@@ -249,6 +270,24 @@ export const newChipSource = (
       });
   }
 };
+
+/**
+ * A Project's chip, its name made one line a chip can hold, or undefined
+ * when it still can't be written.
+ */
+export const projectSource = (project: {
+  readonly id: string;
+  readonly name: string;
+}) =>
+  tryChipSource({
+    kind: "project",
+    projectId: project.id,
+    name: project.name
+      .replace(/[|{}\n]+/g, " ")
+      .replace(/^[\s*]+/, "")
+      .replace(/\s+/g, " ")
+      .trim(),
+  });
 
 /** A person's mention, when their name and ID can be written as one. */
 export const mentionSource = (person: {

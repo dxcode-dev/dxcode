@@ -1,3 +1,4 @@
+export * from "./artifacts/library.js";
 export * from "./attachments/index.js";
 export {
   type ForbiddenResponse,
@@ -112,6 +113,7 @@ export * from "./threads/get-thread.js";
 export * from "./threads/get-thread-list-item.js";
 export * from "./threads/get-thread-readiness.js";
 export * from "./threads/github-delivery.js";
+export * from "./threads/huddle.js";
 export * from "./threads/list-threads.js";
 export * from "./threads/mark-thread-seen.js";
 export * from "./threads/mcp-apps.js";
@@ -124,7 +126,6 @@ export * from "./threads/pin-thread.js";
 export * from "./threads/plugin-agent-modes.js";
 export * from "./threads/plugin-ui.js";
 export * from "./threads/portals.js";
-export * from "./threads/huddle.js";
 export * from "./threads/reactions.js";
 export * from "./threads/reply-offers.js";
 export * from "./threads/search-threads.js";

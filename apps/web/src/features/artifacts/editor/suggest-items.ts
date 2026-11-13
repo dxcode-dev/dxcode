@@ -24,6 +24,8 @@ export interface SlashItem extends SuggestItem {
   readonly action:
     | { readonly kind: "block"; readonly block: BlockKind }
     | { readonly kind: "chip"; readonly chip: ChipKind }
+    /** Opens the Project picker, whose choice becomes a project chip. */
+    | { readonly kind: "project" }
     | { readonly kind: "image" };
   readonly keywords: ReadonlyArray<string>;
 }
@@ -83,6 +85,13 @@ export const SLASH_ITEMS: ReadonlyArray<SlashItem> = [
   chip("time", "Time", ["clock"]),
   chip("dropdown", "Dropdown", ["status", "select"]),
   chip("toggle", "Toggle", ["switch"]),
+  {
+    id: "project",
+    label: "Project",
+    group: "Chips",
+    keywords: ["project", "repo", "repository"],
+    action: { kind: "project" },
+  },
 ];
 
 /**

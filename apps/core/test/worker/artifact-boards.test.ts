@@ -298,9 +298,7 @@ describe("drawing boards", () => {
       markdown: FLOW,
     });
     expect(created).toMatchObject({ saved: true, type: "board", revision: 1 });
-    expect(created.link).toBe(
-      `/threads/${threadId}?artifact=${created.artifact_id}&sheet=artifact`,
-    );
+    expect(created.link).toBe(`/artifacts/${created.artifact_id}`);
     const stored = await read(threadId, created.artifact_id);
     const board = elementsOf(stored.markdown);
     const live = board.elements.filter((element) => !element.isDeleted);

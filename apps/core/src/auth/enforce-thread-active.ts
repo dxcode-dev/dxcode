@@ -20,6 +20,20 @@ export const enforceThreadActive: MiddlewareHandler<AppEnv> = async (
     context.req.path.startsWith(`${threadPath}/desktop/`) ||
     (context.req.method === "POST" &&
       [agentPath, `${agentPath}/abort`].includes(context.req.path));
+  // A standalone artifact's home holds the artifact only: no agent runs in
+  // it and no Orb starts for it.
+  if (executionCapable && context.get("threadArtifactHome") === true)
+    return context.json(
+      {
+        status: "error",
+        data: {
+          code: "THREAD_NOT_FOUND",
+          message: "Thread not found.",
+          requestId: context.get("requestId"),
+        },
+      },
+      404,
+    );
   if (executionCapable && context.get("threadLifecycleState") === "archived")
     return context.json(
       Schema.encodeUnknownSync(ThreadArchivedResponseSchema)({

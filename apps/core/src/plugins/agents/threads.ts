@@ -211,6 +211,8 @@ export interface StartAgentThreadInput {
   readonly db: D1Database;
   readonly install: PluginInstallRecord;
   readonly ownerUserId: string;
+  /** The member whose click started the call, when not the owner. */
+  readonly actorUserId?: string;
   readonly definition: PluginAgentDefinition;
   /** The declared mode it starts in; absent for `agent.run`. */
   readonly modeKey?: string;
@@ -261,6 +263,9 @@ export const startAgentThread = async (
     detail: Record<string, unknown>,
   ) =>
     insertPluginAudit(db, {
+      ...(input.actorUserId === undefined
+        ? {}
+        : { actorUserId: input.actorUserId }),
       pluginId: install.pluginId,
       pluginName: install.name,
       pluginVersion: install.version,

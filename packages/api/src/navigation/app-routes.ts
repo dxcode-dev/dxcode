@@ -17,6 +17,8 @@ export const APP_ROUTE_PATHS = [
   "/projects/$projectId/settings/$section",
   "/threads/$threadId",
   "/threads/$threadId/tree",
+  "/artifacts",
+  "/artifacts/$artifactId",
   "/bug-reports",
   "/bug-reports/$reportId",
   "/bug-reports/all",

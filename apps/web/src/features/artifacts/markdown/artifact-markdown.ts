@@ -305,7 +305,7 @@ const altText = (tokens: ReadonlyArray<Token>): string =>
 
 /**
  * Chips read as one token each, before links (a mention is link-shaped).
- * Inside a table cell a dropdown's `|` arrives escaped as `\|`.
+ * Inside a table cell a chip's `|` arrives escaped as `\|`.
  */
 markdownIt.inline.ruler.before("link", "artifact_chip", (state, silent) => {
   const rest = state.src.slice(state.pos);
@@ -801,8 +801,8 @@ interface ParsedDocument {
 }
 
 /**
- * A table row's dropdown and toggle chips with each bare `|` escaped, as a
- * cell needs (#1865): an agent that writes
+ * A table row's dropdown, toggle, and project chips with each bare `|`
+ * escaped, as a cell needs (#1865): an agent that writes
  * `| {{dropdown:Todo|*Doing}} |` meant one chip, not two cells. Only what
  * markdown-it reads changes; the lines kept for each block are the source
  * as written, so an untouched row saves byte for byte.
@@ -811,7 +811,7 @@ const escapeChipPipes = (source: string) =>
   source.includes("{{")
     ? source.replace(/^([ \t]*\|.*)$/gmu, (row: string) =>
         row.replace(
-          /\{\{(?:dropdown|toggle)(?:#[A-Za-z0-9_-]{1,40})?:[^\n]*?\}\}/gu,
+          /\{\{(?:dropdown|toggle|project)(?:#[A-Za-z0-9_-]{1,40})?:[^\n]*?\}\}/gu,
           (chip) => chip.replace(/(?<!\\)\|/gu, "\\|"),
         ),
       )

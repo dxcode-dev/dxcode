@@ -29,7 +29,7 @@ import {
 import "./artifacts-view.css";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 
-const loading = (
+const artifactLoading = (
   <div className="artifacts-state" role="status">
     <FileText className="workspace-loading-glyph" aria-hidden="true" />
     <span className="sr-only">Loading artifacts…</span>
@@ -132,7 +132,7 @@ function ArtifactSwitcher({
   );
 }
 
-function OpenArtifact({
+export function OpenArtifact({
   threadId,
   artifactId,
   active,
@@ -159,7 +159,7 @@ function OpenArtifact({
             title={message(query.error)}
           />
         ) : (
-          loading
+          artifactLoading
         )}
       </section>
     );
@@ -169,7 +169,7 @@ function OpenArtifact({
       fallback={
         <section className="artifact-view">
           <header className="artifact-header">{switcher()}</header>
-          {loading}
+          {artifactLoading}
         </section>
       }
     >
@@ -250,7 +250,7 @@ export function ArtifactsView({
         title={message(list.error)}
       />
     ) : (
-      loading
+      artifactLoading
     );
   if (selected === undefined)
     return (

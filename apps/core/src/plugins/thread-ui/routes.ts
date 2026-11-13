@@ -46,7 +46,10 @@ import {
  * Everyone who can open the Thread sees its notices and link patterns; the
  * owner and Contribute members also see and answer prompts, use quick
  * actions, and run palette commands. A secret input takes only the owner's
- * answer. Commands run as the Thread's owner, as everything in a Thread does.
+ * answer. Commands run as the Thread's owner, as everything in a Thread does,
+ * so the owner's personal plugins take commands, command quick actions, and
+ * pane messages from the owner only; workspace plugins take them from every
+ * member, and record that member as the call's actor.
  */
 
 const logger = getLogger(["dx", "plugins", "thread-ui"]);
@@ -64,6 +67,10 @@ const MESSAGES: Record<PluginThreadUiErrorCode, [number, string]> = {
   PLUGIN_PROMPT_OWNER_ONLY: [
     403,
     "Only the Thread's owner can answer this plugin question.",
+  ],
+  PLUGIN_UI_OWNER_ONLY: [
+    403,
+    "This is the Thread owner's own plugin: only they can use it here.",
   ],
   PLUGIN_COMMAND_NOT_FOUND: [
     404,
@@ -136,6 +143,48 @@ const keepAlive = (context: Context<AppEnv>, work: Promise<unknown>) => {
 
 const access = (context: Context<AppEnv>) =>
   context.get("threadAccess") ?? "owner";
+
+/**
+ * Who clicked, when it was not the owner: a member of a shared Thread. The
+ * call still runs as the owner's install; this is `ctx.caller` and the
+ * audit's `actorUserId`.
+ */
+const actorOf = (context: Context<AppEnv>) => {
+  const actor = (context.get("actor") ?? context.get("principal"))?.userId;
+  return actor === undefined || actor === context.get("threadOwnerUserId")
+    ? {}
+    : { actorUserId: actor };
+};
+
+/**
+ * A personal install is its owner's own: in a shared Thread its commands,
+ * command quick actions, and pane messages are for the owner only, since
+ * they run with the owner's secrets, network, and shell. Workspace installs
+ * were approved for every member.
+ */
+const ownerOnly = (
+  context: Context<AppEnv>,
+  plugin: { readonly scope: string },
+) => plugin.scope === "personal" && access(context) !== "owner";
+
+/** Refuses a member a personal install's interactive call, and logs it. */
+const refuseOwnerOnly = (
+  context: Context<AppEnv>,
+  route: string,
+  plugin: { readonly pluginId: string; readonly name: string },
+) => {
+  logger.info(`Plugin ${plugin.name} refused a member's ${route} call.`, {
+    event: "plugin_ui_request",
+    route,
+    outcome: "refused:owner-only",
+    installId: plugin.pluginId,
+    plugin: plugin.name,
+    threadId: context.req.param("threadId"),
+    access: access(context),
+    ...actorOf(context),
+  });
+  return refuse(context, "PLUGIN_UI_OWNER_ONLY");
+};
 
 /** Whether the install may show panes: its manifest grants `pane`. */
 const showsPanes = (plugin: ResolvedCodePlugin) =>
@@ -266,13 +315,15 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
     );
     const commands: PluginCommand[] = readOnly
       ? []
-      : running.flatMap((plugin) =>
-          plugin.commands.map((command) => ({
-            ...command,
-            id: `${plugin.pluginId}:${command.id}`,
-            plugin: plugin.displayName,
-          })),
-        );
+      : running
+          .filter((plugin) => !ownerOnly(context, plugin))
+          .flatMap((plugin) =>
+            plugin.commands.map((command) => ({
+              ...command,
+              id: `${plugin.pluginId}:${command.id}`,
+              plugin: plugin.displayName,
+            })),
+          );
     const panes: PluginPaneEntry[] = running
       .filter(showsPanes)
       .flatMap((plugin) =>
@@ -285,6 +336,7 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
             pluginTitle: plugin.displayName,
             version: plugin.version,
             ...(openedAt === undefined ? {} : { openedAt }),
+            ...(ownerOnly(context, plugin) ? { ownerOnly: true as const } : {}),
           };
         }),
       );
@@ -304,7 +356,16 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
                     : prompt,
                 ),
           notices: shown.notices,
-          quickActions,
+          quickActions: quickActions.filter(
+            // A run-command action names its install: `<install id>:<id>`.
+            (action) =>
+              action.action !== "run-command" ||
+              !running.some(
+                (plugin) =>
+                  action.args.command?.startsWith(`${plugin.pluginId}:`) ===
+                    true && ownerOnly(context, plugin),
+              ),
+          ),
           commands,
           linkPatterns,
           panes,
@@ -392,6 +453,8 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
     );
     if (split < 1 || plugin === undefined)
       return refuse(context, "PLUGIN_COMMAND_NOT_FOUND");
+    if (ownerOnly(context, plugin))
+      return refuseOwnerOnly(context, "command", plugin);
     // The command may wait on a person's answer to one of its prompts; the
     // request stays open while it does, and a closed page has a moment more.
     const run = runPluginCommand(
@@ -401,6 +464,7 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
         install: plugin,
         threadId,
         ownerUserId: context.get("threadOwnerUserId"),
+        ...actorOf(context),
         ...shellGateFor(context, db, threadId, plugins, plugin),
       },
       commandId,
@@ -480,6 +544,8 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
       const found = await findPane(context, db);
       if (found === undefined || !found.pane.handlesMessages)
         return refuse(context, "PLUGIN_PANE_NOT_FOUND");
+      if (ownerOnly(context, found.plugin))
+        return refuseOwnerOnly(context, "pane-message", found.plugin);
       const threadId = context.req.param("threadId");
       // A view's script could call in a loop with nobody clicking.
       try {
@@ -504,6 +570,7 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
           install: found.plugin,
           threadId,
           ownerUserId: context.get("threadOwnerUserId"),
+          ...actorOf(context),
           ...shellGateFor(context, db, threadId, found.plugins, found.plugin),
         },
         found.pane.id,

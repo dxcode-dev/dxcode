@@ -221,6 +221,8 @@ export interface Variables {
   readonly threadSnoozed?: boolean;
   /** Set by Thread authorization: whether the Thread is a Space. */
   readonly threadKind?: "thread" | "space";
+  /** The authorized Thread is a standalone artifact's hidden home. */
+  readonly threadArtifactHome?: boolean;
   /** The Thread POST is a chat message: Flue records it without a model call. */
   readonly chatDelivery: boolean;
   /**

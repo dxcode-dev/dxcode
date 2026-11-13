@@ -11709,7 +11709,8 @@ body:has(.dx-app-shell) {
   height: 100%;
 }
 .product-sidebar-trigger + .standard-page .page-topbar,
-.product-sidebar-trigger + .thread-region .thread-title-bar {
+.product-sidebar-trigger + .thread-region .thread-title-bar,
+.product-sidebar-trigger + .library-artifact-page .artifact-header {
   padding-left: 42px;
 }
 @media (max-width: 767px) {
@@ -11729,7 +11730,8 @@ body:has(.dx-app-shell) {
     top: max(6px, env(safe-area-inset-top));
     left: max(7px, env(safe-area-inset-left));
   }
-  .page-topbar {
+  .page-topbar,
+  .product-sidebar-trigger + .library-artifact-page .artifact-header {
     padding-left: 44px;
   }
   .projects-page-content {

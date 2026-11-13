@@ -592,6 +592,25 @@
   color: var(--primary-foreground);
   background: color-mix(in srgb, var(--primary) 85%, transparent);
 }
+/* A project chip: the Projects icon and the Project's name; it opens the
+   Project when the reader's list holds it. */
+.artifact-chip[data-kind="project"] {
+  gap: var(--space-1);
+  border-radius: var(--radius-sm);
+  cursor: default;
+}
+.artifact-chip[data-kind="project"][data-linked] {
+  --chip-color: var(--primary);
+  cursor: pointer;
+}
+.artifact-chip[data-kind="project"][data-linked]:hover {
+  text-decoration: underline;
+}
+.artifact-chip-icon {
+  width: 1em;
+  height: 1em;
+  flex: none;
+}
 .artifact-chip.ProseMirror-selectednode {
   outline: 2px solid color-mix(in srgb, var(--primary) 60%, transparent);
   outline-offset: 1px;
@@ -616,6 +635,14 @@
 }
 [data-color="purple"] {
   --chip-color: var(--chip-purple);
+}
+
+/* `/` Project's picker: a search row over the reader's Projects. */
+.dx-popover.artifact-project-picker {
+  width: 280px;
+  max-width: calc(100vw - var(--space-4));
+  padding: 0;
+  overflow: hidden;
 }
 
 /* A chip's picker: a date or time field, or a dropdown's options. */
@@ -1384,4 +1411,32 @@ span.artifact-image-upload {
   margin: 0;
   color: var(--muted-foreground);
   font-size: var(--text-sm);
+}
+
+/* A document embedded by its link: its opening lines, faded at the end. */
+.artifact-embed-excerpt {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  max-height: 140px;
+  padding: var(--space-3) var(--space-3-5);
+  overflow: hidden;
+  border-bottom: 1px solid var(--divider);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  line-height: var(--leading-5);
+  mask-image: linear-gradient(to bottom, black 70%, transparent);
+}
+.artifact-embed-excerpt > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-embed-excerpt > span:first-child {
+  color: var(--foreground);
+  font-weight: var(--weight-medium);
+}
+.artifact-embed-empty {
+  font-style: italic;
 }

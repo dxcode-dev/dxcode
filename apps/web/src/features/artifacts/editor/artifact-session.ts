@@ -18,7 +18,7 @@ import {
   type ThreadMemberData,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
-import type { QueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import {
   type EditorState,
   TextSelection,
@@ -26,6 +26,7 @@ import {
 } from "prosemirror-state";
 import { selectedRect } from "prosemirror-tables";
 import type { EditorView } from "prosemirror-view";
+import type { ProjectPage } from "../../../shared/api/client.js";
 import {
   type PersonItem,
   peopleItems,
@@ -34,6 +35,7 @@ import type {
   SuggestMenuRow,
   SuggestMenuState,
 } from "../../../shared/comments/suggest-menu.js";
+import { projectKeys } from "../../projects/project-queries.js";
 import { threadKeys } from "../../threads/thread-queries.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
 import {
@@ -53,6 +55,7 @@ import {
   mentionSource,
   newChipSource,
   parseChip,
+  projectSource,
   tryChipSource,
 } from "../markdown/chips.js";
 import {
@@ -74,7 +77,7 @@ import {
   selectionInTable,
   topLevelBlockAt,
 } from "./block-commands.js";
-import { chipTogglesKey } from "./chip-views.js";
+import { chipTogglesKey, projectLinks, projectLinksKey } from "./chip-views.js";
 import {
   type CommentRange,
   commentAt,
@@ -131,6 +134,8 @@ export interface ArtifactSessionSnapshot {
   readonly headed: boolean;
   /** The chip whose picker is open. */
   readonly chip: { readonly pos: number; readonly chip: Chip } | undefined;
+  /** The Project picker `/` Project opened, and where its chip goes. */
+  readonly project: { readonly pos: number } | undefined;
   /** The `dx-view` blocks on screen, each framed into its container. */
   readonly views: ReadonlyArray<ArtifactViewFrame>;
   /** Artifacts embedded by a link on a line of its own, such as boards. */
@@ -305,7 +310,11 @@ export class ArtifactSession {
     this.#codec = createArtifactMarkdownCodec();
     this.#state = createArtifactEditorState(
       this.#codec.parse(initial.markdown),
-      [suggestions(this.#suggestHost), imageUploadsPlugin(this.#uploadHost)],
+      [
+        suggestions(this.#suggestHost),
+        imageUploadsPlugin(this.#uploadHost),
+        projectLinks,
+      ],
     );
     this.#base = {
       revision: initial.artifact.revision,
@@ -323,6 +332,7 @@ export class ArtifactSession {
       selection: { inTable: false, ranged: false, block: undefined },
       headed: headed(this.#state),
       chip: undefined,
+      project: undefined,
       views: [],
       embeds: [],
       suggest: undefined,
@@ -604,6 +614,9 @@ export class ArtifactSession {
           : undefined;
       this.#publish({ chip: chip === undefined ? undefined : { pos, chip } });
     }
+    const picking = this.#snapshot.project;
+    if (picking !== undefined && tr.docChanged)
+      this.#publish({ project: { pos: tr.mapping.map(picking.pos) } });
   };
 
   #edited() {
@@ -659,11 +672,65 @@ export class ArtifactSession {
     this.#view?.focus();
   }
 
+  /** Puts the Project picker at `pos`, where its chip will go. */
+  openProjectPicker(pos: number) {
+    this.#publish({ project: { pos } });
+  }
+
+  /** Closes the Project picker, back to the text. */
+  readonly closeProjectPicker = () => {
+    if (this.#snapshot.project === undefined) return;
+    this.#publish({ project: undefined });
+    this.#view?.focus();
+  };
+
+  /** Writes the picked Project's chip where the picker opened. */
+  readonly insertProject = (project: {
+    readonly id: string;
+    readonly name: string;
+  }) => {
+    const open = this.#snapshot.project;
+    const source = projectSource(project);
+    this.#publish({ project: undefined });
+    if (open !== undefined && source !== undefined) {
+      const at = Math.min(open.pos, this.#state.doc.content.size);
+      this.dispatch(
+        this.#state.tr.setSelection(
+          TextSelection.near(this.#state.doc.resolve(at)),
+        ),
+      );
+      const tr = insertChip(this.#state, source);
+      if (tr !== undefined) this.dispatch(tr);
+    }
+    this.#view?.focus();
+  };
+
+  /** Whether the reader's Project list holds the Project, so it can open it. */
+  readonly projectLinked = (projectId: string) =>
+    projectLinksKey.getState(this.#state)?.has(projectId) ?? false;
+
+  /** A point at `pos` in the text, which a picker is placed against. */
+  readonly caretAnchor = (pos: number) => {
+    const view = this.#view;
+    return {
+      getBoundingClientRect: () => {
+        if (view === undefined) return new DOMRect();
+        const at = view.coordsAtPos(Math.min(pos, view.state.doc.content.size));
+        return new DOMRect(at.left, at.top, 0, at.bottom - at.top);
+      },
+    };
+  };
+
   /** The chip's element, which its picker is placed against. */
   readonly chipElement = (pos: number) => {
     const dom = this.#view?.nodeDOM(pos);
     return dom instanceof Element ? dom : null;
   };
+
+  /** The artifact this session edits; a link to it does not embed. */
+  get artifactId() {
+    return this.#artifactId;
+  }
 
   #embeds = 0;
   /** Shows a linked artifact in `container`, a widget below its link. */
@@ -946,6 +1013,8 @@ export class ArtifactSession {
     } else {
       const { action } = item as SlashItem;
       if (action.kind === "image") this.pickImage();
+      else if (action.kind === "project")
+        this.openProjectPicker(this.#state.selection.from);
       else
         tr =
           action.kind === "block"
@@ -976,6 +1045,16 @@ export class ArtifactSession {
     if (item !== undefined) this.#pick(view, match, item);
   };
 
+  /** Follows what depends on the reader: `@`'s people and linked Projects. */
+  followViewer(viewerId: string) {
+    const stopPeople = this.followPeople(viewerId);
+    const stopProjects = this.followProjects(viewerId);
+    return () => {
+      stopPeople();
+      stopProjects();
+    };
+  }
+
   /** Keeps `@` following the Thread's people (its members query). */
   followPeople(viewerId: string) {
     this.#viewerId = viewerId;
@@ -983,6 +1062,42 @@ export class ArtifactSession {
     const take = (data: unknown) => {
       if (Array.isArray(data))
         this.#people = data as ReadonlyArray<ThreadMemberData>;
+    };
+    take(this.#queryClient.getQueryData(key));
+    const id = JSON.stringify(key);
+    return this.#queryClient.getQueryCache().subscribe((event) => {
+      if (
+        event.type === "updated" &&
+        JSON.stringify(event.query.queryKey) === id
+      )
+        take(event.query.state.data);
+    });
+  }
+
+  /**
+   * Links project chips whose Project the reader's Project list holds (the
+   * sidebar's query), following it as it loads and changes.
+   */
+  followProjects(viewerId: string) {
+    const key = projectKeys.lists(viewerId as UserId);
+    const take = (data: unknown) => {
+      const pages = (data as InfiniteData<ProjectPage> | undefined)?.pages;
+      if (pages === undefined) return;
+      const known = new Set(
+        pages.flatMap((page) => page.items.map((project) => project.id)),
+      );
+      const current = projectLinksKey.getState(this.#state);
+      if (
+        current !== undefined &&
+        current.size === known.size &&
+        [...known].every((id) => current.has(id))
+      )
+        return;
+      this.dispatch(
+        this.#state.tr
+          .setMeta(projectLinksKey, known)
+          .setMeta("addToHistory", false),
+      );
     };
     take(this.#queryClient.getQueryData(key));
     const id = JSON.stringify(key);

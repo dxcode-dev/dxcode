@@ -14,6 +14,9 @@
  *     that chip (a bad date, a label with `|` or `}}`, two selections).
  *  6. A toggle hides chips with no matching toggle, or tagged chips leak out
  *     from a toggle that is off.
+ *  7. A project chip reads with an ID that is not a Project's, a tag, or a
+ *     name that would end it, or a Project's name writes a chip that does not
+ *     read back.
  */
 import { readFileSync } from "node:fs";
 import type { Node } from "prosemirror-model";
@@ -29,8 +32,11 @@ import {
   chipSource,
   hiddenChipTags,
   parseChip,
+  projectSource,
   tryChipSource,
 } from "./chips.js";
+
+const PROJECT = "prj_00000000-0000-4000-8000-000000000001";
 
 const fixture = readFileSync(
   new URL("./fixtures/chips.md", import.meta.url),
@@ -83,6 +89,24 @@ describe("chip sources", () => {
       { kind: "toggle", key: "times", label: "Show times" },
     ],
     ["{{toggle:bad key|Label}}", undefined],
+    [
+      `{{project:${PROJECT}|Web app}}`,
+      { kind: "project", projectId: PROJECT, name: "Web app" },
+    ],
+    [
+      `{{project:${PROJECT}|acme/web: the app}}`,
+      { kind: "project", projectId: PROJECT, name: "acme/web: the app" },
+    ],
+    [`{{project#tag:${PROJECT}|Web app}}`, undefined],
+    [`{{project:${PROJECT}}}`, undefined],
+    [`{{project:${PROJECT}|}}`, undefined],
+    [`{{project:${PROJECT}| }}`, undefined],
+    [`{{project:${PROJECT}|Web|app}}`, undefined],
+    [`{{project:${PROJECT}|*Web}}`, undefined],
+    ["{{project:prj_123|Web app}}", undefined],
+    ["{{project:thr_00000000-0000-4000-8000-000000000001|Web app}}", undefined],
+    [`{{project:${PROJECT.toUpperCase()}|Web app}}`, undefined],
+    [`{{project:|Web app}}`, undefined],
     ["{{nope}}", undefined],
     ["{{nope:x}}", undefined],
     [
@@ -119,6 +143,17 @@ describe("chip pickers", () => {
     { kind: "toggle", key: "k", label: "a {{b" },
   ])("writes nothing for a value typed halfway: %j", (chip) => {
     expect(tryChipSource(chip)).toBeUndefined();
+  });
+
+  it("writes a Project's chip with its name made one line a chip holds", () => {
+    expect(projectSource({ id: PROJECT, name: "Web app" })).toBe(
+      `{{project:${PROJECT}|Web app}}`,
+    );
+    expect(projectSource({ id: PROJECT, name: "*a|b {{c}}\nd" })).toBe(
+      `{{project:${PROJECT}|a b c d}}`,
+    );
+    expect(projectSource({ id: "prj_nope", name: "Web" })).toBeUndefined();
+    expect(projectSource({ id: PROJECT, name: "|{}" })).toBeUndefined();
   });
 
   it("writes a complete value", () => {
@@ -213,6 +248,33 @@ describe("chips in Markdown", () => {
     expect(
       chipsIn(parseArtifactMarkdown(output)).map((chip) => chip.source),
     ).toEqual(["{{date:2026-11-09}}", "@[dx](agent)"]);
+  });
+});
+
+describe("project chips in Markdown", () => {
+  it("round-trips a project chip in a paragraph and in a table cell", () => {
+    const source = `See {{project:${PROJECT}|Web app}} today.
+
+| Project | Owner |
+| --- | --- |
+| {{project:${PROJECT}\\|Web app}} | Ada |
+`;
+    const codec = createArtifactMarkdownCodec();
+    const doc = codec.parse(source);
+    expect(chipsIn(doc).map((chip) => chip.source)).toEqual([
+      `{{project:${PROJECT}|Web app}}`,
+      `{{project:${PROJECT}|Web app}}`,
+    ]);
+    expect(codec.serialize(doc)).toBe(source);
+  });
+
+  it("reads a project chip an agent wrote in a cell without escaping its |", () => {
+    const doc = parseArtifactMarkdown(
+      `| Project |\n| --- |\n| {{project:${PROJECT}|Web app}} |\n`,
+    );
+    expect(chipsIn(doc).map((chip) => chip.source)).toEqual([
+      `{{project:${PROJECT}|Web app}}`,
+    ]);
   });
 });
 

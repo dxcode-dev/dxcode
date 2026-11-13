@@ -403,23 +403,36 @@ describe("the artifact tool", () => {
     expect(after.comments[0].detached).toBe(true);
   });
 
-  it("works only on its own Thread's artifacts", async () => {
+  it("reaches the owner's other Threads' artifacts, but deletes and lists only its own", async () => {
     const mine = await newThread();
     const other = await newThread();
     const { artifact_id: id } = await toolFor(other)({
       action: "create",
       title: "Other",
-      markdown: "not yours",
+      markdown: "the owner's other Thread",
     });
     const artifact = toolFor(mine);
-    for (const data of [
-      { action: "read", artifact_id: id },
-      { action: "update", artifact_id: id, base_revision: 1, markdown: "x" },
-      { action: "delete", artifact_id: id },
-    ])
-      await expect(artifact(data)).rejects.toThrow(
-        /not found|not in this Thread/,
-      );
+    // The same owner opens it, so the agent reads and edits it there.
+    expect(await artifact({ action: "read", artifact_id: id })).toMatchObject({
+      markdown: "the owner's other Thread",
+    });
+    expect(
+      await artifact({
+        action: "update",
+        artifact_id: id,
+        base_revision: 1,
+        markdown: "edited from another Thread",
+      }),
+    ).toMatchObject({ saved: true, revision: 2 });
+    // Delete's confirmation card belongs to the artifact's own Thread.
+    await expect(
+      artifact({ action: "delete", artifact_id: id }),
+    ).rejects.toThrow(/not found/);
     expect((await artifact({ action: "list" })).artifacts).toEqual([]);
+    expect(
+      (await artifact({ action: "list", scope: "all" })).artifacts.map(
+        (entry: { artifact_id: string }) => entry.artifact_id,
+      ),
+    ).toContain(id);
   });
 });

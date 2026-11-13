@@ -7,7 +7,7 @@ import type {
 import type { UserId } from "@dx/domain";
 import { useDebouncer } from "@tanstack/react-pacer";
 import { Link, useLocation } from "@tanstack/react-router";
-import { Search, SquarePen } from "lucide-react";
+import { Files, Search, SquarePen } from "lucide-react";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { AppUpdateRow } from "../../shared/app-update/app-update-row.js";
@@ -18,11 +18,11 @@ import {
 } from "../../shared/new-thread-surface.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
+import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
 import { SidebarAccountMenuSlot } from "./sidebar-account-menu-slot.js";
 import { SidebarArchive } from "./sidebar-archive.js";
-import { ProjectsIcon } from "./sidebar-icons.js";
 import {
   type SidebarLayout,
   useLocalSidebarLayout,
@@ -447,6 +447,14 @@ function AppSidebarContent({
         >
           <ProjectsIcon />
           <span>Projects</span>
+        </Link>
+        <Link
+          to="/artifacts"
+          className={`dock-link ${pathname === "/artifacts" || pathname.startsWith("/artifacts/") ? "selected" : ""}`}
+          onClick={onNavigate}
+        >
+          <Files aria-hidden="true" />
+          <span>Artifacts</span>
         </Link>
       </nav>
 

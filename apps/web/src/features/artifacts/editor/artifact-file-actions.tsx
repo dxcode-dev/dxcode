@@ -51,14 +51,13 @@ export function useArtifactFileActions({
   const folders = new Set<string>();
   for (const artifact of listed ?? [])
     if (artifact.folder !== "") folders.add(artifact.folder);
-  // Copy Link: pasted on a line of its own in a document, a board shows
-  // its preview there.
+  // Copy Link: the artifact's one link, which opens for whoever may open
+  // it; pasted on a line of its own in a document, it shows a preview.
   const copyLink = (
     <MenuItem
       onClick={() =>
         void navigator.clipboard?.writeText(
-          new URL(artifactHref(threadId, artifactId), window.location.href)
-            .href,
+          new URL(artifactHref(artifactId), window.location.href).href,
         )
       }
     >

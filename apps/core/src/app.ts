@@ -4,6 +4,7 @@ import {
   rewindThreadAgent,
   stopThreadAgent,
 } from "./agents/routes.js";
+import { artifactLibraryRoutes } from "./artifact-library/routes.js";
 import { LOCAL_R2_BUCKET, localR2Routes } from "./attachments/local-r2.js";
 import { attachmentRoutes } from "./attachments/routes.js";
 import { authenticate } from "./auth/authenticate.js";
@@ -134,6 +135,8 @@ app.route("/v1", threadDaemonRoutes);
 app.route("/v1/portal-auth", portalAuthRoutes);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
+// The Artifacts library: every artifact the person may open.
+app.route("/v1/artifacts", artifactLibraryRoutes);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);

@@ -3,6 +3,7 @@ import {
   Bot,
   Calendar,
   Clock,
+  FolderGit2,
   Heading1,
   Heading2,
   Heading3,
@@ -72,6 +73,7 @@ const ICONS: Readonly<Record<string, LucideIcon>> = {
   time: Clock,
   dropdown: SquareChevronDown,
   toggle: ToggleLeft,
+  project: FolderGit2,
 };
 
 /**

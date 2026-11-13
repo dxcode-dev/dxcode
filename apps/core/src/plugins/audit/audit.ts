@@ -29,9 +29,22 @@ export interface PluginAuditRow {
   readonly detail?: Readonly<Record<string, unknown>>;
   /** The request the call served, for tying the row to Worker logs. */
   readonly requestId?: string;
+  /**
+   * The person whose click started the call, when not the owner: a
+   * member of a shared Thread. Kept in the row's detail as `actorUserId`,
+   * so a member's call is never recorded as the owner's alone.
+   */
+  readonly actorUserId?: string;
 }
 
 const DETAIL_BYTES = 4_096;
+
+/** A row's detail with the acting member, when one started the call. */
+export const auditDetail = (
+  detail: PluginAuditRow["detail"],
+  actorUserId: string | undefined,
+): PluginAuditRow["detail"] =>
+  actorUserId === undefined ? detail : { ...detail, actorUserId };
 
 const detailJson = (detail: PluginAuditRow["detail"]) => {
   if (detail === undefined) return null;
@@ -66,7 +79,7 @@ export const pluginAuditStatement = (
       row.action.slice(0, 96),
       row.target?.slice(0, 256) ?? null,
       row.outcome,
-      detailJson(row.detail),
+      detailJson(auditDetail(row.detail, row.actorUserId)),
       now.toISOString(),
     );
 
@@ -84,6 +97,7 @@ const logAudit = (id: string, row: PluginAuditRow) => {
     target: row.target,
     outcome: row.outcome,
     requestId: row.requestId,
+    ...(row.actorUserId === undefined ? {} : { actorUserId: row.actorUserId }),
     detail: row.detail,
   };
   const text = `Plugin ${row.pluginName} ${row.action} ${row.outcome}`;

@@ -1,0 +1,253 @@
+/* The Artifacts library: filters and search beside the list, like Projects. */
+.artifact-library-content {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  align-items: start;
+  align-content: start;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-4) var(--space-6) var(--space-6);
+  overflow: auto;
+}
+
+.artifact-library-pane {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.artifact-library-search {
+  position: relative;
+}
+.artifact-library-search > svg {
+  position: absolute;
+  top: 50%;
+  left: var(--space-2-5);
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+.artifact-library-search input {
+  padding-left: var(--space-8);
+  font-size: var(--text-sm);
+}
+
+.artifact-library-filter {
+  width: 100%;
+}
+
+.artifact-library-hint {
+  display: flex;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  line-height: var(--leading-4);
+}
+.artifact-library-hint svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-top: var(--space-0-5);
+}
+
+.artifact-library-list {
+  min-height: 80px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface) 80%, transparent);
+}
+
+.artifact-library-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 14px;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 60px;
+  padding: var(--space-2-5) var(--space-4);
+  border-bottom: 1px solid var(--divider);
+  color: var(--foreground);
+  text-decoration: none;
+}
+.artifact-library-row:last-child {
+  border-bottom: 0;
+}
+.artifact-library-row:hover {
+  background: var(--accent);
+}
+.artifact-library-row:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: -2px;
+}
+
+.artifact-library-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-xs);
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+.artifact-library-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.artifact-library-row-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-0-5);
+  min-width: 0;
+}
+.artifact-library-row-content > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-5);
+}
+
+.artifact-library-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.artifact-library-meta small {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted-foreground);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-3);
+}
+.artifact-library-meta small svg {
+  width: 12px;
+  height: 12px;
+}
+.artifact-library-meta .artifact-library-source {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.artifact-library-source span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.artifact-library-badge {
+  padding: 0 var(--space-1-5);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted-foreground);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-4);
+  white-space: nowrap;
+}
+
+.artifact-library-chevron {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+
+.artifact-library-error {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--divider);
+  color: var(--destructive);
+  font-size: var(--text-sm);
+}
+
+/* One artifact, full height, its editor below the header. */
+.library-artifact-page {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+.library-artifact-page > .artifact-view,
+.library-artifact-page > section {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.library-artifact-missing {
+  margin: auto;
+}
+
+.library-artifact-source {
+  overflow: hidden;
+  max-width: 220px;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-artifact-share {
+  flex: none;
+}
+
+.library-share-menu {
+  width: 280px;
+}
+
+/* A phone: search, then filters, then the list, each full width. */
+@media (max-width: 767px) {
+  .artifact-library-content {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-3);
+    padding: var(--space-3);
+  }
+  .artifact-library-pane {
+    z-index: 1;
+    padding-bottom: var(--space-1);
+    background: var(--background);
+  }
+  .artifact-library-search input {
+    height: 44px;
+    font-size: var(--text-input-touch);
+  }
+  .artifact-library-hint {
+    display: none;
+  }
+  .artifact-library-row {
+    min-height: 64px;
+    padding: var(--space-3);
+  }
+  .library-artifact-source,
+  .library-artifact-share-label {
+    display: none;
+  }
+  /* Back and Share join the header, so the save state steps aside: edits
+     save on their own, and a failed save still shows here. */
+  .library-artifact-page .artifact-header {
+    gap: var(--space-0-5);
+    padding-right: var(--space-1);
+  }
+  .library-artifact-page .artifact-save:not([data-tone="warning"]) {
+    display: none;
+  }
+  .library-artifact-share {
+    width: 36px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
+/* The filters share the pane's width evenly. */
+.artifact-library-filter {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+}

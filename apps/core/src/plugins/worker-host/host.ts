@@ -32,7 +32,11 @@ import {
   startAgentThread,
   waitForAgentAnswer,
 } from "../agents/threads.js";
-import { insertPluginAudit, pluginAuditLogger } from "../audit/audit.js";
+import {
+  auditDetail,
+  insertPluginAudit,
+  pluginAuditLogger,
+} from "../audit/audit.js";
 import {
   insertPaneEvent,
   invalidatePluginPanes,
@@ -152,6 +156,12 @@ export interface PluginHostDependencies {
   /** The Thread the call runs in; absent for a webhook trigger. */
   readonly threadId?: string;
   readonly ownerUserId: string;
+  /**
+   * The person whose click started the call, when it was not the owner: a
+   * member of a shared Thread. It is `ctx.caller`, and every audit row the
+   * call writes records it as `actorUserId`.
+   */
+  readonly actorUserId?: string;
   /** Runs one of this Thread's dx tools; absent where no tool call is in reach. */
   readonly callTool?: (
     name: string,
@@ -188,7 +198,7 @@ export const pluginCallInfo = (
       pluginName: dependencies.install.name,
       version: dependencies.install.version,
     },
-    caller: { userId: dependencies.ownerUserId },
+    caller: { userId: dependencies.actorUserId ?? dependencies.ownerUserId },
     ...(dependencies.threadId === undefined
       ? {}
       : { threadId: dependencies.threadId }),
@@ -749,8 +759,10 @@ export class PluginHost extends RpcTarget {
     detail: Record<string, unknown>,
     target?: string,
   ) {
-    const { db, install, threadId, ownerUserId } = this.#dependencies;
+    const { db, install, threadId, ownerUserId, actorUserId } =
+      this.#dependencies;
     return insertPluginAudit(db, {
+      ...(actorUserId === undefined ? {} : { actorUserId }),
       pluginId: install.pluginId,
       pluginName: install.name,
       pluginVersion: install.version,
@@ -923,6 +935,9 @@ export class PluginHost extends RpcTarget {
       db,
       install,
       ownerUserId,
+      ...(dependencies.actorUserId === undefined
+        ? {}
+        : { actorUserId: dependencies.actorUserId }),
       definition: agent,
       prompt: message,
       // Named for the agent and its request: a run started here has no
@@ -1064,6 +1079,9 @@ export class PluginHost extends RpcTarget {
       install,
       threadId,
       ownerUserId: dependencies.ownerUserId,
+      ...(dependencies.actorUserId === undefined
+        ? {}
+        : { actorUserId: dependencies.actorUserId }),
       gate: shellGate,
       isOpen: () => this.#open,
     });
@@ -1102,7 +1120,7 @@ export class PluginHost extends RpcTarget {
       audited?: true;
     }>,
   ): Promise<T> {
-    const { db, install, ownerUserId, threadId } = this.#check();
+    const { db, install, ownerUserId, threadId, actorUserId } = this.#check();
     const target =
       targetId === undefined || targetId === null ? threadId : targetId;
     const audit = (
@@ -1110,6 +1128,7 @@ export class PluginHost extends RpcTarget {
       detail?: Record<string, unknown>,
     ) =>
       insertPluginAudit(db, {
+        ...(actorUserId === undefined ? {} : { actorUserId }),
         pluginId: install.pluginId,
         pluginName: install.name,
         pluginVersion: install.version,
@@ -1258,7 +1277,9 @@ export class PluginHost extends RpcTarget {
           threadId ?? null,
           action,
           reach.id,
-          JSON.stringify({ chars: body.length }),
+          JSON.stringify(
+            auditDetail({ chars: body.length }, this.#dependencies.actorUserId),
+          ),
           now.toISOString(),
           new Date(now.getTime() - 60_000).toISOString(),
           THREAD_POSTS_PER_MINUTE,

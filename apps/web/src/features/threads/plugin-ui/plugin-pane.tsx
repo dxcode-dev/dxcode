@@ -5,12 +5,14 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { Lock } from "lucide-react";
 import * as React from "react";
+import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import type { PluginPaneFrameProps } from "../../../shared/ui/markdown-view-frame.js";
 import type { PluginPaneTab } from "../panes/pane-layout.js";
 import type { PluginPaneMenuProps } from "../panes/pane-views.js";
-import { pluginUiQueryOptions } from "../thread-queries.js";
+import { pluginUiQueryOptions, threadQueryOptions } from "../thread-queries.js";
 import {
   pluginPaneMessageMutationOptions,
   pluginPaneMessagesQueryOptions,
@@ -54,6 +56,22 @@ function PluginPaneBody({
   const post = useMutation(
     pluginPaneMessageMutationOptions(threadId, tab.plugin, tab.pane),
   );
+  // The Thread owner's personal plugin: a member sees it, without controls.
+  const { identity } = useAuthenticatedIdentity();
+  const ownerOnly =
+    useQuery({
+      ...pluginUiQueryOptions(threadId),
+      select: (data) =>
+        data.panes?.find(
+          (entry) => entry.plugin === tab.plugin && entry.pane === tab.pane,
+        )?.ownerOnly === true,
+    }).data === true;
+  const ownerName = useQuery({
+    ...threadQueryOptions(identity.id, threadId),
+    enabled: false,
+    select: (thread) =>
+      thread.participants?.find(({ owner }) => owner)?.name ?? "the owner",
+  }).data;
   // A failed refetch keeps the pane it already shows.
   if (view.data === undefined && view.isError)
     return (
@@ -78,15 +96,27 @@ function PluginPaneBody({
     if (current !== undefined) listener(current);
     return unsubscribe;
   };
-  return (
+  const frame = (
     <React.Suspense fallback={<div className="plugin-pane-state" />}>
       <PaneFrame
         html={view.data.html}
         title={tab.title}
         subscribeMessages={subscribeMessages}
-        {...(canPost ? { onPost: post.mutateAsync } : {})}
+        {...(canPost && !ownerOnly ? { onPost: post.mutateAsync } : {})}
       />
     </React.Suspense>
+  );
+  if (!ownerOnly) return frame;
+  return (
+    <div className="plugin-pane-archived" data-owner-only="">
+      <p className="plugin-pane-read-only" role="status">
+        <Lock aria-hidden="true" />
+        Only {ownerName ?? "the owner"} can use this plugin here.
+      </p>
+      <div className="plugin-pane-archived-frame" inert>
+        {frame}
+      </div>
+    </div>
   );
 }
 

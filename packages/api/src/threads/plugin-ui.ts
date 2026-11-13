@@ -225,6 +225,11 @@ export const PluginPaneEntry = Schema.Struct({
   version: Text(200),
   /** The latest request from the plugin's code to open it, if recent. */
   openedAt: Schema.optional(Schema.String),
+  /**
+   * The Thread owner's personal plugin, seen by a member: only the owner
+   * may send it messages, so the pane shows without controls.
+   */
+  ownerOnly: Schema.optional(Schema.Literal(true)),
 });
 
 export type PluginPaneEntry = typeof PluginPaneEntry.Type;
@@ -332,6 +337,10 @@ export const PluginThreadUiErrorResponseSchema = Schema.Union([
   errorResponse(
     "PLUGIN_PROMPT_OWNER_ONLY",
     "Only the Thread's owner can answer this plugin question.",
+  ),
+  errorResponse(
+    "PLUGIN_UI_OWNER_ONLY",
+    "This is the Thread owner's own plugin: only they can use it here.",
   ),
   errorResponse(
     "PLUGIN_COMMAND_NOT_FOUND",

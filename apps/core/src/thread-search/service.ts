@@ -293,6 +293,8 @@ export const searchThreads = async (
     const parameters = new Parameters();
     const clauses = [
       "thread.lifecycle_state != 'deleted'",
+      // An artifact home is not a Thread; its artifact lists in the library.
+      "thread.artifact_home = 0",
       accessClause(scope, parameters),
       ...filterClauses(parsed.filters, scope, parameters),
       ...extra(parameters),

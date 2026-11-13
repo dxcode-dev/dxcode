@@ -16,8 +16,14 @@
  *     menus show; people lack an avatar or their @username.
  * 10. The active row scrolls out of sight, the menu runs off the bottom of
  *     the editor instead of opening above the caret, or past a phone's edge.
+ * 11. `/` Project opens no picker, the picker lists other Projects than the
+ *     reader's or does not filter, arrows and Enter do not pick, Escape
+ *     leaves it open or writes a chip, or the chip it writes is not saved as
+ *     `{{project:ID|Name}}`.
+ * 12. A project chip links a Project the reader's list lacks, or clicking a
+ *     linked one does not open its Project.
  */
-import type { ThreadArtifact, ThreadMemberData } from "@dx/api";
+import type { ProjectData, ThreadArtifact, ThreadMemberData } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -26,10 +32,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
 import { createQueryClient } from "../../../shared/query/query-client.js";
+import { projectKeys } from "../../projects/project-queries.js";
 import { threadKeys } from "../../threads/thread-queries.js";
 import { ArtifactEditor } from "./artifact-editor.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+const router = vi.hoisted(() => ({ navigate: vi.fn() }));
+vi.mock("@tanstack/react-router", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tanstack/react-router")>()),
+  useNavigate: () => router.navigate,
+}));
 
 const threadId = "thr_00000000-0000-4000-8000-0000000000c1" as ThreadId;
 const userId = "usr_viewer" as UserId;
@@ -47,6 +60,20 @@ const MEMBERS = [
   member("usr_ada", "Ada Lovelace", "ada"),
   member("usr_grace", "Grace Hopper", "grace"),
 ];
+
+const project = (id: number, name: string) =>
+  ({
+    id: `prj_00000000-0000-4000-8000-${String(id).padStart(12, "0")}`,
+    name,
+  }) as ProjectData;
+
+const PROJECTS = [
+  project(1, "Docs site"),
+  project(2, "Web app"),
+  project(3, "Website builder"),
+];
+/** A Project the viewer's list does not hold. */
+const OTHER = project(9, "Someone else's");
 
 const artifact = (): ThreadArtifact => ({
   id: `art_${"c".repeat(32)}`,
@@ -69,12 +96,17 @@ afterEach(async () => {
   root = undefined;
   document.body.replaceChildren();
   vi.unstubAllGlobals();
+  router.navigate.mockClear();
 });
 
 const mount = async (markdown: string, width?: number) => {
   vi.stubGlobal("fetch", () => new Promise<Response>(() => {}));
   const client = createQueryClient();
   client.setQueryData(threadKeys.members(userId, threadId), MEMBERS);
+  client.setQueryData(projectKeys.lists(userId), {
+    pages: [{ items: PROJECTS, nextCursor: undefined }],
+    pageParams: [undefined],
+  });
   const container = document.body.appendChild(document.createElement("div"));
   container.style.height = "800px";
   container.style.display = "flex";
@@ -290,7 +322,7 @@ describe("the menus' look (#1651)", () => {
     await type("/");
     const list = document.querySelector(".artifact-suggest");
     await type("{ArrowUp}");
-    expect(active()).toContain("Toggle");
+    expect(active()).toContain("Project");
     const row = document.querySelector(
       ".artifact-suggest [role=option][aria-selected=true]",
     );
@@ -329,5 +361,109 @@ describe("the menus' look (#1651)", () => {
     expect(ada?.querySelector(".dx-avatar")?.textContent).toBe("AL");
     expect(ada?.textContent).toContain("Ada Lovelace");
     expect(ada?.textContent).toContain("@ada");
+  });
+});
+
+describe("the / Project chip", () => {
+  const picker = () =>
+    document.querySelector<HTMLElement>(".artifact-project-picker");
+  const projectOptions = () =>
+    [
+      ...document.querySelectorAll<HTMLElement>(
+        ".artifact-project-picker [role=option]",
+      ),
+    ].map((option) => option.textContent ?? "");
+  const highlighted = () =>
+    document.querySelector<HTMLElement>(
+      ".artifact-project-picker [role=option][data-highlighted]",
+    )?.textContent ?? "";
+
+  it("searches the reader's Projects, picks one with the keys, and saves its chip", async () => {
+    const { prose } = await mount("");
+    const saves: string[] = [];
+    vi.stubGlobal("fetch", (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") saves.push(String(init.body));
+      return new Promise<Response>(() => {});
+    });
+    await type("Ship ");
+    await type("/proj");
+    expect(options()[0]).toBe("Project");
+    await type("{Enter}");
+    expect(menu()).toBeNull();
+    expect(picker()).not.toBeNull();
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Search projects",
+    );
+    expect(projectOptions()).toEqual([
+      "Docs site",
+      "Web app",
+      "Website builder",
+    ]);
+    await type("web");
+    expect(projectOptions()).toEqual(["Web app", "Website builder"]);
+    await type("{ArrowDown}");
+    expect(highlighted()).toBe("Website builder");
+    await type("{Enter}");
+    expect(picker()).toBeNull();
+    const chip = prose.querySelector<HTMLElement>(
+      ".artifact-chip[data-kind=project]",
+    );
+    expect(chip?.textContent).toBe("Website builder");
+    expect(chip?.querySelector("svg")).not.toBeNull();
+    expect(chip?.dataset.linked).toBe("true");
+    expect(prose.textContent).not.toContain("/proj");
+    // Typing goes on after the chip.
+    expect(document.activeElement).toBe(prose);
+    await type("next");
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const saved = saves.map(
+      (body) => (JSON.parse(body) as { markdown: string }).markdown,
+    );
+    expect(saved.at(-1)).toBe(
+      `Ship {{project:${PROJECTS[2]?.id}|Website builder}} next\n`,
+    );
+  });
+
+  it("closes on Escape without a chip, back in the text", async () => {
+    const { prose } = await mount("");
+    await type("/project");
+    await type("{Enter}");
+    expect(picker()).not.toBeNull();
+    await type("{Escape}");
+    expect(picker()).toBeNull();
+    expect(prose.querySelector(".artifact-chip")).toBeNull();
+    expect(document.activeElement).toBe(prose);
+  });
+
+  it("is found by repo and repository too", async () => {
+    await mount("");
+    await type("/repo");
+    expect(options()).toContain("Project");
+  });
+
+  it("links only the reader's Projects, and a click opens one", async () => {
+    const { prose } = await mount(
+      `{{project:${PROJECTS[1]?.id}|Web app}} and {{project:${OTHER.id}|${OTHER.name}}}\n`,
+    );
+    const [mine, theirs] = [
+      ...prose.querySelectorAll<HTMLElement>(
+        ".artifact-chip[data-kind=project]",
+      ),
+    ];
+    expect(mine?.textContent).toBe("Web app");
+    expect(mine?.dataset.linked).toBe("true");
+    expect(mine?.getAttribute("role")).toBe("link");
+    expect(theirs?.textContent).toBe(OTHER.name);
+    expect(theirs?.dataset.linked).toBeUndefined();
+    expect(theirs?.getAttribute("role")).toBeNull();
+    if (theirs === undefined || mine === undefined)
+      throw new Error("Expected two chips.");
+    await userEvent.click(theirs);
+    expect(router.navigate).not.toHaveBeenCalled();
+    await userEvent.click(mine);
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: "/projects/$projectId",
+      params: { projectId: PROJECTS[1]?.id },
+    });
   });
 });

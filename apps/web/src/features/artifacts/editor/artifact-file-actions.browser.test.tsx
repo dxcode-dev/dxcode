@@ -194,7 +194,7 @@ describe("the switcher's file actions", () => {
     await userEvent.click(page.getByRole("menuitem", { name: "Copy Link" }));
     await settle(50);
     expect(copied).toEqual([
-      `${window.location.origin}/threads/${artifact.threadId}?artifact=${artifact.id}&sheet=artifact`,
+      `${window.location.origin}/artifacts/${artifact.id}`,
     ]);
   });
 });

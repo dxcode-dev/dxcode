@@ -1,6 +1,7 @@
 import type { ThreadArtifactComment } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
+import type { ProjectId, ThreadId } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "@tanstack/react-router";
 import {
   ArrowDown,
   ArrowUp,
@@ -90,7 +91,12 @@ import {
   tableAction,
   turnBlockInto,
 } from "./block-commands.js";
-import { ChipInsertItems, ChipPicker, ViewFrames } from "./chip-picker.js";
+import {
+  ChipInsertItems,
+  ChipPicker,
+  ProjectChipPicker,
+  ViewFrames,
+} from "./chip-picker.js";
 import { DRAFT_COMMENT } from "./comment-highlights.js";
 import { useCommentPeople } from "./comment-people.js";
 import { ExportMenu } from "./export-menu.js";
@@ -478,6 +484,7 @@ const artifactEditorProps = (
   session: ArtifactSession,
   readOnly: boolean,
   openComments: () => void,
+  openProject: (projectId: string, newTab: boolean) => void,
 ): Omit<DirectEditorProps, "state"> => ({
   editable: () => !readOnly,
   // Placeholders while editing; embedded boards below their links always.
@@ -490,6 +497,10 @@ const artifactEditorProps = (
     // A reader may still flip toggles; only editors open pickers.
     onChip: (pos, chip) => {
       if (!readOnly || chip.kind === "toggle") session.onChip(pos, chip);
+    },
+    // Editors and readers alike open a Project they can reach.
+    openProject: (projectId, newTab) => {
+      if (session.projectLinked(projectId)) openProject(projectId, newTab);
     },
     showView: session.showView,
     setImageAlt: session.setImageAlt,
@@ -998,6 +1009,20 @@ function useCommentDraft(session: ArtifactSession) {
  * The block editor for one artifact: edits save on their own, and a newer
  * revision someone else saved merges into what is on screen.
  */
+/** Opens a project chip's Project, here or in a new tab. */
+const useOpenProject = () => {
+  const navigate = useNavigate();
+  return (projectId: string, newTab: boolean) => {
+    if (newTab)
+      window.open(`/projects/${projectId}`, "_blank", "noopener,noreferrer");
+    else
+      void navigate({
+        to: "/projects/$projectId",
+        params: { projectId: projectId as ProjectId },
+      });
+  };
+};
+
 export function ArtifactEditor({
   threadId,
   initial,
@@ -1062,6 +1087,7 @@ export function ArtifactEditor({
   const host = React.useRef<HTMLDivElement>(null);
   const page = React.useRef<HTMLDivElement>(null);
   const view = React.useRef<EditorView>(undefined);
+  const openProject = useOpenProject();
 
   useMountEffect(() => {
     const mount = host.current;
@@ -1069,7 +1095,7 @@ export function ArtifactEditor({
     if (mount === null || pageNode === null) return;
     const editor = new EditorView(mount, {
       state: session.state,
-      ...artifactEditorProps(session, readOnly, dropDraft),
+      ...artifactEditorProps(session, readOnly, dropDraft, openProject),
     });
     view.current = editor;
     session.attach(editor, pageNode);
@@ -1079,7 +1105,7 @@ export function ArtifactEditor({
     holdArtifactSession(queryClient, threadId, initial, session);
     const stopFollowing = session.followQuery();
     const stopComments = session.followComments();
-    const stopPeople = session.followPeople(identity.id);
+    const stopViewer = session.followViewer(identity.id);
     const warn = (event: BeforeUnloadEvent) => {
       if (session.dirty) event.preventDefault();
     };
@@ -1095,7 +1121,7 @@ export function ArtifactEditor({
       pageNode.removeEventListener("scroll", session.refreshLayout, true);
       stopFollowing();
       stopComments();
-      stopPeople();
+      stopViewer();
       session.detach(editor);
       releaseArtifactSession(queryClient, threadId, initial, session);
       editor.destroy();
@@ -1253,6 +1279,9 @@ export function ArtifactEditor({
             )}
             {readOnly ? null : (
               <ChipPicker session={session} open={snapshot.chip} />
+            )}
+            {readOnly ? null : (
+              <ProjectChipPicker session={session} open={snapshot.project} />
             )}
             {readOnly || handle === undefined ? null : (
               <BlockHandle

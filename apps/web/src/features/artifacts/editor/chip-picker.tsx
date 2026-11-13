@@ -1,10 +1,17 @@
 import type { ThreadId } from "@dx/domain";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowUp, Check, Pencil, Trash2, X } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
+import {
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxRoot,
+  ComboboxSearch,
+} from "../../../shared/ui/combobox.js";
 import { Input } from "../../../shared/ui/input.js";
 import { MarkdownView } from "../../../shared/ui/markdown-view.js";
 import {
@@ -15,6 +22,8 @@ import {
   MenuSubmenuTrigger,
 } from "../../../shared/ui/menu.js";
 import { PopoverContent, PopoverRoot } from "../../../shared/ui/popover.js";
+import { ProjectsIcon } from "../../../shared/ui/projects-icon.js";
+import { projectsQueryOptions } from "../../projects/project-queries.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import {
   CHIP_COLORS,
@@ -336,6 +345,86 @@ export function ChipPicker({
             if (close === true) session.closeChip();
           }}
         />
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
+interface ProjectOption {
+  readonly id: string;
+  readonly name: string;
+}
+
+/** The reader's Projects to search, as the sidebar lists them. */
+function ProjectOptions({ session }: { readonly session: ArtifactSession }) {
+  const { identity } = useAuthenticatedIdentity();
+  const projects = useInfiniteQuery(projectsQueryOptions(identity.id));
+  const items: ReadonlyArray<ProjectOption> = (
+    projects.data?.pages ?? []
+  ).flatMap((page) =>
+    page.items.map((project) => ({ id: project.id, name: project.name })),
+  );
+  return (
+    <ComboboxRoot
+      inline
+      open
+      autoHighlight
+      items={items}
+      itemToStringLabel={(project: ProjectOption) => project.name}
+      onValueChange={(project: ProjectOption | null) => {
+        if (project !== null) session.insertProject(project);
+      }}
+    >
+      <ComboboxSearch
+        placeholder="Search projects"
+        aria-label="Search projects"
+      />
+      <ComboboxEmpty>
+        {projects.isPending
+          ? "Loading projects…"
+          : projects.isError
+            ? "Couldn't load your projects."
+            : "No matching projects."}
+      </ComboboxEmpty>
+      <ComboboxList aria-label="Projects">
+        {(project: ProjectOption) => (
+          <ComboboxItem key={project.id} value={project} check={false}>
+            <ProjectsIcon />
+            <span className="dx-picker-item-label">{project.name}</span>
+          </ComboboxItem>
+        )}
+      </ComboboxList>
+    </ComboboxRoot>
+  );
+}
+
+/**
+ * `/` Project's picker at the caret: type to search the reader's Projects,
+ * arrows and Enter (or a click) insert one's chip, Escape goes back.
+ */
+export function ProjectChipPicker({
+  session,
+  open,
+}: {
+  readonly session: ArtifactSession;
+  readonly open: ArtifactSessionSnapshot["project"];
+}) {
+  if (open === undefined) return null;
+  return (
+    <PopoverRoot
+      open
+      onOpenChange={(next) => {
+        if (!next) session.closeProjectPicker();
+      }}
+    >
+      <PopoverContent
+        anchor={session.caretAnchor(open.pos)}
+        side="bottom"
+        align="start"
+        className="artifact-project-picker"
+        aria-label="Insert project"
+      >
+        <ProjectOptions session={session} />
       </PopoverContent>
     </PopoverRoot>
   );

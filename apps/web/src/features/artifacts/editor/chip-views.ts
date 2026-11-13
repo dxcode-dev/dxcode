@@ -17,6 +17,7 @@ import {
 export type NodeViews = NonNullable<EditorProps["nodeViews"]>;
 
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import { PROJECTS_ICON_PATH } from "../../../shared/ui/projects-icon.js";
 import {
   type Chip,
   chipTag,
@@ -31,6 +32,8 @@ const TOOL_CLASS = `${buttonVariants({ variant: "subtle", size: "xs" })} artifac
 export interface ChipViewHost {
   /** A chip was clicked: open its picker (or flip it, for a toggle). */
   readonly onChip: (pos: number, chip: Chip) => void;
+  /** A project chip was clicked: open its Project, if the reader can. */
+  readonly openProject: (projectId: string, newTab: boolean) => void;
   /** Sets an image's alt text. */
   readonly setImageAlt: (pos: number, alt: string) => void;
   /** Shows a `dx-view` block's HTML in `container`; returns its updater. */
@@ -62,10 +65,29 @@ export const chipLabel = (chip: Chip): string => {
       return chip.options.find((option) => option.selected)?.label ?? "Select…";
     case "toggle":
       return chip.label;
+    case "project":
+      return chip.name;
     case "mention":
     case "agent":
       return `@${chip.name}`;
   }
+};
+
+/** The Projects icon, as the sidebar draws it. */
+const projectIcon = () => {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add("artifact-chip-icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", PROJECTS_ICON_PATH);
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("stroke-width", "1.6");
+  svg.append(path);
+  return svg;
 };
 
 class ChipView implements NodeView {
@@ -82,7 +104,9 @@ class ChipView implements NodeView {
       event.preventDefault();
       const position = this.getPos();
       const chip = parseChip(String(this.dom.dataset.source));
-      if (position !== undefined && chip !== undefined)
+      if (chip?.kind === "project")
+        this.host.openProject(chip.projectId, event.metaKey || event.ctrlKey);
+      else if (position !== undefined && chip !== undefined)
         this.host.onChip(position, chip);
     });
     this.#show(node);
@@ -95,7 +119,6 @@ class ChipView implements NodeView {
     this.dom.classList.add("artifact-chip");
     this.dom.dataset.source = source;
     this.dom.dataset.kind = chip?.kind ?? "text";
-    this.dom.setAttribute("role", "button");
     this.dom.tabIndex = -1;
     const color =
       chip?.kind === "dropdown"
@@ -104,7 +127,13 @@ class ChipView implements NodeView {
     if (color === undefined) delete this.dom.dataset.color;
     else this.dom.dataset.color = color;
     this.dom.textContent = chip === undefined ? source : chipLabel(chip);
-    this.dom.title = chip?.kind === "time" ? chip.instant : "";
+    // A project chip's role and title come from `projectLinks`, when the
+    // reader can open its Project.
+    if (chip?.kind === "project") this.dom.prepend(projectIcon());
+    else {
+      this.dom.setAttribute("role", "button");
+      this.dom.title = chip?.kind === "time" ? chip.instant : "";
+    }
   }
 
   update(node: Node) {
@@ -398,6 +427,43 @@ export const chipToggles = new Plugin<ReadonlySet<string>>({
             }),
           );
       }
+      return DecorationSet.create(state.doc, decorations);
+    },
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Project chips: which Projects this reader can open, as their Project list
+// holds them. A chip of another Project shows its saved name, unlinked.
+
+export const projectLinksKey = new PluginKey<ReadonlySet<string>>(
+  "artifactProjectLinks",
+);
+
+export const projectLinks = new Plugin<ReadonlySet<string>>({
+  key: projectLinksKey,
+  state: {
+    init: () => new Set(),
+    apply: (tr, known) =>
+      (tr.getMeta(projectLinksKey) as ReadonlySet<string> | undefined) ?? known,
+  },
+  props: {
+    decorations: (state) => {
+      const known = projectLinksKey.getState(state) ?? new Set<string>();
+      if (known.size === 0) return DecorationSet.empty;
+      const decorations: Decoration[] = [];
+      state.doc.descendants((node, pos) => {
+        if (node.type.name !== "chip") return;
+        const chip = parseChip(String(node.attrs.source));
+        if (chip?.kind === "project" && known.has(chip.projectId))
+          decorations.push(
+            Decoration.node(pos, pos + node.nodeSize, {
+              "data-linked": "true",
+              role: "link",
+              title: `Open ${chip.name}`,
+            }),
+          );
+      });
       return DecorationSet.create(state.doc, decorations);
     },
   },

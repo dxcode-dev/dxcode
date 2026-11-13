@@ -293,6 +293,8 @@ export const pluginShellRunner = (input: {
   readonly install: PluginInstallRecord;
   readonly threadId: string;
   readonly ownerUserId: string;
+  /** The member whose click started the call, for the audit. */
+  readonly actorUserId?: string;
   readonly gate: PluginShellGate;
   readonly isOpen: () => boolean;
   /** Tests replace the Orb. */
@@ -314,6 +316,9 @@ export const pluginShellRunner = (input: {
     if (outcome === "rejected" && ++refusals > REFUSALS_AUDITED)
       return Promise.resolve();
     return insertPluginAudit(input.db, {
+      ...(input.actorUserId === undefined
+        ? {}
+        : { actorUserId: input.actorUserId }),
       pluginId: input.install.pluginId,
       pluginName: input.install.name,
       pluginVersion: input.install.version,

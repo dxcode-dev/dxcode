@@ -92,6 +92,14 @@ const page = {
     "NewThreadPage",
   ),
   thread: lazyRouteComponent(() => import("./thread-route.js"), "ThreadRoute"),
+  artifactLibrary: lazyRouteComponent(
+    () => import("./artifact-library-route.js"),
+    "ArtifactLibraryRoute",
+  ),
+  libraryArtifact: lazyRouteComponent(
+    () => import("./artifact-library-route.js"),
+    "LibraryArtifactRoute",
+  ),
   bugReports: lazyRouteComponent(
     () => import("./features/threads/bug-reports/bug-report-page.js"),
     "BugReportsRoute",
@@ -261,6 +269,19 @@ const projectRoute = createRoute({
   },
   component: page.project,
   ...projectRouteStates,
+});
+
+const artifactLibraryRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/artifacts",
+  component: page.artifactLibrary,
+});
+
+// Every artifact's shareable link; it opens for whoever may open it.
+const libraryArtifactRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/artifacts/$artifactId",
+  component: page.libraryArtifact,
 });
 
 const bugReportsRoute = createRoute({
@@ -677,6 +698,8 @@ const routeTree = rootRoute.addChildren([
     threadRoute,
     threadTreeRedirectRoute,
     huddleLinkRoute,
+    artifactLibraryRoute,
+    libraryArtifactRoute,
     bugReportsRoute,
     bugReportRoute,
     allBugReportsRoute,
