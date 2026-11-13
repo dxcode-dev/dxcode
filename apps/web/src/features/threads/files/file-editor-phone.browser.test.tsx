@@ -112,8 +112,12 @@ it("moves Home to the first non-blank, then column 0", async () => {
 
 it("selects to the first non-blank with Shift+Home, then column 0", async () => {
   await tap(editor.line(13), 100);
-  await editor.type("{End}{Shift>}{Home}{/Shift}C");
+  // End moves the browser's caret, which the editor learns of on the next
+  // selectionchange; a person never presses Shift+Home before that.
+  await editor.type("{End}");
+  await editor.type("{Shift>}{Home}{/Shift}C");
   expect(editor.text()).toBe(withLines({ 13: "    C" }));
-  await editor.type("{End}{Shift>}{Home}{Home}{/Shift}D");
+  await editor.type("{End}");
+  await editor.type("{Shift>}{Home}{Home}{/Shift}D");
   expect(editor.text()).toBe(withLines({ 13: "D" }));
 });

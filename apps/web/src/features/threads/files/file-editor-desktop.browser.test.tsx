@@ -61,7 +61,9 @@ it("moves Home to the first non-blank, then column 0, and Shift+Home selects", a
   await click(editor.line(13), 100);
   await editor.type("{Home}A");
   expect(editor.text()).toBe(withLines({ 13: "    Aconst needle = 1;" }));
-  await editor.type("{End}{Shift>}{Home}{/Shift}C");
+  // As a person would, after the editor sees where End put the caret.
+  await editor.type("{End}");
+  await editor.type("{Shift>}{Home}{/Shift}C");
   expect(editor.text()).toBe(withLines({ 13: "    C" }));
   await editor.type("{Home}{Home}B");
   expect(editor.text()).toBe(withLines({ 13: "B    C" }));
