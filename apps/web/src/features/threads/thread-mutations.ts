@@ -828,8 +828,19 @@ const withThreadUpdate = <Cached extends ThreadData>(
   const titlePending =
     update.title === undefined ? thread.titlePending : undefined;
   const color = update.color === undefined ? thread.color : update.color;
+  // A model change shows at once in the Thread's detail; lists hold none.
+  const agentInitialization =
+    update.selection !== undefined && "agentInitialization" in thread
+      ? {
+          agentInitialization: {
+            ...(thread.agentInitialization as ThreadDetailData["agentInitialization"]),
+            selection: update.selection,
+          },
+        }
+      : {};
   return {
     ...rest,
+    ...agentInitialization,
     title,
     ...(titlePending === undefined ? {} : { titlePending }),
     ...(color === null || color === undefined ? {} : { color }),

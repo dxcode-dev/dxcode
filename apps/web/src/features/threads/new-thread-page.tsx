@@ -5,12 +5,10 @@ import type {
   UpdatePersonalComposerDefaultsRequest,
 } from "@dx/api";
 import {
-  CLAUDE_CODE_DEFAULT_EFFORT,
-  type ClaudeCodeEffort,
-  type ModeId,
   ModelId,
   type ProjectId,
   type RunnerProfileId,
+  type ThinkingLevel,
   type ThreadId,
   type ThreadVisibility,
   type UserId,
@@ -62,6 +60,11 @@ import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { attachmentsUploading } from "./image-attachments.js";
 import { InsertCurrentThreadButton } from "./insert-current-thread.js";
+import {
+  modeSlot,
+  RECOMMENDED_MODE,
+  resolvedPick,
+} from "./model-picker-options.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
 import { useDraftImages } from "./new-thread-draft-images.js";
 import { getBrowserNewThreadDraftStore } from "./new-thread-draft-store.js";
@@ -285,21 +288,22 @@ function useComposerProjects(
 }
 
 /**
- * Mode and model choices made in this composer. `undefined` means "not
- * chosen yet", so the remembered value (or default) is derived during render.
+ * The model and effort chosen in this composer. `undefined` means "not
+ * chosen yet", so the remembered value (or Recommended) is derived during
+ * render. Someone whose composer last started on a retired mode other than
+ * Medium starts on that mode's model and effort, picked as a model.
  */
 function useComposerModeSelection(
   userId: UserId,
   remembered: PersonalComposerDefaultsData,
   rememberComposer: (input: UpdatePersonalComposerDefaultsRequest) => void,
 ) {
-  const [chosenProfile, setChosenProfile] = React.useState<ModeId>();
   const [chosenModel, setChosenModel] = React.useState<
     { readonly value: string | undefined } | undefined
   >();
-  // Last mode/model selection sent from this composer. Deduping against it
-  // (not the query cache, which updates asynchronously) keeps rapid changes
-  // from dropping the final choice.
+  // Last model selection sent from this composer. Deduping against it (not
+  // the query cache, which updates asynchronously) keeps rapid changes from
+  // dropping the final choice.
   const lastSentSelection = React.useRef<string | undefined>(undefined);
   const rememberSelection = (
     key: string,
@@ -309,40 +313,42 @@ function useComposerModeSelection(
     lastSentSelection.current = key;
     rememberComposer(input);
   };
-  const [effort, chooseEffort] = React.useState<ClaudeCodeEffort>(
-    CLAUDE_CODE_DEFAULT_EFFORT,
-  );
+  const [chosenEffort, chooseEffort] = React.useState<ThinkingLevel>();
   const [chosenPlan, chooseClaudePlan] = React.useState<string>();
-  // A plugin's agent mode, chosen for this composer only; any mode or model
-  // choice replaces it.
+  // A plugin's agent mode, chosen for this composer only; any model choice
+  // replaces it.
   const [pluginAgentMode, choosePluginAgentMode] = React.useState<string>();
   const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(userId));
   const pluginAgentModesQuery = useQuery(pluginAgentModesQueryOptions(userId));
-  const profile = chosenProfile ?? startingMode(remembered.mode);
+  const rememberedMode = startingMode(remembered.mode);
+  const carriedSlot =
+    rememberedMode === RECOMMENDED_MODE
+      ? undefined
+      : modeSlot(choicesQuery.data, rememberedMode);
+  const rememberedModel = startingModel(
+    remembered.model,
+    choicesQuery.data?.models.map(({ canonical }) => canonical),
+  );
+  const carried =
+    chosenModel === undefined &&
+    rememberedModel === undefined &&
+    carriedSlot !== undefined;
   const model =
-    chosenModel === undefined
-      ? startingModel(
-          remembered.model,
-          choicesQuery.data?.models.map(({ canonical }) => canonical),
-        )
-      : chosenModel.value;
-  const chooseProfile = (nextProfile: ModeId) => {
-    choosePluginAgentMode(undefined);
-    setChosenProfile(nextProfile);
-    // Choosing a mode replaces any pinned model, including one that is
-    // remembered but hidden because it is not currently offered.
-    setChosenModel({ value: undefined });
-    rememberSelection(`mode:${nextProfile}`, {
-      mode: nextProfile,
-      model: null,
-    });
-  };
+    chosenModel !== undefined
+      ? chosenModel.value
+      : (rememberedModel ?? carriedSlot?.config.model);
+  const effort =
+    chosenEffort ?? (carried ? carriedSlot?.config.thinking : undefined);
   const chooseModel = (nextModel: string | undefined) => {
-    if (nextModel !== undefined) choosePluginAgentMode(undefined);
+    choosePluginAgentMode(undefined);
     setChosenModel({ value: nextModel });
-    // Clearing the model only happens alongside a mode choice, which
-    // saves both together.
-    if (nextModel === undefined) return;
+    if (nextModel === undefined) {
+      rememberSelection(`mode:${RECOMMENDED_MODE}`, {
+        mode: RECOMMENDED_MODE,
+        model: null,
+      });
+      return;
+    }
     const modelId = Schema.decodeUnknownOption(ModelId)(nextModel);
     if (Option.isSome(modelId))
       rememberSelection(`model:${modelId.value}`, {
@@ -351,12 +357,11 @@ function useComposerModeSelection(
   };
   return {
     choicesQuery,
-    profile,
+    profile: rememberedMode,
     model,
     effort,
     claudePlan: claudePlanPick(choicesQuery.data, chosenPlan).current
       ?.connectionId,
-    chooseProfile,
     chooseModel,
     chooseEffort,
     chooseClaudePlan,
@@ -511,7 +516,6 @@ function ScopedNewThreadModal({
     model,
     effort,
     claudePlan,
-    chooseProfile,
     chooseModel,
     chooseEffort,
     chooseClaudePlan,
@@ -597,12 +601,15 @@ function ScopedNewThreadModal({
       return;
     }
     try {
+      // Recommended is sent as the model and effort it stands for now, so
+      // the Thread keeps them even if Recommended changes later.
+      const pick = resolvedPick({ choices: choicesQuery.data, model, effort });
       await submitNewThread({
         submittedPrompt,
         effectiveProjectId,
         profile,
-        model,
-        effort,
+        model: pick?.model ?? model,
+        effort: pick?.effort,
         claudePlan,
         ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
         runnerProfileId: effectiveRunnerProfileId,
@@ -673,7 +680,6 @@ function ScopedNewThreadModal({
           loadingMoreProjects={projectsQuery.isFetchingNextPage}
           onLoadMoreProjects={() => void projectsQuery.fetchNextPage()}
           projectId={effectiveProjectId}
-          profile={profile}
           model={model}
           effort={effort}
           choices={choicesQuery.data}
@@ -710,7 +716,6 @@ function ScopedNewThreadModal({
               params: { section: "orb-providers" },
             })
           }
-          onProfileChange={chooseProfile}
           onModelChange={chooseModel}
           onEffortChange={chooseEffort}
           claudePlan={claudePlan}

@@ -86,6 +86,8 @@ if [ -e "$HOME/refuse-fork" ] && printf '%s\\n' "$@" | grep -qx -- --resume-sess
   cp "$HOME/claude-args" "$HOME/refused-args"
   echo "No message found with message.uuid of: refused" >&2
   printf '%s\\n' '{"type":"result","subtype":"error_during_execution","is_error":true}'
+  # Its result lands before it exits, and the runner's exit marker after.
+  sleep 1
   exit 1
 fi
 # The plan token as Claude Code reads it: from CLAUDE_CODE_OAUTH_TOKEN, or

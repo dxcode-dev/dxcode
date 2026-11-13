@@ -1,5 +1,5 @@
 import type { ChoicesData, OrbResolvedProvider } from "@dx/api";
-import type { ModeId, RunnerProfile, RunnerProfileId } from "@dx/domain";
+import type { RunnerProfile, RunnerProfileId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import {
   createMemoryHistory,
@@ -135,8 +135,6 @@ const mount = async (setup: {
         runnerProfileLoading={false}
         onRunnerProfileChange={vi.fn()}
         onConnectOrbProvider={vi.fn()}
-        profile={"medium" as ModeId}
-        onProfileChange={vi.fn()}
         model={setup.model}
         onModelChange={vi.fn()}
         choices={setup.choices}

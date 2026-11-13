@@ -105,6 +105,12 @@ export const createSettingsManifest = (
   });
 };
 
+/** Sections that moved, by their old slug, so saved links still open them. */
+const MOVED_SECTIONS: Readonly<Record<string, string>> = {
+  // The Mode Dial became Models when modes gave way to picking a model.
+  "mode-dial": "models",
+};
+
 export const resolveSettingsSection = (
   manifest: SettingsManifest,
   scope: SettingsScope,
@@ -114,10 +120,10 @@ export const resolveSettingsSection = (
   | { readonly found: false; readonly error: SettingsRouteNotFound } => {
   const registrations =
     scope === "personal" ? manifest.personal : manifest.workspace;
+  const slug =
+    section === undefined ? undefined : (MOVED_SECTIONS[section] ?? section);
   const registration = registrations.find((candidate) =>
-    section === undefined
-      ? candidate.slug === undefined
-      : candidate.slug === section,
+    slug === undefined ? candidate.slug === undefined : candidate.slug === slug,
   );
   return registration === undefined
     ? {

@@ -141,8 +141,23 @@ const fixtureMismatch = () =>
 const writtenPrompt = (text: string) =>
   parseMessageAuthor(text).text.replace(/^@dx\s+/, "");
 
+/**
+ * A notice Flue adds after the prompt, such as that the tools changed when a
+ * Thread moves from Claude Code to dx's own agent; never the prompt itself.
+ */
+const isSignal = (message: Context["messages"][number]) => {
+  if (message.role !== "user") return false;
+  const first =
+    typeof message.content === "string"
+      ? message.content
+      : message.content.find((block) => block.type === "text")?.text;
+  return first?.trimStart().startsWith("<signal") === true;
+};
+
 const promptFromContext = (context: Context) => {
-  const message = context.messages.findLast(({ role }) => role === "user");
+  const message = context.messages.findLast(
+    (candidate) => candidate.role === "user" && !isSignal(candidate),
+  );
   if (message?.role !== "user") return undefined;
   if (typeof message.content === "string")
     return writtenPrompt(message.content);

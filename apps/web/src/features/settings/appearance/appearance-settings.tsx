@@ -144,7 +144,7 @@ export function AppearanceSettings(_props: SettingsSectionProps) {
         />
         <SettingsRow
           title="UI Sounds"
-          description="Short sounds for dictation, the mode dial, and other interactions."
+          description="Short sounds for dictation and other interactions."
           control={
             <SettingsToggle
               label="UI Sounds"

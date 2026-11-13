@@ -37,12 +37,12 @@ vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
   useAuthenticatedIdentity: () => ({ identity: { id: "usr_test" } }),
 }));
 
-describe("mode dial settings", () => {
+describe("models settings", () => {
   it.each([
     undefined,
     Schema.decodeUnknownSync(WorkspaceShortName)("qa-workspace"),
   ])(
-    "shows sync state and resets an unsaved Auto-mode draft in scope %s",
+    "shows sync state and resets an unsaved Recommended draft in scope %s",
     async (workspaceSlug) => {
       router.search = {};
       router.data = {
@@ -87,48 +87,36 @@ describe("mode dial settings", () => {
             />,
           ),
         );
-        expect(
-          container
-            .querySelector(".mode-tuning-workbench")
-            ?.getAttribute("data-mode"),
-        ).toBe("medium");
         const select =
-          container.querySelector<HTMLSelectElement>("#mode-dial-model");
+          container.querySelector<HTMLSelectElement>("#models-medium");
         assert.exists(select);
         const button = (text: string) =>
           Array.from(container.querySelectorAll("button")).find(
             (element) => element.textContent?.trim() === text,
           );
-        const reset = button("Reset to default");
-        assert.exists(reset);
-        expect(reset.disabled).toBe(true);
-        expect(
-          container.querySelector("footer [role='status']")?.textContent,
-        ).toBe("In sync");
-        const edit = async () => {
+        const status = () =>
+          container.querySelector(".settings-form-actions > span")?.textContent;
+        expect(status()).toBe("In sync");
+        expect(button("Save")?.disabled).toBe(true);
+        const choose = async (value: string) => {
           await React.act(() => {
-            select.value = "openai/b";
+            select.value = value;
             select.dispatchEvent(new Event("change", { bubbles: true }));
           });
         };
-        await edit();
+        await choose("openai/b");
         expect(onDirtyChange).toHaveBeenLastCalledWith(true);
-        expect(
-          container.querySelector("footer [role='status']")?.textContent,
-        ).toBe("Unsaved changes");
-        expect(reset.disabled).toBe(false);
+        expect(status()).toBe("Unsaved changes");
         expect(button("Save")?.disabled).toBe(false);
-        await React.act(() => reset.click());
+        // Auto is the reset: back on Auto there is nothing to save.
+        await choose("auto");
         expect(select.value).toBe("auto");
-        expect(reset.disabled).toBe(true);
         expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-        expect(
-          container.querySelector("footer [role='status']")?.textContent,
-        ).toBe("In sync");
-        await edit();
+        expect(status()).toBe("In sync");
+        await choose("openai/b");
         await React.act(() => button("Discard")?.click());
         expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-        // An unpinned mode shows Auto, not the model Auto resolves to.
+        // An unpicked slot shows Auto, not the model Auto resolves to.
         expect(select.value).toBe("auto");
       } finally {
         await React.act(() => root.unmount());
@@ -139,7 +127,7 @@ describe("mode dial settings", () => {
   );
 
   it("names Auto's model as the catalog does when no connection serves it", async () => {
-    router.search = { mode: "low" };
+    router.search = {};
     const model = "cloudflare/@cf/zai-org/glm-5.3-flash";
     router.data = {
       profile: {
@@ -172,10 +160,18 @@ describe("mode dial settings", () => {
       await React.act(() =>
         root.render(<ModeDialSettings onDirtyChange={vi.fn()} />),
       );
-      const auto = container.querySelector<HTMLOptionElement>(
-        '#mode-dial-model option[value="auto"]',
+      // Older mode Threads' models stay hidden until asked for.
+      expect(container.querySelector("#models-low")).toBeNull();
+      const show = Array.from(container.querySelectorAll("button")).find(
+        (element) => element.textContent?.trim() === "Show",
       );
-      expect(auto?.textContent).toBe("Auto · GLM 5.3 Flash");
+      await React.act(() => show?.click());
+      for (const slot of ["medium", "low", "high", "ultra"]) {
+        const auto = container.querySelector<HTMLOptionElement>(
+          `#models-${slot} option[value="auto"]`,
+        );
+        expect(auto?.textContent, slot).toBe("Auto · GLM 5.3 Flash");
+      }
       expect(container.textContent).not.toContain("cloudflare/");
       expect(container.textContent).not.toContain("glm-5.3-flash");
     } finally {

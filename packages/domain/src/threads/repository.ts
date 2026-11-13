@@ -8,16 +8,21 @@ import type {
 } from "../persistence/errors.js";
 import type { ProjectId } from "../projects/project-id.js";
 import type { ProjectReader } from "../projects/project-reader.js";
+import type { ThreadModelPin } from "../settings/model-routing.js";
 import type { ThreadSourceAdmission } from "../source-control/source-control.js";
 import type { UserId } from "../users/user-id.js";
 import type { Thread, ThreadColor } from "./thread.js";
 import type { ThreadId } from "./thread-id.js";
 import type { ThreadTitle } from "./thread-title.js";
 
-/** Fields an owner may change; `color: null` returns the Thread to auto. */
+/**
+ * Fields an owner may change; `color: null` returns the Thread to auto.
+ * `selection` is the model and effort the Thread's next turn runs on.
+ */
 export interface ThreadUpdate {
   readonly title?: ThreadTitle;
   readonly color?: ThreadColor | null;
+  readonly selection?: typeof ThreadModelPin.Type;
 }
 
 export interface ThreadListRequest extends PageRequest {

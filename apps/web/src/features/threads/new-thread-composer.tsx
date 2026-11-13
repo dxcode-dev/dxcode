@@ -7,12 +7,11 @@ import type {
   ThreadMemberData,
 } from "@dx/api";
 import type {
-  ClaudeCodeEffort,
-  ModeId,
   ProjectId,
   RunnerProfile,
   RunnerProfileId,
   RunnerProviderPresentation,
+  ThinkingLevel,
   ThreadVisibility,
 } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
@@ -30,6 +29,7 @@ import {
   useAttachmentsUploading,
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
+import { RECOMMENDED_MODE } from "./model-picker-options.js";
 import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js";
 import { useNewThreadMentions } from "./new-thread-mentions.js";
 
@@ -58,8 +58,6 @@ export function NewThreadComposer({
   onRunnerProfileChange,
   onRunnerProfileRetry,
   onConnectOrbProvider,
-  profile,
-  onProfileChange,
   model,
   onModelChange,
   effort,
@@ -102,12 +100,12 @@ export function NewThreadComposer({
   readonly onRunnerProfileChange: (runnerProfileId: RunnerProfileId) => void;
   readonly onRunnerProfileRetry?: () => void;
   readonly onConnectOrbProvider?: () => void;
-  readonly profile: ModeId;
-  readonly onProfileChange: (profile: ModeId) => void;
+  /** The picked model; undefined is Recommended. */
   readonly model?: string;
   readonly onModelChange: (model: string | undefined) => void;
-  readonly effort?: ClaudeCodeEffort;
-  readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
+  /** The picked effort; undefined is the model's own default. */
+  readonly effort?: ThinkingLevel;
+  readonly onEffortChange?: (effort: ThinkingLevel) => void;
   readonly claudePlan?: string;
   readonly onClaudePlanChange?: (connectionId: string | undefined) => void;
   readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
@@ -161,7 +159,8 @@ export function NewThreadComposer({
     runnerProfiles,
     runnerProfileId,
     choices,
-    profile,
+    // Recommended is the mode slot Settings → Models edits.
+    profile: RECOMMENDED_MODE,
     model,
   });
   return (
@@ -229,7 +228,6 @@ export function NewThreadComposer({
         loadingMoreProjects={loadingMoreProjects}
         onLoadMoreProjects={onLoadMoreProjects}
         projectId={projectId}
-        profile={profile}
         model={model}
         effort={effort}
         choices={choices}
@@ -255,7 +253,6 @@ export function NewThreadComposer({
         onRunnerProfileChange={onRunnerProfileChange}
         onRunnerProfileRetry={onRunnerProfileRetry}
         onConnectOrbProvider={onConnectOrbProvider}
-        onProfileChange={onProfileChange}
         onModelChange={onModelChange}
         onEffortChange={onEffortChange}
         claudePlan={claudePlan}

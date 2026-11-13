@@ -1,8 +1,10 @@
 import {
+  GetThreadClaudePlanResponseSchema,
   GetThreadOrbMetricsResponseSchema,
   GetThreadOrbSessionsResponseSchema,
   GetThreadUsageRequestsResponseSchema,
   GetThreadUsageResponseSchema,
+  type ThreadClaudePlanData,
   type ThreadOrbMetricsData,
   type ThreadOrbSessionsData,
   type ThreadUsageData,
@@ -168,4 +170,21 @@ export const threadOrbMetricsQueryOptions = (
     queryKey: threadUsageKeys.orbMetrics(userId, threadId),
     queryFn: ({ signal }) => getThreadOrbMetrics(threadId, signal),
     staleTime: 30_000,
+  });
+
+/** The Claude plan a Claude Code Thread runs on; the owner's composer names it. */
+export const threadClaudePlanQueryOptions = (
+  userId: UserId,
+  threadId: ThreadId,
+) =>
+  queryOptions({
+    queryKey: ["threads", userId, "detail", threadId, "claude-plan"] as const,
+    queryFn: async ({ signal }): Promise<ThreadClaudePlanData> =>
+      (
+        await request(
+          `${threadPath(threadId)}/claude-plan`,
+          GetThreadClaudePlanResponseSchema,
+          { signal },
+        )
+      ).data,
   });

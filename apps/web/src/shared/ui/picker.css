@@ -288,4 +288,66 @@
     margin: 5px -5px;
     background: var(--divider);
   }
+
+  /* An item with a detail line: name (and trailing value) over a note. */
+  .dx-picker-item-detail {
+    display: flex;
+    flex: 1;
+    align-items: flex-start;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .dx-picker-item-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--space-4);
+    height: var(--leading-4-5);
+    color: var(--muted-foreground);
+  }
+  .dx-picker-item-icon svg {
+    width: 14px;
+    height: 14px;
+  }
+  .dx-picker-item-lines {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-0-5);
+    min-width: 0;
+  }
+  .dx-picker-item-title {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .dx-picker-item-trailing {
+    flex: none;
+    margin-left: auto;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+  }
+  .dx-picker-item-note {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* A setting of the chosen item, under the list. */
+  .dx-picker-footer {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-2-5);
+    border-top: 1px solid var(--divider);
+    font-size: var(--text-sm);
+  }
+  .dx-picker-footer-label {
+    color: var(--muted-foreground);
+  }
 }

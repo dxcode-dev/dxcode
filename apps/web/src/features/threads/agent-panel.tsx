@@ -893,6 +893,7 @@ function AgentComposer({
   draftLocked,
   images,
   errorCard,
+  modelControl,
   dockRef,
   mentions,
   onAbort,
@@ -926,6 +927,8 @@ function AgentComposer({
   readonly draftLocked: boolean;
   readonly images: ReadonlyArray<PendingAttachment>;
   readonly errorCard?: React.ReactNode;
+  /** The Thread's model picker; hidden while an earlier message is edited. */
+  readonly modelControl?: React.ReactNode;
   readonly dockRef: React.RefCallback<HTMLDivElement>;
   readonly onAbort: () => void;
   readonly onAddImages: (files: ReadonlyArray<File>) => void;
@@ -1093,6 +1096,7 @@ function AgentComposer({
             onRemove={onRemoveImage}
             disabled={draftLocked}
           />
+          {editing === undefined ? modelControl : null}
           <span className="composer-spacer" />
           {dictation.controls}
           {showSend ? (
@@ -1395,6 +1399,8 @@ export interface AgentPanelOptions {
       ) => React.ReactNode);
   /** The transcript's last line while no run is active. */
   readonly transcriptEnd?: React.ReactNode;
+  /** The Thread's model and effort, beside the composer's attachments. */
+  readonly composerModel?: React.ReactNode;
   /**
    * The composer quick-action row, which Clef Flash fills once the agent's
    * turn ends: present only while the deployment has Clef Flash and this
@@ -1848,6 +1854,7 @@ export function AgentPanel({
   workspaceReady = false,
   workspaceStatus,
   composerNotice,
+  composerModel,
   transcriptEnd,
   quickActions,
   optimisticCreation,
@@ -2097,6 +2104,7 @@ export function AgentPanel({
             images={isEditing ? [] : images}
             dockRef={composerDockRef}
             errorCard={errorCard}
+            modelControl={composerModel}
             mentions={mentions}
             onAbort={() => void stop()}
             onAddImages={(files) => void addImages(files)}

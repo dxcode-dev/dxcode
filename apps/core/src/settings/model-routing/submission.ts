@@ -246,6 +246,11 @@ export const resolveSelectionForUser = async (
   userId: UserId,
   selection: ThreadModelSelection,
   claudeConnectionId?: string,
+  /**
+   * An existing Thread changing its model keeps its own Claude plan, bound
+   * on its first Claude Code turn, so no plan is picked here.
+   */
+  options: { readonly pickClaudePlan?: boolean } = {},
 ) => {
   const db = bindings.DB;
   if (db === undefined) throw new Error("Model routing is not configured.");
@@ -279,12 +284,10 @@ export const resolveSelectionForUser = async (
       ? (overrides.get(selection.mode) ?? defaultProfile.modes[selection.mode])
           .agent.model
       : selection.model;
-  const claudePlan = await pickedClaudePlan(
-    db,
-    connections,
-    model,
-    claudeConnectionId,
-  );
+  const claudePlan =
+    options.pickClaudePlan === false
+      ? undefined
+      : await pickedClaudePlan(db, connections, model, claudeConnectionId);
   return {
     ...resolveSubmissionModel({
       selection,

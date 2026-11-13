@@ -743,6 +743,25 @@ function RetainedThreadSession({
   );
 }
 
+/** The composer's model picker, loaded after the Thread's first paint. */
+const ThreadModelControl = React.lazy(() =>
+  import("./thread-model-control.js").then(
+    ({ ThreadModelControl: Control }) => ({
+      default: Control,
+    }),
+  ),
+);
+
+/**
+ * The owner changes an active Thread's model from its composer. A Space's
+ * model is set in Settings, and other people send on the owner's model.
+ */
+const canChangeModel = (thread: ThreadDetailData) =>
+  (thread.access === undefined || thread.access === "owner") &&
+  thread.lifecycleState === "active" &&
+  thread.kind !== "space" &&
+  thread.projectDeleted !== true;
+
 function RetainedThreadSessionContent(props: ThreadSessionProps) {
   const entry = React.useContext(ThreadPresentationContext);
   if (entry === undefined)
@@ -1285,6 +1304,15 @@ function ThreadSessionContent({
             workspaceReady={thread.executionWorkspace.ready}
             workspaceStatus={workspaceStatus}
             composerNotice={composerNotice}
+            {...(canChangeModel(thread)
+              ? {
+                  composerModel: (
+                    <React.Suspense fallback={null}>
+                      <ThreadModelControl thread={thread} />
+                    </React.Suspense>
+                  ),
+                }
+              : {})}
             {...(quickActions === undefined ? {} : { quickActions })}
             optimisticCreation={optimisticCreation}
             onInitialSubmissionObserved={onInitialSubmissionObserved}

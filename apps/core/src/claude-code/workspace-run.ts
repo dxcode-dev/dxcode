@@ -54,6 +54,11 @@ const HEARTBEAT_CHECK_MS = 5_000;
 const HEARTBEAT_STALE_SECONDS = 90;
 const HEARTBEAT_OBSERVED_MS = 15_000;
 /**
+ * The CLI prints its result before it exits, and the runner writes the exit
+ * marker only after that: how long a finished run's marker may take.
+ */
+const EXIT_MARKER_MS = 15_000;
+/**
  * Reads skip the activity wrapper, so a live run writes this often to keep
  * the sandbox from pausing under Claude while it works: within half the
  * shortest idle deadline a deployment allows (one minute).
@@ -1277,13 +1282,23 @@ echo lost`)}`,
     return true;
   }
 
-  /** It wrote an exit code other than a stop's SIGTERM or SIGKILL. */
-  async exitedOnItsOwn() {
+  /**
+   * It wrote an exit code other than a stop's SIGTERM or SIGKILL. A run
+   * whose stream finished is still exiting until its marker lands, so that
+   * marker is awaited for a while, not taken as missing.
+   */
+  async exitedOnItsOwn(signal?: AbortSignal) {
     if (await this.stopped()) return false;
-    const code = (
-      await this.#sandbox.readFile(`${this.dir}/exit`).catch(() => "")
-    ).trim();
-    return code !== "" && code !== "143" && code !== "137";
+    const deadline =
+      Date.now() + (this.stream.finished && !this.#dead ? EXIT_MARKER_MS : 0);
+    for (;;) {
+      const code = (
+        await this.#sandbox.readFile(`${this.dir}/exit`).catch(() => "")
+      ).trim();
+      if (code !== "" || Date.now() >= deadline)
+        return code !== "" && code !== "143" && code !== "137";
+      await sleep(POLL_MS, signal);
+    }
   }
 
   /** Forget a session Claude could not resume, so the next attempt starts one. */

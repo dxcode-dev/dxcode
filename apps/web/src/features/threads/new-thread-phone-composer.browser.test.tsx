@@ -1,5 +1,5 @@
 import type { ProjectData } from "@dx/api";
-import type { ModeId, ProjectId, RunnerProfileId } from "@dx/domain";
+import type { ProjectId, RunnerProfileId } from "@dx/domain";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -9,9 +9,10 @@ import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js
 
 // The New Thread composer on a phone, with a coarse pointer:
 // - #1119: at 360x740 the mode menu ran 42px past the bottom of the screen,
-//   so "low" could not be chosen;
+//   so "low" could not be chosen; the model menu that replaced it must keep
+//   every model reachable;
 // - #1175: the Orb and mode chips shrank to bare icons, hiding the selected
-//   Orb provider, size, and mode. The provider now shows as its logo.
+//   Orb provider, size, and model. The provider now shows as its logo.
 // The strip sits where the phone /new page puts it: y=282 at 390x844 and
 // y=269 at 360x740, measured on the local app.
 
@@ -39,6 +40,41 @@ const runnerProfiles = [
   Parameters<typeof NewThreadConfigurationStrip>[0]["runnerProfiles"]
 >;
 
+const model = (canonical: string, name: string, connectionName: string) => ({
+  canonical,
+  name,
+  connectionId: `conn_${connectionName}`,
+  connectionName,
+  contextWindow: 200_000,
+  reasoning: true,
+  vision: false,
+});
+const choices = {
+  modes: ["low", "medium", "high", "ultra"].map((mode) => ({
+    mode,
+    config: { model: "openai/gpt-5.6-sol", thinking: "high" },
+    modelName: "GPT-5.6 Sol",
+    source: "default",
+    served: true,
+    servingConnectionName: "OpenAI API key",
+  })),
+  models: [
+    model("claude-code/claude-opus-5-5", "Claude Opus 5.5", "Claude Max"),
+    model("claude-code/claude-sonnet-5-5", "Claude Sonnet 5.5", "Claude Max"),
+    model("openai/gpt-5.6-sol", "GPT-5.6 Sol", "OpenAI API key"),
+    model("openai/gpt-5.6-terra", "GPT-5.6 Terra", "OpenAI API key"),
+    model("anthropic/claude-opus-5-5", "Claude Opus 5.5", "Anthropic API key"),
+    model(
+      "anthropic/claude-fable-5-1",
+      "Claude Fable 5.1",
+      "Anthropic API key",
+    ),
+  ],
+  claudePlans: [],
+} as unknown as NonNullable<
+  Parameters<typeof NewThreadConfigurationStrip>[0]["choices"]
+>;
+
 const PHONES = [
   { width: 390, height: 844, stripTop: 282 },
   { width: 360, height: 740, stripTop: 269 },
@@ -48,7 +84,10 @@ const box = (element: Element) => element.getBoundingClientRect();
 
 async function mountPhoneStrip(
   { width, height, stripTop }: (typeof PHONES)[number],
-  { model }: { readonly model?: string } = {},
+  {
+    model,
+    withChoices = false,
+  }: { readonly model?: string; readonly withChoices?: boolean } = {},
 ) {
   await page.viewport(width, height);
   await cdp().send("Emulation.setTouchEmulationEnabled", {
@@ -66,15 +105,15 @@ async function mountPhoneStrip(
     right: "12px",
   });
   const root = createRoot(container);
-  const profileChanged = vi.fn();
+  const modelChanged = vi.fn();
   function Harness() {
-    const [profile, setProfile] = React.useState<ModeId>("medium");
+    const [picked, setPicked] = React.useState(model);
     return (
       <NewThreadConfigurationStrip
         projects={projects}
         projectId={projectId}
-        profile={profile}
-        model={model}
+        {...(withChoices ? { choices } : {})}
+        model={picked}
         locked={false}
         submitting={false}
         ready
@@ -93,16 +132,15 @@ async function mountPhoneStrip(
         ]}
         runnerProfileId={"cf.standard-2" as RunnerProfileId}
         onRunnerProfileChange={() => undefined}
-        onModelChange={() => undefined}
-        onProfileChange={(next) => {
-          profileChanged(next);
-          setProfile(next);
+        onModelChange={(next) => {
+          modelChanged(next);
+          setPicked(next);
         }}
       />
     );
   }
   await React.act(() => root.render(<Harness />));
-  return { container, root, profileChanged };
+  return { container, root, modelChanged };
 }
 
 afterEach(async () => {
@@ -114,8 +152,10 @@ afterEach(async () => {
 describe.each(PHONES)(
   "the phone New Thread composer at $width x $height",
   (phone) => {
-    it("keeps the mode menu on screen so every mode can be chosen (#1119)", async () => {
-      const { container, root, profileChanged } = await mountPhoneStrip(phone);
+    it("keeps the model menu on screen so every model can be chosen (#1119)", async () => {
+      const { container, root, modelChanged } = await mountPhoneStrip(phone, {
+        withChoices: true,
+      });
       const trigger =
         container.querySelector<HTMLButtonElement>(".new-thread-mode");
       await React.act(() => trigger?.click());
@@ -123,7 +163,7 @@ describe.each(PHONES)(
         vi.waitFor(() =>
           expect(
             document
-              .querySelector(".reasoning-positioner")
+              .querySelector(".model-picker-positioner")
               ?.hasAttribute("data-side"),
           ).toBe(true),
         ),
@@ -131,34 +171,49 @@ describe.each(PHONES)(
       await React.act(
         () => new Promise((resolve) => requestAnimationFrame(resolve)),
       );
-      const popup = document.querySelector(".reasoning-popup") as HTMLElement;
+      const popup = document.querySelector(".model-picker") as HTMLElement;
       expect(box(popup).top).toBeGreaterThanOrEqual(0);
       expect(box(popup).bottom).toBeLessThanOrEqual(innerHeight);
+      expect(box(popup).left).toBeGreaterThanOrEqual(0);
+      expect(box(popup).right).toBeLessThanOrEqual(innerWidth);
+      // The effort row fits the popup: every effort can be tapped.
+      for (const button of document.querySelectorAll<HTMLElement>(
+        'fieldset[aria-label="Effort"] button',
+      )) {
+        expect(box(button).right, button.textContent ?? "").toBeLessThanOrEqual(
+          box(popup).right,
+        );
+        expect(box(button).width).toBeGreaterThan(0);
+      }
 
-      for (const mode of ["ultra", "high", "medium", "low"]) {
-        const option = [
-          ...document.querySelectorAll<HTMLElement>(".reasoning-option"),
-        ].find((element) => element.textContent?.startsWith(mode));
-        expect(option, mode).toBeDefined();
-        option?.scrollIntoView({ block: "nearest" });
-        const rect = box(option as HTMLElement);
-        expect(rect.bottom, mode).toBeLessThanOrEqual(innerHeight);
+      const options = [
+        ...document.querySelectorAll<HTMLElement>('[role="option"]'),
+      ];
+      // Recommended, two Claude Code models, and four raw models.
+      expect(options).toHaveLength(7);
+      for (const option of options) {
+        const name = option.textContent ?? "";
+        option.scrollIntoView({ block: "nearest" });
+        const rect = box(option);
+        expect(rect.bottom, name).toBeLessThanOrEqual(innerHeight);
         expect(
-          option?.contains(
+          option.contains(
             document.elementFromPoint(
               rect.left + rect.width / 2,
               rect.top + rect.height / 2,
             ),
           ),
-          `${mode} is the element at its own center`,
+          `${name} is the element at its own center`,
         ).toBe(true);
       }
 
-      const low = [
-        ...document.querySelectorAll<HTMLElement>(".reasoning-option"),
-      ].find((element) => element.textContent?.startsWith("low"));
-      await React.act(() => low?.click());
-      expect(profileChanged).toHaveBeenLastCalledWith("low");
+      const fable = options.find((element) =>
+        element.textContent?.startsWith("Claude Fable 5.1"),
+      );
+      await React.act(() => fable?.click());
+      expect(modelChanged).toHaveBeenLastCalledWith(
+        "anthropic/claude-fable-5-1",
+      );
       await React.act(() => root.unmount());
     });
 
@@ -196,7 +251,7 @@ describe.each(PHONES)(
       ) as HTMLElement;
       expect(getComputedStyle(orbLogo).display).not.toBe("none");
       expect(box(orbLogo).width).toBeGreaterThan(0);
-      const modeLabel = visibleLabel(mode, "medium");
+      const modeLabel = visibleLabel(mode, "Model");
       expect(modeLabel.scrollWidth).toBeLessThanOrEqual(modeLabel.clientWidth);
       visibleLabel(project, "qa-nt-scratch");
 
@@ -232,6 +287,26 @@ describe.each(PHONES)(
       await React.act(() => root.unmount());
     });
 
+    it("keeps send on the strip with the Recommended model's name on its chip", async () => {
+      const { container, root } = await mountPhoneStrip(phone, {
+        withChoices: true,
+      });
+      const strip = container.querySelector(
+        ".new-thread-config-strip",
+      ) as HTMLElement;
+      const mode = container.querySelector(".new-thread-mode") as HTMLElement;
+      const submit = container.querySelector(
+        ".new-thread-submit",
+      ) as HTMLElement;
+      expect(mode.getAttribute("aria-label")).toBe(
+        "Model: Recommended, GPT-5.6 Sol, High effort",
+      );
+      expect(mode.textContent).toMatch(/^GPT-5\.6 Sol/);
+      expect(box(mode).right).toBeLessThanOrEqual(box(submit).left);
+      expect(box(submit).right).toBeLessThanOrEqual(box(strip).right);
+      await React.act(() => root.unmount());
+    });
+
     it("shortens a pinned model's long name instead of pushing send off the strip", async () => {
       const { container, root } = await mountPhoneStrip(phone, {
         model: "dx-byok/a-very-long-reasoning-model-name-preview-2026",
@@ -243,7 +318,7 @@ describe.each(PHONES)(
       const submit = container.querySelector(
         ".new-thread-submit",
       ) as HTMLElement;
-      expect(mode.textContent).toMatch(/^Model: a very long/);
+      expect(mode.textContent).toMatch(/^a very long/);
       expect(box(mode).right).toBeLessThanOrEqual(box(submit).left);
       expect(box(submit).right).toBeLessThanOrEqual(box(strip).right);
       await React.act(() => root.unmount());

@@ -24,7 +24,7 @@ describe("settings navigation", () => {
     expect(menu("personal")).toEqual([
       [null, ["Account", "Integrations & MCP", "Experimental Features"]],
       ["Usage", ["Model", "Orb", "Plugin usage"]],
-      ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
+      ["Agent", ["Instructions", "Models", "Model Routing"]],
       ["Library", ["Secrets & Env Vars", "Skills", "Plugins", "Triggers"]],
       ["Projects & Orbs", ["Project Defaults", "Orb Providers"]],
       [
@@ -39,7 +39,7 @@ describe("settings navigation", () => {
         null,
         ["Workspace", "Members", "Integrations & MCP", "Usage", "Plugin usage"],
       ],
-      ["Agent", ["Instructions", "Mode Dial", "Model Routing"]],
+      ["Agent", ["Instructions", "Models", "Model Routing"]],
       [
         "Library",
         ["Secrets & Env Vars", "Skills", "Plugins", "External API Apps"],

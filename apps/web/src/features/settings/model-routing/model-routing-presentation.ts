@@ -111,7 +111,7 @@ export function routingPresentation({
       groups[groups.indexOf(other)] = { ...other, rows: [...other.rows, row] };
     else groups.push({ id: "other", rows: [row] });
   }
-  // A Space has its own model (Mode Dial → Space) and route, picked once
+  // A Space has its own model (Models → Space) and route, picked once
   // when each Space is created: Claude Code on a plan, or Model Routing.
   const spaceDestination =
     space === undefined || space.kind === "unavailable"

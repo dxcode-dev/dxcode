@@ -1,11 +1,12 @@
 import type { PersonalComposerDefaultsData, ProjectData } from "@dx/api";
-import { MODE_IDS, type ModeId, type ProjectId } from "@dx/domain";
+import { type ModeId, ModelId, type ProjectId } from "@dx/domain";
 import {
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { Option, Schema } from "effect";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import {
@@ -20,7 +21,6 @@ import {
   projectQueryOptions,
   projectsQueryOptions,
 } from "../../projects/project-queries.js";
-import { MODE_LABELS } from "../mode-dial/mode-dial-values.js";
 import { modelRoutingChoicesQueryOptions } from "../model-routing/model-routing-queries.js";
 import {
   SettingsBackgroundError,
@@ -40,7 +40,6 @@ import { DictationSettingsCard } from "./dictation-settings.js";
 import { DictationVocabularyCard } from "./dictation-vocabulary.js";
 
 const NO_PROJECT = "";
-const PINNED_MODEL = "pinned-model";
 
 /**
  * What the next New Thread starts with. The New Thread composer writes these
@@ -84,7 +83,11 @@ export function ComposerSettings({ onDirtyChange }: SettingsSectionProps) {
           />
           <StartingModeRow
             remembered={defaults.data}
-            onChange={(mode) => update.mutate({ mode, model: null })}
+            onChange={(next) =>
+              update.mutate(
+                "mode" in next ? { mode: next.mode, model: null } : next,
+              )
+            }
           />
         </SettingsCard>
       )}
@@ -209,54 +212,81 @@ function StartingProjectRow({
   );
 }
 
+const RECOMMENDED = "recommended";
+const CARRIED = "carried";
+
+/**
+ * The model a New Thread opens on: Recommended, or the model last picked in
+ * the composer. Someone whose composer last started on a retired mode other
+ * than Medium opens on that mode's model, as the composer does.
+ */
 function StartingModeRow({
   remembered,
   onChange,
 }: {
   readonly remembered: PersonalComposerDefaultsData;
-  readonly onChange: (mode: ModeId) => void;
+  readonly onChange: (
+    next: { readonly mode: ModeId } | { readonly model: ModelId },
+  ) => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const choicesQuery = useQuery(modelRoutingChoicesQueryOptions(identity.id));
+  const choices = choicesQuery.data;
   const pinnedModel = startingModel(
     remembered.model,
-    choicesQuery.data?.models.map(({ canonical }) => canonical),
+    choices?.models.map(({ canonical }) => canonical),
   );
-  const pinnedModelName =
-    pinnedModel === undefined
-      ? undefined
-      : modelDisplayName(
-          choicesQuery.data?.models.find(
-            ({ canonical }) => canonical === pinnedModel,
-          )?.name ?? pinnedModel,
-        );
-  // A model picked in the composer replaces the mode until a mode is chosen
-  // again, so it shows as its own option; choosing a mode clears it.
+  const nameOf = (canonical: string) =>
+    modelDisplayName(
+      choices?.models.find((model) => model.canonical === canonical)?.name ??
+        canonical,
+    );
+  const mode = startingMode(remembered.mode);
+  const recommended = choices?.modes.find((slot) => slot.mode === "medium");
+  const carried =
+    pinnedModel === undefined && mode !== "medium"
+      ? choices?.modes.find((slot) => slot.mode === mode)
+      : undefined;
+  const models = (choices?.models ?? []).filter(
+    ({ canonical }) => canonical !== pinnedModel,
+  );
   const options: ReadonlyArray<SettingsSelectOption> = [
-    ...(pinnedModelName === undefined
+    [
+      RECOMMENDED,
+      recommended === undefined
+        ? "Recommended"
+        : `Recommended · ${modelDisplayName(recommended.modelName)}`,
+    ],
+    ...(carried === undefined
       ? []
-      : [[PINNED_MODEL, pinnedModelName] as const]),
-    ...MODE_IDS.map((mode): SettingsSelectOption => [mode, MODE_LABELS[mode]]),
+      : [[CARRIED, modelDisplayName(carried.modelName)] as const]),
+    ...(pinnedModel === undefined
+      ? []
+      : [[pinnedModel, nameOf(pinnedModel)] as const]),
+    ...models.map(
+      ({ canonical, name }): SettingsSelectOption => [
+        canonical,
+        modelDisplayName(name),
+      ],
+    ),
   ];
   return (
     <SettingsRow
-      title="Mode"
-      description={
-        pinnedModelName === undefined
-          ? "Where the Mode Dial starts."
-          : "Starts on the model you picked in the composer until you choose a mode."
-      }
+      title="Model"
+      description="The model a New Thread starts on. Picking one in the composer changes it here too."
       control={
         <SettingsSelect
-          label="Mode"
-          value={
-            pinnedModelName === undefined
-              ? startingMode(remembered.mode)
-              : PINNED_MODEL
-          }
+          label="Model"
+          value={pinnedModel ?? (carried === undefined ? RECOMMENDED : CARRIED)}
           options={options}
           onValueChange={(next) => {
-            if (next !== PINNED_MODEL) onChange(next as ModeId);
+            if (next === CARRIED) return;
+            if (next === RECOMMENDED) {
+              onChange({ mode: "medium" });
+              return;
+            }
+            const model = Schema.decodeUnknownOption(ModelId)(next);
+            if (Option.isSome(model)) onChange({ model: model.value });
           }}
         />
       }

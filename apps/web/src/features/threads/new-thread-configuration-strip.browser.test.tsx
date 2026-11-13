@@ -1,5 +1,5 @@
 import type { ProjectData } from "@dx/api";
-import type { ModeId, ProjectId, RunnerProfileId } from "@dx/domain";
+import type { ProjectId, RunnerProfileId, ThinkingLevel } from "@dx/domain";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -30,6 +30,7 @@ const choices = {
   modes: ["low", "medium", "high", "ultra"].map((mode) => ({
     mode,
     config: { model: "dx-byok/gpt-5.6-luna", thinking: "medium" },
+    modelName: "GPT 5.6 Luna",
     source: "default",
     served: true,
     servingConnectionName: "LiteLLM2",
@@ -129,7 +130,6 @@ const renderStrip = (
     <NewThreadConfigurationStrip
       projects={projects}
       projectId={projectId}
-      profile="high"
       choices={choices}
       locked={overrides.locked ?? false}
       submitting={false}
@@ -145,7 +145,6 @@ const renderStrip = (
       onRunnerProfileChange={() => undefined}
       onRunnerProfileRetry={overrides.onRunnerProfileRetry}
       onModelChange={() => undefined}
-      onProfileChange={() => undefined}
     />,
   );
 
@@ -251,50 +250,52 @@ describe("new thread configuration strip accessibility", () => {
     ).toContain('aria-label="Orb: E2B a1.tiny"');
   });
 
-  it("keeps a valid mode when switching to the raw-model tab", async () => {
+  it("keeps the picked model while the model list is searched", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
     const changed = vi.fn();
-    function Harness() {
-      const [profile, setProfile] = React.useState<ModeId>("medium");
-      return (
-        <NewThreadConfigurationStrip
-          projects={projects}
-          projectId={projectId}
-          profile={profile}
-          locked={false}
-          submitting={false}
-          ready
-          retrying={false}
-          onProjectChange={() => undefined}
-          onModelChange={() => undefined}
-          onProfileChange={(next) => {
-            changed(next);
-            setProfile(next);
-          }}
-        />
-      );
-    }
     try {
-      await React.act(() => root.render(<Harness />));
       await React.act(() =>
-        container
-          .querySelector<HTMLButtonElement>(
-            '[aria-label="Reasoning mode: medium"]',
-          )
-          ?.click(),
+        root.render(
+          <NewThreadConfigurationStrip
+            choices={choices}
+            projects={projects}
+            projectId={projectId}
+            locked={false}
+            submitting={false}
+            ready
+            retrying={false}
+            onProjectChange={() => undefined}
+            onModelChange={changed}
+          />,
+        ),
       );
-      const rawTab = Array.from(
-        document.querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-      ).find((tab) => tab.textContent === "Raw Models");
-      expect(rawTab).toBeDefined();
-      await React.act(() => rawTab?.click());
+      const chip = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Model: Recommended, GPT 5.6 Luna, Medium effort"]',
+      );
+      expect(chip).not.toBeNull();
+      await React.act(() => chip?.click());
+      const search = document.querySelector<HTMLInputElement>(
+        'input[aria-label="Search models"]',
+      );
+      expect(search).not.toBeNull();
+      await React.act(() => {
+        if (search === null) return;
+        const setValue = Object.getOwnPropertyDescriptor(
+          HTMLInputElement.prototype,
+          "value",
+        )?.set;
+        setValue?.call(search, "no such model");
+        search.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      expect(document.body.textContent).toContain(
+        "No models match “no such model”.",
+      );
       expect(
-        document.querySelector('[aria-label="Search models"]'),
-      ).not.toBeNull();
-      expect(
-        container.querySelector('[aria-label="Reasoning mode: medium"]'),
+        container.querySelector(
+          '[aria-label="Model: Recommended, GPT 5.6 Luna, Medium effort"]',
+        ),
       ).not.toBeNull();
       expect(changed).not.toHaveBeenCalled();
     } finally {
@@ -303,15 +304,13 @@ describe("new thread configuration strip accessibility", () => {
     }
   });
 
-  it("clears a pinned raw model when selecting a mode", async () => {
+  it("shows who pays for each model, and Recommended clears a picked model", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
     const modelChanged = vi.fn();
-    const profileChanged = vi.fn();
 
     function Harness() {
-      const [profile, setProfile] = React.useState<ModeId>("medium");
       const [model, setModel] = React.useState<string | undefined>(
         "dx-byok/gpt-5.6-luna",
       );
@@ -326,7 +325,6 @@ describe("new thread configuration strip accessibility", () => {
           }}
           projects={projects}
           projectId={projectId}
-          profile={profile}
           model={model}
           locked={false}
           submitting={false}
@@ -337,68 +335,68 @@ describe("new thread configuration strip accessibility", () => {
             modelChanged(next);
             setModel(next);
           }}
-          onProfileChange={(next) => {
-            profileChanged(next);
-            setProfile(next);
-          }}
         />
       );
     }
 
     try {
       await React.act(() => root.render(<Harness />));
-      expect(
-        container.querySelector('[aria-label="Model: dx-byok/gpt-5.6-luna"]'),
-      ).not.toBeNull();
-
-      await React.act(() =>
-        container
-          .querySelector<HTMLButtonElement>(
-            '[aria-label="Model: dx-byok/gpt-5.6-luna"]',
-          )
-          ?.click(),
+      const picked = container.querySelector<HTMLButtonElement>(
+        '[aria-label="Model: GPT 5.6 Luna, High effort"]',
       );
-      expect(document.body.textContent).toContain("SERVED BY LiteLLM2");
-      expect(document.body.textContent).not.toContain(
-        "SERVED BY Different mode provider",
-      );
-      const highMode = Array.from(
+      expect(picked).not.toBeNull();
+      await React.act(() => picked?.click());
+      const options = Array.from(
         document.querySelectorAll<HTMLElement>('[role="option"]'),
-      ).find((option) => option.textContent?.includes("high"));
-      expect(highMode).toBeDefined();
-      await React.act(() => highMode?.click());
+      );
+      // The model's group names the connection that pays for it.
+      expect(
+        Array.from(document.querySelectorAll(".dx-picker-label")).map(
+          (label) => label.textContent,
+        ),
+      ).toContain("LiteLLM2");
+      const recommended = options.find((option) =>
+        option.textContent?.startsWith("Recommended"),
+      );
+      expect(recommended?.textContent).toContain("Different mode provider");
+      await React.act(() => recommended?.click());
 
       expect(modelChanged).toHaveBeenCalledWith(undefined);
-      expect(profileChanged).toHaveBeenCalledWith("high");
       expect(
-        container.querySelector('[aria-label="Reasoning mode: high"]'),
+        container.querySelector(
+          '[aria-label="Model: Recommended, GPT 5.6 Luna, Medium effort"]',
+        ),
       ).not.toBeNull();
-      expect(container.textContent).toContain("Mode: high");
     } finally {
       await React.act(() => root.unmount());
       container.remove();
     }
   });
 
-  it("opens with Control+S and exposes working dial without Fast Mode controls", async () => {
+  it("opens with Control+S on the search and sets the picked model's effort", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
+    const effortChanged = vi.fn();
 
     function Harness() {
-      const [profile, setProfile] = React.useState<ModeId>("medium");
+      const [effort, setEffort] = React.useState<ThinkingLevel>();
       return (
         <NewThreadConfigurationStrip
+          choices={choices}
           projects={projects}
           projectId={projectId}
-          profile={profile}
+          effort={effort}
           locked={false}
           submitting={false}
           ready
           retrying={false}
           onProjectChange={() => undefined}
           onModelChange={() => undefined}
-          onProfileChange={setProfile}
+          onEffortChange={(next) => {
+            effortChanged(next);
+            setEffort(next);
+          }}
         />
       );
     }
@@ -413,99 +411,37 @@ describe("new thread configuration strip accessibility", () => {
         }),
       ),
     );
-
-    const dial = document.querySelector<HTMLElement>('[role="slider"]');
-    const fastMode = document.querySelector<HTMLButtonElement>(
-      '[role="switch"][aria-label="Fast Mode"]',
+    const search = document.querySelector<HTMLElement>(
+      'input[aria-label="Search models"]',
     );
-    expect(dial?.getAttribute("aria-valuetext")).toBe("Medium");
-    expect(dial?.getAttribute("aria-keyshortcuts")).toBe(
-      "ArrowLeft ArrowRight ArrowUp ArrowDown",
-    );
-    // The popup moves focus to the dial once it has opened.
     await React.act(() =>
-      vi.waitFor(() => expect(document.activeElement).toBe(dial)),
+      vi.waitFor(() => expect(document.activeElement).toBe(search)),
     );
-    expect(fastMode).toBeNull();
+    // Fast Mode stays out of the picker.
     expect(
-      document.querySelector(".mode-dial-position.active .mode-plate-label")
-        ?.textContent,
-    ).toBe("MED");
-
-    await React.act(() =>
-      dial?.dispatchEvent(
-        new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }),
+      document.querySelector('[role="switch"][aria-label="Fast Mode"]'),
+    ).toBeNull();
+    const effortButton = (name: string) =>
+      Array.from(
+        document.querySelectorAll<HTMLButtonElement>(
+          'fieldset[aria-label="Effort"] button',
+        ),
+      ).find((button) => button.textContent === name);
+    expect(effortButton("Medium")?.getAttribute("aria-pressed")).toBe("true");
+    await React.act(() => effortButton("Max")?.click());
+    expect(effortChanged).toHaveBeenCalledWith("max");
+    expect(effortButton("Max")?.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      container.querySelector(
+        '[aria-label="Model: Recommended, GPT 5.6 Luna, Max effort"]',
       ),
-    );
-    expect(dial?.getAttribute("aria-valuetext")).toBe("High");
-    expect(
-      document.querySelector(".mode-dial-position.active .mode-plate-label")
-        ?.textContent,
-    ).toBe("HIGH");
-    expect(
-      document.querySelector<SVGGElement>(".mode-dial-rotor")?.style.transform,
-    ).toBe("rotate(15deg)");
-
-    if (dial !== null) {
-      Object.defineProperties(dial, {
-        getBoundingClientRect: {
-          value: () => ({
-            x: 100,
-            y: 100,
-            top: 100,
-            right: 200,
-            bottom: 200,
-            left: 100,
-            width: 100,
-            height: 100,
-            toJSON: () => undefined,
-          }),
-        },
-        setPointerCapture: { value: vi.fn() },
-      });
-      await React.act(() =>
-        dial.dispatchEvent(
-          new PointerEvent("pointerdown", {
-            clientX: 113,
-            clientY: 166,
-            pointerId: 1,
-            bubbles: true,
-          }),
-        ),
-      );
-      expect(dial.getAttribute("aria-valuetext")).toBe("Low");
-
-      await React.act(() =>
-        dial.dispatchEvent(
-          new PointerEvent("pointerdown", {
-            clientX: 187,
-            clientY: 166,
-            pointerId: 2,
-            bubbles: true,
-          }),
-        ),
-      );
-      expect(dial.getAttribute("aria-valuetext")).toBe("Ultra");
-      expect(
-        document.querySelector(".mode-dial-position.active .mode-plate-label")
-          ?.textContent,
-      ).toBe("ULTRA");
-      await React.act(() =>
-        dial.dispatchEvent(
-          new PointerEvent("pointerup", {
-            pointerId: 2,
-            bubbles: true,
-          }),
-        ),
-      );
-      expect(document.querySelector('[role="slider"]')).toBe(dial);
-    }
+    ).not.toBeNull();
 
     await React.act(() => root.unmount());
     container.remove();
   });
 
-  it("does not open the mode picker from Control+S while locked", async () => {
+  it("does not open the model picker from Control+S while locked", async () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
@@ -514,14 +450,12 @@ describe("new thread configuration strip accessibility", () => {
         <NewThreadConfigurationStrip
           projects={projects}
           projectId={projectId}
-          profile="medium"
           locked
           submitting
           ready
           retrying={false}
           onProjectChange={() => undefined}
           onModelChange={() => undefined}
-          onProfileChange={() => undefined}
         />,
       ),
     );
@@ -530,7 +464,9 @@ describe("new thread configuration strip accessibility", () => {
         new KeyboardEvent("keydown", { key: "s", ctrlKey: true }),
       ),
     );
-    expect(document.querySelector('[role="slider"]')).toBeNull();
+    expect(
+      document.querySelector('input[aria-label="Search models"]'),
+    ).toBeNull();
     await React.act(() => root.unmount());
     container.remove();
   });
@@ -544,14 +480,12 @@ describe("new thread configuration strip accessibility", () => {
         <NewThreadConfigurationStrip
           projects={projects}
           projectId={projectId}
-          profile="medium"
           locked={false}
           submitting={false}
           ready
           retrying={false}
           onProjectChange={() => undefined}
           onModelChange={() => undefined}
-          onProfileChange={() => undefined}
         />,
       ),
     );
@@ -597,7 +531,6 @@ describe("new thread configuration strip accessibility", () => {
         <NewThreadConfigurationStrip
           projects={[...projects, istanbulProject]}
           projectId={projectId}
-          profile="medium"
           locked={false}
           submitting={false}
           ready
@@ -606,7 +539,6 @@ describe("new thread configuration strip accessibility", () => {
           onLoadMoreProjects={loadMore}
           onProjectChange={() => undefined}
           onModelChange={() => undefined}
-          onProfileChange={() => undefined}
         />,
       ),
     );
@@ -648,14 +580,12 @@ describe("new thread configuration strip accessibility", () => {
           <NewThreadConfigurationStrip
             projects={[longProject, istanbulProject]}
             projectId={longProject.id}
-            profile="medium"
             locked={false}
             submitting={false}
             ready
             retrying={false}
             onProjectChange={changed}
             onModelChange={() => undefined}
-            onProfileChange={() => undefined}
           />,
         ),
       );
@@ -732,7 +662,6 @@ describe("new thread Orb picker", () => {
         <NewThreadConfigurationStrip
           projects={projects}
           projectId={projectId}
-          profile="medium"
           locked={false}
           submitting={false}
           ready
@@ -744,7 +673,6 @@ describe("new thread Orb picker", () => {
           runnerProfileId={"cf.standard-1" as RunnerProfileId}
           onRunnerProfileChange={onRunnerProfileChange}
           onModelChange={() => undefined}
-          onProfileChange={() => undefined}
         />,
       ),
     );

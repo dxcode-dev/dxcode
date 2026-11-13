@@ -1,6 +1,5 @@
 import type { ProjectData } from "@dx/api";
 import {
-  type ClaudeCodeEffort,
   generateThreadTitle,
   isClaudeCodeModel,
   type ModeId,
@@ -8,6 +7,7 @@ import {
   newThreadId,
   type ProjectId,
   type RunnerProfileId,
+  type ThinkingLevel,
   type ThreadId,
   type ThreadVisibility,
 } from "@dx/domain";
@@ -77,10 +77,11 @@ export async function submitNewThread({
 }: {
   readonly submittedPrompt: string;
   readonly effectiveProjectId: ProjectId | "";
+  /** The mode sent only when no model is known yet (choices still loading). */
   readonly profile: ModeId;
   readonly model: string | undefined;
-  /** Claude Code effort, sent only with a Claude Code model. */
-  readonly effort?: ClaudeCodeEffort;
+  /** The effort sent with a model; undefined for a model without one. */
+  readonly effort?: ThinkingLevel | undefined;
   /** The Claude plan, sent only with a Claude Code model. */
   readonly claudePlan?: string;
   /** An installed plugin's agent mode the Thread starts in. */
@@ -132,15 +133,15 @@ export async function submitNewThread({
     // The composer stays unchanged, files included, until admission.
     const attachmentIds = stagedImages.map(({ id }) => id);
     const selectedProfile = reasoningModeId(profile);
-    // Effort belongs to Claude Code models only; other selections have none,
-    // so a recovered attempt without one still matches.
-    // A plugin agent's Thread runs on the agent's model, so a Claude Code
-    // pick the composer still holds sends no effort or plan with it.
+    // A picked model runs at its effort. A plugin agent's Thread runs on the
+    // agent's model, so a Claude Code pick the composer still holds sends no
+    // plan with it.
     const claudeCode =
       pluginAgentMode === undefined &&
       model !== undefined &&
       isClaudeCodeModel(model);
-    const claudeEffort = claudeCode ? effort : undefined;
+    const claudeEffort =
+      model === undefined || pluginAgentMode !== undefined ? undefined : effort;
     const claudeConnectionId = claudeCode ? claudePlan : undefined;
     const request = {
       projectId: project?.id,

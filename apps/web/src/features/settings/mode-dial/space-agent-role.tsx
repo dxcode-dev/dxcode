@@ -14,7 +14,7 @@ const message = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
 /**
- * Settings → Mode Dial → Space: the model a person's new Spaces run their
+ * Settings → Models → Space: the model a person's new Spaces run their
  * main Thread on. Auto is Claude Opus 5.5 at medium effort. dx picks a new
  * Space's route once, when it is created: Claude Code when Claude Code serves
  * the model and a Claude Pro/Max plan is connected, else Model Routing. The

@@ -6834,559 +6834,101 @@ img.orb-provider-logo {
   line-height: var(--leading-3-5);
   vertical-align: 1px;
 }
-/* The mode console: the shared picker surface, wider, and scrolling as a
-   whole rather than in its list. */
-.dx-picker.reasoning-popup {
-  display: block;
-  width: min(544px, calc(100vw - 32px));
-  /* Fits the room on its side of the trigger and scrolls the rest. */
-  max-height: min(32rem, var(--available-height, calc(100dvh - 24px)));
-  overflow-x: hidden;
-  overflow-y: auto;
-  scrollbar-width: none;
+/* The New Thread model picker: the shared picker surface, wide enough for a
+   model's name over who pays for it, with the effort under the list. */
+.dx-picker.model-picker {
+  width: min(26rem, calc(100vw - 24px));
 }
-.reasoning-console {
-  display: block;
+.dx-picker.model-picker .dx-picker-list {
+  max-height: min(26rem, 52dvh, var(--available-height));
 }
-.reasoning-console-toolbar {
-  display: flex;
-  align-items: center;
-  height: 41px;
-  padding: 0 var(--space-2) 0 var(--space-3);
-  border-bottom: 1px solid var(--divider);
-  color: var(--foreground);
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
+.dx-picker.model-picker .dx-picker-label:first-child {
+  padding-top: var(--space-1);
 }
-.reasoning-console-shortcut {
-  margin-left: auto;
-  padding: 0;
-  color: inherit;
-  background: transparent;
-  border: 0;
-}
-.reasoning-console-shortcut kbd {
-  display: block;
-  padding: var(--space-0-5) 5px;
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--shadow-ink) 18%, transparent);
-  border: 1px solid color-mix(in srgb, var(--highlight-ink) 7%, transparent);
-  border-radius: var(--radius-xs);
-  font: var(--text-2xs) / var(--leading-3-5) var(--font-mono);
-}
-.reasoning-console-shortcut:hover kbd,
-.reasoning-console-shortcut:focus-visible kbd {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--highlight-ink) 8%, transparent);
-  outline: 1px solid color-mix(in srgb, var(--highlight-ink) 14%, transparent);
-}
-.reasoning-console-tabs {
-  display: flex;
-  align-items: center;
-  gap: var(--space-0-5);
-  margin-left: var(--space-2);
-  padding: var(--space-0-5);
-  background: color-mix(in srgb, var(--shadow-ink) 20%, transparent);
-  border: 1px solid color-mix(in srgb, var(--highlight-ink) 5%, transparent);
-  border-radius: var(--radius-md);
-}
-.reasoning-console-tabs button {
-  padding: var(--space-1) var(--space-2);
-  color: var(--muted-foreground);
-  background: none;
-  border: none;
-  border-radius: var(--radius-sm);
-  font-size: var(--text-2xs);
-  line-height: var(--leading-3-5);
-  cursor: pointer;
-}
-.reasoning-console-tabs button[data-active="true"] {
-  color: var(--foreground);
-  background: var(--background);
-  box-shadow: 0 1px 2px color-mix(in srgb, var(--shadow-ink) 5%, transparent);
-}
-.reasoning-console-plate-wrap {
-  position: relative;
-  width: min(502px, calc(100% - 26px));
-  margin: var(--space-2-5) 0 0 13px;
-}
-.reasoning-raw-panel {
-  padding: var(--space-1-5);
-}
-.reasoning-picker-search {
-  width: 0;
-  min-width: 80px;
-  flex: 1;
-  height: 32px;
-  padding: var(--space-1) 0;
-  color: var(--foreground);
-  font: inherit;
-  border: 0;
-  outline: none;
-  background: transparent;
-}
-.mode-option-heading {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  min-width: 0;
-}
-.mode-serving-badge {
+.model-picker-shortcut {
   display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  max-width: 120px;
-  padding: 1px 5px;
-  border-radius: var(--radius-lg);
-  background: var(--accent);
-  color: var(--muted-foreground);
-  font-size: var(--text-3xs);
-  font-weight: 400;
-  white-space: nowrap;
+  flex: none;
 }
-.mode-serving-badge span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.mode-serving-badge svg {
-  flex: 0 0 12px;
-  width: 12px;
-  height: 12px;
-}
-.reasoning-raw-list {
-  display: grid;
-  gap: var(--space-0-5);
-  max-height: min(450px, 55dvh);
-  margin: 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
-}
-.reasoning-raw-option {
+.model-picker-effort {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  width: 100%;
-  padding: var(--space-1-5) var(--space-2-5) var(--space-1-5) var(--space-8);
-  color: var(--foreground);
-  background: none;
-  border: 1px solid transparent;
-  border-radius: var(--radius-md);
-  text-align: left;
-  cursor: pointer;
-}
-.reasoning-raw-option:hover,
-.reasoning-raw-option:focus-visible {
-  background: var(--accent);
-}
-.reasoning-raw-option[data-selected] {
-  background: var(--accent);
-  border-color: var(--border);
-}
-.reasoning-raw-option-main {
-  display: grid;
-  gap: 1px;
+  min-inline-size: 0;
+  flex: 1 1 0;
   min-width: 0;
 }
-.reasoning-raw-option-main strong {
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.reasoning-raw-option-main small {
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.reasoning-raw-option-meta {
-  color: var(--foreground);
-}
-.plugin-agent-option {
-  position: relative;
-}
-.plugin-agent-option-dot {
-  position: absolute;
-  top: 50%;
-  left: 14px;
-  width: 7px;
-  height: 7px;
-  border-radius: var(--radius-full);
-  background: var(--plugin-agent-color, var(--muted-foreground));
-  transform: translateY(-50%);
-}
-.new-thread-mode[data-plugin-agent] .new-thread-plugin-agent-icon {
-  color: var(--plugin-agent-color, currentColor);
-}
-.reasoning-raw-option-meta svg {
-  width: 14px;
-  height: 14px;
-}
-.reasoning-raw-empty {
-  margin: 0;
-  padding: var(--space-3-5) var(--space-2-5);
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
-  text-align: center;
-}
-.reasoning-console-dial-target {
-  position: absolute;
-  top: 29.17%;
-  left: 17.75%;
-  z-index: 1;
-  width: 24%;
-  height: 57.14%;
-  border-radius: 50%;
-  outline: none;
-  cursor: grab;
-  touch-action: none;
-}
-.reasoning-console-dial-target:active {
-  cursor: grabbing;
-}
-.reasoning-console-dial-target:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--console-cyan) 85%, transparent);
-  outline-offset: 2px;
-}
-.reasoning-console-plate {
-  display: block;
-  width: 100%;
-  height: auto;
-  margin: 0;
-  border-radius: var(--radius-xl);
-}
-.mode-plate-label,
-.mode-display-label,
-.mode-display-value,
-.mode-subscription-copy {
-  font-family: var(--font-mono);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.12em;
-}
-.mode-plate-label {
-  fill: var(--console-label);
-  font-size: var(--text-avatar-xs);
-}
-.mode-plate-screw circle {
-  fill: var(--console-screw);
-  stroke: var(--console-screw-edge);
-  stroke-width: 0.8;
-}
-.mode-plate-screw line {
-  stroke: var(--console-screw-slot);
-  stroke-width: 0.65;
-  stroke-linecap: round;
-}
-.mode-dial-tick {
-  stroke: var(--console-tick);
-  stroke-width: 1;
-  stroke-linecap: round;
-  opacity: 0.78;
-  transition:
-    stroke 150ms ease,
-    opacity 150ms ease;
-}
-.mode-dial-tick.active {
-  stroke: var(--console-cyan);
-  opacity: 1;
-}
-.mode-dial-position line {
-  stroke: var(--console-tick-strong);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-.mode-dial-position circle {
-  fill: var(--console-knob);
-  stroke: var(--console-edge);
-  stroke-width: 0.8;
-}
-.mode-dial-position.active line {
-  stroke: var(--console-cyan);
-}
-.mode-dial-position.active circle {
-  fill: var(--console-cyan);
-  stroke: var(--console-cyan-pale);
-  stroke-width: 0.5;
-  filter: drop-shadow(0 0 2px var(--console-cyan));
-}
-.mode-dial-position.active .mode-plate-label {
-  fill: var(--console-cyan);
-  text-shadow: 0 0 4px color-mix(in srgb, var(--console-cyan) 80%, transparent);
-}
-.mode-dial-rotor {
-  transition: transform 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.mode-knob-ridge {
-  stroke: var(--console-ridge);
-  stroke-width: 1.4;
-  stroke-linecap: round;
-}
-.mode-knob-cap {
-  stroke: color-mix(in srgb, var(--highlight-ink) 9%, transparent);
-  stroke-width: 0.8;
-}
-.mode-knob-ring {
-  fill: none;
-  stroke: color-mix(in srgb, var(--highlight-ink) 4%, transparent);
-  stroke-width: 0.55;
-}
-.mode-dial-needle-shadow {
-  stroke: var(--console-cyan);
-  stroke-width: 4.5;
-  stroke-linecap: round;
-  opacity: 0.4;
-  filter: blur(1px);
-}
-.mode-dial-needle {
-  stroke: var(--console-needle);
-  stroke-width: 2.2;
-  stroke-linecap: round;
-}
-.mode-display-screen {
-  fill: var(--console-screen);
-  stroke: var(--console-screen-edge);
-  stroke-width: 0.7;
-}
-.mode-display-label {
-  fill: var(--console-screen-label);
-  font-size: var(--text-avatar-sm);
-}
-.mode-display-value {
-  fill: var(--console-cyan-text);
-  font-size: var(--text-xs);
-  letter-spacing: 0.03em;
-  text-shadow: 0 0 5px color-mix(in srgb, var(--console-cyan) 70%, transparent);
-}
-.mode-display-divider {
-  stroke: var(--console-screen-divider);
-  stroke-dasharray: 1.5 2;
-  opacity: 0.75;
-}
-.reasoning-console-plate-wrap[data-claude-code] .reasoning-console-dial-target {
-  top: 25%;
-  height: 48.98%;
-}
-.reasoning-console-plate[data-claude-code] .mode-dial-needle-shadow {
-  stroke: var(--console-amber);
-}
-.mode-claude-lamp-tick {
-  stroke: var(--console-tick-strong);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-.mode-claude-bezel {
-  fill: var(--console-bezel);
-  stroke: var(--console-bezel-edge);
-  stroke-width: 0.8;
-}
-.mode-claude-glass {
-  fill: var(--console-amber-glass-off);
-  stroke: var(--console-edge);
-  stroke-width: 0.6;
-}
-.mode-claude-mark {
-  fill: var(--console-amber-mark);
-}
-.mode-claude-label {
-  fill: var(--console-label);
-}
-.mode-claude-lamp.lit .mode-claude-lamp-tick {
-  stroke: var(--console-amber);
-}
-.mode-claude-lamp.lit .mode-claude-glass {
-  fill: var(--console-amber-glass);
-  stroke: var(--console-amber-pale);
-  filter: drop-shadow(0 0 4px var(--console-amber));
-}
-.mode-claude-lamp.lit .mode-claude-mark {
-  fill: var(--console-amber-ink);
-}
-.mode-claude-lamp.lit .mode-claude-label {
-  fill: var(--console-amber-text);
-  text-shadow: 0 0 4px color-mix(in srgb, var(--console-amber) 80%, transparent);
-}
-.mode-display-screen.mode-display-claude {
-  stroke: var(--console-amber-screen-edge);
-}
-.reasoning-console-plate[data-claude-code] .mode-display-label {
-  fill: var(--console-amber-label);
-}
-.reasoning-console-plate[data-claude-code] .mode-display-value {
-  fill: var(--console-amber-text);
-  text-shadow: 0 0 5px color-mix(in srgb, var(--console-amber) 70%, transparent);
-}
-.reasoning-console-plate[data-claude-code] .mode-display-divider {
-  stroke: var(--console-amber-divider);
-}
-.mode-display-chevron {
-  fill: none;
-  stroke: var(--console-amber-text);
-  stroke-width: 1.2;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.reasoning-claude-lamp,
-.reasoning-claude-display-select {
-  position: absolute;
-  z-index: 2;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-xs);
-  background: transparent;
-  cursor: pointer;
-}
-.reasoning-claude-lamp {
-  top: 77%;
-  left: 27%;
-  width: 21%;
-  height: 9.5%;
-}
-.reasoning-claude-display-select {
-  left: 57%;
-  width: 39.25%;
-  color: transparent;
-  font-size: var(--text-sm);
-  opacity: 0;
-  appearance: none;
-}
-.reasoning-claude-display-select.model {
-  top: 21.94%;
-  height: 20.92%;
-}
-.reasoning-claude-display-select.effort {
-  top: 42.86%;
-  height: 20.41%;
-}
-.reasoning-claude-lamp:focus-visible,
-.reasoning-claude-display-select:focus-visible {
-  outline: 1px solid color-mix(in srgb, var(--console-amber) 85%, transparent);
-  outline-offset: 2px;
-  opacity: 1;
-}
-.mode-subscription-copy {
-  fill: var(--console-label-muted);
-  font-size: var(--text-avatar-xs);
-  letter-spacing: 0.24em;
-}
-.dx-picker-list.reasoning-list {
-  display: grid;
-  gap: var(--space-0-5);
-  max-height: none;
-  overflow: visible;
-  padding: var(--space-1-5);
-}
-.claude-code-mode-option {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2-5);
-  margin: var(--space-1-5) var(--space-1-5) var(--space-0-5);
-  padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-1);
-  border-radius: var(--radius-md);
-}
-.claude-code-mode-option[data-selected],
-.claude-code-mode-option:hover {
-  background: var(--accent);
-}
-.claude-code-mode-main {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-2-5);
-  padding: var(--space-0-5) var(--space-1-5);
-  border: 0;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  font: inherit;
-  cursor: pointer;
-}
-div.claude-code-mode-main {
-  cursor: default;
-}
-.claude-code-mode-main > span {
-  display: grid;
-  min-width: 0;
-  gap: var(--space-0-5);
-}
-.claude-code-mode-main strong {
-  font-weight: var(--weight-medium);
-}
-.claude-code-mode-main small {
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
-.claude-code-mode-check {
-  display: inline-flex;
-  width: 16px;
+.model-picker-effort .dx-tab {
+  flex: 1 1 0;
   justify-content: center;
-}
-.claude-code-mode-check svg {
-  width: 14px;
-  height: 14px;
-}
-.claude-code-mode-controls {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-}
-.claude-code-mode-select {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.claude-code-mode-select select {
-  height: 28px;
-  padding: 0 26px 0 var(--space-2-5);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--foreground) 8%, transparent);
-  color: var(--foreground);
-  font: inherit;
-  font-size: var(--text-md);
-  appearance: none;
-  cursor: pointer;
-}
-.claude-code-mode-select select:hover {
-  background: color-mix(in srgb, var(--foreground) 12%, transparent);
-}
-.claude-code-mode-select svg {
-  position: absolute;
-  right: 8px;
-  width: 13px;
-  height: 13px;
-  color: var(--muted-foreground);
-  pointer-events: none;
-}
-.claude-code-mode-connect {
-  padding: var(--space-1) var(--space-2-5);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--foreground);
-  font-size: var(--text-sm);
-  text-decoration: none;
-  white-space: nowrap;
-}
-.claude-code-mode-connect:hover {
-  background: var(--surface);
-}
-.reasoning-option > span:first-child {
-  display: grid;
-  flex: 1;
   min-width: 0;
-  gap: var(--space-0-5);
-}
-.reasoning-option small {
-  overflow: hidden;
+  padding-inline: var(--space-1);
   white-space: nowrap;
-  text-overflow: ellipsis;
+}
+.model-picker-note {
+  flex: none;
+  margin: 0;
+  padding: var(--space-2) var(--space-2-5) 0;
+  border-top: 1px solid var(--divider);
   color: var(--muted-foreground);
   font-size: var(--text-xs);
-  line-height: 15px;
+}
+.model-picker-note + .dx-picker-footer {
+  border-top: 0;
+}
+/* An open Thread's model, beside the composer's attachments: quiet until
+   hovered, and the name shortens before the send button moves. */
+.thread-model-control {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.dx-chip.thread-model-chip {
+  min-width: 0;
+  max-width: min(18rem, 100%);
+  color: var(--muted-foreground);
+  border-color: transparent;
+  background: transparent;
+  cursor: pointer;
+}
+.dx-chip.thread-model-chip:hover,
+.dx-chip.thread-model-chip[data-popup-open] {
+  color: var(--foreground);
+  border-color: var(--outline);
+}
+.dx-chip.thread-model-chip[data-claude-code] {
+  color: var(--brand-anthropic-text);
+}
+.dx-chip.thread-model-chip .new-thread-mode-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dx-chip.thread-model-chip .new-thread-mode-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.thread-model-error {
+  color: var(--destructive);
+  font-size: var(--text-xs);
+}
+.new-thread-mode-effort {
+  color: inherit;
+  opacity: 0.72;
+}
+@media (pointer: coarse) {
+  .model-picker-shortcut {
+    display: none;
+  }
+}
+@media (max-width: 600px) {
+  /* The effort row takes the footer's whole width on a phone. */
+  .model-picker .dx-picker-footer-label {
+    display: none;
+  }
 }
 @media (max-width: 600px) {
   .new-thread-dialog {
@@ -7405,8 +6947,8 @@ div.claude-code-mode-main {
   /*
    * Each chip keeps a compact label of what is selected. The Orb chip
    * names only a short size beside its provider's logo, so it keeps its
-   * width up to 40% of the row and the project shortens instead. A mode is
-   * one short word, but a pinned model name shortens too.
+   * width up to 40% of the row and the project shortens instead. The
+   * model's name shortens too, down to a readable width.
    * The Orb chip has its own rule: the build wraps a selector list holding
    * :has() in :is(), which gives every chip in it :has()'s specificity.
    */
@@ -7419,6 +6961,10 @@ div.claude-code-mode-main {
   .new-thread-mode:has(.new-thread-mode-value) {
     flex: 0 1 auto;
     min-width: 0;
+  }
+  /* The chip leaves the model's effort to the picker. */
+  .new-thread-mode-effort {
+    display: none;
   }
   .new-thread-mode {
     flex: none;

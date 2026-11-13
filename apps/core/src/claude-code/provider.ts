@@ -450,6 +450,26 @@ const firstText = (message: Context["messages"][number]) =>
 const isEditedMessage = (message: Context["messages"][number]) =>
   parseMessageAuthor(firstText(message) ?? "").edited === true;
 
+/**
+ * The Thread changed its model and another model answered after Claude Code
+ * last did: Claude's session lacks those turns, so the turn starts a new
+ * session told the whole conversation. A Thread that only ever ran Claude
+ * Code keeps resuming its session.
+ */
+const answeredByAnotherModel = (messages: Context["messages"]) => {
+  const last = messages.findLast(
+    (message) =>
+      message.role === "assistant" &&
+      message.stopReason !== "error" &&
+      message.stopReason !== "aborted",
+  );
+  return (
+    last !== undefined &&
+    last.role === "assistant" &&
+    last.api !== CLAUDE_CODE_API
+  );
+};
+
 /** The most of the earlier conversation a new session is given. */
 const EARLIER_CONVERSATION_CHARS = 60_000;
 /** The most of one tool result or call a new session is given. */
@@ -791,6 +811,19 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         const turnStartsAt = context.messages.indexOf(
           pending[0] ?? turnInput[0] ?? anchor,
         );
+        if (
+          attempts.length === 0 &&
+          !edited &&
+          answeredByAnotherModel(
+            context.messages.slice(0, Math.max(0, turnStartsAt)),
+          )
+        ) {
+          await forgetClaudeCodeSession(sandbox);
+          claudeCodeLogger.info(
+            "Claude Code starts a new session after another model answered.",
+            { event: "claude_code_model_switch_session", threadId },
+          );
+        }
         const earlier = earlierConversation(
           context.messages.slice(0, Math.max(0, turnStartsAt)),
         );
@@ -845,7 +878,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
             relaunch &&
             existing.stream.sessionId === undefined &&
             (await existing.resumed()) &&
-            (await existing.exitedOnItsOwn())
+            (await existing.exitedOnItsOwn(signal))
           ) {
             await existing.forgetSession();
             freshSession = true;
@@ -1096,7 +1129,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
           found?.stopReason !== "toolUse" &&
           current.stream.sessionId === undefined &&
           (await current.resumed()) &&
-          (await current.exitedOnItsOwn())
+          (await current.exitedOnItsOwn(signal))
         ) {
           claudeCodeLogger.warn(
             "Claude Code could not load its session; a new one answers.",

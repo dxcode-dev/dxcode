@@ -764,9 +764,15 @@ export const ThreadRepositoryD1 = Layer.effect(
             const title = update.title ?? null;
             const colorChanged = update.color !== undefined ? 1 : 0;
             const color = update.color ?? null;
+            // Read per submission, so the next turn runs on it.
+            const selection =
+              update.selection === undefined
+                ? null
+                : JSON.stringify(update.selection);
             return yield* sql<ThreadRow>`
               UPDATE threads
               SET title = COALESCE(${title}, title),
+                  model_selection = COALESCE(${selection}, model_selection),
                   title_pending_until = CASE
                     WHEN ${title} IS NULL THEN title_pending_until
                     ELSE NULL

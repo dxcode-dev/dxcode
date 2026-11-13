@@ -6,7 +6,7 @@ import {
   threadAgentUrl,
 } from "@dx/api";
 import type {
-  ClaudeCodeEffort,
+  ThinkingLevel,
   ModeId,
   ProjectId,
   RunnerProfileId,
@@ -429,8 +429,8 @@ export interface OptimisticThreadCreation {
   readonly title: ThreadTitle;
   readonly profile: ModeId;
   readonly model?: string;
-  /** The Claude Code effort, with a Claude Code model only. */
-  readonly effort?: ClaudeCodeEffort;
+  /** The effort sent with a picked model. */
+  readonly effort?: ThinkingLevel;
   readonly runnerProfileId?: RunnerProfileId;
   readonly body: string;
   readonly images: ReadonlyArray<PendingAttachment>;

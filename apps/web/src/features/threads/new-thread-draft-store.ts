@@ -1,5 +1,5 @@
 import type {
-  ClaudeCodeEffort,
+  ThinkingLevel,
   ModeId,
   ProjectId,
   RunnerProfileId,
@@ -42,7 +42,7 @@ export interface InitialThreadCreationAttempt {
   readonly projectId?: ProjectId;
   readonly profile: ModeId;
   readonly model?: string;
-  readonly effort?: ClaudeCodeEffort;
+  readonly effort?: ThinkingLevel;
   readonly claudeConnectionId?: string;
   readonly pluginAgentMode?: string;
   readonly runnerProfileId?: RunnerProfileId;

@@ -1,30 +1,30 @@
-import { Sliders } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import type { SettingsSectionRegistration } from "../settings-registration.js";
 import { ModeDialSettings } from "./mode-dial-settings.js";
 
 export const personalModeDialSettingsSection = {
   id: "personal-mode-dial",
   scope: "personal",
-  slug: "mode-dial",
+  slug: "models",
   group: "agent",
-  label: "Mode Dial",
-  title: "Mode Dial",
+  label: "Models",
+  title: "Models",
   description:
-    "Pin the model and reasoning effort behind each mode's main agent.",
-  icon: Sliders,
+    "The Recommended model and effort new Threads start on, and the models older mode Threads run on.",
+  icon: Sparkles,
   component: ModeDialSettings,
 } satisfies SettingsSectionRegistration;
 
 export const workspaceModeDialSettingsSection = {
   id: "workspace-mode-dial",
   scope: "workspace",
-  slug: "mode-dial",
+  slug: "models",
   group: "agent",
-  label: "Mode Dial",
-  title: "Mode Dial",
+  label: "Models",
+  title: "Models",
   description:
-    "Pin each mode's main-agent model and reasoning effort for the workspace.",
-  icon: Sliders,
+    "The Recommended model and effort everyone in the workspace starts new Threads on.",
+  icon: Sparkles,
   component: ModeDialSettings,
   adminOnly: true,
 } satisfies SettingsSectionRegistration;

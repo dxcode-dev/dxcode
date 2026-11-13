@@ -260,3 +260,24 @@ export type ThreadOrbMetricsData = typeof ThreadOrbMetricsDataSchema.Type;
 export const GetThreadOrbMetricsResponseSchema = successResponse(
   ThreadOrbMetricsDataSchema,
 );
+
+/**
+ * The Claude Pro/Max plan a Claude Code Thread runs on, for its owner.
+ * `bound`: the plan by its connection; `removed`: its plan was deleted, and
+ * it takes no other; `none`: it has not run Claude Code yet, and its first
+ * Claude Code turn picks one as Auto does.
+ */
+export const ThreadClaudePlanDataSchema = Schema.Union([
+  Schema.Struct({
+    state: Schema.Literal("bound"),
+    connectionId: Schema.String.check(Schema.isMaxLength(128)),
+  }),
+  Schema.Struct({ state: Schema.Literals(["removed", "none"]) }),
+]);
+
+export type ThreadClaudePlanData = typeof ThreadClaudePlanDataSchema.Type;
+
+export const GetThreadClaudePlanResponseSchema = Schema.Struct({
+  status: Schema.Literal("success"),
+  data: ThreadClaudePlanDataSchema,
+});

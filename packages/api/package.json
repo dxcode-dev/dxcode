@@ -1,7 +1,7 @@
 {
   "name": "@dx/api",
   "private": true,
-  "version": "0.2.113",
+  "version": "0.2.114",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "sideEffects": [

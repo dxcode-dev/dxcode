@@ -6,35 +6,20 @@ import type {
   ProjectData,
 } from "@dx/api";
 import {
-  CLAUDE_CODE_DEFAULT_EFFORT,
-  type ClaudeCodeEffort,
   isClaudeCodeModel,
-  type ModeId,
   orbProviderBetaFeature,
   type ProjectId,
   type RunnerProfile,
   type RunnerProfileId,
   type RunnerProviderPresentation,
+  type ThinkingLevel,
   type ThreadVisibility,
 } from "@dx/domain";
-import {
-  ArrowRight,
-  Bot,
-  Check,
-  Folder,
-  LoaderCircle,
-  Plus,
-  RotateCw,
-} from "lucide-react";
+import { ArrowRight, Folder, LoaderCircle, Plus, RotateCw } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
-import {
-  claudeCodeChipLabel,
-  modelDisplayName,
-} from "../../shared/model-display-name.js";
 import { useNewProjectSurface } from "../../shared/new-project-surface.js";
-import { useTheme } from "../../shared/theme/theme-provider.js";
 import { Button } from "../../shared/ui/button.js";
 import { chipVariants } from "../../shared/ui/chip-variants.js";
 import {
@@ -50,7 +35,6 @@ import {
   ChoiceSelectTrigger,
   ChoiceSelectValue,
 } from "../../shared/ui/choice-select.js";
-import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import {
   MenuItemHint,
   MenuItemText,
@@ -62,611 +46,20 @@ import {
   MenuSubmenuTrigger,
   MenuTrigger,
 } from "../../shared/ui/menu.js";
-import {
-  angularDistance,
-  DIAL_MODE_ORDER,
-  DIAL_POSITION_BY_MODE,
-} from "../../shared/ui/mode-dial-geometry.js";
-import { ModeDialPlate } from "../../shared/ui/mode-dial-plate.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { OrbProviderLogo } from "../../shared/ui/orb-provider-logo.js";
-import { playUiSound } from "../../shared/ui/ui-sounds.js";
-import {
-  ClaudeCodeDialControls,
-  ClaudeCodeModeOption,
-  ClaudePlanPicker,
-} from "./claude-code-mode.js";
-import {
-  claudeCodeDial,
-  claudeCodeEffortLabel,
-} from "./claude-code-mode-options.js";
-import { ServingBadge } from "./model-picker-presentation.js";
-import { REASONING_MODES } from "./new-thread-modal-utils.js";
+import { ClaudePlanPicker } from "./claude-code-mode.js";
+import { ModelPicker } from "./model-picker.js";
 import { NewThreadOptionsMenu } from "./new-thread-options-menu.js";
 
 const shortcutSnapshot = () => 0;
 
-const focusModeDial = () =>
+const focusModelSearch = () =>
   requestAnimationFrame(() =>
     document
-      .querySelector<HTMLElement>('[role="slider"][aria-label="Mode dial"]')
+      .querySelector<HTMLElement>('input[aria-label="Search models"]')
       ?.focus(),
   );
-
-function ModeDialIcon({ profile }: { readonly profile: ModeId }) {
-  return (
-    <svg
-      className="new-thread-mode-dial-icon"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M2.73 17.75A10 10 0 1 1 21.27 17.75" />
-      <line
-        x1="12"
-        y1="14"
-        x2="12"
-        y2="8.34"
-        transform={`rotate(${DIAL_POSITION_BY_MODE[profile].angle - 282} 12 14)`}
-      />
-    </svg>
-  );
-}
-
-function RawModelList({
-  choices,
-  routingGraph,
-  selectedModel,
-  query,
-  onSelect,
-}: {
-  readonly choices: ChoicesData | undefined;
-  readonly routingGraph?: GraphData;
-  readonly query: string;
-  readonly selectedModel: string | undefined;
-  readonly onSelect: (modelId: string) => void;
-}) {
-  const normalized = query.trim().toLowerCase();
-  // Claude Code models are an agent, not a raw model; the mode list offers them.
-  const rawModels = (choices?.models ?? []).filter(
-    ({ canonical }) => !isClaudeCodeModel(canonical),
-  );
-  const models = rawModels.filter(
-    (model) =>
-      normalized === "" ||
-      modelDisplayName(model.name).toLowerCase().includes(normalized) ||
-      model.canonical.toLowerCase().includes(normalized) ||
-      model.connectionName.toLowerCase().includes(normalized),
-  );
-  return (
-    <div className="reasoning-raw-panel">
-      {choices === undefined ? (
-        <p className="reasoning-raw-empty">Loading models…</p>
-      ) : models.length === 0 ? (
-        <p className="reasoning-raw-empty">
-          {rawModels.length === 0
-            ? "No models available. Add a provider connection in Settings."
-            : `No models match “${query.trim()}”.`}
-        </p>
-      ) : (
-        <ul className="reasoning-raw-list">
-          {models.map((model) => (
-            <li key={`${model.connectionId}:${model.canonical}`}>
-              <button
-                type="button"
-                className="reasoning-raw-option"
-                data-selected={selectedModel === model.canonical || undefined}
-                aria-pressed={selectedModel === model.canonical}
-                onClick={() => onSelect(model.canonical)}
-              >
-                <span className="reasoning-raw-option-main">
-                  <span className="mode-option-heading">
-                    <strong>{modelDisplayName(model.name)}</strong>
-                    <ServingBadge
-                      name={model.connectionName}
-                      connection={routingGraph?.connections.find(
-                        (c) => c.connectionId === model.connectionId,
-                      )}
-                    />
-                  </span>
-                  <small>
-                    {modelDisplayName(model.name)} ·{" "}
-                    {Math.round(model.contextWindow / 1000)}k context
-                  </small>
-                </span>
-                <span className="reasoning-raw-option-meta">
-                  {selectedModel === model.canonical ? (
-                    <Check aria-label="Selected" />
-                  ) : null}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
-type PickerTab = "modes" | "raw" | "plugins";
-
-/** The Plugin Agents tab's list, loaded when the tab first opens. */
-const PluginAgentList = React.lazy(() =>
-  import("./plugin-agent-list.js").then(({ PluginAgentList: List }) => ({
-    default: List,
-  })),
-);
-
-function ReasoningModeConsole({
-  profile,
-  onProfileChange,
-  onFocusDial,
-  choices,
-  routingGraph,
-  selectedModel,
-  onModelChange,
-  pickerTab,
-  onPickerTabChange,
-  effort,
-  onEffortChange,
-  onClaudeCodeSelect,
-  pluginAgentModes,
-  pluginAgentMode,
-  onPluginAgentSelect,
-}: {
-  readonly pluginAgentModes: ReadonlyArray<PluginAgentModeData>;
-  readonly pluginAgentMode: string | undefined;
-  readonly onPluginAgentSelect: (mode: string) => void;
-  readonly profile: ModeId;
-  readonly onProfileChange: (profile: ModeId) => void;
-  readonly onFocusDial: () => void;
-  readonly effort: ClaudeCodeEffort;
-  readonly onEffortChange: (effort: ClaudeCodeEffort) => void;
-  readonly onClaudeCodeSelect: (model: string, close: boolean) => void;
-  readonly choices: ChoicesData | undefined;
-  readonly routingGraph?: GraphData;
-  readonly selectedModel: string | undefined;
-  readonly onModelChange: (model: string | undefined) => void;
-  readonly pickerTab: PickerTab;
-  readonly onPickerTabChange: (tab: PickerTab) => void;
-}) {
-  const [query, setQuery] = React.useState("");
-  const mode =
-    REASONING_MODES.find(({ id }) => id === profile) ?? REASONING_MODES[2];
-  const modeIndex = DIAL_MODE_ORDER.indexOf(mode.id);
-  const selectedAngle = DIAL_POSITION_BY_MODE[mode.id].angle;
-  const { uiSounds } = useTheme();
-  const selectMode = (nextMode: ModeId) => {
-    // One tick per detent the dial moves to.
-    if (uiSounds && nextMode !== mode.id) playUiSound("tick");
-    onProfileChange(nextMode);
-    if (selectedModel !== undefined) onModelChange(undefined);
-  };
-  const selectModeFromPointer = (event: React.PointerEvent<HTMLDivElement>) => {
-    const bounds = event.currentTarget.getBoundingClientRect();
-    const angle =
-      (Math.atan2(
-        event.clientY - bounds.top - bounds.height / 2,
-        event.clientX - bounds.left - bounds.width / 2,
-      ) *
-        180) /
-      Math.PI;
-    const nextMode = DIAL_MODE_ORDER.reduce((closest, candidate) =>
-      angularDistance(angle, DIAL_POSITION_BY_MODE[candidate].angle) <
-      angularDistance(angle, DIAL_POSITION_BY_MODE[closest].angle)
-        ? candidate
-        : closest,
-    );
-    selectMode(nextMode);
-  };
-  const moveModeWithKeyboard = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (
-      !["ArrowLeft", "ArrowDown", "ArrowRight", "ArrowUp"].includes(event.key)
-    )
-      return;
-    event.preventDefault();
-    const direction =
-      event.key === "ArrowLeft" || event.key === "ArrowDown" ? -1 : 1;
-    const nextIndex = Math.max(
-      0,
-      Math.min(DIAL_MODE_ORDER.length - 1, modeIndex + direction),
-    );
-    selectMode(DIAL_MODE_ORDER[nextIndex] ?? "medium");
-  };
-  const tier = choices?.modes.find(({ mode: id }) => id === mode.id);
-  const pickedModel = choices?.models.find(
-    ({ canonical }) => canonical === selectedModel,
-  );
-  const activeModel =
-    pickedModel ??
-    choices?.models.find((m) => m.canonical === tier?.config.model);
-  const displayModel = modelDisplayName(
-    activeModel?.name ?? tier?.config.model ?? "—",
-  );
-  const claudeCode =
-    selectedModel !== undefined && isClaudeCodeModel(selectedModel);
-  const dial = claudeCodeDial(choices, selectedModel, effort);
-  const agentEffort = claudeCode
-    ? effort.toUpperCase()
-    : (tier?.config.thinking.toUpperCase() ?? "—");
-  const resolutionLabel = claudeCode
-    ? "USES YOUR CLAUDE PRO/MAX PLAN"
-    : selectedModel !== undefined
-      ? pickedModel?.connectionName
-        ? `SERVED BY ${pickedModel.connectionName}`
-        : "NOT SERVED"
-      : tier?.served
-        ? `SERVED BY ${tier.servingConnectionName ?? "CONNECTED PROVIDER"}`
-        : "NOT SERVED";
-  return (
-    <div className="reasoning-console">
-      <div className="reasoning-console-toolbar">
-        {pickerTab === "plugins" ? (
-          <input
-            className="reasoning-picker-search"
-            type="search"
-            aria-label="Search plugin agents"
-            placeholder="Choose a Plugin Agent…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") event.stopPropagation();
-            }}
-          />
-        ) : pickerTab === "raw" ? (
-          <input
-            className="reasoning-picker-search"
-            type="search"
-            aria-label="Search models"
-            placeholder="Choose a Model…"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Escape") event.stopPropagation();
-            }}
-          />
-        ) : (
-          <span>Choose a mode</span>
-        )}
-        <button
-          type="button"
-          className="reasoning-console-shortcut"
-          aria-label="Focus mode dial"
-          onClick={onFocusDial}
-        >
-          <ShortcutKeycaps keycaps={["⌃", "S"]} />
-        </button>
-        <div className="reasoning-console-tabs" role="tablist">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={pickerTab === "modes"}
-            data-active={pickerTab === "modes" || undefined}
-            onClick={() => onPickerTabChange("modes")}
-          >
-            dx Modes
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={pickerTab === "raw"}
-            data-active={pickerTab === "raw" || undefined}
-            onClick={() => onPickerTabChange("raw")}
-          >
-            Raw Models
-          </button>
-          {pluginAgentModes.length === 0 ? null : (
-            <button
-              type="button"
-              role="tab"
-              aria-selected={pickerTab === "plugins"}
-              data-active={pickerTab === "plugins" || undefined}
-              onClick={() => onPickerTabChange("plugins")}
-            >
-              Plugin Agents
-            </button>
-          )}
-        </div>
-      </div>
-      {pickerTab === "plugins" ? (
-        <React.Suspense
-          fallback={
-            <p className="reasoning-raw-empty">Loading plugin agents…</p>
-          }
-        >
-          <PluginAgentList
-            modelName={(model) =>
-              modelDisplayName(
-                choices?.models.find(({ canonical }) => canonical === model)
-                  ?.name ?? model,
-              )
-            }
-            modes={pluginAgentModes}
-            selected={pluginAgentMode}
-            query={query}
-            onSelect={onPluginAgentSelect}
-          />
-        </React.Suspense>
-      ) : pickerTab === "raw" ? (
-        <RawModelList
-          choices={choices}
-          routingGraph={routingGraph}
-          selectedModel={selectedModel}
-          query={query}
-          onSelect={(modelId) => onModelChange(modelId)}
-        />
-      ) : (
-        <div
-          className="reasoning-console-plate-wrap"
-          data-claude-code={dial === undefined ? undefined : true}
-        >
-          <ModeDialPlate
-            profile={mode.id}
-            selectedAngle={selectedAngle}
-            agentEffort={agentEffort}
-            displayModel={displayModel}
-            resolutionLabel={resolutionLabel}
-            agentOnly
-            claudeCode={dial}
-          />
-          <ClaudeCodeDialControls
-            choices={choices}
-            model={selectedModel}
-            effort={effort}
-            onSelect={onClaudeCodeSelect}
-            onEffortChange={onEffortChange}
-          />
-          <div
-            className="reasoning-console-dial-target"
-            role="slider"
-            aria-label="Mode dial"
-            aria-valuemin={0}
-            aria-valuemax={DIAL_MODE_ORDER.length - 1}
-            aria-valuenow={modeIndex}
-            aria-valuetext={mode.label}
-            aria-keyshortcuts="ArrowLeft ArrowRight ArrowUp ArrowDown"
-            tabIndex={0}
-            onKeyDown={moveModeWithKeyboard}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              event.currentTarget.setPointerCapture(event.pointerId);
-              selectModeFromPointer(event);
-            }}
-            onPointerMove={(event) => {
-              if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-                event.stopPropagation();
-                selectModeFromPointer(event);
-              }
-            }}
-            onPointerUp={(event) => {
-              event.stopPropagation();
-              if (event.currentTarget.hasPointerCapture(event.pointerId))
-                event.currentTarget.releasePointerCapture(event.pointerId);
-            }}
-            onPointerCancel={(event) => {
-              event.stopPropagation();
-              if (event.currentTarget.hasPointerCapture(event.pointerId))
-                event.currentTarget.releasePointerCapture(event.pointerId);
-            }}
-            onClick={(event) => event.stopPropagation()}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ModePicker({
-  profile,
-  model,
-  choices,
-  routingGraph,
-  locked,
-  open,
-  onOpenChange,
-  onProfileChange,
-  onModelChange,
-  effort,
-  onEffortChange,
-  pluginAgentModes = [],
-  pluginAgentMode,
-  onPluginAgentModeChange,
-}: {
-  readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
-  readonly pluginAgentMode?: string;
-  readonly onPluginAgentModeChange?: (mode: string | undefined) => void;
-  readonly profile: ModeId;
-  readonly model: string | undefined;
-  readonly choices: ChoicesData | undefined;
-  readonly routingGraph?: GraphData;
-  readonly locked: boolean;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly onProfileChange: (profile: ModeId) => void;
-  readonly onModelChange: (model: string | undefined) => void;
-  readonly effort: ClaudeCodeEffort;
-  readonly onEffortChange: (effort: ClaudeCodeEffort) => void;
-}) {
-  const agent = pluginAgentModes.find(({ mode }) => mode === pluginAgentMode);
-  const [chosenTab, setPickerTab] = React.useState<PickerTab>();
-  // A Thread set to a plugin agent opens the picker on its tab.
-  const pickerTab =
-    chosenTab === "plugins" && pluginAgentModes.length === 0
-      ? "modes"
-      : (chosenTab ?? (agent === undefined ? "modes" : "plugins"));
-  const claudeCode =
-    agent === undefined && model !== undefined && isClaudeCodeModel(model);
-  const modelName = (canonical: string) =>
-    modelDisplayName(
-      choices?.models.find((choice) => choice.canonical === canonical)?.name ??
-        canonical,
-    );
-
-  return (
-    <ChoiceSelectRoot
-      // A pinned model (Claude Code or raw) or a plugin agent means no mode
-      // is selected.
-      value={model === undefined && agent === undefined ? profile : null}
-      disabled={locked}
-      open={open}
-      onOpenChange={onOpenChange}
-      onValueChange={(value) => {
-        // Switching picker tabs unmounts Select items and emits a cleared value.
-        if (value === null) return;
-        onModelChange(undefined);
-        onProfileChange(value);
-      }}
-    >
-      <ChoiceSelectTrigger
-        variant="bare"
-        className={chipVariants({
-          variant: "soft",
-          size: "lg",
-          className: "new-thread-config-pill new-thread-mode",
-        })}
-        data-claude-code={claudeCode || undefined}
-        data-plugin-agent={agent === undefined ? undefined : true}
-        style={
-          agent?.color === undefined
-            ? undefined
-            : ({ "--plugin-agent-color": agent.color } as React.CSSProperties)
-        }
-        aria-label={
-          agent !== undefined
-            ? `Plugin agent: ${agent.label} from ${agent.plugin}`
-            : claudeCode
-              ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
-              : model === undefined
-                ? `Reasoning mode: ${profile}`
-                : `Model: ${model}`
-        }
-        title={
-          agent !== undefined
-            ? `Plugin agent: ${agent.label} from ${agent.plugin}${agent.model === undefined ? "" : ` on ${agent.model}`}`
-            : claudeCode
-              ? `Claude Code: ${modelName(model)}, ${claudeCodeEffortLabel(effort)}`
-              : model === undefined
-                ? `Reasoning mode: ${profile}`
-                : `Model: ${model}`
-        }
-      >
-        {agent !== undefined ? (
-          <Bot className="new-thread-mode-dial-icon new-thread-plugin-agent-icon" />
-        ) : claudeCode ? (
-          <ClaudeIcon className="new-thread-mode-dial-icon" />
-        ) : (
-          <ModeDialIcon profile={profile} />
-        )}
-        {agent !== undefined ? (
-          <>
-            <span className="new-thread-mode-label">Agent: </span>
-            <span className="new-thread-mode-value">{agent.label}</span>
-          </>
-        ) : claudeCode ? (
-          <span className="new-thread-mode-value">
-            {claudeCodeChipLabel(modelName(model), effort)}
-          </span>
-        ) : model === undefined ? (
-          <>
-            <span className="new-thread-mode-label">Mode: </span>
-            <ChoiceSelectValue />
-          </>
-        ) : (
-          <>
-            <span className="new-thread-mode-label">Model: </span>
-            <span className="new-thread-mode-value">
-              {modelDisplayName(
-                choices?.models.find(({ canonical }) => canonical === model)
-                  ?.name ?? model,
-              )}
-            </span>
-          </>
-        )}
-      </ChoiceSelectTrigger>
-      <ChoiceSelectPopup
-        positionerClassName="reasoning-positioner"
-        className="reasoning-popup"
-        sideOffset={8}
-        collisionPadding={12}
-      >
-        <ReasoningModeConsole
-          profile={profile}
-          onProfileChange={onProfileChange}
-          onFocusDial={focusModeDial}
-          choices={choices}
-          routingGraph={routingGraph}
-          selectedModel={model}
-          onModelChange={(value) => {
-            onModelChange(value);
-            if (value !== undefined) onOpenChange(false);
-          }}
-          pickerTab={pickerTab}
-          onPickerTabChange={setPickerTab}
-          pluginAgentModes={pluginAgentModes}
-          pluginAgentMode={agent?.mode}
-          onPluginAgentSelect={(mode) => {
-            onPluginAgentModeChange?.(mode);
-            onOpenChange(false);
-          }}
-          effort={effort}
-          onEffortChange={onEffortChange}
-          onClaudeCodeSelect={(next, close) => {
-            onModelChange(next);
-            if (close) onOpenChange(false);
-          }}
-        />
-        {pickerTab === "modes" ? (
-          <ClaudeCodeModeOption
-            choices={choices}
-            model={model}
-            effort={effort}
-            onEffortChange={onEffortChange}
-            onSelect={(next, close) => {
-              onModelChange(next);
-              if (close) onOpenChange(false);
-            }}
-          />
-        ) : null}
-        {pickerTab === "modes" ? (
-          <ChoiceSelectList className="reasoning-list">
-            {REASONING_MODES.map((mode) => (
-              <ChoiceSelectItem
-                key={mode.id}
-                value={mode.id}
-                className="reasoning-option"
-                aria-describedby={`reasoning-${mode.id}-description`}
-              >
-                <span>
-                  <span className="mode-option-heading">
-                    <ChoiceSelectItemText>{mode.id}</ChoiceSelectItemText>
-                    <ServingBadge
-                      compact
-                      name={
-                        choices?.modes.find((m) => m.mode === mode.id)
-                          ?.servingConnectionName
-                      }
-                      connection={routingGraph?.connections.find(
-                        (c) =>
-                          c.connectionId ===
-                          routingGraph.edges.find((e) => e.mode === mode.id)
-                            ?.connectionId,
-                      )}
-                    />
-                  </span>
-                  <small id={`reasoning-${mode.id}-description`}>
-                    {mode.description}
-                  </small>
-                </span>
-              </ChoiceSelectItem>
-            ))}
-          </ChoiceSelectList>
-        ) : null}
-      </ChoiceSelectPopup>
-    </ChoiceSelectRoot>
-  );
-}
 
 const REPOSITORY_LABELS = {
   git: "Git",
@@ -1094,9 +487,8 @@ const ORB_PILL = chipVariants({
 export function NewThreadConfigurationStrip({
   projects,
   projectId,
-  profile,
   model,
-  effort = CLAUDE_CODE_DEFAULT_EFFORT,
+  effort,
   onEffortChange = () => undefined,
   choices,
   routingGraph,
@@ -1119,7 +511,6 @@ export function NewThreadConfigurationStrip({
   onRunnerProfileChange,
   onRunnerProfileRetry,
   onConnectOrbProvider,
-  onProfileChange,
   onModelChange,
   claudePlan,
   onClaudePlanChange,
@@ -1134,10 +525,11 @@ export function NewThreadConfigurationStrip({
 }: {
   readonly projects: ReadonlyArray<ProjectData>;
   readonly projectId: ProjectId | "";
-  readonly profile: ModeId;
+  /** The picked model; undefined is Recommended. */
   readonly model?: string;
-  readonly effort?: ClaudeCodeEffort;
-  readonly onEffortChange?: (effort: ClaudeCodeEffort) => void;
+  /** The picked effort; undefined is the model's own default. */
+  readonly effort?: ThinkingLevel;
+  readonly onEffortChange?: (effort: ThinkingLevel) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly locked: boolean;
@@ -1162,7 +554,6 @@ export function NewThreadConfigurationStrip({
   readonly onRunnerProfileRetry?: () => void;
   /** Opens Orb Providers settings, for a person with no provider. */
   readonly onConnectOrbProvider?: () => void;
-  readonly onProfileChange: (profile: ModeId) => void;
   readonly onModelChange: (model: string | undefined) => void;
   /** The Claude plan a Claude Code Thread is bound to; unset, dx picks one. */
   readonly claudePlan?: string;
@@ -1181,7 +572,7 @@ export function NewThreadConfigurationStrip({
   const projectTriggerRef = React.useRef<HTMLButtonElement>(null);
   const openAndFocusModePicker = () => {
     setModePickerOpen(true);
-    focusModeDial();
+    focusModelSearch();
   };
   const shortcutHandler = (event: KeyboardEvent) => {
     if (
@@ -1316,15 +707,13 @@ export function NewThreadConfigurationStrip({
         onProjectChange={onProjectChange}
         projectTriggerRef={projectTriggerRef}
       />
-      <ModePicker
-        profile={profile}
+      <ModelPicker
         model={model}
         choices={choices}
         routingGraph={routingGraph}
         locked={locked}
         open={modePickerOpen}
         onOpenChange={setModePickerOpen}
-        onProfileChange={onProfileChange}
         onModelChange={onModelChange}
         effort={effort}
         onEffortChange={onEffortChange}

@@ -74,6 +74,8 @@ import {
   ThreadIdUnavailableResponseSchema,
   threadAgentUrl,
   UpdateThreadInvalidRequestResponseSchema,
+  UpdateThreadModelLockedResponseSchema,
+  UpdateThreadModelNotServedResponseSchema,
   UpdateThreadNotFoundResponseSchema,
   UpdateThreadParamsSchema,
   UpdateThreadPersistenceUnavailableResponseSchema,
@@ -250,6 +252,12 @@ class ThreadSnoozeUnavailable extends Schema.TaggedError<ThreadSnoozeUnavailable
 
 class InvalidThreadRequest extends Schema.TaggedError<InvalidThreadRequest>()(
   "InvalidThreadRequest",
+  {},
+) {}
+
+/** A Space's model is set in Settings → Models → Space, not per Space. */
+class ThreadModelLocked extends Schema.TaggedError<ThreadModelLocked>()(
+  "ThreadModelLocked",
   {},
 ) {}
 
@@ -2519,13 +2527,54 @@ export const createThreadRoutes = (
         () => new InvalidThreadRequest(),
       );
       const db = yield* decodeD1Binding(context.env.DB);
+      const principal = context.get("principal");
+      // A model change applies from the Thread's next submitted message:
+      // each turn reads the Thread's selection when it starts. The owner's
+      // connections must serve the model; a Claude Code model runs on the
+      // Thread's own Claude plan, bound on its first Claude Code turn.
+      const selection = body.selection;
+      if (selection !== undefined) {
+        const kind = yield* Effect.tryPromise({
+          try: () =>
+            db
+              .prepare(
+                "SELECT kind FROM threads WHERE id = ? AND owner_user_id = ? AND lifecycle_state != 'deleted'",
+              )
+              .bind(params.threadId, principal.userId)
+              .first<string>("kind"),
+          catch: (cause) =>
+            PersistenceUnavailable.new(
+              { operation: "thread.readKindForModelChange" },
+              cause,
+            ),
+        });
+        if (kind === null)
+          return yield* Effect.fail(
+            new ThreadNotFound({ threadId: params.threadId }),
+          );
+        if (kind === "space")
+          return yield* Effect.fail(new ThreadModelLocked());
+        yield* Effect.tryPromise({
+          try: () =>
+            resolveSelectionForUser(
+              context.env,
+              principal.userId,
+              selection,
+              undefined,
+              { pickClaudePlan: false },
+            ),
+          catch: (cause) =>
+            cause instanceof ModelNotServed
+              ? cause
+              : PersistenceUnavailable.new(
+                  { operation: "thread.resolveModelChange" },
+                  cause,
+                ),
+        });
+      }
       const thread = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
-        return yield* service.update(
-          context.get("principal"),
-          params.threadId,
-          body,
-        );
+        return yield* service.update(principal, params.threadId, body);
       }).pipe(Effect.provide(threadServiceLayer(db)));
       // Children on auto color show this Thread's color, so a recolor
       // refreshes their detail too.
@@ -2588,6 +2637,30 @@ export const createThreadRoutes = (
               },
             }),
             400,
+          ),
+        ThreadModelLocked: () =>
+          context.json(
+            Schema.encodeUnknownSync(UpdateThreadModelLockedResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_MODEL_LOCKED",
+                message: "This Thread's model cannot be changed.",
+                requestId,
+              },
+            }),
+            409,
+          ),
+        ModelNotServed: () =>
+          context.json(
+            Schema.encodeUnknownSync(UpdateThreadModelNotServedResponseSchema)({
+              status: "error",
+              data: {
+                code: "MODEL_NOT_SERVED",
+                message: "No connection serves that model.",
+                requestId,
+              },
+            }),
+            422,
           ),
         ThreadNotFound: () =>
           context.json(

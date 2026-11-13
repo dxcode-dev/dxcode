@@ -1,9 +1,12 @@
+/* Settings → Models: the Recommended model, older mode Threads' models, and
+   the Space model, each a model choice beside an effort choice. */
 .mode-tuning-page {
-  font-family: var(--font-ui);
+  display: grid;
+  gap: var(--space-4);
   color: var(--foreground);
 }
 .tuning-notice {
-  margin: 0 0 var(--space-2-5);
+  margin: 0;
   font-size: var(--text-xs);
   line-height: var(--leading-4);
   color: var(--muted-foreground);
@@ -14,280 +17,81 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.mode-tuning-workbench {
-  --mode-accent: var(--mode-low-glow);
-  background:
-    radial-gradient(ellipse at 45% 0%, var(--console-glow), transparent 65%),
-    var(--console-surface);
-  border: 1px solid var(--console-border);
-  border-radius: var(--radius-4xl);
-  padding: var(--space-6);
-  color: var(--console-foreground);
-  box-shadow: inset 0 1px 0
-    color-mix(in srgb, var(--highlight-ink) 2%, transparent);
-}
-.mode-tuning-workbench[data-mode="medium"] {
-  --mode-accent: var(--mode-medium-glow);
-}
-.mode-tuning-workbench[data-mode="high"] {
-  --mode-accent: var(--mode-high-glow);
-}
-.mode-tuning-workbench[data-mode="ultra"] {
-  --mode-accent: var(--mode-ultra-glow);
-}
-.tuning-workbench-body {
-  display: flex;
+/* A model choice and its effort, side by side; stacked on a phone. */
+.tuning-agent-card {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   align-items: center;
-  gap: var(--space-6);
-  min-height: 280px;
+  gap: var(--space-2);
+  padding: var(--space-3);
 }
-.tuning-device {
-  position: relative;
-  flex: 0 0 400px;
-  width: 400px;
-  max-width: 100%;
+.tuning-agent-card > label {
+  grid-column: 1 / -1;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
 }
-.tuning-editor-column {
-  flex: 1;
-  min-width: 0;
+.tuning-agent-card > p,
+.tuning-agent-card .tuning-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.tuning-hint {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  line-height: var(--leading-4);
+}
+.models-older-modes {
+  display: grid;
+  gap: var(--space-1);
+  padding-bottom: var(--space-1);
+}
+.models-older-modes > section {
+  border-top: 1px solid var(--divider);
+}
+.models-older-modes h3 {
+  margin: 0;
+  padding: var(--space-2-5) var(--space-3) 0;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+/* Settings → Models → Space: the model new Spaces run on. */
+.space-agent-role {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-lg);
 }
 .tuning-mode-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 30px;
   gap: var(--space-3);
 }
 .tuning-mode-heading h2 {
   margin: 0;
-  color: var(--mode-accent);
-  font-size: var(--text-2xs);
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  font-weight: var(--weight-medium);
-  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
-.tuning-mode-heading h2 span {
-  color: var(--console-muted);
-  letter-spacing: 1px;
-}
-.tuning-mode-heading button {
-  font-size: var(--text-3xs);
-  text-transform: uppercase;
-  color: var(--console-muted);
-}
-.tuning-agent-card {
-  padding: var(--space-3-5);
-  border: 1px solid var(--console-border);
-  border-radius: var(--radius-xl);
-  background: var(--console-card);
-  box-shadow: inset 0 1px
-    color-mix(in srgb, var(--highlight-ink) 3.9%, transparent);
-}
-.tuning-agent-card > label {
-  display: block;
-  margin-bottom: var(--space-3-5);
-  font-size: var(--text-3xs);
-  letter-spacing: 3px;
-  text-transform: uppercase;
-  color: var(--console-muted);
-  font-family: var(--font-mono);
-}
-.tuning-agent-card select {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  height: 36px;
-  padding: 0 var(--space-3);
-  color: var(--console-field-foreground);
-  border: 1px solid var(--console-field-border);
-  border-radius: var(--radius-sm);
-  background: var(--console-field);
-  font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-}
-.tuning-agent-card p {
-  font-size: var(--text-xs);
-  color: var(--console-muted);
-  line-height: 17px;
-}
-.tuning-agent-card .tuning-hint {
-  margin: 7px 0 0;
-  overflow-wrap: anywhere;
-}
-.tuning-effort {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin-top: var(--space-3);
-  min-height: 32px;
-}
-.tuning-agent-card[data-auto="true"] .tuning-effort {
-  opacity: 0.55;
-}
-.tuning-effort-track {
-  flex: 1;
-  min-width: 0;
-  position: relative;
-  height: 32px;
-}
-.tuning-effort-dots {
-  display: flex;
-  justify-content: space-between;
-  position: absolute;
-  pointer-events: none;
-  inset: 14px 7px;
-  z-index: 1;
-}
-.tuning-effort-dots i {
-  width: 3px;
-  height: 3px;
-  background: var(--console-dot);
-  border-radius: 50%;
-}
-.tuning-effort input {
-  appearance: none;
-  width: 100%;
-  height: 6px;
-  position: absolute;
-  top: 13px;
-  margin: 0;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--shadow-ink);
-  background: linear-gradient(
-    to right,
-    color-mix(in srgb, var(--mode-accent) 30%, var(--shadow-ink))
-      var(--effort-fill),
-    var(--console-track) var(--effort-fill)
-  );
-  cursor: pointer;
-}
-.tuning-effort input::-webkit-slider-thumb {
-  appearance: none;
-  width: 10px;
-  height: 18px;
-  border: 1px solid var(--console-thumb-edge);
-  border-radius: 2px;
-  background: linear-gradient(
-    90deg,
-    var(--console-thumb-top),
-    var(--console-thumb-bottom)
-  );
-  box-shadow:
-    0 1px 3px var(--shadow-ink),
-    inset 0 1px color-mix(in srgb, var(--highlight-ink) 20%, transparent);
-  position: relative;
-  z-index: 2;
-}
-.tuning-effort input::-moz-range-thumb {
-  width: 8px;
-  height: 16px;
-  border: 1px solid var(--console-thumb-edge);
-  border-radius: 2px;
-  background: var(--console-thumb);
-}
-.tuning-effort output {
-  flex: 0 0 48px;
-  text-align: right;
-  font: var(--text-3xs) var(--font-mono);
-  text-transform: uppercase;
-  color: var(--console-muted);
+.space-agent-role .tuning-agent-card {
+  padding: 0;
 }
 .tuning-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
-  margin-top: var(--space-6);
-  border-top: 1px solid
-    color-mix(in srgb, var(--highlight-ink) 3.1%, transparent);
-  padding-top: var(--space-4);
-  font: var(--text-2xs) var(--font-mono);
-  text-transform: uppercase;
-}
-.tuning-footer button {
-  padding: 7px var(--space-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--console-button-border);
-  text-transform: uppercase;
-}
-.tuning-footer .tuning-save {
-  background: var(--console-save);
-  border-color: var(--console-save);
-  color: var(--console-save-foreground);
-}
-.mode-tuning-workbench button:disabled,
-.mode-tuning-workbench input:disabled,
-.space-agent-role button:disabled,
-.space-agent-role input:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-.mode-tuning-workbench :is(button, select, input):focus-visible,
-.space-agent-role :is(button, select, input):focus-visible {
-  outline: 2px solid var(--mode-accent);
-  outline-offset: 3px;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
 }
 .tuning-error {
-  color: var(--console-error);
+  margin: 0;
+  color: var(--destructive);
   font-size: var(--text-sm);
-  margin: var(--space-3) 0 0;
-}
-@media (max-width: 1050px) {
-  .tuning-workbench-body {
-    flex-direction: column;
-    gap: var(--space-6);
-  }
-  .tuning-device {
-    flex-basis: auto;
-  }
-  .tuning-editor-column {
-    width: 100%;
-  }
 }
 @media (max-width: 639px) {
-  .mode-tuning-workbench {
-    padding: var(--space-4);
+  .tuning-agent-card {
+    grid-template-columns: minmax(0, 1fr);
   }
-  .tuning-device {
-    width: min(320px, 100%);
-    transform-origin: center;
-  }
-  .tuning-workbench-body {
-    min-height: 0;
-  }
-}
-
-.tuning-label-target {
-  position: absolute;
-  width: 32px;
-  height: 24px;
-  transform: translate(-50%, -50%);
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-}
-.tuning-label-target:focus-visible {
-  outline: 1px solid var(--mode-accent);
-  border-radius: var(--radius-xs);
-}
-
-/* Settings → Mode Dial → Space: the model new Spaces run on. */
-.space-agent-role {
-  --mode-accent: var(--console-agent-accent);
-  margin-top: var(--space-5);
-  background: var(--console-surface);
-  border: 1px solid var(--console-border);
-  border-radius: var(--radius-4xl);
-  padding: var(--space-6);
-  color: var(--console-foreground);
-}
-.space-agent-role > .tuning-hint {
-  margin: 0 0 var(--space-3-5);
-}
-.space-agent-role .tuning-agent-card .tuning-hint[data-route] {
-  margin-top: var(--space-3);
 }

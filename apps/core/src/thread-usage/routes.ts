@@ -1,4 +1,5 @@
 import {
+  GetThreadClaudePlanResponseSchema,
   GetThreadOrbMetricsResponseSchema,
   GetThreadOrbSessionsResponseSchema,
   GetThreadUsageRequestsResponseSchema,
@@ -10,6 +11,10 @@ import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import type { AppEnv } from "../http/types.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
+import {
+  lastThreadClaudeConnection,
+  loadThreadClaudePlan,
+} from "../settings/model-routing/connection-store-d1.js";
 import {
   readThreadOrbSessions,
   readThreadUsage,
@@ -73,6 +78,48 @@ const orbMetricSamples = async (
 };
 
 export const threadUsageRoutes = new Hono<AppEnv>()
+  // The plan a Claude Code Thread runs on, as its composer names it. Plans
+  // are the owner's connections, so only the owner reads it.
+  .get("/:threadId/usage/claude-plan", async (context) => {
+    const db = context.env.DB;
+    if (db === undefined) return unavailable(context);
+    if (context.get("threadAccess") !== "owner")
+      return context.json(
+        {
+          status: "error",
+          data: {
+            code: "THREAD_OWNER_ONLY",
+            message: "Only the Thread's owner sees its Claude plan.",
+            requestId: context.get("requestId"),
+          },
+        },
+        403,
+      );
+    const threadId = threadIdOf(context);
+    const plan = await loadThreadClaudePlan(db, threadId);
+    // Threads from before plans were bound ran on the plan of their latest
+    // Claude Code turn, which their next turn binds.
+    const connectionId =
+      plan.connectionId ??
+      (plan.boundAt === undefined
+        ? await lastThreadClaudeConnection(
+            db,
+            context.get("threadOwnerUserId"),
+            threadId,
+          )
+        : undefined);
+    context.header("cache-control", "no-store");
+    return context.json(
+      Schema.encodeUnknownSync(GetThreadClaudePlanResponseSchema)({
+        status: "success",
+        data:
+          connectionId !== undefined
+            ? { state: "bound", connectionId }
+            : { state: plan.boundAt === undefined ? "none" : "removed" },
+      }),
+      200,
+    );
+  })
   .get("/:threadId/usage", async (context) => {
     const db = context.env.DB;
     if (db === undefined) return unavailable(context);

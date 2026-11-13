@@ -4,8 +4,53 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { Select } from "../../../shared/ui/select.js";
-import { ReasoningEffort } from "./mode-dial-controls.js";
 import { AUTO, type ModeDraft, type ModeSlot } from "./mode-dial-drafts.js";
+import { THINKING_LEVELS } from "./mode-dial-values.js";
+
+const EFFORT_NAMES: Readonly<Record<ThinkingLevel, string>> = {
+  off: "Off",
+  minimal: "Minimal",
+  low: "Low",
+  medium: "Medium",
+  high: "High",
+  xhigh: "X-High",
+  max: "Max",
+};
+
+/** A model's reasoning effort, as a plain choice list. */
+function ReasoningEffort({
+  value,
+  label,
+  disabled,
+  onChange,
+  name = "Main Agent reasoning effort",
+}: {
+  readonly value: ThinkingLevel;
+  /** The list's accessible name. */
+  readonly name?: string;
+  /** Shown instead of the level, such as Auto before it resolves. */
+  readonly label?: string | undefined;
+  readonly disabled: boolean;
+  readonly onChange: (value: ThinkingLevel) => void;
+}) {
+  return (
+    <Select
+      size="md"
+      aria-label={name}
+      value={label === undefined ? value : "auto"}
+      disabled={disabled}
+      options={
+        label === undefined
+          ? THINKING_LEVELS.map((level) => [
+              level,
+              `${EFFORT_NAMES[level]} effort`,
+            ])
+          : [["auto", label]]
+      }
+      onValueChange={(next) => onChange(next as ThinkingLevel)}
+    />
+  );
+}
 
 /** A link to another settings page in the same scope. */
 export function SettingsSectionLink({

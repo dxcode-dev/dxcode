@@ -120,6 +120,72 @@ export function ChoiceSelectItem({
   );
 }
 
+/**
+ * An item's two lines: its name, and a quieter detail under it, such as who
+ * pays for a model. `trailing` sits at the name's end, such as an effort.
+ */
+export function ChoiceSelectItemDetail({
+  title,
+  detail,
+  trailing,
+  icon,
+}: {
+  readonly title: React.ReactNode;
+  readonly detail?: React.ReactNode;
+  readonly trailing?: React.ReactNode;
+  readonly icon?: React.ReactNode;
+}) {
+  return (
+    <span className="dx-picker-item-detail">
+      {icon === undefined ? null : (
+        <span className="dx-picker-item-icon" aria-hidden="true">
+          {icon}
+        </span>
+      )}
+      <span className="dx-picker-item-lines">
+        <span className="dx-picker-item-title">
+          <BaseSelect.ItemText className="dx-picker-item-label">
+            {title}
+          </BaseSelect.ItemText>
+          {trailing === undefined ? null : (
+            <span className="dx-picker-item-trailing">{trailing}</span>
+          )}
+        </span>
+        {detail === undefined ? null : (
+          <span className="dx-picker-item-note">{detail}</span>
+        )}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * A row under the list for a setting of the chosen item, such as its effort.
+ * Pointer and keys inside it stay out of the list's navigation.
+ */
+export function ChoiceSelectFooter({
+  children,
+  label,
+}: {
+  readonly children: React.ReactNode;
+  readonly label?: React.ReactNode;
+}) {
+  return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: keeps the list's typeahead out of the footer's controls.
+    <div
+      className="dx-picker-footer"
+      onKeyDown={(event) => {
+        if (event.key !== "Escape") event.stopPropagation();
+      }}
+    >
+      {label === undefined ? null : (
+        <span className="dx-picker-footer-label">{label}</span>
+      )}
+      {children}
+    </div>
+  );
+}
+
 export function ChoiceSelectSeparator() {
   return <BaseSelect.Separator className="dx-picker-separator" />;
 }

@@ -1,7 +1,7 @@
 import { type QueryClient, queryOptions } from "@tanstack/react-query";
 import { getSpaceAgentModel } from "../../shared/api/client.js";
 
-/** Mode Dial → Space: the model new Spaces run on, and where they'd run. */
+/** Models → Space: the model new Spaces run on, and where they'd run. */
 export const spaceAgentModelQueryOptions = (identity: string) =>
   queryOptions({
     queryKey: ["space-agent-model", identity] as const,

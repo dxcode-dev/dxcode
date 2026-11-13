@@ -1634,7 +1634,7 @@ export const resetProfileMode = async (mode: string) =>
     )
   ).data;
 
-/** Settings → Mode Dial → Space: the model new Spaces run on, and its route. */
+/** Settings → Models → Space: the model new Spaces run on, and its route. */
 export const getSpaceAgentModel = async (signal?: AbortSignal) =>
   (
     await request(

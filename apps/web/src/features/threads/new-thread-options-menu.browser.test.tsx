@@ -1,5 +1,5 @@
 import type { ProjectData } from "@dx/api";
-import type { ModeId, ThreadVisibility } from "@dx/domain";
+import type { ThreadVisibility } from "@dx/domain";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -23,14 +23,12 @@ async function mountStrip({ inWorkspace }: { readonly inWorkspace: boolean }) {
       <NewThreadConfigurationStrip
         projects={projects}
         projectId=""
-        profile={"medium" as ModeId}
         locked={false}
         submitting={false}
         ready
         retrying={false}
         onProjectChange={() => undefined}
         onModelChange={() => undefined}
-        onProfileChange={() => undefined}
         visibility={visibility}
         onVisibilityChange={
           inWorkspace

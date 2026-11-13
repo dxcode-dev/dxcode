@@ -56,7 +56,7 @@ const spaceAgentChipLabel = (route: SpaceAgentRoute) =>
 /**
  * The model for new Spaces, picked before a Space exists: from the Create
  * Space dialog when nothing serves the current one, or to change it. It
- * saves the same setting as Settings → Mode Dial → Space.
+ * saves the same setting as Settings → Models → Space.
  */
 export function SpaceAgentPicker({
   identity,
