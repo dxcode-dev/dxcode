@@ -18,6 +18,15 @@ import {
   safeNextPath,
   validateSignInSearch,
 } from "./features/authentication/sign-in-paths.js";
+import { HUDDLE_MOCK } from "./features/huddle/huddle-availability.js";
+import {
+  HuddlesOffError,
+  huddleLinkTargetQueryOptions,
+} from "./features/huddle/huddle-link-queries.js";
+import {
+  HuddleLinkError,
+  HuddleLinkPending,
+} from "./features/huddle/huddle-link-states.js";
 import { InstallAppBanner } from "./features/install-app/install-app-banner.js";
 import { ProductShell } from "./features/navigation/product-shell.js";
 import { ensureProductShellData } from "./features/navigation/sidebar-width.js";
@@ -50,6 +59,7 @@ import {
 } from "./features/threads/thread-queries.js";
 import { openThreadSeen } from "./features/threads/thread-seen-mutations.js";
 import { ThreadSnoozeProvider } from "./features/threads/thread-snooze.js";
+import { huddleJoinRequest } from "./shared/huddle/huddle-join-request.js";
 import { NewProjectSurfaceContext } from "./shared/new-project-surface.js";
 import { isStaleChunkError } from "./shared/stale-chunk.js";
 
@@ -130,7 +140,14 @@ const productSpacesSection = (onNavigate: () => void) => (
   </React.Suspense>
 );
 
+// Any URL that is not a dx page; Core answers it with status 404.
+const NotFoundPage = lazyRouteComponent(
+  () => import("./features/not-found/not-found-page.js"),
+  "NotFoundPage",
+);
+
 const rootRoute = createRootRouteWithContext<RouterContext>()({
+  notFoundComponent: NotFoundPage,
   component: () => (
     <NewProjectSurfaceContext.Provider value={NewProjectOnDemand}>
       <NewThreadProvider>
@@ -405,6 +422,36 @@ const threadRoute = createRoute({
   component: page.thread,
 });
 
+// A huddle link, /huddle/<workspace>/<code>: opens its thread or Space with
+// the Join dialog showing. The code reads with or without hyphens, in any
+// case. Signed out, sign-in comes first and returns here.
+const huddleLinkRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/huddle/$workspace/$code",
+  loader: async ({ context, params }) => {
+    const [settings, target] = await Promise.all([
+      HUDDLE_MOCK
+        ? undefined
+        : context.queryClient.ensureQueryData(
+            settingsContextQueryOptions(context.userId),
+          ),
+      context.queryClient.ensureQueryData(
+        huddleLinkTargetQueryOptions(params.workspace, params.code),
+      ),
+    ]);
+    if (settings !== undefined && settings.huddle !== true)
+      throw new HuddlesOffError();
+    huddleJoinRequest.ask(target.threadId);
+    throw redirect({
+      to: "/threads/$threadId",
+      params: { threadId: target.threadId },
+      replace: true,
+    });
+  },
+  pendingComponent: HuddleLinkPending,
+  errorComponent: HuddleLinkError,
+});
+
 // A Thread's tree page lived at /threads/:id/tree; keep old links working.
 const threadTreeRedirectRoute = createRoute({
   getParentRoute: () => productRoute,
@@ -629,6 +676,7 @@ const routeTree = rootRoute.addChildren([
     newThreadRoute,
     threadRoute,
     threadTreeRedirectRoute,
+    huddleLinkRoute,
     bugReportsRoute,
     bugReportRoute,
     allBugReportsRoute,

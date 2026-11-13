@@ -23,6 +23,8 @@ import { mountEditor, withLines } from "./file-editor-harness.js";
 Object.defineProperty(navigator, "platform", { get: () => "iPhone" });
 
 let editor: Awaited<ReturnType<typeof mountEditor>>;
+/** This test's editor, once it mounted; a failed mount cleans up itself. */
+let mounted: typeof editor | undefined;
 
 beforeEach(async () => {
   await cdp().send("Emulation.setTouchEmulationEnabled", {
@@ -31,9 +33,13 @@ beforeEach(async () => {
   });
   await page.viewport(393, 852);
   editor = await mountEditor();
+  mounted = editor;
 });
 
-afterEach(() => editor.unmount());
+afterEach(async () => {
+  await mounted?.unmount();
+  mounted = undefined;
+});
 
 /** A real touch tap at a point in this page. */
 const tap = async (element: Element, dx?: number) => {

@@ -7,6 +7,7 @@ import {
   type StoredPluginTrigger,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
+import { getLogger } from "@logtape/logtape";
 import { Effect, Layer, Schema } from "effect";
 import type { PluginInstallRecord } from "../../plugins/worker-host/host.js";
 import { findCodePluginTriggerInstall } from "../../plugins/worker-host/triggers.js";
@@ -29,6 +30,54 @@ export class TriggerDeliveryForbidden extends Schema.TaggedError<TriggerDelivery
     ]),
   },
 ) {}
+
+const logger = getLogger(["dx", "settings", "triggers"]);
+
+/**
+ * A trigger whose plugin no longer runs for its owner: disabled, removed,
+ * paused by an overlap, or a workspace's plugin after the owner left the
+ * workspace. Logged and audited, then refused.
+ */
+const refuse = (db: D1Database, trigger: StoredPluginTrigger) =>
+  Effect.gen(function* () {
+    const auditId = `taud_${crypto.randomUUID()}`;
+    logger.warn("A trigger's plugin no longer runs for its owner; refused.", {
+      event: "plugin_trigger_refused",
+      triggerId: trigger.id,
+      ownerUserId: trigger.ownerUserId,
+      pluginId: trigger.pluginId,
+      reason: "plugin-unreachable",
+      auditId,
+    });
+    // One row a minute per trigger at most: the URL's holder may keep
+    // posting, and audit rows are permanent. One statement, no extra read.
+    const now = new Date();
+    yield* Effect.tryPromise(() =>
+      db
+        .prepare(
+          `INSERT INTO plugin_trigger_audit (
+             audit_id, trigger_id, owner_user_id, action, outcome, request_id,
+             created_at
+           )
+           SELECT ?1, ?2, ?3, 'plugin_trigger.delivery_refused', 'rejected', ?1, ?4
+            WHERE NOT EXISTS (
+              SELECT 1 FROM plugin_trigger_audit recent
+               WHERE recent.owner_user_id = ?3
+                 AND recent.trigger_id = ?2
+                 AND recent.action = 'plugin_trigger.delivery_refused'
+                 AND recent.created_at > ?5)`,
+        )
+        .bind(
+          auditId,
+          trigger.id,
+          trigger.ownerUserId,
+          now.toISOString(),
+          new Date(now.getTime() - 60_000).toISOString(),
+        )
+        .run(),
+    ).pipe(Effect.ignore);
+    return yield* new TriggerDeliveryForbidden({ reason: "plugin-disabled" });
+  });
 
 const PluginAuthorizationRow = Schema.Struct({
   scope: Schema.Literals(["personal", "workspace"]),
@@ -112,7 +161,7 @@ export const loadAuthorizedTriggerDelivery = Effect.fn(
       ),
   });
   if (row === null) {
-    return yield* new TriggerDeliveryForbidden({ reason: "plugin-disabled" });
+    return yield* refuse(db, trigger);
   }
   const authorized = yield* Schema.decodeUnknownEffect(PluginAuthorizationRow)(
     row,
@@ -127,8 +176,7 @@ export const loadAuthorizedTriggerDelivery = Effect.fn(
           cause,
         ),
     });
-    if (install === undefined)
-      return yield* new TriggerDeliveryForbidden({ reason: "plugin-disabled" });
+    if (install === undefined) return yield* refuse(db, trigger);
     // A personal secret (the trigger's HMAC key, or one a personal install
     // reads) needs the workspace to allow personal secret overrides.
     if (

@@ -24,6 +24,11 @@ export const setupPluginTrigger = async (
     readonly idempotent?: boolean;
     readonly capabilityHash?: string;
     readonly hmacReference?: unknown;
+    /**
+     * Install the plugin in this workspace instead of personally, with the
+     * trigger's owner as a member.
+     */
+    readonly workspaceId?: string;
   } = {},
 ) => {
   const idempotent = options.idempotent ?? true;
@@ -67,6 +72,9 @@ export const setupPluginTrigger = async (
     },
     skipped: [],
   };
+  const workspaceId = options.workspaceId;
+  const membershipId =
+    workspaceId === undefined ? undefined : `mem_${crypto.randomUUID()}`;
   await env.DB.batch([
     env.DB.prepare(
       'INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
@@ -81,8 +89,26 @@ export const setupPluginTrigger = async (
       `INSERT INTO trusted_plugin (
          id, scope, target_id, name, enabled, active_version, health_status,
          created_at, updated_at, kind
-       ) VALUES (?, 'personal', ?, ?, 1, ?, 'unchecked', ?, ?, 'bundle')`,
-    ).bind(pluginId, pluginTriggerOwner, name, version, timestamp, timestamp),
+       ) VALUES (?, ?, ?, ?, 1, ?, 'unchecked', ?, ?, 'bundle')`,
+    ).bind(
+      pluginId,
+      workspaceId === undefined ? "personal" : "workspace",
+      workspaceId ?? pluginTriggerOwner,
+      name,
+      version,
+      timestamp,
+      timestamp,
+    ),
+    ...(workspaceId === undefined || membershipId === undefined
+      ? []
+      : [
+          env.DB.prepare(
+            "INSERT OR IGNORE INTO organization (id, name, slug, createdAt) VALUES (?, ?, ?, 1)",
+          ).bind(workspaceId, `Workspace ${workspaceId}`, workspaceId),
+          env.DB.prepare(
+            "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'member', 1)",
+          ).bind(membershipId, workspaceId, pluginTriggerOwner),
+        ]),
     env.DB.prepare(
       `INSERT INTO trusted_plugin_version (
          plugin_id, version, manifest_json, grants_json, source_json,
@@ -136,5 +162,5 @@ export const setupPluginTrigger = async (
   const stub = env.PLUGIN_TRIGGER_DELIVERY.get(
     env.PLUGIN_TRIGGER_DELIVERY.idFromName(triggerId),
   );
-  return { pluginId, triggerId, stub };
+  return { pluginId, triggerId, stub, membershipId };
 };

@@ -66,8 +66,13 @@ export function HuddlePrejoin({
   const [video, setVideo] = React.useState(false);
   const people = summary?.active === true ? summary.participants : [];
   const where = place.scope.kind === "space" ? "Space" : "thread";
-  const description =
-    people.length === 0
+  // Until the summary loads, nobody is known to be here: say so, and offer
+  // Join rather than Start, since a huddle link opens this before it loads.
+  const loading = summary === undefined;
+  const starting = !loading && people.length === 0;
+  const description = loading
+    ? "Checking who's here…"
+    : people.length === 0
       ? `Nobody is here yet. People in this ${where} see the huddle and can join.`
       : `${people.map(({ name }) => name.split(" ")[0]).join(", ")} ${people.length === 1 ? "is" : "are"} here.`;
   return (
@@ -75,7 +80,7 @@ export function HuddlePrejoin({
       open={open}
       onOpenChange={onOpenChange}
       title={
-        people.length === 0
+        starting
           ? `Start a huddle in ${place.name}`
           : `Join the huddle in ${place.name}`
       }
@@ -84,7 +89,7 @@ export function HuddlePrejoin({
           ? description
           : `${description} Joining leaves the huddle in ${leaving}.`
       }
-      confirmLabel={people.length === 0 ? "Start huddle" : "Join"}
+      confirmLabel={starting ? "Start huddle" : "Join"}
       onConfirm={() => {
         onOpenChange(false);
         void joinHuddle(place, { audio, video });

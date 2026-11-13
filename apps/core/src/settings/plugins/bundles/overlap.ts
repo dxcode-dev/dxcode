@@ -40,10 +40,13 @@ export const personalCopyRunsSql = (plugin: string) =>
 
 /**
  * True when the workspace bundle row `plugin` may run for `owner`: it is on,
- * and `owner` does not run their own copy in its place.
+ * `owner` is an active member of its workspace now (someone who left or was
+ * removed reaches none of its plugins, through any path), and `owner` does
+ * not run their own copy in its place.
  */
 export const workspaceCopyRunsSql = (plugin: string, owner: string) =>
   `(${plugin}.enabled = 1 AND ${plugin}.removed_at IS NULL
+    AND ${activeMemberSql(`${plugin}.target_id`, owner)}
     AND NOT EXISTS (
       SELECT 1 FROM trusted_plugin own_copy
        WHERE own_copy.kind = 'bundle'

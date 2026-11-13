@@ -1,14 +1,16 @@
 import {
-  HuddleErrorResponseSchema,
-  type HuddleFailure,
+  formatHuddleCode,
   HuddleJoinResponseSchema,
+  HuddleLinkResponseSchema,
   HuddleSummaryResponseSchema,
 } from "@dx/api";
 import { Schema } from "effect";
-import { type Context, Hono } from "hono";
+import { Hono } from "hono";
 import { userImageSql } from "../avatars/storage.js";
 import type { AppEnv } from "../http/types.js";
 import { displayNameSql } from "../thread-sharing/service.js";
+import { failure } from "./failures.js";
+import { huddleWorkspace, linkCodeFor } from "./links.js";
 import {
   addParticipant,
   createMeeting,
@@ -16,28 +18,6 @@ import {
   type RealtimeKitAccess,
   realtimeKitAccess,
 } from "./realtimekit.js";
-
-const FAILURES = {
-  HUDDLE_UNAVAILABLE: [
-    409,
-    "This deployment has no RealtimeKit app, so huddles are unavailable.",
-  ],
-  HUDDLE_PROVIDER_FAILED: [
-    502,
-    "RealtimeKit did not answer. Try again in a moment.",
-  ],
-} as const satisfies Record<HuddleFailure, readonly [number, string]>;
-
-const failure = (context: Context<AppEnv>, code: HuddleFailure) => {
-  const [status, message] = FAILURES[code];
-  return context.json(
-    Schema.encodeUnknownSync(HuddleErrorResponseSchema)({
-      status: "error",
-      data: { code, message, requestId: context.get("requestId") },
-    }),
-    status,
-  );
-};
 
 interface Person {
   readonly id: string;
@@ -104,11 +84,46 @@ const meetingFor = async (
  * since talking changes nothing in the Thread. A Space's huddle is its own
  * Thread's.
  *
+ * A private Thread has no huddle: talking is for the people it is shared
+ * with, so every route answers `HUDDLE_PRIVATE` until it is shared.
+ *
  * - `GET /huddle`: who is in it now, for the header before joining.
  * - `POST /huddle/join`: a RealtimeKit token that joins the signed-in person
  *   under their dx name, creating the Thread's meeting on first join.
+ * - `POST /huddle/link`: the huddle's short link, made on first copy and the
+ *   same for everyone after.
  */
 export const threadHuddleRoutes = new Hono<AppEnv>()
+  // Matches `/huddle` itself too.
+  .use("/:threadId/huddle/*", async (context, next) => {
+    const db = context.env.DB;
+    if (
+      db !== undefined &&
+      (await huddleWorkspace(db, context.req.param("threadId"))) === undefined
+    )
+      return failure(context, "HUDDLE_PRIVATE");
+    return next();
+  })
+  .post("/:threadId/huddle/link", async (context) => {
+    const db = context.env.DB;
+    const threadId = context.req.param("threadId");
+    const workspace =
+      db === undefined ? undefined : await huddleWorkspace(db, threadId);
+    if (db === undefined || workspace === undefined)
+      return failure(context, "HUDDLE_PRIVATE");
+    const code = formatHuddleCode(await linkCodeFor(db, threadId));
+    return context.json(
+      Schema.encodeUnknownSync(HuddleLinkResponseSchema)({
+        status: "success",
+        data: {
+          code,
+          workspace: workspace.slug,
+          path: `/huddle/${workspace.slug}/${code}`,
+        },
+      }),
+      200,
+    );
+  })
   .get("/:threadId/huddle", async (context) => {
     const access = realtimeKitAccess(context.env);
     const db = context.env.DB;

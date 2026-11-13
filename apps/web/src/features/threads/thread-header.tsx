@@ -400,7 +400,11 @@ export function ThreadHeader({
                 : "Contributor"}
           </span>
         )}
-        {archived || Huddle === undefined ? null : (
+        {/* Huddles are for the people a thread is shared with: none in a
+            private thread. */}
+        {archived ||
+        Huddle === undefined ||
+        thread.sharing === undefined ? null : (
           <Huddle kind="thread" threadId={thread.id} name={thread.title} />
         )}
         {views}

@@ -1178,7 +1178,9 @@ export default Alchemy.Stack(
       },
       assets: {
         directory: `${configuration.packageDirectory}/assets`,
-        notFoundHandling: "single-page-application",
+        // A path with no file reaches Core, which answers app pages with 200
+        // and unknown paths with 404 (site/page-not-found.ts).
+        notFoundHandling: "none",
         runWorkerFirst: ["/api/*", "/v1", "/v1/*", "/healthz", "/readyz"],
       },
       env: deployedWorkerBindings,

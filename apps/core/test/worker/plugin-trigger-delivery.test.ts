@@ -5,8 +5,15 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import {
+  findCodePluginTriggerInstall,
+  listCodePluginTriggerCapabilities,
+} from "../../src/plugins/worker-host/triggers.js";
 import { triggerDeliveryBackoffMs } from "../../src/settings/triggers/durable-object.js";
-import { setupPluginTrigger } from "./plugin-trigger-fixture.js";
+import {
+  pluginTriggerOwner,
+  setupPluginTrigger,
+} from "./plugin-trigger-fixture.js";
 
 const setup = (idempotent = true) => setupPluginTrigger({ idempotent });
 
@@ -348,5 +355,66 @@ describe("plugin trigger durable delivery", () => {
         "ALTER TABLE plugin_trigger_unavailable RENAME TO plugin_trigger",
       ).run();
     }
+  });
+
+  it("refuses a former member's trigger for the workspace's plugin, with a log line and an audit row", async () => {
+    const workspaceId = `ws-trigger-${crypto.randomUUID().slice(0, 8)}`;
+    const { triggerId, stub, pluginId, membershipId } =
+      await setupPluginTrigger({ workspaceId });
+    // While a member, the delivery runs the workspace's plugin.
+    const accepted = await enqueue(stub, triggerId, "member-event");
+    expect(accepted.status).toBe(202);
+    await runDurableObjectAlarm(stub);
+    let delivered = (await status(stub)).deliveries[0];
+    for (
+      let wait = 0;
+      wait < 100 && delivered?.status !== "succeeded";
+      wait++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      await runDurableObjectAlarm(stub);
+      delivered = (await status(stub)).deliveries[0];
+    }
+    expect(delivered).toMatchObject({ status: "succeeded" });
+    expect(
+      await listCodePluginTriggerCapabilities(env.DB, pluginTriggerOwner),
+    ).toEqual(expect.arrayContaining([expect.objectContaining({ pluginId })]));
+
+    // Removed from the workspace: the same trigger reaches nothing.
+    await env.DB.prepare("DELETE FROM member WHERE id = ?")
+      .bind(membershipId)
+      .run();
+    const refused = await enqueue(stub, triggerId, "former-member-event");
+    expect(refused.status).toBe(403);
+    await expect(refused.json()).resolves.toMatchObject({
+      code: "plugin-disabled",
+    });
+    expect(
+      await findCodePluginTriggerInstall(env.DB, pluginId, pluginTriggerOwner),
+    ).toBeUndefined();
+    expect(
+      (await listCodePluginTriggerCapabilities(env.DB, pluginTriggerOwner)).map(
+        (capability) => capability.pluginId,
+      ),
+    ).not.toContain(pluginId);
+    const audit = await env.DB.prepare(
+      `SELECT action, outcome FROM plugin_trigger_audit
+        WHERE trigger_id = ? AND outcome = 'rejected'`,
+    )
+      .bind(triggerId)
+      .all<{ action: string; outcome: string }>();
+    expect(audit.results).toEqual([
+      { action: "plugin_trigger.delivery_refused", outcome: "rejected" },
+    ]);
+    // Posting again is refused too, without another audit row this minute.
+    const again = await enqueue(stub, triggerId, "former-member-again");
+    expect(again.status).toBe(403);
+    const audited = await env.DB.prepare(
+      `SELECT COUNT(*) AS rows FROM plugin_trigger_audit
+        WHERE trigger_id = ? AND action = 'plugin_trigger.delivery_refused'`,
+    )
+      .bind(triggerId)
+      .first<{ rows: number }>();
+    expect(audited?.rows).toBe(1);
   });
 });

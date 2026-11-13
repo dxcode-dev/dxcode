@@ -1,4 +1,5 @@
 import {
+  Link2,
   Maximize2,
   Mic,
   MicOff,
@@ -10,7 +11,8 @@ import {
   VideoOff,
 } from "lucide-react";
 import { Button } from "../../shared/ui/button.js";
-import type { HuddleCallState } from "./huddle-client.js";
+import { type HuddleCallState, huddleThreadId } from "./huddle-client.js";
+import { copyHuddleLink } from "./huddle-link-queries.js";
 import { canPopOut, popOutHuddle } from "./huddle-popout.js";
 import { huddleClient, huddleView, leaveHuddle } from "./huddle-session.js";
 
@@ -19,8 +21,8 @@ const canShareScreen = () =>
   typeof navigator.mediaDevices?.getDisplayMedia === "function";
 
 /**
- * Mute, camera, screen share, and leave, with expand or dock and pop out
- * where the window allows them.
+ * Mute, camera, screen share, the huddle's link, and leave, with expand or
+ * dock and pop out where the window allows them.
  */
 export function HuddleControls({
   call,
@@ -139,6 +141,23 @@ export function HuddleControls({
           <PictureInPicture2 aria-hidden="true" />
         </Button>
       ) : null}
+      {call.scope === undefined ? null : (
+        <Button
+          variant="secondary"
+          size="lg"
+          shape="round"
+          className="huddle-control"
+          aria-label="Copy huddle link"
+          title="Copy huddle link: anyone this is shared with joins in one click"
+          onClick={() =>
+            call.scope === undefined
+              ? undefined
+              : void copyHuddleLink(huddleThreadId(call.scope))
+          }
+        >
+          <Link2 aria-hidden="true" />
+        </Button>
+      )}
       <Button
         variant="destructive"
         size="lg"

@@ -39,13 +39,26 @@ export const mountEditor = async () => {
       </ThemeProvider>,
     ),
   );
-  await expect
-    .poll(() =>
-      container
-        .querySelector("diffs-container")
-        ?.shadowRoot?.querySelector('[contenteditable="true"]'),
-    )
-    .toBeTruthy();
+  // The editor loads its highlighter lazily; the first mount on a cold CI
+  // runner takes longer than expect.poll's one-second default. A mount
+  // that never appears still fails, and takes its nodes with it so later
+  // tests start clean.
+  try {
+    await expect
+      .poll(
+        () =>
+          container
+            .querySelector("diffs-container")
+            ?.shadowRoot?.querySelector('[contenteditable="true"]'),
+        { timeout: 15_000 },
+      )
+      .toBeTruthy();
+  } catch (error) {
+    await React.act(() => root.unmount());
+    container.remove();
+    outside.remove();
+    throw error;
+  }
   const shadow = container.querySelector("diffs-container")?.shadowRoot;
   const editable = shadow?.querySelector<HTMLElement>(
     '[contenteditable="true"]',

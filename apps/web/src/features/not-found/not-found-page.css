@@ -1,0 +1,82 @@
+/* The 404 page: the snapped chain, one sentence of story, two ways out.
+   Colors come from the app's tokens, so it follows the saved appearance. */
+.nf-page {
+  /* The scene's inks, derived from the palette like every other color: the
+     chain and posts from its ink and ground, the band from --brand, and the
+     manila tag from --warning mixed into the printed page, so it stays a
+     warm paper tag in every theme. */
+  --nf-steel: color-mix(in srgb, var(--foreground) 82%, var(--background));
+  --nf-steel-shade: color-mix(in srgb, var(--nf-steel) 30%, var(--shadow-ink));
+  --nf-glint: color-mix(in srgb, var(--highlight-ink) 55%, transparent);
+  --nf-post: color-mix(in srgb, var(--shadow-ink) 82%, var(--foreground));
+  --nf-post-light: color-mix(in srgb, var(--highlight-ink) 7%, transparent);
+  --nf-band: var(--brand);
+  --nf-ground: var(--border);
+  --nf-shadow: color-mix(in srgb, var(--shadow-ink) 30%, transparent);
+  --nf-tag: color-mix(in srgb, var(--warning) 24%, var(--page-canvas));
+  --nf-tag-edge: color-mix(in srgb, var(--warning) 55%, var(--page-canvas));
+  --nf-tag-ink: color-mix(in srgb, var(--shadow-ink) 82%, var(--warning));
+  --nf-tag-ring: var(--nf-tag-edge);
+  --nf-tag-hole: var(--background);
+  --nf-string: color-mix(in srgb, var(--warning) 45%, var(--muted-foreground));
+  display: grid;
+  grid-template-rows: auto 1fr;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-ui);
+}
+
+.nf-page-header {
+  padding: 20px 24px;
+}
+
+.nf-page-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 24px 64px;
+  text-align: center;
+}
+
+.nf-page-art {
+  width: min(560px, 100%);
+  margin-bottom: 20px;
+}
+
+.nf-page-title {
+  margin: 0 0 14px;
+  color: var(--popover-foreground);
+  font-size: clamp(2.125em, 5vw, 3.25em);
+  font-weight: 700;
+  line-height: 1.02;
+  letter-spacing: -0.035em;
+}
+
+.nf-page-story {
+  max-width: 440px;
+  margin: 0 0 28px;
+  color: var(--muted-foreground);
+  font-size: var(--text-xl);
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+
+.nf-page-path {
+  padding: 2px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--muted);
+  color: var(--popover-foreground);
+  font: var(--text-md) / 1 var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.nf-page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+}

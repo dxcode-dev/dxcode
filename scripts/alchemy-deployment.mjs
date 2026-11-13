@@ -1544,7 +1544,11 @@ const validateWorkerProps = (
     ],
     [
       "asset-not-found",
-      props.assets?.notFoundHandling !== "single-page-application",
+      // Core answers paths with no file; a stage deployed before it did
+      // still records the single-page-application fallback.
+      props.assets?.notFoundHandling !== "none" &&
+        (current ||
+          props.assets?.notFoundHandling !== "single-page-application"),
     ],
     [
       "asset-worker-first",

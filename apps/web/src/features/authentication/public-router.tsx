@@ -3,7 +3,9 @@ import {
   createRootRouteWithContext,
   createRoute,
   createRouter,
+  lazyRouteComponent,
   Outlet,
+  type RouterHistory,
   redirect,
 } from "@tanstack/react-router";
 import { JoinSignInRoute } from "./join-sign-in-route.js";
@@ -46,17 +48,26 @@ const joinRoute = createRoute({
   component: JoinSignInRoute,
 });
 
-/** Any other signed-out URL asks for sign-in and comes back afterwards. */
+/**
+ * Any other signed-out URL: a dx page asks for sign-in and comes back
+ * afterwards; anything else is not a page, and says so.
+ */
 const anyRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "$",
-  beforeLoad: ({ location }) => {
+  beforeLoad: async ({ location }) => {
+    const { isAppRoutePath } = await import("../not-found/app-route-check.js");
+    if (!isAppRoutePath(location.pathname)) return;
     throw redirect({
       to: "/signin",
       search: { next: location.href },
       replace: true,
     });
   },
+  component: lazyRouteComponent(
+    () => import("../not-found/not-found-page.js"),
+    "NotFoundPage",
+  ),
 });
 
 const routeTree = rootRoute.addChildren([
@@ -68,5 +79,12 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 /** Routes for signed-out visitors; the signed-in product router replaces it after sign-in. */
-export const createPublicRouter = (queryClient: QueryClient) =>
-  createRouter({ routeTree, context: { queryClient } });
+export const createPublicRouter = (
+  queryClient: QueryClient,
+  history?: RouterHistory,
+) =>
+  createRouter({
+    routeTree,
+    context: { queryClient },
+    ...(history === undefined ? {} : { history }),
+  });

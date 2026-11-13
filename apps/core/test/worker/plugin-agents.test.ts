@@ -11,11 +11,16 @@ import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
 import { resolveAgentCodePlugins } from "../../src/plugins/agent-context.js";
+import { pluginAgentDefinitionOf } from "../../src/plugins/agents/definition.js";
+import { startAgentThread } from "../../src/plugins/agents/threads.js";
 import {
   type CodePluginRuntime,
   createPluginTools,
 } from "../../src/plugins/worker-host/agent.js";
-import { resolveThreadCodePlugins } from "../../src/plugins/worker-host/resolve.js";
+import {
+  listThreadCodePluginInstalls,
+  resolveThreadCodePlugins,
+} from "../../src/plugins/worker-host/resolve.js";
 import { pluginPermissionDiff } from "../../src/settings/plugins/bundles/permission-diff.js";
 import { readPluginBundle } from "../../src/settings/plugins/bundles/read-bundle.js";
 import { PluginBundleRepositoryD1 } from "../../src/settings/plugins/bundles/repository-d1.js";
@@ -24,7 +29,10 @@ import {
   buildZip,
   type FixtureEntry,
 } from "../../src/settings/plugins/bundles/zip-fixture.js";
-import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
+import {
+  TEST_CONFIG_ENCRYPTION_KEYS,
+  TEST_RUNNER_PROFILE_CATALOG,
+} from "../../src/testing/bindings.js";
 
 /**
  * Plugin agents and model choice, through real Dynamic Workers. What can go
@@ -45,6 +53,8 @@ import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
  *   gone, without the agent's instructions or tool limits ("fail closed").
  * - An update adds models or agents without a new review ("updates").
  * - A malformed manifest grants a half-read permission ("reading").
+ * - A long request makes the agent Thread's title too long, so dx refuses
+ *   to start the Thread at all ("title").
  */
 
 const bindings = {
@@ -459,5 +469,37 @@ describe("plugin agents and model choice", () => {
     await expect(resolveAgentCodePlugins(threadId)).rejects.toThrow(
       /no longer runs for you.*\(dx_failure:account:PLUGIN_AGENT_UNAVAILABLE\)/,
     );
+  });
+
+  it("title: a request whose first line is long still starts the agent's Thread", async () => {
+    const { userId, threadId } = await person();
+    await install(userId, agentsFiles());
+    const [installed] = await listThreadCodePluginInstalls(env.DB, threadId);
+    if (installed === undefined) throw new Error("Missing the install.");
+    const firstLine = `Review the change that moves plugin triggers onto the shared membership check ${"and its tests ".repeat(8)}`;
+    const started = await startAgentThread({
+      // Thread creation as the product routes run it, with a model served.
+      bindings: {
+        ...bindings,
+        AI: { run: async () => ({}) } as unknown as Ai,
+        DX_RUNNER_PROFILE_CATALOG: TEST_RUNNER_PROFILE_CATALOG,
+      },
+      db: env.DB,
+      install: installed,
+      ownerUserId: userId,
+      definition: pluginAgentDefinitionOf(installed.code, {
+        name: "reviewer",
+        instructions: "Review only.",
+      }),
+      prompt: `${firstLine}\nSecond line.`,
+      // As agent.run names it: the agent's label and the first line.
+      title: `Reviewer: ${firstLine.slice(0, 80)}`,
+      startedBy: "plugin",
+    });
+    const row = await env.DB.prepare("SELECT title FROM threads WHERE id = ?")
+      .bind(started.threadId)
+      .first<{ title: string | null }>();
+    expect(row?.title?.length).toBeLessThanOrEqual(80);
+    expect(row?.title).toMatch(/^Reviewer: Review the change/);
   });
 });

@@ -104,17 +104,20 @@ const verifyContentSecurityPolicy = async (origin, packageRoot, manifest) => {
     ({ path }) => path.startsWith("assets/assets/") && path.endsWith(".js"),
   )?.path;
   const checks = [
-    ["/", expected(app)],
-    ["/w/acme/threads/thr_00000000-0000-4000-8000-000000000000", expected(app)],
-    [`/${script?.replace(/^assets\//, "")}`, expected(app)],
+    ["/", expected(app), 200],
+    ["/threads/thr_00000000-0000-4000-8000-000000000000", expected(app), 200],
+    // Core answers a path with no file with the app; it keeps the policy.
+    ["/no-such-page-xyz", expected(app), 404],
+    [`/${script?.replace(/^assets\//, "")}`, expected(app), 200],
     [
       "/view-frame",
       JSON.stringify({
         enforced: VIEW_FRAME_CONTENT_SECURITY_POLICY,
         reportOnly: null,
       }),
+      200,
     ],
-    ["/v1/projects", expected(apiPolicy)],
+    ["/v1/projects", expected(apiPolicy), 401],
   ];
   if (manifest.graph.docs.length > 0) {
     const docsHashes = [
@@ -128,18 +131,78 @@ const verifyContentSecurityPolicy = async (origin, packageRoot, manifest) => {
           ),
       ),
     ].sort();
-    checks.push(["/docs/", expected(docsPolicy({ scriptHashes: docsHashes }))]);
+    const docs = expected(docsPolicy({ scriptHashes: docsHashes }));
+    checks.push(["/docs/", docs, 200], ["/docs/no-such-page-xyz/", docs, 404]);
   }
-  for (const [path, want] of checks) {
+  for (const [path, want, status] of checks) {
     const response = await fetch(`${origin}${path}`, { redirect: "manual" });
     const got = JSON.stringify(policiesOf(response));
-    if (response.status !== (path === "/v1/projects" ? 401 : 200))
+    if (response.status !== status)
       throw new Error(
         `Packaged Worker answered ${path} with ${response.status}.`,
       );
     if (got !== want)
       throw new Error(
         `Packaged Worker served ${path} with an unexpected CSP: ${got}`,
+      );
+  }
+};
+
+/**
+ * App pages answer 200 on a reload or deep link; any other path with no file
+ * answers 404, the docs with their own 404 page, so search engines never
+ * index a soft 404.
+ */
+const verifyPageStatuses = async (origin, packageRoot, manifest) => {
+  const file = (path) => readFileSync(resolve(packageRoot, "assets", path));
+  const app = file("index.html").toString("utf8");
+  const thread = "thr_00000000-0000-4000-8000-000000000000";
+  const checks = [
+    ["GET", "/", 200, app],
+    ["GET", `/threads/${thread}`, 200, app],
+    ["GET", `/threads/${thread}/`, 200, app],
+    ["GET", "/workspaces/acme/members", 200, app],
+    ["GET", "/projects/prj_1/settings/general", 200, app],
+    ["GET", "/signin", 200, app],
+    ["GET", "/join/token-1", 200, app],
+    ["GET", "/no-such-page-xyz", 404, app],
+    ["HEAD", "/no-such-page-xyz", 404, ""],
+    ["GET", "/threads", 404, app],
+    ["GET", `/threads/${thread}/no-such-tab`, 404, app],
+    ["GET", "/llms.txt", 200, file("llms.txt").toString("utf8")],
+    ["GET", "/sitemap.xml", 200, file("sitemap.xml").toString("utf8")],
+  ];
+  if (manifest.graph.docs.length > 0) {
+    const docsNotFound = file("docs/404.html").toString("utf8");
+    checks.push(
+      ["GET", "/docs/no-such-page-xyz/", 404, docsNotFound],
+      ["GET", "/docs/deployment/no-such-page-xyz/", 404, docsNotFound],
+    );
+  }
+  for (const [method, path, status, body] of checks) {
+    const response = await fetch(`${origin}${path}`, {
+      method,
+      redirect: "manual",
+    });
+    const text = await response.text();
+    if (response.status !== status || text !== body)
+      throw new Error(
+        `Packaged Worker answered ${method} ${path} with ${response.status} and ${text === body ? "the expected" : "an unexpected"} body; expected ${status}.`,
+      );
+  }
+  // Core's own paths and other methods keep the API's JSON not-found.
+  for (const [method, path] of [
+    ["GET", "/api/no-such-route"],
+    ["POST", "/no-such-page-xyz"],
+  ]) {
+    const response = await fetch(`${origin}${path}`, { method });
+    const code = await response
+      .json()
+      .then((body) => body?.data?.code)
+      .catch(() => undefined);
+    if (response.status !== 404 || code !== "NOT_FOUND")
+      throw new Error(
+        `Packaged Worker answered ${method} ${path} with ${response.status}, not the API's JSON 404.`,
       );
   }
 };
@@ -317,7 +380,9 @@ export const smokeProductionPackage = async (packageRoot) => {
     rules: [{ type: "ESModule", globs: ["**/*.js"] }],
     assets: {
       directory: assets,
-      not_found_handling: "single-page-application",
+      // Alchemy binds every deployed Worker's assets as ASSETS.
+      binding: "ASSETS",
+      not_found_handling: "none",
       run_worker_first: ["/api/*", "/v1", "/v1/*", "/healthz", "/readyz"],
     },
     vars: {
@@ -397,6 +462,7 @@ export const smokeProductionPackage = async (packageRoot) => {
         "Packaged Worker did not serve the packaged application.",
       );
     await verifyContentSecurityPolicy(origin, packageRoot, manifest);
+    await verifyPageStatuses(origin, packageRoot, manifest);
     if (manifest.graph.docs.length === 0) {
       // A package without the docs site sends every docs path to the hosted
       // docs, keeping the rest of the path.

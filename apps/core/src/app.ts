@@ -32,6 +32,7 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
+import { huddleLinkRoutes } from "./huddles/links.js";
 import { threadHuddleRoutes } from "./huddles/routes.js";
 import {
   notificationRoutes,
@@ -63,6 +64,7 @@ import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
 import { shellRoutes } from "./shell/routes.js";
 import { sidebarLayoutRoutes } from "./sidebar-layout/routes.js";
+import { pageNotFound } from "./site/page-not-found.js";
 import { bitbucketGitGatewayRoutes } from "./source-control/bitbucket/git-gateway.js";
 import { bitbucketControlPlaneRoutes } from "./source-control/bitbucket/routes.js";
 import {
@@ -142,6 +144,8 @@ app.route(
 // A deployment's own routes for every signed-in person.
 app.route("/v1/deployment", registeredDeploymentRoutes);
 app.route("/v1/dictation", dictationRoutes);
+// Where a huddle link opens, for the signed-in person.
+app.route("/v1/huddle-links", huddleLinkRoutes);
 app.route("/v1/invites", inviteAcceptRoutes);
 app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
@@ -230,7 +234,7 @@ app.route(
 app.use("/v1/threads/:threadId/plugin-ui", authorizeThread);
 app.use("/v1/threads/:threadId/plugin-ui/*", authorizeThread);
 app.route("/v1/threads", pluginThreadUiRoutes);
-// A Thread's huddle, a Space's included (experimental flag `huddle`).
+// A Thread's huddle, a Space's included, and its link: shared Threads only.
 app.use("/v1/threads/:threadId/huddle", authorizeThread);
 app.use("/v1/threads/:threadId/huddle/*", authorizeThread);
 app.route("/v1/threads", threadHuddleRoutes);
@@ -247,7 +251,7 @@ app.route("/v1/threads", mcpAppViewRoutes);
 app.route("/v1/threads", threadDraftRoutes);
 app.route("/v1/agents/dx", dxAgentRoutes);
 
-app.notFound(notFoundHandler);
+app.notFound(pageNotFound(notFoundHandler));
 app.onError(errorHandler);
 // A read a D1 replica answered "not found" is answered again at the primary.
 app.fetch = confirmMissesAtPrimary(app.fetch) as typeof app.fetch;

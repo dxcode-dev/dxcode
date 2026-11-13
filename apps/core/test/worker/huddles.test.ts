@@ -156,9 +156,20 @@ const call = async (
 };
 
 let projects = 0;
+/** A Thread shared with a workspace: private Threads have no huddle. */
 const newThread = async () => {
   const project = await createProjectViaApi(`huddles-${++projects}`);
-  return (await createThreadViaApi(project.data.id)).data.id;
+  const threadId = (await createThreadViaApi(project.data.id)).data.id;
+  const workspaceId = `org_huddles_${projects}`;
+  await env.DB.batch([
+    env.DB.prepare(
+      "INSERT INTO organization (id, name, slug, createdAt) VALUES (?, 'Huddles', ?, 1)",
+    ).bind(workspaceId, `huddles-${projects}`),
+    env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'view', shared_workspace_id = ? WHERE id = ?",
+    ).bind(workspaceId, threadId),
+  ]);
+  return threadId;
 };
 
 afterEach(() => {
@@ -256,6 +267,8 @@ describe("huddle routes", () => {
     expect(viewerMayRequest("POST", "/v1/threads/t1/huddle/join/x")).toBe(
       false,
     );
+    // Copying the link invites only people who can open the Thread.
+    expect(viewerMayRequest("POST", "/v1/threads/t1/huddle/link")).toBe(true);
   });
 
   it("lists only the people in the session now, once each", async () => {

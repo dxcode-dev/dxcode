@@ -515,7 +515,9 @@ describe("readiness requirements", () => {
       failure(createTestBindings({ DX_E2B_TEMPLATE: "other" })),
     ).resolves.toMatchObject({ category: "runner_template_configuration" });
     await expect(
-      failure(createTestBindings({ DX_SOURCE_CONTROL_SCHEMA_VERSION: "0047" })),
+      // No migration is ever numbered 0000, so this is never the current
+      // version, in this repository or in the renumbered public export.
+      failure(createTestBindings({ DX_SOURCE_CONTROL_SCHEMA_VERSION: "0000" })),
     ).resolves.toMatchObject({
       category: "source_control_schema_configuration",
     });

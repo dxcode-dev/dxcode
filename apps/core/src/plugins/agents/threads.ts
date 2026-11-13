@@ -1,4 +1,8 @@
-import type { ThreadModelSelection, UserId } from "@dx/domain";
+import {
+  generateThreadTitle,
+  type ThreadModelSelection,
+  type UserId,
+} from "@dx/domain";
 import type { Bindings } from "../../http/types.js";
 import { listenForThreadHints } from "../../realtime/thread-hints.js";
 import { pluginAgentClaudePlan } from "../../settings/model-routing/submission.js";
@@ -230,15 +234,16 @@ export interface StartedAgentThread {
 }
 
 const failureText = (status: number, payload: unknown) => {
+  // dx's routes answer `{ status: "error", data: { code, message } }`.
   const body = payload as
     | {
+        readonly data?: { readonly code?: string; readonly message?: string };
         readonly error?: { readonly code?: string; readonly message?: string };
       }
     | undefined;
-  const code = body?.error?.code ?? `HTTP_${status}`;
-  return body?.error?.message === undefined
-    ? code
-    : `${code}: ${body.error.message}`;
+  const error = body?.data ?? body?.error;
+  const code = error?.code ?? `HTTP_${status}`;
+  return error?.message === undefined ? code : `${code}: ${error.message}`;
 };
 
 /**
@@ -344,9 +349,11 @@ export const startAgentThread = async (
       ...(input.parent?.projectId === undefined
         ? {}
         : { projectId: input.parent.projectId }),
+      // A Thread title is at most 80 characters; a longer one would refuse
+      // the whole request.
       ...(input.title === undefined
         ? {}
-        : { title: input.title, generateTitle: false }),
+        : { title: generateThreadTitle(input.title), generateTitle: false }),
       ...(selection === undefined ? {} : { selection }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       initialMessage: { body: input.prompt, attachments: [] },

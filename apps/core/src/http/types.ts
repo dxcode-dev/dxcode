@@ -185,6 +185,11 @@ export interface Bindings {
   readonly DB?: D1Database;
   readonly EMAIL?: SendEmail;
   readonly DX_STORAGE?: R2Bucket;
+  /**
+   * The web app and docs files a deployed Worker serves. Present only where
+   * Cloudflare serves them; local development serves the app with Vite.
+   */
+  readonly ASSETS?: Fetcher;
 }
 
 export interface Variables {

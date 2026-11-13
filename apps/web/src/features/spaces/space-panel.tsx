@@ -547,18 +547,23 @@ export function SpaceProjectChip({ space }: { readonly space: SpaceData }) {
  * Huddle's place (voice is not built in dx yet) and who the Space is shared
  * with; the owner's opens Edit Space.
  */
-/** The Huddle button while Huddle is off for this person. */
-const HUDDLE_OFF = (
+/** The Huddle button while Huddle is off, with why. */
+const huddleOff = (why: string) => (
   <Button
     variant="subtle"
     size="icon-xs"
     className="space-icon-button"
     aria-label="Huddle"
-    title="Huddle is not available yet"
+    title={why}
     disabled
   >
     <Headphones aria-hidden="true" />
   </Button>
+);
+const HUDDLE_OFF = huddleOff("Huddle is not available yet");
+// Huddles are for the people a Space is shared with.
+const HUDDLE_PRIVATE = huddleOff(
+  "Huddles are in shared Spaces. Share this Space with your workspace to start one.",
 );
 
 export function SpaceCallAndSharing({
@@ -577,6 +582,8 @@ export function SpaceCallAndSharing({
     <>
       {Huddle === undefined ? (
         HUDDLE_OFF
+      ) : space.sharing === "private" ? (
+        HUDDLE_PRIVATE
       ) : (
         <Huddle
           kind="space"

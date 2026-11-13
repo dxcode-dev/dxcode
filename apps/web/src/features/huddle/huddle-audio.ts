@@ -8,11 +8,16 @@
  * it runs, tracks that arrive seconds later still play in every browser.
  * Chrome also needs each remote WebRTC track attached to a media element
  * before Web Audio hears it, so each track gets a muted, detached <audio>.
+ *
+ * Firefox refuses a track whose sample rate differs from the context's (a Mac
+ * on a Bluetooth headset, for one). That track plays through its own <audio>
+ * instead, which `unlock()` starts again if the browser held it back.
  */
 
 type Sink = {
   readonly track: MediaStreamTrack;
-  readonly source: MediaStreamAudioSourceNode;
+  /** Undefined when the track plays through `element` instead. */
+  readonly source: MediaStreamAudioSourceNode | undefined;
   readonly element: HTMLAudioElement;
 };
 
@@ -34,15 +39,21 @@ export class HuddleAudio {
     }
     if (this.context.state !== "running")
       void this.context.resume().catch(() => undefined);
+    for (const sink of this.sinks.values())
+      if (sink.source === undefined && sink.element.paused) this.start(sink);
   }
 
   /** Whether sound is held back while someone could be heard. */
   get blocked() {
-    return (
-      this.sinks.size > 0 &&
-      this.context !== undefined &&
-      this.context.state !== "running"
-    );
+    if (this.sinks.size === 0 || this.context === undefined) return false;
+    for (const sink of this.sinks.values())
+      if (
+        sink.source === undefined
+          ? sink.element.paused
+          : this.context.state !== "running"
+      )
+        return true;
+    return false;
   }
 
   /** Plays exactly these tracks, keyed by who they belong to. */
@@ -56,17 +67,27 @@ export class HuddleAudio {
     for (const [key, track] of tracks) {
       if (this.sinks.has(key)) continue;
       const element = new Audio();
-      element.muted = true;
       element.srcObject = new MediaStream([track]);
-      void element.play().catch(() => undefined);
-      const source = context.createMediaStreamSource(new MediaStream([track]));
-      source.connect(context.destination);
-      this.sinks.set(key, { track, source, element });
+      let source: MediaStreamAudioSourceNode | undefined;
+      try {
+        source = context.createMediaStreamSource(new MediaStream([track]));
+        source.connect(context.destination);
+        element.muted = true;
+      } catch {
+        source = undefined;
+      }
+      const sink = { track, source, element };
+      this.sinks.set(key, sink);
+      this.start(sink);
     }
   }
 
+  private start(sink: Sink) {
+    void sink.element.play().then(this.onChange, this.onChange);
+  }
+
   private remove(key: string, sink: Sink) {
-    sink.source.disconnect();
+    sink.source?.disconnect();
     sink.element.pause();
     sink.element.srcObject = null;
     this.sinks.delete(key);

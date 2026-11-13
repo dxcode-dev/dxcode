@@ -11,12 +11,18 @@ import "../../../styles.css";
 import { mountEditor, withLines } from "./file-editor-harness.js";
 
 let editor: Awaited<ReturnType<typeof mountEditor>>;
+/** This test's editor, once it mounted; a failed mount cleans up itself. */
+let mounted: typeof editor | undefined;
 
 beforeEach(async () => {
   editor = await mountEditor();
+  mounted = editor;
 });
 
-afterEach(() => editor.unmount());
+afterEach(async () => {
+  await mounted?.unmount();
+  mounted = undefined;
+});
 
 const click = async (element: HTMLElement, x: number) => {
   await userEvent.click(element, {

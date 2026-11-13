@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Headphones } from "lucide-react";
 import * as React from "react";
+import { huddleJoinRequest } from "../../shared/huddle/huddle-join-request.js";
 import { ParticipantStack } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import { huddleScopeKey } from "./huddle-client.js";
@@ -17,7 +18,8 @@ import "./huddle.css";
 
 /**
  * The Huddle control in a Space's or thread's header: start one, join the
- * one that is on (with who is in it), or return to the one you're in.
+ * one that is on (with who is in it), or return to the one you're in. A
+ * huddle link opens its thread with the Join dialog already showing.
  */
 export default function HuddleButton({
   place,
@@ -26,7 +28,16 @@ export default function HuddleButton({
   readonly place: HuddlePlace;
   readonly variant: "space" | "thread";
 }) {
-  const [prejoin, setPrejoin] = React.useState(false);
+  const [prejoin, setPrejoin] = React.useState(() => {
+    if (!huddleJoinRequest.isFor(place.threadId)) return false;
+    // Gets the call ready while the person reads the dialog.
+    huddleClient.prepare(place.scope);
+    return true;
+  });
+  const closePrejoin = (open: boolean) => {
+    if (!open) huddleJoinRequest.clear();
+    setPrejoin(open);
+  };
   const summary = useQuery(huddleSummaryQueryOptions(place.scope));
   const call = useHuddleCall();
   const view = useHuddleView();
@@ -45,7 +56,9 @@ export default function HuddleButton({
     variant === "space"
       ? "space-icon-button huddle-header-button"
       : "thread-title-action huddle-header-button";
-  if (here)
+  if (here) {
+    // Already in it: the link has nothing left to ask.
+    if (prejoin) huddleJoinRequest.clear();
     return (
       <Button
         variant="subtle"
@@ -62,6 +75,7 @@ export default function HuddleButton({
         <span className="huddle-header-label">In huddle</span>
       </Button>
     );
+  }
   const names = people.map(({ name }) => name).join(", ");
   // Gets the call ready while the person checks their camera and mic.
   const openPrejoin = () => {
@@ -108,7 +122,7 @@ export default function HuddleButton({
       {prejoin ? (
         <HuddlePrejoin
           open
-          onOpenChange={setPrejoin}
+          onOpenChange={closePrejoin}
           place={place}
           summary={summary.data}
           leaving={elsewhere}
