@@ -121,6 +121,10 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
   context,
   next,
 ) => {
+  // A route both `/:threadId/x` and `/:threadId/x/*` guard runs this twice.
+  // The first run may impersonate the owner for a member, so a second run
+  // would find the Thread "owned" and grant owner access: keep the first.
+  if (context.get("threadAuthorizedAt") !== undefined) return next();
   const startedAt = performance.now();
   const requestId = context.get("requestId");
 
