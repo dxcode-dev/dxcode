@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ConnectionData } from "@dx/api";
 import { CLAUDE_CODE_PROVIDER_ID, customModelEndpoint } from "@dx/domain";
 import {
@@ -9,9 +8,16 @@ import {
   Route,
 } from "lucide-react";
 import type { PointerEventHandler, ReactNode } from "react";
+import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import { ClaudeIcon } from "../../../shared/ui/claude-icon.js";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { ProviderMark } from "../../../shared/ui/provider-marks.js";
 import { providerKeyPresentation } from "./provider-key-presentation.js";
 import { hasProviderMark } from "./provider-mark-ids.js";
@@ -142,14 +148,9 @@ export const ConnectionRow = ({
             <span className="model-routing-connection-subtitle">{label}</span>
           </span>
           {!connection.enabled ? (
-            <span className="model-routing-health-badge">Inactive</span>
+            <Badge>Inactive</Badge>
           ) : connection.health.state === "unhealthy" ? (
-            <span
-              className="model-routing-health-badge"
-              data-health="unhealthy"
-            >
-              Warning
-            </span>
+            <Badge tone="danger">Warning</Badge>
           ) : null}
           <ChevronRight
             className="model-routing-connection-chevron"
@@ -278,8 +279,8 @@ const ConnectionMenu = ({
 }) => {
   const claudeTab = connection.providerId === CLAUDE_CODE_PROVIDER_ID;
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         render={
           <Button
             size="icon-xs"
@@ -289,36 +290,22 @@ const ConnectionMenu = ({
         }
       >
         <Ellipsis />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="routing-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup">
-            {canReorderUp ? (
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => onMove(-1)}
-              >
-                {claudeTab ? "Move Left" : "Move Up"}
-              </Menu.Item>
-            ) : null}
-            {canReorderDown ? (
-              <Menu.Item className="thread-menu-item" onClick={() => onMove(1)}>
-                {claudeTab ? "Move Right" : "Move Down"}
-              </Menu.Item>
-            ) : null}
-            <Menu.Item
-              className="thread-menu-item routing-menu-danger"
-              onClick={onRemove}
-            >
-              {connection.kind === "subscription" ? "Disconnect" : "Delete"}
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup align="end">
+        {canReorderUp ? (
+          <MenuItem onClick={() => onMove(-1)}>
+            {claudeTab ? "Move Left" : "Move Up"}
+          </MenuItem>
+        ) : null}
+        {canReorderDown ? (
+          <MenuItem onClick={() => onMove(1)}>
+            {claudeTab ? "Move Right" : "Move Down"}
+          </MenuItem>
+        ) : null}
+        <MenuItem tone="danger" onClick={onRemove}>
+          {connection.kind === "subscription" ? "Disconnect" : "Delete"}
+        </MenuItem>
+      </MenuPopup>
+    </MenuRoot>
   );
 };

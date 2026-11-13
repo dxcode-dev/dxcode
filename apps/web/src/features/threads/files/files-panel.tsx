@@ -23,6 +23,8 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { Button } from "../../../shared/ui/button.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import {
   type ChangesTransport,
   defaultChangesTransport,
@@ -206,9 +208,13 @@ function FilesWorktreeRoot({
     ) : query.data === undefined ? (
       <div className="thread-files-state" role="alert">
         <span>{message(query.error)}</span>
-        <button type="button" onClick={() => void query.refetch()}>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void query.refetch()}
+        >
           Retry
-        </button>
+        </Button>
       </div>
     ) : (
       <>
@@ -243,14 +249,15 @@ function FilesWorktreeRoot({
           />
         </React.Suspense>
         {query.hasNextPage ? (
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             className="thread-files-more"
-            type="button"
             disabled={query.isFetchingNextPage}
             onClick={() => void query.fetchNextPage()}
           >
             {query.isFetchingNextPage ? "Loading…" : "More"}
-          </button>
+          </Button>
         ) : null}
       </>
     );
@@ -285,16 +292,16 @@ const tool = (
   onClick: () => void,
   disabled = false,
 ) => (
-  <button
-    type="button"
-    className="thread-files-tool"
+  <Button
+    variant="ghost"
+    size="icon-xs"
     aria-label={label}
     title={label}
     disabled={disabled}
     onClick={onClick}
   >
     {icon}
-  </button>
+  </Button>
 );
 
 export const ThreadFilesPanel = ({
@@ -461,14 +468,14 @@ export const ThreadFilesPanel = ({
           role="alert"
         >
           <span>{error}</span>
-          <button
-            type="button"
-            className="thread-files-tool"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             aria-label="Dismiss"
             onClick={() => setError(undefined)}
           >
             <X aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       )}
       {deleting === undefined ? null : (
@@ -548,17 +555,21 @@ export const ThreadFilePane = ({
   };
   if (query.isPending)
     return (
-      <div className="thread-files-state" role="status">
-        Loading file…
+      <div className="thread-files-placeholder" role="status">
+        <EmptyState title="Loading file…" />
       </div>
     );
   if (query.data === undefined)
     return (
       <div className="thread-files-state" role="alert">
         <span>{message(query.error)}</span>
-        <button type="button" onClick={() => void query.refetch()}>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void query.refetch()}
+        >
           Retry
-        </button>
+        </Button>
       </div>
     );
   const conflict =
@@ -567,8 +578,8 @@ export const ThreadFilePane = ({
   return (
     <React.Suspense
       fallback={
-        <div className="thread-files-state" role="status">
-          Loading editor…
+        <div className="thread-files-placeholder" role="status">
+          <EmptyState title="Loading editor…" />
         </div>
       }
     >

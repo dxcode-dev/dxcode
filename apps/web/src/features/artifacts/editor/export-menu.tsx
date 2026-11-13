@@ -1,6 +1,14 @@
-import { Menu } from "@base-ui/react/menu";
 import { Download, X } from "lucide-react";
 import * as React from "react";
+import { Button } from "../../../shared/ui/button.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
+import { cn } from "../../../shared/utils.js";
 import {
   htmlFile,
   markdownFile,
@@ -40,50 +48,39 @@ export function ExportMenu({
   const doc = () => session.state.doc;
   return (
     <>
-      <Menu.Root>
-        <Menu.Trigger
-          className="artifact-icon-button"
+      <MenuRoot>
+        <MenuTrigger
+          className={cn(
+            buttonVariants({ variant: "subtle", size: "icon-xs" }),
+            "artifact-icon-button",
+          )}
           aria-label="Export"
           title="Export"
         >
           <Download aria-hidden="true" />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            side="bottom"
-            align="end"
-            sideOffset={4}
+        </MenuTrigger>
+        <MenuPopup side="bottom" align="end" aria-label="Export">
+          <MenuItem
+            onClick={() =>
+              void save(() => markdownFile(title, session.markdown()))
+            }
           >
-            <Menu.Popup className="thread-menu-popup" aria-label="Export">
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  void save(() => markdownFile(title, session.markdown()))
-                }
-              >
-                Download Markdown
-              </Menu.Item>
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => void save(() => htmlFile(title, doc()))}
-              >
-                Download HTML
-              </Menu.Item>
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  sharesFiles()
-                    ? void save(() => pdfFile(title, doc()))
-                    : printArtifact(title, doc())
-                }
-              >
-                Print or Save as PDF
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+            Download Markdown
+          </MenuItem>
+          <MenuItem onClick={() => void save(() => htmlFile(title, doc()))}>
+            Download HTML
+          </MenuItem>
+          <MenuItem
+            onClick={() =>
+              sharesFiles()
+                ? void save(() => pdfFile(title, doc()))
+                : printArtifact(title, doc())
+            }
+          >
+            Print or Save as PDF
+          </MenuItem>
+        </MenuPopup>
+      </MenuRoot>
       {ready === undefined && !failed ? null : (
         <div className="artifact-export-ready" role="status">
           <span>
@@ -92,12 +89,13 @@ export function ExportMenu({
               : `${ready?.name} is ready.`}
           </span>
           {ready === undefined ? null : (
-            <button type="button" onClick={() => void save(() => ready)}>
+            <Button variant="outline" onClick={() => void save(() => ready)}>
               Save {ready.name}
-            </button>
+            </Button>
           )}
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="icon"
             aria-label="Dismiss"
             onClick={() => {
               setReady(undefined);
@@ -105,7 +103,7 @@ export function ExportMenu({
             }}
           >
             <X aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       )}
     </>

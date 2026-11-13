@@ -34,7 +34,14 @@ export function CheckEmailPanel({
       </p>
       <p className="sign-in-hint">{note}</p>
       {onResend === undefined ? null : (
-        <Button type="button" variant="outline" onClick={onResend}>
+        <Button
+          type="button"
+          variant="outline"
+          size="lg"
+          block
+          className="sign-in-resend"
+          onClick={onResend}
+        >
           {resendLabel}
         </Button>
       )}
@@ -43,9 +50,15 @@ export function CheckEmailPanel({
           {resendError}
         </p>
       )}
-      <button type="button" className="sign-in-switch" onClick={onBack}>
+      <Button
+        variant="subtle"
+        size="sm"
+        type="button"
+        className="sign-in-switch"
+        onClick={onBack}
+      >
         <ArrowLeft aria-hidden="true" /> Use a different email
-      </button>
+      </Button>
     </div>
   );
 }

@@ -21,12 +21,14 @@ import { getBrowserCommandRegistry } from "../../../shared/commands/command-regi
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
 import { clientDiagnostics } from "../../../shared/diagnostics/client-diagnostics.js";
 import { Button } from "../../../shared/ui/button.js";
+import { Checkbox } from "../../../shared/ui/checkbox.js";
 import {
   DialogContent,
   DialogDescription,
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
+import { Textarea } from "../../../shared/ui/textarea.js";
 import { loadedChanges } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
 import { serializeThreadJson } from "../thread-export.js";
@@ -176,6 +178,7 @@ function DiagnosticOptions({
   readonly dictated: boolean;
   readonly setDictated: (checked: boolean) => void;
 }) {
+  const id = React.useId();
   return (
     <section
       className="bug-report-diagnostics"
@@ -183,9 +186,9 @@ function DiagnosticOptions({
     >
       <h3 id="bug-report-diagnostics-title">Diagnostic Data</h3>
       {!inThread ? (
-        <label className="bug-report-option">
-          <input
-            type="checkbox"
+        <label htmlFor={`${id}-app`} className="bug-report-option">
+          <Checkbox
+            id={`${id}-app`}
             checked={threadAndApp}
             disabled={pending}
             onChange={(event) => setThreadAndApp(event.currentTarget.checked)}
@@ -198,9 +201,9 @@ function DiagnosticOptions({
         </label>
       ) : (
         <>
-          <label className="bug-report-option">
-            <input
-              type="checkbox"
+          <label htmlFor={`${id}-thread`} className="bug-report-option">
+            <Checkbox
+              id={`${id}-thread`}
               checked={threadAndApp}
               disabled={pending}
               onChange={(event) => setThreadAndApp(event.currentTarget.checked)}
@@ -215,11 +218,12 @@ function DiagnosticOptions({
             </span>
           </label>
           <label
+            htmlFor={`${id}-diff`}
             className="bug-report-option"
             data-disabled={changesOpen ? undefined : ""}
           >
-            <input
-              type="checkbox"
+            <Checkbox
+              id={`${id}-diff`}
               checked={diff && changesOpen}
               disabled={pending || !changesOpen}
               onChange={(event) => setDiff(event.currentTarget.checked)}
@@ -234,11 +238,12 @@ function DiagnosticOptions({
             </span>
           </label>
           <label
+            htmlFor={`${id}-dictation`}
             className="bug-report-option"
             data-disabled={dictation === undefined ? "" : undefined}
           >
-            <input
-              type="checkbox"
+            <Checkbox
+              id={`${id}-dictation`}
               checked={dictated && dictation !== undefined}
               disabled={pending || dictation === undefined}
               onChange={(event) => setDictated(event.currentTarget.checked)}
@@ -433,7 +438,8 @@ export function BugReportDialog({
           >
             <DialogTitle>Report Bug</DialogTitle>
             <div className="bug-report-message">
-              <textarea
+              <Textarea
+                variant="bare"
                 aria-label="Bug description"
                 placeholder="Describe the problem, what you expected, and steps to reproduce it."
                 value={message}

@@ -47,14 +47,16 @@ export const ClaudeCodeNotice = ({
       <div className="claude-code-notice-head">
         <ClaudeIcon className="claude-code-notice-icon" />
         <h2 id="claude-code-notice-title">Connect Your Claude Subscription</h2>
-        <button
+        <Button
+          variant="subtle"
+          size="icon-xs"
           type="button"
           className="claude-code-notice-dismiss"
           aria-label="Dismiss Claude subscription notice"
           onClick={store.dismiss}
         >
           <X aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       <p>{CLAUDE_PLAN_COPY}</p>
       <Button
@@ -137,7 +139,10 @@ export const ClaudeConnectDialog = ({
   };
   return (
     <DialogRoot open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="model-routing-dialog claude-code-dialog">
+      <DialogContent
+        size="lg"
+        className="model-routing-dialog claude-code-dialog"
+      >
         <DialogTitle>
           {replacing
             ? "Replace Your Claude Token"
@@ -158,7 +163,9 @@ export const ClaudeConnectDialog = ({
                 <p>In a terminal on your own computer, run:</p>
                 <div className="claude-code-command">
                   <code>{SETUP_COMMAND}</code>
-                  <button
+                  <Button
+                    variant="subtle"
+                    size="icon-sm"
                     type="button"
                     className="claude-code-copy"
                     aria-label={copied ? "Copied" : "Copy command"}
@@ -169,7 +176,7 @@ export const ClaudeConnectDialog = ({
                     ) : (
                       <Copy aria-hidden="true" />
                     )}
-                  </button>
+                  </Button>
                 </div>
                 <p className="claude-code-step-hint">
                   This needs Claude Code.{" "}

@@ -2,6 +2,7 @@ import { Dialog } from "@base-ui/react/dialog";
 import { X } from "lucide-react";
 import type * as React from "react";
 import { cn } from "../utils.js";
+import { Button } from "./button.js";
 
 export function ModalSurface({
   children,
@@ -51,7 +52,7 @@ export function ModalSurfaceHeader({
 
 export function ModalSurfaceClose() {
   return (
-    <Dialog.Close className="modal-surface-header-action">
+    <Dialog.Close render={<Button variant="ghost" size="xs" />}>
       <X aria-hidden="true" /> Close
     </Dialog.Close>
   );

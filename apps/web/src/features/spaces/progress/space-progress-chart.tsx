@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { Button } from "../../../shared/ui/button.js";
 import { useOpenSpaceThread } from "../use-open-space-thread.js";
 import {
   spaceProgressQueryOptions,
@@ -123,14 +124,15 @@ function DayThreads({
     <section className="space-progress-day" aria-label={dayLabel(day.date)}>
       <header>
         <span>{dayLabel(day.date)}</span>
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="space-progress-day-close"
           aria-label="Close"
           onClick={onClose}
         >
           <X aria-hidden="true" />
-        </button>
+        </Button>
       </header>
       {listed.length === 0 ? (
         <p>No threads started, shipped, or archived this day.</p>

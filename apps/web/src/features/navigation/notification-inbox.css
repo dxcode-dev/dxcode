@@ -8,66 +8,41 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--chat-mention-foreground, #7c5cff);
+  background: var(--chat-mention-foreground);
   box-shadow: 0 0 0 2px var(--sidebar, var(--background));
   content: "";
 }
-.notification-positioner {
-  z-index: 200;
-  outline: none;
-}
-.notification-popup {
+/* The mentions list on the shared Popover: wider, and its rows reach the
+   edges. */
+.dx-popover.notification-popup {
   width: min(400px, calc(100vw - 16px));
-  color: var(--popover-foreground);
-  border: 1px solid var(--outline);
-  border-radius: 10px;
-  background: var(--popover);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.3);
-  transform-origin: var(--transform-origin);
+  max-width: none;
+  padding: 0;
   overflow: hidden;
 }
 .notification-header {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 40px;
-  padding: 0 8px 0 14px;
+  padding: 0 var(--space-2) 0 var(--space-3-5);
   border-bottom: 1px solid var(--divider);
 }
 .notification-title {
   flex: 1;
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 13px;
-  font-weight: 500;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
 }
 .notification-count {
   color: var(--muted-foreground);
-  font-size: 12.5px;
+  font-size: var(--text-md);
   font-variant-numeric: tabular-nums;
 }
-.notification-menu-trigger {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-}
-.notification-menu-trigger:hover,
-.notification-menu-trigger[data-popup-open] {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.notification-menu-trigger svg {
+.dx-button.notification-menu-trigger svg {
   width: 15px;
   height: 15px;
-}
-.notification-menu-positioner {
-  z-index: 210;
 }
 /*
  * Rows have a fixed height (title and excerpt each truncate to one line), so
@@ -85,7 +60,7 @@
     ),
     calc(100dvh - 120px)
   );
-  padding: 4px;
+  padding: var(--space-1);
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-width: thin;
@@ -101,10 +76,10 @@
   display: flex;
   height: var(--notification-row-height);
   align-items: flex-start;
-  gap: 10px;
-  padding: 9px 22px 9px 10px;
+  gap: var(--space-2-5);
+  padding: 9px 22px 9px var(--space-2-5);
   color: inherit;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   outline: none;
   text-decoration: none;
 }
@@ -117,40 +92,40 @@
   height: 30px;
   flex: none;
   margin-top: 1px;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .notification-row-body {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
   flex: 1;
 }
 .notification-row-heading {
   display: flex;
   align-items: baseline;
-  line-height: 18px;
-  gap: 8px;
+  line-height: var(--leading-4-5);
+  gap: var(--space-2);
   min-width: 0;
 }
 .notification-row-heading strong {
   flex: 1;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .notification-row-heading time {
   flex: none;
   color: var(--muted-foreground);
-  font-size: 11.5px;
+  font-size: var(--text-sm);
 }
 .notification-excerpt {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12.5px;
-  line-height: 18px;
+  font-size: var(--text-md);
+  line-height: var(--leading-4-5);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -158,7 +133,7 @@
   color: var(--foreground);
 }
 .notification-mention {
-  color: var(--chat-mention-foreground, #7c5cff);
+  color: var(--chat-mention-foreground);
 }
 .notification-unread-dot {
   position: absolute;
@@ -167,14 +142,14 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: var(--chat-mention-foreground, #7c5cff);
+  background: var(--chat-mention-foreground);
   transform: translateY(-50%);
 }
 .notification-empty {
   margin: 0;
-  padding: 22px 16px;
+  padding: 22px var(--space-4);
   color: var(--muted-foreground);
-  font-size: 12.5px;
-  line-height: 18px;
+  font-size: var(--text-md);
+  line-height: var(--leading-4-5);
   text-align: center;
 }

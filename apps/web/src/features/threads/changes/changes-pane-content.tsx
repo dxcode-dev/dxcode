@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type {
   ThreadChangedFile,
   ThreadChangesData,
@@ -34,6 +33,8 @@ import * as React from "react";
 import { toast } from "sonner";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
+import { Button } from "../../../shared/ui/button.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { PaneTabAccessory } from "../panes/pane-toolbar-slot.js";
 import {
   type ChangesTransport,
@@ -52,6 +53,12 @@ import {
   shipPlanQueryOptions,
 } from "./changes-queries.js";
 import "./changes.css";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 
 /**
  * Syntax highlighting runs in workers: a diff renders plain lines at once and
@@ -288,11 +295,19 @@ export function ChangesPaneContent({
           </ChangesState>
         ) : null}
         {changesQuery.error !== null ? (
-          <ChangesState>
-            <span>{errorMessage(changesQuery.error)}</span>
-            <button type="button" onClick={() => void changesQuery.refetch()}>
-              <RefreshCw aria-hidden="true" /> Retry
-            </button>
+          <ChangesState
+            tone="error"
+            action={
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void changesQuery.refetch()}
+              >
+                <RefreshCw aria-hidden="true" /> Retry
+              </Button>
+            }
+          >
+            {errorMessage(changesQuery.error)}
           </ChangesState>
         ) : null}
         {missing ? (
@@ -308,8 +323,7 @@ export function ChangesPaneContent({
             ) : null}
             {changes.files.length === 0 ? (
               <div className="changes-empty" role="status">
-                <FileDiffIcon aria-hidden="true" />
-                <span>No Changes</span>
+                <EmptyState icon={<FileDiffIcon />} title="No Changes" />
               </div>
             ) : (
               <ChangesFileList
@@ -340,15 +354,16 @@ export function ChangesPaneContent({
               ? "No commit capture"
               : `${changes.ahead} commit${changes.ahead === 1 ? "" : "s"} ahead of ${changes.upstreamLabel ?? changes.baseline.slice(0, 7)}`}
           </span>
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             aria-haspopup="menu"
             aria-expanded={rangeMenuOpen}
             aria-label="Choose Changes range"
             onClick={() => setRangeMenuOpen((current) => !current)}
           >
             <ChevronDown aria-hidden="true" />
-          </button>
+          </Button>
         </footer>
       ) : null}
 
@@ -445,8 +460,9 @@ function ShipAction({
   };
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         className="changes-action"
         disabled={plan === undefined || !shippable || mutation.isPending}
         onClick={() => {
@@ -457,7 +473,7 @@ function ShipAction({
       >
         <Rocket aria-hidden="true" />
         {plan?.action === "push" ? "Push to Branch" : "Ship"}
-      </button>
+      </Button>
       {open && plan !== undefined ? (
         <ShipConfirmation
           plan={plan}
@@ -524,12 +540,12 @@ function ShipConfirmation({
       )}
       {error ? <div role="alert">{errorMessage(error)}</div> : null}
       <div>
-        <button type="button" onClick={onCancel}>
+        <Button variant="ghost" size="xs" onClick={onCancel}>
           Cancel
-        </button>
-        <button type="button" onClick={onConfirm} disabled={pending}>
+        </Button>
+        <Button size="xs" onClick={onConfirm} disabled={pending}>
           {copy.confirm}
-        </button>
+        </Button>
       </div>
     </dialog>
   );
@@ -559,12 +575,12 @@ function PushConfirmation({
       </p>
       {error ? <div role="alert">{errorMessage(error)}</div> : null}
       <div>
-        <button type="button" onClick={onCancel} disabled={pending}>
+        <Button variant="ghost" size="xs" onClick={onCancel} disabled={pending}>
           Cancel
-        </button>
-        <button type="button" onClick={onConfirm} disabled={pending}>
+        </Button>
+        <Button size="xs" onClick={onConfirm} disabled={pending}>
           {pending ? "Pushing…" : "Confirm push"}
-        </button>
+        </Button>
       </div>
     </dialog>
   );
@@ -783,8 +799,9 @@ function ChangesToolbar({
   return (
     <div className="changes-toolbar">
       {shipAction}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="xs"
         className="changes-action"
         disabled={!canPush}
         onClick={onPush}
@@ -796,15 +813,16 @@ function ChangesToolbar({
           <Upload aria-hidden="true" />
         )}
         {pushPending ? "Pushing…" : "Push"}
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="ghost"
+        size="xs"
         className="changes-action"
         disabled={!hasFiles}
         onClick={onReview}
       >
         <ListChecks aria-hidden="true" /> Review
-      </button>
+      </Button>
       {hasFiles ? (
         <>
           <fieldset className="changes-totals">
@@ -817,47 +835,52 @@ function ChangesToolbar({
             </span>
           </fieldset>
           <fieldset className="changes-view-controls" aria-label="Diff view">
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="icon-xs"
               title="Side-by-side diff"
               aria-label="Side-by-side diff"
               aria-pressed={diffStyle === "split"}
               onClick={onToggleDiffStyle}
             >
               <Columns2 aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
               title="Wrap lines"
               aria-label="Wrap lines"
               aria-pressed={overflow === "wrap"}
               onClick={onToggleOverflow}
             >
               <WrapText aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
               title="Sort by filename"
               aria-label="Sort by filename"
               aria-pressed={sortByName}
               onClick={onToggleSort}
             >
               <ArrowDownAZ aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon-xs"
               title="Collapse all files"
               aria-label="Collapse all files"
               onClick={onCollapseAll}
               disabled={expandedCount === 0}
             >
               <ChevronsDownUp aria-hidden="true" />
-            </button>
+            </Button>
           </fieldset>
         </>
       ) : null}
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-xs"
         className="changes-refresh"
         title={
           updating && capturedAt !== undefined
@@ -872,7 +895,7 @@ function ChangesToolbar({
           aria-hidden="true"
           className={refreshing || updating ? "changes-spin" : undefined}
         />
-      </button>
+      </Button>
     </div>
   );
 }
@@ -964,44 +987,41 @@ function ChangedFile({
             <span className="visually-hidden">Status {file.status}</span>
           </b>
         </button>
-        <Menu.Root>
-          <Menu.Trigger
-            className="changes-file-menu-trigger"
+        <MenuRoot>
+          <MenuTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="changes-file-menu-trigger"
+              />
+            }
             aria-label={`Actions for ${file.path}`}
             title="File actions"
           >
             <MoreHorizontal aria-hidden="true" />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner
-              side="bottom"
-              align="end"
-              sideOffset={4}
-              className="changes-menu-positioner"
+          </MenuTrigger>
+          <MenuPopup side="bottom" align="end">
+            <MenuItem onClick={copyPath}>
+              <Copy aria-hidden="true" />
+              Copy Path
+            </MenuItem>
+            <MenuItem
+              disabled={!canOpenFile}
+              onClick={
+                canOpenFile
+                  ? () =>
+                      worktreeLabel === undefined
+                        ? onOpenFile(worktree, file.path)
+                        : onOpenFile(worktree, file.path, worktreeLabel)
+                  : undefined
+              }
             >
-              <Menu.Popup className="changes-file-menu">
-                <Menu.Item onClick={copyPath}>
-                  <Copy aria-hidden="true" />
-                  Copy Path
-                </Menu.Item>
-                <Menu.Item
-                  disabled={!canOpenFile}
-                  onClick={
-                    canOpenFile
-                      ? () =>
-                          worktreeLabel === undefined
-                            ? onOpenFile(worktree, file.path)
-                            : onOpenFile(worktree, file.path, worktreeLabel)
-                      : undefined
-                  }
-                >
-                  <SquareArrowOutUpRight aria-hidden="true" />
-                  Open File
-                </Menu.Item>
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+              <SquareArrowOutUpRight aria-hidden="true" />
+              Open File
+            </MenuItem>
+          </MenuPopup>
+        </MenuRoot>
       </div>
       {expanded ? (
         <div className="changes-diff-region">
@@ -1087,7 +1107,9 @@ function ChangedFileDiff({
   } as const;
   if (query.isPending) return <ChangesState>Loading diff…</ChangesState>;
   if (query.error !== null)
-    return <ChangesState>{errorMessage(query.error)}</ChangesState>;
+    return (
+      <ChangesState tone="error">{errorMessage(query.error)}</ChangesState>
+    );
   const data = query.data;
   if (data === undefined || data.patch === "")
     return (
@@ -1136,15 +1158,21 @@ function ChangedFileDiff({
 
 function ChangesState({
   icon,
+  action,
+  tone,
   children,
 }: {
   readonly icon?: React.ReactNode;
+  readonly action?: React.ReactNode;
+  readonly tone?: "error";
   readonly children: React.ReactNode;
 }) {
   return (
-    <div className="changes-state" role="status">
-      {icon}
-      {children}
+    <div
+      className="changes-state"
+      role={tone === undefined ? "status" : undefined}
+    >
+      <EmptyState icon={icon} title={children} action={action} tone={tone} />
     </div>
   );
 }

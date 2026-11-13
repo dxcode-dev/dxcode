@@ -1,12 +1,12 @@
 /* The Project page's Commits and Files, built on the Recent Threads list. */
 .project-overview {
   display: grid;
-  gap: 20px;
+  gap: var(--space-5);
 }
 .project-overview-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 20px;
+  gap: var(--space-5);
 }
 @media (min-width: 1024px) {
   .project-overview-row {
@@ -22,7 +22,7 @@
 }
 .project-section-link {
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   text-decoration: none;
 }
 .project-section-link:hover {
@@ -30,24 +30,24 @@
 }
 .project-branch-name,
 .project-commit-sha {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
 }
 .project-commit-avatar {
   display: grid;
   place-items: center;
   width: 24px;
   height: 24px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   color: var(--foreground);
   background: var(--accent);
   border: 1px solid var(--border);
-  font-size: 9px;
-  font-weight: 600;
+  font-size: var(--text-3xs);
+  font-weight: var(--weight-semibold);
 }
 .project-files-history {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .project-files-history > svg {
   width: 12px;
@@ -58,24 +58,24 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 4px 16px;
+  gap: var(--space-1) var(--space-4);
   min-height: 40px;
-  padding: 7px 12px;
+  padding: 7px var(--space-3);
   border-bottom: 1px solid var(--divider);
   background: color-mix(in srgb, var(--accent) 45%, transparent);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .project-files-breadcrumbs {
   display: flex;
   min-width: 0;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .project-files-breadcrumbs > span {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .project-files-breadcrumbs svg {
   width: 12px;
@@ -91,7 +91,7 @@
   text-decoration: underline;
 }
 .project-files-breadcrumbs strong {
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .project-files-head-commit {
   display: flex;
@@ -99,29 +99,29 @@
   flex: 1 1 280px;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
+  gap: var(--space-2-5);
   color: var(--muted-foreground);
   text-decoration: none;
 }
 .project-files-head-commit strong {
   color: var(--foreground);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .project-files-head-commit time,
 .project-files-head-commit .project-commit-sha {
   flex: none;
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }
 .project-file-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr) 56px;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 34px;
-  padding: 5px 12px;
+  padding: 5px var(--space-3);
   color: var(--foreground);
   border-bottom: 1px solid var(--divider);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-decoration: none;
 }
 .project-file-row:last-child {
@@ -140,7 +140,7 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .project-file-name > span,
 .project-file-commit {
@@ -166,14 +166,14 @@
 }
 .project-file-row time {
   color: var(--muted-foreground);
-  font-size: 9px;
+  font-size: var(--text-3xs);
   text-align: right;
 }
 .project-files-more {
   display: block;
-  padding: 9px 12px;
+  padding: 9px var(--space-3);
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   text-align: center;
   text-decoration: none;
 }

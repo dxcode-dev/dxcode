@@ -9,6 +9,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import {
   initialSettingsFormState,
@@ -310,21 +311,24 @@ export function PersonalAdvancedSettings({
   }
   if (instructions.data === undefined) {
     return (
-      <div className="settings-route-state" role="alert">
-        <AlertTriangle />
-        <strong>
-          {instructions.error instanceof Error
+      <EmptyState
+        tone="error"
+        icon={<AlertTriangle />}
+        title={
+          instructions.error instanceof Error
             ? instructions.error.message
-            : "Instructions could not be loaded."}
-        </strong>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void instructions.refetch()}
-        >
-          Try again
-        </Button>
-      </div>
+            : "Instructions could not be loaded."
+        }
+        action={
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void instructions.refetch()}
+          >
+            Try again
+          </Button>
+        }
+      />
     );
   }
   return (

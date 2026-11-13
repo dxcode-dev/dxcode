@@ -1,5 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
-import { Popover } from "@base-ui/react/popover";
 import type { NotificationData } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,6 +7,18 @@ import * as React from "react";
 import { DxWordmark } from "../../shared/brand/dx-wordmark.js";
 import { Avatar } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTitle,
+  PopoverTrigger,
+} from "../../shared/ui/popover.js";
 import {
   markAllNotificationsReadMutationOptions,
   markNotificationsReadMutationOptions,
@@ -160,8 +170,8 @@ export function NotificationInbox({
     onNavigate();
   };
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
+    <PopoverRoot open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         render={
           <Button
             aria-label={
@@ -176,72 +186,62 @@ export function NotificationInbox({
         }
       >
         <AtSign />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          className="notification-positioner"
-          side="bottom"
-          align="start"
-          sideOffset={6}
-        >
-          <Popover.Popup className="notification-popup" aria-label="Mentions">
-            <header className="notification-header">
-              <Popover.Title className="notification-title">
-                Mentions
-              </Popover.Title>
-              <span className="notification-count">{unreadCount} Unread</span>
-              <Menu.Root>
-                <Menu.Trigger
+      </PopoverTrigger>
+      <PopoverContent
+        className="notification-popup"
+        side="bottom"
+        align="start"
+        aria-label="Mentions"
+      >
+        <header className="notification-header">
+          <PopoverTitle className="notification-title">Mentions</PopoverTitle>
+          <span className="notification-count">{unreadCount} Unread</span>
+          <MenuRoot>
+            <MenuTrigger
+              render={
+                <Button
+                  variant="subtle"
+                  size="icon-xs"
                   className="notification-menu-trigger"
-                  aria-label="Mentions options"
-                >
-                  <EllipsisVertical />
-                </Menu.Trigger>
-                <Menu.Portal>
-                  <Menu.Positioner
-                    className="thread-context-positioner notification-menu-positioner"
-                    side="bottom"
-                    align="end"
-                    sideOffset={4}
-                  >
-                    <Menu.Popup className="thread-context-menu">
-                      <Menu.Item
-                        className="thread-context-item"
-                        disabled={unreadCount === 0}
-                        onClick={() => markAllRead.mutate()}
-                      >
-                        <MailOpen />
-                        Mark All as Read
-                      </Menu.Item>
-                    </Menu.Popup>
-                  </Menu.Positioner>
-                </Menu.Portal>
-              </Menu.Root>
-            </header>
-            {inbox.isPending ? (
-              <p className="notification-empty">Loading mentions…</p>
-            ) : inbox.isError && items.length === 0 ? (
-              <p className="notification-empty" role="alert">
-                Mentions could not be loaded.
-              </p>
-            ) : items.length === 0 ? (
-              <p className="notification-empty">
-                When someone mentions you in a shared thread, it shows up here.
-              </p>
-            ) : (
-              <div className="notification-list">
-                {items.map((notification) => (
-                  <NotificationRow
-                    key={notification.id}
-                    notification={notification}
-                    onOpen={openNotification}
-                  />
-                ))}
-              </div>
-            )}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+                />
+              }
+              aria-label="Mentions options"
+            >
+              <EllipsisVertical />
+            </MenuTrigger>
+            <MenuPopup side="bottom" align="end">
+              <MenuItem
+                disabled={unreadCount === 0}
+                onClick={() => markAllRead.mutate()}
+              >
+                <MailOpen />
+                <span>Mark All as Read</span>
+              </MenuItem>
+            </MenuPopup>
+          </MenuRoot>
+        </header>
+        {inbox.isPending ? (
+          <p className="notification-empty">Loading mentions…</p>
+        ) : inbox.isError && items.length === 0 ? (
+          <p className="notification-empty" role="alert">
+            Mentions could not be loaded.
+          </p>
+        ) : items.length === 0 ? (
+          <p className="notification-empty">
+            When someone mentions you in a shared thread, it shows up here.
+          </p>
+        ) : (
+          <div className="notification-list">
+            {items.map((notification) => (
+              <NotificationRow
+                key={notification.id}
+                notification={notification}
+                onOpen={openNotification}
+              />
+            ))}
+          </div>
+        )}
+      </PopoverContent>
+    </PopoverRoot>
   );
 }

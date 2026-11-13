@@ -82,14 +82,16 @@ export function InstallAppBanner() {
       <Button type="button" size="xs" onClick={install}>
         Install
       </Button>
-      <button
+      <Button
+        variant="subtle"
+        size="icon-sm"
         type="button"
         className="install-app-banner-dismiss"
         aria-label="Dismiss install banner"
         onClick={installAppBanner.dismiss}
       >
         <X aria-hidden="true" />
-      </button>
+      </Button>
       {state === "prompt" ? null : (
         <DialogRoot open={guideOpen} onOpenChange={setGuideOpen}>
           <DialogContent className="install-app-guide">

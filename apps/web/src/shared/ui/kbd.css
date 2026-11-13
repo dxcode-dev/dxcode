@@ -1,0 +1,32 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's keycaps: see kbd.tsx. A bordered box that hugs its keys; feature
+   CSS places it (a menu row puts it at the end). */
+@layer components {
+  .shortcut-keycaps {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--space-0-5);
+    padding: 0 var(--space-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-xs);
+    background: transparent;
+    white-space: nowrap;
+  }
+  .shortcut-keycaps kbd {
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--muted-foreground);
+    font: var(--text-sm) / var(--leading-4-5) var(--font-ui);
+    text-align: center;
+  }
+  .shortcut-unassigned {
+    color: var(--muted-foreground);
+    font-size: var(--text-3xs);
+  }
+}

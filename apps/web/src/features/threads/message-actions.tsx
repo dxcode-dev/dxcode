@@ -1,7 +1,12 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
-import { Menu } from "@base-ui/react/menu";
 import { Ellipsis } from "lucide-react";
 import * as React from "react";
+import {
+  ContextMenuRoot,
+  ContextMenuTrigger,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import { copyFocusedMessage, type MessageMenuKind } from "./message-copy.js";
 import { canEditMessage, MessageEditContext } from "./message-edit.js";
 import { MessageMenuItems } from "./message-menu-items.js";
@@ -55,8 +60,8 @@ export function MessageActions({
   const editing = React.use(MessageEditContext);
   const editable = canEditMessage(row, editing);
   return (
-    <ContextMenu.Root>
-      <ContextMenu.Trigger
+    <ContextMenuRoot>
+      <ContextMenuTrigger
         render={render}
         // A long press on touch selects text, as everywhere else on a
         // phone; the menu opening on the same press broke the selection.
@@ -87,43 +92,33 @@ export function MessageActions({
         <div className="message-actions-anchor" data-side={side}>
           <div className="message-actions-controls">
             <MessageReactionAction row={row} />
-            <Menu.Root>
-              <Menu.Trigger
+            <MenuRoot>
+              <MenuTrigger
                 className="message-actions-button"
                 aria-label="Message Actions"
               >
                 <Ellipsis aria-hidden="true" />
-              </Menu.Trigger>
-              <Menu.Portal>
-                <Menu.Positioner
-                  className="thread-context-positioner"
-                  side="bottom"
-                  align={side === "right" ? "end" : "start"}
-                  sideOffset={4}
-                >
-                  <Menu.Popup
-                    className="thread-context-menu message-menu"
-                    onKeyDown={editable ? chooseEditItem : undefined}
-                  >
-                    <MessageMenuItems row={row} header />
-                  </Menu.Popup>
-                </Menu.Positioner>
-              </Menu.Portal>
-            </Menu.Root>
+              </MenuTrigger>
+              <MenuPopup
+                className="message-menu"
+                onKeyDown={editable ? chooseEditItem : undefined}
+                side="bottom"
+                align={side === "right" ? "end" : "start"}
+              >
+                <MessageMenuItems row={row} header />
+              </MenuPopup>
+            </MenuRoot>
           </div>
         </div>
         {children}
-      </ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Positioner className="thread-context-positioner">
-          <ContextMenu.Popup
-            className="thread-context-menu message-menu"
-            onKeyDown={editable ? chooseEditItem : undefined}
-          >
-            <MessageMenuItems row={row} />
-          </ContextMenu.Popup>
-        </ContextMenu.Positioner>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
+      </ContextMenuTrigger>
+      <MenuPopup
+        className="message-menu"
+        sideOffset={0}
+        onKeyDown={editable ? chooseEditItem : undefined}
+      >
+        <MessageMenuItems row={row} />
+      </MenuPopup>
+    </ContextMenuRoot>
   );
 }

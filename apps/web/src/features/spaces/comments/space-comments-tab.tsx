@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { MessagesSquare } from "lucide-react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
 import { messageCommentSummariesQueryOptions } from "./message-comments-queries.js";
@@ -32,12 +33,10 @@ export function SpaceCommentsTab({
   const items = summaries.data ?? [];
   if (items.length === 0)
     return (
-      <div className="space-comments-empty">
-        <strong>No Comments Yet</strong>
-        <span>
-          Comments people leave on this Space's messages show up here.
-        </span>
-      </div>
+      <EmptyState
+        title="No Comments Yet"
+        description="Comments people leave on this Space's messages show up here."
+      />
     );
   return (
     <ul className="space-comments-list" aria-label="Commented messages">

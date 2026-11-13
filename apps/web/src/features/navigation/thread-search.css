@@ -1,0 +1,6 @@
+/* Thread search's filter keys: ghost buttons in the mono face. */
+.dx-button.thread-search-key {
+  flex: none;
+  font-family: var(--font-mono);
+  font-weight: 400;
+}

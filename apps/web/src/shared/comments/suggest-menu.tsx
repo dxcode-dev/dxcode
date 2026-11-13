@@ -130,7 +130,7 @@ export function SuggestMenu({
       role="option"
       aria-selected={index === menu.active}
       data-highlighted={index === menu.active ? "" : undefined}
-      className="thread-menu-item artifact-suggest-option"
+      className="dx-menu-item artifact-suggest-option"
       // Keep the caret in the document while choosing.
       onMouseDown={(event) => event.preventDefault()}
       onMouseMove={() => onHighlight(index)}
@@ -160,7 +160,7 @@ export function SuggestMenu({
   });
   return (
     <div
-      className="artifact-suggest thread-menu-popup thread-actions-menu"
+      className="dx-menu artifact-suggest"
       role="listbox"
       aria-label={menu.kind === "slash" ? "Insert a block" : "Mention someone"}
       data-above={menu.above ? "" : undefined}

@@ -203,7 +203,9 @@ export function SidebarThreadNavigation({
                 ) : (
                   <div className="thread-group-heading-row">
                     {heading}
-                    <button
+                    <Button
+                      variant="subtle"
+                      size="icon-2xs"
                       type="button"
                       className="thread-group-action"
                       aria-label="Archive inactive threads"
@@ -213,7 +215,7 @@ export function SidebarThreadNavigation({
                       }
                     >
                       <Archive aria-hidden="true" />
-                    </button>
+                    </Button>
                   </div>
                 )}
                 {collapsed

@@ -1,6 +1,7 @@
 import type { ThreadId } from "@dx/domain";
 import { useMutation } from "@tanstack/react-query";
 import { Check, Send } from "lucide-react";
+import { Button } from "../../../shared/ui/button.js";
 import { notifyArtifactAgentMutation } from "../artifact-document-queries.js";
 
 /**
@@ -23,9 +24,11 @@ export function NotifyAgentButton({
   const sent = notify.isSuccess && notify.data.revision >= revision;
   const failed = notify.isError;
   return (
-    <button
-      type="button"
+    <Button
+      variant="subtle"
+      size="xs"
       className="artifact-tool artifact-notify-agent"
+      tone={sent ? "success" : failed ? "warning" : undefined}
       data-sent={sent || undefined}
       data-failed={failed || undefined}
       disabled={notify.isPending}
@@ -48,6 +51,6 @@ export function NotifyAgentButton({
               ? "Retry notify"
               : "Notify agent"}
       </span>
-    </button>
+    </Button>
   );
 }

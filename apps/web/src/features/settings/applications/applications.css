@@ -1,7 +1,7 @@
 /* Same density as the Members and Plugins pages. */
 .applications-settings {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .applications-card {
   width: 100%;
@@ -9,10 +9,10 @@
 .applications-docs-link {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
   color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
   text-decoration: none;
 }
 .applications-docs-link:hover {
@@ -30,9 +30,9 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr) 72px 96px 24px;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   min-height: 48px;
-  padding: 7px 16px;
+  padding: 7px var(--space-4);
   border-bottom: 1px solid var(--divider);
 }
 .application-row:last-child {
@@ -50,14 +50,14 @@
   white-space: nowrap;
 }
 .application-identity strong {
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4);
 }
 .application-identity code {
   color: var(--muted-foreground);
-  font-family: var(--font-mono-family);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   line-height: 15px;
 }
 .application-meta {
@@ -66,7 +66,7 @@
 .application-status,
 .application-created {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .application-row:not([data-status="active"]) .application-identity strong {
   color: var(--muted-foreground);
@@ -81,9 +81,9 @@
 .application-empty,
 .application-error {
   margin: 0;
-  padding: 24px 16px;
+  padding: var(--space-6) var(--space-4);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-align: center;
 }
 .application-error {
@@ -95,23 +95,18 @@
   text-align: left;
 }
 .applications-card > .application-error {
-  padding: 8px 16px;
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--divider);
 }
 .application-more {
   display: flex;
   justify-content: center;
-  padding: 6px;
+  padding: var(--space-1-5);
   border-top: 1px solid var(--divider);
 }
-.application-danger {
-  color: var(--destructive);
-}
-
 .application-dialog {
   display: grid;
-  gap: 12px;
-  width: min(420px, calc(100vw - 32px));
+  gap: var(--space-3);
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
 }
@@ -123,11 +118,11 @@
 }
 .application-form {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .application-field {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -137,35 +132,35 @@
 .application-field > legend {
   padding: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .application-scopes {
   grid-template-columns: 1fr 1fr;
-  gap: 6px 12px;
+  gap: var(--space-1-5) var(--space-3);
 }
 .application-scopes > legend {
-  margin-bottom: 4px;
+  margin-bottom: var(--space-1);
 }
 .application-form .application-scopes > label {
   display: flex;
   align-items: center;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--space-1-5);
+  font-size: var(--text-sm);
 }
 .application-copy-field {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .application-copy-field input {
-  font-family: var(--font-mono-family);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
 }
 .application-dialog-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
 }
 .application-copy-status {
   flex: 1;
@@ -182,10 +177,10 @@
 .application-audit-list li {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 6px 0;
+  gap: var(--space-2);
+  padding: var(--space-1-5) 0;
   border-bottom: 1px solid var(--divider);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .application-audit-list li:last-child {
   border-bottom: 0;
@@ -199,12 +194,12 @@
 }
 .application-audit-rejected {
   color: var(--destructive);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .application-audit-list time {
   flex: none;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 @media (max-width: 767px) {
@@ -217,7 +212,7 @@
     grid-template-areas:
       "identity actions"
       "meta actions";
-    row-gap: 2px;
+    row-gap: var(--space-0-5);
   }
   .application-identity {
     grid-area: identity;
@@ -228,7 +223,7 @@
   .application-meta {
     display: flex;
     grid-area: meta;
-    gap: 8px;
+    gap: var(--space-2);
   }
   .application-scopes {
     grid-template-columns: 1fr;

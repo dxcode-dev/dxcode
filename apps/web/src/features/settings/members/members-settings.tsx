@@ -1,5 +1,5 @@
+import { Select } from "../../../shared/ui/select.js";
 import "./members.css";
-import { Menu } from "@base-ui/react/menu";
 import type { WorkspaceInviteLinkData, WorkspaceMemberData } from "@dx/api";
 import type { WorkspaceSlug } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +16,14 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
+
 import { Input } from "../../../shared/ui/input.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
 import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
@@ -78,8 +85,8 @@ function MemberMenu({
 }) {
   const label = member.name || member.email;
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         render={
           <Button
             size="icon-xs"
@@ -89,77 +96,66 @@ function MemberMenu({
         }
       >
         <Ellipsis />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
+      </MenuTrigger>
+      <MenuPopup align="end">
+        {member.role === "admin" ? (
+          <MenuItem
+            onClick={() =>
+              onConfirm({
+                title: "Revoke workspace admin?",
+                body: `${label} will keep using the workspace but can no longer change its settings or members.`,
+                action: "Revoke",
+                run: () => setRole("member"),
+              })
+            }
+          >
+            Revoke Workspace Admin
+          </MenuItem>
+        ) : (
+          <MenuItem
+            onClick={() =>
+              onConfirm({
+                title: "Promote to workspace admin?",
+                body: "Workspace admins manage workspace settings, secrets, members, and invite links.",
+                action: "Promote",
+                run: () => setRole("admin"),
+              })
+            }
+          >
+            Promote to Workspace Admin
+          </MenuItem>
+        )}
+        {transferOwnership === undefined ? null : (
+          <MenuItem
+            onClick={() =>
+              onConfirm({
+                title: `Make ${label} the owner?`,
+                body: "They become the workspace owner and you become an admin. Only the owner can delete the workspace or hand it on.",
+                action: "Transfer",
+                destructive: true,
+                run: transferOwnership,
+              })
+            }
+          >
+            Transfer Ownership
+          </MenuItem>
+        )}
+        <MenuItem
+          tone="danger"
+          onClick={() =>
+            onConfirm({
+              title: `Remove ${label}?`,
+              body: "They lose access to workspace projects, settings, and the threads they started in the workspace. Those threads come back if they rejoin.",
+              action: "Remove",
+              destructive: true,
+              run: remove,
+            })
+          }
         >
-          <Menu.Popup className="thread-menu-popup">
-            {member.role === "admin" ? (
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  onConfirm({
-                    title: "Revoke workspace admin?",
-                    body: `${label} will keep using the workspace but can no longer change its settings or members.`,
-                    action: "Revoke",
-                    run: () => setRole("member"),
-                  })
-                }
-              >
-                Revoke Workspace Admin
-              </Menu.Item>
-            ) : (
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  onConfirm({
-                    title: "Promote to workspace admin?",
-                    body: "Workspace admins manage workspace settings, secrets, members, and invite links.",
-                    action: "Promote",
-                    run: () => setRole("admin"),
-                  })
-                }
-              >
-                Promote to Workspace Admin
-              </Menu.Item>
-            )}
-            {transferOwnership === undefined ? null : (
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  onConfirm({
-                    title: `Make ${label} the owner?`,
-                    body: "They become the workspace owner and you become an admin. Only the owner can delete the workspace or hand it on.",
-                    action: "Transfer",
-                    destructive: true,
-                    run: transferOwnership,
-                  })
-                }
-              >
-                Transfer Ownership
-              </Menu.Item>
-            )}
-            <Menu.Item
-              className="thread-menu-item members-danger"
-              onClick={() =>
-                onConfirm({
-                  title: `Remove ${label}?`,
-                  body: "They lose access to workspace projects, settings, and the threads they started in the workspace. Those threads come back if they rejoin.",
-                  action: "Remove",
-                  destructive: true,
-                  run: remove,
-                })
-              }
-            >
-              Remove from Workspace
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+          Remove from Workspace
+        </MenuItem>
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
@@ -260,7 +256,7 @@ function InviteLinkDialog({
         if (!pending) onOpenChange(next);
       }}
     >
-      <DialogContent className="members-dialog">
+      <DialogContent size="sm" className="members-dialog">
         <DialogTitle>
           {created === undefined ? "Create invite link" : "Invite link ready"}
         </DialogTitle>
@@ -278,6 +274,7 @@ function InviteLinkDialog({
             <div className="members-link-field">
               <label htmlFor={`${formId}-title`}>Title</label>
               <Input
+                size="sm"
                 id={`${formId}-title`}
                 className="members-input"
                 value={title}
@@ -304,6 +301,7 @@ function InviteLinkDialog({
             <div className="members-link-field">
               <label htmlFor={`${formId}-expires`}>Expires</label>
               <Input
+                size="sm"
                 id={`${formId}-expires`}
                 className="members-input"
                 type="datetime-local"
@@ -331,9 +329,8 @@ function InviteLinkDialog({
             </div>
             <div className="members-link-field">
               <label htmlFor={`${formId}-uses`}>Use limit</label>
-              <select
+              <Select
                 id={`${formId}-uses`}
-                className="settings-select"
                 value={maxUses}
                 aria-invalid={
                   fieldErrors.maxUses === undefined ? undefined : true
@@ -354,7 +351,7 @@ function InviteLinkDialog({
                     {limit === 1 ? "1 person" : `${limit} people`}
                   </option>
                 ))}
-              </select>
+              </Select>
               {fieldErrors.maxUses === undefined ? null : (
                 <span id={`${formId}-uses-error`} className="members-error">
                   {fieldErrors.maxUses}
@@ -388,6 +385,7 @@ function InviteLinkDialog({
           <>
             <div className="members-link-ready">
               <Input
+                size="sm"
                 readOnly
                 aria-label="Invite link"
                 className="members-input"
@@ -459,7 +457,7 @@ function InviteLinksCard({
               ) : null}
               <Button
                 size="xs"
-                variant="ghost"
+                variant="danger"
                 className="members-revoke"
                 onClick={() =>
                   onConfirm({
@@ -593,6 +591,7 @@ function MembersList({
       <div className="members-toolbar">
         <div className="members-search">
           <Input
+            size="sm"
             className="members-input"
             type="search"
             aria-label="Search members"

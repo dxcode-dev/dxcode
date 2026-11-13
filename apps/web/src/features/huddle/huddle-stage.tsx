@@ -1,5 +1,6 @@
 import { Headphones, Minimize2 } from "lucide-react";
 import type * as React from "react";
+import { Button } from "../../shared/ui/button.js";
 import type { HuddleCallState } from "./huddle-client.js";
 import { HuddleControls } from "./huddle-controls.js";
 import { featured } from "./huddle-featured.js";
@@ -66,22 +67,27 @@ export function HuddleStage({
             {statusLabel(call)}
           </span>
           <span className="huddle-spacer" />
-          <button
-            type="button"
+          <Button
+            variant="subtle"
+            size="icon-sm"
             className="huddle-header-button"
             aria-label="Minimize huddle"
             title="Minimize"
             onClick={huddleView.dock}
           >
             <Minimize2 aria-hidden="true" />
-          </button>
+          </Button>
         </header>
         {call.error === undefined ? null : (
           <p className="huddle-banner" role="alert">
             <span>{call.error.message}</span>
-            <button type="button" onClick={() => huddleClient.dismissError()}>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => huddleClient.dismissError()}
+            >
               {call.error.action ?? "Dismiss"}
-            </button>
+            </Button>
           </p>
         )}
         {call.status === "joining" ? (

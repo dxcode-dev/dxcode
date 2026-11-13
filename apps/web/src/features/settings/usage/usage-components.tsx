@@ -1,5 +1,6 @@
 import { DateTime } from "effect";
 import type * as React from "react";
+import { SegmentedControl } from "../../../shared/ui/segmented-control.js";
 import { SettingsCard } from "../settings-primitives.js";
 import { USAGE_LOCALE } from "./usage-format.js";
 import {
@@ -37,19 +38,15 @@ export function UsageToolbar({
   return (
     <div className="usage-toolbar">
       {children}
-      <div className="usage-tabs" role="tablist" aria-label="Measure">
-        {(["tokens", "cost"] as const).map((item) => (
-          <button
-            key={item}
-            type="button"
-            role="tab"
-            aria-selected={mode === item}
-            onClick={() => onModeChange(item)}
-          >
-            {item === "tokens" ? "Tokens" : "Cost"}
-          </button>
-        ))}
-      </div>
+      <SegmentedControl
+        label="Measure"
+        value={mode}
+        onValueChange={onModeChange}
+        options={[
+          ["tokens", "Tokens"],
+          ["cost", "Cost"],
+        ]}
+      />
       <UsageRangeTabs days={days} onDaysChange={onDaysChange} />
     </div>
   );
@@ -64,19 +61,12 @@ export function UsageRangeTabs({
   readonly onDaysChange: (days: UsageRange) => void;
 }) {
   return (
-    <div className="usage-tabs" role="tablist" aria-label="Range">
-      {USAGE_RANGES.map((item) => (
-        <button
-          key={item}
-          type="button"
-          role="tab"
-          aria-selected={days === item}
-          onClick={() => onDaysChange(item)}
-        >
-          {item}d
-        </button>
-      ))}
-    </div>
+    <SegmentedControl
+      label="Range"
+      value={String(days)}
+      onValueChange={(value) => onDaysChange(Number(value) as UsageRange)}
+      options={USAGE_RANGES.map((item) => [String(item), `${item}d`] as const)}
+    />
   );
 }
 

@@ -1,5 +1,7 @@
 import type { CatalogProviderData } from "@dx/api";
+import { Badge } from "../../../shared/ui/badge.js";
 import { Input } from "../../../shared/ui/input.js";
+import { Select } from "../../../shared/ui/select.js";
 import {
   OPENAI_REGIONS,
   type ProviderKeyPresentation,
@@ -32,18 +34,16 @@ export const ProviderSettingsFields = ({
       <div className="routing-sheet-field">
         <div className="routing-sheet-label-row">
           <label htmlFor="model-provider-openai-region">Region</label>
-          <span
-            className="routing-sheet-badge"
-            title="OpenAI serves regional endpoints to Enterprise projects with data residency."
-          >
+          <Badge title="OpenAI serves regional endpoints to Enterprise projects with data residency.">
             Enterprise-Only
-          </span>
+          </Badge>
         </div>
-        <select
+        <Select
           id="model-provider-openai-region"
-          className="routing-sheet-control routing-sheet-select"
+          className="routing-sheet-select"
+          size="md"
           value={region}
-          onChange={(event) => onRegion(event.target.value)}
+          onValueChange={onRegion}
         >
           <option value="">Global (api.openai.com)</option>
           {OPENAI_REGIONS.map((option) => (
@@ -51,7 +51,7 @@ export const ProviderSettingsFields = ({
               {option.label} ({option.host})
             </option>
           ))}
-        </select>
+        </Select>
         {fieldErrors.baseUrl === undefined ? null : (
           <p className="model-routing-field-error">{fieldErrors.baseUrl}</p>
         )}
@@ -63,7 +63,7 @@ export const ProviderSettingsFields = ({
           {presentation.fieldLabels?.[field.key] ?? field.label}
         </label>
         <Input
-          className="routing-sheet-control"
+          size="sm"
           id={`model-provider-field-${field.key}`}
           type={field.secret ? "password" : "text"}
           placeholder={field.placeholder}

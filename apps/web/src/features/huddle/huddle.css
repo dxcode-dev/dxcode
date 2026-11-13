@@ -1,37 +1,22 @@
 /* Huddle: the header control, the pre-join preview, the expanded stage, and
    the docked Picture-in-Picture window. */
 
-/* Header control: an icon like its neighbors, a pill while a huddle is on. */
-.space-icon-button.huddle-header-pill,
-.thread-title-bar .thread-title-action.huddle-header-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
+/* Header control: an icon like its neighbors, a round success-toned
+   Button while a huddle is on; it sizes to its people and label. */
+.dx-button.huddle-header-pill {
   width: auto;
-  padding: 0 8px 0 7px;
-  color: var(--foreground);
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  box-shadow: inset 0 0 0 1px
-    color-mix(in srgb, var(--success) 30%, transparent);
-  cursor: pointer;
-}
-.space-icon-button.huddle-header-pill:hover,
-.thread-title-bar .thread-title-action.huddle-header-pill:hover {
-  background: color-mix(in srgb, var(--success) 20%, transparent);
+  gap: 5px;
 }
 .huddle-header-pill .participant-stack > .dx-avatar {
   width: 16px;
   height: 16px;
-  font-size: 7px;
+  font-size: var(--text-avatar-sm);
 }
 .huddle-live-dot {
   width: 6px;
   height: 6px;
   flex: none;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--success);
   animation: huddle-live 1.6s ease-in-out infinite;
 }
@@ -44,7 +29,7 @@
 /* Pre-join */
 .huddle-prejoin {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .huddle-preview {
   position: relative;
@@ -52,7 +37,7 @@
   place-items: center;
   aspect-ratio: 16 / 9;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--foreground) 5%, var(--background));
   box-shadow: inset 0 0 0 1px var(--border);
 }
@@ -62,7 +47,7 @@
 }
 .huddle-preview-note {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .huddle-preview-people {
   position: absolute;
@@ -71,31 +56,7 @@
 }
 .huddle-prejoin-toggles {
   display: flex;
-  gap: 8px;
-}
-.huddle-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.huddle-toggle[aria-pressed="true"] {
-  color: var(--foreground);
-}
-.huddle-toggle:hover {
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-}
-.huddle-toggle svg {
-  width: 14px;
-  height: 14px;
+  gap: var(--space-2);
 }
 
 /* Video and tiles */
@@ -103,7 +64,7 @@
   width: 100%;
   height: 100%;
   object-fit: cover;
-  background: #000;
+  background: var(--media-background);
 }
 .huddle-video[data-mirrored] {
   transform: scaleX(-1);
@@ -119,7 +80,7 @@
   min-height: 0;
   margin: 0;
   overflow: hidden;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--foreground) 6%, var(--background));
   box-shadow: inset 0 0 0 1px var(--border);
 }
@@ -138,12 +99,12 @@
 .huddle-tile-avatar .dx-avatar {
   width: 64px;
   height: 64px;
-  font-size: 22px;
+  font-size: var(--text-2xl);
 }
 .huddle-tile[data-size="strip"] .huddle-tile-avatar .dx-avatar {
   width: 36px;
   height: 36px;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .huddle-tile[data-size="dock"] {
   width: 100%;
@@ -154,7 +115,7 @@
 .huddle-tile[data-size="dock"] .huddle-tile-avatar .dx-avatar {
   width: 48px;
   height: 48px;
-  font-size: 17px;
+  font-size: var(--text-heading);
 }
 .huddle-tile-name {
   position: absolute;
@@ -164,12 +125,12 @@
   align-items: center;
   gap: 5px;
   max-width: calc(100% - 16px);
-  padding: 2px 7px;
-  color: #f6fff5;
-  border-radius: 4px;
-  background: rgb(0 0 0 / 55%);
-  font-size: 12px;
-  font-weight: 500;
+  padding: var(--space-0-5) 7px;
+  color: var(--on-media);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--shadow-ink) 55%, transparent);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   line-height: 18px;
 }
 .huddle-tile-name > span {
@@ -188,7 +149,7 @@
 .huddle-tile[data-size="strip"] .huddle-tile-name {
   left: 5px;
   bottom: 5px;
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .huddle-tile[data-size="dock"] .huddle-tile-name {
   display: none;
@@ -199,59 +160,15 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
-.huddle-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
+/* A call control: a round 40px Button; the icon-only ones are square. */
+.dx-button.huddle-control:not(:has(> span)) {
   width: 40px;
-  height: 40px;
   padding: 0;
-  color: var(--foreground);
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 9%, transparent);
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-}
-.huddle-control:hover {
-  background: color-mix(in srgb, var(--foreground) 15%, transparent);
-}
-.huddle-control:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--ring);
-}
-.huddle-control:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.huddle-control svg {
-  width: 18px;
-  height: 18px;
-}
-.huddle-control[data-off] {
-  color: var(--destructive);
-  background: color-mix(in srgb, var(--destructive) 14%, transparent);
-}
-.huddle-control[data-active] {
-  color: var(--primary-foreground);
-  background: var(--primary);
-}
-.huddle-control[data-tone="leave"] {
-  width: auto;
-  padding: 0 16px;
-  color: #fff;
-  background: #c4473f;
-}
-.huddle-control[data-tone="leave"]:hover {
-  background: #d4544b;
 }
 .huddle-controls[data-size="dock"] {
-  gap: 4px;
+  gap: var(--space-1);
 }
 .huddle-controls[data-size="dock"] .huddle-control {
   width: 28px;
@@ -273,13 +190,13 @@
   z-index: 100;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: var(--space-6);
 }
 .huddle-stage-backdrop {
   position: absolute;
   inset: 0;
   border: 0;
-  background: rgb(0 0 0 / 45%);
+  background: var(--scrim);
   cursor: default;
 }
 .huddle-stage {
@@ -290,20 +207,20 @@
   height: min(760px, 100%);
   overflow: hidden;
   color: var(--foreground);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--background);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent),
-    0 24px 48px -12px rgba(0, 0, 0, 0.8);
-  font-size: 13px;
+    0 24px 48px -12px color-mix(in srgb, var(--shadow-ink) 80%, transparent);
+  font-size: var(--text-md);
 }
 .huddle-stage-header {
   flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 44px;
-  padding: 0 10px 0 16px;
+  padding: 0 var(--space-2-5) 0 var(--space-4);
   border-bottom: 1px solid var(--divider);
 }
 .huddle-stage-icon {
@@ -313,71 +230,43 @@
 }
 .huddle-stage-title {
   overflow: hidden;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .huddle-stage-meta {
   flex: none;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .huddle-spacer {
   flex: 1;
 }
-.huddle-stage .huddle-header-button,
-.huddle-banner button {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-}
-.huddle-stage .huddle-header-button:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.huddle-stage .huddle-header-button svg {
-  width: 16px;
-  height: 16px;
-}
 .huddle-banner {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 10px 16px 0;
-  padding: 6px 6px 6px 12px;
+  gap: var(--space-2);
+  margin: var(--space-2-5) var(--space-4) 0;
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-3);
   color: var(--foreground);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--warning) 14%, transparent);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .huddle-banner span {
   flex: 1;
 }
-.huddle-banner button {
-  width: auto;
-  padding: 0 8px;
-  color: var(--foreground);
-  font: inherit;
-  font-weight: 500;
-}
 .huddle-stage-body {
   flex: 1 1 0;
   min-height: 0;
-  padding: 12px;
+  padding: var(--space-3);
 }
 .huddle-stage-body[data-layout="grid"] {
   position: relative;
   display: grid;
   grid-template-columns: repeat(var(--huddle-columns, 2), minmax(0, 1fr));
   grid-template-rows: repeat(var(--huddle-rows, 1), minmax(0, 1fr));
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .huddle-stage-hint {
   position: absolute;
@@ -386,13 +275,13 @@
   left: 0;
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
 }
 .huddle-stage-body[data-layout="screen"] {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 200px;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .huddle-stage-main {
   display: grid;
@@ -401,7 +290,7 @@
 .huddle-stage-strip {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 0;
   overflow-y: auto;
 }
@@ -413,21 +302,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   height: 100%;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .huddle-pulse {
   width: 8px;
   height: 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--success);
   animation: huddle-live 1s ease-in-out infinite;
 }
 .huddle-stage-footer {
   flex: none;
-  padding: 12px 16px 16px;
+  padding: var(--space-3) var(--space-4) var(--space-4);
 }
 
 /* Docked window, kept above every page while you work, and above an open
@@ -442,12 +331,12 @@
   height: 224px;
   overflow: hidden;
   color: var(--foreground);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--background);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--foreground) 12%, transparent),
-    0 16px 32px -8px rgba(0, 0, 0, 0.75);
-  font-size: 12px;
+    0 16px 32px -8px color-mix(in srgb, var(--shadow-ink) 75%, transparent);
+  font-size: var(--text-sm);
   transition: transform 160ms ease;
   touch-action: none;
 }
@@ -476,28 +365,28 @@
   position: relative;
   display: grid;
   min-height: 0;
-  background: #000;
+  background: var(--media-background);
   cursor: grab;
   user-select: none;
 }
 .huddle-dock-bar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 6px 6px 8px;
+  gap: var(--space-1-5);
+  padding: var(--space-1-5) var(--space-1-5) var(--space-1-5) var(--space-2);
   border-top: 1px solid var(--divider);
 }
 .huddle-dock-place {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
-  column-gap: 6px;
+  column-gap: var(--space-1-5);
   align-items: center;
   flex: 1;
   min-width: 0;
-  padding: 2px 4px;
+  padding: var(--space-0-5) var(--space-1);
   color: var(--foreground);
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: transparent;
   font: inherit;
   text-align: left;
@@ -519,11 +408,11 @@
   white-space: nowrap;
 }
 .huddle-dock-place-name {
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .huddle-dock-count {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 
 /* Browser Picture-in-Picture window */
@@ -538,7 +427,7 @@
   color: var(--foreground);
   background: var(--background);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* Phones: the stage fills the screen; the dock is a small floating tile. */
@@ -560,13 +449,13 @@
         minmax(0, 1fr)
       );
     grid-template-rows: repeat(var(--huddle-rows-phone, 1), minmax(0, 1fr));
-    padding: 8px;
-    gap: 8px;
+    padding: var(--space-2);
+    gap: var(--space-2);
   }
   .huddle-stage-body[data-layout="screen"] {
     grid-template-columns: none;
     grid-template-rows: minmax(0, 1fr) 96px;
-    padding: 8px;
+    padding: var(--space-2);
   }
   .huddle-stage-strip {
     flex-direction: row;
@@ -598,7 +487,7 @@
     width: 128px;
     height: 196px;
     grid-template-rows: 1fr auto;
-    border-radius: 14px;
+    border-radius: var(--radius-2xl);
   }
   .huddle-dock[data-mobile][data-corner^="top"] {
     top: calc(52px + env(safe-area-inset-top));
@@ -621,7 +510,7 @@
   }
   .huddle-dock[data-mobile] .huddle-dock-bar {
     justify-content: center;
-    padding: 6px 4px;
+    padding: var(--space-1-5) var(--space-1);
   }
   .huddle-dock[data-mobile] .huddle-control[aria-label^="Turn camera"],
   .huddle-dock[data-mobile] .huddle-control[aria-label="Pop out huddle"] {

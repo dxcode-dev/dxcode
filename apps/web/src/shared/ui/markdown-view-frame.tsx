@@ -12,6 +12,7 @@ import {
 import { Maximize2 } from "lucide-react";
 import * as React from "react";
 import { useTheme } from "../theme/theme-provider.js";
+import { Button } from "./button.js";
 import type { MarkdownViewProps } from "./markdown-view.js";
 import { createMcpAppHost, type McpAppHost } from "./mcp-app-host.js";
 import type { McpAppViewProps } from "./mcp-app-view.js";
@@ -348,23 +349,23 @@ function FramedView({
           <span>
             Open <code>{link}</code>?
           </span>
-          <button
-            type="button"
-            className="markdown-view-button"
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => {
               window.open(link, "_blank", "noopener,noreferrer");
               setLink(undefined);
             }}
           >
             Open
-          </button>
-          <button
-            type="button"
-            className="markdown-view-button"
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => setLink(undefined)}
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
       {error !== undefined && (
@@ -374,15 +375,16 @@ function FramedView({
       )}
       <figcaption className="markdown-view-actions">
         {actions}
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           className="markdown-view-action"
           aria-label="Show view full screen"
           title="Full screen"
           onClick={toggleFullScreen}
         >
           <Maximize2 aria-hidden="true" />
-        </button>
+        </Button>
       </figcaption>
     </figure>
   );
@@ -575,23 +577,23 @@ export function PluginPaneFrame({
           <span>
             Open <code>{link}</code>?
           </span>
-          <button
-            type="button"
-            className="markdown-view-button"
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => {
               window.open(link, "_blank", "noopener,noreferrer");
               setLink(undefined);
             }}
           >
             Open
-          </button>
-          <button
-            type="button"
-            className="markdown-view-button"
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => setLink(undefined)}
           >
             Cancel
-          </button>
+          </Button>
         </div>
       )}
       {error !== undefined && (

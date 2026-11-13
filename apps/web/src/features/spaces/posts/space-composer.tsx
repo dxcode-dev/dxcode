@@ -5,6 +5,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
 import type { ComposerSlot } from "../../../shared/composer/composer-slot.js";
+import { Button } from "../../../shared/ui/button.js";
 import { useSpacePeople } from "./space-people.js";
 import { postFailureText } from "./space-post-format.js";
 import { useCreateSpacePost } from "./space-posts-queries.js";
@@ -89,8 +90,8 @@ export function UnarchiveToContinue({
 }) {
   return (
     <div className="agent-composer-dock space-composer-dock">
-      <button
-        type="button"
+      <Button
+        variant="outline"
         className="space-unarchive"
         disabled={onUnarchive === undefined || pending}
         aria-busy={pending || undefined}
@@ -98,7 +99,7 @@ export function UnarchiveToContinue({
       >
         <ArchiveRestore aria-hidden="true" />
         Unarchive to Continue
-      </button>
+      </Button>
     </div>
   );
 }

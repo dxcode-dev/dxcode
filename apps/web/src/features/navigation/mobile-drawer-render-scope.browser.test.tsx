@@ -119,8 +119,8 @@ it("opens the phone drawer again without mounting the sidebar again", async () =
         .querySelector<HTMLButtonElement>('[aria-label="Close sidebar"]')
         ?.click(),
     );
-    await settle();
-    expect(drawerShown()).toBe(false);
+    // The drawer hides once its slide-out finishes.
+    await expect.poll(drawerShown).toBe(false);
   }
 
   expect(sidebar.mounts).toBe(1);

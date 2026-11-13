@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { Button } from "../../../shared/ui/button.js";
+import { Input } from "../../../shared/ui/input.js";
 import { useThreadDraftValue } from "../../threads/thread-draft-queries.js";
 import type { ArtifactSelection, ArtifactSession } from "./artifact-session.js";
 import { type SelectionMark, withQuote } from "./selection-format.js";
@@ -116,8 +118,9 @@ export function SelectionToolbar({
         data-touch=""
         style={place(box.bottom + 10, box.center)}
       >
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
           className="artifact-selection-button"
           aria-label="Comment"
           onMouseDown={keep}
@@ -125,7 +128,7 @@ export function SelectionToolbar({
         >
           <MessageSquarePlus aria-hidden="true" />
           <span>Comment</span>
-        </button>
+        </Button>
       </div>
     );
 
@@ -152,7 +155,8 @@ export function SelectionToolbar({
           }}
         >
           <Link aria-hidden="true" />
-          <input
+          <Input
+            variant="bare"
             // biome-ignore lint/a11y/noAutofocus: it opens because the person asked for it
             autoFocus
             name="link"
@@ -170,9 +174,10 @@ export function SelectionToolbar({
       ) : (
         <>
           {MARKS.map(({ mark, label, keys, Icon }) => (
-            <button
+            <Button
+              variant="subtle"
+              size="xs"
               key={mark}
-              type="button"
               className="artifact-selection-button"
               aria-label={label}
               aria-pressed={marks?.[mark] === true}
@@ -181,10 +186,11 @@ export function SelectionToolbar({
               onClick={() => session.formatSelection(mark)}
             >
               <Icon aria-hidden="true" />
-            </button>
+            </Button>
           ))}
-          <button
-            type="button"
+          <Button
+            variant="subtle"
+            size="xs"
             className="artifact-selection-button"
             aria-label="Link"
             aria-pressed={marks?.link !== undefined}
@@ -193,10 +199,11 @@ export function SelectionToolbar({
             onClick={() => setLinking(true)}
           >
             <Link aria-hidden="true" />
-          </button>
+          </Button>
           <span className="artifact-selection-divider" aria-hidden="true" />
-          <button
-            type="button"
+          <Button
+            variant="subtle"
+            size="xs"
             className="artifact-selection-button"
             aria-label="Comment"
             title="Comment"
@@ -204,9 +211,10 @@ export function SelectionToolbar({
             onClick={onComment}
           >
             <MessageSquarePlus aria-hidden="true" />
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="subtle"
+            size="xs"
             className="artifact-selection-button"
             aria-label="Copy as Markdown"
             title="Copy as Markdown"
@@ -223,9 +231,10 @@ export function SelectionToolbar({
             }}
           >
             <Copy aria-hidden="true" />
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant="subtle"
+            size="xs"
             className="artifact-selection-button"
             aria-label="Send to Thread"
             title="Send to Thread"
@@ -245,7 +254,7 @@ export function SelectionToolbar({
             }}
           >
             <SendHorizontal aria-hidden="true" />
-          </button>
+          </Button>
         </>
       )}
       {status === undefined ? null : (

@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type {
   ThreadPortal,
   ThreadPortalPublicDuration,
@@ -24,6 +23,15 @@ import {
   useWakePortals,
 } from "./portals-queries.js";
 import "./portals.css";
+import {
+  MenuGroup,
+  MenuItem,
+  MenuLabel,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 
 // The guest is another site: it may run scripts, keep its own cookies, and
 // open popups, but never navigate the dx tab.
@@ -73,6 +81,7 @@ function PublicStatus({
       size="icon-xs"
       variant="ghost"
       className="thread-portals-public-trigger"
+      tone={link === undefined ? undefined : "success"}
       data-public={link === undefined ? undefined : ""}
       aria-disabled="true"
       aria-label={`${state} ${OWNER_ONLY}`}
@@ -94,13 +103,14 @@ function PublicMenu({
   readonly onChange: PublicChange;
 }) {
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         render={
           <Button
             size="icon-xs"
             variant="ghost"
             className="thread-portals-public-trigger"
+            tone={link === undefined ? undefined : "success"}
             data-public={link === undefined ? undefined : ""}
             aria-label={
               link === undefined
@@ -112,45 +122,30 @@ function PublicMenu({
         }
       >
         <Globe aria-hidden="true" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup">
-            <Menu.Group>
-              <Menu.GroupLabel className="thread-portals-menu-label">
-                {link === undefined
-                  ? "Anyone with the link can open it"
-                  : `Public until ${until(link)}`}
-              </Menu.GroupLabel>
-              {DURATIONS.map(([duration, label]) => (
-                <Menu.Item
-                  key={duration}
-                  className="thread-menu-item"
-                  onClick={() => onChange(port, duration)}
-                >
-                  Public for {label}
-                </Menu.Item>
-              ))}
-            </Menu.Group>
-            {link === undefined ? null : (
-              <>
-                <Menu.Separator className="thread-menu-separator" />
-                <Menu.Item
-                  className="thread-menu-item"
-                  onClick={() => onChange(port, "private")}
-                >
-                  Make private
-                </Menu.Item>
-              </>
-            )}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuGroup>
+          <MenuLabel>
+            {link === undefined
+              ? "Anyone with the link can open it"
+              : `Public until ${until(link)}`}
+          </MenuLabel>
+          {DURATIONS.map(([duration, label]) => (
+            <MenuItem key={duration} onClick={() => onChange(port, duration)}>
+              Public for {label}
+            </MenuItem>
+          ))}
+        </MenuGroup>
+        {link === undefined ? null : (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={() => onChange(port, "private")}>
+              Make private
+            </MenuItem>
+          </>
+        )}
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 

@@ -5,7 +5,7 @@
 /* The `/` and `@` menu, under what was typed (or over it near the bottom):
    the thread actions menu's popup, rows, and highlight, with the artifact
    switcher's group headings. */
-.artifact-suggest {
+.dx-menu.artifact-suggest {
   position: absolute;
   z-index: 20;
   width: min(260px, 100%);
@@ -28,24 +28,24 @@
 .artifact-suggest .artifact-suggest-option[data-highlighted] {
   background: var(--accent);
 }
-.artifact-suggest.thread-actions-menu .artifact-suggest-option > .dx-avatar {
+.artifact-suggest .artifact-suggest-option > .dx-avatar {
   flex: none;
   width: 18px;
   height: 18px;
   overflow: hidden;
-  font-size: 8px;
+  font-size: var(--text-4xs);
 }
 .artifact-suggest-label {
   color: var(--foreground);
 }
 .artifact-suggest-hint {
-  margin-left: 6px;
+  margin-left: var(--space-1-5);
   color: var(--muted-foreground);
 }
 .artifact-suggest-empty {
-  margin: 6px 8px;
+  margin: var(--space-1-5) var(--space-2);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 @media (pointer: coarse) {
   .artifact-suggest.thread-actions-menu .artifact-suggest-option {
@@ -80,7 +80,7 @@
 .artifact-comment-mention {
   padding: 0 3px;
   color: var(--primary);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--primary) 12%, transparent);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }

@@ -11,6 +11,8 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../shared/ui/dialog.js";
+import { EmptyState } from "../../shared/ui/empty-state.js";
+import { Input } from "../../shared/ui/input.js";
 import { SpaceIcon } from "./space-icon.js";
 import {
   discoverSpacesQueryOptions,
@@ -50,7 +52,8 @@ export function DiscoverSpacesDialog({
           </DialogDescription>
           <div className="space-search">
             <Search aria-hidden="true" />
-            <input
+            <Input
+              variant="bare"
               aria-label="Search Spaces"
               placeholder="Search Spaces"
               autoComplete="off"
@@ -65,27 +68,28 @@ export function DiscoverSpacesDialog({
               Could not load Spaces.
             </p>
           ) : spacesQuery.isSuccess && spaces.length === 0 ? (
-            <div className="space-empty-state">
-              <Orbit aria-hidden="true" />
-              <strong>
-                {query.trim() === ""
+            <EmptyState
+              icon={<Orbit />}
+              title={
+                query.trim() === ""
                   ? "Nothing New to Join Yet"
-                  : "No Spaces Match"}
-              </strong>
-              <p>
-                {query.trim() === ""
+                  : "No Spaces Match"
+              }
+              description={
+                query.trim() === ""
                   ? "When someone shares a Space with your workspace, it shows up here. Start your own in the meantime."
-                  : "Try another name, or start your own Space."}
-              </p>
-              <Button
-                type="button"
-                size="sm"
-                className="space-primary-button"
-                onClick={onCreate}
-              >
-                New Space
-              </Button>
-            </div>
+                  : "Try another name, or start your own Space."
+              }
+              action={
+                <Button
+                  size="sm"
+                  className="space-primary-button"
+                  onClick={onCreate}
+                >
+                  New Space
+                </Button>
+              }
+            />
           ) : (
             <ul className="space-discover-list">
               {spaces.map((space) => (

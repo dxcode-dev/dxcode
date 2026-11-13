@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type {
   ThreadContextWindow,
   ThreadDetailData,
@@ -21,12 +20,15 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { modelDisplayName } from "../../../shared/model-display-name.js";
 import { Button } from "../../../shared/ui/button.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../../shared/ui/claude-icon.js";
 import {
+  DialogClose,
   DialogDescription,
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
 import { ModalSurface } from "../../../shared/ui/modal-surface.js";
 import { SettingsCard, SettingsToggle } from "../../../shared/ui/settings.js";
@@ -77,9 +79,12 @@ export function ThreadUsageDialog({
           <DialogDescription className="sr-only">
             Cost, model, and tool usage for this thread.
           </DialogDescription>
-          <Dialog.Close className="thread-usage-close" aria-label="Close">
+          <DialogClose
+            className={buttonVariants({ variant: "ghost", size: "icon-xs" })}
+            aria-label="Close"
+          >
             <X aria-hidden="true" />
-          </Dialog.Close>
+          </DialogClose>
         </header>
         <div ref={body} className="thread-usage-body" tabIndex={-1}>
           {usage.data !== undefined ? (
@@ -89,18 +94,21 @@ export function ThreadUsageDialog({
               onNavigate={onClose}
             />
           ) : usage.isError ? (
-            <div className="thread-usage-state" role="alert">
-              <span>Usage could not load.</span>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => void usage.refetch()}
-              >
-                Retry
-              </Button>
-            </div>
+            <EmptyState
+              tone="error"
+              title="Usage could not load."
+              action={
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => void usage.refetch()}
+                >
+                  Retry
+                </Button>
+              }
+            />
           ) : (
-            <p className="thread-usage-state">Loading usage…</p>
+            <EmptyState title="Loading usage…" />
           )}
         </div>
       </ModalSurface>

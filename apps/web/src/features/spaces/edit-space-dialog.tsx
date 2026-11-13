@@ -1,4 +1,3 @@
-import { Popover } from "@base-ui/react/popover";
 import type { SpaceData, SpaceSharing } from "@dx/api";
 import type { ThreadColor, UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
@@ -15,6 +14,11 @@ import {
   DialogTitle,
 } from "../../shared/ui/dialog.js";
 import { Input } from "../../shared/ui/input.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../../shared/ui/popover.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import {
   EnterKeycap,
@@ -35,53 +39,47 @@ function SpaceColorPicker({
 }) {
   const [open, setOpen] = React.useState(false);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
+    <PopoverRoot open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         className="space-color-button"
         aria-label={`Space color: ${THREAD_COLOR_LABELS[value]}`}
         title={`Space color: ${THREAD_COLOR_LABELS[value]}`}
       >
         <span className="space-color-swatch" data-thread-color={value} />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          className="space-color-positioner"
-          side="bottom"
-          align="start"
-          sideOffset={6}
-        >
-          <Popover.Popup className="space-color-popup">
-            <fieldset className="space-color-grid">
-              <legend className="sr-only">Space color</legend>
-              {THREAD_COLORS.map((color) => (
-                <label
-                  key={color}
-                  className="space-color-option"
-                  title={THREAD_COLOR_LABELS[color]}
-                >
-                  <input
-                    type="radio"
-                    className="sr-only"
-                    name="space-color"
-                    value={color}
-                    checked={color === value}
-                    onChange={() => {
-                      onChange(color);
-                      setOpen(false);
-                    }}
-                  />
-                  <span
-                    className="space-color-swatch"
-                    data-thread-color={color}
-                  />
-                  <span className="sr-only">{THREAD_COLOR_LABELS[color]}</span>
-                </label>
-              ))}
-            </fieldset>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        positionerClassName="space-color-positioner"
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        className="space-color-popup"
+      >
+        <fieldset className="space-color-grid">
+          <legend className="sr-only">Space color</legend>
+          {THREAD_COLORS.map((color) => (
+            <label
+              key={color}
+              className="space-color-option"
+              title={THREAD_COLOR_LABELS[color]}
+            >
+              <input
+                type="radio"
+                className="sr-only"
+                name="space-color"
+                value={color}
+                checked={color === value}
+                onChange={() => {
+                  onChange(color);
+                  setOpen(false);
+                }}
+              />
+              <span className="space-color-swatch" data-thread-color={color} />
+              <span className="sr-only">{THREAD_COLOR_LABELS[color]}</span>
+            </label>
+          ))}
+        </fieldset>
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
 

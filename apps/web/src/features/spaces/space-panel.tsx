@@ -1,5 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
-import { Tabs } from "@base-ui/react/tabs";
 import type { SpaceArtifactItem, SpaceData, SpaceThreadItem } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
@@ -30,7 +28,19 @@ import type { ThreadAutomationView } from "../../shared/thread-automations-slot.
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { copyThreadUrl } from "../../shared/thread-copy.js";
 import { Avatar } from "../../shared/ui/avatar.js";
+import { Button } from "../../shared/ui/button.js";
+import { buttonVariants } from "../../shared/ui/button-variants.js";
+import { EmptyState } from "../../shared/ui/empty-state.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
+import { Tab, Tabs, TabsList, TabsPanel } from "../../shared/ui/tabs.js";
+import { cn } from "../../shared/utils.js";
 import { threadQueryOptions } from "../threads/thread-queries.js";
 import { SpaceCommentsTab } from "./comments/space-comments-tab.js";
 import { SpaceProgressChart } from "./progress/space-progress-chart.js";
@@ -64,7 +74,6 @@ const ThreadUsageDialog = React.lazy(() =>
     default: module.ThreadUsageDialogLoader,
   })),
 );
-const menuParts = { Item: Menu.Item, Separator: Menu.Separator };
 
 function ThreadRowAge({ thread }: { readonly thread: SpaceThreadItem }) {
   const at = epochOf(thread.lastActivityAt);
@@ -146,14 +155,11 @@ function SpaceThreadSections({
     return <div className="space-panel-loading" aria-busy="true" />;
   if (threads.length === 0)
     return (
-      <div className="space-panel-empty">
-        <ListTree aria-hidden="true" />
-        <strong>No Threads Yet</strong>
-        <p>
-          Ask this Space to take something on. The threads it starts show up
-          here.
-        </p>
-      </div>
+      <EmptyState
+        icon={<ListTree />}
+        title="No Threads Yet"
+        description="Ask this Space to take something on. The threads it starts show up here."
+      />
     );
   return (
     <div className="space-thread-sections">
@@ -267,20 +273,16 @@ function SpaceArtifactsTab({
       });
   };
   if (artifacts.isError)
-    return (
-      <div className="space-panel-empty" role="alert">
-        <p>Could not load artifacts.</p>
-      </div>
-    );
+    return <EmptyState tone="error" title="Could not load artifacts." />;
   if (artifacts.data === undefined)
     return <div className="space-panel-loading" aria-busy="true" />;
   if (artifacts.data.length === 0)
     return (
-      <div className="space-panel-empty">
-        <FileText aria-hidden="true" />
-        <strong>No Artifacts Yet</strong>
-        <p>Plans and notes the Space and its threads write show up here.</p>
-      </div>
+      <EmptyState
+        icon={<FileText />}
+        title="No Artifacts Yet"
+        description="Plans and notes the Space and its threads write show up here."
+      />
     );
   const groups = groupSpaceArtifacts(artifacts.data, spaceThreadId);
   // With only the Space's own artifacts, a heading would only repeat its name.
@@ -366,9 +368,12 @@ export function SpacePanelMenu({
   const own = space.access === "owner";
   return (
     <>
-      <Menu.Root>
-        <Menu.Trigger
-          className="space-icon-button"
+      <MenuRoot>
+        <MenuTrigger
+          className={cn(
+            buttonVariants({ variant: "subtle", size: "icon-xs" }),
+            "space-icon-button",
+          )}
           aria-label="Space Actions"
           title="Space Actions"
           onPointerEnter={preloadThreadDetails}
@@ -376,73 +381,60 @@ export function SpacePanelMenu({
           onFocus={preloadThreadDetails}
         >
           <Ellipsis aria-hidden="true" />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            align="end"
-            sideOffset={4}
-          >
-            <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-menu-details">
-              {onEdit === undefined ? null : (
-                <Menu.Item className="thread-menu-item" onClick={onEdit}>
-                  <Pencil />
-                  <span>Edit Space…</span>
-                </Menu.Item>
-              )}
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => void copyThreadUrl(space.threadId)}
+        </MenuTrigger>
+        <MenuPopup align="end">
+          {onEdit === undefined ? null : (
+            <MenuItem onClick={onEdit}>
+              <Pencil />
+              <span>Edit Space…</span>
+            </MenuItem>
+          )}
+          <MenuItem onClick={() => void copyThreadUrl(space.threadId)}>
+            <Link2 />
+            <span>Copy Space URL</span>
+          </MenuItem>
+          {onArchive === undefined ? null : (
+            <MenuItem onClick={onArchive}>
+              <Archive />
+              <span>Archive Space</span>
+            </MenuItem>
+          )}
+          {automations && own ? (
+            <MenuItems threadId={space.threadId} onOpen={setSheet} />
+          ) : null}
+          {thread === undefined ? null : (
+            <React.Suspense fallback={null}>
+              <ThreadDetailRows
+                thread={thread}
+                onOpenUsage={() => setUsageOpen(true)}
+              />
+            </React.Suspense>
+          )}
+          {member ? (
+            <>
+              <MenuSeparator />
+              <MenuItem
+                disabled={leave.isPending}
+                onClick={() =>
+                  leave.mutate({ threadId: space.threadId, joined: false })
+                }
               >
-                <Link2 />
-                <span>Copy Space URL</span>
-              </Menu.Item>
-              {onArchive === undefined ? null : (
-                <Menu.Item className="thread-menu-item" onClick={onArchive}>
-                  <Archive />
-                  <span>Archive Space</span>
-                </Menu.Item>
-              )}
-              {automations && own ? (
-                <MenuItems threadId={space.threadId} onOpen={setSheet} />
-              ) : null}
-              {thread === undefined ? null : (
-                <React.Suspense fallback={null}>
-                  <ThreadDetailRows
-                    Menu={menuParts}
-                    thread={thread}
-                    onOpenUsage={() => setUsageOpen(true)}
-                  />
-                </React.Suspense>
-              )}
-              {member ? (
-                <>
-                  <Menu.Separator className="thread-menu-separator" />
-                  <Menu.Item
-                    className="thread-menu-item"
-                    disabled={leave.isPending}
-                    onClick={() =>
-                      leave.mutate({ threadId: space.threadId, joined: false })
-                    }
-                  >
-                    <LogOut />
-                    <span>Leave Space</span>
-                  </Menu.Item>
-                </>
-              ) : null}
-              {onDelete === undefined ? null : (
-                <>
-                  <Menu.Separator className="thread-menu-separator" />
-                  <Menu.Item className="thread-menu-item" onClick={onDelete}>
-                    <Trash2 />
-                    <span>Delete Space…</span>
-                  </Menu.Item>
-                </>
-              )}
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+                <LogOut />
+                <span>Leave Space</span>
+              </MenuItem>
+            </>
+          ) : null}
+          {onDelete === undefined ? null : (
+            <>
+              <MenuSeparator />
+              <MenuItem onClick={onDelete}>
+                <Trash2 />
+                <span>Delete Space…</span>
+              </MenuItem>
+            </>
+          )}
+        </MenuPopup>
+      </MenuRoot>
       {usageOpen && thread !== undefined ? (
         <React.Suspense fallback={null}>
           <ThreadUsageDialog
@@ -557,15 +549,16 @@ export function SpaceProjectChip({ space }: { readonly space: SpaceData }) {
  */
 /** The Huddle button while Huddle is off for this person. */
 const HUDDLE_OFF = (
-  <button
-    type="button"
+  <Button
+    variant="subtle"
+    size="icon-xs"
     className="space-icon-button"
     aria-label="Huddle"
     title="Huddle is not available yet"
     disabled
   >
     <Headphones aria-hidden="true" />
-  </button>
+  </Button>
 );
 
 export function SpaceCallAndSharing({
@@ -592,8 +585,9 @@ export function SpaceCallAndSharing({
           fallback={HUDDLE_OFF}
         />
       )}
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="space-icon-button"
         aria-label="Sharing"
         title={sharing}
@@ -606,7 +600,7 @@ export function SpaceCallAndSharing({
         ) : (
           <UsersRound aria-hidden="true" />
         )}
-      </button>
+      </Button>
     </>
   );
 }
@@ -667,15 +661,16 @@ export function SpacePanel({
             onArchive={onArchive}
           />
           {onHide === undefined ? null : (
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="icon-xs"
               className="space-icon-button"
               aria-label="Hide Space Details"
               title="Hide Space Details"
               onClick={onHide}
             >
               <PanelRightClose aria-hidden="true" />
-            </button>
+            </Button>
           )}
         </div>
         {status === undefined ? null : (
@@ -698,40 +693,41 @@ export function SpacePanel({
         <SpaceAutomationsRow space={space} />
       </header>
       <SpaceProgressChart spaceThreadId={space.threadId} />
-      <Tabs.Root
+      <Tabs
+        variant="segmented"
         className="space-panel-tabs"
         value={tab}
         onValueChange={(value) => setTab(value as SpacePanelTab)}
       >
-        <Tabs.List className="space-panel-tab-list" aria-label="Space panel">
-          <Tabs.Tab className="space-panel-tab" value="threads">
+        <TabsList className="space-panel-tab-list" aria-label="Space panel">
+          <Tab className="space-panel-tab" value="threads">
             <span className="space-panel-tab-icon">
               <ListTree aria-hidden="true" />
               {unread ? <span className="space-unread-dot" /> : null}
             </span>
             Threads
-          </Tabs.Tab>
-          <Tabs.Tab className="space-panel-tab" value="comments">
+          </Tab>
+          <Tab className="space-panel-tab" value="comments">
             <span className="space-panel-tab-icon">
               <MessagesSquare aria-hidden="true" />
             </span>
             Comments
-          </Tabs.Tab>
-          <Tabs.Tab className="space-panel-tab" value="artifacts">
+          </Tab>
+          <Tab className="space-panel-tab" value="artifacts">
             <span className="space-panel-tab-icon">
               <FileText aria-hidden="true" />
             </span>
             Artifacts
-          </Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel className="space-panel-tab-panel" value="threads">
+          </Tab>
+        </TabsList>
+        <TabsPanel className="space-panel-tab-panel" value="threads">
           <SpaceThreadSections
             threads={threads}
             activeThreadId={activeThreadId}
             onOpenThread={onOpenThread}
           />
-        </Tabs.Panel>
-        <Tabs.Panel className="space-panel-tab-panel" value="comments">
+        </TabsPanel>
+        <TabsPanel className="space-panel-tab-panel" value="comments">
           <SpaceCommentsTab
             spaceThreadId={space.threadId}
             onOpen={() => {
@@ -739,14 +735,14 @@ export function SpacePanel({
               onOpenComments();
             }}
           />
-        </Tabs.Panel>
-        <Tabs.Panel className="space-panel-tab-panel" value="artifacts">
+        </TabsPanel>
+        <TabsPanel className="space-panel-tab-panel" value="artifacts">
           <SpaceArtifactsTab
             spaceThreadId={space.threadId}
             onOpened={onOpened}
           />
-        </Tabs.Panel>
-      </Tabs.Root>
+        </TabsPanel>
+      </Tabs>
     </div>
   );
 }

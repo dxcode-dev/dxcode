@@ -1,7 +1,12 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
 import { Download, FileText } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 import { downloadFromUrl } from "../download-from-url.js";
+import {
+  ContextMenuRoot,
+  ContextMenuTrigger,
+  MenuItem,
+  MenuPopup,
+} from "./menu.js";
 
 /**
  * Right-click menu for a file reference: "Open file" and, when the file can
@@ -20,25 +25,20 @@ export function FileContextMenu({
   readonly downloadUrl?: string;
 }) {
   return (
-    <ContextMenu.Root>
-      <ContextMenu.Trigger render={trigger}>{children}</ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Positioner className="thread-context-positioner">
-          <ContextMenu.Popup className="thread-context-menu">
-            <ContextMenu.Item className="thread-context-item" onClick={onOpen}>
-              <FileText /> Open file
-            </ContextMenu.Item>
-            {downloadUrl === undefined ? null : (
-              <ContextMenu.Item
-                className="thread-context-item"
-                onClick={() => downloadFromUrl(downloadUrl)}
-              >
-                <Download /> Download file
-              </ContextMenu.Item>
-            )}
-          </ContextMenu.Popup>
-        </ContextMenu.Positioner>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
+    <ContextMenuRoot>
+      <ContextMenuTrigger render={trigger}>{children}</ContextMenuTrigger>
+      <MenuPopup sideOffset={0}>
+        <MenuItem onClick={onOpen}>
+          <FileText />
+          <span>Open file</span>
+        </MenuItem>
+        {downloadUrl === undefined ? null : (
+          <MenuItem onClick={() => downloadFromUrl(downloadUrl)}>
+            <Download />
+            <span>Download file</span>
+          </MenuItem>
+        )}
+      </MenuPopup>
+    </ContextMenuRoot>
   );
 }

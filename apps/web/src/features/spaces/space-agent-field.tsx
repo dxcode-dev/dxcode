@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { SpaceAgentRoute } from "@dx/api";
 import {
   claudeCodeEffort,
@@ -17,7 +16,15 @@ import {
 } from "../../shared/model-display-name.js";
 import { spaceRouteText } from "../../shared/space-agent-route.js";
 import { Button } from "../../shared/ui/button.js";
+import { chipVariants } from "../../shared/ui/chip-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import {
+  DialogContent,
+  DialogDescription,
+  DialogRoot,
+  DialogTitle,
+} from "../../shared/ui/dialog.js";
+import { Select } from "../../shared/ui/select.js";
 import { modelRoutingChoicesQueryOptions } from "../settings/model-routing/model-routing-queries.js";
 import { spaceAgentModelMutationOptions } from "./space-agent-model-mutations.js";
 import { spaceAgentModelQueryOptions } from "./space-agent-model-queries.js";
@@ -76,80 +83,83 @@ export function SpaceAgentPicker({
   });
   const route = save.data?.route ?? current.data?.route;
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="space-agent-picker-backdrop" />
-        <Dialog.Popup className="space-agent-picker" aria-label="Space model">
-          <Dialog.Title className="space-agent-picker-title">
-            Pick the model for Spaces
-          </Dialog.Title>
-          <Dialog.Description className="space-agent-picker-lede">
-            A Space's agent runs on this model. dx runs it on Claude Code when
-            your Claude Pro/Max plan serves it, otherwise through Model Routing.
-          </Dialog.Description>
-          <select
-            aria-label="Model for Spaces"
-            value={chosen}
-            disabled={choices.isPending || save.isPending}
-            onChange={(event) => setModel(event.target.value)}
+    <DialogRoot open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent
+        layer="panel"
+        stacked
+        showClose={false}
+        size="md"
+        className="space-agent-picker"
+        aria-label="Space model"
+      >
+        <DialogTitle className="space-agent-picker-title">
+          Pick the model for Spaces
+        </DialogTitle>
+        <DialogDescription className="space-agent-picker-lede">
+          A Space's agent runs on this model. dx runs it on Claude Code when
+          your Claude Pro/Max plan serves it, otherwise through Model Routing.
+        </DialogDescription>
+        <Select
+          size="md"
+          className="space-agent-picker-select"
+          aria-label="Model for Spaces"
+          value={chosen}
+          disabled={choices.isPending || save.isPending}
+          onChange={(event) => setModel(event.target.value)}
+        >
+          <option value={AUTO}>Auto · Claude Opus 5.5</option>
+          {served.map((m) => (
+            <option key={m.canonical} value={m.canonical}>
+              {m.name}
+            </option>
+          ))}
+        </Select>
+        {route === undefined ? null : (
+          <p
+            className="space-agent-picker-route"
+            data-route={route.kind}
+            role={route.kind === "unavailable" ? "alert" : "status"}
           >
-            <option value={AUTO}>Auto · Claude Opus 5.5</option>
-            {served.map((m) => (
-              <option key={m.canonical} value={m.canonical}>
-                {m.name}
-              </option>
-            ))}
-          </select>
-          {route === undefined ? null : (
-            <p
-              className="space-agent-picker-route"
-              data-route={route.kind}
-              role={route.kind === "unavailable" ? "alert" : "status"}
-            >
-              {spaceRouteText(route)}
-            </p>
-          )}
-          {served.length === 0 && choices.isSuccess ? (
-            <p className="space-agent-picker-route">
-              No model is served yet. Connect a provider in{" "}
-              <Link
-                to="/settings/$section"
-                params={{ section: "model-routing" }}
-              >
-                Model Routing
-              </Link>
-              .
-            </p>
-          ) : null}
-          <footer className="space-agent-picker-footer">
-            <Button type="button" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              className="space-primary-button"
-              disabled={save.isPending}
-              onClick={() =>
-                save.mutate(
-                  chosen === AUTO
-                    ? null
-                    : ({
-                        model: chosen,
-                        thinking:
-                          served.find((m) => m.canonical === chosen)
-                            ?.reasoning === false
-                            ? "off"
-                            : SPACE_AGENT_DEFAULT.thinking,
-                      } as never),
-                )
-              }
-            >
-              {save.isPending ? "Saving…" : "Use this model"}
-            </Button>
-          </footer>
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+            {spaceRouteText(route)}
+          </p>
+        )}
+        {served.length === 0 && choices.isSuccess ? (
+          <p className="space-agent-picker-route">
+            No model is served yet. Connect a provider in{" "}
+            <Link to="/settings/$section" params={{ section: "model-routing" }}>
+              Model Routing
+            </Link>
+            .
+          </p>
+        ) : null}
+        <footer className="space-agent-picker-footer">
+          <Button type="button" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            className="space-primary-button"
+            disabled={save.isPending}
+            onClick={() =>
+              save.mutate(
+                chosen === AUTO
+                  ? null
+                  : ({
+                      model: chosen,
+                      thinking:
+                        served.find((m) => m.canonical === chosen)
+                          ?.reasoning === false
+                          ? "off"
+                          : SPACE_AGENT_DEFAULT.thinking,
+                    } as never),
+              )
+            }
+          >
+            {save.isPending ? "Saving…" : "Use this model"}
+          </Button>
+        </footer>
+      </DialogContent>
+    </DialogRoot>
   );
 }
 
@@ -212,7 +222,12 @@ export function SpaceAgentField({
         <button
           id={id}
           type="button"
-          className="new-thread-config-pill new-thread-mode space-agent-chip"
+          className={chipVariants({
+            variant: "soft",
+            size: "lg",
+            className:
+              "new-thread-config-pill new-thread-mode space-agent-chip",
+          })}
           data-claude-code={claudeCode || undefined}
           aria-label={`${described} Change the model for Spaces.`}
           title={described}

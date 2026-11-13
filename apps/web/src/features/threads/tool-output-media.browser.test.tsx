@@ -1,7 +1,7 @@
 import type { FlueConversationMessage } from "@flue/react";
 import * as React from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ToolMediaSourceContext } from "./tool-output-media-model.js";
 import { deriveTranscriptViewModel } from "./transcript-view-model.js";
 import { TranscriptTurn } from "./transcript-work.js";
@@ -109,9 +109,14 @@ describe("tool output media", () => {
       `${AGENT}/attachments/${IMAGE_ID}`,
     );
     await React.act(() => tile?.click());
-    const viewer = document.querySelector(".image-viewer");
-    expect(viewer?.querySelector("img")?.getAttribute("src")).toBe(
-      `${AGENT}/attachments/${IMAGE_ID}`,
+    // The viewer loads on first open.
+    await vi.waitFor(() =>
+      expect(
+        document
+          .querySelector(".dx-image-viewer")
+          ?.querySelector("img")
+          ?.getAttribute("src"),
+      ).toBe(`${AGENT}/attachments/${IMAGE_ID}`),
     );
     await React.act(() => root.unmount());
   });

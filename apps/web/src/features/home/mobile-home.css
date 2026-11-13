@@ -24,7 +24,7 @@
   left: 50%;
   width: 32px;
   height: 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--muted-foreground) 32%, transparent);
   transform: translateX(-50%);
   pointer-events: none;
@@ -41,14 +41,14 @@
   flex-direction: column;
   height: var(--pull-distance);
   overflow: hidden;
-  padding-bottom: 12px;
+  padding-bottom: var(--space-3);
   pointer-events: none;
   transition: height 360ms cubic-bezier(0.32, 0.72, 0, 1);
 }
 .mobile-pull-line {
   flex: 1;
   width: 0;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
   border-left: 1px dashed
     color-mix(in srgb, var(--muted-foreground) 60%, transparent);
 }
@@ -57,12 +57,12 @@
   align-items: center;
   flex: none;
   gap: 9px;
-  padding: 7px 12px 7px 10px;
+  padding: 7px var(--space-3) 7px var(--space-2-5);
   color: var(--foreground);
   border: 1px solid var(--outline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-ink) 32%, transparent);
   animation: mobile-pull-card-in 160ms ease-out both;
 }
 .mobile-pull-card > svg {
@@ -76,14 +76,14 @@
   white-space: nowrap;
 }
 .mobile-pull-card strong {
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4);
 }
 .mobile-pull-card small {
   color: var(--muted-foreground);
-  font-size: 10px;
-  line-height: 14px;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-3-5);
 }
 @keyframes mobile-pull-card-in {
   from {

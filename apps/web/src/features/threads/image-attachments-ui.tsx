@@ -1,8 +1,5 @@
-import { Dialog } from "@base-ui/react/dialog";
-import { Menu } from "@base-ui/react/menu";
 import {
   AlertCircle,
-  Download,
   Eye,
   FileIcon,
   FileVideo,
@@ -13,6 +10,14 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
+import { LazyImageViewer as ImageViewer } from "../../shared/ui/lazy-image-viewer.js";
+import {
+  MenuItem,
+  MenuItemHint,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import {
   attachmentPreviewKind,
   attachmentTypeLabel,
@@ -113,85 +118,65 @@ function AttachmentMedia({
 }
 
 /**
- * A file's preview card: the media (or a file icon), its name and type, and
- * download and delete actions.
+ * A file's preview in the shared viewer: the media (or a file icon), its
+ * name, type, and size, and Download and Remove.
  */
 function AttachmentPreviewDialog({
-  open,
-  onOpenChange,
   name,
   mimeType,
   size,
   url,
   downloadUrl = url,
+  onClose,
   onRemove,
   removeDisabled = false,
 }: {
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
   readonly name: string;
   readonly mimeType: string;
   readonly size?: number;
   readonly url: string;
   readonly downloadUrl?: string;
+  readonly onClose: () => void;
   readonly onRemove?: () => void;
   readonly removeDisabled?: boolean;
 }) {
-  const kind = attachmentPreviewKind(mimeType);
+  const type = attachmentTypeLabel(name, mimeType);
   return (
-    <Dialog.Root open={open} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="image-preview-backdrop" />
-        <Dialog.Viewport className="image-preview-viewport">
-          <Dialog.Popup className="attachment-preview-card" aria-label={name}>
-            <Dialog.Close
-              className="attachment-preview-close"
-              aria-label="Close preview"
-            >
-              <X />
-            </Dialog.Close>
-            <div className="attachment-preview-media" data-kind={kind}>
-              <AttachmentMedia kind={kind} url={url} name={name} controls />
-            </div>
-            <div className="attachment-preview-footer">
-              <div className="attachment-preview-meta">
-                <span className="attachment-preview-name" title={name}>
-                  {name}
-                </span>
-                <span className="attachment-preview-type">
-                  {attachmentTypeLabel(name, mimeType)}
-                  {size === undefined ? "" : ` · ${formatAttachmentSize(size)}`}
-                </span>
-              </div>
-              <a
-                className="attachment-preview-action"
-                href={downloadUrl}
-                download={name}
-                aria-label={`Download ${name}`}
-                title="Download"
-              >
-                <Download />
-              </a>
-              {onRemove === undefined ? null : (
-                <button
-                  type="button"
-                  className="attachment-preview-action"
-                  aria-label={`Remove ${name}`}
-                  title="Remove"
-                  disabled={removeDisabled}
-                  onClick={() => {
-                    onOpenChange(false);
-                    onRemove();
-                  }}
-                >
-                  <Trash2 />
-                </button>
-              )}
-            </div>
-          </Dialog.Popup>
-        </Dialog.Viewport>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <ImageViewer
+      items={[
+        {
+          key: url,
+          url,
+          name,
+          kind: attachmentPreviewKind(mimeType),
+          downloadUrl,
+          detail:
+            size === undefined
+              ? type
+              : `${type} · ${formatAttachmentSize(size)}`,
+        },
+      ]}
+      onClose={onClose}
+      closeLabel="Close preview"
+      showOpenInTab={false}
+      actions={() =>
+        onRemove === undefined ? null : (
+          <Button
+            variant="subtle"
+            size="icon-sm"
+            aria-label={`Remove ${name}`}
+            title="Remove"
+            disabled={removeDisabled}
+            onClick={() => {
+              onClose();
+              onRemove();
+            }}
+          >
+            <Trash2 />
+          </Button>
+        )
+      }
+    />
   );
 }
 
@@ -236,16 +221,17 @@ function PendingAttachmentThumbnail({
           />
         ) : null}
       </button>
-      <AttachmentPreviewDialog
-        open={open}
-        onOpenChange={setOpen}
-        name={label}
-        mimeType={attachment.mimeType}
-        size={attachment.size}
-        url={attachment.previewUrl}
-        onRemove={onRemove}
-        removeDisabled={disabled}
-      />
+      {open ? (
+        <AttachmentPreviewDialog
+          onClose={() => setOpen(false)}
+          name={label}
+          mimeType={attachment.mimeType}
+          size={attachment.size}
+          url={attachment.previewUrl}
+          onRemove={onRemove}
+          removeDisabled={disabled}
+        />
+      ) : null}
     </span>
   );
 }
@@ -317,29 +303,32 @@ function ImagePreview({
   const [open, setOpen] = React.useState(false);
   return (
     <span className="composer-attachment">
-      <Dialog.Root open={open} onOpenChange={setOpen}>
-        <Dialog.Trigger
-          className="composer-attachment-preview"
-          aria-label={`Preview ${label}`}
-          title={`Preview ${label}`}
-          disabled={disabled}
-          onClick={() => setOpen(true)}
-        >
-          <img src={image.previewUrl} alt="" />
-          <Eye aria-hidden="true" />
-        </Dialog.Trigger>
-        <Dialog.Portal>
-          <Dialog.Backdrop className="image-preview-backdrop" />
-          <Dialog.Viewport className="image-preview-viewport">
-            <Dialog.Popup className="image-preview-dialog" aria-label={label}>
-              <Dialog.Close aria-label="Close image preview">
-                <X />
-              </Dialog.Close>
-              <img src={image.previewUrl} alt={label} />
-            </Dialog.Popup>
-          </Dialog.Viewport>
-        </Dialog.Portal>
-      </Dialog.Root>
+      <button
+        type="button"
+        className="composer-attachment-preview"
+        aria-label={`Preview ${label}`}
+        title={`Preview ${label}`}
+        disabled={disabled}
+        onClick={() => setOpen(true)}
+      >
+        <img src={image.previewUrl} alt="" />
+        <Eye aria-hidden="true" />
+      </button>
+      {open ? (
+        <ImageViewer
+          items={[
+            {
+              key: image.previewUrl,
+              url: image.previewUrl,
+              name: label,
+              kind: "image",
+            },
+          ]}
+          onClose={() => setOpen(false)}
+          closeLabel="Close image preview"
+          showOpenInTab={false}
+        />
+      ) : null}
       <button
         type="button"
         className="composer-attachment-remove"
@@ -381,8 +370,8 @@ export function AttachmentMenu({
           if (files.length > 0) onFiles(files);
         }}
       />
-      <Menu.Root open={open && !disabled} onOpenChange={setOpen}>
-        <Menu.Trigger
+      <MenuRoot open={open && !disabled} onOpenChange={setOpen}>
+        <MenuTrigger
           nativeButton
           render={
             <Button
@@ -396,34 +385,27 @@ export function AttachmentMenu({
           }
         >
           <Paperclip />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="attachment-menu-positioner"
-            side="top"
-            align="start"
-            sideOffset={6}
+        </MenuTrigger>
+        <MenuPopup side="top" align="start" sideOffset={6}>
+          <MenuItem
+            nativeButton
+            render={<button type="button" />}
+            onClick={() => inputRef.current?.click()}
           >
-            <Menu.Popup className="attachment-menu">
-              <Menu.Item
-                nativeButton
-                render={<button type="button" />}
-                onClick={() => inputRef.current?.click()}
-              >
-                <Paperclip /> <span>Add Images &amp; Files</span>
-                <kbd>⌘U</kbd>
-              </Menu.Item>
-              <Menu.Item
-                nativeButton
-                render={<button type="button" />}
-                onClick={onScreenshot}
-              >
-                <Monitor /> <span>Take Screenshot</span>
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+            <Paperclip />
+            <span>Add Images &amp; Files</span>
+            <MenuItemHint>⌘U</MenuItemHint>
+          </MenuItem>
+          <MenuItem
+            nativeButton
+            render={<button type="button" />}
+            onClick={onScreenshot}
+          >
+            <Monitor />
+            <span>Take Screenshot</span>
+          </MenuItem>
+        </MenuPopup>
+      </MenuRoot>
     </span>
   );
 }

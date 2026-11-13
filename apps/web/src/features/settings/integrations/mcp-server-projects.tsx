@@ -1,10 +1,16 @@
-import { Menu } from "@base-ui/react/menu";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Building2, Check, ChevronDown, UserRound } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
-import { MenuItemText } from "../../../shared/ui/menu-item-text.js";
+import {
+  MenuItemText,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { projectsQueryOptions } from "../../projects/project-queries.js";
 import type { McpServerData, ProjectData } from "./mcp-queries.js";
 import type { McpRun } from "./mcp-server-sheet.js";
@@ -51,8 +57,8 @@ function ScopeMenu({
   readonly onChoose: (scope: Scope) => void;
 }) {
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         disabled={disabled}
         render={
           <Button
@@ -66,38 +72,23 @@ function ScopeMenu({
       >
         {SCOPE_COPY[value].label}
         <ChevronDown />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuRadioGroup
+          value={value}
+          onValueChange={(next) => onChoose(next as Scope)}
         >
-          <Menu.Popup className="thread-menu-popup mcp-menu-popup">
-            <Menu.RadioGroup
-              value={value}
-              onValueChange={(next) => onChoose(next as Scope)}
-            >
-              {(["all", "only"] as const).map((scope) => (
-                <Menu.RadioItem
-                  key={scope}
-                  value={scope}
-                  className="thread-menu-item mcp-menu-radio"
-                >
-                  <Menu.RadioItemIndicator className="mcp-menu-indicator">
-                    <Check />
-                  </Menu.RadioItemIndicator>
-                  <MenuItemText
-                    title={SCOPE_COPY[scope].label}
-                    description={SCOPE_COPY[scope].detail}
-                  />
-                </Menu.RadioItem>
-              ))}
-            </Menu.RadioGroup>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+          {(["all", "only"] as const).map((scope) => (
+            <MenuRadioItem key={scope} value={scope}>
+              <MenuItemText
+                title={SCOPE_COPY[scope].label}
+                description={SCOPE_COPY[scope].detail}
+              />
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 

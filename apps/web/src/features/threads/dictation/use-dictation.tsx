@@ -471,6 +471,9 @@ export const useDictation = ({
         type="button"
         variant="ghost"
         size="icon-sm"
+        shape="round"
+        busy={processingIntent !== undefined || snapshot.state === "recording"}
+        tone={recoverable ? "danger" : undefined}
         className="dictation-action"
         aria-label={
           processingIntent !== undefined
@@ -521,7 +524,7 @@ export const useDictation = ({
           </Button>
           <Button
             type="button"
-            variant="ghost"
+            variant="danger"
             size="icon-xs"
             className="dictation-download"
             aria-label="Download saved dictation"

@@ -1,12 +1,9 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadPaneLayout, ThreadPaneTab } from "@dx/api";
 import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
-  ChevronRight,
   Copy,
   Download,
   Grid2x2Plus,
@@ -21,6 +18,19 @@ import { getBrowserCommandRegistry } from "../../../shared/commands/command-regi
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { terminalEnvironmentFormId } from "../../../shared/terminal-session.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import {
+  ContextMenuRoot,
+  ContextMenuTrigger,
+  MenuItem,
+  MenuItemHint,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import {
   warmTerminal,
   warmTerminalAfterDwell,
@@ -87,9 +97,8 @@ function ViewMenuItems({
         const another =
           open && view === "terminal" && onNewTerminal !== undefined;
         return (
-          <Menu.Item
+          <MenuItem
             key={view}
-            className="thread-menu-item pane-view-menu-item"
             data-view={view}
             disabled={another && !canOpenTerminal(layout)}
             onClick={() => (another ? onNewTerminal() : onOpen(view))}
@@ -98,11 +107,11 @@ function ViewMenuItems({
             <Icon aria-hidden="true" />
             <span>{another ? "New Terminal" : label}</span>
             {another ? null : open ? (
-              <small className="pane-view-menu-open">Open</small>
+              <MenuItemHint>Open</MenuItemHint>
             ) : (
               <ShortcutKeycaps keycaps={keycaps(command)} emptyLabel="" />
             )}
-          </Menu.Item>
+          </MenuItem>
         );
       })}
       {onOpenPluginPane === undefined
@@ -111,9 +120,9 @@ function ViewMenuItems({
             renderItem: (option) => {
               const id = pluginPaneTabId(option);
               return (
-                <Menu.Item
+                <MenuItem
                   key={id}
-                  className="thread-menu-item pane-view-menu-item"
+                  className="pane-view-menu-item"
                   data-view={id}
                   title={option.pluginTitle}
                   onClick={() =>
@@ -127,9 +136,9 @@ function ViewMenuItems({
                   <Puzzle aria-hidden="true" />
                   <span>{option.title}</span>
                   {locateTab(layout, id) === undefined ? null : (
-                    <small className="pane-view-menu-open">Open</small>
+                    <MenuItemHint>Open</MenuItemHint>
                   )}
-                </Menu.Item>
+                </MenuItem>
               );
             },
           })}
@@ -190,32 +199,28 @@ export function ViewsMenuButton({
 }) {
   if (availableViews(contents).length === 0) return null;
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        className={`thread-title-action thread-title-action-text ${className ?? ""}`}
+    <MenuRoot>
+      <MenuTrigger
+        className={buttonVariants({
+          variant: "subtle",
+          size: "xs",
+          className: `thread-title-action thread-title-action-text ${className ?? ""}`,
+        })}
         aria-label="Views"
       >
         <Grid2x2Plus aria-hidden="true" />
         <span>Views</span>
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup thread-actions-menu pane-view-menu">
-            <ViewMenuItems
-              layout={layout}
-              contents={contents}
-              onOpen={onOpen}
-              onNewTerminal={onNewTerminal}
-              onOpenPluginPane={onOpenPluginPane}
-            />
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup className="pane-view-menu" align="end">
+        <ViewMenuItems
+          layout={layout}
+          contents={contents}
+          onOpen={onOpen}
+          onNewTerminal={onNewTerminal}
+          onOpenPluginPane={onOpenPluginPane}
+        />
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
@@ -235,32 +240,24 @@ export function OpenTabMenuButton({
 }) {
   if (availableViews(contents).length === 0) return null;
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         className="pane-open-tab"
         aria-label="Open Tab"
         title="Open Tab"
       >
         <Plus aria-hidden="true" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="start"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup thread-actions-menu pane-view-menu">
-            <ViewMenuItems
-              layout={layout}
-              contents={contents}
-              onOpen={onOpen}
-              onNewTerminal={onNewTerminal}
-              onOpenPluginPane={onOpenPluginPane}
-            />
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup className="pane-view-menu" align="start">
+        <ViewMenuItems
+          layout={layout}
+          contents={contents}
+          onOpen={onOpen}
+          onNewTerminal={onNewTerminal}
+          onOpenPluginPane={onOpenPluginPane}
+        />
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
@@ -311,127 +308,91 @@ export function PaneTabContextMenu({
     .filter((candidate) => candidate.kind !== "agent");
   const label = tabLabel(tab);
   return (
-    <ContextMenu.Root>
-      <ContextMenu.Trigger render={children} />
-      <ContextMenu.Portal>
-        <ContextMenu.Positioner className="thread-context-positioner">
-          <ContextMenu.Popup
-            className="thread-context-menu pane-tab-menu"
-            aria-label={`Actions for ${label}`}
-          >
-            <ContextMenu.Item
-              className="thread-context-item"
-              onClick={() => dispatch({ type: "close", tab: id })}
-            >
-              <X />
-              <span>Close</span>
-            </ContextMenu.Item>
-            <ContextMenu.Item
-              className="thread-context-item"
-              disabled={others.length === 0}
-              onClick={() => dispatch({ type: "close-others", pane, tab: id })}
-            >
-              <span>Close Others</span>
-            </ContextMenu.Item>
-            <ContextMenu.Item
-              className="thread-context-item"
-              disabled={toRight.length === 0}
-              onClick={() => dispatch({ type: "close-right", pane, tab: id })}
-            >
-              <span>Close to the Right</span>
-            </ContextMenu.Item>
-            <ContextMenu.Item
-              className="thread-context-item"
-              onClick={() => dispatch({ type: "close-all", pane })}
-            >
-              <span>Close All</span>
-            </ContextMenu.Item>
-            {file === undefined ? null : (
-              <>
-                <ContextMenu.Separator className="thread-context-separator" />
-                {file.downloadUrl === undefined ? null : (
-                  <ContextMenu.Item
-                    className="thread-context-item"
-                    onClick={() => downloadFromUrl(file.downloadUrl as string)}
-                  >
-                    <Download />
-                    <span>Download</span>
-                  </ContextMenu.Item>
-                )}
-                <ContextMenu.Item
-                  className="thread-context-item"
-                  onClick={() => copyText(file.path)}
-                >
-                  <Copy />
-                  <span>Copy Path</span>
-                </ContextMenu.Item>
-                {file.link === undefined ? null : (
-                  <ContextMenu.Item
-                    className="thread-context-item"
-                    onClick={() => copyText(file.link as string)}
-                  >
-                    <span>Copy Link</span>
-                  </ContextMenu.Item>
-                )}
-              </>
-            )}
-            {tab.kind === "terminal" ? (
-              <>
-                <ContextMenu.Separator className="thread-context-separator" />
-                <ContextMenu.Item
-                  className="thread-context-item"
-                  nativeButton
-                  render={
-                    <button
-                      type="submit"
-                      form={terminalEnvironmentFormId(terminalSession(tab))}
-                    />
-                  }
-                >
-                  <RefreshCw />
-                  <span>Refresh Environment</span>
-                </ContextMenu.Item>
-              </>
-            ) : null}
-            <ContextMenu.Separator className="thread-context-separator" />
-            <ContextMenu.SubmenuRoot>
-              <ContextMenu.SubmenuTrigger
-                className="thread-context-item"
-                disabled={tabs.length === 1}
+    <ContextMenuRoot>
+      <ContextMenuTrigger render={children} />
+      <MenuPopup sideOffset={0} aria-label={`Actions for ${label}`}>
+        <MenuItem onClick={() => dispatch({ type: "close", tab: id })}>
+          <X />
+          <span>Close</span>
+        </MenuItem>
+        <MenuItem
+          disabled={others.length === 0}
+          onClick={() => dispatch({ type: "close-others", pane, tab: id })}
+        >
+          <span>Close Others</span>
+        </MenuItem>
+        <MenuItem
+          disabled={toRight.length === 0}
+          onClick={() => dispatch({ type: "close-right", pane, tab: id })}
+        >
+          <span>Close to the Right</span>
+        </MenuItem>
+        <MenuItem onClick={() => dispatch({ type: "close-all", pane })}>
+          <span>Close All</span>
+        </MenuItem>
+        {file === undefined ? null : (
+          <>
+            <MenuSeparator />
+            {file.downloadUrl === undefined ? null : (
+              <MenuItem
+                onClick={() => downloadFromUrl(file.downloadUrl as string)}
               >
-                <span>Move To</span>
-                <ChevronRight />
-              </ContextMenu.SubmenuTrigger>
-              <ContextMenu.Portal>
-                <ContextMenu.Positioner
-                  className="thread-context-positioner"
-                  sideOffset={4}
-                  alignOffset={-4}
-                >
-                  <ContextMenu.Popup className="thread-context-menu pane-tab-menu">
-                    {SIDES.map(({ side, label: sideLabel, Icon }) => (
-                      <ContextMenu.Item
-                        key={side}
-                        className="thread-context-item"
-                        onClick={() =>
-                          dispatch({
-                            type: "move",
-                            tab: id,
-                            to: { pane, side },
-                          })
-                        }
-                      >
-                        <Icon />
-                        <span>{sideLabel}</span>
-                      </ContextMenu.Item>
-                    ))}
-                  </ContextMenu.Popup>
-                </ContextMenu.Positioner>
-              </ContextMenu.Portal>
-            </ContextMenu.SubmenuRoot>
-          </ContextMenu.Popup>
-        </ContextMenu.Positioner>
-      </ContextMenu.Portal>
-    </ContextMenu.Root>
+                <Download />
+                <span>Download</span>
+              </MenuItem>
+            )}
+            <MenuItem onClick={() => copyText(file.path)}>
+              <Copy />
+              <span>Copy Path</span>
+            </MenuItem>
+            {file.link === undefined ? null : (
+              <MenuItem onClick={() => copyText(file.link as string)}>
+                <span>Copy Link</span>
+              </MenuItem>
+            )}
+          </>
+        )}
+        {tab.kind === "terminal" ? (
+          <>
+            <MenuSeparator />
+            <MenuItem
+              nativeButton
+              render={
+                <button
+                  type="submit"
+                  form={terminalEnvironmentFormId(terminalSession(tab))}
+                />
+              }
+            >
+              <RefreshCw />
+              <span>Refresh Environment</span>
+            </MenuItem>
+          </>
+        ) : null}
+        <MenuSeparator />
+        <MenuSubmenuRoot>
+          <MenuSubmenuTrigger disabled={tabs.length === 1}>
+            <span>Move To</span>
+          </MenuSubmenuTrigger>
+          <MenuPopup alignOffset={-4}>
+            {SIDES.map(({ side, label: sideLabel, Icon }) => (
+              <MenuItem
+                key={side}
+                onClick={() =>
+                  dispatch({
+                    type: "move",
+                    tab: id,
+                    to: { pane, side },
+                  })
+                }
+              >
+                <Icon />
+                <span>{sideLabel}</span>
+              </MenuItem>
+            ))}
+          </MenuPopup>
+        </MenuSubmenuRoot>
+      </MenuPopup>
+    </ContextMenuRoot>
   );
 }

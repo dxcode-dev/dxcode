@@ -1,9 +1,10 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderInput, Link2, Trash2 } from "lucide-react";
 import * as React from "react";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
+import { Input } from "../../../shared/ui/input.js";
+import { MenuItem, MenuSeparator } from "../../../shared/ui/menu.js";
 import {
   artifactListOptions,
   deleteArtifactMutation,
@@ -53,8 +54,7 @@ export function useArtifactFileActions({
   // Copy Link: pasted on a line of its own in a document, a board shows
   // its preview there.
   const copyLink = (
-    <Menu.Item
-      className="thread-menu-item"
+    <MenuItem
       onClick={() =>
         void navigator.clipboard?.writeText(
           new URL(artifactHref(threadId, artifactId), window.location.href)
@@ -64,13 +64,13 @@ export function useArtifactFileActions({
     >
       <Link2 aria-hidden="true" />
       Copy Link
-    </Menu.Item>
+    </MenuItem>
   );
   if (readOnly)
     return {
       items: (
         <>
-          <Menu.Separator className="thread-menu-separator" />
+          <MenuSeparator />
           {copyLink}
         </>
       ),
@@ -79,10 +79,9 @@ export function useArtifactFileActions({
   const problem = folderProblem(target.trim());
   const items = (
     <>
-      <Menu.Separator className="thread-menu-separator" />
+      <MenuSeparator />
       {copyLink}
-      <Menu.Item
-        className="thread-menu-item"
+      <MenuItem
         onClick={() => {
           setTarget(folder);
           setMoving(true);
@@ -90,15 +89,11 @@ export function useArtifactFileActions({
       >
         <FolderInput aria-hidden="true" />
         Move to Folder…
-      </Menu.Item>
-      <Menu.Item
-        className="thread-menu-item"
-        data-tone="destructive"
-        onClick={() => setDeleting(true)}
-      >
+      </MenuItem>
+      <MenuItem tone="danger" onClick={() => setDeleting(true)}>
         <Trash2 aria-hidden="true" />
         Delete Artifact…
-      </Menu.Item>
+      </MenuItem>
     </>
   );
   const dialogs = (
@@ -116,7 +111,7 @@ export function useArtifactFileActions({
           setMoving(false);
         }}
       >
-        <input
+        <Input
           className="artifact-folder-input"
           aria-label="Folder"
           list="artifact-folders"

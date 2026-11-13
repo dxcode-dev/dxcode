@@ -2,6 +2,7 @@ import { THREAD_SANDBOX_WORKSPACE_ROOT, ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import * as React from "react";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,
@@ -101,8 +102,8 @@ const DelimitedTable = ({
   const rows = parseDelimited(content, delimiterFor(path, content));
   if (rows.length === 0)
     return (
-      <div className="thread-files-state" role="status">
-        This table is empty.
+      <div className="thread-files-placeholder" role="status">
+        <EmptyState title="This table is empty." />
       </div>
     );
   const [header, ...body] = rows;

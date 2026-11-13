@@ -247,7 +247,7 @@ export function OrbDiskNotice({
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="subtle"
           size="icon-xs"
           className="orb-memory-dismiss"
           aria-label="Hide disk notice"

@@ -186,7 +186,7 @@ function ComposerEditingBar({
         <span className="composer-editing-title">Editing message</span>
         <Button
           type="button"
-          variant="ghost"
+          variant="subtle"
           size="xs"
           className="composer-editing-cancel"
           disabled={pending}

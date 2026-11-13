@@ -4,6 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
+import { Radio } from "../../shared/ui/checkbox.js";
 import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import { Input } from "../../shared/ui/input.js";
 import { SettingsCard, SettingsRow } from "../../shared/ui/settings.js";
@@ -104,9 +105,9 @@ function DeleteProjectDialog({
       <form className="delete-scope-form" onSubmit={submit}>
         <fieldset className="delete-scope-choices">
           <legend>Threads in this project</legend>
-          <label>
-            <input
-              type="radio"
+          <label htmlFor={`${formId}-keep`}>
+            <Radio
+              id={`${formId}-keep`}
               name={`${formId}-threads`}
               checked={threads === "keep"}
               onChange={() => setThreads("keep")}
@@ -116,9 +117,9 @@ function DeleteProjectDialog({
               read-only, and they can never be unarchived.
             </span>
           </label>
-          <label>
-            <input
-              type="radio"
+          <label htmlFor={`${formId}-delete`}>
+            <Radio
+              id={`${formId}-delete`}
               name={`${formId}-threads`}
               checked={threads === "delete"}
               onChange={() => setThreads("delete")}

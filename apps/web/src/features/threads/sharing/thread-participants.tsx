@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type {
   ThreadContributeDuration,
   ThreadDetailData,
@@ -8,6 +7,18 @@ import type { UserId } from "@dx/domain";
 import { ChevronRight, Settings2, UserRoundX, UsersRound } from "lucide-react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Avatar, ParticipantStack } from "../../../shared/ui/avatar.js";
+import { Badge } from "../../../shared/ui/badge.js";
+import {
+  MenuGroup,
+  MenuItem,
+  MenuLabel,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { useThreadPresentUsers } from "../realtime/realtime-provider.js";
 import { formatRemaining, participantsLabel } from "./sharing-format.js";
@@ -65,8 +76,8 @@ export function ThreadParticipants({
     present.has(userId),
   ).length;
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         className="thread-participants-trigger"
         aria-label={participantsLabel(participants.length, liveCount)}
         title={participants
@@ -80,23 +91,15 @@ export function ThreadParticipants({
           <UsersRound className="thread-multiplayer-icon" aria-hidden="true" />
         ) : null}
         <ParticipantStack participants={participants} present={present} />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup thread-participants-menu">
-            <ThreadParticipantsMenuContent
-              thread={thread}
-              onOpenShare={onOpenShare}
-              onEnableMultiplayer={onEnableMultiplayer}
-            />
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup align="end" className="thread-participants-menu">
+        <ThreadParticipantsMenuContent
+          thread={thread}
+          onOpenShare={onOpenShare}
+          onEnableMultiplayer={onEnableMultiplayer}
+        />
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
@@ -119,10 +122,10 @@ export function ThreadParticipantsMenuContent({
   const contributeUntil = thread.sharing?.contributeUntil;
   return (
     <>
-      <Menu.Group>
-        <Menu.GroupLabel className="thread-menu-label">
+      <MenuGroup>
+        <MenuLabel>
           {multiplayer ? "Multiplayer" : "Shared with workspace"}
-        </Menu.GroupLabel>
+        </MenuLabel>
         {participants.map((participant) => (
           <div className="thread-participant-row" key={participant.userId}>
             <Avatar
@@ -135,9 +138,7 @@ export function ThreadParticipantsMenuContent({
                 ? "You"
                 : participant.name}
             </span>
-            {participant.owner ? (
-              <span className="thread-participant-badge">Owner</span>
-            ) : null}
+            {participant.owner ? <Badge>Owner</Badge> : null}
             {present.has(participant.userId) ? (
               <span
                 className="thread-participant-live"
@@ -147,65 +148,57 @@ export function ThreadParticipantsMenuContent({
             ) : null}
           </div>
         ))}
-      </Menu.Group>
-      {own ? <Menu.Separator className="thread-menu-separator" /> : null}
+      </MenuGroup>
+      {own ? <MenuSeparator /> : null}
       {own && multiplayer && contributeUntil ? (
-        <Menu.SubmenuRoot>
-          <Menu.SubmenuTrigger className="thread-menu-item">
+        <MenuSubmenuRoot>
+          <MenuSubmenuTrigger>
             <span>
               Remaining:{" "}
               <TimeText text={(now) => formatRemaining(contributeUntil, now)} />
             </span>
             <ChevronRight />
-          </Menu.SubmenuTrigger>
-          <Menu.Portal>
-            <Menu.Positioner className="thread-menu-positioner" sideOffset={2}>
-              <Menu.Popup className="thread-menu-popup">
-                <Menu.Group>
-                  <Menu.GroupLabel className="thread-menu-label">
-                    Keep On For
-                  </Menu.GroupLabel>
-                  {durations.map((duration) => (
-                    <Menu.Item
-                      key={duration.value}
-                      className="thread-menu-item"
-                      disabled={mutation.isPending}
-                      onClick={() =>
-                        mutation.mutate({
-                          workspaceAccess: "contribute",
-                          contributeFor: duration.value,
-                        })
-                      }
-                    >
-                      {duration.label}
-                    </Menu.Item>
-                  ))}
-                </Menu.Group>
-                <Menu.Separator className="thread-menu-separator" />
-                <Menu.Item
-                  className="thread-menu-item"
+          </MenuSubmenuTrigger>
+          <MenuPopup sideOffset={2}>
+            <MenuGroup>
+              <MenuLabel>Keep On For</MenuLabel>
+              {durations.map((duration) => (
+                <MenuItem
+                  key={duration.value}
                   disabled={mutation.isPending}
-                  onClick={() => mutation.mutate({ workspaceAccess: "view" })}
+                  onClick={() =>
+                    mutation.mutate({
+                      workspaceAccess: "contribute",
+                      contributeFor: duration.value,
+                    })
+                  }
                 >
-                  <UserRoundX />
-                  <span>Disable Multiplayer</span>
-                </Menu.Item>
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.SubmenuRoot>
+                  {duration.label}
+                </MenuItem>
+              ))}
+            </MenuGroup>
+            <MenuSeparator />
+            <MenuItem
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate({ workspaceAccess: "view" })}
+            >
+              <UserRoundX />
+              <span>Disable Multiplayer</span>
+            </MenuItem>
+          </MenuPopup>
+        </MenuSubmenuRoot>
       ) : null}
       {own && !multiplayer && onEnableMultiplayer !== undefined ? (
-        <Menu.Item className="thread-menu-item" onClick={onEnableMultiplayer}>
+        <MenuItem onClick={onEnableMultiplayer}>
           <UsersRound />
           <span>Enable Multiplayer…</span>
-        </Menu.Item>
+        </MenuItem>
       ) : null}
       {own && onOpenShare !== undefined ? (
-        <Menu.Item className="thread-menu-item" onClick={onOpenShare}>
+        <MenuItem onClick={onOpenShare}>
           <Settings2 />
           <span>Sharing settings…</span>
-        </Menu.Item>
+        </MenuItem>
       ) : null}
     </>
   );

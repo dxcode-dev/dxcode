@@ -1,12 +1,20 @@
-import { Menu } from "@base-ui/react/menu";
-import { Popover } from "@base-ui/react/popover";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUp, Check, ChevronRight, Pencil, Trash2, X } from "lucide-react";
+import { ArrowUp, Check, Pencil, Trash2, X } from "lucide-react";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { Button } from "../../../shared/ui/button.js";
+import { Input } from "../../../shared/ui/input.js";
 import { MarkdownView } from "../../../shared/ui/markdown-view.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+} from "../../../shared/ui/menu.js";
+import { PopoverContent, PopoverRoot } from "../../../shared/ui/popover.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import {
   CHIP_COLORS,
@@ -91,7 +99,8 @@ function DropdownFields({
             data-color={option.color}
           >
             {renaming === index ? (
-              <input
+              <Input
+                size="md"
                 className="artifact-chip-rename"
                 aria-label={`Name of ${option.label}`}
                 defaultValue={option.label}
@@ -135,17 +144,19 @@ function DropdownFields({
                 {option.selected ? <Check aria-hidden="true" /> : null}
               </button>
             )}
-            <button
-              type="button"
+            <Button
+              variant="subtle"
+              size="icon-xs"
               className="artifact-chip-tool"
               aria-label={`Rename ${option.label}`}
               title="Rename"
               onClick={() => setRenaming(index)}
             >
               <Pencil aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="subtle"
+              size="icon-xs"
               className="artifact-chip-tool artifact-chip-color"
               aria-label={`Change Color of ${option.label}`}
               title="Change color"
@@ -171,9 +182,10 @@ function DropdownFields({
               }
             >
               <span className="artifact-chip-swatch" aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="subtle"
+              size="icon-xs"
               className="artifact-chip-tool"
               aria-label={`Move ${option.label} Up`}
               title="Move up"
@@ -190,9 +202,10 @@ function DropdownFields({
               }
             >
               <ArrowUp aria-hidden="true" />
-            </button>
-            <button
-              type="button"
+            </Button>
+            <Button
+              variant="subtle"
+              size="icon-xs"
               className="artifact-chip-tool"
               aria-label={`Remove ${option.label}`}
               title="Remove"
@@ -200,12 +213,13 @@ function DropdownFields({
               onClick={() => write(options.toSpliced(index, 1))}
             >
               <X aria-hidden="true" />
-            </button>
+            </Button>
           </div>
         ))}
       </div>
       <div className="artifact-chip-add">
-        <input
+        <Input
+          size="md"
           aria-label="New option"
           placeholder="Add an option"
           maxLength={60}
@@ -222,15 +236,16 @@ function DropdownFields({
             input.value = "";
           }}
         />
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="artifact-chip-tool"
           aria-label="Remove Dropdown"
           title="Remove dropdown"
           onClick={() => onChange(chip, "remove")}
         >
           <Trash2 aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       {problem === undefined ? null : (
         <p className="artifact-chip-problem" role="alert">
@@ -253,7 +268,8 @@ function ChipFields({
       return (
         <label className="artifact-chip-field">
           <span>Date</span>
-          <input
+          <Input
+            size="md"
             type="date"
             value={chip.date}
             onChange={(event) => {
@@ -267,7 +283,8 @@ function ChipFields({
       return (
         <label className="artifact-chip-field">
           <span>Time</span>
-          <input
+          <Input
+            size="md"
             type="datetime-local"
             value={localInput(chip.instant)}
             onChange={(event) => {
@@ -295,39 +312,32 @@ export function ChipPicker({
 }) {
   if (open === undefined) return null;
   return (
-    <Popover.Root
+    <PopoverRoot
       open
       onOpenChange={(next) => {
         if (!next) session.closeChip();
       }}
     >
-      <Popover.Portal>
-        <Popover.Positioner
-          className="thread-menu-positioner"
-          anchor={() => session.chipElement(open.pos)}
-          side="bottom"
-          align="start"
-          sideOffset={6}
-        >
-          <Popover.Popup
-            className="thread-menu-popup artifact-chip-picker"
-            aria-label="Edit chip"
-          >
-            <ChipFields
-              chip={open.chip}
-              onChange={(chip, close) => {
-                if (close === "remove") {
-                  session.removeChip(open.pos);
-                  return;
-                }
-                session.setChip(open.pos, chip);
-                if (close === true) session.closeChip();
-              }}
-            />
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      <PopoverContent
+        anchor={() => session.chipElement(open.pos)}
+        side="bottom"
+        align="start"
+        className="artifact-chip-picker"
+        aria-label="Edit chip"
+      >
+        <ChipFields
+          chip={open.chip}
+          onChange={(chip, close) => {
+            if (close === "remove") {
+              session.removeChip(open.pos);
+              return;
+            }
+            session.setChip(open.pos, chip);
+            if (close === true) session.closeChip();
+          }}
+        />
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
 
@@ -355,25 +365,22 @@ export function ChipInsertItems({
   );
   return (
     <>
-      <Menu.Separator className="thread-menu-separator" />
-      <Menu.Item
-        className="thread-menu-item"
+      <MenuSeparator />
+      <MenuItem
         onClick={() =>
           onInsert(chipSource({ kind: "date", date: localDate() }))
         }
       >
         Date
-      </Menu.Item>
-      <Menu.Item
-        className="thread-menu-item"
+      </MenuItem>
+      <MenuItem
         onClick={() =>
           onInsert(chipSource({ kind: "time", instant: instantOf(new Date()) }))
         }
       >
         Time
-      </Menu.Item>
-      <Menu.Item
-        className="thread-menu-item"
+      </MenuItem>
+      <MenuItem
         onClick={() =>
           onInsert(
             chipSource({
@@ -388,9 +395,8 @@ export function ChipInsertItems({
         }
       >
         Dropdown
-      </Menu.Item>
-      <Menu.Item
-        className="thread-menu-item"
+      </MenuItem>
+      <MenuItem
         onClick={() =>
           onInsert(
             chipSource({
@@ -402,47 +408,31 @@ export function ChipInsertItems({
         }
       >
         Toggle
-      </Menu.Item>
-      <Menu.SubmenuRoot>
-        <Menu.SubmenuTrigger className="thread-menu-item">
-          Mention
-          <ChevronRight aria-hidden="true" />
-        </Menu.SubmenuTrigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            alignOffset={-5}
-            sideOffset={4}
+      </MenuItem>
+      <MenuSubmenuRoot>
+        <MenuSubmenuTrigger>
+          <span>Mention</span>
+        </MenuSubmenuTrigger>
+        <MenuPopup alignOffset={-5} aria-label="Mention">
+          <MenuItem
+            onClick={() => onInsert(chipSource({ kind: "agent", name: "dx" }))}
           >
-            <Menu.Popup
-              className="thread-menu-popup thread-actions-menu thread-actions-submenu"
-              aria-label="Mention"
+            @dx (the agent)
+          </MenuItem>
+          {people.map((member) => (
+            <MenuItem
+              key={member.userId}
+              disabled={mentionOf(member) === undefined}
+              onClick={() => {
+                const source = mentionOf(member);
+                if (source !== undefined) onInsert(source);
+              }}
             >
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  onInsert(chipSource({ kind: "agent", name: "dx" }))
-                }
-              >
-                @dx (the agent)
-              </Menu.Item>
-              {people.map((member) => (
-                <Menu.Item
-                  key={member.userId}
-                  className="thread-menu-item"
-                  disabled={mentionOf(member) === undefined}
-                  onClick={() => {
-                    const source = mentionOf(member);
-                    if (source !== undefined) onInsert(source);
-                  }}
-                >
-                  @{member.name}
-                </Menu.Item>
-              ))}
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.SubmenuRoot>
+              @{member.name}
+            </MenuItem>
+          ))}
+        </MenuPopup>
+      </MenuSubmenuRoot>
     </>
   );
 }

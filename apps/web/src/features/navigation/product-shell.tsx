@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import { SIDEBAR_WIDTH_MAX_PX, SIDEBAR_WIDTH_MIN_PX } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
@@ -22,6 +21,11 @@ import {
 } from "../../shared/layout/resizable-panel.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import { Button } from "../../shared/ui/button.js";
+import {
+  SheetContent,
+  SheetRoot,
+  SheetTrigger,
+} from "../../shared/ui/sheet.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { projectsQueryOptions } from "../projects/project-queries.js";
 import { personalAccountQueryOptions } from "../settings/account/personal-account-queries.js";
@@ -254,20 +258,24 @@ export function ProductShell({ notices, spacesSection }: ProductShellProps) {
   return (
     <AppFrame className="product-shell">
       {notices}
-      <Dialog.Root
+      <SheetRoot
         open={mobile && mobileSidebarOpen}
         onOpenChange={setMobileSidebar}
       >
-        <Dialog.Portal keepMounted={mobile && mobileSidebarKept}>
-          <Dialog.Backdrop className="mobile-sidebar-scrim" ref={pushSidebar} />
-          <Dialog.Popup
-            ref={attachMobileSidebarPopup}
-            initialFocus={mobileSidebarPopupRef}
-            className="mobile-sidebar-drawer"
-          >
-            {sidebar}
-          </Dialog.Popup>
-        </Dialog.Portal>
+        <SheetContent
+          side="left"
+          inset
+          padded={false}
+          layer="panel"
+          keepMounted={mobile && mobileSidebarKept}
+          backdropRef={pushSidebar}
+          backdropClassName="mobile-sidebar-scrim"
+          popupRef={attachMobileSidebarPopup}
+          initialFocus={mobileSidebarPopupRef}
+          className="mobile-sidebar-drawer"
+        >
+          {sidebar}
+        </SheetContent>
         <Group
           orientation="horizontal"
           className="product-panel-group"
@@ -312,7 +320,7 @@ export function ProductShell({ notices, spacesSection }: ProductShellProps) {
             <main className="product-shell-content" ref={pullSidebar}>
               {mobile || sidebarCollapsed ? (
                 mobile ? (
-                  <Dialog.Trigger
+                  <SheetTrigger
                     render={
                       <Button
                         ref={mobileSidebarTriggerRef}
@@ -327,7 +335,7 @@ export function ProductShell({ notices, spacesSection }: ProductShellProps) {
                   >
                     <SidebarPanelIcon />
                     <AppUpdateDot />
-                  </Dialog.Trigger>
+                  </SheetTrigger>
                 ) : (
                   <Button
                     ref={attachOpenTrigger}
@@ -348,7 +356,7 @@ export function ProductShell({ notices, spacesSection }: ProductShellProps) {
             </main>
           </Panel>
         </Group>
-      </Dialog.Root>
+      </SheetRoot>
       <ThreadSearchOnDemand
         open={threadSearchOpen}
         userId={identity.id}

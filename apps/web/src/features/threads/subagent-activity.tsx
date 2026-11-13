@@ -1,5 +1,7 @@
 import { ChevronRight, Maximize2, X } from "lucide-react";
 import * as React from "react";
+import { Button } from "../../shared/ui/button.js";
+import { Card } from "../../shared/ui/card.js";
 import {
   DialogContent,
   DialogDescription,
@@ -107,26 +109,31 @@ export function SubagentActivity({
       </button>
     );
   return (
-    <section className="subagent-card" aria-label={`${heading(view)} details`}>
+    <Card
+      as="section"
+      variant="subtle"
+      className="subagent-card"
+      aria-label={`${heading(view)} details`}
+    >
       <header className="subagent-card-head">
         <strong>{heading(view)}</strong>
         <span className="subagent-card-description">{view.description}</span>
-        <button
-          type="button"
-          className="subagent-card-action"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           aria-label="Open subagent in full view"
           onClick={() => setFull(true)}
         >
           <Maximize2 aria-hidden="true" />
-        </button>
-        <button
-          type="button"
-          className="subagent-card-action"
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
           aria-label="Close subagent"
           onClick={() => setOpen(false)}
         >
           <X aria-hidden="true" />
-        </button>
+        </Button>
       </header>
       <div className="subagent-card-scroll">
         <SubagentBody view={view} renderStep={renderStep} />
@@ -140,6 +147,6 @@ export function SubagentActivity({
           </div>
         </DialogContent>
       </DialogRoot>
-    </section>
+    </Card>
   );
 }

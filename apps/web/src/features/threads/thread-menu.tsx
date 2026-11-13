@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { Link } from "@tanstack/react-router";
 import { DateTime } from "effect";
@@ -10,7 +9,6 @@ import {
   Braces,
   Bug,
   Check,
-  ChevronRight,
   Ellipsis,
   FileDown,
   FileText,
@@ -41,6 +39,15 @@ import {
   useOptionalThreadSnooze,
 } from "../../shared/thread-snooze.js";
 import { Button } from "../../shared/ui/button.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
@@ -72,7 +79,6 @@ const preloadDetailsWhenIdle = () => {
   const timer = window.setTimeout(preloadDetails, 1_500);
   return () => window.clearTimeout(timer);
 };
-const menuParts = { Item: Menu.Item, Separator: Menu.Separator };
 
 /** Report Bug, loaded when it first opens, as Settings loads it. */
 const BugReportDialog = React.lazy(() =>
@@ -92,16 +98,14 @@ const ThreadUsageDialog = React.lazy(() =>
   })),
 );
 
-function ThreadMenuDetails(
-  props: Omit<React.ComponentProps<typeof LazyDetails>, "Menu">,
-) {
+function ThreadMenuDetails(props: React.ComponentProps<typeof LazyDetails>) {
   const Loaded = loadedDetails?.default;
   return Loaded === undefined ? (
     <React.Suspense fallback={null}>
-      <LazyDetails Menu={menuParts} {...props} />
+      <LazyDetails {...props} />
     </React.Suspense>
   ) : (
-    <Loaded Menu={menuParts} {...props} />
+    <Loaded {...props} />
   );
 }
 
@@ -109,7 +113,7 @@ function ThreadMenuDetails(
 export function ThreadMenuSubmenu({
   icon,
   label,
-  popupClassName = "",
+  popupClassName,
   children,
 }: {
   readonly icon: React.ReactNode;
@@ -118,26 +122,18 @@ export function ThreadMenuSubmenu({
   readonly children: React.ReactNode;
 }) {
   return (
-    <Menu.SubmenuRoot>
-      <Menu.SubmenuTrigger className="thread-menu-item">
+    <MenuSubmenuRoot>
+      <MenuSubmenuTrigger>
         {icon}
         <span>{label}</span>
-        <ChevronRight />
-      </Menu.SubmenuTrigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          sideOffset={4}
-          alignOffset={-4}
-        >
-          <Menu.Popup
-            className={`thread-menu-popup thread-actions-menu thread-actions-submenu ${popupClassName}`}
-          >
-            {children}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.SubmenuRoot>
+      </MenuSubmenuTrigger>
+      <MenuPopup
+        className={`thread-actions-menu thread-actions-submenu ${popupClassName ?? ""}`}
+        alignOffset={-4}
+      >
+        {children}
+      </MenuPopup>
+    </MenuSubmenuRoot>
   );
 }
 
@@ -231,8 +227,8 @@ export function ThreadMenu({
     snooze !== undefined;
   return (
     <>
-      <Menu.Root>
-        <Menu.Trigger
+      <MenuRoot>
+        <MenuTrigger
           onPointerEnter={preloadDetails}
           onPointerDown={preloadDetails}
           onFocus={preloadDetails}
@@ -241,153 +237,134 @@ export function ThreadMenu({
               className="thread-title-action"
               aria-label="More Actions"
               title="More Actions"
-              variant="ghost"
+              variant="subtle"
               size="icon-xs"
             />
           }
         >
           <Ellipsis />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            align="start"
-            sideOffset={4}
-          >
-            <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-menu-details">
-              {/* A family shares as one unit, so members reach the Thread
+        </MenuTrigger>
+        <MenuPopup align="start" className="thread-actions-menu">
+          {/* A family shares as one unit, so members reach the Thread
                   that started this one too: its starter, or for a Thread
                   started before dx recorded starters, the family's root. */}
-              {thread.parentThreadId === undefined ? null : (
-                <Menu.Item
-                  className="thread-menu-item"
-                  render={
-                    <Link
-                      to="/threads/$threadId"
-                      params={{
-                        threadId:
-                          thread.startedByThreadId ?? thread.parentThreadId,
-                      }}
-                    />
+          {thread.parentThreadId === undefined ? null : (
+            <MenuItem
+              render={
+                <Link
+                  to="/threads/$threadId"
+                  params={{
+                    threadId: thread.startedByThreadId ?? thread.parentThreadId,
+                  }}
+                />
+              }
+            >
+              <SubthreadIcon strokeWidth={2} />
+              <span>Open Source Thread</span>
+            </MenuItem>
+          )}
+          {thread.parentThreadId === undefined ? null : <MenuSeparator />}
+          <MenuItem onClick={() => void copyThreadUrl(thread.id)}>
+            <Link2 />
+            <span>Copy Thread URL</span>
+            <ShortcutKeycaps keycaps={copyUrlKeycaps} emptyLabel="" />
+          </MenuItem>
+          <ThreadIdentityItems thread={thread} onDownload={download} />
+          {showDetails ? null : (
+            <ThreadMenuDetails thread={thread} onOpenUsage={openUsage} />
+          )}
+          {onOpenShare === undefined &&
+          overflowItems === undefined &&
+          !pinnable &&
+          !snoozable ? null : (
+            <MenuSeparator />
+          )}
+          {overflowItems}
+          {onOpenShare === undefined ? null : (
+            <MenuItem onClick={onOpenShare}>
+              <Share2 />
+              <span>Share…</span>
+            </MenuItem>
+          )}
+          {pinnable ? (
+            <PinMenuItem threadId={thread.id} editing={editing} />
+          ) : null}
+          {snoozable ? (
+            <SnoozeMenuItem thread={thread} snooze={snooze} />
+          ) : null}
+          {own ? (
+            <>
+              <MenuSeparator />
+              {/* A Thread kept from a deleted project stays archived. */}
+              {thread.projectDeleted === true ? null : (
+                <MenuItem
+                  disabled={
+                    archive === undefined ||
+                    archive.pendingThreadId === thread.id
+                  }
+                  onClick={() =>
+                    archive?.setArchived(
+                      thread.id,
+                      thread.lifecycleState !== "archived",
+                    )
                   }
                 >
-                  <SubthreadIcon strokeWidth={2} />
-                  <span>Open Source Thread</span>
-                </Menu.Item>
-              )}
-              <Menu.Separator className="thread-menu-separator" />
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => void copyThreadUrl(thread.id)}
-              >
-                <Link2 />
-                <span>Copy Thread URL</span>
-                <ShortcutKeycaps keycaps={copyUrlKeycaps} emptyLabel="" />
-              </Menu.Item>
-              <ThreadIdentityItems thread={thread} onDownload={download} />
-              {showDetails ? null : (
-                <ThreadMenuDetails thread={thread} onOpenUsage={openUsage} />
-              )}
-              {onOpenShare === undefined &&
-              overflowItems === undefined &&
-              !pinnable &&
-              !snoozable ? null : (
-                <Menu.Separator className="thread-menu-separator" />
-              )}
-              {overflowItems}
-              {onOpenShare === undefined ? null : (
-                <Menu.Item className="thread-menu-item" onClick={onOpenShare}>
-                  <Share2 />
-                  <span>Share…</span>
-                </Menu.Item>
-              )}
-              {pinnable ? (
-                <PinMenuItem threadId={thread.id} editing={editing} />
-              ) : null}
-              {snoozable ? (
-                <SnoozeMenuItem thread={thread} snooze={snooze} />
-              ) : null}
-              {own ? (
-                <>
-                  <Menu.Separator className="thread-menu-separator" />
-                  {/* A Thread kept from a deleted project stays archived. */}
-                  {thread.projectDeleted === true ? null : (
-                    <Menu.Item
-                      className="thread-menu-item"
-                      disabled={
-                        archive === undefined ||
-                        archive.pendingThreadId === thread.id
-                      }
-                      onClick={() =>
-                        archive?.setArchived(
-                          thread.id,
-                          thread.lifecycleState !== "archived",
-                        )
-                      }
-                    >
-                      {thread.lifecycleState === "archived" ? (
-                        <ArchiveRestore />
-                      ) : (
-                        <Archive />
-                      )}
-                      <span>
-                        {thread.lifecycleState === "archived"
-                          ? "Unarchive"
-                          : "Archive"}
-                      </span>
-                    </Menu.Item>
+                  {thread.lifecycleState === "archived" ? (
+                    <ArchiveRestore />
+                  ) : (
+                    <Archive />
                   )}
-                  {editable ? (
-                    <>
-                      <Menu.Item
-                        className="thread-menu-item"
-                        onClick={() => editing.openRename(thread)}
-                      >
-                        <Pencil />
-                        <span>Rename</span>
-                      </Menu.Item>
-                      <ThreadColorSubmenu
-                        thread={thread}
-                        itemClassName="thread-menu-item"
-                        onSelect={(color) => editing.setColor(thread.id, color)}
-                      />
-                      <Menu.Separator className="thread-menu-separator" />
-                      <DeleteMenuItem thread={thread} editing={editing} />
-                    </>
-                  ) : null}
+                  <span>
+                    {thread.lifecycleState === "archived"
+                      ? "Unarchive"
+                      : "Archive"}
+                  </span>
+                </MenuItem>
+              )}
+              {editable ? (
+                <>
+                  <MenuItem onClick={() => editing.openRename(thread)}>
+                    <Pencil />
+                    <span>Rename</span>
+                  </MenuItem>
+                  <ThreadColorSubmenu
+                    thread={thread}
+                    onSelect={(color) => editing.setColor(thread.id, color)}
+                  />
+                  <MenuSeparator />
+                  <DeleteMenuItem thread={thread} editing={editing} />
                 </>
               ) : null}
-              {/* A phone lists what the Thread runs on, its Orb, Project,
+            </>
+          ) : null}
+          {/* A phone lists what the Thread runs on, its Orb, Project,
                   and cost before Report Bug, which stays last. */}
-              {showDetails ? (
-                <ThreadMenuDetails
-                  thread={thread}
-                  project={project}
-                  layout="phone"
-                  onOpenUsage={openUsage}
-                />
-              ) : null}
-              <Menu.Separator className="thread-menu-separator" />
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => {
-                  const dictation = retained?.dictation.latest();
-                  setReportingBug({
-                    changesOpen:
-                      document.querySelector(
-                        `.changes-pane[data-thread-id="${thread.id}"]`,
-                      ) !== null,
-                    ...(dictation === undefined ? {} : { dictation }),
-                  });
-                }}
-              >
-                <Bug />
-                <span>Report Bug</span>
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+          {showDetails ? (
+            <ThreadMenuDetails
+              thread={thread}
+              project={project}
+              layout="phone"
+              onOpenUsage={openUsage}
+            />
+          ) : null}
+          <MenuSeparator />
+          <MenuItem
+            onClick={() => {
+              const dictation = retained?.dictation.latest();
+              setReportingBug({
+                changesOpen:
+                  document.querySelector(
+                    `.changes-pane[data-thread-id="${thread.id}"]`,
+                  ) !== null,
+                ...(dictation === undefined ? {} : { dictation }),
+              });
+            }}
+          >
+            <Bug />
+            <span>Report Bug</span>
+          </MenuItem>
+        </MenuPopup>
+      </MenuRoot>
       {reportingBug === undefined ? null : (
         <React.Suspense fallback={null}>
           <BugReportDialog
@@ -444,21 +421,14 @@ function SnoozeMenuItem({
     DateTime.toEpochMillis(thread.snoozedUntil) > now;
   if (snoozed)
     return (
-      <Menu.Item
-        className="thread-menu-item"
-        onClick={() => snooze.wake(thread.id)}
-      >
+      <MenuItem onClick={() => snooze.wake(thread.id)}>
         <AlarmClockOff />
         <span>Wake</span>
-      </Menu.Item>
+      </MenuItem>
     );
   return (
     <ThreadMenuSubmenu icon={<AlarmClock />} label="Snooze">
-      <SnoozeMenuItems
-        threadId={thread.id}
-        snooze={snooze}
-        itemClassName="thread-menu-item"
-      />
+      <SnoozeMenuItems threadId={thread.id} snooze={snooze} />
     </ThreadMenuSubmenu>
   );
 }
@@ -474,13 +444,10 @@ function PinMenuItem({
   // Read as the menu opens, so it follows a pin made since the last open.
   const pinned = editing.pinned(threadId);
   return (
-    <Menu.Item
-      className="thread-menu-item"
-      onClick={() => editing.setPinned(threadId, !pinned)}
-    >
+    <MenuItem onClick={() => editing.setPinned(threadId, !pinned)}>
       {pinned ? <PinOff /> : <Pin />}
       <span>{pinned ? "Unpin" : "Pin"}</span>
-    </Menu.Item>
+    </MenuItem>
   );
 }
 
@@ -499,44 +466,32 @@ function DeleteMenuItem({
   const children = editing.childCount(thread.id);
   if (children === 0)
     return (
-      <Menu.Item
-        className="thread-menu-item thread-menu-item-danger"
-        onClick={() => editing.openDelete(thread)}
-      >
+      <MenuItem tone="danger" onClick={() => editing.openDelete(thread)}>
         <Trash2 />
         <span>Delete</span>
-      </Menu.Item>
+      </MenuItem>
     );
   return (
-    <Menu.SubmenuRoot>
-      <Menu.SubmenuTrigger className="thread-menu-item thread-menu-item-danger">
+    <MenuSubmenuRoot>
+      <MenuSubmenuTrigger tone="danger">
         <Trash2 />
         <span>Delete</span>
-        <ChevronRight />
-      </Menu.SubmenuTrigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          sideOffset={4}
-          alignOffset={-4}
+      </MenuSubmenuTrigger>
+      <MenuPopup
+        className="thread-actions-menu thread-actions-submenu"
+        alignOffset={-4}
+      >
+        <MenuItem
+          tone="danger"
+          onClick={() => editing.openDelete(thread, children)}
         >
-          <Menu.Popup className="thread-menu-popup thread-actions-menu thread-actions-submenu">
-            <Menu.Item
-              className="thread-menu-item thread-menu-item-danger"
-              onClick={() => editing.openDelete(thread, children)}
-            >
-              <span>All {children + 1} Threads</span>
-            </Menu.Item>
-            <Menu.Item
-              className="thread-menu-item thread-menu-item-danger"
-              onClick={() => editing.openDelete(thread)}
-            >
-              <span>This Thread</span>
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.SubmenuRoot>
+          <span>All {children + 1} Threads</span>
+        </MenuItem>
+        <MenuItem tone="danger" onClick={() => editing.openDelete(thread)}>
+          <span>This Thread</span>
+        </MenuItem>
+      </MenuPopup>
+    </MenuSubmenuRoot>
   );
 }
 
@@ -550,28 +505,19 @@ function ThreadIdentityItems({
 }) {
   return (
     <>
-      <Menu.Item
-        className="thread-menu-item"
-        onClick={() => void copyThreadId(thread.id)}
-      >
+      <MenuItem onClick={() => void copyThreadId(thread.id)}>
         <Hash />
         <span>Copy Thread ID</span>
-      </Menu.Item>
+      </MenuItem>
       <ThreadMenuSubmenu icon={<FileDown />} label="Export">
-        <Menu.Item
-          className="thread-menu-item"
-          onClick={() => onDownload("markdown")}
-        >
+        <MenuItem onClick={() => onDownload("markdown")}>
           <FileText />
           <span>Markdown</span>
-        </Menu.Item>
-        <Menu.Item
-          className="thread-menu-item"
-          onClick={() => onDownload("json")}
-        >
+        </MenuItem>
+        <MenuItem onClick={() => onDownload("json")}>
           <Braces />
           <span>JSON</span>
-        </Menu.Item>
+        </MenuItem>
       </ThreadMenuSubmenu>
     </>
   );

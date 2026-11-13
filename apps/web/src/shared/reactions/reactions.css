@@ -3,56 +3,25 @@
 .reaction-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .reaction-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  height: 22px;
-  padding: 0 7px;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
   font-variant-numeric: tabular-nums;
-}
-.reaction-chip:hover:not(:disabled) {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.reaction-chip[aria-pressed="true"] {
-  color: var(--foreground);
-  border-color: color-mix(in srgb, var(--unread) 55%, transparent);
-  background: color-mix(in srgb, var(--unread) 12%, transparent);
 }
 .reaction-chip:disabled {
   cursor: default;
 }
-.reaction-picker {
+/* The picker is one pill of five emoji. */
+.dx-popover.reaction-picker {
   display: flex;
-  gap: 2px;
-  padding: 4px;
-  border: 1px solid var(--outline);
-  border-radius: 999px;
-  background: var(--popover);
-  box-shadow: 0 6px 20px rgb(0 0 0 / 0.14);
+  gap: var(--space-0-5);
+  padding: var(--space-1);
+  border-radius: var(--radius-full);
 }
-.reaction-picker > button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  font-size: 16px;
+.reaction-picker > .dx-button {
+  font-size: var(--text-xl);
 }
-.reaction-picker > button:hover,
-.reaction-picker > button[aria-pressed="true"] {
+.reaction-picker > .dx-button[aria-pressed="true"] {
   background: var(--accent);
 }
 
@@ -61,7 +30,7 @@
    On the right it grows leftwards over the bubble; on the left it sits in
    the gutter where there is room, and after ⋯ on a narrow screen. */
 .message-actions-controls:has(> .message-reaction-action) {
-  gap: 4px;
+  gap: var(--space-1);
 }
 .message-actions-anchor:not([data-side="right"])
   > .message-actions-controls:has(> .message-reaction-action) {
@@ -76,7 +45,7 @@
 }
 .message-reactions {
   display: flex;
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
 }
 .message-reactions[data-side="right"] {
   justify-content: flex-end;

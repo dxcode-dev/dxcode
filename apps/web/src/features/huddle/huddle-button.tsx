@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Headphones } from "lucide-react";
 import * as React from "react";
 import { ParticipantStack } from "../../shared/ui/avatar.js";
+import { Button } from "../../shared/ui/button.js";
 import { huddleScopeKey } from "./huddle-client.js";
 import { HuddlePrejoin } from "./huddle-prejoin.js";
 import { huddleSummaryQueryOptions } from "./huddle-queries.js";
@@ -46,8 +47,11 @@ export default function HuddleButton({
       : "thread-title-action huddle-header-button";
   if (here)
     return (
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="xs"
+        shape="round"
+        tone="success"
         className={`${base} huddle-header-pill`}
         data-state="in"
         title="You're in this huddle. Open it."
@@ -56,7 +60,7 @@ export default function HuddleButton({
         <span className="huddle-live-dot" aria-hidden="true" />
         <Headphones aria-hidden="true" />
         <span className="huddle-header-label">In huddle</span>
-      </button>
+      </Button>
     );
   const names = people.map(({ name }) => name).join(", ");
   // Gets the call ready while the person checks their camera and mic.
@@ -67,18 +71,22 @@ export default function HuddleButton({
   return (
     <>
       {people.length === 0 ? (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className={base}
           aria-label="Start a huddle"
           title="Start a huddle"
           onClick={openPrejoin}
         >
           <Headphones aria-hidden="true" />
-        </button>
+        </Button>
       ) : (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
+          shape="round"
+          tone="success"
           className={`${base} huddle-header-pill`}
           data-state="on"
           aria-label={`Join huddle with ${names}`}
@@ -95,7 +103,7 @@ export default function HuddleButton({
             limit={variant === "space" ? 2 : 3}
           />
           <span className="huddle-header-label">Join</span>
-        </button>
+        </Button>
       )}
       {prejoin ? (
         <HuddlePrejoin

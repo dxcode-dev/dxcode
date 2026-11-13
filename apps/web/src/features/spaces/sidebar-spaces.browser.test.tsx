@@ -638,7 +638,7 @@ it("shows a Space row's people as one overlapping row that leaves the name reada
 });
 
 it("ends a Space name too long for its row with an ellipsis and shows it whole on hover", async () => {
-  const name = "Recall Tool Improvements";
+  const name = "Recall Tool Improvements for the Whole Quarter";
   await mount(true, 1440, 900, (server) => {
     server.joined.push(
       space(TEAM_SPACE, {

@@ -1,0 +1,308 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's floating surfaces: the Popover, the Sheet, the Drawer, and the
+   overlay layers. Menus have menu.css; dialogs have dialog.css. */
+@layer components {
+  .dx-popover-positioner {
+    z-index: var(--z-popover);
+    max-width: calc(100vw - 16px);
+    outline: none;
+  }
+  .dx-popover {
+    max-width: min(360px, calc(100vw - 16px));
+    max-height: var(--available-height);
+    overflow-y: auto;
+    padding: var(--space-3);
+    color: var(--popover-foreground);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-lg);
+    outline: none;
+    background: var(--popover);
+    box-shadow: var(--shadow-lg);
+    font-size: var(--text-sm);
+    transform-origin: var(--transform-origin);
+  }
+
+  .dx-sheet-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-dialog);
+    background: var(--scrim);
+    transition: opacity var(--duration-normal) ease;
+  }
+  .dx-sheet-backdrop[data-starting-style],
+  .dx-sheet-backdrop[data-ending-style] {
+    opacity: 0;
+  }
+  .dx-sheet-viewport {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-dialog);
+    display: flex;
+    justify-content: flex-end;
+    pointer-events: none;
+  }
+  /* A kept-mounted sheet's viewport stays laid out while closed (it takes
+     no pointer events), so a drag can show the closed popup at once. */
+  .dx-sheet-viewport[hidden] {
+    display: flex;
+  }
+  .dx-sheet {
+    display: flex;
+    flex-direction: column;
+    width: min(480px, 100%);
+    height: 100%;
+    color: var(--foreground);
+    border-left: 1px solid var(--border);
+    outline: none;
+    background: var(--background);
+    box-shadow: var(--shadow-xl);
+    pointer-events: auto;
+    transition: transform var(--duration-normal) ease;
+  }
+  .dx-sheet[data-starting-style],
+  .dx-sheet[data-ending-style] {
+    transform: translateX(100%);
+  }
+  .dx-sheet-header {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+    padding: var(--space-4) var(--space-4) var(--space-3) var(--space-5);
+    border-bottom: 1px solid var(--divider);
+  }
+  .dx-sheet-heading {
+    display: grid;
+    flex: 1;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .dx-sheet-title {
+    margin: 0;
+    font-size: var(--text-xl);
+    font-weight: var(--weight-semibold);
+  }
+  .dx-sheet-description {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
+  .dx-sheet-close {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--control-sm);
+    height: var(--control-sm);
+    color: var(--muted-foreground);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    cursor: pointer;
+  }
+  .dx-sheet-close:hover {
+    color: var(--foreground);
+    background: var(--accent);
+  }
+  .dx-sheet-close svg {
+    width: 16px;
+    height: 16px;
+  }
+  .dx-sheet-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-4) var(--space-5);
+  }
+  .dx-sheet[data-size="full"] {
+    width: 100%;
+    border-left: 0;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .dx-sheet[data-size="full"][data-starting-style],
+  .dx-sheet[data-size="full"][data-ending-style] {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  @media (max-width: 767px) {
+    .dx-sheet:not([data-inset]) {
+      width: 100%;
+      border-left: 0;
+    }
+  }
+
+  /* From the left, such as the phone's sidebar. */
+  .dx-sheet-viewport[data-side="left"] {
+    justify-content: flex-start;
+  }
+  .dx-sheet[data-side="left"] {
+    border-right: 1px solid var(--border);
+    border-left: 0;
+  }
+  .dx-sheet[data-side="left"][data-starting-style],
+  .dx-sheet[data-side="left"][data-ending-style] {
+    transform: translateX(-100%);
+  }
+
+  /* Inset: a rounded card floating off the edge, clear of the safe areas. */
+  .dx-sheet[data-inset] {
+    width: min(360px, calc(100% - 2 * var(--space-2)));
+    height: auto;
+    margin: max(var(--space-2), env(safe-area-inset-top))
+      max(var(--space-2), env(safe-area-inset-right))
+      max(var(--space-2), env(safe-area-inset-bottom))
+      max(var(--space-2), env(safe-area-inset-left));
+    overflow: hidden;
+    border: 0;
+    border-radius: var(--radius-xl);
+    outline: 1px solid var(--outline);
+    box-shadow: var(--shadow-xl);
+  }
+  .dx-sheet[data-inset][data-side="left"][data-starting-style],
+  .dx-sheet[data-inset][data-side="left"][data-ending-style] {
+    opacity: 0;
+    transform: translateX(calc(-100% - var(--space-2)));
+  }
+
+  /* A bottom sheet a finger can swipe down: see drawer.tsx. Base UI sets
+     the swipe variables while it is dragged. */
+  .dx-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-dialog);
+    background: var(--scrim);
+    opacity: calc(1 - var(--drawer-swipe-progress, 0));
+    transition: opacity 240ms ease;
+  }
+  .dx-drawer-backdrop[data-swiping] {
+    transition-duration: 0ms;
+  }
+  .dx-drawer-backdrop[data-starting-style],
+  .dx-drawer-backdrop[data-ending-style] {
+    opacity: 0;
+  }
+  .dx-drawer-viewport {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-dialog);
+    display: flex;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+  .dx-drawer {
+    width: 100%;
+    max-height: min(72dvh, 640px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-bottom: env(safe-area-inset-bottom);
+    color: var(--foreground);
+    border-radius: var(--radius-3xl) var(--radius-3xl) 0 0;
+    outline: none;
+    background: var(--popover);
+    box-shadow:
+      0 0 0 1px var(--outline),
+      0 -12px 32px color-mix(in srgb, var(--shadow-ink) 35%, transparent);
+    pointer-events: auto;
+    transform: translateY(var(--drawer-swipe-movement-y, 0px));
+    transition: transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
+    will-change: transform;
+  }
+  .dx-drawer[data-swiping] {
+    transition-duration: 0ms;
+    user-select: none;
+  }
+  .dx-drawer[data-starting-style],
+  .dx-drawer[data-ending-style] {
+    transform: translateY(100%);
+  }
+  .dx-drawer[data-ending-style] {
+    transition-duration: calc(var(--drawer-swipe-strength, 1) * 240ms);
+  }
+  /* The grab bar at the top, which also closes it. */
+  .dx-drawer-handle {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+  }
+  .dx-drawer-handle > span {
+    width: 48px;
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--foreground) 30%, transparent);
+  }
+
+  /* Overlay layers (see OverlayLayer in sheet.tsx). `panel` sits under the
+     page's dialogs, so a full-screen panel's own dialogs and menus open over
+     it; `dialog` is the dialog layer. `stacked` lifts an overlay over another
+     on its layer. The viewport sits one above its backdrop. */
+  [data-layer="panel"]:is(
+    .dx-sheet-backdrop,
+    .dx-drawer-backdrop,
+    .dialog-backdrop
+  ) {
+    z-index: var(--z-panel);
+  }
+  [data-layer="panel"]:is(
+    .dx-sheet-viewport,
+    .dx-drawer-viewport,
+    .dialog-viewport
+  ) {
+    z-index: calc(var(--z-panel) + 1);
+  }
+  [data-layer="dialog"]:is(
+    .dx-sheet-backdrop,
+    .dx-drawer-backdrop,
+    .dialog-backdrop
+  ) {
+    z-index: var(--z-dialog);
+  }
+  [data-layer="dialog"]:is(
+    .dx-sheet-viewport,
+    .dx-drawer-viewport,
+    .dialog-viewport
+  ) {
+    z-index: calc(var(--z-dialog) + 1);
+  }
+  [data-layer="panel"][data-stacked]:is(
+    .dx-sheet-backdrop,
+    .dx-drawer-backdrop,
+    .dialog-backdrop
+  ) {
+    z-index: calc(var(--z-panel) + 2);
+  }
+  [data-layer="panel"][data-stacked]:is(
+    .dx-sheet-viewport,
+    .dx-drawer-viewport,
+    .dialog-viewport
+  ) {
+    z-index: calc(var(--z-panel) + 3);
+  }
+  [data-layer="dialog"][data-stacked]:is(
+    .dx-sheet-backdrop,
+    .dx-drawer-backdrop,
+    .dialog-backdrop
+  ) {
+    z-index: calc(var(--z-dialog) + 2);
+  }
+  [data-layer="dialog"][data-stacked]:is(
+    .dx-sheet-viewport,
+    .dx-drawer-viewport,
+    .dialog-viewport
+  ) {
+    z-index: calc(var(--z-dialog) + 3);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dx-sheet,
+    .dx-sheet-backdrop,
+    .dx-drawer,
+    .dx-drawer-backdrop {
+      transition: none;
+    }
+  }
+}

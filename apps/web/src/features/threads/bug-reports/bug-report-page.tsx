@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "@tanstack/react-router";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { PageShell } from "../../../shared/layout/page-shell.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { BugReportDialog } from "./bug-report-detail.js";
 import { firstLine, reportSource, sentAt } from "./bug-report-format.js";
 import { bugReportsQueryOptions } from "./bug-report-queries.js";
@@ -41,16 +42,19 @@ export function BugReportsPage({ reportId }: { readonly reportId?: string }) {
       {reports.isPending ? (
         <DxLoading label="Loading your reports…" />
       ) : reports.isError ? (
-        <div className="empty-state bug-reports-empty">
-          <strong>Your reports could not be loaded.</strong>
-        </div>
+        <EmptyState
+          className="bug-reports-empty"
+          tone="error"
+          title="Your reports could not be loaded."
+        />
       ) : reports.data.length === 0 ? (
-        <div className="empty-state bug-reports-empty">
-          <strong>No bug reports yet</strong>
-          <span>
-            Report Bug is in Settings and in a Thread's More Actions menu.
-          </span>
-        </div>
+        <EmptyState
+          className="bug-reports-empty"
+          title="No bug reports yet"
+          description={
+            <>Report Bug is in Settings and in a Thread's More Actions menu.</>
+          }
+        />
       ) : (
         <ul className="bug-reports-list">
           {reports.data.map((report) => (

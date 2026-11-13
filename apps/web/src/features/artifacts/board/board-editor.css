@@ -13,7 +13,7 @@
 
 /* The editor fills its box; its own panels keep their font. */
 .board-canvas .excalidraw {
-  --ui-font: var(--font-sans, system-ui, sans-serif);
+  --ui-font: var(--font-ui);
   border-radius: 0;
 }
 .board-canvas .excalidraw .App-menu_top {
@@ -39,11 +39,13 @@
   height: 24px;
   padding: 0 5px;
   border: 1.5px solid var(--surface);
-  border-radius: 12px 12px 12px 3px;
-  background: var(--accent-strong, #f59f00);
-  color: var(--accent-strong-foreground, #1e1e1e);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
-  font: 600 11px / 1 var(--font-sans, system-ui, sans-serif);
+  border-radius: var(--radius-xl) var(--radius-xl) var(--radius-xl)
+    var(--radius-xs);
+  background: var(--thread-color-orange);
+  color: var(--background);
+  box-shadow: var(--shadow-sm);
+  font:
+    var(--weight-semibold) var(--text-xs) / var(--leading-none) var(--font-ui);
   transform: translate(-4px, -100%);
   cursor: pointer;
   pointer-events: auto;
@@ -74,7 +76,7 @@
 .board-presence-person {
   display: inline-flex;
   margin-left: -6px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   box-shadow:
     0 0 0 2px var(--surface),
     0 0 0 3.5px var(--board-person);
@@ -85,12 +87,12 @@
 .board-presence-person .dx-avatar {
   width: 20px;
   height: 20px;
-  font-size: 9px;
+  font-size: var(--text-3xs);
 }
 .board-presence-more {
   margin-left: 6px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .board-presence + .artifact-save {
   margin-left: 4px;
@@ -162,7 +164,7 @@
   --list-border-color: var(--border);
   --overlay-bg-color: color-mix(in srgb, var(--background) 70%, transparent);
   --select-highlight-color: var(--ring);
-  --shadow-island: 0 0 0 1px var(--border), 0 4px 14px rgb(0 0 0 / 0.12);
+  --shadow-island: 0 0 0 1px var(--border), var(--shadow-md);
   --avatar-border-color: var(--surface);
   font-family: var(--font-ui);
 }

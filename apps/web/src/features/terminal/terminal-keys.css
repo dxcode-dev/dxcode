@@ -6,15 +6,15 @@
 > .thread-terminal-environment-notice {
   position: static;
   flex: none;
-  margin: 0 8px 6px;
+  margin: 0 var(--space-2) var(--space-1-5);
   box-shadow: none;
 }
 .terminal-keys {
   display: flex;
   align-items: center;
   flex: none;
-  gap: 4px;
-  padding: 6px 8px;
+  gap: var(--space-1);
+  padding: var(--space-1-5) var(--space-2);
   overflow-x: auto;
   border-top: 1px solid var(--divider);
   background: var(--surface);
@@ -33,13 +33,13 @@
   flex: none;
   min-width: 34px;
   height: 32px;
-  padding: 0 8px;
+  padding: 0 var(--space-2);
   color: var(--chat-foreground);
   border: 1px solid var(--outline);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--secondary);
-  font-family: var(--font-mono-family);
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
   -webkit-tap-highlight-color: transparent;
 }
 .terminal-key svg {

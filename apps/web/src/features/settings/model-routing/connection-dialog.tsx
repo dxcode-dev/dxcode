@@ -7,6 +7,7 @@ import { customModelEndpoint } from "@dx/domain";
 import type { FormEvent } from "react";
 import { useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
+import { Radio } from "../../../shared/ui/checkbox.js";
 import {
   DialogContent,
   DialogDescription,
@@ -14,6 +15,7 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { Select } from "../../../shared/ui/select.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 
 import { parseCustomModelsText } from "./custom-models.js";
@@ -88,15 +90,16 @@ const CustomHeaderEditor = ({
             .map((header) => `${header.name}: ${header.masked}`)
             .join(", ")}
         </span>
-        <select
+        <Select
           aria-label="Custom header action"
           value={action}
-          onChange={(event) => onAction(event.target.value as HeaderAction)}
-        >
-          <option value="keep">Keep stored headers</option>
-          <option value="replace">Replace stored headers</option>
-          <option value="clear">Clear stored headers</option>
-        </select>
+          onValueChange={(value) => onAction(value as HeaderAction)}
+          options={[
+            ["keep", "Keep stored headers"],
+            ["replace", "Replace stored headers"],
+            ["clear", "Clear stored headers"],
+          ]}
+        />
       </>
     ) : null}
     {action === "replace" ? (
@@ -211,9 +214,13 @@ const CustomFormatField = ({
   <fieldset className="routing-format-options">
     <legend>API format</legend>
     {CUSTOM_API_FORMATS.map(([value, label]) => (
-      <label key={value} className="routing-format-option">
-        <input
-          type="radio"
+      <label
+        key={value}
+        className="routing-format-option"
+        htmlFor={`api-format-${value}`}
+      >
+        <Radio
+          id={`api-format-${value}`}
           name="api-format"
           value={value}
           checked={format === value}
@@ -364,7 +371,7 @@ export const ConnectionDialog = ({
 
   return (
     <DialogRoot open={open} onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="model-routing-dialog">
+      <DialogContent size="lg" className="model-routing-dialog">
         <DialogTitle>
           {existing === undefined
             ? custom
@@ -482,13 +489,14 @@ export const ConnectionDialog = ({
               error={fieldErrors.models}
             />
           ) : null}
-          <button
+          <Button
+            variant="ghost"
+            size="xs"
             type="button"
-            className="model-routing-advanced-toggle"
             onClick={() => setAdvanced((current) => !current)}
           >
             {advanced ? "Hide advanced" : "Advanced"}
-          </button>
+          </Button>
           {advanced ? (
             <div className="model-routing-advanced">
               {advancedFields.map((field) => (

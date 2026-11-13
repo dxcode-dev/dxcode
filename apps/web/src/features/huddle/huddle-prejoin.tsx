@@ -2,6 +2,7 @@ import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import * as React from "react";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { ParticipantStack } from "../../shared/ui/avatar.js";
+import { Chip } from "../../shared/ui/chip.js";
 import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import type { HuddleSummary } from "./huddle-client.js";
 import { type HuddlePlace, joinHuddle } from "./huddle-session.js";
@@ -110,17 +111,19 @@ export function HuddlePrejoin({
           )}
         </div>
         <div className="huddle-prejoin-toggles">
-          <button
-            type="button"
+          <Chip
+            variant="outline"
+            size="md"
             className="huddle-toggle"
             aria-pressed={audio}
             onClick={() => setAudio(!audio)}
           >
             {audio ? <Mic aria-hidden="true" /> : <MicOff aria-hidden="true" />}
             {audio ? "Microphone on" : "Muted"}
-          </button>
-          <button
-            type="button"
+          </Chip>
+          <Chip
+            variant="outline"
+            size="md"
             className="huddle-toggle"
             aria-pressed={video}
             onClick={() => setVideo(!video)}
@@ -131,7 +134,7 @@ export function HuddlePrejoin({
               <VideoOff aria-hidden="true" />
             )}
             {video ? "Camera on" : "Camera off"}
-          </button>
+          </Chip>
         </div>
       </div>
     </ConfirmDialog>

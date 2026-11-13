@@ -20,6 +20,7 @@ import {
   terminalEnvironmentFormId,
 } from "../../shared/terminal-session.js";
 import { useTheme } from "../../shared/theme/theme-provider.js";
+import { Button } from "../../shared/ui/button.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { TerminalKeys } from "./terminal-keys.js";
 import { terminalThemeFor } from "./terminal-themes.js";
@@ -179,14 +180,14 @@ function TerminalStatus({
             />
             <p>{presentation.message}</p>
             {presentation.action === undefined ? null : (
-              <button
-                className="thread-terminal-retry"
-                type="button"
+              <Button
+                variant="outline"
+                size="xs"
                 onClick={() => retry(status !== disconnected)}
               >
                 <RefreshCw aria-hidden="true" />
                 <span>{presentation.action}</span>
-              </button>
+              </Button>
             )}
           </div>
         </div>

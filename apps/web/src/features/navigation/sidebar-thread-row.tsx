@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadData } from "@dx/api";
 import { threadReturnedAt } from "@dx/domain";
 import { Link } from "@tanstack/react-router";
@@ -28,6 +27,7 @@ import {
   snoozeWakeText,
 } from "../../shared/thread-snooze-presets.js";
 import { Avatar } from "../../shared/ui/avatar.js";
+import { MenuPopup, MenuRoot, MenuTrigger } from "../../shared/ui/menu.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
@@ -155,26 +155,14 @@ function SnoozeRowButton({
       </button>
     );
   return (
-    <Menu.Root defaultOpen>
-      <Menu.Trigger aria-label="Snooze thread" title="Snooze thread">
+    <MenuRoot defaultOpen>
+      <MenuTrigger aria-label="Snooze thread" title="Snooze thread">
         <AlarmClock />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup thread-actions-menu">
-            <SnoozeMenuItems
-              threadId={threadId}
-              snooze={snooze}
-              itemClassName="thread-menu-item"
-            />
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <SnoozeMenuItems threadId={threadId} snooze={snooze} />
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 

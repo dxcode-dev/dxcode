@@ -10,8 +10,10 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
+import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { DocumentTitle } from "../../shared/ui/document-title.js";
+import { EmptyState } from "../../shared/ui/empty-state.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
@@ -142,14 +144,15 @@ export function ProjectPage() {
                 <Settings />
               </Link>
             )}
-            <button
+            <Button
+              size="icon-xs"
+              variant="ghost"
               type="button"
               aria-label="New Thread"
-              className={buttonVariants({ variant: "ghost", size: "icon-xs" })}
               onClick={() => openNewThread(project.id)}
             >
               <SquarePen />
-            </button>
+            </Button>
           </div>
         )
       }
@@ -160,13 +163,15 @@ export function ProjectPage() {
         <DxLoading label="Loading project…" />
       ) : null}
       {!projectQuery.isPending && project === undefined ? (
-        <div className="project-detail-state">
-          <strong>Project not found</strong>
-          <span>This project is unavailable or no longer exists.</span>
-          <Link to="/projects" search={{ owner: undefined }}>
-            Back to Projects
-          </Link>
-        </div>
+        <EmptyState
+          title="Project not found"
+          description="This project is unavailable or no longer exists."
+          action={
+            <Link to="/projects" search={{ owner: undefined }}>
+              Back to Projects
+            </Link>
+          }
+        />
       ) : null}
       {project === undefined ? null : (
         <div className="project-overview">
@@ -182,16 +187,14 @@ export function ProjectPage() {
                   <div className="project-recent-empty" role="alert">
                     <MessageSquare />
                     <strong>Recent threads could not be loaded</strong>
-                    <button
+                    <Button
+                      size="xs"
+                      variant="outline"
                       type="button"
-                      className={buttonVariants({
-                        size: "xs",
-                        variant: "outline",
-                      })}
                       onClick={() => void threadsQuery.refetch()}
                     >
                       Retry
-                    </button>
+                    </Button>
                   </div>
                 ) : threadsState === "loading" ? (
                   <DxLoading label="Loading recent threads…" />
@@ -200,13 +203,13 @@ export function ProjectPage() {
                     <MessageSquare />
                     <strong>No threads yet</strong>
                     <span>Start the first thread in {project.name}.</span>
-                    <button
+                    <Button
+                      size="xs"
                       type="button"
-                      className={buttonVariants({ size: "xs" })}
                       onClick={() => openNewThread(project.id)}
                     >
                       <Plus /> New Thread
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   projectThreads.slice(0, 5).map((thread) => {

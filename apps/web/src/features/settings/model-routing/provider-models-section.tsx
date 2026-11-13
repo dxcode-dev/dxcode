@@ -1,6 +1,3 @@
-import { Checkbox } from "@base-ui/react/checkbox";
-import { Popover } from "@base-ui/react/popover";
-import { Switch } from "@base-ui/react/switch";
 import type { CatalogProviderData } from "@dx/api";
 import {
   type ModelMappingLine,
@@ -8,11 +5,18 @@ import {
   modelMappingText,
   parseModelMappingText,
 } from "@dx/domain";
-import { Check, Info, KeyRound } from "lucide-react";
+import { Info, KeyRound } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
+import { Checkbox } from "../../../shared/ui/checkbox.js";
 import { Input } from "../../../shared/ui/input.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../../../shared/ui/popover.js";
 import { ProviderMark } from "../../../shared/ui/provider-marks.js";
+import { Switch } from "../../../shared/ui/switch.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import { hasProviderMark } from "./provider-mark-ids.js";
 
@@ -63,44 +67,36 @@ const ModelDetails = ({ model }: { readonly model: CatalogModel }) => {
     ...(model.vision ? ["Image input"] : []),
   ].join(", ");
   return (
-    <Popover.Root>
-      <Popover.Trigger
-        className="routing-model-details-trigger"
+    <PopoverRoot>
+      <PopoverTrigger
+        render={<Button variant="ghost" size="icon-xs" />}
         aria-label={`Details for ${model.name}`}
       >
         <Info />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          side="left"
-          sideOffset={6}
-          className="routing-menu-positioner"
+      </PopoverTrigger>
+      <PopoverContent side="left" className="routing-model-details">
+        <p className="routing-model-details-id">{model.id}</p>
+        <dl>
+          <dt>Provider ID</dt>
+          <dd>{model.id.slice(slash + 1)}</dd>
+          <dt>Context</dt>
+          <dd>{formatTokens(model.contextWindow)}</dd>
+          <dt>Output</dt>
+          <dd>{formatTokens(model.maxOutputTokens)}</dd>
+          <dt>Supports</dt>
+          <dd>{supports}</dd>
+        </dl>
+        <Button
+          type="button"
+          size="xs"
+          variant="outline"
+          className="routing-model-details-copy"
+          onClick={() => void navigator.clipboard?.writeText(model.id)}
         >
-          <Popover.Popup className="routing-model-details">
-            <p className="routing-model-details-id">{model.id}</p>
-            <dl>
-              <dt>Provider ID</dt>
-              <dd>{model.id.slice(slash + 1)}</dd>
-              <dt>Context</dt>
-              <dd>{formatTokens(model.contextWindow)}</dd>
-              <dt>Output</dt>
-              <dd>{formatTokens(model.maxOutputTokens)}</dd>
-              <dt>Supports</dt>
-              <dd>{supports}</dd>
-            </dl>
-            <Button
-              type="button"
-              size="xs"
-              variant="outline"
-              className="routing-sheet-button routing-model-details-copy"
-              onClick={() => void navigator.clipboard?.writeText(model.id)}
-            >
-              Copy to clipboard
-            </Button>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+          Copy to clipboard
+        </Button>
+      </PopoverContent>
+    </PopoverRoot>
   );
 };
 
@@ -124,16 +120,11 @@ const ModelRow = ({
 }) => (
   <div className="routing-model-row">
     <label className="routing-model-row-label" htmlFor={id}>
-      <Checkbox.Root
+      <Checkbox
         id={id}
         checked={checked}
-        onCheckedChange={onChange}
-        className="routing-checkbox"
-      >
-        <Checkbox.Indicator className="routing-checkbox-indicator">
-          <Check />
-        </Checkbox.Indicator>
-      </Checkbox.Root>
+        onChange={(event) => onChange(event.currentTarget.checked)}
+      />
       {hasProviderMark(providerId) ? (
         <ProviderMark
           providerId={providerId}
@@ -159,25 +150,17 @@ const RowNote = ({
   readonly label: string;
   readonly note: string;
 }) => (
-  <Popover.Root>
-    <Popover.Trigger
-      className="routing-model-details-trigger"
+  <PopoverRoot>
+    <PopoverTrigger
+      render={<Button variant="ghost" size="icon-xs" />}
       aria-label={`Details for ${label}`}
     >
       <Info />
-    </Popover.Trigger>
-    <Popover.Portal>
-      <Popover.Positioner
-        side="left"
-        sideOffset={6}
-        className="routing-menu-positioner"
-      >
-        <Popover.Popup className="routing-model-details">
-          <p>{note}</p>
-        </Popover.Popup>
-      </Popover.Positioner>
-    </Popover.Portal>
-  </Popover.Root>
+    </PopoverTrigger>
+    <PopoverContent side="left" className="routing-model-details">
+      <p>{note}</p>
+    </PopoverContent>
+  </PopoverRoot>
 );
 
 const MAPPING_SYNTAX = `*/*
@@ -188,35 +171,24 @@ openai/gpt-5.6-sol -> gpt-5.6-sol-2026
 # with GPT-5.6 Sol sent to the provider as gpt-5.6-sol-2026`;
 
 const MappingSyntax = () => (
-  <Popover.Root>
-    <Popover.Trigger
-      render={
-        <Button
-          type="button"
-          size="xs"
-          variant="outline"
-          className="routing-sheet-button"
-        />
-      }
+  <PopoverRoot>
+    <PopoverTrigger
+      render={<Button type="button" size="xs" variant="outline" />}
     >
       Model Mapping Syntax
-    </Popover.Trigger>
-    <Popover.Portal>
-      <Popover.Positioner sideOffset={6} className="routing-menu-positioner">
-        <Popover.Popup className="routing-model-details routing-mapping-syntax">
-          <p>
-            One provider/model pattern per line, such as
-            anthropic/claude-opus-5-5. Prefix a line with - to exclude, use * at
-            the start or end of a pattern, and # for comments. The last matching
-            line wins. Add -&gt; provider-model-id after an exact model ID to
-            override the model ID sent to the provider.
-          </p>
-          <pre>{MAPPING_SYNTAX}</pre>
-          <p>Leave the field empty to use this provider's default models.</p>
-        </Popover.Popup>
-      </Popover.Positioner>
-    </Popover.Portal>
-  </Popover.Root>
+    </PopoverTrigger>
+    <PopoverContent className="routing-model-details routing-mapping-syntax">
+      <p>
+        One provider/model pattern per line, such as anthropic/claude-opus-5-5.
+        Prefix a line with - to exclude, use * at the start or end of a pattern,
+        and # for comments. The last matching line wins. Add -&gt;
+        provider-model-id after an exact model ID to override the model ID sent
+        to the provider.
+      </p>
+      <pre>{MAPPING_SYNTAX}</pre>
+      <p>Leave the field empty to use this provider's default models.</p>
+    </PopoverContent>
+  </PopoverRoot>
 );
 
 /**
@@ -283,21 +255,18 @@ export const ProviderModelsSection = ({
         </span>
         <div className="routing-sheet-advanced">
           <span aria-hidden="true">Advanced</span>
-          <Switch.Root
+          <Switch
             checked={advanced}
             onCheckedChange={setAdvanced}
-            aria-label="Advanced"
-            className="routing-switch"
-          >
-            <Switch.Thumb className="routing-switch-thumb" />
-          </Switch.Root>
+            label="Advanced"
+          />
         </div>
       </div>
       {advanced ? (
         <div className="routing-sheet-field">
           <label htmlFor="model-provider-mapping">Models</label>
           <Textarea
-            className="routing-sheet-control"
+            className="routing-sheet-mapping"
             id="model-provider-mapping"
             rows={5}
             spellCheck={false}
@@ -313,7 +282,7 @@ export const ProviderModelsSection = ({
       ) : (
         <>
           <Input
-            className="routing-sheet-control"
+            size="sm"
             aria-label="Search models"
             placeholder="Search models…"
             value={search}

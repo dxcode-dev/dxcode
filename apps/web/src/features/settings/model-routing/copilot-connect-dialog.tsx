@@ -98,7 +98,7 @@ export const CopilotConnectDialog = ({
 
   return (
     <DialogRoot open={open} onOpenChange={(next) => !next && close()}>
-      <DialogContent className="model-routing-dialog">
+      <DialogContent size="lg" className="model-routing-dialog">
         <DialogTitle>Connect GitHub Copilot</DialogTitle>
         {phase === "pending" && authorization !== undefined ? (
           <div className="model-routing-copilot-flow">

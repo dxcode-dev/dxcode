@@ -514,7 +514,7 @@ it("#1771: archive and unarchive move the row to its new section at once, and a 
 
   // Unarchive moves it back at once too.
   await openContextMenu(row("Beta"));
-  await userEvent.click(menuItem(".thread-context-item", "Unarchive"));
+  await userEvent.click(menuItem(".dx-menu-item", "Unarchive"));
   await settle();
   expect(sectionTitles("archived")).not.toContain("Beta");
   expect(sectionTitles(projectId)).toContain("Beta");
@@ -562,9 +562,9 @@ it("#1145: Copy from the sidebar confirms with a toast, as the header menu does"
   await mount(threeThreads(), `/threads/${BETA}`);
 
   await openContextMenu(row("Beta"));
-  await userEvent.hover(menuItem(".thread-context-item", "Copy"));
+  await userEvent.hover(menuItem(".dx-menu-item", "Copy"));
   await settle(200);
-  await userEvent.click(menuItem(".thread-context-item", "Thread URL"));
+  await userEvent.click(menuItem(".dx-menu-item", "Thread URL"));
   await until(() =>
     toasts().some((text) => text.includes("Thread URL copied")),
   );
@@ -586,7 +586,7 @@ it("#1145: Copy from the header menu confirms with the same toast", async () => 
     ) as HTMLElement,
   );
   await settle();
-  await userEvent.click(menuItem(".thread-menu-item", "Copy Thread URL"));
+  await userEvent.click(menuItem(".dx-menu-item", "Copy Thread URL"));
   await until(() =>
     toasts().some((text) => text.includes("Thread URL copied")),
   );
@@ -616,9 +616,9 @@ it("#1145: Unarchive on an archived parent offers its children, as Archive does"
   await until(() => rowTitles().includes("Parent"));
 
   await openContextMenu(row("Parent"));
-  await userEvent.hover(menuItem(".thread-context-item", "Unarchive"));
+  await userEvent.hover(menuItem(".dx-menu-item", "Unarchive"));
   await settle(200);
-  await userEvent.click(menuItem(".thread-context-item", "All 2 Threads"));
+  await userEvent.click(menuItem(".dx-menu-item", "All 2 Threads"));
   await until(
     () =>
       sectionTitles(projectId).includes("Parent") &&

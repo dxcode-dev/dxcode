@@ -1,3 +1,4 @@
+import { Tab, Tabs, TabsList } from "../../../shared/ui/tabs.js";
 import { spaceAgentModelQueryOptions } from "../../spaces/space-agent-model-queries.js";
 import "./model-routing.css";
 import type { ConnectionData } from "@dx/api";
@@ -10,7 +11,6 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, UsersRound } from "lucide-react";
 import {
   type Dispatch,
-  type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
   type SetStateAction,
@@ -263,37 +263,21 @@ function ClaudePlanTabs({
   readonly selected: ConnectionData;
   readonly onSelect: (id: string) => void;
 }) {
-  const step = (event: KeyboardEvent<HTMLButtonElement>) => {
-    const direction =
-      event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-    if (direction === 0) return;
-    event.preventDefault();
-    const index = plans.findIndex(({ id }) => id === selected.id);
-    const next = plans[(index + direction + plans.length) % plans.length];
-    if (next === undefined) return;
-    onSelect(next.id);
-    event.currentTarget.parentElement
-      ?.querySelector<HTMLButtonElement>(`[data-plan="${next.id}"]`)
-      ?.focus();
-  };
   return (
     <li className="claude-plan-tabs">
-      <div className="usage-tabs" role="tablist" aria-label="Claude plans">
-        {plans.map((plan) => (
-          <button
-            key={plan.id}
-            type="button"
-            role="tab"
-            data-plan={plan.id}
-            aria-selected={plan.id === selected.id}
-            tabIndex={plan.id === selected.id ? 0 : -1}
-            onClick={() => onSelect(plan.id)}
-            onKeyDown={step}
-          >
-            {plan.name}
-          </button>
-        ))}
-      </div>
+      <Tabs
+        variant="segmented"
+        value={selected.id}
+        onValueChange={(id) => onSelect(String(id))}
+      >
+        <TabsList aria-label="Claude plans">
+          {plans.map((plan) => (
+            <Tab key={plan.id} value={plan.id} data-plan={plan.id}>
+              {plan.name}
+            </Tab>
+          ))}
+        </TabsList>
+      </Tabs>
     </li>
   );
 }

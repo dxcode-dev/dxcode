@@ -1,5 +1,11 @@
-import { Menu } from "@base-ui/react/menu";
 import { GripHorizontal, GripVertical, Plus } from "lucide-react";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import type { ArtifactTablePlacement } from "./artifact-session.js";
 import type { TableAction } from "./block-commands.js";
 
@@ -20,8 +26,8 @@ export function TableCellTools({
         const column = axis === "column";
         const label = column ? "Column Options" : "Row Options";
         return (
-          <Menu.Root key={axis}>
-            <Menu.Trigger
+          <MenuRoot key={axis}>
+            <MenuTrigger
               className={`artifact-table-grip artifact-table-${axis}`}
               aria-label={label}
               title={label}
@@ -35,55 +41,42 @@ export function TableCellTools({
               ) : (
                 <GripVertical aria-hidden="true" />
               )}
-            </Menu.Trigger>
-            <Menu.Portal>
-              <Menu.Positioner
-                className="thread-menu-positioner"
-                side={column ? "top" : "right"}
-                sideOffset={4}
+            </MenuTrigger>
+            <MenuPopup
+              side={column ? "top" : "right"}
+              aria-label={label}
+              // Keep typing in the cell after an action or Escape. A bare
+              // DOM focus can let the browser's caret replace the
+              // editor's selection, which drops the grips.
+              finalFocus={() => {
+                focusEditor();
+                return false;
+              }}
+            >
+              {(column
+                ? ([
+                    ["insert-left", "Insert Left"],
+                    ["insert-right", "Insert Right"],
+                  ] as const)
+                : ([
+                    ["insert-above", "Insert Above"],
+                    ["insert-below", "Insert Below"],
+                  ] as const)
+              ).map(([action, text]) => (
+                <MenuItem key={action} onClick={() => onAction(action)}>
+                  {text}
+                </MenuItem>
+              ))}
+              <MenuSeparator />
+              <MenuItem
+                onClick={() =>
+                  onAction(column ? "delete-column" : "delete-row")
+                }
               >
-                <Menu.Popup
-                  className="thread-menu-popup thread-actions-menu"
-                  aria-label={label}
-                  // Keep typing in the cell after an action or Escape. A bare
-                  // DOM focus can let the browser's caret replace the
-                  // editor's selection, which drops the grips.
-                  finalFocus={() => {
-                    focusEditor();
-                    return false;
-                  }}
-                >
-                  {(column
-                    ? ([
-                        ["insert-left", "Insert Left"],
-                        ["insert-right", "Insert Right"],
-                      ] as const)
-                    : ([
-                        ["insert-above", "Insert Above"],
-                        ["insert-below", "Insert Below"],
-                      ] as const)
-                  ).map(([action, text]) => (
-                    <Menu.Item
-                      key={action}
-                      className="thread-menu-item"
-                      onClick={() => onAction(action)}
-                    >
-                      {text}
-                    </Menu.Item>
-                  ))}
-                  <Menu.Separator className="thread-menu-separator" />
-                  <Menu.Item
-                    className="thread-menu-item"
-                    onClick={() =>
-                      onAction(column ? "delete-column" : "delete-row")
-                    }
-                  >
-                    {column ? "Delete Column" : "Delete Row"}
-                  </Menu.Item>
-                </Menu.Popup>
-              </Menu.Positioner>
-            </Menu.Portal>
-          </Menu.Root>
+                {column ? "Delete Column" : "Delete Row"}
+              </MenuItem>
+            </MenuPopup>
+          </MenuRoot>
         );
       })}
       <button

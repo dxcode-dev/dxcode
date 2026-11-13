@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlarmClock } from "lucide-react";
@@ -15,11 +14,15 @@ import {
   snoozeWakeText,
 } from "../../shared/thread-snooze-presets.js";
 import { Button } from "../../shared/ui/button.js";
+import { DialogRoot } from "../../shared/ui/dialog.js";
+import { Input } from "../../shared/ui/input.js";
 import {
   ModalSurface,
   ModalSurfaceClose,
   ModalSurfaceHeader,
 } from "../../shared/ui/modal-surface.js";
+import { SegmentedControl } from "../../shared/ui/segmented-control.js";
+import { Select } from "../../shared/ui/select.js";
 import { setThreadSnoozedMutationOptions } from "./thread-mutations.js";
 
 /** One toast at a time: each notice replaces the one before it. */
@@ -132,37 +135,34 @@ function CustomSnoozeDialog({
     onSnooze(wakeAt);
   };
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
+    <DialogRoot open onOpenChange={(open) => (open ? undefined : onClose())}>
       <ModalSurface className="custom-snooze-dialog" ariaLabel="Snooze until">
         <ModalSurfaceHeader>
           <strong>Snooze until</strong>
           <ModalSurfaceClose />
         </ModalSurfaceHeader>
         <form onSubmit={submit}>
-          <div className="custom-snooze-modes">
-            {(["duration", "date"] as const).map((option) => (
-              <button
-                key={option}
-                type="button"
-                aria-pressed={mode === option}
-                onClick={() => {
-                  setMode(option);
-                  setError(undefined);
-                  // Date and time starts on this time tomorrow.
-                  if (option === "date" && value === "")
-                    setValue(
-                      localInputValue(
-                        new Date(Date.now() + 24 * 60 * 60 * 1_000),
-                      ),
-                    );
-                }}
-              >
-                {option === "duration" ? "Duration" : "Date and time"}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            className="custom-snooze-modes"
+            label="Snooze by"
+            value={mode}
+            options={[
+              ["duration", "Duration"],
+              ["date", "Date and time"],
+            ]}
+            onValueChange={(option) => {
+              setMode(option);
+              setError(undefined);
+              // Date and time starts on this time tomorrow.
+              if (option === "date" && value === "")
+                setValue(
+                  localInputValue(new Date(Date.now() + 24 * 60 * 60 * 1_000)),
+                );
+            }}
+          />
           {mode === "date" ? (
-            <input
+            <Input
+              size="sm"
               type="datetime-local"
               aria-label="Wake date and time"
               value={value}
@@ -173,7 +173,8 @@ function CustomSnoozeDialog({
             />
           ) : (
             <div className="custom-snooze-duration">
-              <input
+              <Input
+                size="sm"
                 type="number"
                 min={1}
                 inputMode="numeric"
@@ -184,19 +185,18 @@ function CustomSnoozeDialog({
                   setError(undefined);
                 }}
               />
-              <select
+              <Select
                 aria-label="Unit"
                 value={unit}
-                onChange={(event) =>
-                  setUnit(
-                    event.currentTarget.value as "minutes" | "hours" | "days",
-                  )
+                onValueChange={(next) =>
+                  setUnit(next as "minutes" | "hours" | "days")
                 }
-              >
-                <option value="minutes">Minutes</option>
-                <option value="hours">Hours</option>
-                <option value="days">Days</option>
-              </select>
+                options={[
+                  ["minutes", "Minutes"],
+                  ["hours", "Hours"],
+                  ["days", "Days"],
+                ]}
+              />
             </div>
           )}
           {error === undefined ? null : (
@@ -211,6 +211,6 @@ function CustomSnoozeDialog({
           </footer>
         </form>
       </ModalSurface>
-    </Dialog.Root>
+    </DialogRoot>
   );
 }

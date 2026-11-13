@@ -1,4 +1,5 @@
 import type * as React from "react";
+import { PluginStatusBadge } from "./plugin-status-badge.js";
 
 interface Item {
   readonly key: string;
@@ -38,9 +39,7 @@ export function PluginBundleGroup({
               <span title={item.detail}>{item.detail}</span>
             )}
             {item.status === undefined ? null : (
-              <em className="plugin-bundle-status-pill" data-tone={item.tone}>
-                {item.status}
-              </em>
+              <PluginStatusBadge tone={item.tone} label={item.status} />
             )}
           </li>
         ))}

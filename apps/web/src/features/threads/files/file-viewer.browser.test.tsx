@@ -192,7 +192,7 @@ describe("Thread file viewer", () => {
       );
     };
     const menuItem = (name: string) =>
-      [...document.querySelectorAll<HTMLElement>(".thread-menu-item")].find(
+      [...document.querySelectorAll<HTMLElement>(".dx-menu-item")].find(
         (item) => item.textContent?.trim() === name,
       );
     await openActions();

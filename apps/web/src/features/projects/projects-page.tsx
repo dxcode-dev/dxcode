@@ -6,6 +6,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
 import { Button } from "../../shared/ui/button.js";
+import { EmptyState } from "../../shared/ui/empty-state.js";
 import { Input } from "../../shared/ui/input.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../shared/utils.js";
@@ -127,38 +128,40 @@ export function ProjectsPage() {
           <DxLoading label="Loading projects…" />
         ) : null}
         {!projectsQuery.isPending && projectsQuery.error !== null ? (
-          <div className="empty-state">
-            <strong>Projects unavailable</strong>
-            <span>
-              {projectsQuery.error instanceof Error
+          <EmptyState
+            title="Projects unavailable"
+            description={
+              projectsQuery.error instanceof Error
                 ? projectsQuery.error.message
-                : "Projects could not be loaded."}
-            </span>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void projectsQuery.refetch()}
-            >
-              Retry
-            </Button>
-          </div>
+                : "Projects could not be loaded."
+            }
+            action={
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => void projectsQuery.refetch()}
+              >
+                Retry
+              </Button>
+            }
+          />
         ) : null}
         {!projectsQuery.isPending &&
         projectsQuery.error === null &&
         visible.length === 0 ? (
-          <div className="empty-state">
-            <FolderGit2 />
-            <strong>
-              {scopedProjects.length === 0
+          <EmptyState
+            icon={<FolderGit2 />}
+            title={
+              scopedProjects.length === 0
                 ? "Create your first project"
-                : "No projects match"}
-            </strong>
-            <span>
-              {scopedProjects.length === 0
+                : "No projects match"
+            }
+            description={
+              scopedProjects.length === 0
                 ? "Projects keep related threads together."
-                : "Try another search."}
-            </span>
-          </div>
+                : "Try another search."
+            }
+          />
         ) : null}
         {visible.map((project) => {
           return (

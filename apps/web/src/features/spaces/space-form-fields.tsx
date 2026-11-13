@@ -1,10 +1,26 @@
-import { Combobox } from "@base-ui/react/combobox";
-import { Select } from "@base-ui/react/select";
 import type { SpaceSharing } from "@dx/api";
 import type { ProjectId } from "@dx/domain";
-import { Check, ChevronDown, LockKeyhole, Search } from "lucide-react";
+import { LockKeyhole } from "lucide-react";
 import * as React from "react";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
+import {
+  ChoiceSelectItem,
+  ChoiceSelectItemText,
+  ChoiceSelectList,
+  ChoiceSelectPopup,
+  ChoiceSelectRoot,
+  ChoiceSelectTrigger,
+} from "../../shared/ui/choice-select.js";
+import {
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxRoot,
+  ComboboxSearch,
+  ComboboxTrigger,
+} from "../../shared/ui/combobox.js";
+import { Textarea } from "../../shared/ui/textarea.js";
 
 /** A Project's mark: its first letter on a muted square. */
 export function ProjectMark({ name }: { readonly name: string }) {
@@ -63,7 +79,8 @@ export function SpaceGoalField({
     <div className="space-goal-field">
       {/* Both dialogs label it with a <label htmlFor={id}> beside it. */}
       {/* react-doctor-disable-next-line react-doctor/control-has-associated-label */}
-      <textarea
+      <Textarea
+        variant="bare"
         id={id}
         ref={box}
         rows={3}
@@ -109,7 +126,7 @@ export function SpaceProjectCombobox({
 }) {
   const selected = projects?.find((project) => project.id === value) ?? null;
   return (
-    <Combobox.Root
+    <ComboboxRoot
       items={projects ?? []}
       value={selected}
       onValueChange={(next) => {
@@ -120,58 +137,43 @@ export function SpaceProjectCombobox({
       autoHighlight
       disabled={projects === undefined || projects.length === 0}
     >
-      <Combobox.Trigger id={id} className="space-select-trigger">
+      <ComboboxTrigger
+        id={id}
+        size="lg"
+        className="space-select-trigger"
+        data-placeholder={selected === null || undefined}
+      >
         {selected === null ? (
-          <span className="space-select-placeholder">
-            {projects === undefined ? "Loading…" : "No projects"}
-          </span>
+          <span>{projects === undefined ? "Loading…" : "No projects"}</span>
         ) : (
           <>
             <ProjectMark name={selected.name} />
-            <span className="space-select-value">{selected.name}</span>
+            <span>{selected.name}</span>
           </>
         )}
-        <ChevronDown aria-hidden="true" />
-      </Combobox.Trigger>
-      <Combobox.Portal>
-        <Combobox.Positioner
-          className="repository-combobox-positioner space-select-positioner"
-          sideOffset={4}
-        >
-          <Combobox.Popup
-            className="repository-combobox-popup space-select-popup"
-            aria-label="Projects"
-          >
-            <div className="space-select-search">
-              <Search aria-hidden="true" />
-              <Combobox.Input
-                placeholder="Search projects"
-                aria-label="Search projects"
-                autoComplete="off"
-              />
-            </div>
-            <Combobox.Empty className="repository-combobox-empty">
-              No matching projects.
-            </Combobox.Empty>
-            <Combobox.List className="repository-combobox-list">
-              {(project: SpaceProjectOption) => (
-                <Combobox.Item
-                  key={project.id}
-                  value={project}
-                  className="space-select-item"
-                >
-                  <ProjectMark name={project.name} />
-                  <span className="space-select-text">{project.name}</span>
-                  <Combobox.ItemIndicator className="space-select-check">
-                    <Check aria-hidden="true" />
-                  </Combobox.ItemIndicator>
-                </Combobox.Item>
-              )}
-            </Combobox.List>
-          </Combobox.Popup>
-        </Combobox.Positioner>
-      </Combobox.Portal>
-    </Combobox.Root>
+      </ComboboxTrigger>
+      <ComboboxPopup className="space-select-popup" aria-label="Projects">
+        <ComboboxSearch
+          placeholder="Search projects"
+          aria-label="Search projects"
+        />
+        <ComboboxEmpty>No matching projects.</ComboboxEmpty>
+        <ComboboxList>
+          {(project: SpaceProjectOption) => (
+            <ComboboxItem
+              key={project.id}
+              value={project}
+              className="space-select-item"
+            >
+              <ProjectMark name={project.name} />
+              <span className="dx-picker-item-label space-select-text">
+                {project.name}
+              </span>
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxPopup>
+    </ComboboxRoot>
   );
 }
 
@@ -216,50 +218,35 @@ export function SpaceSharingSelect({
   ];
   const current = options.find((option) => option.value === value);
   return (
-    <Select.Root
+    <ChoiceSelectRoot
       value={value}
       onValueChange={(next) => {
         if (next !== null) onChange(next);
       }}
     >
-      <Select.Trigger id={id} className="space-select-trigger">
+      <ChoiceSelectTrigger id={id} size="lg" className="space-select-trigger">
         {sharingMark(current)}
-        <span className="space-select-value">{current?.label}</span>
-        <ChevronDown aria-hidden="true" />
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Positioner
-          className="repository-combobox-positioner space-select-positioner"
-          sideOffset={4}
-          alignItemWithTrigger={false}
-        >
-          <Select.Popup className="repository-combobox-popup space-select-popup">
-            <Select.List className="repository-combobox-list">
-              {options.map((option) => (
-                <Select.Item
-                  key={option.value}
-                  value={option.value}
-                  className="space-select-item"
-                  label={option.label}
-                >
-                  {sharingMark(option)}
-                  <Select.ItemText className="space-select-text">
-                    {option.label}
-                    <span className="space-select-detail">
-                      {" "}
-                      — {option.detail}
-                    </span>
-                  </Select.ItemText>
-                  <Select.ItemIndicator className="space-select-check">
-                    <Check aria-hidden="true" />
-                  </Select.ItemIndicator>
-                </Select.Item>
-              ))}
-            </Select.List>
-          </Select.Popup>
-        </Select.Positioner>
-      </Select.Portal>
-    </Select.Root>
+        <span>{current?.label}</span>
+      </ChoiceSelectTrigger>
+      <ChoiceSelectPopup className="space-select-popup">
+        <ChoiceSelectList>
+          {options.map((option) => (
+            <ChoiceSelectItem
+              key={option.value}
+              value={option.value}
+              className="space-select-item"
+              label={option.label}
+            >
+              {sharingMark(option)}
+              <ChoiceSelectItemText className="dx-picker-item-label space-select-text">
+                {option.label}
+                <span className="space-select-detail"> — {option.detail}</span>
+              </ChoiceSelectItemText>
+            </ChoiceSelectItem>
+          ))}
+        </ChoiceSelectList>
+      </ChoiceSelectPopup>
+    </ChoiceSelectRoot>
   );
 }
 

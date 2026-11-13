@@ -1,0 +1,33 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's card: see card.tsx. */
+@layer components {
+  .dx-card {
+    min-width: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--background);
+  }
+  .dx-card[data-variant="subtle"] {
+    background: color-mix(in srgb, var(--foreground) 3%, transparent);
+  }
+  .dx-card[data-variant="raised"] {
+    border-color: var(--outline);
+    background: var(--surface);
+    box-shadow: var(--shadow-lg);
+  }
+  .dx-card[data-padding="sm"] {
+    padding: var(--space-3);
+  }
+  .dx-card[data-padding="md"] {
+    padding: var(--space-4);
+  }
+  .dx-card[data-interactive] {
+    cursor: pointer;
+    transition: background-color var(--duration-fast);
+  }
+  .dx-card[data-interactive]:hover {
+    background: var(--accent);
+  }
+}

@@ -1,6 +1,14 @@
-import { Combobox } from "@base-ui/react/combobox";
-import { Check, ChevronDown, GitBranch } from "lucide-react";
+import { GitBranch } from "lucide-react";
 import * as React from "react";
+import {
+  ComboboxEmpty,
+  ComboboxField,
+  ComboboxInput,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxRoot,
+} from "../../shared/ui/combobox.js";
 import {
   matchesQuery,
   optionsWithTypedUrl,
@@ -37,7 +45,7 @@ export function RepositoryPicker({
       : (options.find((option) => sameRepository(option, pasted)) ?? pasted);
   };
   return (
-    <Combobox.Root
+    <ComboboxRoot
       items={items}
       value={value ?? null}
       inputValue={query}
@@ -58,8 +66,12 @@ export function RepositoryPicker({
       autoHighlight
       disabled={disabled}
     >
-      <Combobox.InputGroup className="repository-combobox-control">
-        <Combobox.Input
+      <ComboboxField
+        className="repository-combobox-control"
+        size={inPlace ? "sm" : "md"}
+        toggleLabel="Open repository list"
+      >
+        <ComboboxInput
           id={inPlace ? undefined : "project-repository"}
           aria-label={inPlace ? "Repository URL" : undefined}
           placeholder="Search repositories or paste a URL"
@@ -67,38 +79,20 @@ export function RepositoryPicker({
           autoFocus={!inPlace}
           aria-busy={loading !== undefined}
         />
-        <Combobox.Trigger aria-label="Open repository list">
-          <ChevronDown aria-hidden="true" />
-        </Combobox.Trigger>
-      </Combobox.InputGroup>
-      <Combobox.Portal>
-        <Combobox.Positioner
-          className="repository-combobox-positioner"
-          sideOffset={4}
-          align="start"
-        >
-          <Combobox.Popup className="repository-combobox-popup">
-            <Combobox.Empty className="repository-combobox-empty">
-              {loading ?? "No repositories found. Paste a Git URL."}
-            </Combobox.Empty>
-            <Combobox.List className="repository-combobox-list">
-              {(option: RepositoryOption) => (
-                <Combobox.Item
-                  key={option.value}
-                  value={option}
-                  className="repository-combobox-item repository-option"
-                >
-                  <GitBranch aria-hidden="true" />
-                  <span>{option.label}</span>
-                  <Combobox.ItemIndicator className="repository-combobox-indicator">
-                    <Check aria-hidden="true" />
-                  </Combobox.ItemIndicator>
-                </Combobox.Item>
-              )}
-            </Combobox.List>
-          </Combobox.Popup>
-        </Combobox.Positioner>
-      </Combobox.Portal>
-    </Combobox.Root>
+      </ComboboxField>
+      <ComboboxPopup width="anchor" className="repository-combobox-popup">
+        <ComboboxEmpty>
+          {loading ?? "No repositories found. Paste a Git URL."}
+        </ComboboxEmpty>
+        <ComboboxList>
+          {(option: RepositoryOption) => (
+            <ComboboxItem key={option.value} value={option}>
+              <GitBranch aria-hidden="true" />
+              <span className="dx-picker-item-label">{option.label}</span>
+            </ComboboxItem>
+          )}
+        </ComboboxList>
+      </ComboboxPopup>
+    </ComboboxRoot>
   );
 }

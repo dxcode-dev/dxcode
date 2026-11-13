@@ -132,7 +132,7 @@ afterEach(async () => {
 const cutLabels = () =>
   Array.from(
     document.querySelectorAll<HTMLElement>(
-      ".thread-menu-popup .thread-menu-item > span:not([role='img']):not(.shortcut-keycaps)",
+      ".dx-menu .dx-menu-item > span:not([role='img']):not(.shortcut-keycaps)",
     ),
   )
     .filter((label) => label.scrollWidth > label.clientWidth)
@@ -144,7 +144,7 @@ const cutLabels = () =>
 const menuLabels = () =>
   Array.from(
     document.querySelectorAll<HTMLElement>(
-      ".thread-actions-menu:not(.thread-actions-submenu) > .thread-menu-item",
+      ".thread-actions-menu:not(.thread-actions-submenu) > .dx-menu-item",
     ),
     (item) => item.textContent?.trim(),
   );
@@ -252,7 +252,7 @@ describe("More Actions", () => {
           ]) {
         const trigger = Array.from(
           document.querySelectorAll<HTMLElement>(
-            ".thread-actions-menu .thread-menu-item",
+            ".thread-actions-menu .dx-menu-item",
           ),
         ).find((item) => item.textContent?.trim() === name);
         await React.act(() => trigger?.click());
@@ -261,7 +261,7 @@ describe("More Actions", () => {
           expect(
             Array.from(
               document.querySelectorAll(
-                ".thread-actions-submenu .thread-menu-item",
+                ".thread-actions-submenu .dx-menu-item",
               ),
               (item) => item.textContent?.trim(),
             ),
@@ -306,7 +306,7 @@ describe("More Actions", () => {
     );
     const item = (name: string, selector = ".thread-actions-menu") =>
       Array.from(
-        document.querySelectorAll<HTMLElement>(`${selector} .thread-menu-item`),
+        document.querySelectorAll<HTMLElement>(`${selector} .dx-menu-item`),
       ).find((entry) => entry.textContent?.trim() === name);
     await React.act(() => item("Export")?.click());
     await vi.waitFor(() =>

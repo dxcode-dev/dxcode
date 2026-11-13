@@ -6,6 +6,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { ComposerSlotProps } from "../../shared/composer/composer-slot.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../shared/ui/button.js";
+import { Textarea } from "../../shared/ui/textarea.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
@@ -140,7 +141,8 @@ export function SlotComposer({
         }}
         {...dropTarget}
       >
-        <textarea
+        <Textarea
+          variant="bare"
           ref={textareaRef}
           aria-label={label}
           enterKeyHint={enterKey.enterKeyHint}
@@ -186,11 +188,11 @@ export function SlotComposer({
           {dictation.hideSubmit ? null : (
             <Button
               type="submit"
-              size="icon-sm"
+              size="icon-xs"
+              shape="round"
               className="composer-submit"
               aria-label={sendLabel}
-              aria-busy={holding || undefined}
-              data-submitting={holding ? "" : undefined}
+              busy={holding}
               disabled={holding || uploading || !composing}
             >
               {holding ? (

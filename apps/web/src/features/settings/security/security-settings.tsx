@@ -1,3 +1,4 @@
+import { Checkbox } from "../../../shared/ui/checkbox.js";
 import "./security.css";
 import type {
   BrowserSessionData,
@@ -136,7 +137,7 @@ function SecretDialog({
       onOpenChange={(open) => !open && closeDialog()}
     >
       {secret === undefined ? null : (
-        <DialogContent className="security-dialog">
+        <DialogContent size="md" className="security-dialog">
           <DialogTitle>Copy {secret.token.name} now</DialogTitle>
           <DialogDescription>
             dx shows this token once and stores only its hash.
@@ -176,6 +177,7 @@ function CreateTokenDialog({
   readonly setOpen: (open: boolean) => void;
   readonly created: (secret: PersonalApiTokenSecretData) => void;
 }) {
+  const choiceId = React.useId();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
   const createToken = useMutation(
@@ -219,7 +221,7 @@ function CreateTokenDialog({
       onOpenChange={(nextOpen) => (nextOpen ? setOpen(true) : close())}
     >
       {open ? (
-        <DialogContent className="security-dialog">
+        <DialogContent size="md" className="security-dialog">
           <DialogTitle>New access token</DialogTitle>
           <form
             className="security-dialog-form"
@@ -244,9 +246,9 @@ function CreateTokenDialog({
               <legend>Scopes</legend>
               <div>
                 {personalApiTokenScopes.map((scope) => (
-                  <label key={scope}>
-                    <input
-                      type="checkbox"
+                  <label key={scope} htmlFor={`${choiceId}-${scope}`}>
+                    <Checkbox
+                      id={`${choiceId}-${scope}`}
                       checked={selectedScopes.has(scope)}
                       onChange={() => toggle(scope)}
                     />
@@ -407,7 +409,7 @@ function TokenList() {
         onOpenChange={(open) => !open && closeAction()}
       >
         {action === undefined ? null : (
-          <DialogContent className="security-dialog">
+          <DialogContent size="md" className="security-dialog">
             <DialogTitle>
               {action.kind === "rotate" ? "Rotate" : "Revoke"}{" "}
               {action.token.name}?
@@ -632,7 +634,7 @@ function SessionList() {
         onOpenChange={(open) => !open && closeTarget()}
       >
         {target === undefined ? null : (
-          <DialogContent className="security-dialog">
+          <DialogContent size="md" className="security-dialog">
             <DialogTitle>
               {target === "others"
                 ? "Sign out other sessions?"

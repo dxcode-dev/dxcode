@@ -6,6 +6,7 @@ import type { PluginsTarget } from "../../../shared/api/client.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { Input } from "../../../shared/ui/input.js";
 import type { PluginBundleUpload } from "./plugin-bundle-mutations.js";
 import { errorMessage, plural } from "./plugin-bundle-presentation.js";
@@ -15,6 +16,7 @@ import {
   pluginCatalogsMutationOptions,
   pluginCatalogsQueryOptions,
 } from "./plugin-catalog-queries.js";
+import { PluginStatusBadge } from "./plugin-status-badge.js";
 
 type Entry = PluginCatalogData["entries"][number];
 
@@ -198,23 +200,25 @@ export function PluginCatalogTab({
                             </span>
                           )}
                           {status === undefined ? null : (
-                            <em
-                              className="plugin-bundle-status-pill"
-                              data-tone={status.tone}
+                            <PluginStatusBadge
+                              tone={status.tone}
+                              label={status.label}
                               title={
                                 "title" in status ? status.title : undefined
                               }
-                            >
-                              {status.label}
-                            </em>
+                            />
                           )}
                         </button>
                       </li>
                     );
                   })}
                   {entries.length === 0 ? (
-                    <li className="plugin-catalog-empty">
-                      {query === "" ? "No plugins listed." : "No matches."}
+                    <li>
+                      <EmptyState
+                        title={
+                          query === "" ? "No plugins listed." : "No matches."
+                        }
+                      />
                     </li>
                   ) : null}
                 </ul>

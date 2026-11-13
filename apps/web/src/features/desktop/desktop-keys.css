@@ -5,7 +5,7 @@
   display: flex;
   align-items: center;
   flex: none;
-  gap: 4px;
+  gap: var(--space-1);
   padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
   overflow-x: auto;
   border-top: 1px solid var(--divider);
@@ -23,15 +23,15 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 34px;
   height: 32px;
   padding: 0 9px;
   color: var(--chat-foreground);
   border: 1px solid var(--outline);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--secondary);
-  font-size: 12px;
+  font-size: var(--text-sm);
   white-space: nowrap;
   -webkit-tap-highlight-color: transparent;
 }
@@ -40,10 +40,10 @@
   height: 14px;
 }
 .desktop-key-keyboard span {
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }
 .desktop-key-shortcut {
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .desktop-key:active,
 .desktop-key[aria-pressed="true"] {
@@ -67,5 +67,5 @@
   resize: none;
   pointer-events: none;
   /* At least 16px, or iOS Safari zooms the page when it takes focus. */
-  font-size: 16px;
+  font-size: var(--text-input-touch);
 }

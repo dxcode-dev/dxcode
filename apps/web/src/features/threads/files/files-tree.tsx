@@ -44,6 +44,7 @@ import * as React from "react";
 import { getBrowserCommandRegistry } from "../../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
+import { Button } from "../../../shared/ui/button.js";
 import type { ThreadFilesApi } from "./files-api.js";
 import type { FilesDeleteTarget } from "./files-delete-dialog.js";
 import { threadFilesKeys, threadFileTreeOptions } from "./files-queries.js";
@@ -470,7 +471,7 @@ const samePaths = (left: readonly string[], right: readonly string[]) =>
   left.length === right.length &&
   left.every((path, index) => path === right[index]);
 
-const SEPARATOR = <hr className="thread-context-separator" />;
+const SEPARATOR = <hr className="dx-menu-separator" />;
 
 /** A row's menu: reading actions for everyone, write actions for writers. */
 function TreeRowMenu({
@@ -510,7 +511,7 @@ function TreeRowMenu({
     renames = false,
   ) => (
     <button
-      className="thread-context-item"
+      className="dx-menu-item"
       onClick={() => act(action, !renames)}
       role="menuitem"
       type="button"
@@ -606,7 +607,7 @@ function TreeRowMenu({
     return (
       <div
         aria-label={`Actions for ${item.name}`}
-        className="thread-context-menu thread-files-tree-menu"
+        className="dx-menu thread-files-tree-menu"
         role="menu"
       >
         {entry(
@@ -634,7 +635,7 @@ function TreeRowMenu({
   return (
     <div
       aria-label={`Actions for ${item.name}`}
-      className="thread-context-menu thread-files-tree-menu"
+      className="dx-menu thread-files-tree-menu"
       role="menu"
     >
       {create}
@@ -866,14 +867,15 @@ const DirectoryQuery = ({
     threadFileTreeOptions(api, threadId, worktree, path, active),
   );
   return query.hasNextPage ? (
-    <button
+    <Button
+      variant="ghost"
+      size="xs"
       className="thread-files-more"
       disabled={query.isFetchingNextPage}
       onClick={() => void query.fetchNextPage()}
-      type="button"
     >
       {query.isFetchingNextPage ? "Loading…" : `More in ${path}`}
-    </button>
+    </Button>
   ) : null;
 };
 

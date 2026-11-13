@@ -1,5 +1,5 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { ThreadId } from "@dx/domain";
+import { DialogRoot } from "../../../shared/ui/dialog.js";
 import {
   ModalSurface,
   ModalSurfaceClose,
@@ -30,7 +30,7 @@ export function ThreadAutomationsSheet({
     automationViews(data).find((entry) => entry.view === view)?.label ??
     "Schedule and GitHub events";
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
+    <DialogRoot open onOpenChange={(open) => (open ? undefined : onClose())}>
       <ModalSurface className="automation-sheet" ariaLabel={label}>
         <ModalSurfaceHeader>
           <strong>{label}</strong>
@@ -40,6 +40,6 @@ export function ThreadAutomationsSheet({
           <AutomationViewContent threadId={threadId} data={data} view={view} />
         )}
       </ModalSurface>
-    </Dialog.Root>
+    </DialogRoot>
   );
 }

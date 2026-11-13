@@ -5,6 +5,7 @@ import type {
   ProjectRepositoryUnavailableReason,
 } from "@dx/api";
 import type { ProjectId } from "@dx/domain";
+import { Button } from "../../shared/ui/button.js";
 
 /** What the sections need of the page's project. */
 interface Project {
@@ -123,13 +124,9 @@ function RepositoryState({
       <span>{copy.detail}</span>
       {data.reason === "rate-limited" ||
       data.reason === "provider-unavailable" ? (
-        <button
-          type="button"
-          className={buttonVariants({ size: "xs", variant: "outline" })}
-          onClick={onRetry}
-        >
+        <Button size="xs" variant="outline" type="button" onClick={onRetry}>
           Retry
-        </button>
+        </Button>
       ) : data.reason === "reconnect" ? (
         <Link
           to="/settings/$section"
@@ -221,13 +218,14 @@ export function ProjectCommitsSection({
           <div className="project-recent-empty" role="alert">
             <GitCommitHorizontal />
             <strong>Commits could not be loaded</strong>
-            <button
+            <Button
+              size="xs"
+              variant="outline"
               type="button"
-              className={buttonVariants({ size: "xs", variant: "outline" })}
               onClick={() => void query.refetch()}
             >
               Retry
-            </button>
+            </Button>
           </div>
         ) : data === undefined ? (
           <DxLoading label="Loading commits…" />
@@ -411,13 +409,14 @@ export function ProjectFilesSection({
           <div className="project-recent-empty" role="alert">
             <Folder />
             <strong>Files could not be loaded</strong>
-            <button
+            <Button
+              size="xs"
+              variant="outline"
               type="button"
-              className={buttonVariants({ size: "xs", variant: "outline" })}
               onClick={() => void query.refetch()}
             >
               Retry
-            </button>
+            </Button>
           </div>
         ) : data === undefined ? (
           <DxLoading label="Loading files…" />

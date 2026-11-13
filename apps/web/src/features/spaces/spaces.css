@@ -10,25 +10,19 @@
   stroke-width: 2.2;
 }
 
-.space-icon-button {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
+/* A Space's icon buttons are ghost Buttons, muted until hovered. The
+   header's are 28px with 16px icons; a post's and a card's are 24px. */
+.dx-button.space-icon-button {
   width: 28px;
   height: 28px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
 }
-.space-icon-button:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-icon-button > svg {
+.dx-button.space-icon-button svg {
   width: 16px;
   height: 16px;
+}
+.dx-button.space-post-action svg {
+  width: 14px;
+  height: 14px;
 }
 
 .space-unread-dot {
@@ -37,8 +31,8 @@
   right: 1px;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: #4d9cff;
+  border-radius: var(--radius-full);
+  background: var(--unread);
   box-shadow: 0 0 0 1.5px var(--surface);
 }
 
@@ -51,10 +45,10 @@
   display: none;
 }
 .sidebar-spaces-empty {
-  padding: 2px 8px 8px;
+  padding: var(--space-0-5) var(--space-2) var(--space-2);
 }
 .sidebar-space-row {
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .sidebar-space-row > .sidebar-space-icon {
   width: 14px;
@@ -81,13 +75,13 @@
   flex-direction: row;
   min-width: 18px;
   margin-left: auto;
-  padding: 2px;
+  padding: var(--space-0-5);
   overflow: hidden;
 }
 .sidebar-space-row .participant-stack .dx-avatar {
   width: 14px;
   height: 14px;
-  font-size: 6px;
+  font-size: var(--text-avatar-xs);
 }
 .sidebar-space-row .participant-stack > .dx-avatar + .dx-avatar {
   margin-left: -5px;
@@ -100,7 +94,7 @@
   margin-left: auto;
   min-width: 22px;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -113,7 +107,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: var(--sidebar-text-sm);
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -122,7 +116,7 @@
   .sidebar-space-card-status,
   .space-panel-status
 )[data-waiting] {
-  color: oklch(62% 0.15 60);
+  color: var(--state-needs-you-text);
 }
 
 /* The card beside a hovered Space row. */
@@ -131,15 +125,15 @@
   z-index: 60;
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-3);
   width: 320px;
   max-width: calc(100vw - 16px);
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-2-5);
   color: var(--popover-foreground);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--popover);
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.08);
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--shadow-ink) 8%, transparent);
   pointer-events: none;
 }
 .sidebar-space-card-text {
@@ -149,24 +143,24 @@
 }
 .sidebar-space-card-text > strong {
   overflow: hidden;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 18px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4-5);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .sidebar-space-card-status {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .sidebar-space-card-text > small {
   color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
 }
 .sidebar-space-card-icon {
   margin-top: 3px;
@@ -180,122 +174,46 @@
   width: 20px;
   height: 20px;
   color: var(--muted-foreground);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--foreground) 9%, transparent);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
 }
-.space-select-trigger,
 .space-readonly-field {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
   min-width: 0;
   height: 36px;
-  padding: 0 10px 0 8px;
+  padding: 0 var(--space-2-5) 0 var(--space-2);
   color: var(--foreground);
   border: 1px solid var(--outline);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
   text-align: left;
 }
 .space-readonly-field {
   border-color: transparent;
   background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
-.space-select-trigger:focus-visible,
-.space-select-trigger[data-popup-open] {
-  border-color: var(--foreground);
-  outline: none;
-}
-.space-select-trigger:disabled {
-  color: var(--muted-foreground);
-}
-.space-select-trigger > svg:last-child {
-  width: 15px;
-  height: 15px;
-  margin-left: auto;
-  color: var(--muted-foreground);
-}
-.space-select-value,
-.space-select-placeholder {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.space-select-placeholder {
-  color: var(--muted-foreground);
-}
 .space-select-lock {
   flex: none;
   width: 16px;
   height: 16px;
-  margin: 0 2px;
+  margin: 0 var(--space-0-5);
   color: var(--muted-foreground);
-}
-.space-select-positioner {
-  z-index: 130;
-}
-.space-select-popup {
-  min-width: var(--anchor-width);
-}
-.space-select-search {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 10px;
-  border-bottom: 1px solid var(--divider);
-}
-.space-select-search > svg {
-  width: 14px;
-  height: 14px;
-  color: var(--muted-foreground);
-}
-.space-select-search > input {
-  flex: 1;
-  min-width: 0;
-  color: var(--foreground);
-  border: 0;
-  outline: 0;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-}
-.space-select-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 34px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  outline: 0;
-  cursor: default;
-  user-select: none;
-  font-size: 12.5px;
-}
-.space-select-item[data-highlighted] {
-  background: var(--accent);
 }
 .space-select-detail {
   color: var(--muted-foreground);
-}
-.space-select-check {
-  display: grid;
-  margin-left: auto;
-}
-.space-select-check > svg {
-  width: 14px;
-  height: 14px;
 }
 .space-goal-field {
   display: grid;
   overflow: hidden;
   border: 1px solid var(--outline);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 .space-goal-field:focus-within {
@@ -303,14 +221,11 @@
 }
 .space-goal-field > textarea {
   min-height: 84px;
-  padding: 10px 12px;
+  padding: var(--space-2-5) var(--space-3);
   color: var(--foreground);
-  border: 0;
-  outline: 0;
-  background: transparent;
   font: inherit;
-  font-size: 13px;
-  line-height: 1.45;
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
   resize: none;
 }
 .space-goal-tools {
@@ -318,67 +233,45 @@
   align-items: center;
   justify-content: flex-end;
   min-height: 36px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-top: 1px solid var(--divider);
 }
 .space-primary-button {
-  gap: 8px;
-  border-radius: 999px;
+  gap: var(--space-2);
 }
 .space-enter-keycap {
   padding: 0 5px;
   border: 1px solid color-mix(in srgb, currentColor 35%, transparent);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   font: inherit;
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 16px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4);
   opacity: 0.85;
 }
 
-/* New Space: full screen */
-.space-create-backdrop {
-  position: fixed;
-  z-index: 110;
-  inset: 0;
-  background: rgb(0 0 0 / 45%);
-}
-.space-create-viewport {
-  position: fixed;
-  z-index: 111;
-  inset: 0;
-  display: grid;
-  padding: 12px;
-}
+/* New Space: a page-size dialog (shared/ui/dialog.css): its bar over its
+   body. */
 .space-create {
   display: grid;
   grid-template-rows: 52px minmax(0, 1fr);
-  min-height: 0;
-  overflow: hidden;
-  color: var(--foreground);
-  border-radius: 14px;
-  background: var(--surface);
-  box-shadow:
-    0 0 0 1px var(--outline),
-    0 18px 48px rgb(0 0 0 / 45%);
-  outline: none;
 }
 .space-create-bar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 16px 0 20px;
+  gap: var(--space-2-5);
+  padding: 0 var(--space-4) 0 var(--space-5);
   border-bottom: 1px solid var(--divider);
 }
 .space-create-breadcrumb {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   color: var(--muted-foreground);
-  font-size: 14px;
+  font-size: var(--text-lg);
 }
 .space-create-breadcrumb > [aria-current] {
   color: var(--foreground);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .space-create-close {
   margin-left: auto;
@@ -401,8 +294,8 @@
   max-width: 540px;
 }
 .space-create-title {
-  margin: 0 0 10px;
-  font-size: 19px;
+  margin: 0 0 var(--space-2-5);
+  font-size: var(--text-2xl);
   font-weight: 650;
   line-height: 1.3;
 }
@@ -410,21 +303,21 @@
   max-width: 400px;
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 15px;
-  line-height: 1.5;
+  font-size: var(--text-xl);
+  line-height: var(--leading-relaxed);
 }
 .space-create-eyebrow {
-  margin: 40px 0 12px;
+  margin: 40px 0 var(--space-3);
   color: var(--muted-foreground);
   font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 .space-suggestions {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -432,12 +325,12 @@
 .space-suggestion {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
+  gap: var(--space-3);
   width: 100%;
-  padding: 14px 18px;
+  padding: var(--space-3-5) 18px;
   color: inherit;
   border: 1px solid var(--outline);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: transparent;
   font: inherit;
   text-align: left;
@@ -451,28 +344,28 @@
 .space-suggestion-text {
   display: grid;
   flex: 1;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 0;
 }
 .space-suggestion-text > strong {
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 550;
 }
 .space-suggestion-text > span {
   color: var(--muted-foreground);
-  font-size: 13px;
-  line-height: 1.4;
+  font-size: var(--text-md);
+  line-height: var(--leading-snug);
 }
 .space-suggestion-text > small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
   opacity: 0.8;
 }
 .space-suggestion-check {
   flex: none;
   width: 16px;
   height: 16px;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 .space-create-form-pane {
   display: flex;
@@ -486,11 +379,11 @@
 .space-create-card {
   width: 100%;
   max-width: 860px;
-  padding: 12px 32px 28px;
+  padding: var(--space-3) var(--space-8) 28px;
   border: 1px solid var(--outline);
-  border-radius: 16px;
+  border-radius: var(--radius-2xl);
   background: var(--surface);
-  box-shadow: 0 2px 12px rgb(0 0 0 / 12%);
+  box-shadow: 0 2px 12px color-mix(in srgb, var(--shadow-ink) 12%, transparent);
 }
 .space-field-row {
   display: grid;
@@ -503,19 +396,19 @@
   border-bottom: 0;
 }
 .space-field-label > label {
-  font-size: 13.5px;
-  font-weight: 500;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
 }
 .space-field-label > label > span {
-  margin-left: 4px;
+  margin-left: var(--space-1);
   color: var(--muted-foreground);
   font-weight: 400;
 }
 .space-field-label > p {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--muted-foreground);
-  font-size: 12.5px;
-  line-height: 1.45;
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
 }
 .space-field-control {
   min-width: 0;
@@ -523,36 +416,36 @@
 .space-field-control > input,
 .space-name-row > input {
   height: 36px;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .space-create-footer {
   display: flex;
   justify-content: flex-end;
-  padding-top: 8px;
+  padding-top: var(--space-2);
 }
 
 /* Edit Space and Discover Spaces dialogs */
 .dialog-popup.space-dialog {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   width: min(480px, calc(100vw - 32px));
 }
 .space-dialog > h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--text-lg);
   font-weight: 550;
-  line-height: 18px;
+  line-height: var(--leading-4-5);
 }
 .space-dialog-form {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .dialog-popup.space-dialog .space-dialog-label {
   display: block;
-  margin-top: 8px;
+  margin-top: var(--space-2);
   color: var(--popover-foreground);
-  font-size: 12.5px;
-  font-weight: 500;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
 }
 .space-dialog-label > span {
   color: var(--muted-foreground);
@@ -561,22 +454,22 @@
 .space-dialog-hint {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .space-dialog-error {
   margin: 0;
   color: var(--destructive);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .space-dialog-footer {
   display: flex;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 .space-name-row {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--space-2);
 }
 .space-color-button {
   display: grid;
@@ -585,7 +478,7 @@
   height: 36px;
   padding: 0;
   border: 1px solid var(--outline);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 .space-color-button[data-popup-open],
@@ -597,24 +490,16 @@
   display: block;
   width: 18px;
   height: 18px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--thread-color);
 }
-.space-color-positioner {
-  z-index: 130;
-}
-.space-color-popup {
-  padding: 8px;
-  border: 1px solid var(--outline);
-  border-radius: 8px;
-  background: var(--popover);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
-  outline: none;
+.dx-popover.space-color-popup {
+  padding: var(--space-2);
 }
 .space-color-grid {
   display: grid;
   grid-template-columns: repeat(5, 30px);
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -627,7 +512,7 @@
   height: 30px;
   padding: 0;
   border: 2px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: transparent;
 }
 .space-color-option .space-color-swatch {
@@ -645,28 +530,28 @@
 }
 .space-discover-header {
   display: grid;
-  gap: 2px;
-  padding: 24px 24px 16px;
+  gap: var(--space-0-5);
+  padding: var(--space-6) var(--space-6) var(--space-4);
   border-bottom: 1px solid var(--divider);
 }
 .space-discover-header > h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: var(--text-heading);
   font-weight: 650;
 }
 .space-discover-header > p {
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-3-5);
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .space-search {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 38px;
-  padding: 0 12px;
+  padding: 0 var(--space-3);
   border: 1px solid var(--outline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 .space-search:focus-within {
@@ -681,44 +566,17 @@
   flex: 1;
   min-width: 0;
   color: var(--foreground);
-  border: 0;
-  outline: 0;
-  background: transparent;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .space-discover-body {
   min-height: 0;
   overflow-y: auto;
-  padding: 8px 12px 16px;
-}
-.space-empty-state {
-  display: grid;
-  justify-items: center;
-  gap: 6px;
-  padding: 56px 24px;
-  text-align: center;
-}
-.space-empty-state > svg {
-  width: 30px;
-  height: 30px;
-  margin-bottom: 8px;
-  color: var(--muted-foreground);
-}
-.space-empty-state > strong {
-  font-size: 14px;
-  font-weight: 550;
-}
-.space-empty-state > p {
-  max-width: 380px;
-  margin: 0 0 8px;
-  color: var(--muted-foreground);
-  font-size: 12.5px;
-  line-height: 1.5;
+  padding: var(--space-2) var(--space-3) var(--space-4);
 }
 .space-discover-list {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -726,9 +584,9 @@
 .space-discover-list > li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding-right: 8px;
-  border-radius: 8px;
+  gap: var(--space-2);
+  padding-right: var(--space-2);
+  border-radius: var(--radius-md);
 }
 .space-discover-list > li:hover {
   background: var(--accent);
@@ -737,9 +595,9 @@
   display: flex;
   flex: 1;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-width: 0;
-  padding: 10px 12px;
+  padding: var(--space-2-5) var(--space-3);
   color: inherit;
   border: 0;
   background: transparent;
@@ -756,13 +614,13 @@
   min-width: 0;
 }
 .space-discover-text > strong {
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 550;
 }
 .space-discover-text > span {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -775,8 +633,8 @@
   display: flex;
   min-width: 0;
   height: 100%;
-  gap: 4px;
-  padding: 0 4px 4px;
+  gap: var(--space-1);
+  padding: 0 var(--space-1) var(--space-1);
   background: var(--shell);
 }
 .product-shell-content > .space-page {
@@ -788,7 +646,7 @@
   flex: 1;
   min-width: 0;
   height: 100%;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .space-pane {
   display: flex;
@@ -807,7 +665,7 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-  border-radius: 0 10px 10px;
+  border-radius: 0 var(--radius-lg) var(--radius-lg);
   background: var(--surface);
 }
 /* An open thread's Thread page: its title bar is the strip, and its panes
@@ -834,7 +692,7 @@
   .thread-pane-tree
   > .thread-pane:only-child:not(:has(.pane-tab + .pane-tab))
   > .pane-body {
-  border-top-right-radius: 8px;
+  border-top-right-radius: var(--radius-md);
 }
 
 /* The tab strip */
@@ -842,10 +700,10 @@
   display: flex;
   flex: none;
   align-items: flex-end;
-  gap: 2px;
+  gap: var(--space-0-5);
   height: 32px;
   min-width: 0;
-  padding: 0 4px 0 0;
+  padding: 0 var(--space-1) 0 0;
   background: var(--shell);
 }
 /* While the sidebar is hidden, the first pane shown keeps its tabs clear of
@@ -863,18 +721,18 @@
   display: inline-flex;
   align-items: center;
   flex: 0 1 auto;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   max-width: 260px;
   height: 28px;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   color: var(--muted-foreground);
   border: 0;
-  border-radius: 8px 8px 0 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: transparent;
   font: inherit;
-  font-size: 12.5px;
-  line-height: 16px;
+  font-size: var(--text-md);
+  line-height: var(--leading-4);
 }
 button.space-tab:hover,
 .space-thread-tab:not([data-active]):hover {
@@ -903,13 +761,13 @@ button.space-tab:hover,
   white-space: nowrap;
 }
 .space-thread-tab {
-  gap: 2px;
-  padding-right: 4px;
+  gap: var(--space-0-5);
+  padding-right: var(--space-1);
 }
 .space-tab-head {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   padding: 0;
   color: inherit;
@@ -919,32 +777,12 @@ button.space-tab:hover,
 }
 .space-tab-menu {
   display: inline-flex;
-  margin-left: 2px;
+  margin-left: var(--space-0-5);
 }
-.space-tab-menu .thread-title-action {
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
-}
-.space-tab-close {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
+/* A tab's close button: a 20px ghost Button inside the tab. */
+.dx-button.space-tab-close {
   width: 20px;
   height: 20px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-}
-.space-tab-close:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-tab-close > svg {
-  width: 12px;
-  height: 12px;
 }
 .space-tab-spacer {
   flex: 1;
@@ -954,62 +792,24 @@ button.space-tab:hover,
   display: inline-flex;
   align-items: center;
   flex: none;
-  gap: 2px;
+  gap: var(--space-0-5);
   height: 30px;
-  padding-bottom: 2px;
+  padding-bottom: var(--space-0-5);
 }
-.space-tab-tools .space-icon-button {
+.space-tab-tools .dx-button.space-icon-button {
   width: 26px;
   height: 26px;
 }
-.space-tab-tools .space-icon-button > svg {
+.space-tab-tools .dx-button.space-icon-button svg {
   width: 15px;
   height: 15px;
 }
-/* The Thread's own title bar controls (its More Actions and Views) as
-   the title bar draws them. */
-.space-tab-strip .thread-title-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: none;
-  gap: 4px;
-  height: 24px;
-  min-width: 24px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.space-tab-strip .thread-title-action-text {
-  padding: 4px 8px;
-}
-.space-tab-strip .thread-title-action svg {
-  width: 14px;
-  height: 14px;
-  flex: none;
-}
-.space-tab-strip .thread-title-action:hover,
-.space-tab-strip .thread-title-action[data-popup-open] {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-}
-.space-tab-strip .thread-title-action:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 1px var(--ring);
-}
 .space-tab-mode {
   flex: none;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   white-space: nowrap;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .space-details-toggle {
   position: relative;
@@ -1020,25 +820,18 @@ button.space-tab:hover,
   right: 3px;
   width: 6px;
   height: 6px;
-  border-radius: 999px;
-  background: oklch(70% 0.15 70);
+  border-radius: var(--radius-full);
+  background: var(--state-needs-you);
   box-shadow: 0 0 0 1.5px var(--shell);
 }
 .space-panel-status {
   margin: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.space-icon-button[aria-pressed="true"] {
-  color: var(--foreground);
-}
-.space-icon-button:disabled {
-  opacity: 0.45;
-  pointer-events: none;
 }
 .space-icon-button[aria-label="Sharing"]:disabled {
   opacity: 1;
@@ -1049,9 +842,9 @@ button.space-tab:hover,
   gap: 5px;
   min-width: 0;
   max-width: 180px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
   line-height: 26px;
 }
 .space-project-chip > svg {
@@ -1088,28 +881,28 @@ button.space-tab:hover,
   width: 100%;
   max-width: 41rem;
   margin: 0 auto auto;
-  padding: 36px 24px 16px;
+  padding: 36px var(--space-6) var(--space-4);
   color: var(--chat-foreground, var(--foreground));
-  font-size: 13.5px;
-  line-height: 1.5;
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
 }
 .space-chat-earlier,
 .space-chat-error {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .space-day-divider {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin: 12px 0 16px;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 var(--space-4);
   color: var(--muted-foreground);
-  font-size: 11.5px;
+  font-size: var(--text-sm);
 }
 .space-day-divider::before,
 .space-day-divider::after {
@@ -1120,7 +913,7 @@ button.space-tab:hover,
 }
 .space-post {
   position: relative;
-  margin-bottom: 14px;
+  margin-bottom: var(--space-3-5);
 }
 .space-post.agent-message .message-content {
   padding: 0;
@@ -1136,7 +929,7 @@ button.space-tab:hover,
 }
 /* A post a mention's link opened at flashes, as a linked message does. */
 .space-post[data-notification-target] {
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   animation: notification-target-flash 2.4s ease-out;
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1147,7 +940,7 @@ button.space-tab:hover,
   }
 }
 .space-post.user-message {
-  margin-bottom: 14px;
+  margin-bottom: var(--space-3-5);
   padding: 0;
 }
 .space-post .user-message-text {
@@ -1167,19 +960,19 @@ button.space-tab:hover,
 
 .space-post[data-kind="other"] > .message-author {
   justify-content: flex-start;
-  gap: 8px;
-  margin-bottom: 6px;
-  font-size: 11.5px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1-5);
+  font-size: var(--text-sm);
 }
 .space-post[data-kind="other"] > .message-author .dx-avatar {
   width: 18px;
   height: 18px;
-  font-size: 8px;
+  font-size: var(--text-4xs);
 }
 .space-post[data-kind="other"] .message-content {
   margin-right: auto;
   margin-left: 0;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--foreground) 6%, transparent);
   background-image: none;
   box-shadow: none;
@@ -1195,12 +988,12 @@ button.space-tab:hover,
   top: -24px;
   right: -10px;
   display: flex;
-  gap: 2px;
-  padding: 2px;
+  gap: var(--space-0-5);
+  padding: var(--space-0-5);
   border: 1px solid var(--outline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--popover);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.08);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--shadow-ink) 8%, transparent);
   opacity: 0;
   pointer-events: none;
   transition: opacity 120ms ease;
@@ -1224,7 +1017,7 @@ button.space-tab:hover,
   .space-post-actions {
     position: static;
     width: fit-content;
-    margin-top: 4px;
+    margin-top: var(--space-1);
     opacity: 1;
     pointer-events: auto;
     border: 0;
@@ -1235,32 +1028,12 @@ button.space-tab:hover,
     margin-left: auto;
   }
 }
-.space-post-action {
-  display: inline-grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-}
-.space-post-action:hover,
-.space-post-action[data-popup-open] {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-post-action > svg {
-  width: 14px;
-  height: 14px;
-}
 .space-post-meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
-  margin-top: 4px;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1);
 }
 .space-post-meta[data-side="right"] {
   justify-content: flex-end;
@@ -1271,63 +1044,58 @@ button.space-tab:hover,
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 11px;
-  line-height: 18px;
+  font-size: var(--text-xs);
+  line-height: var(--leading-4-5);
 }
 .space-post-edited:hover {
   color: var(--foreground);
   text-decoration: underline;
 }
-.space-post-revisions {
+.dx-popover.space-post-revisions {
   width: min(380px, calc(100vw - 32px));
+  max-width: none;
   max-height: 360px;
-  overflow-y: auto;
-  padding: 10px 12px;
-  color: var(--popover-foreground);
-  border: 1px solid var(--outline);
-  border-radius: 10px;
-  background: var(--popover);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 0.16);
-  font-size: 12.5px;
+  padding: var(--space-2-5) var(--space-3);
+  font-size: var(--text-md);
 }
 .space-post-revisions > h3 {
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 600;
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
 }
 .space-post-revisions > ol {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 .space-post-revisions li {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .space-post-revisions li > p {
   margin: 0;
   color: var(--popover-foreground);
-  font-size: 12.5px;
-  line-height: 1.45;
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
   white-space: pre-wrap;
 }
 /* Only the viewer's own posts edit, in their column at the right. */
 .space-post-edit {
   display: grid;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: min(36rem, 70vw);
   margin-left: auto;
 }
 .space-post-edit > textarea {
   width: 100%;
-  padding: 8px 12px;
+  padding: var(--space-2) var(--space-3);
   color: var(--foreground);
   border: 1px solid var(--input);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--surface);
   font: inherit;
   resize: vertical;
@@ -1335,16 +1103,16 @@ button.space-tab:hover,
 .space-post-edit-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .space-post-edit-error,
 .space-composer-error {
   margin: 0;
   color: var(--destructive);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .space-post-replies {
-  margin-top: 6px;
+  margin-top: var(--space-1-5);
 }
 .space-chat .space-composer-dock {
   position: relative;
@@ -1355,32 +1123,17 @@ button.space-tab:hover,
   width: 100%;
   max-width: 43rem;
   margin: 0 auto;
-  padding: 0 16px 8px;
+  padding: 0 var(--space-4) var(--space-2);
 }
 .space-composer-dock .agent-composer > textarea {
   min-height: 52px;
 }
-.space-unarchive {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
+/* Unarchive fills the composer's place: a full-width outline Button. */
+.dx-button.space-unarchive {
   width: 100%;
   height: 44px;
-  color: var(--muted-foreground);
-  border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: var(--radius-2xl);
   background: var(--surface);
-  font: inherit;
-  font-size: 13px;
-}
-.space-unarchive:hover:not(:disabled) {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-unarchive > svg {
-  width: 15px;
-  height: 15px;
 }
 
 /* Space Details: a column on the shell on a wide page, a bottom sheet
@@ -1397,17 +1150,17 @@ body:has(.space-page[data-details="column"]) .dx-toaster[data-sonner-toaster] {
 .space-panel {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 6px 4px 16px 10px;
+  gap: var(--space-3);
+  padding: var(--space-1-5) var(--space-1) var(--space-4) var(--space-2-5);
 }
 .space-panel-header {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .space-panel-title {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-height: 28px;
 }
 .space-panel-title > h2 {
@@ -1415,7 +1168,7 @@ body:has(.space-page[data-details="column"]) .dx-toaster[data-sonner-toaster] {
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: 13.5px;
+  font-size: var(--text-lg);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1423,7 +1176,7 @@ body:has(.space-page[data-details="column"]) .dx-toaster[data-sonner-toaster] {
 .space-goal {
   display: grid;
   justify-items: start;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .space-goal-text {
   display: -webkit-box;
@@ -1434,7 +1187,7 @@ body:has(.space-page[data-details="column"]) .dx-toaster[data-sonner-toaster] {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--text-md);
   line-height: 1.3;
   text-align: left;
   -webkit-box-orient: vertical;
@@ -1453,7 +1206,7 @@ button.space-goal-text {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--text-sm);
 }
 .space-goal-toggle:hover {
   color: var(--foreground);
@@ -1461,46 +1214,15 @@ button.space-goal-text {
 .space-panel-meta {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-height: 26px;
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .space-panel-meta > .space-project-chip {
   padding-left: 0;
 }
 .space-panel-meta-spacer {
   flex: 1;
-}
-.space-panel-tab-list {
-  display: flex;
-  gap: 2px;
-}
-.space-panel-tab {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 8px;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  font: inherit;
-  font-size: 12.5px;
-}
-/* The selected tab sits on a filled pill, as the reference's; the others
-   are plain until hovered. */
-.space-panel-tab:hover {
-  color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 4%, transparent);
-}
-.space-panel-tab[aria-selected="true"] {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-panel-tab:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 1.5px var(--ring);
 }
 .space-panel-tab-icon {
   position: relative;
@@ -1515,51 +1237,27 @@ button.space-goal-text {
   right: -3px;
 }
 .space-panel-tab-panel {
-  padding-top: 8px;
+  padding-top: var(--space-2);
   outline: none;
-}
-.space-panel-empty {
-  display: grid;
-  justify-items: center;
-  gap: 4px;
-  padding: 28px 16px;
-  color: var(--muted-foreground);
-  text-align: center;
-}
-.space-panel-empty > svg {
-  width: 22px;
-  height: 22px;
-  margin-bottom: 6px;
-}
-.space-panel-empty > strong {
-  color: var(--foreground);
-  font-size: 13px;
-  font-weight: 500;
-}
-.space-panel-empty > p {
-  max-width: 260px;
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
 }
 .space-panel-loading {
   min-height: 80px;
 }
 .space-thread-sections {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .space-thread-section-heading {
   width: 100%;
   height: 24px;
-  padding: 0 4px;
-  border-radius: 6px;
-  font-size: 12.5px;
-  line-height: 16px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-md);
+  line-height: var(--leading-4);
 }
 .space-thread-section-heading > small {
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
 }
 .space-thread-section-heading > .space-thread-section-chevron {
   width: 12px;
@@ -1581,27 +1279,27 @@ button.space-goal-text {
   padding: 0 5px;
   color: var(--muted-foreground);
   border: 1px solid var(--divider);
-  border-radius: 4px;
-  font-size: 10.5px;
+  border-radius: var(--radius-xs);
+  font-size: var(--text-xs);
   font-style: normal;
   line-height: 15px;
 }
 .space-thread-list {
   display: grid;
   gap: 1px;
-  margin: 2px 0 0;
+  margin: var(--space-0-5) 0 0;
   padding: 0;
   list-style: none;
 }
 .space-thread-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   color: inherit;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: transparent;
   font: inherit;
   text-align: left;
@@ -1634,14 +1332,14 @@ button.space-goal-text {
   white-space: nowrap;
 }
 .space-thread-text > strong {
-  font-size: 12.5px;
-  font-weight: 500;
-  line-height: 18px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4-5);
 }
 .space-thread-text > small {
   color: var(--muted-foreground);
-  font-size: 11.5px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
 }
 .space-thread-requester {
   display: inline-grid;
@@ -1650,97 +1348,22 @@ button.space-goal-text {
 .space-thread-row .space-thread-requester .dx-avatar {
   width: 16px;
   height: 16px;
-  font-size: 7px;
+  font-size: var(--text-avatar-sm);
 }
 .space-thread-age {
   flex: none;
   min-width: 24px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
-  line-height: 18px;
+  line-height: var(--leading-4-5);
   text-align: right;
 }
-.space-sheet-backdrop {
-  position: fixed;
-  z-index: 90;
-  inset: 0;
-  background: rgb(0 0 0 / 40%);
-  /* Fades as the sheet is dragged down. */
-  opacity: calc(1 - var(--drawer-swipe-progress, 0));
-  transition: opacity 240ms ease;
-}
-.space-sheet-backdrop[data-swiping] {
-  transition-duration: 0ms;
-}
-.space-sheet-backdrop[data-starting-style],
-.space-sheet-backdrop[data-ending-style] {
-  opacity: 0;
-}
-.space-sheet-viewport {
-  position: fixed;
-  z-index: 91;
-  inset: 0;
-  display: flex;
-  align-items: flex-end;
-  pointer-events: none;
-}
-.space-sheet {
-  width: 100%;
-  max-height: min(72dvh, 640px);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  padding-bottom: env(safe-area-inset-bottom);
-  color: var(--foreground);
-  border-radius: 18px 18px 0 0;
-  background: var(--popover);
-  box-shadow:
-    0 0 0 1px var(--outline),
-    0 -12px 32px rgb(0 0 0 / 35%);
-  outline: none;
-  pointer-events: auto;
-  /* Follows the finger while it drags the sheet down. */
-  transform: translateY(var(--drawer-swipe-movement-y, 0px));
-  transition: transform 240ms cubic-bezier(0.32, 0.72, 0, 1);
-  will-change: transform;
-}
-.space-sheet[data-swiping] {
-  transition-duration: 0ms;
-  user-select: none;
-}
-.space-sheet[data-starting-style],
-.space-sheet[data-ending-style] {
-  transform: translateY(100%);
-}
-.space-sheet[data-ending-style] {
-  transition-duration: calc(var(--drawer-swipe-strength, 1) * 240ms);
-}
-.space-sheet-handle {
-  display: grid;
-  place-items: center;
-  width: 100%;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-.space-sheet-handle > span {
-  width: 48px;
-  height: 4px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--foreground) 30%, transparent);
-}
 .space-sheet .space-panel {
-  padding: 2px 20px 20px;
+  padding: var(--space-0-5) var(--space-5) var(--space-5);
 }
 
 @media (max-width: 767px) {
-  .space-create-viewport {
-    padding: 0;
-  }
-  .space-create {
-    border-radius: 0;
-  }
   /* One column that scrolls: blocks, so each pane is as tall as what it
      holds. Grid rows in the screen-high body would shrink to fit it, and
      the suggestions would run under the form. */
@@ -1753,25 +1376,25 @@ button.space-goal-text {
   .space-create-form-pane {
     display: block;
     overflow: visible;
-    padding: 20px 16px;
+    padding: var(--space-5) var(--space-4);
     border-right: 0;
   }
   .space-create-intro {
-    padding-bottom: 4px;
+    padding-bottom: var(--space-1);
   }
   .space-create-eyebrow {
-    margin-top: 20px;
+    margin-top: var(--space-5);
   }
   .space-create-form-pane {
     align-items: flex-start;
   }
   .space-create-card {
-    padding: 4px 16px 16px;
+    padding: var(--space-1) var(--space-4) var(--space-4);
   }
   .space-field-row {
     grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-    padding: 16px 0;
+    gap: var(--space-2-5);
+    padding: var(--space-4) 0;
   }
   .dialog-popup.space-discover-dialog {
     min-height: 0;
@@ -1797,14 +1420,14 @@ button.space-goal-text {
 .space-agent-field {
   display: grid;
   justify-items: start;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 36px;
   align-content: center;
 }
 .space-agent-chips {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
   max-width: 100%;
 }
@@ -1823,50 +1446,35 @@ button.space-goal-text {
 }
 .space-agent-message {
   margin: 0;
-  font-size: 13px;
-  line-height: 18px;
-  color: var(--danger, #ff8a80);
+  font-size: var(--text-md);
+  line-height: var(--leading-4-5);
+  color: var(--destructive);
 }
-/* Above the Create Space dialog (backdrop 110, viewport 111). */
-.space-agent-picker-backdrop {
-  position: fixed;
-  z-index: 112;
-  inset: 0;
-  background: rgb(0 0 0 / 0.45);
-}
+/* A stacked dialog over Create Space (shared/ui/dialog.tsx). */
 .space-agent-picker {
-  position: fixed;
-  inset: 50% auto auto 50%;
-  transform: translate(-50%, -50%);
-  z-index: 113;
-  width: min(440px, calc(100vw - 32px));
-  padding: 24px;
-  border: 1px solid var(--border, #2a2b33);
-  border-radius: 16px;
-  background: var(--surface, #111217);
   display: grid;
-  gap: 14px;
+  gap: var(--space-3-5);
 }
 .space-agent-picker-title {
   margin: 0;
-  font-size: 16px;
+  font-size: var(--text-xl);
 }
 .space-agent-picker-lede,
 .space-agent-picker-route {
   margin: 0;
-  font-size: 13px;
-  color: var(--text-muted, #a0a3ad);
+  font-size: var(--text-md);
+  color: var(--muted-foreground);
 }
 .space-agent-picker-route[data-route="unavailable"] {
-  color: var(--danger, #ff8a80);
+  color: var(--destructive);
 }
-.space-agent-picker select {
-  height: 36px;
+.dx-select.space-agent-picker-select {
+  width: 100%;
 }
 .space-agent-picker-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 /* A thread's issues, pull requests, CI, and listeners in a Space's strip
@@ -1877,18 +1485,18 @@ button.space-goal-text {
   align-items: center;
   justify-content: center;
   flex: none;
-  gap: 4px;
+  gap: var(--space-1);
   height: 26px;
   min-width: 0;
-  padding: 4px 8px;
+  padding: var(--space-1) var(--space-2);
   color: var(--muted-foreground);
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: transparent;
   font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4);
   white-space: nowrap;
   cursor: pointer;
 }
@@ -1918,7 +1526,7 @@ button.space-goal-text {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   margin-left: -8px;
 }
 .space-panel-automations:empty {

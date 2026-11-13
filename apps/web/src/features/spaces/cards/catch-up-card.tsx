@@ -2,6 +2,7 @@ import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { Button } from "../../../shared/ui/button.js";
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
 import { ThreadReferenceContext } from "../../../shared/ui/thread-reference-context.js";
 import {
@@ -67,14 +68,15 @@ export function SpaceCatchUpCard({
       <header className="space-catch-up-header">
         <h3 id="space-catch-up-title">Since you've been gone</h3>
         <small>Visible only to you</small>
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="space-catch-up-dismiss"
           aria-label="Dismiss"
           onClick={() => dismiss.mutate()}
         >
           <X aria-hidden />
-        </button>
+        </Button>
       </header>
       <div className="space-catch-up-body">
         <ThreadReferenceContext.Provider value={spaceThreadReferences}>

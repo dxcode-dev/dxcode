@@ -1,3 +1,4 @@
+import { Button } from "../../../shared/ui/button.js";
 import "./mode-dial.css";
 import { isClaudeCodeModel, type ModeId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -230,15 +231,16 @@ export const ModeDialSettings = ({
                   <span> · Workspace</span>
                 ) : null}
               </h2>
-              <button
-                type="button"
+              <Button
+                variant="ghost"
+                size="xs"
                 onClick={() => void reset()}
                 disabled={
                   busy || (!pinned && (draft === undefined || draft === AUTO))
                 }
               >
                 Reset to default
-              </button>
+              </Button>
             </div>
             <div className="tuning-agent-card" data-auto={choice === AUTO}>
               <label htmlFor="mode-dial-model">Main Agent</label>
@@ -277,8 +279,9 @@ export const ModeDialSettings = ({
                     ? "Unsaved changes"
                     : "In sync"}
           </span>
-          <button
-            type="button"
+          <Button
+            variant="outline"
+            size="sm"
             disabled={!dirty || busy}
             onClick={() => {
               updateDrafts({});
@@ -286,9 +289,9 @@ export const ModeDialSettings = ({
             }}
           >
             Discard
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            size="sm"
             className="tuning-save"
             disabled={
               !dirty ||
@@ -306,7 +309,7 @@ export const ModeDialSettings = ({
             onClick={() => void save()}
           >
             {saving ? "Saving…" : "Save"}
-          </button>
+          </Button>
         </footer>
         {error ? (
           <p className="tuning-error" role="alert">

@@ -236,6 +236,8 @@ export function SignInPage({
                 <Button
                   type="button"
                   variant="outline"
+                  size="lg"
+                  block
                   className="sign-in-provider"
                   disabled={pending}
                   onClick={() => {

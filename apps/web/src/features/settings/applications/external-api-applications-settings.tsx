@@ -1,10 +1,12 @@
+import { Checkbox } from "../../../shared/ui/checkbox.js";
+import { Select } from "../../../shared/ui/select.js";
 import "./applications.css";
-import { Menu } from "@base-ui/react/menu";
 import type {
   ExternalApiApplicationAuditEventData,
   ExternalApiApplicationData,
   ExternalApiApplicationSecretData,
 } from "@dx/api";
+
 import {
   type ExternalApiApplicationRotationOverlapSeconds,
   type ExternalApiApplicationScope,
@@ -30,6 +32,12 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import { applicationMutationOptions } from "./application-mutations.js";
@@ -130,7 +138,7 @@ function SecretDialog({
   const copiedLabel = copyStatus?.ok === true ? copyStatus.label : undefined;
   return (
     <DialogRoot open onOpenChange={(open) => !open && close()}>
-      <DialogContent className="application-dialog">
+      <DialogContent size="sm" className="application-dialog">
         <DialogTitle>Save the client secret</DialogTitle>
         <DialogDescription>
           dx shows this secret once. Send the pair as HTTP Basic credentials.
@@ -177,6 +185,7 @@ function ApplicationEditorDialog({
   readonly close: () => void;
   readonly saved: (secret?: ExternalApiApplicationSecretData) => void;
 }) {
+  const choiceId = React.useId();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
   const mutation = useMutation(
@@ -224,7 +233,7 @@ function ApplicationEditorDialog({
 
   return (
     <DialogRoot open onOpenChange={(open) => !open && close()}>
-      <DialogContent className="application-dialog">
+      <DialogContent size="sm" className="application-dialog">
         <DialogTitle>
           {application === undefined
             ? "Create Application"
@@ -252,9 +261,9 @@ function ApplicationEditorDialog({
           <fieldset className="application-field application-scopes">
             <legend>Access</legend>
             {externalApiApplicationScopes.map((scope) => (
-              <label key={scope}>
-                <input
-                  type="checkbox"
+              <label key={scope} htmlFor={`${choiceId}-${scope}`}>
+                <Checkbox
+                  id={`${choiceId}-${scope}`}
                   checked={selected.has(scope)}
                   onChange={() => toggle(scope)}
                 />
@@ -375,15 +384,14 @@ function ApplicationActionDialog({
   const copy = actionCopy[action.kind];
   return (
     <DialogRoot open onOpenChange={(open) => !open && close()}>
-      <DialogContent className="application-dialog">
+      <DialogContent size="sm" className="application-dialog">
         <DialogTitle>{copy.title}</DialogTitle>
         <DialogDescription>{copy.body}</DialogDescription>
         {action.kind === "rotate" ? (
           <div className="application-field">
             <label htmlFor="application-overlap">Keep the current secret</label>
-            <select
+            <Select
               id="application-overlap"
-              className="settings-select"
               value={overlapSeconds}
               onChange={(event) =>
                 setOverlapSeconds(
@@ -397,7 +405,7 @@ function ApplicationActionDialog({
               <option value={300}>5 minutes</option>
               <option value={3600}>1 hour</option>
               <option value={86400}>24 hours</option>
-            </select>
+            </Select>
           </div>
         ) : null}
         {error === undefined ? null : (
@@ -528,8 +536,8 @@ function ApplicationMenu({
 }) {
   const manageable = canManage && application.status !== "revoked";
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         render={
           <Button
             size="icon-xs"
@@ -539,60 +547,31 @@ function ApplicationMenu({
         }
       >
         <Ellipsis />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup">
-            {manageable ? (
+      </MenuTrigger>
+      <MenuPopup align="end">
+        {manageable ? (
+          <>
+            <MenuItem onClick={edit}>Edit</MenuItem>
+            {application.status === "active" ? (
               <>
-                <Menu.Item className="thread-menu-item" onClick={edit}>
-                  Edit
-                </Menu.Item>
-                {application.status === "active" ? (
-                  <>
-                    <Menu.Item
-                      className="thread-menu-item"
-                      onClick={() => act("rotate")}
-                    >
-                      Rotate Secret
-                    </Menu.Item>
-                    <Menu.Item
-                      className="thread-menu-item"
-                      onClick={() => act("disable")}
-                    >
-                      Disable
-                    </Menu.Item>
-                  </>
-                ) : (
-                  <Menu.Item
-                    className="thread-menu-item"
-                    disabled={enabling}
-                    onClick={enable}
-                  >
-                    {enabling ? "Enabling…" : "Enable"}
-                  </Menu.Item>
-                )}
+                <MenuItem onClick={() => act("rotate")}>Rotate Secret</MenuItem>
+                <MenuItem onClick={() => act("disable")}>Disable</MenuItem>
               </>
-            ) : null}
-            <Menu.Item className="thread-menu-item" onClick={audit}>
-              View Audit
-            </Menu.Item>
-            {manageable ? (
-              <Menu.Item
-                className="thread-menu-item application-danger"
-                onClick={() => act("revoke")}
-              >
-                Revoke
-              </Menu.Item>
-            ) : null}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+            ) : (
+              <MenuItem disabled={enabling} onClick={enable}>
+                {enabling ? "Enabling…" : "Enable"}
+              </MenuItem>
+            )}
+          </>
+        ) : null}
+        <MenuItem onClick={audit}>View Audit</MenuItem>
+        {manageable ? (
+          <MenuItem tone="danger" onClick={() => act("revoke")}>
+            Revoke
+          </MenuItem>
+        ) : null}
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 

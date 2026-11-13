@@ -1,11 +1,11 @@
 .mode-tuning-page {
-  font-family: var(--sidebar-font-family);
+  font-family: var(--font-ui);
   color: var(--foreground);
 }
 .tuning-notice {
-  margin: 0 0 10px;
-  font-size: 11px;
-  line-height: 16px;
+  margin: 0 0 var(--space-2-5);
+  font-size: var(--text-xs);
+  line-height: var(--leading-4);
   color: var(--muted-foreground);
 }
 .tuning-notice a,
@@ -15,28 +15,30 @@
   text-underline-offset: 2px;
 }
 .mode-tuning-workbench {
-  --mode-accent: #ffd700;
+  --mode-accent: var(--mode-low-glow);
   background:
-    radial-gradient(ellipse at 45% 0%, #17182080, transparent 65%), #090b10;
-  border: 1px solid #292a32;
-  border-radius: 24px;
-  padding: 24px;
-  color: #d5d6dc;
-  box-shadow: inset 0 1px 0 #ffffff05;
+    radial-gradient(ellipse at 45% 0%, var(--console-glow), transparent 65%),
+    var(--console-surface);
+  border: 1px solid var(--console-border);
+  border-radius: var(--radius-4xl);
+  padding: var(--space-6);
+  color: var(--console-foreground);
+  box-shadow: inset 0 1px 0
+    color-mix(in srgb, var(--highlight-ink) 2%, transparent);
 }
 .mode-tuning-workbench[data-mode="medium"] {
-  --mode-accent: #3dffa6;
+  --mode-accent: var(--mode-medium-glow);
 }
 .mode-tuning-workbench[data-mode="high"] {
-  --mode-accent: #3dd4ff;
+  --mode-accent: var(--mode-high-glow);
 }
 .mode-tuning-workbench[data-mode="ultra"] {
-  --mode-accent: #d8b3ff;
+  --mode-accent: var(--mode-ultra-glow);
 }
 .tuning-workbench-body {
   display: flex;
   align-items: center;
-  gap: 24px;
+  gap: var(--space-6);
   min-height: 280px;
 }
 .tuning-device {
@@ -54,60 +56,61 @@
   align-items: center;
   justify-content: space-between;
   min-height: 30px;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .tuning-mode-heading h2 {
   margin: 0;
   color: var(--mode-accent);
-  font-size: 10px;
+  font-size: var(--text-2xs);
   letter-spacing: 2px;
   text-transform: uppercase;
-  font-weight: 500;
-  font-family: monospace;
+  font-weight: var(--weight-medium);
+  font-family: var(--font-mono);
 }
 .tuning-mode-heading h2 span {
-  color: #9295a1;
+  color: var(--console-muted);
   letter-spacing: 1px;
 }
 .tuning-mode-heading button {
-  font-size: 9px;
+  font-size: var(--text-3xs);
   text-transform: uppercase;
-  color: #9295a1;
+  color: var(--console-muted);
 }
 .tuning-agent-card {
-  padding: 14px;
-  border: 1px solid #292a32;
-  border-radius: 12px;
-  background: #18191f99;
-  box-shadow: inset 0 1px #ffffff0a;
+  padding: var(--space-3-5);
+  border: 1px solid var(--console-border);
+  border-radius: var(--radius-xl);
+  background: var(--console-card);
+  box-shadow: inset 0 1px
+    color-mix(in srgb, var(--highlight-ink) 3.9%, transparent);
 }
 .tuning-agent-card > label {
   display: block;
-  margin-bottom: 14px;
-  font-size: 9px;
+  margin-bottom: var(--space-3-5);
+  font-size: var(--text-3xs);
   letter-spacing: 3px;
   text-transform: uppercase;
-  color: #9295a1;
-  font-family: monospace;
+  color: var(--console-muted);
+  font-family: var(--font-mono);
 }
 .tuning-agent-card select {
   display: block;
   width: 100%;
   min-width: 0;
   height: 36px;
-  padding: 0 12px;
-  color: #e6e7eb;
-  border: 1px solid #2b2d35;
-  border-radius: 6px;
-  background: #030509;
-  font-family: monospace;
-  font-size: 10px;
+  padding: 0 var(--space-3);
+  color: var(--console-field-foreground);
+  border: 1px solid var(--console-field-border);
+  border-radius: var(--radius-sm);
+  background: var(--console-field);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   text-transform: uppercase;
   letter-spacing: 0.4px;
 }
 .tuning-agent-card p {
-  font-size: 11px;
-  color: #9295a1;
+  font-size: var(--text-xs);
+  color: var(--console-muted);
   line-height: 17px;
 }
 .tuning-agent-card .tuning-hint {
@@ -117,8 +120,8 @@
 .tuning-effort {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-top: 12px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
   min-height: 32px;
 }
 .tuning-agent-card[data-auto="true"] .tuning-effort {
@@ -141,7 +144,7 @@
 .tuning-effort-dots i {
   width: 3px;
   height: 3px;
-  background: #656878;
+  background: var(--console-dot);
   border-radius: 50%;
 }
 .tuning-effort input {
@@ -151,12 +154,13 @@
   position: absolute;
   top: 13px;
   margin: 0;
-  border-radius: 8px;
-  border: 1px solid #000;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--shadow-ink);
   background: linear-gradient(
     to right,
-    color-mix(in srgb, var(--mode-accent) 30%, #000) var(--effort-fill),
-    #020306 var(--effort-fill)
+    color-mix(in srgb, var(--mode-accent) 30%, var(--shadow-ink))
+      var(--effort-fill),
+    var(--console-track) var(--effort-fill)
   );
   cursor: pointer;
 }
@@ -164,50 +168,55 @@
   appearance: none;
   width: 10px;
   height: 18px;
-  border: 1px solid #565c66;
+  border: 1px solid var(--console-thumb-edge);
   border-radius: 2px;
-  background: linear-gradient(90deg, #727780, #323740);
+  background: linear-gradient(
+    90deg,
+    var(--console-thumb-top),
+    var(--console-thumb-bottom)
+  );
   box-shadow:
-    0 1px 3px #000,
-    inset 0 1px #fff3;
+    0 1px 3px var(--shadow-ink),
+    inset 0 1px color-mix(in srgb, var(--highlight-ink) 20%, transparent);
   position: relative;
   z-index: 2;
 }
 .tuning-effort input::-moz-range-thumb {
   width: 8px;
   height: 16px;
-  border: 1px solid #565c66;
+  border: 1px solid var(--console-thumb-edge);
   border-radius: 2px;
-  background: #565b65;
+  background: var(--console-thumb);
 }
 .tuning-effort output {
   flex: 0 0 48px;
   text-align: right;
-  font: 9px monospace;
+  font: var(--text-3xs) var(--font-mono);
   text-transform: uppercase;
-  color: #9295a1;
+  color: var(--console-muted);
 }
 .tuning-footer {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  margin-top: 24px;
-  border-top: 1px solid #ffffff08;
-  padding-top: 16px;
-  font: 10px monospace;
+  gap: var(--space-2);
+  margin-top: var(--space-6);
+  border-top: 1px solid
+    color-mix(in srgb, var(--highlight-ink) 3.1%, transparent);
+  padding-top: var(--space-4);
+  font: var(--text-2xs) var(--font-mono);
   text-transform: uppercase;
 }
 .tuning-footer button {
-  padding: 7px 12px;
-  border-radius: 5px;
-  border: 1px solid #393b43;
+  padding: 7px var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--console-button-border);
   text-transform: uppercase;
 }
 .tuning-footer .tuning-save {
-  background: #dddeda;
-  border-color: #dddeda;
-  color: #10130f;
+  background: var(--console-save);
+  border-color: var(--console-save);
+  color: var(--console-save-foreground);
 }
 .mode-tuning-workbench button:disabled,
 .mode-tuning-workbench input:disabled,
@@ -222,14 +231,14 @@
   outline-offset: 3px;
 }
 .tuning-error {
-  color: #f4a4a4;
-  font-size: 12px;
-  margin: 12px 0 0;
+  color: var(--console-error);
+  font-size: var(--text-sm);
+  margin: var(--space-3) 0 0;
 }
 @media (max-width: 1050px) {
   .tuning-workbench-body {
     flex-direction: column;
-    gap: 24px;
+    gap: var(--space-6);
   }
   .tuning-device {
     flex-basis: auto;
@@ -240,7 +249,7 @@
 }
 @media (max-width: 639px) {
   .mode-tuning-workbench {
-    padding: 16px;
+    padding: var(--space-4);
   }
   .tuning-device {
     width: min(320px, 100%);
@@ -248,11 +257,6 @@
   }
   .tuning-workbench-body {
     min-height: 0;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .tuning-knob-cap {
-    transition: none;
   }
 }
 
@@ -268,22 +272,22 @@
 }
 .tuning-label-target:focus-visible {
   outline: 1px solid var(--mode-accent);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 
 /* Settings → Mode Dial → Space: the model new Spaces run on. */
 .space-agent-role {
-  --mode-accent: #ff9f6e;
-  margin-top: 20px;
-  background: #090b10;
-  border: 1px solid #292a32;
-  border-radius: 24px;
-  padding: 24px;
-  color: #d5d6dc;
+  --mode-accent: var(--console-agent-accent);
+  margin-top: var(--space-5);
+  background: var(--console-surface);
+  border: 1px solid var(--console-border);
+  border-radius: var(--radius-4xl);
+  padding: var(--space-6);
+  color: var(--console-foreground);
 }
 .space-agent-role > .tuning-hint {
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-3-5);
 }
 .space-agent-role .tuning-agent-card .tuning-hint[data-route] {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }

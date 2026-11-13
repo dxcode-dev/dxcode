@@ -25,7 +25,9 @@ import {
 } from "../../../shared/comments/comment-text.js";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
+import { Button } from "../../../shared/ui/button.js";
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
+import { Textarea } from "../../../shared/ui/textarea.js";
 import { ThreadReferenceContext } from "../../../shared/ui/thread-reference-context.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
@@ -339,7 +341,8 @@ function CommentComposer({
         </p>
       ) : null}
       <div className="message-comments-box">
-        <textarea
+        <Textarea
+          variant="bare"
           ref={box}
           aria-label="Comment"
           placeholder="Comment"
@@ -368,7 +371,9 @@ function CommentComposer({
           {dictation === undefined ? null : (
             <dictation.Textarea textareaRef={box} onChange={change} />
           )}
-          <button
+          <Button
+            variant="default"
+            size="icon-sm"
             type="submit"
             className="message-comments-send"
             aria-label="Send Comment"
@@ -376,7 +381,7 @@ function CommentComposer({
             disabled={add.isPending || body.trim() === ""}
           >
             <ArrowUp aria-hidden="true" />
-          </button>
+          </Button>
         </div>
       </div>
       {error === undefined ? null : (
@@ -501,33 +506,36 @@ function OpenComments({
       <header className="message-comments-header">
         <MessagesSquare aria-hidden="true" />
         <h2>Comments</h2>
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label="Previous Comments"
           title="Previous Comments"
           disabled={previous === undefined}
           onClick={() => open(previous?.message.messageId)}
         >
           <ChevronUp aria-hidden="true" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label="Next Comments"
           title="Next Comments"
           disabled={next === undefined}
           onClick={() => open(next?.message.messageId)}
         >
           <ChevronDown aria-hidden="true" />
-        </button>
+        </Button>
         <span className="message-comments-divider" aria-hidden="true" />
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           aria-label="Close Comments"
           title="Close Comments"
           onClick={() => open(undefined)}
         >
           <X aria-hidden="true" />
-        </button>
+        </Button>
       </header>
       <div className="message-comments-body">
         {message === undefined ? null : (

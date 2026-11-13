@@ -8,6 +8,7 @@ import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { Input } from "../../../shared/ui/input.js";
 import { registeredDeploymentAccountCards } from "../deployment-settings-registration.js";
 import { ProfilePicture, ProfilePictureEditor } from "../profile-picture.js";
@@ -342,21 +343,24 @@ export function PersonalAccountSettings({
   }
   if (account.data === undefined) {
     return (
-      <div className="settings-route-state" role="alert">
-        <AlertTriangle />
-        <strong>
-          {account.error instanceof Error
+      <EmptyState
+        tone="error"
+        icon={<AlertTriangle />}
+        title={
+          account.error instanceof Error
             ? account.error.message
-            : "Account settings could not be loaded."}
-        </strong>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void account.refetch()}
-        >
-          Try again
-        </Button>
-      </div>
+            : "Account settings could not be loaded."
+        }
+        action={
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void account.refetch()}
+          >
+            Try again
+          </Button>
+        }
+      />
     );
   }
   return (

@@ -17,12 +17,7 @@ import {
   useMessageAuthor,
 } from "./sharing/message-authors.js";
 import { MessageReactionChips } from "./sharing/message-reactions.js";
-import {
-  AutomationMessage,
-  CommentPromptMessage,
-  PluginPostMessage,
-  ThreadSourceMessage,
-} from "./thread-source-message.js";
+import { ThreadSourceMessage } from "./thread-source-message.js";
 import { TranscriptOutline } from "./transcript-outline.js";
 import type { TranscriptReply } from "./transcript-selection-popup.js";
 import {
@@ -43,6 +38,27 @@ import {
 export const TRANSCRIPT_FOLLOW_ON_SEND = "transcript-follow-on-send";
 
 import { useTranscriptVirtualizer } from "./use-transcript-virtualizer.js";
+
+/**
+ * Messages a schedule, a GitHub subscription, an artifact, or a comment
+ * delivered, loaded when a transcript first shows one, so they stay out of
+ * the Thread page's first load.
+ */
+const AutomationMessage = React.lazy(() =>
+  import("./thread-automation-messages.js").then((module) => ({
+    default: module.AutomationMessage,
+  })),
+);
+const PluginPostMessage = React.lazy(() =>
+  import("./thread-automation-messages.js").then((module) => ({
+    default: module.PluginPostMessage,
+  })),
+);
+const CommentPromptMessage = React.lazy(() =>
+  import("./thread-automation-messages.js").then((module) => ({
+    default: module.CommentPromptMessage,
+  })),
+);
 
 const ROW_ESTIMATE_PX = 56;
 /** Message IDs the panel gives messages other Threads sent, not yet joined. */
@@ -216,13 +232,15 @@ function TranscriptRowShellContent({
         tabIndex={-1}
         className="transcript-row conversation-message plugin-post-row"
       />,
-      <PluginPostMessage
-        plugin={plugin}
-        note={row.chat === true}
-        text={row.text}
-        pending={!row.admitted || steering}
-        {...(row.sentAt === undefined ? {} : { sentAt: row.sentAt })}
-      />,
+      <React.Suspense fallback={null}>
+        <PluginPostMessage
+          plugin={plugin}
+          note={row.chat === true}
+          text={row.text}
+          pending={!row.admitted || steering}
+          {...(row.sentAt === undefined ? {} : { sentAt: row.sentAt })}
+        />
+      </React.Suspense>,
     );
   if (fromThread !== undefined && row.kind === "user-prompt")
     return withMenu(
@@ -254,11 +272,13 @@ function TranscriptRowShellContent({
         tabIndex={-1}
         className="transcript-row conversation-message thread-source-row"
       />,
-      <AutomationMessage
-        automation={automation}
-        text={row.text}
-        pending={!row.admitted}
-      />,
+      <React.Suspense fallback={null}>
+        <AutomationMessage
+          automation={automation}
+          text={row.text}
+          pending={!row.admitted}
+        />
+      </React.Suspense>,
     );
   if (commentOn !== undefined && row.kind === "user-prompt")
     return withMenu(
@@ -271,11 +291,13 @@ function TranscriptRowShellContent({
         tabIndex={-1}
         className="transcript-row conversation-message thread-source-row"
       />,
-      <CommentPromptMessage
-        name={author?.name ?? row.author?.name ?? "Someone"}
-        text={row.text}
-        pending={!row.admitted}
-      />,
+      <React.Suspense fallback={null}>
+        <CommentPromptMessage
+          name={author?.name ?? row.author?.name ?? "Someone"}
+          text={row.text}
+          pending={!row.admitted}
+        />
+      </React.Suspense>,
     );
   return withMenu(
     <article
@@ -1047,7 +1069,7 @@ function TranscriptJumpControl({
   return (
     <Button
       type="button"
-      variant="ghost"
+      variant="subtle"
       size="icon-sm"
       className={`transcript-control transcript-jump ${hasUnread ? "has-unread" : ""}`}
       data-visible={!atEnd || undefined}

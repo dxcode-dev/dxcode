@@ -244,8 +244,8 @@ function WorkspaceProfileRow({
             <span>{workspace.displayName}</span>
             <Button
               className="workspace-id-copy"
-              size="icon-xs"
-              variant="ghost"
+              size="icon-2xs"
+              variant="subtle"
               aria-label={
                 workspaceIdCopyState === "copied"
                   ? "Workspace ID copied"

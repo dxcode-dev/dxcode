@@ -3,6 +3,7 @@ import type { ThinkingLevel } from "@dx/domain";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
+import { Select } from "../../../shared/ui/select.js";
 import { ReasoningEffort } from "./mode-dial-controls.js";
 import { AUTO, type ModeDraft, type ModeSlot } from "./mode-dial-drafts.js";
 
@@ -74,8 +75,9 @@ export function MainAgentRole({
   );
   return (
     <>
-      <select
+      <Select
         id={id}
+        size="md"
         aria-label={label}
         value={choice === AUTO ? AUTO : choice.model}
         disabled={busy || choicesPending || choicesError !== undefined}
@@ -108,7 +110,7 @@ export function MainAgentRole({
             {model.name}
           </option>
         ))}
-      </select>
+      </Select>
       <ReasoningEffort
         name={label.replace(/ model$/, " reasoning effort")}
         value={effective?.thinking ?? "medium"}

@@ -1,14 +1,14 @@
 /* Same density as the Plugins and Model Routing pages. */
 .members-settings {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
 }
 /* Same width as the heading and cards, so search starts at the list's left
    edge and Invite ends at its right edge. */
 .members-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
@@ -22,17 +22,8 @@
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin-left: auto;
-}
-.members-chip {
-  border-color: var(--divider);
-  font-weight: 400;
-}
-.members-chip[aria-pressed="true"] {
-  border-color: var(--foreground);
-  background: var(--secondary);
-  color: var(--foreground);
 }
 .members-search svg {
   position: absolute;
@@ -44,13 +35,9 @@
   transform: translateY(-50%);
   pointer-events: none;
 }
-.members-input {
-  height: 28px;
-  padding: 0 28px 0 9px;
-  font-size: 12px;
-}
-.members-input[type="datetime-local"] {
-  padding-right: 9px;
+/* Room for the search field's icon. */
+.members-search .members-input {
+  padding-right: 28px;
 }
 .members-search .members-input::-webkit-search-cancel-button {
   display: none;
@@ -58,9 +45,9 @@
 .members-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-height: 48px;
-  padding: 7px 12px;
+  padding: 7px var(--space-3);
   border-bottom: 1px solid var(--divider);
 }
 .members-row:last-child {
@@ -73,10 +60,10 @@
   width: 20px;
   height: 20px;
   color: var(--foreground);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--accent);
-  font-size: 10px;
-  font-weight: 600;
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
   overflow: hidden;
 }
 /* A zero minimum keeps a non-square picture in its square frame, centered. */
@@ -96,21 +83,21 @@
 .members-identity > div {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-width: 0;
 }
 .members-identity strong {
   overflow: hidden;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .members-identity > span {
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 15px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -119,65 +106,53 @@
   flex: none;
   padding: 1px 5px;
   color: var(--foreground);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--accent);
-  font-size: 10px;
-  line-height: 14px;
+  font-size: var(--text-2xs);
+  line-height: var(--leading-3-5);
 }
 .members-activity {
   flex: 0 0 180px;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .members-row-actions {
   display: flex;
   flex: none;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: var(--space-1);
   min-width: 24px;
 }
 .members-card .settings-card-header {
   min-height: 0;
-  padding: 10px 12px;
-}
-.members-row-actions > .members-revoke {
-  height: 22px;
-  color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 400;
-}
-.members-row-actions > .members-revoke:hover {
-  color: var(--destructive);
+  padding: var(--space-2-5) var(--space-3);
 }
 .members-empty,
 .members-error {
   margin: 0;
-  padding: 12px;
+  padding: var(--space-3);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .members-error {
   color: var(--destructive);
 }
-.members-danger {
-  color: var(--destructive);
-}
 .members-link-form {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
 }
 .members-link-field {
   display: grid;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .members-link-field > label {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .members-link-field > span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .members-link-form > .members-error,
 .members-dialog > .members-error {
@@ -186,22 +161,20 @@
 .members-link-ready {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .members-link-ready > .members-input {
   flex: 1;
   min-width: 0;
-  padding-right: 9px;
 }
 .members-dialog {
   display: grid;
-  gap: 12px;
-  width: min(420px, calc(100vw - 32px));
+  gap: var(--space-3);
 }
 .members-dialog-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 8px;
+  gap: var(--space-2);
 }
 @media (max-width: 639px) {
   .members-toolbar {
@@ -217,7 +190,7 @@
   /* Last active moves under the name instead of squeezing it. */
   .members-person {
     flex-wrap: wrap;
-    row-gap: 2px;
+    row-gap: var(--space-0-5);
   }
   .members-person > .members-identity {
     flex-basis: calc(100% - 64px);

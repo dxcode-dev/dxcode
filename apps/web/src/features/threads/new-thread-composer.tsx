@@ -18,6 +18,7 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import type * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { Textarea } from "../../shared/ui/textarea.js";
 import { newThreadOrbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { newThreadSetupGaps } from "./composer-readiness.js";
@@ -173,7 +174,8 @@ export function NewThreadComposer({
       {...dropTarget}
     >
       <div className="new-thread-composer-body">
-        <textarea
+        <Textarea
+          variant="bare"
           ref={textareaRef}
           value={prompt}
           readOnly={submitting}

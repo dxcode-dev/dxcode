@@ -3,6 +3,7 @@ import type { ThreadId } from "@dx/domain";
 import { useNavigate } from "@tanstack/react-router";
 import { Columns2, Maximize2, PanelRightOpen, X } from "lucide-react";
 import type * as React from "react";
+import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { SpaceIcon } from "./space-icon.js";
 import {
@@ -123,15 +124,16 @@ export function ThreadTab({
       {active && menu !== undefined ? (
         <span className="space-tab-menu">{menu}</span>
       ) : null}
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="space-tab-close"
         aria-label={`Close ${thread.title}`}
         title="Close Tab"
         onClick={onClose}
       >
         <X aria-hidden="true" />
-      </button>
+      </Button>
     </span>
   );
 }
@@ -171,8 +173,9 @@ export function ThreadTabTools({
         </span>
       )}
       {onToggleSplit === undefined ? null : (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="space-icon-button"
           aria-label="Side by Side"
           title={split ? "Show as Tabs" : "Show Side by Side"}
@@ -180,10 +183,11 @@ export function ThreadTabTools({
           onClick={onToggleSplit}
         >
           <Columns2 aria-hidden="true" />
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="space-icon-button"
         aria-label="Focus Thread"
         title="Focus Thread"
@@ -192,7 +196,7 @@ export function ThreadTabTools({
         }
       >
         <Maximize2 aria-hidden="true" />
-      </button>
+      </Button>
     </span>
   );
 }
@@ -247,8 +251,9 @@ export function SpaceStripTools({
           onArchive={onArchive}
         />
       )}
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="space-icon-button space-details-toggle"
         aria-label={
           space.waitingOnInput
@@ -267,7 +272,7 @@ export function SpaceStripTools({
         {space.waitingOnInput ? (
           <span className="space-needs-input-dot" aria-hidden="true" />
         ) : null}
-      </button>
+      </Button>
     </span>
   );
 }

@@ -118,9 +118,12 @@ describe("ThreadComposer", () => {
     );
     preview?.focus();
     await React.act(() => preview?.click());
-    expect(
-      document.querySelector('[aria-label="Close image preview"]'),
-    ).not.toBeNull();
+    // The viewer loads on first open.
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector('[aria-label="Close image preview"]'),
+      ).not.toBeNull(),
+    );
     await React.act(() =>
       document
         .querySelector<HTMLButtonElement>('[aria-label="Close image preview"]')

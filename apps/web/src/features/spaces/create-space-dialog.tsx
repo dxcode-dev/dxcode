@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { SpaceSharing, SpaceSuggestion } from "@dx/api";
 import type { ModelConnectionId, ProjectId, UserId } from "@dx/domain";
 import {
@@ -12,7 +11,16 @@ import * as React from "react";
 import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { Button } from "../../shared/ui/button.js";
+import { buttonVariants } from "../../shared/ui/button-variants.js";
+import {
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogRoot,
+  DialogTitle,
+} from "../../shared/ui/dialog.js";
 import { Input } from "../../shared/ui/input.js";
+import { cn } from "../../shared/utils.js";
 import { projectsQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { SpaceAgentField, SpaceAgentPicker } from "./space-agent-field.js";
@@ -178,161 +186,165 @@ export function CreateSpaceDialog({
     );
   };
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="space-create-backdrop" />
-        <Dialog.Viewport className="space-create-viewport">
-          <Dialog.Popup className="space-create" aria-label="Create Space">
-            <header className="space-create-bar">
-              <button
-                type="button"
-                className="space-icon-button"
-                aria-label="Back"
-                title="Back"
-                onClick={onClose}
-              >
-                <ArrowLeft aria-hidden="true" />
-              </button>
-              <nav className="space-create-breadcrumb" aria-label="Breadcrumb">
-                <span>Spaces</span>
-                <span aria-hidden="true">/</span>
-                <span aria-current="page">Create</span>
-              </nav>
-              <Dialog.Close
-                className="space-icon-button space-create-close"
-                aria-label="Close"
-                title="Close"
-              >
-                <X aria-hidden="true" />
-              </Dialog.Close>
-            </header>
-            <div className="space-create-body">
-              <section className="space-create-intro">
-                <div className="space-create-intro-inner">
-                  <Dialog.Title className="space-create-title">
-                    What's this Space for?
-                  </Dialog.Title>
-                  <Dialog.Description className="space-create-lede">
-                    Pick up something you have been working on, or start
-                    something new.
-                  </Dialog.Description>
-                  {suggestions === undefined ||
-                  suggestions.length === 0 ? null : (
-                    <>
-                      <h3 className="space-create-eyebrow">
-                        From your recent threads
-                      </h3>
-                      <ul className="space-suggestions">
-                        {suggestions.map((suggestion) => (
-                          <SuggestionCard
-                            key={`${suggestion.projectId}:${suggestion.name}`}
-                            suggestion={suggestion}
-                            chosen={chosen === suggestion}
-                            onChoose={() => choose(suggestion)}
-                          />
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                </div>
-              </section>
-              <section className="space-create-form-pane">
-                <form className="space-create-card" onSubmit={onSubmit}>
-                  <SpaceFieldRow
-                    label="Name"
-                    help="Shown in the sidebar and at the top of the Space."
-                    htmlFor={`${fieldId}-name`}
-                  >
-                    <Input
-                      id={`${fieldId}-name`}
-                      autoFocus
-                      autoComplete="off"
-                      maxLength={200}
-                      value={name}
-                      onChange={(event) => setName(event.target.value)}
-                    />
-                  </SpaceFieldRow>
-                  <SpaceFieldRow
-                    label="Goal"
-                    optional
-                    help="What the work here is for. dx keeps the Space's threads directed toward it."
-                    htmlFor={`${fieldId}-goal`}
-                  >
-                    <SpaceGoalField
-                      id={`${fieldId}-goal`}
-                      value={goal}
-                      onChange={setGoal}
-                      dictation={dictation}
-                    />
-                  </SpaceFieldRow>
-                  <SpaceFieldRow
-                    label="Project"
-                    help="The project the Space's threads run in."
-                    htmlFor={`${fieldId}-project`}
-                  >
-                    <SpaceProjectCombobox
-                      id={`${fieldId}-project`}
-                      projects={projects}
-                      value={projectId}
-                      onChange={setProjectId}
-                    />
-                  </SpaceFieldRow>
-                  <SpaceFieldRow
-                    label="Shared with"
-                    help="Who can see the Space and chat in it."
-                    htmlFor={`${fieldId}-sharing`}
-                  >
-                    <SpaceSharingSelect
-                      id={`${fieldId}-sharing`}
-                      workspaceName={workspace?.displayName}
-                      value={sharing}
-                      onChange={setSharing}
-                    />
-                  </SpaceFieldRow>
-                  <SpaceFieldRow
-                    label="Agent"
-                    help="The model the Space's agent runs on. It keeps this choice."
-                    htmlFor={`${fieldId}-agent`}
-                  >
-                    <SpaceAgentField
-                      id={`${fieldId}-agent`}
-                      identity={userId}
-                      plan={chosenPlan}
-                      locked={create.isPending}
-                      PlanPicker={PlanPicker}
-                      onChange={() => setPicking(true)}
-                      onPlanChange={setPlan}
-                    />
-                  </SpaceFieldRow>
-                  {create.error === null ||
-                  // The Agent row and the picker say this one.
-                  (create.error as { readonly code?: string }).code ===
-                    "SPACE_MODEL_UNAVAILABLE" ? null : (
-                    <p className="space-dialog-error" role="alert">
-                      {create.error instanceof Error
-                        ? create.error.message
-                        : "The Space could not be created."}
-                    </p>
-                  )}
-                  <footer className="space-create-footer">
-                    <Button
-                      type="submit"
-                      className="space-primary-button"
-                      disabled={!canCreate}
-                    >
-                      {create.isPending ? "Creating…" : "Create Space"}
-                      <EnterKeycap />
-                    </Button>
-                  </footer>
-                </form>
-              </section>
+    <DialogRoot open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <DialogContent
+        size="page"
+        layer="panel"
+        showClose={false}
+        className="space-create"
+        aria-label="Create Space"
+      >
+        <header className="space-create-bar">
+          <Button
+            variant="subtle"
+            size="icon-xs"
+            className="space-icon-button"
+            aria-label="Back"
+            title="Back"
+            onClick={onClose}
+          >
+            <ArrowLeft aria-hidden="true" />
+          </Button>
+          <nav className="space-create-breadcrumb" aria-label="Breadcrumb">
+            <span>Spaces</span>
+            <span aria-hidden="true">/</span>
+            <span aria-current="page">Create</span>
+          </nav>
+          <DialogClose
+            className={cn(
+              buttonVariants({ variant: "subtle", size: "icon-xs" }),
+              "space-icon-button space-create-close",
+            )}
+            aria-label="Close"
+            title="Close"
+          >
+            <X aria-hidden="true" />
+          </DialogClose>
+        </header>
+        <div className="space-create-body">
+          <section className="space-create-intro">
+            <div className="space-create-intro-inner">
+              <DialogTitle className="space-create-title">
+                What's this Space for?
+              </DialogTitle>
+              <DialogDescription className="space-create-lede">
+                Pick up something you have been working on, or start something
+                new.
+              </DialogDescription>
+              {suggestions === undefined || suggestions.length === 0 ? null : (
+                <>
+                  <h3 className="space-create-eyebrow">
+                    From your recent threads
+                  </h3>
+                  <ul className="space-suggestions">
+                    {suggestions.map((suggestion) => (
+                      <SuggestionCard
+                        key={`${suggestion.projectId}:${suggestion.name}`}
+                        suggestion={suggestion}
+                        chosen={chosen === suggestion}
+                        onChoose={() => choose(suggestion)}
+                      />
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
-          </Dialog.Popup>
-        </Dialog.Viewport>
-      </Dialog.Portal>
+          </section>
+          <section className="space-create-form-pane">
+            <form className="space-create-card" onSubmit={onSubmit}>
+              <SpaceFieldRow
+                label="Name"
+                help="Shown in the sidebar and at the top of the Space."
+                htmlFor={`${fieldId}-name`}
+              >
+                <Input
+                  id={`${fieldId}-name`}
+                  autoFocus
+                  autoComplete="off"
+                  maxLength={200}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </SpaceFieldRow>
+              <SpaceFieldRow
+                label="Goal"
+                optional
+                help="What the work here is for. dx keeps the Space's threads directed toward it."
+                htmlFor={`${fieldId}-goal`}
+              >
+                <SpaceGoalField
+                  id={`${fieldId}-goal`}
+                  value={goal}
+                  onChange={setGoal}
+                  dictation={dictation}
+                />
+              </SpaceFieldRow>
+              <SpaceFieldRow
+                label="Project"
+                help="The project the Space's threads run in."
+                htmlFor={`${fieldId}-project`}
+              >
+                <SpaceProjectCombobox
+                  id={`${fieldId}-project`}
+                  projects={projects}
+                  value={projectId}
+                  onChange={setProjectId}
+                />
+              </SpaceFieldRow>
+              <SpaceFieldRow
+                label="Shared with"
+                help="Who can see the Space and chat in it."
+                htmlFor={`${fieldId}-sharing`}
+              >
+                <SpaceSharingSelect
+                  id={`${fieldId}-sharing`}
+                  workspaceName={workspace?.displayName}
+                  value={sharing}
+                  onChange={setSharing}
+                />
+              </SpaceFieldRow>
+              <SpaceFieldRow
+                label="Agent"
+                help="The model the Space's agent runs on. It keeps this choice."
+                htmlFor={`${fieldId}-agent`}
+              >
+                <SpaceAgentField
+                  id={`${fieldId}-agent`}
+                  identity={userId}
+                  plan={chosenPlan}
+                  locked={create.isPending}
+                  PlanPicker={PlanPicker}
+                  onChange={() => setPicking(true)}
+                  onPlanChange={setPlan}
+                />
+              </SpaceFieldRow>
+              {create.error === null ||
+              // The Agent row and the picker say this one.
+              (create.error as { readonly code?: string }).code ===
+                "SPACE_MODEL_UNAVAILABLE" ? null : (
+                <p className="space-dialog-error" role="alert">
+                  {create.error instanceof Error
+                    ? create.error.message
+                    : "The Space could not be created."}
+                </p>
+              )}
+              <footer className="space-create-footer">
+                <Button
+                  type="submit"
+                  className="space-primary-button"
+                  disabled={!canCreate}
+                >
+                  {create.isPending ? "Creating…" : "Create Space"}
+                  <EnterKeycap />
+                </Button>
+              </footer>
+            </form>
+          </section>
+        </div>
+      </DialogContent>
       {picking ? (
         <SpaceAgentPicker identity={userId} onClose={() => setPicking(false)} />
       ) : null}
-    </Dialog.Root>
+    </DialogRoot>
   );
 }

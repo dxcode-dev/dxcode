@@ -1,4 +1,3 @@
-import type { Menu as BaseMenu } from "@base-ui/react/menu";
 import type { ProjectData, ThreadDetailData } from "@dx/api";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -15,13 +14,13 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import { MenuItem, MenuSeparator } from "../../shared/ui/menu.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { threadOrbMemoryQueryOptions } from "./orb-memory/orb-memory-queries.js";
 import { threadArchiveInFlight, threadKeys } from "./thread-queries.js";
 import { formatUsd } from "./thread-usage/thread-usage-format.js";
 import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
 
-/** The menu's parts, passed in so this chunk shares none with the Thread page. */
 const LazyThreadUsageDialog = React.lazy(() =>
   import("./thread-usage/thread-usage-dialog.js").then((module) => ({
     default: module.ThreadUsageDialog,
@@ -42,8 +41,6 @@ export function ThreadUsageDialogLoader(
   );
 }
 
-export type MenuParts = Pick<typeof BaseMenu, "Item" | "Separator">;
-
 // More Actions' Orb and cost rows (#1406). They read the Orb and the
 // Thread's usage once the menu opens, so the menu loads this module then,
 // not with the Thread page.
@@ -53,13 +50,11 @@ export type MenuParts = Pick<typeof BaseMenu, "Item" | "Separator">;
  * after a separator; on a phone (`layout="phone"`), the Project too.
  */
 export default function ThreadMenuDetails({
-  Menu,
   thread,
   project,
   layout,
   onOpenUsage,
 }: {
-  readonly Menu: MenuParts;
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
   readonly layout?: "phone";
@@ -69,7 +64,6 @@ export default function ThreadMenuDetails({
   if (layout === "phone")
     return (
       <ThreadDetailItems
-        Menu={Menu}
         thread={thread}
         project={project}
         onOpenUsage={onOpenUsage}
@@ -78,20 +72,14 @@ export default function ThreadMenuDetails({
   const own = thread.access === undefined || thread.access === "owner";
   return (
     <>
-      <Menu.Separator className="thread-menu-separator" />
-      <SelectionMenuItem Menu={Menu} thread={thread} />
-      <PluginAgentMenuItem Menu={Menu} thread={thread} />
-      {canUseOrb(thread) ? (
-        <OrbMenuItem Menu={Menu} threadId={thread.id} />
-      ) : null}
+      <MenuSeparator />
+      <SelectionMenuItem thread={thread} />
+      <PluginAgentMenuItem thread={thread} />
+      {canUseOrb(thread) ? <OrbMenuItem threadId={thread.id} /> : null}
       {own ? (
         <>
-          <Menu.Separator className="thread-menu-separator" />
-          <ThreadCostMenuItems
-            Menu={Menu}
-            thread={thread}
-            onOpenUsage={onOpenUsage}
-          />
+          <MenuSeparator />
+          <ThreadCostMenuItems thread={thread} onOpenUsage={onOpenUsage} />
         </>
       ) : null}
     </>
@@ -103,12 +91,10 @@ export default function ThreadMenuDetails({
  * here; members of a shared Thread cannot read the owner's Project.
  */
 function ThreadDetailItems({
-  Menu,
   thread,
   project,
   onOpenUsage,
 }: {
-  readonly Menu: MenuParts;
   readonly thread: ThreadDetailData;
   readonly project?: Pick<ProjectData, "name">;
   readonly onOpenUsage: () => void;
@@ -117,15 +103,12 @@ function ThreadDetailItems({
   const projectName = project?.name ?? thread.projectName ?? "No project";
   return (
     <>
-      <Menu.Separator className="thread-menu-separator" />
-      <SelectionMenuItem Menu={Menu} thread={thread} />
-      <PluginAgentMenuItem Menu={Menu} thread={thread} />
-      {canUseOrb(thread) ? (
-        <OrbMenuItem Menu={Menu} threadId={thread.id} />
-      ) : null}
-      <Menu.Separator className="thread-menu-separator" />
-      <Menu.Item
-        className="thread-menu-item"
+      <MenuSeparator />
+      <SelectionMenuItem thread={thread} />
+      <PluginAgentMenuItem thread={thread} />
+      {canUseOrb(thread) ? <OrbMenuItem threadId={thread.id} /> : null}
+      <MenuSeparator />
+      <MenuItem
         title={projectName}
         render={
           own ? (
@@ -138,13 +121,9 @@ function ThreadDetailItems({
       >
         <FolderGit2 />
         <span>{projectName}</span>
-      </Menu.Item>
+      </MenuItem>
       {own ? (
-        <ThreadCostMenuItems
-          Menu={Menu}
-          thread={thread}
-          onOpenUsage={onOpenUsage}
-        />
+        <ThreadCostMenuItems thread={thread} onOpenUsage={onOpenUsage} />
       ) : null}
     </>
   );
@@ -152,42 +131,31 @@ function ThreadDetailItems({
 
 /** The plugin agent the Thread runs as, and the plugin that defined it. */
 function PluginAgentMenuItem({
-  Menu,
   thread,
 }: {
-  readonly Menu: MenuParts;
   readonly thread: ThreadDetailData;
 }) {
   const agent = thread.pluginAgent;
   if (agent === undefined) return null;
   return (
-    <Menu.Item
-      className="thread-menu-item thread-menu-detail-item"
+    <MenuItem
+      className="thread-menu-detail-item"
       title={`Runs the ${agent.label} agent from the ${agent.plugin} plugin`}
     >
       <Bot />
       <span className="thread-menu-detail-label">{agent.label}</span>
       <span className="thread-menu-detail-value">{agent.plugin}</span>
-    </Menu.Item>
+    </MenuItem>
   );
 }
 
 /** What the Thread runs on: its mode, or Claude Code or a model with its effort. */
-function SelectionMenuItem({
-  Menu,
-  thread,
-}: {
-  readonly Menu: MenuParts;
-  readonly thread: ThreadDetailData;
-}) {
+function SelectionMenuItem({ thread }: { readonly thread: ThreadDetailData }) {
   const selection = threadSelectionSummary(
     thread.agentInitialization.selection,
   );
   return (
-    <Menu.Item
-      className="thread-menu-item thread-menu-detail-item"
-      title={selection.title}
-    >
+    <MenuItem className="thread-menu-detail-item" title={selection.title}>
       {selection.kind === "claude-code" ? (
         <ClaudeIcon />
       ) : selection.kind === "mode" ? (
@@ -199,7 +167,7 @@ function SelectionMenuItem({
       {selection.detail === undefined ? null : (
         <span className="thread-menu-detail-value">{selection.detail}</span>
       )}
-    </Menu.Item>
+    </MenuItem>
   );
 }
 
@@ -229,10 +197,8 @@ const ORB_STATE_LABELS = {
  * Routing) waits on backend support (#1155).
  */
 function OrbMenuItem({
-  Menu,
   threadId,
 }: {
-  readonly Menu: MenuParts;
   readonly threadId: ThreadDetailData["id"];
 }) {
   const client = useQueryClient();
@@ -255,11 +221,11 @@ function OrbMenuItem({
         ? ORB_STATE_LABELS.unavailable
         : "Checking…";
   return (
-    <Menu.Item className="thread-menu-item thread-menu-detail-item">
+    <MenuItem className="thread-menu-detail-item">
       <OrbIcon reducedMotion />
       <span className="thread-menu-detail-label">Orb</span>
       <span className="thread-menu-detail-value">{state}</span>
-    </Menu.Item>
+    </MenuItem>
   );
 }
 
@@ -269,11 +235,9 @@ function OrbMenuItem({
  * Thread also says its model costs are not tracked.
  */
 function ThreadCostMenuItems({
-  Menu,
   thread,
   onOpenUsage,
 }: {
-  readonly Menu: MenuParts;
   readonly thread: ThreadDetailData;
   readonly onOpenUsage: () => void;
 }) {
@@ -298,7 +262,7 @@ function ThreadCostMenuItems({
           : undefined;
   return (
     <>
-      <Menu.Item className="thread-menu-item" onClick={onOpenUsage}>
+      <MenuItem onClick={onOpenUsage}>
         <DollarSign />
         <span>{label}</span>
         {coverage === undefined ? null : (
@@ -310,12 +274,12 @@ function ThreadCostMenuItems({
             {coverage}
           </span>
         )}
-      </Menu.Item>
+      </MenuItem>
       {claudeCode ? (
-        <Menu.Item className="thread-menu-item" disabled>
+        <MenuItem disabled>
           <Info />
           <span>Claude Code Costs Not Tracked</span>
-        </Menu.Item>
+        </MenuItem>
       ) : null}
     </>
   );

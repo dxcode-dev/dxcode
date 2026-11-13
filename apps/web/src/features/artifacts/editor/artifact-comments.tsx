@@ -1,5 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
-import { Popover } from "@base-ui/react/popover";
 import type { ThreadArtifactComment } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,8 +16,20 @@ import {
 } from "../../../shared/comments/comment-text.js";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
+import { Button } from "../../../shared/ui/button.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import {
+  MenuGroup,
+  MenuItem,
+  MenuLabel,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
+import { PopoverContent, PopoverRoot } from "../../../shared/ui/popover.js";
+import { Textarea } from "../../../shared/ui/textarea.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
-import { formatRelativeTime } from "../../../shared/utils.js";
+import { cn, formatRelativeTime } from "../../../shared/utils.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import {
   createArtifactCommentMutation,
@@ -132,7 +142,8 @@ function CommentComposer({
       }}
     >
       {mentions.menu}
-      <textarea
+      <Textarea
+        variant="bare"
         ref={(node) => {
           box.current = node;
           if (focus) focusOnOpen(node);
@@ -167,8 +178,9 @@ function CommentComposer({
         </p>
       ) : null}
       <div className="artifact-comment-actions">
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="artifact-comment-icon"
           aria-label="Mention someone"
           title="Mention someone"
@@ -176,9 +188,10 @@ function CommentComposer({
           onClick={mention}
         >
           <AtSign aria-hidden="true" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="artifact-comment-icon artifact-comment-ask"
           aria-label="Ask @dx"
           title={asking ? "Don't ask dx" : "Ask dx to reply"}
@@ -186,7 +199,7 @@ function CommentComposer({
           onClick={() => setBody(toggleAgent(body))}
         >
           <DxWordmark size="small" />
-        </button>
+        </Button>
         {dictation === undefined ? null : (
           <dictation.Textarea
             textareaRef={box}
@@ -194,7 +207,9 @@ function CommentComposer({
             noticeHost={noticeHost}
           />
         )}
-        <button
+        <Button
+          variant="default"
+          size="icon-xs"
           type="submit"
           className="artifact-comment-submit"
           aria-label={label}
@@ -202,7 +217,7 @@ function CommentComposer({
           disabled={pending || body.trim() === ""}
         >
           <ArrowUp aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       {error === undefined ? null : (
         <p className="artifact-comment-error" role="alert">
@@ -269,8 +284,9 @@ function CommentEntries({
               }
             />
             {index === 0 && onResolve !== undefined ? (
-              <button
-                type="button"
+              <Button
+                variant="subtle"
+                size="icon-xs"
                 className="artifact-comment-resolve"
                 aria-label="Resolve"
                 title="Resolve"
@@ -278,7 +294,7 @@ function CommentEntries({
                 onClick={onResolve}
               >
                 <Check aria-hidden="true" />
-              </button>
+              </Button>
             ) : null}
           </div>
           <p className="artifact-comment-body">
@@ -349,88 +365,79 @@ export function CommentCard({
       ? []
       : [comment, ...comments.filter((entry) => entry.parentId === comment.id)];
   return (
-    <Popover.Root
+    <PopoverRoot
       open
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
     >
-      <Popover.Portal>
-        <Popover.Positioner
-          className="artifact-comment-positioner"
-          anchor={anchor}
-          side="bottom"
-          align="center"
-          sideOffset={6}
-          collisionPadding={8}
-        >
-          <Popover.Popup
-            className="artifact-comment-card"
-            aria-label="Comment"
-            initialFocus={target.kind === "draft"}
-            finalFocus={false}
-          >
-            {comment === undefined ? null : (
-              <CommentEntries
-                entries={entries}
-                people={people}
-                resolving={resolve.isPending}
-                onResolve={
-                  readOnly
-                    ? undefined
-                    : () => resolve.mutate(comment.id, { onSuccess: onClose })
-                }
-              />
-            )}
-            {readOnly ? null : comment === undefined &&
-              target.kind === "draft" ? (
-              <CommentComposer
-                key="draft"
-                threadId={threadId}
-                dictation={dictation}
-                label="Comment"
-                placeholder="Comment, or @mention dx"
-                pending={create.isPending}
-                error={create.isError ? failure(create.error) : undefined}
-                text={draftText}
-                focus
-                onSubmit={(body, failed) =>
-                  create.mutate(
-                    "target" in target.draft
-                      ? { target: target.draft.target, body }
-                      : {
-                          quote: target.draft.quote,
-                          near: target.draft.near,
-                          body,
-                        },
-                    {
-                      onSuccess: (posted) => onPosted(posted.id),
-                      onError: failed,
+      <PopoverContent
+        positionerClassName="artifact-comment-positioner"
+        anchor={anchor}
+        side="bottom"
+        align="center"
+        sideOffset={6}
+        collisionPadding={8}
+        className="artifact-comment-card"
+        aria-label="Comment"
+        initialFocus={target.kind === "draft"}
+        finalFocus={false}
+      >
+        {comment === undefined ? null : (
+          <CommentEntries
+            entries={entries}
+            people={people}
+            resolving={resolve.isPending}
+            onResolve={
+              readOnly
+                ? undefined
+                : () => resolve.mutate(comment.id, { onSuccess: onClose })
+            }
+          />
+        )}
+        {readOnly ? null : comment === undefined && target.kind === "draft" ? (
+          <CommentComposer
+            key="draft"
+            threadId={threadId}
+            dictation={dictation}
+            label="Comment"
+            placeholder="Comment, or @mention dx"
+            pending={create.isPending}
+            error={create.isError ? failure(create.error) : undefined}
+            text={draftText}
+            focus
+            onSubmit={(body, failed) =>
+              create.mutate(
+                "target" in target.draft
+                  ? { target: target.draft.target, body }
+                  : {
+                      quote: target.draft.quote,
+                      near: target.draft.near,
+                      body,
                     },
-                  )
-                }
-              />
-            ) : comment === undefined ? null : (
-              <CommentComposer
-                key={comment.id}
-                threadId={threadId}
-                dictation={dictation}
-                label="Reply"
-                placeholder="Reply, or @mention dx"
-                pending={create.isPending}
-                error={create.isError ? failure(create.error) : undefined}
-                onSubmit={(body, failed) =>
-                  create.mutate(
-                    { parentId: comment.id, body },
-                    { onError: failed },
-                  )
-                }
-              />
-            )}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+                {
+                  onSuccess: (posted) => onPosted(posted.id),
+                  onError: failed,
+                },
+              )
+            }
+          />
+        ) : comment === undefined ? null : (
+          <CommentComposer
+            key={comment.id}
+            threadId={threadId}
+            dictation={dictation}
+            label="Reply"
+            placeholder="Reply, or @mention dx"
+            pending={create.isPending}
+            error={create.isError ? failure(create.error) : undefined}
+            onSubmit={(body, failed) =>
+              create.mutate({ parentId: comment.id, body }, { onError: failed })
+            }
+          />
+        )}
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
 
@@ -470,9 +477,9 @@ export function CommentsMenu({
   const replies = (id: string) =>
     comments.filter((comment) => comment.parentId === id).length;
   const item = (comment: ThreadArtifactComment) => (
-    <Menu.Item
+    <MenuItem
       key={comment.id}
-      className="thread-menu-item artifact-comments-item"
+      className="artifact-comments-item"
       onClick={() => onSelect(comment.id)}
     >
       <span className="artifact-comments-item-quote">
@@ -489,49 +496,43 @@ export function CommentsMenu({
             : `${replies(comment.id)} replies`}
         </span>
       )}
-    </Menu.Item>
+    </MenuItem>
   );
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        className="artifact-icon-button artifact-comments-toggle"
+    <MenuRoot>
+      <MenuTrigger
+        className={cn(
+          buttonVariants({ variant: "subtle", size: "xs" }),
+          "artifact-tool artifact-comments-toggle",
+        )}
         aria-label={`Comments (${open.length})`}
         title="Comments"
       >
         <MessageSquare aria-hidden="true" />
         {open.length === 0 ? null : <span>{open.length}</span>}
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          side="bottom"
-          align="end"
-          sideOffset={4}
-          collisionPadding={8}
-        >
-          <Menu.Popup
-            className="thread-menu-popup artifact-comments-menu"
-            aria-label="Comments"
-          >
-            {loadFailed ? (
-              <p className="artifact-comments-empty" role="alert">
-                Couldn't load the comments.
-              </p>
-            ) : open.length === 0 ? (
-              <p className="artifact-comments-empty">{emptyText}</p>
-            ) : null}
-            {anchored.map(item)}
-            {detached.length === 0 ? null : (
-              <Menu.Group>
-                <Menu.GroupLabel className="artifact-comments-heading">
-                  {detachedHeading}
-                </Menu.GroupLabel>
-                {detached.map(item)}
-              </Menu.Group>
-            )}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup
+        side="bottom"
+        align="end"
+        collisionPadding={8}
+        className="artifact-comments-menu"
+        aria-label="Comments"
+      >
+        {loadFailed ? (
+          <p className="artifact-comments-empty" role="alert">
+            Couldn't load the comments.
+          </p>
+        ) : open.length === 0 ? (
+          <p className="artifact-comments-empty">{emptyText}</p>
+        ) : null}
+        {anchored.map(item)}
+        {detached.length === 0 ? null : (
+          <MenuGroup>
+            <MenuLabel>{detachedHeading}</MenuLabel>
+            {detached.map(item)}
+          </MenuGroup>
+        )}
+      </MenuPopup>
+    </MenuRoot>
   );
 }

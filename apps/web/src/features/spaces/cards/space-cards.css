@@ -2,13 +2,13 @@
 
 .markdown-thread-cards {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   max-width: 590px;
-  margin: 10px 0;
+  margin: var(--space-2-5) 0;
 }
 .markdown-thread-cards + p,
 .transcript-markdown p + .markdown-thread-cards {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 
 .space-thread-state-icon {
@@ -21,14 +21,14 @@
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto 22px;
   align-items: center;
-  column-gap: 12px;
+  column-gap: var(--space-3);
   width: 100%;
   max-width: 590px;
   min-height: 58px;
-  padding: 9px 14px;
+  padding: 9px var(--space-3-5);
   color: var(--chat-foreground, var(--foreground));
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--card);
   font: inherit;
   text-align: left;
@@ -51,19 +51,19 @@
 }
 .space-thread-card > .space-thread-state-icon {
   align-self: start;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
 }
 [data-state="needs_you"] > .space-thread-state-icon {
-  color: oklch(70% 0.15 70);
+  color: var(--state-needs-you);
 }
 [data-state="failed"] > .space-thread-state-icon {
   color: var(--destructive);
 }
 [data-state="ready_to_ship"] > .space-thread-state-icon {
-  color: oklch(62% 0.13 150);
+  color: var(--state-ready);
 }
 [data-state="shipped"] > .space-thread-state-icon {
-  color: oklch(60% 0.12 150);
+  color: var(--state-shipped);
 }
 .space-thread-card-text {
   display: grid;
@@ -73,7 +73,7 @@
 .space-thread-card-title {
   overflow: hidden;
   font-size: 1em;
-  line-height: 1.45;
+  line-height: var(--leading-normal);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -81,12 +81,12 @@
   overflow: hidden;
   color: var(--muted-foreground);
   font-size: 0.93em;
-  line-height: 1.4;
+  line-height: var(--leading-snug);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 [data-state="needs_you"] .space-thread-card-state {
-  color: oklch(62% 0.15 60);
+  color: var(--state-needs-you-text);
 }
 [data-state="failed"] .space-thread-card-state {
   color: var(--destructive);
@@ -103,17 +103,17 @@
 .space-thread-card-requester > .dx-avatar {
   width: 22px;
   height: 22px;
-  font-size: 9px;
+  font-size: var(--text-3xs);
 }
 .space-thread-card-placeholder {
   display: block;
   height: 12px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--muted);
 }
 .space-thread-card-title.space-thread-card-placeholder {
   width: 45%;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-1-5);
 }
 .space-thread-card-line.space-thread-card-placeholder {
   width: 65%;
@@ -130,7 +130,7 @@
   vertical-align: baseline;
   color: var(--chat-foreground, var(--foreground));
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--foreground) 3%, transparent);
   font: inherit;
   font-size: 0.94em;
@@ -154,9 +154,9 @@
 /* "Since you've been gone", at the end of a Space's chat. */
 .space-catch-up {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
   max-width: 760px;
-  margin: 20px 0 8px;
+  margin: var(--space-5) 0 var(--space-2);
   /* Brought into view clear of the composer floating over the chat's end. */
   scroll-margin-bottom: calc(var(--agent-composer-dock-height, 132px) + 16px);
 }
@@ -164,47 +164,31 @@
   content: "";
   width: 56px;
   height: 1px;
-  margin-bottom: 8px;
+  margin-bottom: var(--space-2);
   background: var(--border);
 }
 .space-catch-up-header {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .space-catch-up-header > h3 {
   flex: 1;
   margin: 0;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 20px;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-5);
 }
 .space-catch-up-header > small {
   color: var(--muted-foreground);
-  font-size: 12.5px;
+  font-size: var(--text-md);
 }
-.space-catch-up-dismiss {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-  cursor: pointer;
-}
-.space-catch-up-dismiss:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.space-catch-up-dismiss > svg {
+.dx-button.space-catch-up-dismiss svg {
   width: 14px;
   height: 14px;
 }
 .space-catch-up-body {
   color: var(--chat-foreground, var(--foreground));
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 1.7;
 }

@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
@@ -7,10 +6,18 @@ import { AudioLines, Copy, Download, EllipsisVertical } from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
+import { Button } from "../../../shared/ui/button.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import {
   type FileMediaKind,
   fileMediaKind,
 } from "../../../shared/ui/media-kind.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { PaneToolbar } from "../panes/pane-toolbar-slot.js";
 import {
   absolutePathFor,
@@ -41,8 +48,8 @@ const FilePreview = lazyRouteComponent(
   "FilePreview",
 );
 const loadingFile = (
-  <div className="thread-files-state" role="status">
-    Loading file…
+  <div className="thread-files-placeholder" role="status">
+    <EmptyState title="Loading file…" />
   </div>
 );
 
@@ -61,15 +68,22 @@ function DownloadCard({
   readonly detail: string;
 }) {
   return (
-    <div className="thread-files-state thread-file-download" role="status">
-      <strong>{title}</strong>
-      <span>{detail}</span>
-      <button
-        type="button"
-        onClick={() => downloadFromUrl(sandboxFileUrl(threadId, path, true))}
-      >
-        <Download aria-hidden="true" /> Download file
-      </button>
+    <div className="thread-files-placeholder" role="status">
+      <EmptyState
+        title={title}
+        description={detail}
+        action={
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() =>
+              downloadFromUrl(sandboxFileUrl(threadId, path, true))
+            }
+          >
+            <Download aria-hidden="true" /> Download file
+          </Button>
+        }
+      />
     </div>
   );
 }
@@ -91,41 +105,29 @@ function Toolbar({
       <span className="sr-only" role="status">
         Read-only
       </span>
-      <Menu.Root>
-        <Menu.Trigger
-          className="thread-file-actions"
+      <MenuRoot>
+        <MenuTrigger
+          render={<Button variant="ghost" size="icon-xs" />}
           aria-label="File Actions"
           title="File Actions"
         >
           <EllipsisVertical aria-hidden="true" />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            align="end"
-            sideOffset={4}
+        </MenuTrigger>
+        <MenuPopup align="end">
+          <MenuItem
+            onClick={() =>
+              downloadFromUrl(sandboxFileUrl(threadId, path, true))
+            }
           >
-            <Menu.Popup className="thread-menu-popup thread-actions-menu">
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() =>
-                  downloadFromUrl(sandboxFileUrl(threadId, path, true))
-                }
-              >
-                <Download />
-                <span>Download</span>
-              </Menu.Item>
-              <Menu.Item
-                className="thread-menu-item"
-                onClick={() => void navigator.clipboard.writeText(path)}
-              >
-                <Copy />
-                <span>Copy Path</span>
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+            <Download />
+            <span>Download</span>
+          </MenuItem>
+          <MenuItem onClick={() => void navigator.clipboard.writeText(path)}>
+            <Copy />
+            <span>Copy Path</span>
+          </MenuItem>
+        </MenuPopup>
+      </MenuRoot>
     </PaneToolbar>
   );
 }
@@ -168,8 +170,8 @@ function PdfView({
     );
   if (pdf.isPending)
     return (
-      <div className="thread-files-state" role="status">
-        Loading file…
+      <div className="thread-files-placeholder" role="status">
+        <EmptyState title="Loading file…" />
       </div>
     );
   if (pdf.error instanceof SandboxPdfInvalid)
@@ -184,9 +186,9 @@ function PdfView({
   return (
     <div className="thread-files-state" role="alert">
       <span>{errorMessage(pdf.error)}</span>
-      <button type="button" onClick={() => void pdf.refetch()}>
+      <Button variant="outline" size="xs" onClick={() => void pdf.refetch()}>
         Retry
-      </button>
+      </Button>
     </div>
   );
 }
@@ -212,17 +214,21 @@ function SandboxMediaView({
   let body: React.ReactNode;
   if (metadata.isPending)
     body = (
-      <div className="thread-files-state" role="status">
-        Loading file…
+      <div className="thread-files-placeholder" role="status">
+        <EmptyState title="Loading file…" />
       </div>
     );
   else if (metadata.data === undefined)
     body = (
       <div className="thread-files-state" role="alert">
         <span>{errorMessage(metadata.error)}</span>
-        <button type="button" onClick={() => void metadata.refetch()}>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void metadata.refetch()}
+        >
           Retry
-        </button>
+        </Button>
       </div>
     );
   else if (exceedsPreviewLimit(metadata.data.sizeBytes))
@@ -341,9 +347,13 @@ function SandboxTextView({
     body = (
       <div className="thread-files-state" role="alert">
         <span>{errorMessage(preview.error)}</span>
-        <button type="button" onClick={() => void preview.refetch()}>
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => void preview.refetch()}
+        >
           Retry
-        </button>
+        </Button>
       </div>
     );
   else if (preview.data.kind === "download")
@@ -400,16 +410,16 @@ function SandboxTextView({
     <section className="thread-file-viewer" aria-label={`File ${path}`}>
       <Toolbar threadId={threadId} path={path} label={path}>
         {previewKind === undefined || preview.data?.kind !== "text" ? null : (
-          <button
-            type="button"
-            className="thread-file-mode"
+          <Button
+            variant="ghost"
+            size="xs"
             aria-label={`${viewMode === "preview" ? "Preview" : "Source"}, switch to ${viewMode === "preview" ? "Source" : "Preview"}`}
             onClick={() =>
               setMode(viewMode === "preview" ? "source" : "preview")
             }
           >
             <span>{viewMode === "preview" ? "Preview" : "Source"}</span>
-          </button>
+          </Button>
         )}
       </Toolbar>
       <React.Suspense fallback={loadingFile}>{body}</React.Suspense>

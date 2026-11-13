@@ -174,6 +174,7 @@ function OrbScriptEditor({
         <h4 id={`${id}-title`}>{title}</h4>
         <p id={`${id}-description`}>{description}</p>
         <Textarea
+          mono
           className="project-orb-script-input"
           aria-label={title}
           aria-describedby={`${id}-description`}

@@ -679,7 +679,7 @@ describe("Thread Usage", () => {
     );
     const row = await vi.waitFor(() => {
       const found = [
-        ...document.querySelectorAll<HTMLElement>(".thread-menu-item"),
+        ...document.querySelectorAll<HTMLElement>(".dx-menu-item"),
       ].find((item) => item.textContent === "$0.08Credits");
       expect(found).toBeDefined();
       return found;

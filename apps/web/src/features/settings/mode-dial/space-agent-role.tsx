@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { spaceRouteText } from "../../../shared/space-agent-route.js";
+import { Button } from "../../../shared/ui/button.js";
 import { spaceAgentModelMutationOptions } from "../../spaces/space-agent-model-mutations.js";
 import { spaceAgentModelQueryOptions } from "../../spaces/space-agent-model-queries.js";
 import { modelRoutingChoicesQueryOptions } from "../model-routing/model-routing-queries.js";
@@ -124,15 +125,16 @@ export function SpaceAgentRole() {
         <span role="status">
           {save.isPending ? "Saving…" : dirty ? "Unsaved changes" : "In sync"}
         </span>
-        <button
-          type="button"
+        <Button
+          variant="outline"
+          size="sm"
           disabled={!dirty || save.isPending}
           onClick={() => setDraft(undefined)}
         >
           Discard
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          size="sm"
           className="tuning-save"
           disabled={!dirty || save.isPending || draft === undefined}
           onClick={() => {
@@ -141,7 +143,7 @@ export function SpaceAgentRole() {
           }}
         >
           {save.isPending ? "Saving…" : "Save"}
-        </button>
+        </Button>
       </footer>
       {error ? (
         <p className="tuning-error" role="alert">

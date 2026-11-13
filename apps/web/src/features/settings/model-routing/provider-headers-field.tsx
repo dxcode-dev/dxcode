@@ -42,7 +42,7 @@ export const ProviderHeadersField = ({
     {rows.map((row, index) => (
       <div key={row.key} className="routing-sheet-header-row">
         <Input
-          className="routing-sheet-control"
+          size="sm"
           aria-label={`Header Name ${index + 1}`}
           placeholder="x-custom-header"
           value={row.name}
@@ -57,7 +57,7 @@ export const ProviderHeadersField = ({
           }
         />
         <Input
-          className="routing-sheet-control"
+          size="sm"
           aria-label={`Header Value ${index + 1}`}
           type="password"
           autoComplete="new-password"
@@ -90,7 +90,6 @@ export const ProviderHeadersField = ({
       <Button
         type="button"
         size="xs"
-        className="routing-sheet-button"
         variant="outline"
         onClick={() =>
           onRows((current) => [

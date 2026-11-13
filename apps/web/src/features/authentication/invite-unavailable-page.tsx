@@ -27,14 +27,19 @@ export function InviteUnavailablePage({
         </p>
         <section className="sign-in-card" aria-label="Invite unavailable">
           {onRetry === undefined ? null : (
-            <Button className="sign-in-primary" onClick={onRetry}>
+            <Button
+              size="lg"
+              block
+              className="sign-in-primary"
+              onClick={onRetry}
+            >
               Try again
             </Button>
           )}
           <Link
             to="/"
             className={cn(
-              buttonVariants({ variant: "outline" }),
+              buttonVariants({ variant: "outline", size: "lg", block: true }),
               "sign-in-provider",
             )}
           >

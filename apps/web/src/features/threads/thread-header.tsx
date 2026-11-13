@@ -19,6 +19,7 @@ import { threadSelectionSummary } from "../../shared/thread-selection-summary.js
 import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { snoozeWakeText } from "../../shared/thread-snooze-presets.js";
 import { Avatar } from "../../shared/ui/avatar.js";
+import { Badge } from "../../shared/ui/badge.js";
 import { Button } from "../../shared/ui/button.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { ThreadTitleText } from "../../shared/ui/thread-title.js";
@@ -301,9 +302,9 @@ export function ThreadHeader({
           <ThreadTitleText thread={thread} maxCharacters={60} />
         </strong>
         {archived ? (
-          <span className="thread-archived-badge">
+          <Badge className="thread-archived-badge">
             {compact ? "Archived" : "Archived thread"}
-          </span>
+          </Badge>
         ) : own && thread.snoozedUntil !== undefined ? (
           <ThreadSnoozeBadge
             threadId={thread.id}
@@ -315,8 +316,9 @@ export function ThreadHeader({
         {compact ? null : <span className="thread-title-menu">{menu}</span>}
         <span className="thread-title-spacer" />
         {compact ? null : own ? (
-          <button
-            type="button"
+          <Button
+            variant="subtle"
+            size="xs"
             className="thread-title-action thread-title-action-text thread-title-project"
             title={projectName ?? "No project"}
             aria-label={`Project ${projectName ?? "No project"}`}
@@ -329,7 +331,7 @@ export function ThreadHeader({
           >
             <FolderGit2 aria-hidden="true" />
             <span>{projectName ?? "No project"}</span>
-          </button>
+          </Button>
         ) : (
           <span
             className="thread-title-action thread-title-action-text thread-title-project"

@@ -1,4 +1,3 @@
-import { ContextMenu } from "@base-ui/react/context-menu";
 import type { ThreadData } from "@dx/api";
 import { Link } from "@tanstack/react-router";
 import {
@@ -6,7 +5,6 @@ import {
   AlarmClockOff,
   Archive,
   ArchiveRestore,
-  ChevronRight,
   ChevronsDownUp,
   ChevronsUpDown,
   Copy,
@@ -19,45 +17,21 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
-import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import type { ThreadSnoozeController } from "../../shared/thread-snooze.js";
-import { snoozePresets } from "../../shared/thread-snooze-presets.js";
+import {
+  ContextMenuRoot,
+  ContextMenuTrigger,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+} from "../../shared/ui/menu.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
-
-/** The Snooze submenu's wake times, read as it opens. */
-function SnoozeContextItems({
-  threadId,
-  snooze,
-}: {
-  readonly threadId: ThreadData["id"];
-  readonly snooze: ThreadSnoozeController;
-}) {
-  const now = useNowMinute();
-  return (
-    <>
-      {snoozePresets(now).map((preset) => (
-        <ContextMenu.Item
-          key={preset.id}
-          className="thread-context-item"
-          onClick={() => snooze.snooze(threadId, preset.wakeAt(Date.now()))}
-        >
-          <span>{preset.label}</span>
-          <small className="thread-snooze-when">{preset.when}</small>
-        </ContextMenu.Item>
-      ))}
-      <ContextMenu.Separator className="thread-context-separator" />
-      <ContextMenu.Item
-        className="thread-context-item"
-        onClick={() => snooze.snoozeCustom(threadId)}
-      >
-        <span>Custom…</span>
-      </ContextMenu.Item>
-    </>
-  );
-}
+import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
 
 /** A parent's action: on All N Threads, with its children, or This Thread. */
 function FamilyContextSubmenu({
@@ -78,33 +52,22 @@ function FamilyContextSubmenu({
   readonly onAll: () => void;
   readonly onThis: () => void;
 }) {
-  const itemClassName = danger
-    ? "thread-context-item thread-menu-item-danger"
-    : "thread-context-item";
+  const tone = danger ? "danger" : undefined;
   return (
-    <ContextMenu.SubmenuRoot>
-      <ContextMenu.SubmenuTrigger className={itemClassName} disabled={disabled}>
+    <MenuSubmenuRoot>
+      <MenuSubmenuTrigger tone={tone} disabled={disabled}>
         {icon}
         <span>{label}</span>
-        <ChevronRight />
-      </ContextMenu.SubmenuTrigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Positioner
-          className="thread-context-positioner"
-          sideOffset={4}
-          alignOffset={-4}
-        >
-          <ContextMenu.Popup className="thread-context-menu">
-            <ContextMenu.Item className={itemClassName} onClick={onAll}>
-              <span>All {count + 1} Threads</span>
-            </ContextMenu.Item>
-            <ContextMenu.Item className={itemClassName} onClick={onThis}>
-              <span>This Thread</span>
-            </ContextMenu.Item>
-          </ContextMenu.Popup>
-        </ContextMenu.Positioner>
-      </ContextMenu.Portal>
-    </ContextMenu.SubmenuRoot>
+      </MenuSubmenuTrigger>
+      <MenuPopup alignOffset={-4}>
+        <MenuItem tone={tone} onClick={onAll}>
+          <span>All {count + 1} Threads</span>
+        </MenuItem>
+        <MenuItem tone={tone} onClick={onThis}>
+          <span>This Thread</span>
+        </MenuItem>
+      </MenuPopup>
+    </MenuSubmenuRoot>
   );
 }
 
@@ -170,24 +133,20 @@ function ThreadContextMenuItems({
     <>
       {subthreads === undefined ? null : (
         <>
-          <ContextMenu.Item
-            className="thread-context-item"
-            onClick={subthreads.onToggle}
-          >
+          <MenuItem onClick={subthreads.onToggle}>
             {subthreads.expanded ? <ChevronsDownUp /> : <ChevronsUpDown />}
             <span>
               {subthreads.expanded
                 ? "Collapse Subthreads"
                 : "Expand Subthreads"}
             </span>
-          </ContextMenu.Item>
-          <ContextMenu.Separator className="thread-context-separator" />
+          </MenuItem>
+          <MenuSeparator />
         </>
       )}
       {sourceThread === undefined ? null : (
         <>
-          <ContextMenu.Item
-            className="thread-context-item"
+          <MenuItem
             render={
               <Link
                 to="/threads/$threadId"
@@ -198,70 +157,55 @@ function ThreadContextMenuItems({
           >
             <SubthreadIcon strokeWidth={2} />
             <span>Open Source Thread</span>
-          </ContextMenu.Item>
-          <ContextMenu.Separator className="thread-context-separator" />
+          </MenuItem>
+          <MenuSeparator />
         </>
       )}
       {own ? (
         <>
           {thread.lifecycleState === "active" ? (
-            <ContextMenu.Item
-              className="thread-context-item"
+            <MenuItem
               disabled={pinning}
               onClick={() => onSetPinned(thread.pinnedAt === undefined)}
             >
               {thread.pinnedAt === undefined ? <Pin /> : <PinOff />}
               <span>{thread.pinnedAt === undefined ? "Pin" : "Unpin"}</span>
-            </ContextMenu.Item>
+            </MenuItem>
           ) : null}
           {snooze === undefined ? null : snooze.snoozed ? (
-            <ContextMenu.Item
-              className="thread-context-item"
-              onClick={() => snooze.controller.wake(thread.id)}
-            >
+            <MenuItem onClick={() => snooze.controller.wake(thread.id)}>
               <AlarmClockOff />
               <span>Wake</span>
-            </ContextMenu.Item>
+            </MenuItem>
           ) : (
-            <ContextMenu.SubmenuRoot>
-              <ContextMenu.SubmenuTrigger className="thread-context-item">
+            <MenuSubmenuRoot>
+              <MenuSubmenuTrigger>
                 <AlarmClock />
                 <span>Snooze</span>
-                <ChevronRight />
-              </ContextMenu.SubmenuTrigger>
-              <ContextMenu.Portal>
-                <ContextMenu.Positioner
-                  className="thread-context-positioner"
-                  sideOffset={4}
-                  alignOffset={-4}
-                >
-                  <ContextMenu.Popup className="thread-context-menu">
-                    <SnoozeContextItems
-                      threadId={thread.id}
-                      snooze={snooze.controller}
-                    />
-                  </ContextMenu.Popup>
-                </ContextMenu.Positioner>
-              </ContextMenu.Portal>
-            </ContextMenu.SubmenuRoot>
+              </MenuSubmenuTrigger>
+              <MenuPopup alignOffset={-4}>
+                <SnoozeMenuItems
+                  threadId={thread.id}
+                  snooze={snooze.controller}
+                />
+              </MenuPopup>
+            </MenuSubmenuRoot>
           )}
           {editing === undefined || title === undefined || creating ? null : (
             <>
-              <ContextMenu.Item
-                className="thread-context-item"
+              <MenuItem
                 onClick={() => editing.openRename({ id: thread.id, title })}
               >
                 <Pencil />
                 <span>Rename</span>
-              </ContextMenu.Item>
+              </MenuItem>
               <ThreadColorSubmenu
                 thread={thread}
-                itemClassName="thread-context-item"
                 onSelect={(color) => editing.setColor(thread.id, color)}
               />
             </>
           )}
-          <ContextMenu.Separator className="thread-context-separator" />
+          <MenuSeparator />
           {subthreads !== undefined ? (
             <FamilyContextSubmenu
               icon={
@@ -282,8 +226,7 @@ function ThreadContextMenuItems({
               onThis={() => onSetArchived(thread.lifecycleState === "active")}
             />
           ) : (
-            <ContextMenu.Item
-              className="thread-context-item"
+            <MenuItem
               disabled={archiving}
               onClick={() => onSetArchived(thread.lifecycleState === "active")}
             >
@@ -295,18 +238,18 @@ function ThreadContextMenuItems({
               <span>
                 {thread.lifecycleState === "active" ? "Archive" : "Unarchive"}
               </span>
-            </ContextMenu.Item>
+            </MenuItem>
           )}
           {editing === undefined ||
           title === undefined ||
           creating ? null : subthreads === undefined ? (
-            <ContextMenu.Item
-              className="thread-context-item thread-menu-item-danger"
+            <MenuItem
+              tone="danger"
               onClick={() => editing.openDelete({ id: thread.id, title })}
             >
               <Trash2 />
               <span>Delete</span>
-            </ContextMenu.Item>
+            </MenuItem>
           ) : (
             <FamilyContextSubmenu
               icon={<Trash2 />}
@@ -319,57 +262,38 @@ function ThreadContextMenuItems({
               onThis={() => editing.openDelete({ id: thread.id, title })}
             />
           )}
-          <ContextMenu.Separator className="thread-context-separator" />
+          <MenuSeparator />
         </>
       ) : null}
-      <ContextMenu.SubmenuRoot>
-        <ContextMenu.SubmenuTrigger className="thread-context-item">
+      <MenuSubmenuRoot>
+        <MenuSubmenuTrigger>
           <Copy />
           <span>Copy</span>
-          <ChevronRight />
-        </ContextMenu.SubmenuTrigger>
-        <ContextMenu.Portal>
-          <ContextMenu.Positioner
-            className="thread-context-positioner"
-            sideOffset={4}
-            alignOffset={-4}
-          >
-            <ContextMenu.Popup className="thread-context-menu">
-              <ContextMenu.Item
-                className="thread-context-item"
-                onClick={() => void copyThreadUrl(thread.id)}
-              >
-                <Link2 />
-                <span>Thread URL</span>
-              </ContextMenu.Item>
-              <ContextMenu.Item
-                className="thread-context-item"
-                onClick={() => void copyThreadId(thread.id)}
-              >
-                <Hash />
-                <span>Thread ID</span>
-              </ContextMenu.Item>
-            </ContextMenu.Popup>
-          </ContextMenu.Positioner>
-        </ContextMenu.Portal>
-      </ContextMenu.SubmenuRoot>
+        </MenuSubmenuTrigger>
+        <MenuPopup alignOffset={-4}>
+          <MenuItem onClick={() => void copyThreadUrl(thread.id)}>
+            <Link2 />
+            <span>Thread URL</span>
+          </MenuItem>
+          <MenuItem onClick={() => void copyThreadId(thread.id)}>
+            <Hash />
+            <span>Thread ID</span>
+          </MenuItem>
+        </MenuPopup>
+      </MenuSubmenuRoot>
     </>
   );
 }
 
 const menuPopup = (items: ReactNode) => (
-  <ContextMenu.Portal>
-    <ContextMenu.Positioner className="thread-context-positioner">
-      <ContextMenu.Popup
-        className="thread-context-menu"
-        // Only a keyboard close returns focus to the row; after a click
-        // the row would keep a focus highlight beside the new selection.
-        finalFocus={(closeType) => closeType === "keyboard"}
-      >
-        {items}
-      </ContextMenu.Popup>
-    </ContextMenu.Positioner>
-  </ContextMenu.Portal>
+  <MenuPopup
+    sideOffset={0}
+    // Only a keyboard close returns focus to the row; after a click
+    // the row would keep a focus highlight beside the new selection.
+    finalFocus={(closeType) => closeType === "keyboard"}
+  >
+    {items}
+  </MenuPopup>
 );
 
 /** Each row's menu, by the row's trigger element, for the list's one menu. */
@@ -393,7 +317,7 @@ export function SharedThreadContextMenu({
   const [active, setActive] = React.useState<ThreadContextMenuProps>();
   return (
     <SharedMenuRows.Provider value={rows}>
-      <ContextMenu.Root
+      <ContextMenuRoot
         onOpenChange={(open, details) => {
           if (!open) return;
           const target = details.event.target;
@@ -411,15 +335,15 @@ export function SharedThreadContextMenu({
           menu.onOpenChange?.(true);
         }}
       >
-        <ContextMenu.Trigger render={<div className="thread-context-scope" />}>
+        <ContextMenuTrigger render={<div className="thread-context-scope" />}>
           {children}
-        </ContextMenu.Trigger>
+        </ContextMenuTrigger>
         {menuPopup(
           active === undefined ? null : (
             <ThreadContextMenuItems key={active.thread.id} {...active} />
           ),
         )}
-      </ContextMenu.Root>
+      </ContextMenuRoot>
     </SharedMenuRows.Provider>
   );
 }
@@ -446,11 +370,11 @@ export function ThreadContextMenu({
       </div>
     );
   return (
-    <ContextMenu.Root onOpenChange={menu.onOpenChange}>
-      <ContextMenu.Trigger render={<div className="thread-context-trigger" />}>
+    <ContextMenuRoot onOpenChange={menu.onOpenChange}>
+      <ContextMenuTrigger render={<div className="thread-context-trigger" />}>
         {children}
-      </ContextMenu.Trigger>
+      </ContextMenuTrigger>
       {menuPopup(<ThreadContextMenuItems {...menu} />)}
-    </ContextMenu.Root>
+    </ContextMenuRoot>
   );
 }

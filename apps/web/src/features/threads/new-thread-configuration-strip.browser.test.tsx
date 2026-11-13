@@ -870,8 +870,12 @@ describe("new thread Orb picker", () => {
         "true",
         "false",
       ]);
-      expect(sizes[0]?.querySelector(".orb-picker-dot")).not.toBeNull();
-      expect(sizes[1]?.querySelector(".orb-picker-dot")).toBeNull();
+      expect(
+        sizes[0]?.querySelector(".dx-menu-check[data-checked]"),
+      ).not.toBeNull();
+      expect(
+        sizes[1]?.querySelector(".dx-menu-check[data-checked]"),
+      ).toBeNull();
 
       await React.act(() => sizes[1]?.click());
       expect(picker.onRunnerProfileChange).toHaveBeenCalledWith(

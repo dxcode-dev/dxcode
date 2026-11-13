@@ -1,6 +1,8 @@
-import { Popover } from "@base-ui/react/popover";
 import { SmilePlus } from "lucide-react";
 import * as React from "react";
+import { Button } from "../ui/button.js";
+import { Chip } from "../ui/chip.js";
+import { PopoverContent, PopoverRoot, PopoverTrigger } from "../ui/popover.js";
 import {
   REACTION_EMOJI,
   REACTION_NAME,
@@ -32,13 +34,15 @@ function ReactionChip({
     ...(reaction.agent ? ["dx"] : []),
   ];
   const others = reaction.count - who.length;
-  const label = `${REACTION_NAME[reaction.reaction]}: ${[
+  // The count leads, so the name holds the chip's visible text.
+  const label = `${reaction.count} ${REACTION_NAME[reaction.reaction]}: ${[
     ...who,
     ...(others > 0 ? [`${others} more`] : []),
   ].join(", ")}`;
   return (
-    <button
-      type="button"
+    <Chip
+      variant="outline"
+      size="sm"
       className="reaction-chip"
       data-reaction={reaction.reaction}
       data-agent={reaction.agent ? "" : undefined}
@@ -50,7 +54,7 @@ function ReactionChip({
     >
       <span aria-hidden="true">{REACTION_EMOJI[reaction.reaction]}</span>
       <span className="reaction-chip-count">{reaction.count}</span>
-    </button>
+    </Chip>
   );
 }
 
@@ -92,40 +96,42 @@ export function ReactionPicker({
 }) {
   const [open, setOpen] = React.useState(false);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
+    <PopoverRoot open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         className={triggerClassName}
         aria-label="Add Reaction"
         title="Add Reaction"
       >
         <SmilePlus aria-hidden="true" />
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner side="top" align="end" sideOffset={6}>
-          <Popover.Popup className="reaction-picker">
-            {REACTIONS.map((reaction) => {
-              const mine =
-                reactions.find((item) => item.reaction === reaction)?.mine ===
-                true;
-              return (
-                <button
-                  key={reaction}
-                  type="button"
-                  aria-label={REACTION_NAME[reaction]}
-                  title={REACTION_NAME[reaction]}
-                  aria-pressed={mine}
-                  onClick={() => {
-                    setOpen(false);
-                    onToggle(reaction, !mine);
-                  }}
-                >
-                  {REACTION_EMOJI[reaction]}
-                </button>
-              );
-            })}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="end"
+        className="reaction-picker"
+        aria-label="Reactions"
+      >
+        {REACTIONS.map((reaction) => {
+          const mine =
+            reactions.find((item) => item.reaction === reaction)?.mine === true;
+          return (
+            <Button
+              key={reaction}
+              variant="ghost"
+              size="icon-sm"
+              shape="round"
+              aria-label={REACTION_NAME[reaction]}
+              title={REACTION_NAME[reaction]}
+              aria-pressed={mine}
+              onClick={() => {
+                setOpen(false);
+                onToggle(reaction, !mine);
+              }}
+            >
+              {REACTION_EMOJI[reaction]}
+            </Button>
+          );
+        })}
+      </PopoverContent>
+    </PopoverRoot>
   );
 }

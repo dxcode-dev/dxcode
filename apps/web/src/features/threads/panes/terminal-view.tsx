@@ -1,10 +1,15 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadTerminalId } from "@dx/api";
 import { Ellipsis, RefreshCw } from "lucide-react";
 import {
   TerminalSessionContext,
   terminalEnvironmentFormId,
 } from "../../../shared/terminal-session.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 
 /** The Terminal with a floating `⋯` of Terminal actions at its top right. */
 export function TerminalView({
@@ -18,38 +23,29 @@ export function TerminalView({
     <TerminalSessionContext value={session}>
       <div className="pane-terminal-view">
         {children}
-        <Menu.Root>
-          <Menu.Trigger
+        <MenuRoot>
+          <MenuTrigger
             className="pane-terminal-actions"
             aria-label="Terminal Actions"
             title="Terminal Actions"
           >
             <Ellipsis aria-hidden="true" />
-          </Menu.Trigger>
-          <Menu.Portal>
-            <Menu.Positioner
-              className="thread-menu-positioner"
-              align="end"
-              sideOffset={4}
+          </MenuTrigger>
+          <MenuPopup align="end">
+            <MenuItem
+              nativeButton
+              render={
+                <button
+                  type="submit"
+                  form={terminalEnvironmentFormId(session)}
+                />
+              }
             >
-              <Menu.Popup className="thread-menu-popup thread-actions-menu">
-                <Menu.Item
-                  className="thread-menu-item"
-                  nativeButton
-                  render={
-                    <button
-                      type="submit"
-                      form={terminalEnvironmentFormId(session)}
-                    />
-                  }
-                >
-                  <RefreshCw aria-hidden="true" />
-                  <span>Refresh Environment</span>
-                </Menu.Item>
-              </Menu.Popup>
-            </Menu.Positioner>
-          </Menu.Portal>
-        </Menu.Root>
+              <RefreshCw aria-hidden="true" />
+              <span>Refresh Environment</span>
+            </MenuItem>
+          </MenuPopup>
+        </MenuRoot>
       </div>
     </TerminalSessionContext>
   );

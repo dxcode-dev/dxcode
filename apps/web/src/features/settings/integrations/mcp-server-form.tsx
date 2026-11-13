@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import {
   Check,
   ChevronRight,
@@ -11,7 +10,16 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../../shared/ui/button.js";
+import { Checkbox } from "../../../shared/ui/checkbox.js";
 import { Input } from "../../../shared/ui/input.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import type { McpTemplate } from "./mcp-catalog.js";
 import type { McpServerData } from "./mcp-queries.js";
@@ -136,49 +144,31 @@ function AuthenticationCard({
         <strong>{AUTH_COPY[value].title}</strong>
         {value === "auto" ? null : <span>{AUTH_COPY[value].detail}</span>}
       </div>
-      <Menu.Root>
-        <Menu.Trigger
+      <MenuRoot>
+        <MenuTrigger
           disabled={disabled}
           render={<Button size="xs" variant="ghost" type="button" />}
         >
           Change
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner"
-            align="end"
-            sideOffset={4}
+        </MenuTrigger>
+        <MenuPopup align="end">
+          {creating ? (
+            <MenuItem onClick={() => onChange("auto")}>
+              Detect Authentication
+            </MenuItem>
+          ) : null}
+          <MenuRadioGroup
+            value={value}
+            onValueChange={(next) => onChange(next as McpAuthMode)}
           >
-            <Menu.Popup className="thread-menu-popup mcp-menu-popup">
-              {creating ? (
-                <Menu.Item
-                  className="thread-menu-item mcp-menu-heading"
-                  onClick={() => onChange("auto")}
-                >
-                  Detect Authentication
-                </Menu.Item>
-              ) : null}
-              <Menu.RadioGroup
-                value={value}
-                onValueChange={(next) => onChange(next as McpAuthMode)}
-              >
-                {choices.map((mode) => (
-                  <Menu.RadioItem
-                    key={mode}
-                    value={mode}
-                    className="thread-menu-item mcp-menu-radio"
-                  >
-                    <Menu.RadioItemIndicator className="mcp-menu-indicator">
-                      <Check />
-                    </Menu.RadioItemIndicator>
-                    {AUTH_COPY[mode].title}
-                  </Menu.RadioItem>
-                ))}
-              </Menu.RadioGroup>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+            {choices.map((mode) => (
+              <MenuRadioItem key={mode} value={mode}>
+                {AUTH_COPY[mode].title}
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+        </MenuPopup>
+      </MenuRoot>
     </div>
   );
 }
@@ -216,6 +206,7 @@ function HeadersEditor({
   readonly disabled: boolean;
   readonly onChange: (headers: ReadonlyArray<McpHeaderField>) => void;
 }) {
+  const choiceId = React.useId();
   const [pasting, setPasting] = React.useState<string>();
   const [placeholder] = React.useState(emptyMcpHeader);
   const rows: ReadonlyArray<McpHeaderField> =
@@ -268,6 +259,7 @@ function HeadersEditor({
             }}
           />
           <label
+            htmlFor={`${choiceId}-secret-${index}`}
             className="mcp-header-secret"
             title={
               header.stored
@@ -275,8 +267,8 @@ function HeadersEditor({
                 : undefined
             }
           >
-            <input
-              type="checkbox"
+            <Checkbox
+              id={`${choiceId}-secret-${index}`}
               checked={header.secret}
               disabled={disabled || header.stored}
               onChange={(event) =>

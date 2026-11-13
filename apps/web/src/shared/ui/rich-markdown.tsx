@@ -1,3 +1,4 @@
+import { Button } from "./button.js";
 import "@fontsource/ibm-plex-mono/latin-400.css";
 import "@fontsource/ibm-plex-mono/latin-700.css";
 import { splitMentions } from "@dx/api";
@@ -112,9 +113,10 @@ function CopyButton({
   if (typeof navigator === "undefined" || navigator.clipboard === undefined)
     return null;
   return (
-    <button
+    <Button
+      variant="ghost"
+      size="icon-xs"
       ref={attach}
-      type="button"
       className="transcript-copy"
       aria-label={
         status === "copied"
@@ -137,7 +139,7 @@ function CopyButton({
             ? `${subject} could not be copied.`
             : ""}
       </span>
-    </button>
+    </Button>
   );
 }
 
@@ -166,15 +168,16 @@ function CodeBlock({
     >
       <CopyButton text={text} label={diagram ? "Copy diagram" : "Copy code"} />
       {!diagram && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-xs"
           className="markdown-wrap"
           aria-label="Toggle line wrap"
           aria-pressed={wrap}
           onClick={() => setWrap(!wrap)}
         >
           <WrapText aria-hidden="true" />
-        </button>
+        </Button>
       )}
       <pre>
         {diagram ? (
@@ -236,28 +239,30 @@ function MermaidBlock({
       <div className="markdown-mermaid-source">
         <CodeBlock content={content} source={text} />
         {image && (
-          <button
-            type="button"
+          <Button
+            variant="ghost"
+            size="icon-xs"
             className="markdown-mermaid-toggle"
             aria-label="Show diagram"
             onClick={() => setShowSource(false)}
           >
             <Image aria-hidden="true" />
-          </button>
+          </Button>
         )}
       </div>
     );
   return (
     <figure className="markdown-mermaid" data-diagram-label={image.label}>
       <CopyButton text={source} label="Copy Mermaid source" subject="Diagram" />
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-xs"
         className="markdown-mermaid-toggle"
         aria-label="Show Mermaid source"
         onClick={() => setShowSource(true)}
       >
         <Code aria-hidden="true" />
-      </button>
+      </Button>
       <div className="markdown-mermaid-scroll">
         <img
           src={image.src}
@@ -293,14 +298,15 @@ function ViewBlock({
     );
   const sourceBlock = <CodeBlock content={content} source={text} />;
   const toggle = (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="icon-xs"
       className="markdown-view-action"
       aria-label={showSource ? "Show view" : "Show view source"}
       onClick={() => setShowSource(!showSource)}
     >
       {showSource ? <Image aria-hidden="true" /> : <Code aria-hidden="true" />}
-    </button>
+    </Button>
   );
   if (showSource || source.trim() === "")
     return (

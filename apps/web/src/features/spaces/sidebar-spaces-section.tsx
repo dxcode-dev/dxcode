@@ -9,6 +9,7 @@ import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { ParticipantStack } from "../../shared/ui/avatar.js";
+import { Button } from "../../shared/ui/button.js";
 import {
   compactAge,
   epochOf,
@@ -228,24 +229,26 @@ export function SidebarSpacesSection({
             <i />
           </h2>
         )}
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-2xs"
           className="thread-group-action"
           aria-label="Discover Spaces"
           title="Discover Spaces"
           onClick={() => setDialog("discover")}
         >
           <Compass aria-hidden="true" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="subtle"
+          size="icon-2xs"
           className="thread-group-action"
           aria-label="New Space"
           title="New Space"
           onClick={() => setDialog("create")}
         >
           <Plus aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       {spacesQuery.isError ? (
         <div className="sidebar-empty" role="alert">

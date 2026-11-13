@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ClockFading } from "lucide-react";
 import type * as React from "react";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
+import { Chip } from "../../shared/ui/chip.js";
 import { threadQuickActionsQueryOptions } from "./thread-quick-actions-queries.js";
 
 /**
@@ -91,9 +92,10 @@ function ThreadQuickActions({
     >
       {shown.map((action) =>
         action.kind === "snooze" ? (
-          <button
+          <Chip
             key="snooze"
-            type="button"
+            variant="glass"
+            size="md"
             className="thread-quick-action"
             data-thread-quick-action="snooze"
             aria-label="Snooze Until I'm Needed"
@@ -102,11 +104,12 @@ function ThreadQuickActions({
           >
             <ClockFading aria-hidden="true" />
             <span>Snooze Until I'm Needed</span>
-          </button>
+          </Chip>
         ) : (
-          <button
+          <Chip
             key={`reply:${action.text}`}
-            type="button"
+            variant="glass"
+            size="md"
             className="thread-quick-action"
             data-thread-quick-action="reply"
             aria-label={`Reply "${action.text}"`}
@@ -117,7 +120,7 @@ function ThreadQuickActions({
               {replyIcon}
             </span>
             <span>{action.text}</span>
-          </button>
+          </Chip>
         ),
       )}
     </div>

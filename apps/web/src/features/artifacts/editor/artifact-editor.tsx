@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadArtifactComment } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -9,7 +8,6 @@ import {
   BetweenVerticalEnd,
   Check,
   ChevronDown,
-  ChevronRight,
   CircleAlert,
   Copy,
   GripVertical,
@@ -40,6 +38,18 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { SuggestMenu } from "../../../shared/comments/suggest-menu.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { Button } from "../../../shared/ui/button.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
+import { cn } from "../../../shared/utils.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
 import { artifactsApi } from "../artifacts-api.js";
@@ -160,44 +170,16 @@ function BlockKindItems({
     <>
       {BLOCK_KINDS.map(({ kind, label, convertible }) =>
         convertibleOnly && !convertible ? null : (
-          <Menu.Item
+          <MenuItem
             key={kind}
-            className="thread-menu-item"
             data-block-kind={kind}
             onClick={() => onPick(kind)}
           >
             {label}
-          </Menu.Item>
+          </MenuItem>
         ),
       )}
     </>
-  );
-}
-
-function MenuPopup({
-  children,
-  align = "start",
-  label,
-}: {
-  readonly children: React.ReactNode;
-  readonly align?: "start" | "end";
-  readonly label: string;
-}) {
-  return (
-    <Menu.Portal>
-      <Menu.Positioner
-        className="thread-menu-positioner"
-        align={align}
-        sideOffset={4}
-      >
-        <Menu.Popup
-          className="thread-menu-popup thread-actions-menu"
-          aria-label={label}
-        >
-          {children}
-        </Menu.Popup>
-      </Menu.Positioner>
-    </Menu.Portal>
   );
 }
 
@@ -250,30 +232,30 @@ function BlockHandle({
   return (
     <>
       <div className="artifact-block-handle" style={{ top }}>
-        <Menu.Root onOpenChange={onPin}>
-          <Menu.Trigger
+        <MenuRoot onOpenChange={onPin}>
+          <MenuTrigger
             className="artifact-handle-button"
             aria-label="Insert Below"
             title="Insert Below"
           >
             <Plus aria-hidden="true" />
-          </Menu.Trigger>
-          <MenuPopup label="Insert Below">
+          </MenuTrigger>
+          <MenuPopup align="start" aria-label="Insert Below">
             <BlockKindItems
               onPick={(kind) =>
                 run((state) => insertBlockBelow(state, pos, kind))
               }
             />
           </MenuPopup>
-        </Menu.Root>
-        <Menu.Root
+        </MenuRoot>
+        <MenuRoot
           open={optionsOpen}
           onOpenChange={(open) => {
             setOptionsOpen(open);
             onPin(open);
           }}
         >
-          <Menu.Trigger
+          <MenuTrigger
             className="artifact-handle-button artifact-grip"
             aria-label="Block Options"
             title="Drag to move, or click for options"
@@ -318,56 +300,42 @@ function BlockHandle({
             }}
           >
             <GripVertical aria-hidden="true" />
-          </Menu.Trigger>
-          <MenuPopup label="Block Options">
-            <Menu.SubmenuRoot>
-              <Menu.SubmenuTrigger className="thread-menu-item">
-                Turn Into
-                <ChevronRight aria-hidden="true" />
-              </Menu.SubmenuTrigger>
-              <Menu.Portal>
-                <Menu.Positioner
-                  className="thread-menu-positioner"
-                  alignOffset={-5}
-                  sideOffset={4}
+          </MenuTrigger>
+          <MenuPopup align="start" aria-label="Block Options">
+            <MenuSubmenuRoot>
+              <MenuSubmenuTrigger>
+                <span>Turn Into</span>
+              </MenuSubmenuTrigger>
+              <MenuPopup alignOffset={-5} aria-label="Turn Into">
+                <BlockKindItems
+                  onPick={(kind) =>
+                    run((state) => turnBlockInto(state, pos, kind))
+                  }
+                  convertibleOnly
+                />
+                <MenuItem
+                  onClick={() => {
+                    // The image goes at the block's start; its text stays.
+                    run((state) =>
+                      state.tr.setSelection(
+                        TextSelection.near(state.doc.resolve(pos + 1)),
+                      ),
+                    );
+                    session.pickImage();
+                  }}
                 >
-                  <Menu.Popup
-                    className="thread-menu-popup thread-actions-menu thread-actions-submenu"
-                    aria-label="Turn Into"
-                  >
-                    <BlockKindItems
-                      onPick={(kind) =>
-                        run((state) => turnBlockInto(state, pos, kind))
-                      }
-                      convertibleOnly
-                    />
-                    <Menu.Item
-                      className="thread-menu-item"
-                      onClick={() => {
-                        // The image goes at the block's start; its text stays.
-                        run((state) =>
-                          state.tr.setSelection(
-                            TextSelection.near(state.doc.resolve(pos + 1)),
-                          ),
-                        );
-                        session.pickImage();
-                      }}
-                    >
-                      Image
-                    </Menu.Item>
-                  </Menu.Popup>
-                </Menu.Positioner>
-              </Menu.Portal>
-            </Menu.SubmenuRoot>
+                  Image
+                </MenuItem>
+              </MenuPopup>
+            </MenuSubmenuRoot>
             {(
               [
                 [-1, ArrowUp, "Move Up"],
                 [1, ArrowDown, "Move Down"],
               ] as const
             ).map(([direction, Icon, label]) => (
-              <Menu.Item
+              <MenuItem
                 key={label}
-                className="thread-menu-item"
                 onClick={() => {
                   run((state) => moveBlock(state, pos, direction));
                   onDone();
@@ -375,18 +343,16 @@ function BlockHandle({
               >
                 <Icon aria-hidden="true" />
                 {label}
-              </Menu.Item>
+              </MenuItem>
             ))}
-            <Menu.Item
-              className="thread-menu-item"
+            <MenuItem
               onClick={() => run((state) => duplicateBlock(state, pos))}
             >
               <Copy aria-hidden="true" />
               Duplicate
-            </Menu.Item>
-            <Menu.Separator className="thread-menu-separator" />
-            <Menu.Item
-              className="thread-menu-item"
+            </MenuItem>
+            <MenuSeparator />
+            <MenuItem
               onClick={() => {
                 run((state) => deleteBlock(state, pos));
                 onDone();
@@ -394,9 +360,9 @@ function BlockHandle({
             >
               <Trash2 aria-hidden="true" />
               Delete
-            </Menu.Item>
+            </MenuItem>
           </MenuPopup>
-        </Menu.Root>
+        </MenuRoot>
       </div>
       {press?.dragging && drop !== undefined ? (
         <div
@@ -416,8 +382,9 @@ function TableTools({
 }) {
   return (
     <>
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="xs"
         className="artifact-tool artifact-table-tool"
         title="Add Row"
         onClick={() => onAction("add-row")}
@@ -427,9 +394,10 @@ function TableTools({
           className="artifact-tool-phone-icon"
         />
         <span>Add Row</span>
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="subtle"
+        size="xs"
         className="artifact-tool artifact-table-tool"
         title="Add Column"
         onClick={() => onAction("add-column")}
@@ -439,10 +407,13 @@ function TableTools({
           className="artifact-tool-phone-icon"
         />
         <span>Add Column</span>
-      </button>
-      <Menu.Root>
-        <Menu.Trigger
-          className="artifact-tool artifact-table-tool"
+      </Button>
+      <MenuRoot>
+        <MenuTrigger
+          className={cn(
+            buttonVariants({ variant: "subtle", size: "xs" }),
+            "artifact-tool artifact-table-tool",
+          )}
           aria-label="Row Options"
           title="Row Options"
         >
@@ -452,47 +423,27 @@ function TableTools({
           />
           <span>Row Options</span>
           <ChevronDown aria-hidden="true" className="artifact-tool-caret" />
-        </Menu.Trigger>
-        <MenuPopup label="Row Options">
-          <Menu.Item
-            className="thread-menu-item"
-            onClick={() => onAction("align-left")}
-          >
+        </MenuTrigger>
+        <MenuPopup align="start" aria-label="Row Options">
+          <MenuItem onClick={() => onAction("align-left")}>
             Align Column Left
-          </Menu.Item>
-          <Menu.Item
-            className="thread-menu-item"
-            onClick={() => onAction("align-center")}
-          >
+          </MenuItem>
+          <MenuItem onClick={() => onAction("align-center")}>
             Align Column Center
-          </Menu.Item>
-          <Menu.Item
-            className="thread-menu-item"
-            onClick={() => onAction("align-right")}
-          >
+          </MenuItem>
+          <MenuItem onClick={() => onAction("align-right")}>
             Align Column Right
-          </Menu.Item>
-          <Menu.Separator className="thread-menu-separator" />
-          <Menu.Item
-            className="thread-menu-item"
-            onClick={() => onAction("delete-row")}
-          >
-            Delete Row
-          </Menu.Item>
-          <Menu.Item
-            className="thread-menu-item"
-            onClick={() => onAction("delete-column")}
-          >
+          </MenuItem>
+          <MenuSeparator />
+          <MenuItem onClick={() => onAction("delete-row")}>Delete Row</MenuItem>
+          <MenuItem onClick={() => onAction("delete-column")}>
             Delete Column
-          </Menu.Item>
-          <Menu.Item
-            className="thread-menu-item"
-            onClick={() => onAction("delete-table")}
-          >
+          </MenuItem>
+          <MenuItem onClick={() => onAction("delete-table")}>
             Delete Table
-          </Menu.Item>
+          </MenuItem>
         </MenuPopup>
-      </Menu.Root>
+      </MenuRoot>
     </>
   );
 }
@@ -722,58 +673,65 @@ function ArtifactToolbar({
             }}
           />
         )}
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
           className="artifact-tool"
           title="Table"
           onClick={() => run((state) => insertBlock(state, "table"))}
         >
           <Table aria-hidden="true" />
           <span>Table</span>
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="subtle"
+          size="xs"
           className="artifact-tool"
           aria-label="Insert Image"
           title="Image"
           onClick={onImage}
         >
           <ImageIcon aria-hidden="true" />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="subtle"
+          size="xs"
           className="artifact-tool"
           title="Checklist"
           onClick={() => run((state) => insertBlock(state, "checklist"))}
         >
           <ListChecks aria-hidden="true" />
           <span>Checklist</span>
-        </button>
-        <Menu.Root>
-          <Menu.Trigger
-            className="artifact-tool"
+        </Button>
+        <MenuRoot>
+          <MenuTrigger
+            className={cn(
+              buttonVariants({ variant: "subtle", size: "xs" }),
+              "artifact-tool",
+            )}
             aria-label="Insert"
             title="Insert"
           >
             <Plus aria-hidden="true" />
             <span>Insert</span>
-          </Menu.Trigger>
-          <MenuPopup label="Insert">
+          </MenuTrigger>
+          <MenuPopup align="start" aria-label="Insert">
             <BlockKindItems
               onPick={(kind) => run((state) => insertBlock(state, kind))}
             />
-            <Menu.Item className="thread-menu-item" onClick={onImage}>
+            <MenuItem onClick={onImage}>
               <ImageIcon aria-hidden="true" />
               Image
-            </Menu.Item>
+            </MenuItem>
             <ChipInsertItems
               threadId={threadId}
               onInsert={(source) => run((state) => insertChip(state, source))}
             />
           </MenuPopup>
-        </Menu.Root>
-        <button
-          type="button"
+        </MenuRoot>
+        <Button
+          variant="subtle"
+          size="xs"
           className="artifact-tool"
           title="Comment"
           disabled={!snapshot.selection.ranged}
@@ -781,7 +739,7 @@ function ArtifactToolbar({
         >
           <MessageSquarePlus aria-hidden="true" />
           <span>Comment</span>
-        </button>
+        </Button>
         <NotifyAgentButton
           threadId={threadId}
           artifactId={artifactId}
@@ -792,8 +750,9 @@ function ArtifactToolbar({
             onAction={(action) => run((state) => tableAction(state, action))}
           />
         ) : null}
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="xs"
           className="artifact-tool artifact-tool-end"
           aria-pressed={wide}
           aria-label="Wide Layout"
@@ -801,7 +760,7 @@ function ArtifactToolbar({
           onClick={onWide}
         >
           <MoveHorizontal aria-hidden="true" />
-        </button>
+        </Button>
       </fieldset>
       {dictation === undefined ? null : (
         <div className="artifact-dictation-notice" ref={setNoticeHost} />
@@ -830,12 +789,20 @@ function ArtifactNotices({
             versions are kept and marked; remove the one you don't want.
           </span>
           <div className="artifact-notice-actions">
-            <button type="button" onClick={() => session.keepBoth()}>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => session.keepBoth()}
+            >
               Done
-            </button>
-            <button type="button" onClick={() => session.keepMine()}>
+            </Button>
+            <Button
+              variant="outline"
+              size="xs"
+              onClick={() => session.keepMine()}
+            >
               Keep My Version
-            </button>
+            </Button>
           </div>
         </div>
       ) : snapshot.merged !== undefined ? (
@@ -925,25 +892,27 @@ function ArtifactHeader({
         onSelect={onSelectComment}
       />
       {readOnly ? null : (
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="artifact-icon-button"
           aria-label="Rename"
           title="Rename"
           onClick={onRename}
         >
           <Pencil aria-hidden="true" />
-        </button>
+        </Button>
       )}
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="artifact-icon-button"
         aria-label="Find in Artifact"
         title={`Find in Artifact (${modKey()}F)`}
         onClick={onFind}
       >
         <Search aria-hidden="true" />
-      </button>
+      </Button>
       <ExportMenu session={session} title={snapshot.title} />
     </header>
   );

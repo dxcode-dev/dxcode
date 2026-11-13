@@ -1,9 +1,11 @@
 import { ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
 import * as React from "react";
+import { Button } from "./button.js";
+import type { ViewerMedia } from "./image-viewer.js";
+import { LazyImageViewer as ImageViewer } from "./lazy-image-viewer.js";
 import type { MarkdownMediaSource } from "./markdown-file-link-context.js";
 import type { GalleryItem } from "./markdown-galleries.js";
 import { useMarkdownMediaSource } from "./markdown-media-source.js";
-import { MediaViewer, type ViewerMedia } from "./media-viewer.js";
 
 const viewerMedia = (
   source: MarkdownMediaSource,
@@ -91,8 +93,9 @@ export function MarkdownMediaGallery({
             preload="metadata"
           />
         )}
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="icon-sm"
           className="markdown-gallery-step"
           data-direction="previous"
           aria-label="Previous"
@@ -100,9 +103,10 @@ export function MarkdownMediaGallery({
           onClick={() => step(-1)}
         >
           <ChevronLeft />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           className="markdown-gallery-step"
           data-direction="next"
           aria-label="Next"
@@ -110,16 +114,17 @@ export function MarkdownMediaGallery({
           onClick={() => step(1)}
         >
           <ChevronRight />
-        </button>
-        <button
-          type="button"
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
           className="markdown-gallery-expand"
           aria-label="Open full screen"
           title="Open full screen"
           onClick={() => setViewing(shown)}
         >
           <Maximize2 />
-        </button>
+        </Button>
       </div>
       <figcaption className="markdown-gallery-caption">
         <span className="markdown-gallery-name">{current.name}</span>
@@ -128,7 +133,7 @@ export function MarkdownMediaGallery({
         </span>
       </figcaption>
       {viewing === undefined ? null : (
-        <MediaViewer
+        <ImageViewer
           items={media}
           index={viewing}
           onIndexChange={(next) => {
@@ -165,7 +170,7 @@ export function MarkdownImageOpener({
         <img src={source.url} alt={name} title={title} loading="lazy" />
       </button>
       {open && media !== undefined ? (
-        <MediaViewer
+        <ImageViewer
           items={[media]}
           index={0}
           onIndexChange={() => undefined}

@@ -4,6 +4,7 @@ import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { PageShell } from "../../../shared/layout/page-shell.js";
 import { Button } from "../../../shared/ui/button.js";
+import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { BugReportDialog } from "./bug-report-detail.js";
 import { firstLine, reportSource, sentAt } from "./bug-report-format.js";
 import {
@@ -36,20 +37,19 @@ export function AllBugReportsPage({
       (access.data?.reader === true && reports.isPending) ? (
         <DxLoading label="Loading bug reports…" />
       ) : access.data?.reader !== true ? (
-        <div className="empty-state bug-reports-empty">
-          <strong>
-            Only this deployment's report readers see every report.
-          </strong>
-          <Link to="/bug-reports">Your Reports</Link>
-        </div>
+        <EmptyState
+          className="bug-reports-empty"
+          title="Only this deployment's report readers see every report."
+          action={<Link to="/bug-reports">Your Reports</Link>}
+        />
       ) : reports.isError ? (
-        <div className="empty-state bug-reports-empty">
-          <strong>Bug reports could not be loaded.</strong>
-        </div>
+        <EmptyState
+          className="bug-reports-empty"
+          tone="error"
+          title="Bug reports could not be loaded."
+        />
       ) : items.length === 0 ? (
-        <div className="empty-state bug-reports-empty">
-          <strong>No bug reports yet</strong>
-        </div>
+        <EmptyState className="bug-reports-empty" title="No bug reports yet" />
       ) : (
         <>
           <ul className="bug-reports-list">

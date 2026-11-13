@@ -539,9 +539,12 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
       ),
     );
     await act(() => vi.advanceTimersByTime(400));
-    expect(
-      document.querySelector(".mobile-sidebar-drawer:not([hidden])"),
-    ).toBeNull();
+    // The shared sheet hides once its slide-out animation ends.
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector(".mobile-sidebar-drawer:not([hidden])"),
+      ).toBeNull(),
+    );
     expect(document.activeElement).toBe(mobileSidebarTrigger);
 
     await act(() => mobileSidebarTrigger?.click());
@@ -551,9 +554,12 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     await act(() => vi.advanceTimersByTime(400));
-    expect(
-      document.querySelector(".mobile-sidebar-drawer:not([hidden])"),
-    ).toBeNull();
+    // The shared sheet hides once its slide-out animation ends.
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector(".mobile-sidebar-drawer:not([hidden])"),
+      ).toBeNull(),
+    );
 
     await act(() => mobileSidebarTrigger?.click());
     const closeSidebar = document.querySelector<HTMLButtonElement>(
@@ -562,9 +568,12 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
     expect(closeSidebar).not.toBeNull();
     await act(() => closeSidebar?.click());
     await act(() => vi.advanceTimersByTime(400));
-    expect(
-      document.querySelector(".mobile-sidebar-drawer:not([hidden])"),
-    ).toBeNull();
+    // The shared sheet hides once its slide-out animation ends.
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector(".mobile-sidebar-drawer:not([hidden])"),
+      ).toBeNull(),
+    );
 
     await act(() => crossBreakpoint(false));
     expect(routeIdentities.size).toBe(1);

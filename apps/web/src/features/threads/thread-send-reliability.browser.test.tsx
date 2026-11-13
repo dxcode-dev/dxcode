@@ -530,7 +530,7 @@ const open = async (
   /** The Send button shows the New Thread composer's pending mark. */
   const sending = () =>
     submitButton().getAttribute("aria-busy") === "true" &&
-    submitButton().hasAttribute("data-submitting") &&
+    submitButton().hasAttribute("data-busy") &&
     submitButton().querySelector(".processing-dot.dictation-processing-dot") !==
       null &&
     submitButton().querySelector("svg") === null;
@@ -539,7 +539,7 @@ const open = async (
     submitButton().querySelector("svg") !== null &&
     submitButton().querySelector(".processing-dot") === null &&
     !submitButton().hasAttribute("aria-busy") &&
-    !submitButton().hasAttribute("data-submitting");
+    !submitButton().hasAttribute("data-busy");
   /** Nothing marks Send pending: Stop replaced it, or it shows its arrow. */
   const sendSettled = () =>
     container.querySelector('button[type="submit"].composer-submit') === null ||

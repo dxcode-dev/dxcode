@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 /* dx's toasts: one compact row in the app's UI font, with a text action and
    an inline dismiss button. Scoped to the app's Toaster so sonner's own
    rules stay underneath. */
@@ -5,24 +7,24 @@
   font-family: var(--font-ui);
 }
 .dx-toaster[data-sonner-toaster] [data-sonner-toast][data-styled="true"] {
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 36px;
-  padding: 7px 8px 7px 10px;
-  font-size: 12px;
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  padding: 7px var(--space-2) 7px var(--space-2-5);
+  font-size: var(--text-sm);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow-ink) 28%, transparent);
 }
 .dx-toaster[data-sonner-toaster]
   [data-sonner-toast][data-styled="true"]
   [data-title] {
-  font-weight: 500;
-  line-height: 16px;
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4);
 }
 .dx-toaster[data-sonner-toaster]
   [data-sonner-toast][data-styled="true"]
   [data-description] {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 15px;
 }
 .dx-toaster[data-sonner-toaster]
@@ -44,12 +46,12 @@
   [data-sonner-toast][data-styled="true"]
   [data-button] {
   height: 22px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   color: var(--popover-foreground);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
 }
 .dx-toaster[data-sonner-toaster]
   [data-sonner-toast][data-styled="true"]
@@ -66,7 +68,7 @@
   flex: none;
   color: var(--muted-foreground);
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   transform: none;
 }

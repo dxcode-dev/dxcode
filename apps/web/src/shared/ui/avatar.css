@@ -1,3 +1,5 @@
+@import "./tokens.css";
+
 /* People: avatars and overlapping avatar stacks. */
 .dx-avatar {
   position: relative;
@@ -7,12 +9,12 @@
   width: 20px;
   height: 20px;
   overflow: visible;
-  color: #fff;
-  border-radius: 999px;
+  color: var(--on-accent);
+  border-radius: var(--radius-full);
   background: oklch(52% 0.09 var(--avatar-hue, 160));
-  font-size: 8.5px;
-  font-weight: 600;
-  line-height: 1;
+  font-size: var(--text-4xs);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-none);
 }
 /* A grid item's automatic minimum size follows its picture's aspect ratio,
    so a portrait photo would grow past the frame into an oval; a zero minimum
@@ -33,7 +35,7 @@
   height: 6px;
   content: "";
   border: 1.5px solid var(--surface);
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--success);
 }
 .participant-stack {
@@ -49,5 +51,5 @@
 .participant-more {
   margin-left: 3px;
   color: var(--muted-foreground);
-  font-size: 10px;
+  font-size: var(--text-2xs);
 }

@@ -5,10 +5,10 @@
   gap: 5px;
   flex: none;
   height: 24px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   color: var(--muted-foreground);
   border: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: transparent;
   cursor: pointer;
 }
@@ -24,22 +24,16 @@
   height: 13px;
   color: var(--success);
 }
-.thread-menu-label {
-  padding: 6px 8px 4px;
-  color: var(--muted-foreground);
-  font-size: 10.5px;
-  font-weight: 500;
-}
-.thread-participants-menu {
+.dx-menu.thread-participants-menu {
   width: min(260px, calc(100vw - 8px));
 }
 .thread-participant-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 30px;
-  padding: 0 8px;
-  font-size: 11.5px;
+  padding: 0 var(--space-2);
+  font-size: var(--text-sm);
 }
 .thread-participant-row .dx-avatar {
   width: 20px;
@@ -51,18 +45,11 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.thread-participant-badge {
-  padding: 1px 6px;
-  color: var(--muted-foreground);
-  border-radius: 4px;
-  background: var(--muted);
-  font-size: 10px;
-}
 .thread-participant-live {
   width: 7px;
   height: 7px;
   margin-left: auto;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--success);
 }
 
@@ -72,32 +59,32 @@
 }
 .thread-share-dialog > h2 {
   margin: 0;
-  padding: 14px 18px;
+  padding: var(--space-3-5) 18px;
   border-bottom: 1px solid var(--divider);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
 }
 .thread-share-section {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
-  padding: 14px 18px;
+  gap: var(--space-2);
+  padding: var(--space-3-5) 18px;
   border-bottom: 1px solid var(--divider);
 }
 .thread-share-section h3 {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
-  font-weight: 500;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
 }
 .thread-share-url {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--space-0-5);
   height: 32px;
-  padding: 0 4px 0 10px;
+  padding: 0 var(--space-1) 0 var(--space-2-5);
   border: 1px solid var(--outline);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--muted);
 }
 .thread-share-url-text {
@@ -105,8 +92,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-family: var(--font-mono-family);
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -116,7 +103,7 @@
   width: 24px;
   height: 24px;
   color: var(--muted-foreground);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .thread-share-open:hover {
   color: var(--foreground);
@@ -129,7 +116,7 @@
 .thread-share-row {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-height: 40px;
 }
 .thread-share-row > div {
@@ -138,13 +125,13 @@
   min-width: 0;
 }
 .thread-share-row strong {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .thread-share-row span,
 .thread-share-row a {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .thread-share-row a {
   text-decoration: underline;
@@ -157,10 +144,10 @@
   height: 24px;
   color: var(--foreground);
   border: 1px solid var(--outline);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
 }
 .thread-share-workspace-mark > svg {
   width: 13px;
@@ -168,46 +155,31 @@
 }
 .thread-share-permission {
   color: var(--foreground);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .thread-share-permission-static {
   flex: none;
   color: var(--foreground);
-  font-size: 11.5px;
-}
-.thread-share-menu {
-  width: 150px;
-}
-.thread-share-radio-dot {
-  display: grid;
-  place-items: center;
-  width: 12px;
-  height: 12px;
-}
-.thread-share-radio-indicator {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: currentColor;
+  font-size: var(--text-sm);
 }
 .thread-share-section > .thread-share-note {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .thread-share-section > .thread-share-error {
   margin: 0;
   color: var(--destructive);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .thread-share-status {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  margin: 14px 18px 18px;
-  padding: 12px;
+  gap: var(--space-2-5);
+  margin: var(--space-3-5) 18px 18px;
+  padding: var(--space-3);
   border: 1px solid var(--outline);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--muted);
 }
 .thread-share-status > svg {
@@ -222,29 +194,23 @@
 }
 .thread-share-status > div {
   display: grid;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 .thread-share-status strong {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
 }
 .thread-share-status span {
   color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 1.45;
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
 }
 
 .thread-share-checkbox {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   cursor: pointer;
-}
-.thread-share-checkbox > input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--primary);
 }
 
 /* Who sent a message in a shared Thread. */
@@ -252,19 +218,19 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  margin-bottom: 4px;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-1);
   color: var(--muted-foreground);
-  font-size: 10.5px;
+  font-size: var(--text-xs);
 }
 .message-author .dx-avatar {
   width: 16px;
   height: 16px;
-  font-size: 7.5px;
+  font-size: var(--text-avatar-sm);
 }
 .message-author-name {
   color: var(--foreground);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 .message-author time {
   color: var(--muted-foreground);
@@ -282,17 +248,17 @@
 .shared-composer-notice {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   max-width: 41rem;
-  margin: 0 auto 6px;
+  margin: 0 auto var(--space-1-5);
   pointer-events: auto;
-  padding: 6px 10px;
+  padding: var(--space-1-5) var(--space-2-5);
   color: var(--muted-foreground);
   border: 1px solid var(--outline);
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: var(--muted);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .shared-composer-notice > svg {
   width: 13px;
@@ -304,24 +270,24 @@
 .composer-mention-card {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
   width: min(100%, 26rem);
   /* Left-aligned with the composer (max 41rem, centered). */
   margin: 0 auto 6px max(0px, calc((100% - 41rem) / 2));
   pointer-events: auto;
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-2-5);
   color: var(--muted-foreground);
   border: 1px solid var(--outline);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--popover, var(--background));
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  font-size: 11.5px;
-  line-height: 1.45;
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--shadow-ink) 18%, transparent);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
 }
 .composer-mention-card > svg {
   width: 13px;
   height: 13px;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   flex: none;
 }
 .composer-mention-link {
@@ -338,15 +304,15 @@
   flex-direction: column;
   align-items: stretch;
   gap: 1px;
-  padding: 4px;
+  padding: var(--space-1);
 }
 .composer-mention-option {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-height: 30px;
-  padding: 0 8px;
-  border-radius: 6px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
   cursor: pointer;
 }
 .composer-mention-option[data-active] {
@@ -356,7 +322,7 @@
   width: 20px;
   height: 20px;
   flex: none;
-  font-size: 8px;
+  font-size: var(--text-4xs);
 }
 .composer-mention-agent {
   display: inline-grid;
@@ -370,7 +336,7 @@
 }
 .composer-mention-handle {
   color: var(--foreground);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
   white-space: nowrap;
 }
 .composer-mention-name {
@@ -382,14 +348,14 @@
 .composer-chat-banner {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   max-width: 41rem;
-  margin: 0 auto 6px;
-  padding: 0 4px;
+  margin: 0 auto var(--space-1-5);
+  padding: 0 var(--space-1);
   pointer-events: auto;
   color: var(--chat-mention-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .composer-chat-banner > svg {
   width: 13px;
@@ -398,7 +364,7 @@
 }
 .composer-chat-banner strong {
   color: var(--foreground);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 
 /* Messages people wrote: plain text with tagged members. */
@@ -408,10 +374,10 @@
 }
 .message-mention {
   padding: 0 3px;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   color: var(--chat-mention-foreground);
   background: var(--chat-mention-background);
-  font-weight: 500;
+  font-weight: var(--weight-medium);
 }
 button.message-mention,
 .message-author-trigger {
@@ -428,7 +394,7 @@ button.message-mention {
 .message-author-trigger {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   padding: 0;
   color: inherit;
   background: none;
@@ -437,27 +403,20 @@ button.message-mention {
 .user-message[data-continued] {
   margin-top: -6px;
 }
-.member-card-positioner {
-  z-index: 210;
-}
-.member-card {
+.dx-popover.member-card {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   min-width: 200px;
   max-width: 300px;
-  padding: 10px 12px;
-  border: 1px solid var(--outline);
-  border-radius: 10px;
-  background: var(--popover, var(--background));
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
-  font-size: 11.5px;
+  padding: var(--space-2-5) var(--space-3);
+  font-size: var(--text-xs);
 }
 .member-card .dx-avatar {
   width: 32px;
   height: 32px;
   flex: none;
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .member-card > div {
   display: grid;
@@ -465,7 +424,7 @@ button.message-mention {
 }
 .member-card strong {
   color: var(--foreground);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 .member-card span {
   overflow: hidden;
@@ -474,20 +433,25 @@ button.message-mention {
   white-space: nowrap;
 }
 
-/* Chat mode tints the composer so it is clear no agent will answer. */
-:root {
-  --chat-mention-foreground: light-dark(#5b3fc4, #c6b8ff);
-  --chat-mention-background: light-dark(
-    rgb(124 92 255 / 0.12),
-    rgb(150 125 255 / 0.2)
+/* Chat mode tints the composer, in the palette's purple, so it is clear
+   no agent will answer. */
+:root,
+[data-palette] {
+  --chat-mention-foreground: var(--thread-color-purple);
+  --chat-mention-background: color-mix(
+    in srgb,
+    var(--thread-color-purple) 16%,
+    transparent
   );
-  --chat-composer-border: light-dark(
-    rgb(124 92 255 / 0.55),
-    rgb(160 136 255 / 0.55)
+  --chat-composer-border: color-mix(
+    in srgb,
+    var(--thread-color-purple) 55%,
+    transparent
   );
-  --chat-composer-background: light-dark(
-    rgb(124 92 255 / 0.05),
-    rgb(150 125 255 / 0.08)
+  --chat-composer-background: color-mix(
+    in srgb,
+    var(--thread-color-purple) 6%,
+    transparent
   );
 }
 .agent-composer[data-chat-mode] {
@@ -504,7 +468,7 @@ button.message-mention {
 .thread-title-owner .dx-avatar {
   width: 18px;
   height: 18px;
-  font-size: 8px;
+  font-size: var(--text-4xs);
 }
 .thread-follow-button {
   flex: none;
@@ -524,7 +488,7 @@ button.message-mention {
   }
 }
 .transcript-row[data-notification-target] {
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   animation: notification-target-flash 2.4s ease-out;
 }
 @media (prefers-reduced-motion: reduce) {

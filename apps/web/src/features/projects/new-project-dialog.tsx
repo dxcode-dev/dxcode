@@ -1,5 +1,3 @@
-import { Combobox } from "@base-ui/react/combobox";
-import { Dialog } from "@base-ui/react/dialog";
 import type { GitHubGrantData, SettingsContextData } from "@dx/api";
 import {
   isValidProjectName,
@@ -11,7 +9,6 @@ import {
   Building2,
   Check,
   ChevronRight,
-  ChevronsUpDown,
   FolderGit,
   FolderGit2,
   Globe,
@@ -22,10 +19,21 @@ import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import {
+  ComboboxEmpty,
+  ComboboxItem,
+  ComboboxList,
+  ComboboxPopup,
+  ComboboxRoot,
+  ComboboxSearch,
+  ComboboxTrigger,
+} from "../../shared/ui/combobox.js";
+import {
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogRoot,
   DialogTitle,
+  DialogTrigger,
 } from "../../shared/ui/dialog.js";
 import { Input } from "../../shared/ui/input.js";
 import type { BitbucketRepository } from "../settings/integrations/bitbucket-queries.js";
@@ -91,7 +99,7 @@ export function AdditionalRepositoriesPicker({
   const pastedPrimary = pasted !== undefined && isPrimary(pasted);
   const full = value.length >= MAX_PROJECT_ADDITIONAL_REPOSITORIES;
   return (
-    <Combobox.Root
+    <ComboboxRoot
       items={items}
       multiple
       value={[...value]}
@@ -106,7 +114,8 @@ export function AdditionalRepositoriesPicker({
       disabled={disabled}
     >
       {addTrigger ? (
-        <Combobox.Trigger
+        <ComboboxTrigger
+          variant="bare"
           id="project-additional-repositories"
           // A combobox takes no name from its text.
           aria-label="Add Repository"
@@ -114,10 +123,11 @@ export function AdditionalRepositoriesPicker({
         >
           <Plus aria-hidden="true" />
           Add Repository
-        </Combobox.Trigger>
+        </ComboboxTrigger>
       ) : (
-        <Combobox.Trigger
+        <ComboboxTrigger
           id="project-additional-repositories"
+          size="sm"
           className="additional-repositories-trigger"
         >
           <span>
@@ -127,69 +137,59 @@ export function AdditionalRepositoriesPicker({
                 ? "1 repository"
                 : `${value.length} repositories`}
           </span>
-          <ChevronsUpDown aria-hidden="true" />
-        </Combobox.Trigger>
+        </ComboboxTrigger>
       )}
-      <Combobox.Portal>
-        <Combobox.Positioner
-          className="repository-combobox-positioner"
-          sideOffset={4}
-          align={addTrigger ? "start" : "end"}
-        >
-          <Combobox.Popup
-            className="repository-combobox-popup additional-repositories-popup"
-            aria-label="Additional repositories"
-          >
-            <Combobox.Input
-              className="additional-repositories-search"
-              placeholder="Search repositories or paste a URL"
-              autoComplete="off"
-              aria-busy={loading !== undefined}
-            />
-            <Combobox.Empty className="repository-combobox-empty">
-              {loading ??
-                (pastedPrimary
-                  ? "This is the project's primary repository."
-                  : "No other repositories available.")}
-            </Combobox.Empty>
-            <Combobox.List className="repository-combobox-list">
-              {(option: RepositoryOption) => {
-                const selected = value.some(
-                  (current) => current.value === option.value,
-                );
-                return (
-                  <Combobox.Item
-                    key={option.value}
-                    value={option}
-                    disabled={full && !selected}
-                    className="repository-combobox-item additional-repository-option"
-                    title={option.webUrl}
-                  >
-                    <span
-                      className="repository-checkbox"
-                      data-checked={selected ? "" : undefined}
-                      aria-hidden="true"
-                    >
-                      {selected ? <Check /> : null}
-                    </span>
-                    <span>
-                      {option.connected === undefined
-                        ? option.webUrl
-                        : option.fullName}
-                    </span>
-                    {option.visibility === "public" ? (
-                      <Globe aria-label="Public" />
-                    ) : (
-                      <span aria-hidden="true" />
-                    )}
-                  </Combobox.Item>
-                );
-              }}
-            </Combobox.List>
-          </Combobox.Popup>
-        </Combobox.Positioner>
-      </Combobox.Portal>
-    </Combobox.Root>
+      <ComboboxPopup
+        align={addTrigger ? "start" : "end"}
+        className="repository-combobox-popup additional-repositories-popup"
+        aria-label="Additional repositories"
+      >
+        <ComboboxSearch
+          className="additional-repositories-search"
+          placeholder="Search repositories or paste a URL"
+          aria-busy={loading !== undefined}
+        />
+        <ComboboxEmpty>
+          {loading ??
+            (pastedPrimary
+              ? "This is the project's primary repository."
+              : "No other repositories available.")}
+        </ComboboxEmpty>
+        <ComboboxList>
+          {(option: RepositoryOption) => {
+            const selected = value.some(
+              (current) => current.value === option.value,
+            );
+            return (
+              <ComboboxItem
+                key={option.value}
+                value={option}
+                check={false}
+                disabled={full && !selected}
+                className="additional-repository-option"
+                title={option.webUrl}
+              >
+                <span
+                  className="repository-checkbox"
+                  data-checked={selected ? "" : undefined}
+                  aria-hidden="true"
+                >
+                  {selected ? <Check /> : null}
+                </span>
+                <span className="dx-picker-item-label">
+                  {option.connected === undefined
+                    ? option.webUrl
+                    : option.fullName}
+                </span>
+                {option.visibility === "public" ? (
+                  <Globe aria-label="Public" />
+                ) : null}
+              </ComboboxItem>
+            );
+          }}
+        </ComboboxList>
+      </ComboboxPopup>
+    </ComboboxRoot>
   );
 }
 
@@ -226,11 +226,11 @@ export function NewProjectDialog({
 }) {
   return (
     <DialogRoot open={open} onOpenChange={onOpenChange}>
-      <Dialog.Trigger
+      <DialogTrigger
         className={`${buttonVariants({ size: "xs" })} projects-new-project-trigger`}
       >
         <Plus /> New Project
-      </Dialog.Trigger>
+      </DialogTrigger>
       {open ? (
         <NewProjectForm
           key={`${initialOwner}:${open}`}
@@ -572,7 +572,7 @@ function NewProjectForm({
           };
 
   return (
-    <DialogContent className="new-project-dialog">
+    <DialogContent size="lg" className="new-project-dialog">
       <header className="new-project-header">
         <DialogTitle>{heading.title}</DialogTitle>
         <DialogDescription>{heading.description}</DialogDescription>
@@ -618,11 +618,11 @@ function NewProjectForm({
           <div className="notice error-notice">{actionError}</div>
         )}
         <div className="dialog-actions">
-          <Dialog.Close
+          <DialogClose
             className={buttonVariants({ variant: "ghost", size: "sm" })}
           >
             Cancel
-          </Dialog.Close>
+          </DialogClose>
           {step === "source" ? null : (
             <Button
               type="button"

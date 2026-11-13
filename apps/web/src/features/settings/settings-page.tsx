@@ -151,10 +151,15 @@ function SettingsTopBar({
     <header className="settings-top-bar">
       <SettingsSheetHandle onClose={onClose} />
       <div className="settings-top-bar-row">
-        <button type="button" className="settings-back" onClick={onClose}>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="settings-back"
+          onClick={onClose}
+        >
           <ArrowLeft aria-hidden="true" />
           <span>Back to dx</span>
-        </button>
+        </Button>
         <nav className="settings-scope-tabs" aria-label="Settings scope">
           <Link
             to="/settings"
@@ -223,14 +228,15 @@ function SettingsTopBar({
           <span className="settings-dirty-state">Unsaved changes</span>
         ) : null}
         {/* Phones: the sheet's close button, as the reference's X. */}
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-sm"
           className="settings-close"
           aria-label="Close"
           onClick={onClose}
         >
           <X aria-hidden="true" />
-        </button>
+        </Button>
       </div>
     </header>
   );

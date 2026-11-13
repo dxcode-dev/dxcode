@@ -9,6 +9,7 @@ import {
   Video,
   VideoOff,
 } from "lucide-react";
+import { Button } from "../../shared/ui/button.js";
 import type { HuddleCallState } from "./huddle-client.js";
 import { canPopOut, popOutHuddle } from "./huddle-popout.js";
 import { huddleClient, huddleView, leaveHuddle } from "./huddle-session.js";
@@ -43,8 +44,11 @@ export function HuddleControls({
       role="toolbar"
       aria-label="Huddle controls"
     >
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="lg"
+        shape="round"
+        tone={self.audioMuted ? "danger" : undefined}
         className="huddle-control"
         data-off={self.audioMuted || undefined}
         aria-label={micLabel}
@@ -58,9 +62,12 @@ export function HuddleControls({
         ) : (
           <Mic aria-hidden="true" />
         )}
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="secondary"
+        size="lg"
+        shape="round"
+        tone={self.videoOn ? undefined : "danger"}
         className="huddle-control"
         data-off={!self.videoOn || undefined}
         aria-label={cameraLabel}
@@ -74,10 +81,12 @@ export function HuddleControls({
         ) : (
           <VideoOff aria-hidden="true" />
         )}
-      </button>
+      </Button>
       {size === "stage" && canShareScreen() ? (
-        <button
-          type="button"
+        <Button
+          variant={self.screenSharing ? "default" : "secondary"}
+          size="lg"
+          shape="round"
           className="huddle-control"
           data-active={self.screenSharing || undefined}
           aria-label={shareLabel}
@@ -89,43 +98,51 @@ export function HuddleControls({
           }
         >
           <MonitorUp aria-hidden="true" />
-        </button>
+        </Button>
       ) : null}
       {place === "stage" ? (
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
+          shape="round"
           className="huddle-control"
           aria-label="Minimize huddle"
           title="Minimize: keep the huddle in a small window while you work"
           onClick={huddleView.dock}
         >
           <Minimize2 aria-hidden="true" />
-        </button>
+        </Button>
       ) : null}
       {place === "dock" ? (
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
+          shape="round"
           className="huddle-control"
           aria-label="Expand huddle"
           title="Expand huddle"
           onClick={huddleView.expand}
         >
           <Maximize2 aria-hidden="true" />
-        </button>
+        </Button>
       ) : null}
       {place !== "popout" && canPopOut() ? (
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
+          shape="round"
           className="huddle-control"
           aria-label="Pop out huddle"
           title="Pop out: keep the huddle on top of other tabs and apps"
           onClick={() => void popOutHuddle()}
         >
           <PictureInPicture2 aria-hidden="true" />
-        </button>
+        </Button>
       ) : null}
-      <button
-        type="button"
+      <Button
+        variant="destructive"
+        size="lg"
+        shape="round"
         className="huddle-control"
         data-tone="leave"
         aria-label="Leave huddle"
@@ -134,7 +151,7 @@ export function HuddleControls({
       >
         <PhoneOff aria-hidden="true" />
         {size === "stage" ? <span>Leave</span> : null}
-      </button>
+      </Button>
     </div>
   );
 }

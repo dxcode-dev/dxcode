@@ -245,7 +245,7 @@ export function PrivateInspection({
         }}
       >
         {open ? (
-          <DialogContent className="workspace-inspection-dialog">
+          <DialogContent size="md" className="workspace-inspection-dialog">
             <DialogTitle>Inspect logged private access</DialogTitle>
             <DialogDescription>
               dx records your identity, reason, exact Thread, time, and result

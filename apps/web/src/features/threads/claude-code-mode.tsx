@@ -1,4 +1,3 @@
-import { Popover } from "@base-ui/react/popover";
 import type { ChoicesData } from "@dx/api";
 import {
   CLAUDE_CODE_EFFORTS,
@@ -10,8 +9,15 @@ import * as React from "react";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import { Button } from "../../shared/ui/button.js";
+import { chipVariants } from "../../shared/ui/chip-variants.js";
 import { claudePlanWhen } from "../../shared/ui/claude-plan-when.js";
 import { ClaudePlanWindows } from "../../shared/ui/claude-plan-windows.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTitle,
+  PopoverTrigger,
+} from "../../shared/ui/popover.js";
 import {
   claudeCodeEffortLabel,
   claudePlanLabel,
@@ -222,7 +228,13 @@ export function ClaudePlanPicker({
       {plans.length < 2 ? null : (
         // The pill shows the chosen entry at the strip's size; the native
         // select over it, transparent, opens the platform's own list.
-        <span className="new-thread-config-pill new-thread-claude-plan">
+        <span
+          className={chipVariants({
+            variant: "soft",
+            size: "lg",
+            className: "new-thread-config-pill new-thread-claude-plan",
+          })}
+        >
           <span className="new-thread-claude-plan-value" aria-hidden="true">
             {current === undefined
               ? "Auto"
@@ -316,8 +328,8 @@ function ClaudePlanLimits({
   const now = new Date(nowMs);
   const nowSeconds = Math.floor(nowMs / 1000);
   return (
-    <Popover.Root>
-      <Popover.Trigger
+    <PopoverRoot>
+      <PopoverTrigger
         openOnHover
         delay={150}
         render={
@@ -331,71 +343,67 @@ function ClaudePlanLimits({
         }
       >
         <Info aria-hidden="true" />
-      </Popover.Trigger>
-      <Popover.Portal>
-        {/* Fixed, so placing it never widens the page on a phone. */}
-        <Popover.Positioner
-          className="thread-context-positioner"
-          positionMethod="fixed"
-          side="top"
-          align="center"
-          sideOffset={8}
-          collisionPadding={12}
-        >
-          <Popover.Popup className="claude-plan-limits">
-            <Popover.Title className="claude-plan-limits-title">
-              Plan limits
-            </Popover.Title>
-            {autoPicks ? (
-              <React.Suspense fallback={null}>
-                <ClaudeAutoPlanNote
-                  plans={plans}
-                  model={model}
-                  nowSeconds={nowSeconds}
-                />
-              </React.Suspense>
-            ) : null}
-            {plans.map((option) => {
-              const usedUpUntil = claudePlanBlockedUntil(
-                option.usage,
-                option.allowExtraUsage,
-                nowSeconds,
-                model.slice(model.indexOf("/") + 1),
-              );
-              const windows = option.usage?.windows ?? [];
-              return (
-                <section
-                  key={option.connectionId}
-                  className="claude-plan-limits-plan"
-                  aria-label={`${claudePlanNumber(plans, option.connectionId)}, ${option.name}`}
-                >
-                  <h4>
-                    <span>
-                      {claudePlanNumber(plans, option.connectionId)}
-                      <small> · {option.name}</small>
-                    </span>
-                    {current?.connectionId === option.connectionId ? (
-                      <Check aria-label="Selected" />
-                    ) : null}
-                  </h4>
-                  {usedUpUntil === undefined ? null : (
-                    <p className="claude-plan-limits-used-up">
-                      Used up until {claudePlanWhen(usedUpUntil, now)}
-                    </p>
-                  )}
-                  {windows.length === 0 ? (
-                    <p className="claude-plan-limits-empty">
-                      Limits show after Claude Code's first run.
-                    </p>
-                  ) : (
-                    <ClaudePlanWindows windows={windows} now={now} />
-                  )}
-                </section>
-              );
-            })}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      {/* Fixed, so placing it never widens the page on a phone. */}
+      <PopoverContent
+        positionMethod="fixed"
+        side="top"
+        align="center"
+        sideOffset={8}
+        collisionPadding={12}
+        className="claude-plan-limits"
+      >
+        <PopoverTitle className="claude-plan-limits-title">
+          Plan limits
+        </PopoverTitle>
+        {autoPicks ? (
+          <React.Suspense fallback={null}>
+            <ClaudeAutoPlanNote
+              plans={plans}
+              model={model}
+              nowSeconds={nowSeconds}
+            />
+          </React.Suspense>
+        ) : null}
+        {plans.map((option) => {
+          const usedUpUntil = claudePlanBlockedUntil(
+            option.usage,
+            option.allowExtraUsage,
+            nowSeconds,
+            model.slice(model.indexOf("/") + 1),
+          );
+          const windows = option.usage?.windows ?? [];
+          return (
+            <section
+              key={option.connectionId}
+              className="claude-plan-limits-plan"
+              aria-label={`${claudePlanNumber(plans, option.connectionId)}, ${option.name}`}
+            >
+              <h4>
+                <span>
+                  {claudePlanNumber(plans, option.connectionId)}
+                  <small> · {option.name}</small>
+                </span>
+                {current?.connectionId === option.connectionId ? (
+                  <Check aria-label="Selected" />
+                ) : null}
+              </h4>
+              {usedUpUntil === undefined ? null : (
+                <p className="claude-plan-limits-used-up">
+                  Used up until {claudePlanWhen(usedUpUntil, now)}
+                </p>
+              )}
+              {windows.length === 0 ? (
+                <p className="claude-plan-limits-empty">
+                  Limits show after Claude Code's first run.
+                </p>
+              ) : (
+                <ClaudePlanWindows windows={windows} now={now} />
+              )}
+            </section>
+          );
+        })}
+      </PopoverContent>
+    </PopoverRoot>
   );
 }

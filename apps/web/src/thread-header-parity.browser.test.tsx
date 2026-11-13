@@ -365,7 +365,7 @@ const control = (scope: ParentNode, selector: string, label: RegExp) =>
   );
 
 const menuText = () =>
-  [...document.querySelectorAll(".thread-menu-popup")]
+  [...document.querySelectorAll(".dx-menu")]
     .map((popup) => popup.textContent)
     .join(" | ");
 
@@ -426,7 +426,7 @@ for (const viewport of VIEWPORTS)
       expect.soft(button, "More Actions in the bar").toBeDefined();
       if (button === undefined) return;
       await userEvent.click(button);
-      await until(() => document.querySelector(".thread-menu-popup") !== null);
+      await until(() => document.querySelector(".dx-menu") !== null);
       // The cost row reads usage once the menu opens.
       await until(() => /\$1\.23/.test(menuText()), 4_000).catch(() => {});
       await settle(200);
@@ -451,7 +451,7 @@ for (const viewport of VIEWPORTS)
           expect.soft(text, "offers Share…").toMatch(/Share…/);
       }
       const cost = [
-        ...document.querySelectorAll<HTMLElement>(".thread-menu-item"),
+        ...document.querySelectorAll<HTMLElement>(".dx-menu-item"),
       ].find((item) => /\$1\.23/.test(item.textContent ?? ""));
       if (cost === undefined) return;
       await userEvent.click(cost);
@@ -526,13 +526,11 @@ for (const viewport of VIEWPORTS)
       expect.soft(button, "More Actions in the bar").toBeDefined();
       if (button === undefined) return;
       await userEvent.click(button);
-      await until(() => document.querySelector(".thread-menu-popup") !== null);
+      await until(() => document.querySelector(".dx-menu") !== null);
       await settle(300);
       await page.screenshot({ path: `${shot}-menu.png` });
       const items = [
-        ...document.querySelectorAll<HTMLElement>(
-          ".thread-menu-popup .thread-menu-item",
-        ),
+        ...document.querySelectorAll<HTMLElement>(".dx-menu .dx-menu-item"),
       ].map((item) => item.textContent?.trim() ?? "");
       const reachable = (chip: RegExp, item: string) =>
         chip.test(inBar) || items.includes(item);
@@ -547,9 +545,7 @@ for (const viewport of VIEWPORTS)
         )
         .toBe(true);
       const entry = [
-        ...document.querySelectorAll<HTMLElement>(
-          ".thread-menu-popup .thread-menu-item",
-        ),
+        ...document.querySelectorAll<HTMLElement>(".dx-menu .dx-menu-item"),
       ].find((item) =>
         /Schedule and GitHub events/.test(item.textContent ?? ""),
       );

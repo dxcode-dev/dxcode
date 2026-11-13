@@ -758,15 +758,15 @@ it("lays the Space out with no title bar: the Space chat tab, its posts, and Spa
     all(".reaction-chip", post(2) as HTMLElement).map((chip) =>
       chip.getAttribute("aria-label"),
     ),
-  ).toEqual(["Eyes: dx"]);
+  ).toEqual(["1 Eyes: dx"]);
   expect(
     all(".reaction-chip", post(4) as HTMLElement).map((chip) => [
       chip.getAttribute("aria-label"),
       chip.getAttribute("aria-pressed"),
     ]),
   ).toEqual([
-    ["Thumbs Up: You, 1 more", "true"],
-    ["Heart: 1 more", "false"],
+    ["2 Thumbs Up: You, 1 more", "true"],
+    ["1 Heart: 1 more", "false"],
   ]);
   expect(
     q(".space-post-replies button", post(2) as HTMLElement)?.textContent,
@@ -1768,7 +1768,7 @@ it("shows the Artifacts tab's empty, loading, and error states", async () => {
       const panel = artifactPanel();
       if (name === "empty")
         await until(
-          () => q("strong", panel)?.textContent === "No Artifacts Yet",
+          () => q(".dx-empty-title", panel)?.textContent === "No Artifacts Yet",
         );
       if (name === "loading")
         expect(q(".space-panel-loading", panel)).not.toBeNull();

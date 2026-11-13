@@ -2,16 +2,16 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   height: 32px;
-  margin: 0 8px 4px;
-  padding: 0 10px;
+  margin: 0 var(--space-2) var(--space-1);
+  padding: 0 var(--space-2-5);
   border: 0;
-  border-radius: var(--sidebar-radius-sm, 6px);
+  border-radius: var(--radius-xs, var(--radius-sm));
   color: var(--foreground);
   background: var(--accent);
   font: inherit;
-  font-size: var(--sidebar-text-base, 13px);
+  font-size: var(--text-md);
   text-align: left;
 }
 .app-update-row:hover {

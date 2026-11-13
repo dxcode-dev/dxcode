@@ -1,0 +1,82 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's display parts: EmptyState and Badge. */
+@layer components {
+  .dx-empty {
+    display: grid;
+    justify-items: center;
+    gap: var(--space-1-5);
+    padding: var(--space-6) var(--space-4);
+    color: var(--muted-foreground);
+    text-align: center;
+  }
+  .dx-empty-icon {
+    display: grid;
+    place-items: center;
+    margin-bottom: var(--space-1);
+  }
+  .dx-empty-icon svg {
+    width: 20px;
+    height: 20px;
+  }
+  .dx-empty-title {
+    margin: 0;
+    color: var(--foreground);
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+  }
+  .dx-empty-description {
+    max-width: 360px;
+    margin: 0;
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
+  .dx-empty > .dx-button {
+    margin-top: var(--space-2);
+  }
+  .dx-empty[data-tone="error"] .dx-empty-title,
+  .dx-empty[data-tone="error"] .dx-empty-icon {
+    color: var(--destructive);
+  }
+
+  .dx-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    height: 18px;
+    padding: 0 var(--space-1-5);
+    color: var(--muted-foreground);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-xs);
+    background: var(--muted);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-none);
+    white-space: nowrap;
+  }
+  .dx-badge svg {
+    width: 11px;
+    height: 11px;
+  }
+  .dx-badge[data-tone="info"] {
+    color: color-mix(in srgb, var(--unread) 80%, var(--foreground));
+    border-color: color-mix(in srgb, var(--unread) 35%, transparent);
+    background: color-mix(in srgb, var(--unread) 12%, transparent);
+  }
+  .dx-badge[data-tone="success"] {
+    color: color-mix(in srgb, var(--success) 80%, var(--foreground));
+    border-color: color-mix(in srgb, var(--success) 35%, transparent);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+  }
+  .dx-badge[data-tone="warning"] {
+    color: color-mix(in srgb, var(--warning) 80%, var(--foreground));
+    border-color: color-mix(in srgb, var(--warning) 35%, transparent);
+    background: color-mix(in srgb, var(--warning) 12%, transparent);
+  }
+  .dx-badge[data-tone="danger"] {
+    color: color-mix(in srgb, var(--destructive) 80%, var(--foreground));
+    border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+    background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  }
+}

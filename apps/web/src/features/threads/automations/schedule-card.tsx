@@ -2,6 +2,7 @@ import type { ThreadScheduleData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Check, Clock, Copy, Trash2 } from "lucide-react";
 import * as React from "react";
+import { Button } from "../../../shared/ui/button.js";
 import { SettingsToggle } from "../../../shared/ui/settings.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { errorText, runText } from "./automation-text.js";
@@ -37,8 +38,9 @@ export function ScheduleCard({
             action.mutate({ kind: "schedule", enabled })
           }
         />
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="automation-icon-button"
           aria-label="Delete schedule"
           title="Delete schedule"
@@ -46,7 +48,7 @@ export function ScheduleCard({
           onClick={() => action.mutate({ kind: "schedule" })}
         >
           <Trash2 aria-hidden="true" />
-        </button>
+        </Button>
       </header>
       <p className="automation-schedule-meta">
         <Clock aria-hidden="true" />
@@ -64,8 +66,9 @@ export function ScheduleCard({
         >
           <span className="automation-prompt-lines">{schedule.prompt}</span>
         </button>
-        <button
-          type="button"
+        <Button
+          variant="subtle"
+          size="icon-xs"
           className="automation-icon-button automation-prompt-copy"
           aria-label={copied ? "Prompt copied" : "Copy prompt"}
           title={copied ? "Copied" : "Copy prompt"}
@@ -73,7 +76,7 @@ export function ScheduleCard({
           onBlur={() => setCopied(false)}
         >
           {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
-        </button>
+        </Button>
       </div>
       {action.error === null ? null : (
         <p className="automation-error" role="alert">

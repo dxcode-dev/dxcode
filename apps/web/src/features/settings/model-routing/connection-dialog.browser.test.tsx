@@ -98,8 +98,8 @@ describe("connection dialog headers", () => {
     const { container, root } = await renderDialog(onSubmit);
     try {
       await React.act(() =>
-        document
-          .querySelector<HTMLButtonElement>(".model-routing-advanced-toggle")
+        [...document.querySelectorAll<HTMLButtonElement>("button")]
+          .find((button) => button.textContent === "Advanced")
           ?.click(),
       );
       const actionSelect = document.querySelector<HTMLSelectElement>(

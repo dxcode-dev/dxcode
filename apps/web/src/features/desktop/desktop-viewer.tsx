@@ -7,6 +7,7 @@ import {
   reportSessionEnded,
 } from "../../shared/auth/session-ended.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
+import { Button } from "../../shared/ui/button.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { DesktopAppRow } from "./desktop-apps.js";
 import { followPaneSize, writeLocalClipboard } from "./desktop-display.js";
@@ -473,9 +474,9 @@ function DesktopStatusLayer({
           <div className="thread-desktop-state-content">
             <Monitor className="thread-desktop-state-icon" aria-hidden="true" />
             <p>{status.message}</p>
-            <button
-              className="thread-desktop-retry"
-              type="button"
+            <Button
+              variant="outline"
+              size="xs"
               onClick={
                 // A failed dynamic import stays failed for this page (and a
                 // new deployment renames the chunk): reload to fetch it.
@@ -484,7 +485,7 @@ function DesktopStatusLayer({
             >
               <RefreshCw aria-hidden="true" />
               <span>Retry</span>
-            </button>
+            </Button>
           </div>
         </div>
       ) : null}
@@ -669,14 +670,10 @@ export function DesktopViewer({
           <div className="thread-desktop-state-content">
             <Monitor className="thread-desktop-state-icon" aria-hidden="true" />
             <p>Paused to let the workspace sleep.</p>
-            <button
-              className="thread-desktop-retry"
-              type="button"
-              onClick={retry}
-            >
+            <Button variant="outline" size="xs" onClick={retry}>
               <Play aria-hidden="true" />
               <span>Resume</span>
-            </button>
+            </Button>
           </div>
         </div>
       ) : (

@@ -26,6 +26,8 @@ const messages = {
     "Only shared Query infrastructure may create a QueryClient, and only the application root and auth lifecycle may import its singleton. Use Query hooks or feature options elsewhere.",
   "no-component-use-effect":
     "Do not call useEffect directly in a component. Derive during render, handle the originating event, use useSyncExternalStore, or isolate external-system synchronization in a shared hook.",
+  "shared-ui-part":
+    "Build this control from its shared part in src/shared/ui: menus from menu.tsx, popovers from popover.tsx, tabs from tabs.tsx, switches from switch.tsx, checkboxes from checkbox.tsx, dialogs from dialog.tsx, sheets and drawers from sheet.tsx and drawer.tsx, searchable pickers from combobox.tsx, custom choice lists from choice-select.tsx. Do not import the Base UI primitive in a feature; extend the shared part instead. See wiki/ui-design-system.md.",
   "no-global-client-store":
     "Do not add Zustand, TanStack Store, or Effect Atom. Router, Query, Flue, local React state, and the validated browser adapters own the current state lifetimes.",
   "no-use-async-data":
@@ -39,6 +41,20 @@ const messages = {
   "shared-import-boundary":
     "Shared modules may not import feature implementations. Move the dependency to the application/feature composition boundary.",
 };
+
+/** Base UI primitives that features reach only through src/shared/ui. */
+const sharedUiParts = new Set([
+  "@base-ui/react/menu",
+  "@base-ui/react/context-menu",
+  "@base-ui/react/popover",
+  "@base-ui/react/tabs",
+  "@base-ui/react/switch",
+  "@base-ui/react/checkbox",
+  "@base-ui/react/dialog",
+  "@base-ui/react/drawer",
+  "@base-ui/react/combobox",
+  "@base-ui/react/select",
+]);
 
 const walk = (directory) =>
   readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -273,6 +289,11 @@ export const inspectWebArchitecture = ({
         path,
         specifier,
       );
+      if (
+        sharedUiParts.has(specifier) &&
+        !normalized(path).includes("/shared/ui/")
+      )
+        add("shared-ui-part", imported.index, `import ${specifier}`);
       if (
         specifier === "@tanstack/react-store" ||
         specifier === "zustand" ||

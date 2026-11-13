@@ -301,15 +301,13 @@ describe("Plugins settings", () => {
       const searchRow = row("Web search");
       expect(searchRow?.textContent).toContain("Needs an API key");
       // No switch claims the plugin is on while it cannot work.
-      expect(searchRow?.querySelector(".settings-toggle")).toBeNull();
+      expect(searchRow?.querySelector(".dx-switch")).toBeNull();
       const setUp = [...(searchRow?.querySelectorAll("button") ?? [])].find(
         (button) => button.textContent?.trim() === "Set up",
       );
       expect(setUp).toBeDefined();
       // A working plugin keeps its switch.
-      expect(
-        row("Dictation")?.querySelector(".settings-toggle"),
-      ).not.toBeNull();
+      expect(row("Dictation")?.querySelector(".dx-switch")).not.toBeNull();
       await act(async () => setUp?.click());
       expect(
         document.querySelector('input[aria-label="Exa API key"]'),

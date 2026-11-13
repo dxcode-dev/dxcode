@@ -1,0 +1,5 @@
+/* A plugin status badge sits at the end of its row. */
+.plugin-status-badge {
+  flex: none;
+  margin-left: auto;
+}

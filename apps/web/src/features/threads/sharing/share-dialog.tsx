@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadDetailData } from "@dx/api";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -15,6 +14,7 @@ import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { absoluteThreadUrl } from "../../../shared/thread-url.js";
 import { Button } from "../../../shared/ui/button.js";
+import { Checkbox } from "../../../shared/ui/checkbox.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
   DialogContent,
@@ -26,6 +26,13 @@ import { settingsContextQueryOptions } from "../../settings/settings-context-que
 import { formatUntil } from "./sharing-format.js";
 import { useUpdateThreadSharing } from "./sharing-mutations.js";
 import "./thread-sharing.css";
+import {
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 
 type Access = "none" | "view" | "contribute";
 
@@ -54,6 +61,7 @@ function MultiplayerConfirmation({
   readonly onConfirm: (skipNextTime: boolean) => void;
 }) {
   const [skipNextTime, setSkipNextTime] = React.useState(false);
+  const skipId = React.useId();
   return (
     <ConfirmDialog
       open={open}
@@ -66,9 +74,9 @@ function MultiplayerConfirmation({
       pending={pending}
       onConfirm={() => onConfirm(skipNextTime)}
     >
-      <label className="thread-share-checkbox">
-        <input
-          type="checkbox"
+      <label htmlFor={skipId} className="thread-share-checkbox">
+        <Checkbox
+          id={skipId}
           checked={skipNextTime}
           onChange={(event) => setSkipNextTime(event.currentTarget.checked)}
         />
@@ -88,8 +96,8 @@ function PermissionMenu({
   readonly onChange: (access: Access) => void;
 }) {
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         disabled={disabled}
         render={
           <Button
@@ -102,36 +110,20 @@ function PermissionMenu({
       >
         {accessLabel[value]}
         <ChevronDown />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner thread-share-menu-positioner"
-          align="end"
-          sideOffset={4}
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuRadioGroup
+          value={value}
+          onValueChange={(next) => onChange(next as Access)}
         >
-          <Menu.Popup className="thread-menu-popup thread-share-menu">
-            <Menu.RadioGroup
-              value={value}
-              onValueChange={(next) => onChange(next as Access)}
-            >
-              {(["none", "view", "contribute"] as const).map((access) => (
-                <Menu.RadioItem
-                  key={access}
-                  value={access}
-                  className="thread-menu-item thread-share-radio"
-                  closeOnClick
-                >
-                  <span className="thread-share-radio-dot">
-                    <Menu.RadioItemIndicator className="thread-share-radio-indicator" />
-                  </span>
-                  {accessLabel[access]}
-                </Menu.RadioItem>
-              ))}
-            </Menu.RadioGroup>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+          {(["none", "view", "contribute"] as const).map((access) => (
+            <MenuRadioItem key={access} value={access} closeOnClick>
+              <span>{accessLabel[access]}</span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 

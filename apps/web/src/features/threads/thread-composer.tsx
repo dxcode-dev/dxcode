@@ -1,6 +1,7 @@
 import { ArrowUp, Paperclip, Square } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../shared/ui/button.js";
+import { Textarea } from "../../shared/ui/textarea.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { ImageAttachmentPreviews } from "./image-attachments-ui.js";
@@ -71,7 +72,8 @@ export function ThreadComposer({
           focusEditor();
         }}
       />
-      <textarea
+      <Textarea
+        variant="bare"
         ref={textareaRef}
         aria-label="Message"
         data-command-target="thread-composer"
@@ -112,7 +114,8 @@ export function ThreadComposer({
         {dictation.hideSubmit ? null : (
           <Button
             type="submit"
-            size="icon-sm"
+            size="icon-xs"
+            shape="round"
             className="composer-submit"
             aria-label={
               busy ? "Send message during active run" : "Send message"
@@ -133,7 +136,8 @@ export function ThreadComposer({
           <Button
             type="button"
             variant="secondary"
-            size="icon-sm"
+            size="icon-xs"
+            shape="round"
             className="composer-submit"
             aria-label="Stop agent"
             onClick={() => void onAbort()}

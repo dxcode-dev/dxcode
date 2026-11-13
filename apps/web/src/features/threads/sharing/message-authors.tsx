@@ -1,4 +1,3 @@
-import { Popover } from "@base-ui/react/popover";
 import {
   AGENT_MENTION,
   type MessageAuthor,
@@ -14,6 +13,11 @@ import {
   MarkdownMentionContext,
   type MarkdownMentions,
 } from "../../../shared/ui/markdown-mention-context.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../../../shared/ui/popover.js";
 import { conciseAge } from "./sharing-format.js";
 import { mentionLabel } from "./thread-chat.js";
 import { threadMembersQueryOptions } from "./thread-chat-queries.js";
@@ -156,35 +160,27 @@ function MemberCard({
   readonly children: React.ReactNode;
 }) {
   return (
-    <Popover.Root>
-      <Popover.Trigger className={className ?? "message-author-trigger"}>
+    <PopoverRoot>
+      <PopoverTrigger className={className ?? "message-author-trigger"}>
         {children}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          className="member-card-positioner"
-          side="top"
-          align="start"
-          sideOffset={6}
-        >
-          <Popover.Popup className="member-card">
-            <Avatar
-              name={person.name}
-              image={person.image}
-              seed={person.userId}
-            />
-            <div>
-              <strong>{person.name}</strong>
-              {person.handle === undefined ||
-              isDefaultPersonalAccountUsername(person.handle) ? null : (
-                <span>@{person.handle}</span>
-              )}
-              {person.email === undefined ? null : <span>{person.email}</span>}
-            </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={6}
+        className="member-card"
+      >
+        <Avatar name={person.name} image={person.image} seed={person.userId} />
+        <div>
+          <strong>{person.name}</strong>
+          {person.handle === undefined ||
+          isDefaultPersonalAccountUsername(person.handle) ? null : (
+            <span>@{person.handle}</span>
+          )}
+          {person.email === undefined ? null : <span>{person.email}</span>}
+        </div>
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
 

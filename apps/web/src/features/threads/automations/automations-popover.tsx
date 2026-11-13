@@ -1,5 +1,9 @@
-import { Popover } from "@base-ui/react/popover";
 import type * as React from "react";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../../../shared/ui/popover.js";
 
 export function AutomationsPopover({
   trigger,
@@ -16,26 +20,22 @@ export function AutomationsPopover({
   readonly children: React.ReactNode;
 }) {
   return (
-    <Popover.Root>
-      <Popover.Trigger
+    <PopoverRoot>
+      <PopoverTrigger
         className={triggerClassName}
         aria-label={triggerLabel}
         title={triggerLabel}
       >
         {trigger}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          className="automation-popover-positioner"
-          side={above ? "top" : "bottom"}
-          align={above ? "start" : "end"}
-          sideOffset={6}
-        >
-          <Popover.Popup className="automation-popover">
-            {children}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        side={above ? "top" : "bottom"}
+        align={above ? "start" : "end"}
+        sideOffset={6}
+        className="automation-popover"
+      >
+        {children}
+      </PopoverContent>
+    </PopoverRoot>
   );
 }

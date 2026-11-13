@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-router";
 import { PageShell } from "../../shared/layout/page-shell.js";
 import { Button } from "../../shared/ui/button.js";
+import { EmptyState } from "../../shared/ui/empty-state.js";
 
 const projectsTitle = (
   <div className="projects-title project-detail-title">
@@ -33,24 +34,30 @@ export function ProjectRouteNotFound({ data }: NotFoundRouteProps) {
   return (
     <PageShell title={projectsTitle} contentClassName="project-detail-content">
       {section === undefined ? (
-        <div className="project-detail-state" role="alert">
-          <strong>Project not found</strong>
-          <span>This project is unavailable or no longer exists.</span>
-          <Link to="/projects" search={{ owner: undefined }}>
-            Back to Projects
-          </Link>
-        </div>
+        <EmptyState
+          tone="error"
+          title="Project not found"
+          description="This project is unavailable or no longer exists."
+          action={
+            <Link to="/projects" search={{ owner: undefined }}>
+              Back to Projects
+            </Link>
+          }
+        />
       ) : (
-        <div className="project-detail-state" role="alert">
-          <strong>Settings section not found</strong>
-          <span>This URL does not match a project settings section.</span>
-          <Link
-            to="/projects/$projectId/settings/$section"
-            params={{ projectId: section.projectId, section: "general" }}
-          >
-            Open General settings
-          </Link>
-        </div>
+        <EmptyState
+          tone="error"
+          title="Settings section not found"
+          description="This URL does not match a project settings section."
+          action={
+            <Link
+              to="/projects/$projectId/settings/$section"
+              params={{ projectId: section.projectId, section: "general" }}
+            >
+              Open General settings
+            </Link>
+          }
+        />
       )}
     </PageShell>
   );
@@ -61,17 +68,20 @@ export function ProjectRouteError({ error }: ErrorComponentProps) {
   const router = useRouter();
   return (
     <PageShell title={projectsTitle} contentClassName="project-detail-content">
-      <div className="project-detail-state" role="alert">
-        <strong>Project could not load</strong>
-        <span>{error.message || "The project could not load."}</span>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => void router.invalidate()}
-        >
-          Retry
-        </Button>
-      </div>
+      <EmptyState
+        tone="error"
+        title="Project could not load"
+        description={error.message || "The project could not load."}
+        action={
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void router.invalidate()}
+          >
+            Retry
+          </Button>
+        }
+      />
     </PageShell>
   );
 }

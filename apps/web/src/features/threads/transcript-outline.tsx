@@ -1,5 +1,11 @@
-import { Menu } from "@base-ui/react/menu";
 import { List } from "lucide-react";
+import { buttonVariants } from "../../shared/ui/button-variants.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import type {
   TranscriptOutlineAnchor,
   TranscriptRowId,
@@ -38,43 +44,45 @@ export function TranscriptOutline({
   if (anchors.length <= 1) return null;
 
   return (
-    <Menu.Root onOpenChange={(open) => (open ? onOpen() : undefined)}>
-      <Menu.Trigger className="transcript-control" aria-label="Prompt outline">
+    <MenuRoot onOpenChange={(open) => (open ? onOpen() : undefined)}>
+      <MenuTrigger
+        className={buttonVariants({
+          variant: "subtle",
+          size: "icon-sm",
+          className: "transcript-control",
+        })}
+        aria-label="Prompt outline"
+      >
         <List />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="transcript-outline-positioner"
-          side="top"
-          align="end"
-          sideOffset={6}
-        >
-          <Menu.Popup
-            className="transcript-outline-menu"
-            aria-label="Prompt outline"
+      </MenuTrigger>
+      <MenuPopup
+        side="top"
+        align="end"
+        sideOffset={6}
+        positionerClassName="transcript-outline-positioner"
+        className="transcript-outline-menu"
+        aria-label="Prompt outline"
+      >
+        {anchors.map((anchor) => (
+          <MenuItem
+            className="transcript-outline-item"
+            data-visible={visibleRowIds.has(anchor.rowId) ? "" : undefined}
+            aria-current={
+              anchor.rowId === currentRowId ? "location" : undefined
+            }
+            ref={anchor.rowId === currentRowId ? currentItemRef : undefined}
+            key={anchor.id}
+            onClick={() => onNavigate(anchor)}
           >
-            {anchors.map((anchor) => (
-              <Menu.Item
-                className="transcript-outline-item"
-                data-visible={visibleRowIds.has(anchor.rowId) ? "" : undefined}
-                aria-current={
-                  anchor.rowId === currentRowId ? "location" : undefined
-                }
-                ref={anchor.rowId === currentRowId ? currentItemRef : undefined}
-                key={anchor.id}
-                onClick={() => onNavigate(anchor)}
-              >
-                <span>{anchor.label}</span>
-                {anchor.timestamp ? (
-                  <time dateTime={anchor.timestamp}>
-                    {timestampFormatter.format(new Date(anchor.timestamp))}
-                  </time>
-                ) : null}
-              </Menu.Item>
-            ))}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+            <span>{anchor.label}</span>
+            {anchor.timestamp ? (
+              <time className="dx-menu-hint" dateTime={anchor.timestamp}>
+                {timestampFormatter.format(new Date(anchor.timestamp))}
+              </time>
+            ) : null}
+          </MenuItem>
+        ))}
+      </MenuPopup>
+    </MenuRoot>
   );
 }

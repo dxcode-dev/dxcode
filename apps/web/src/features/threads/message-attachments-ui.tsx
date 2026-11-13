@@ -1,8 +1,13 @@
-import { Popover } from "@base-ui/react/popover";
 import type { MessageAttachment } from "@dx/api";
 import { Download, Paperclip } from "lucide-react";
 import * as React from "react";
-import { MediaViewer } from "../../shared/ui/media-viewer.js";
+import { buttonVariants } from "../../shared/ui/button-variants.js";
+import { LazyImageViewer as ImageViewer } from "../../shared/ui/lazy-image-viewer.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../../shared/ui/popover.js";
 import {
   attachmentPlayable,
   attachmentPreviewKind,
@@ -80,7 +85,7 @@ export function ImageTiles({
         </button>
       ))}
       {open === undefined ? null : (
-        <MediaViewer
+        <ImageViewer
           items={images.map((image) => ({
             key: image.key,
             url: image.url,
@@ -142,56 +147,48 @@ function FileLink({ attachment }: { readonly attachment: ShownAttachment }) {
     );
   // Playable media opens a player in the chat instead of leaving it.
   return (
-    <Popover.Root>
-      <Popover.Trigger className="message-file-link" title={attachment.name}>
+    <PopoverRoot>
+      <PopoverTrigger className="message-file-link" title={attachment.name}>
         {label}
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner
-          className="message-file-player-positioner"
-          side="top"
-          align="start"
-          sideOffset={8}
-        >
-          <Popover.Popup
-            className="message-file-player"
-            aria-label={attachment.name}
+      </PopoverTrigger>
+      <PopoverContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="message-file-player"
+        aria-label={attachment.name}
+      >
+        {kind === "video" ? (
+          // biome-ignore lint/a11y/useMediaCaption: user-supplied media has no captions.
+          <video
+            src={attachment.href}
+            controls
+            playsInline
+            preload="metadata"
+          />
+        ) : (
+          // biome-ignore lint/a11y/useMediaCaption: user-supplied media has no captions.
+          <audio src={attachment.href} controls preload="metadata" />
+        )}
+        <div className="message-file-player-footer">
+          <div className="attachment-preview-meta">
+            <span className="attachment-preview-name">{attachment.name}</span>
+            <span className="attachment-preview-type">
+              {attachmentTypeLabel(attachment.name, attachment.mimeType)}
+            </span>
+          </div>
+          <a
+            className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
+            href={`${attachment.href}?download=1`}
+            download={attachment.name}
+            aria-label={`Download ${attachment.name}`}
+            title="Download"
           >
-            {kind === "video" ? (
-              // biome-ignore lint/a11y/useMediaCaption: user-supplied media has no captions.
-              <video
-                src={attachment.href}
-                controls
-                playsInline
-                preload="metadata"
-              />
-            ) : (
-              // biome-ignore lint/a11y/useMediaCaption: user-supplied media has no captions.
-              <audio src={attachment.href} controls preload="metadata" />
-            )}
-            <div className="message-file-player-footer">
-              <div className="attachment-preview-meta">
-                <span className="attachment-preview-name">
-                  {attachment.name}
-                </span>
-                <span className="attachment-preview-type">
-                  {attachmentTypeLabel(attachment.name, attachment.mimeType)}
-                </span>
-              </div>
-              <a
-                className="attachment-preview-action"
-                href={`${attachment.href}?download=1`}
-                download={attachment.name}
-                aria-label={`Download ${attachment.name}`}
-                title="Download"
-              >
-                <Download />
-              </a>
-            </div>
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+            <Download />
+          </a>
+        </div>
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
 

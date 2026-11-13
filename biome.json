@@ -4,6 +4,7 @@
     "includes": [
       "**",
       "!**/dist",
+      "!**/storybook-static",
       "!**/target",
       "!**/coverage",
       "!**/node_modules",
@@ -32,6 +33,21 @@
       "preset": "recommended",
       "complexity": {
         "useOptionalChain": "error"
+      },
+      "a11y": {
+        "noLabelWithoutControl": {
+          "level": "error",
+          "options": {
+            "inputComponents": [
+              "Checkbox",
+              "Radio",
+              "Input",
+              "Select",
+              "Textarea",
+              "Switch"
+            ]
+          }
+        }
       },
       "correctness": {
         "noUnusedImports": "error",

@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadArtifactComment } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
@@ -27,7 +26,17 @@ import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { useBoardLiveChannel } from "../../../shared/realtime/board-live.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
+import { Button } from "../../../shared/ui/button.js";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
+import { Input } from "../../../shared/ui/input.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
+import { cn } from "../../../shared/utils.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import { type ArtifactDocument, artifactsApi } from "../artifacts-api.js";
@@ -311,62 +320,66 @@ function BoardExportMenu({
     }
   };
   return (
-    <Menu.Root>
-      <Menu.Trigger
-        className="artifact-icon-button"
+    <MenuRoot>
+      <MenuTrigger
+        className={cn(
+          buttonVariants({ variant: "subtle", size: "icon-xs" }),
+          "artifact-icon-button",
+        )}
         aria-label="Export"
         title={failed ? "Couldn't export. Try again." : "Export"}
       >
         <Download aria-hidden="true" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          side="bottom"
-          align="end"
-          sideOffset={4}
+      </MenuTrigger>
+      <MenuPopup side="bottom" align="end" aria-label="Export">
+        <MenuItem
+          onClick={() =>
+            void run(async () => {
+              const blob = await exportToBlob({
+                ...scene(),
+                mimeType: "image/png",
+                exportPadding: 24,
+                getDimensions: (width: number, height: number) => ({
+                  width: width * 2,
+                  height: height * 2,
+                  scale: 2,
+                }),
+              });
+              return new File([blob], `${name}.png`, { type: "image/png" });
+            })
+          }
         >
-          <Menu.Popup className="thread-menu-popup" aria-label="Export">
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() =>
-                void run(async () => {
-                  const blob = await exportToBlob({
-                    ...scene(),
-                    mimeType: "image/png",
-                    exportPadding: 24,
-                    getDimensions: (width: number, height: number) => ({
-                      width: width * 2,
-                      height: height * 2,
-                      scale: 2,
-                    }),
-                  });
-                  return new File([blob], `${name}.png`, { type: "image/png" });
-                })
-              }
-            >
-              Download PNG
-            </Menu.Item>
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() =>
-                void run(async () => {
-                  const svg = await exportToSvg({
-                    ...scene(),
-                    exportPadding: 24,
-                  });
-                  return new File([svg.outerHTML], `${name}.svg`, {
-                    type: "image/svg+xml",
-                  });
-                })
-              }
-            >
-              Download SVG
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+          Download PNG
+        </MenuItem>
+        <MenuItem
+          onClick={() =>
+            void run(async () => {
+              const svg = await exportToSvg({
+                ...scene(),
+                exportPadding: 24,
+              });
+              return new File([svg.outerHTML], `${name}.svg`, {
+                type: "image/svg+xml",
+              });
+            })
+          }
+        >
+          Download SVG
+        </MenuItem>
+      </MenuPopup>
+    </MenuRoot>
+  );
+}
+
+/** An icon action in the board's header: a subtle icon Button. */
+function BoardToolButton(props: React.ComponentProps<typeof Button>) {
+  return (
+    <Button
+      variant="subtle"
+      size="icon-xs"
+      className="artifact-icon-button"
+      {...props}
+    />
   );
 }
 
@@ -530,9 +543,7 @@ export function BoardEditor({
           <SaveIndicator save={snapshot.save} revision={snapshot.revision} />
         )}
         {readOnly ? null : (
-          <button
-            type="button"
-            className="artifact-icon-button"
+          <BoardToolButton
             aria-label="Comment on Shape"
             title={
               target === undefined
@@ -543,7 +554,7 @@ export function BoardEditor({
             onClick={startComment}
           >
             <MessageSquarePlus aria-hidden="true" />
-          </button>
+          </BoardToolButton>
         )}
         <CommentsMenu
           comments={comments.data ?? []}
@@ -554,9 +565,7 @@ export function BoardEditor({
           detachedHeading="Shape no longer here"
         />
         {readOnly ? null : (
-          <button
-            type="button"
-            className="artifact-icon-button"
+          <BoardToolButton
             aria-label="Rename"
             title="Rename"
             onClick={() => {
@@ -565,7 +574,7 @@ export function BoardEditor({
             }}
           >
             <Pencil aria-hidden="true" />
-          </button>
+          </BoardToolButton>
         )}
         <BoardExportMenu editor={() => editor} title={snapshot.title} />
       </header>
@@ -655,7 +664,7 @@ export function BoardEditor({
           setRenaming(false);
         }}
       >
-        <input
+        <Input
           className="artifact-folder-input"
           aria-label="Title"
           value={newTitle}

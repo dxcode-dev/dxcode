@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type {
   PersonalComposerDefaultsData,
   ProjectData,
@@ -37,6 +36,7 @@ import {
   startingProjectId,
 } from "../../shared/composer-start.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
+import { DialogRoot } from "../../shared/ui/dialog.js";
 import { DocumentTitle } from "../../shared/ui/document-title.js";
 import {
   ModalSurface,
@@ -97,7 +97,7 @@ export function NewThreadModal({
   readonly initialProjectId?: ProjectId;
   /** Text the composer opens with, after any draft the person already has. */
   readonly initialPrompt?: string;
-  readonly finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
+  readonly finalFocus?: React.ComponentProps<typeof ModalSurface>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
 }) {
@@ -152,7 +152,7 @@ export function NewThreadModal({
     );
   if (settingsQuery.isError)
     return (
-      <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
+      <DialogRoot open onOpenChange={(open) => !open && onClose()}>
         <ModalSurface
           className="new-thread-dialog"
           ariaLabel="New thread"
@@ -167,7 +167,7 @@ export function NewThreadModal({
               : "Settings could not be loaded."}
           </div>
         </ModalSurface>
-      </Dialog.Root>
+      </DialogRoot>
     );
   return (
     <ScopedNewThreadModal
@@ -467,7 +467,7 @@ function ScopedNewThreadModal({
   readonly initialProjectId?: ProjectId;
   /** Text the composer opens with, after any draft the person already has. */
   readonly initialPrompt?: string;
-  readonly finalFocus?: React.ComponentProps<typeof Dialog.Popup>["finalFocus"];
+  readonly finalFocus?: React.ComponentProps<typeof ModalSurface>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
   readonly workspaceId: WorkspaceId | "personal";
@@ -643,7 +643,7 @@ function ScopedNewThreadModal({
   };
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && close()}>
+    <DialogRoot open onOpenChange={(open) => !open && close()}>
       <ModalSurface
         className="new-thread-dialog"
         ariaLabel="New thread"
@@ -743,6 +743,6 @@ function ScopedNewThreadModal({
           onAccepted={onAccepted}
         />
       </ModalSurface>
-    </Dialog.Root>
+    </DialogRoot>
   );
 }

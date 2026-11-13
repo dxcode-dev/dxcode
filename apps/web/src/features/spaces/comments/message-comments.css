@@ -5,7 +5,7 @@
 /* Comment beside ⋯: on the left the pair sits in the gutter, clear of the
    text; on the right it grows leftwards from the bubble's corner. */
 .message-actions-controls:has(> .message-comment-action) {
-  gap: 4px;
+  gap: var(--space-1);
 }
 .message-actions-anchor:not([data-side="right"])
   > .message-actions-controls:has(> .message-comment-action) {
@@ -16,10 +16,10 @@
 .message-comment-replies {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 6px;
-  font-size: 13px;
-  line-height: 20px;
+  gap: var(--space-1-5);
+  margin-top: var(--space-1-5);
+  font-size: var(--text-md);
+  line-height: var(--leading-5);
 }
 /* The viewer's own bubble sits on the right, and its replies row starts at
    the bubble's left edge, as the reference's: one column as wide as the bubble. */
@@ -37,7 +37,7 @@
 }
 .message-comment-replies > button {
   padding: 0;
-  color: var(--link, light-dark(#2563eb, #7aa7ff));
+  color: var(--link);
   border: 0;
   background: transparent;
   font: inherit;
@@ -62,62 +62,40 @@
   overflow: hidden;
   color: var(--chat-foreground, var(--foreground));
   border: 1px solid var(--outline);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--surface);
   box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.04),
-    0 12px 32px rgb(0 0 0 / 0.1);
+    0 1px 2px color-mix(in srgb, var(--shadow-ink) 4%, transparent),
+    0 12px 32px color-mix(in srgb, var(--shadow-ink) 10%, transparent);
 }
 .message-comments-header {
   display: flex;
   flex: none;
   height: 52px;
   align-items: center;
-  gap: 4px;
-  padding: 0 10px 0 18px;
+  gap: var(--space-1);
+  padding: 0 var(--space-2-5) 0 18px;
   border-bottom: 1px solid var(--outline);
 }
 .message-comments-header > svg {
   width: 18px;
   height: 18px;
-  margin-right: 6px;
+  margin-right: var(--space-1-5);
   color: var(--foreground);
 }
 .message-comments-header > h2 {
   flex: 1;
   margin: 0;
-  font-size: 15px;
-  font-weight: 500;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
 }
-.message-comments-header > button {
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  padding: 0;
+.message-comments-header > .dx-button:not(:hover) {
   color: var(--muted-foreground);
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  cursor: pointer;
-}
-.message-comments-header > button:hover:not(:disabled),
-.message-comments-header > button:focus-visible {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.message-comments-header > button:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-.message-comments-header > button > svg {
-  width: 16px;
-  height: 16px;
 }
 .message-comments-divider {
   width: 1px;
   height: 18px;
-  margin: 0 6px;
+  margin: 0 var(--space-1-5);
   background: var(--outline);
 }
 .message-comments-body {
@@ -127,17 +105,17 @@
   flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 20px 0 8px;
+  padding: var(--space-5) 0 var(--space-2);
 }
 /* The message, then a rule across the panel, as the reference quotes it. */
 .message-comments-body > .message-comments-quote {
   flex: none;
-  margin: 0 0 20px;
-  padding: 0 24px 20px;
+  margin: 0 0 var(--space-5);
+  padding: 0 var(--space-6) var(--space-5);
   border-bottom: 1px solid var(--outline);
 }
 .message-comments-list {
-  padding: 0 24px;
+  padding: 0 var(--space-6);
   display: flex;
   min-height: 0;
   flex: 1;
@@ -146,11 +124,11 @@
 .message-comments-empty {
   margin: auto;
   color: var(--muted-foreground);
-  font-size: 14px;
+  font-size: var(--text-lg);
 }
 .message-comment {
   margin: 0 0 18px;
-  font-size: 14px;
+  font-size: var(--text-lg);
   line-height: 21px;
 }
 .message-comment.user-message {
@@ -159,43 +137,43 @@
 .message-comment-author {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   min-width: 0;
 }
 .message-comment-author .dx-avatar {
   width: 20px;
   height: 20px;
   flex: none;
-  font-size: 8px;
+  font-size: var(--text-4xs);
 }
 .message-comment-author strong {
   overflow: hidden;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .message-comment-author time {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .message-comment-text {
-  margin: 2px 0 0 28px;
+  margin: var(--space-0-5) 0 0 28px;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
 .message-comments-quote.message-comment .message-comment-text {
-  font-size: 14px;
+  font-size: var(--text-lg);
 }
 .message-comment-dots {
   display: inline-flex;
   gap: 3px;
-  margin: 6px 0 0 28px;
+  margin: var(--space-1-5) 0 0 28px;
 }
 .message-comment-dots > span {
   width: 5px;
   height: 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--muted-foreground);
   animation: message-comment-typing 1.2s infinite ease-in-out;
 }
@@ -226,32 +204,32 @@
 .message-comments-composer {
   position: relative;
   flex: none;
-  padding: 8px 16px 16px;
+  padding: var(--space-2) var(--space-4) var(--space-4);
 }
 .message-comments-agent {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   margin: 0 0 -1px;
-  padding: 10px 18px 18px;
+  padding: var(--space-2-5) 18px 18px;
   border: 1px solid var(--outline);
   border-bottom: 0;
-  border-radius: 14px 14px 0 0;
-  font-size: 14px;
-  line-height: 20px;
+  border-radius: var(--radius-2xl) var(--radius-2xl) 0 0;
+  font-size: var(--text-lg);
+  line-height: var(--leading-5);
 }
 .message-comments-agent > span {
   width: 7px;
   height: 7px;
-  border-radius: 999px;
-  background: light-dark(#b7791f, #e0a64a);
+  border-radius: var(--radius-full);
+  background: var(--agent-accent);
 }
 .message-comments-box {
   position: relative;
   display: flex;
   flex-direction: column;
   border: 1px solid var(--outline);
-  border-radius: 14px;
+  border-radius: var(--radius-2xl);
   background: var(--background);
 }
 .message-comments-agent + .message-comments-box {
@@ -260,14 +238,11 @@
 .message-comments-box > textarea {
   min-height: 56px;
   max-height: 200px;
-  padding: 14px 16px 4px;
+  padding: var(--space-3-5) var(--space-4) var(--space-1);
   color: inherit;
-  border: 0;
-  outline: none;
-  background: transparent;
   font: inherit;
-  font-size: 15px;
-  line-height: 22px;
+  font-size: var(--text-xl);
+  line-height: var(--leading-5-5);
   resize: none;
 }
 .message-comments-box > textarea::placeholder {
@@ -277,33 +252,17 @@
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
-  padding: 6px 8px 8px;
+  gap: var(--space-2);
+  padding: var(--space-1-5) var(--space-2) var(--space-2);
 }
-.message-comments-send {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  color: var(--background);
-  border: 0;
-  border-radius: 999px;
-  background: var(--foreground);
-  cursor: pointer;
-}
-.message-comments-send:disabled {
-  background: color-mix(in srgb, var(--foreground) 45%, transparent);
-  cursor: default;
-}
-.message-comments-send > svg {
-  width: 16px;
-  height: 16px;
+/* Send: a round primary Button. */
+.dx-button.message-comments-send {
+  border-radius: var(--radius-full);
 }
 .message-comments-error {
-  margin: 6px 4px 0;
+  margin: var(--space-1-5) var(--space-1) 0;
   color: var(--destructive);
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 .message-comments-composer .artifact-comment-suggest {
   margin-bottom: 0;
@@ -317,17 +276,17 @@
     border-radius: 0;
   }
   .message-comments-body {
-    padding-top: 16px;
+    padding-top: var(--space-4);
   }
   .message-comments-body > .message-comments-quote {
-    margin-bottom: 16px;
-    padding: 0 16px 16px;
+    margin-bottom: var(--space-4);
+    padding: 0 var(--space-4) var(--space-4);
   }
   .message-comments-list {
-    padding: 0 16px;
+    padding: 0 var(--space-4);
   }
   .message-comments-composer {
-    padding: 8px 12px 12px;
+    padding: var(--space-2) var(--space-3) var(--space-3);
   }
 }
 
@@ -336,7 +295,7 @@
   display: flex;
   flex-direction: column;
   margin: 0;
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   list-style: none;
 }
 .space-comments-row {
@@ -344,11 +303,11 @@
   width: 100%;
   grid-template-columns: 18px minmax(0, 1fr) auto;
   align-items: start;
-  gap: 10px;
-  padding: 8px 8px;
+  gap: var(--space-2-5);
+  padding: var(--space-2) var(--space-2);
   color: inherit;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: transparent;
   font: inherit;
   text-align: left;
@@ -361,7 +320,7 @@
 .space-comments-row > svg {
   width: 16px;
   height: 16px;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   color: var(--muted-foreground);
 }
 .space-comments-row-text {
@@ -376,41 +335,26 @@
   white-space: nowrap;
 }
 .space-comments-row-message {
-  font-size: 14px;
-  line-height: 20px;
+  font-size: var(--text-lg);
+  line-height: var(--leading-5);
 }
 .space-comments-row-last {
   color: var(--muted-foreground);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--text-md);
+  line-height: var(--leading-4-5);
 }
 .space-comments-row > .dx-avatar {
   width: 20px;
   height: 20px;
-  margin-top: 2px;
-  font-size: 8px;
-}
-.space-comments-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 32px 16px;
-  color: var(--muted-foreground);
-  font-size: 13px;
-  text-align: center;
-}
-.space-comments-empty > strong {
-  color: var(--foreground);
-  font-size: 14px;
-  font-weight: 500;
+  margin-top: var(--space-0-5);
+  font-size: var(--text-4xs);
 }
 
 /* The replies row's commenters, smaller than a list's avatars. */
 .message-comment-replies .participant-stack .dx-avatar {
   width: 18px;
   height: 18px;
-  font-size: 8px;
+  font-size: var(--text-4xs);
 }
 /* dx's quoted post renders as Markdown, which keeps its own line breaks. */
 .message-comments-quote-markdown {
@@ -425,7 +369,7 @@
 /* A comment a mention's link opened the panel at flashes, as a linked
    message does. */
 .message-comment[data-notification-target] {
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   animation: notification-target-flash 2.4s ease-out;
 }
 @media (prefers-reduced-motion: reduce) {

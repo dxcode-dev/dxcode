@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type {
   OrbResolvedProvider,
   ProjectData,
@@ -45,6 +44,11 @@ import { settingsNavigationState } from "../../shared/navigation/settings-return
 import { settle } from "../../shared/settle.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
+import {
+  DialogDescription,
+  DialogRoot,
+  DialogTitle,
+} from "../../shared/ui/dialog.js";
 import { Input } from "../../shared/ui/input.js";
 import {
   ModalSurface,
@@ -529,6 +533,7 @@ function GeneralProjectSettings({
           title="Description"
           control={
             <Input
+              size="sm"
               className="project-description-input"
               aria-label="Project description"
               value={draft.description}
@@ -690,16 +695,16 @@ function ShipPromptDialog({
   const tooLong = text.length > MAX_SHIP_PROMPT_LENGTH;
   const blank = text.trim() === "";
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onCancel())}>
+    <DialogRoot open onOpenChange={(open) => (open ? undefined : onCancel())}>
       <ModalSurface
         className="ship-prompt-dialog"
         ariaLabel="Customize Ship Prompt"
         initialFocus={input}
       >
         <ModalSurfaceHeader>
-          <Dialog.Title className="ship-prompt-dialog-title">
+          <DialogTitle className="ship-prompt-dialog-title">
             Customize Ship Prompt
-          </Dialog.Title>
+          </DialogTitle>
           <ModalSurfaceClose />
         </ModalSurfaceHeader>
         <form
@@ -709,9 +714,9 @@ function ShipPromptDialog({
             if (!blank && !tooLong) onUse(text);
           }}
         >
-          <Dialog.Description>
+          <DialogDescription>
             Ship sends this as your message to the agent, exactly as written.
-          </Dialog.Description>
+          </DialogDescription>
           <Textarea
             ref={input}
             aria-label="Custom Ship prompt"
@@ -742,7 +747,7 @@ function ShipPromptDialog({
           </footer>
         </form>
       </ModalSurface>
-    </Dialog.Root>
+    </DialogRoot>
   );
 }
 
@@ -849,6 +854,7 @@ function ProjectIdentityRow({
           <span className="project-owner-name">{ownerName}</span>
           <span aria-hidden="true">/</span>
           <Input
+            size="sm"
             className="project-name-input"
             aria-label="Project name"
             value={name}
@@ -1089,6 +1095,7 @@ function GitRemoteAliasesSection({
         }}
       >
         <Input
+          size="sm"
           className="project-remote-alias-input"
           aria-label="Git remote alias"
           aria-invalid={invalid || undefined}

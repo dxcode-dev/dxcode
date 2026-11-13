@@ -1,0 +1,12 @@
+/* The MCP server sheet on the shared Sheet: its own header and body, and a
+   bottom sheet on a phone. */
+.dx-sheet.mcp-sheet > .dx-sheet-body {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+@media (max-width: 640px) {
+  .dx-sheet-viewport:has(> .mcp-sheet) {
+    align-items: flex-end;
+  }
+}

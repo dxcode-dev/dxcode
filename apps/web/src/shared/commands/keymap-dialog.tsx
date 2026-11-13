@@ -1,6 +1,7 @@
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { Pencil } from "lucide-react";
 import { settingsNavigationState } from "../navigation/settings-return.js";
+import { Button } from "../ui/button.js";
 import { CommandSurfaceDialog } from "../ui/command-surface-dialog.js";
 import {
   type CommandId,
@@ -32,9 +33,9 @@ export function KeymapDialog({
       title="Keymap"
       description="Keyboard shortcuts available on this page."
       rightHeaderAction={
-        <button
-          type="button"
-          className="keymap-edit-link"
+        <Button
+          variant="outline"
+          size="xs"
           onClick={() => {
             onOpenChange(false);
             void navigate({
@@ -45,7 +46,7 @@ export function KeymapDialog({
           }}
         >
           <Pencil aria-hidden="true" /> Edit Keyboard Shortcuts
-        </button>
+        </Button>
       }
       primary={null}
       variant="keymap"

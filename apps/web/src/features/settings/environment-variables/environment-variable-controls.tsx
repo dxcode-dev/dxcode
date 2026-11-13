@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type {
   EnvironmentVariableAuditEventData,
   EnvironmentVariableData,
@@ -31,6 +30,12 @@ import {
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
@@ -630,8 +635,8 @@ function EnvironmentVariableMenu({
   const trigger = useRef<HTMLButtonElement>(null);
   const returnTo = () => trigger.current ?? document.body;
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         disabled={disabled}
         render={
           <Button
@@ -643,36 +648,19 @@ function EnvironmentVariableMenu({
         }
       >
         <Ellipsis />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
-        >
-          <Menu.Popup className="thread-menu-popup">
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() => onEdit(item, returnTo())}
-            >
-              {item.kind === "secret" ? "Rotate" : "Edit"}
-            </Menu.Item>
-            <Menu.Item
-              className="thread-menu-item"
-              onClick={() => onToggle(item)}
-            >
-              {item.enabled ? "Disable" : "Enable"}
-            </Menu.Item>
-            <Menu.Item
-              className="thread-menu-item environment-menu-danger"
-              onClick={() => onDelete(item, returnTo())}
-            >
-              Delete
-            </Menu.Item>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuItem onClick={() => onEdit(item, returnTo())}>
+          {item.kind === "secret" ? "Rotate" : "Edit"}
+        </MenuItem>
+        <MenuItem onClick={() => onToggle(item)}>
+          {item.enabled ? "Disable" : "Enable"}
+        </MenuItem>
+        <MenuItem tone="danger" onClick={() => onDelete(item, returnTo())}>
+          Delete
+        </MenuItem>
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 

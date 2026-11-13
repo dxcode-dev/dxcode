@@ -1,0 +1,88 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's centered dialog: see dialog.tsx. Confirmations have
+   confirm-dialog.css; sheets, drawers, and overlay layers have overlay.css.
+   A page sizes its dialog with its own class, which outranks this layer. */
+@layer components {
+  .dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-dialog);
+    background: var(--scrim);
+    backdrop-filter: blur(2px);
+  }
+  .dialog-viewport {
+    position: fixed;
+    inset: 0;
+    z-index: calc(var(--z-dialog) + 1);
+    display: grid;
+    place-items: center;
+    padding: var(--space-4);
+  }
+  .dialog-popup {
+    position: relative;
+    width: min(430px, 100%);
+    padding: var(--space-5);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-lg);
+    color: var(--foreground);
+    background: var(--popover);
+    box-shadow: var(--shadow-xl);
+    outline: none;
+  }
+  .dialog-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    color: var(--muted-foreground);
+    background: transparent;
+    border: 0;
+    border-radius: var(--radius-xs);
+    cursor: pointer;
+  }
+  .dialog-close:hover {
+    color: var(--foreground);
+    background: var(--accent);
+  }
+
+  .dialog-popup[data-size="md"] {
+    width: min(480px, 100%);
+  }
+  .dialog-popup[data-size="lg"] {
+    width: min(520px, 100%);
+  }
+  .dialog-popup[data-size="xl"] {
+    width: min(720px, 100%);
+  }
+
+  /* Page: fills the window less a margin, on the surface color; edge to
+     edge on a phone. The content lays itself out. */
+  .dialog-viewport[data-size="page"] {
+    place-items: stretch;
+    padding: var(--space-3);
+  }
+  .dialog-popup[data-size="page"] {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+    border-radius: var(--radius-xl);
+    background: var(--surface);
+  }
+  @media (max-width: 767px) {
+    .dialog-viewport[data-size="page"] {
+      padding: 0;
+    }
+    .dialog-popup[data-size="page"] {
+      border: 0;
+      border-radius: 0;
+    }
+  }
+}

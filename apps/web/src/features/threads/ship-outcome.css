@@ -2,10 +2,10 @@
 .ship-outcome-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   max-width: var(--composer-width);
-  margin: 0 auto 8px;
+  margin: 0 auto var(--space-2);
   padding-right: 64px;
 }
 .ship-outcome-actions > a,
@@ -13,7 +13,7 @@
   pointer-events: auto;
   color: var(--foreground);
   text-decoration: none;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--background) 96%, transparent);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(8px);

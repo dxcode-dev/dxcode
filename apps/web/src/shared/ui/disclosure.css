@@ -1,0 +1,54 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's disclosure row: see disclosure.tsx. */
+@layer components {
+  .dx-disclosure {
+    display: inline-flex;
+    max-width: 100%;
+    align-items: center;
+    gap: var(--space-1-5);
+    padding: var(--space-0-5) 0;
+    color: var(--muted-foreground);
+    border: 0;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-md);
+    line-height: var(--leading-5);
+    text-align: left;
+    cursor: pointer;
+  }
+  .dx-disclosure:hover,
+  .dx-disclosure:focus-visible {
+    color: var(--chat-foreground);
+  }
+  .dx-disclosure:focus-visible {
+    box-shadow: var(--focus-ring);
+  }
+  .dx-disclosure > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-disclosure > svg {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+  }
+  .dx-disclosure > .dx-disclosure-chevron {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
+    transition: rotate var(--duration-fast) ease-out;
+  }
+  .dx-disclosure[aria-expanded="true"] > .dx-disclosure-chevron {
+    rotate: 180deg;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dx-disclosure > .dx-disclosure-chevron {
+      transition: none;
+    }
+  }
+}

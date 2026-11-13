@@ -18,45 +18,19 @@
   align-items: center;
   justify-content: flex-start;
   flex: none;
-  gap: 2px;
+  gap: var(--space-0-5);
   height: 36px;
-  padding: 0 6px;
+  padding: 0 var(--space-1-5);
   border-bottom: 1px solid var(--divider);
 }
-.thread-files-panel .thread-files-tool,
-.thread-file-save,
-.thread-file-actions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
+/* Toolbar icon buttons are muted until hovered. */
+.thread-files-toolbar .dx-button--ghost,
+.thread-file-toolbar .dx-button--icon {
   color: var(--muted-foreground);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  cursor: pointer;
 }
-.thread-files-panel .thread-files-tool:hover,
-.thread-file-save:hover:not(:disabled),
-.thread-file-actions:hover,
-.thread-file-actions[data-popup-open] {
+.thread-files-toolbar .dx-button--ghost:hover,
+.thread-file-toolbar .dx-button--icon:hover {
   color: var(--foreground);
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-}
-.thread-files-tool > svg,
-.thread-file-save > svg,
-.thread-file-actions > svg,
-.thread-file-mode > svg {
-  width: 14px;
-  height: 14px;
-  flex: none;
-}
-.thread-file-save:disabled,
-.thread-files-panel .thread-files-tool:disabled {
-  cursor: default;
-  opacity: 0.5;
 }
 .thread-files-toolbar-end {
   display: inline-flex;
@@ -67,29 +41,9 @@
   justify-content: space-between;
   color: var(--destructive);
 }
-/* The file's Preview or Source toggle: a 26px text button. */
-.thread-file-mode {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  height: 26px;
-  padding: 4px 8px;
-  color: var(--foreground);
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 16px;
-  cursor: pointer;
-}
-.thread-file-mode:hover {
-  background: color-mix(in srgb, var(--foreground) 5%, transparent);
-}
 .thread-file-connection {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   white-space: nowrap;
 }
 .thread-file-connection[role="alert"] {
@@ -102,12 +56,12 @@
   align-items: center;
   flex: none;
   min-width: 0;
-  gap: 6px;
+  gap: var(--space-1-5);
   min-height: 36px;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   border-bottom: 1px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .thread-files-panel > header strong,
@@ -119,20 +73,23 @@
   white-space: nowrap;
 }
 
-.thread-files-panel button,
-.thread-file-viewer button {
+/* Plain buttons left in the panel, such as worktree rows; shared buttons
+   keep their own look. */
+:where(.thread-files-panel, .thread-file-viewer) button:not(.dx-button) {
   border: 0;
-  border-radius: 5px;
-  padding: 4px 7px;
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) 7px;
   background: transparent;
   color: inherit;
   font: inherit;
 }
 
-.thread-files-panel button:hover:not(:disabled),
-.thread-file-viewer button:hover:not(:disabled),
-.thread-file-viewer button[aria-selected="true"],
-.thread-file-viewer button[aria-pressed="true"] {
+:where(.thread-files-panel, .thread-file-viewer)
+  button:not(.dx-button):is(
+    :hover:not(:disabled),
+    [aria-selected="true"],
+    [aria-pressed="true"]
+  ) {
   background: var(--secondary);
   color: var(--foreground);
 }
@@ -144,17 +101,17 @@
   align-items: center;
   justify-content: center;
   flex: 1;
-  gap: 8px;
+  gap: var(--space-2);
   padding: 18px;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
   text-align: center;
 }
 
 /* A notice is a row above the file; it never takes the file's space. */
 .thread-file-notice {
   flex: none;
-  padding: 8px 10px;
+  padding: var(--space-2) var(--space-2-5);
 }
 
 .thread-file-toolbar > .thread-file-connection {
@@ -170,7 +127,7 @@
   flex: none;
   justify-content: flex-start;
   min-height: 30px;
-  padding: 6px 10px;
+  padding: var(--space-1-5) var(--space-2-5);
   border-bottom: 1px solid var(--border);
 }
 
@@ -182,12 +139,6 @@
     color-mix(in srgb, var(--destructive) 34%, transparent);
   background: color-mix(in srgb, var(--destructive) 8%, transparent);
   color: var(--destructive);
-}
-
-.thread-file-notice[role="alert"] button {
-  border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
-  background: var(--surface);
-  color: var(--foreground);
 }
 
 .thread-files-tree {
@@ -221,12 +172,12 @@
   display: flex;
   align-items: center;
   flex: none;
-  gap: 6px;
+  gap: var(--space-1-5);
   width: 100%;
   min-width: 0;
   min-height: 34px;
   border-radius: 0;
-  padding: 0 10px;
+  padding: 0 var(--space-2-5);
   text-align: left;
 }
 
@@ -245,7 +196,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
@@ -255,7 +206,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -267,12 +218,12 @@
 
 .thread-files-more {
   flex: none;
-  margin: 6px 10px;
+  margin: var(--space-1-5) var(--space-2-5);
 }
 
 .thread-file-toolbar > div {
   display: flex;
-  gap: 2px;
+  gap: var(--space-0-5);
 }
 
 .thread-file-toolbar > span[role="status"] {
@@ -296,7 +247,7 @@
 .thread-file-editor {
   display: block;
   overflow: auto;
-  background: light-dark(#ffffff, #141415);
+  background: var(--editor-background);
 }
 
 .thread-file-editor > diffs-container {
@@ -322,7 +273,7 @@
   width: 100%;
   max-width: 820px;
   margin: 0 auto;
-  padding: 28px 32px 48px;
+  padding: 28px var(--space-8) 48px;
   overflow: auto;
   line-height: 1.65;
 }
@@ -332,8 +283,8 @@
 }
 
 .thread-file-preview > .markdown-file {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: var(--text-lg);
+  line-height: var(--leading-5-5);
 }
 
 .thread-file-preview > .markdown-file > :first-child > :first-child {
@@ -365,14 +316,14 @@
   border-collapse: separate;
   border-spacing: 0;
   font-family: var(--font-mono);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4-5);
 }
 
 .thread-file-table th,
 .thread-file-table td {
   max-width: 420px;
-  padding: 4px 10px;
+  padding: var(--space-1) var(--space-2-5);
   overflow: hidden;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -388,7 +339,7 @@
   z-index: 1;
   background: var(--secondary);
   color: var(--foreground);
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
 }
 
 .thread-file-table tbody th {
@@ -413,10 +364,10 @@
 
 .thread-file-table > footer {
   flex: none;
-  padding: 6px 10px;
+  padding: var(--space-1-5) var(--space-2-5);
   border-top: 1px solid var(--border);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .thread-file-viewer[data-zen] {
@@ -444,7 +395,7 @@
 }
 
 .thread-file-media-image {
-  padding: 16px;
+  padding: var(--space-4);
   background:
     repeating-conic-gradient(var(--secondary) 0% 25%, transparent 0% 50%) 50% /
     16px 16px;
@@ -457,7 +408,7 @@
 }
 
 .thread-file-media-video {
-  background: #000;
+  background: var(--media-background);
 }
 
 .thread-file-media-video video {
@@ -466,29 +417,25 @@
   object-fit: contain;
 }
 
-.thread-file-download {
-  flex-direction: column;
-}
-
-.thread-file-download button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.thread-file-download svg {
-  width: 13px;
-  height: 13px;
+/* A loading, empty, or download placeholder fills the pane, centered. */
+.thread-files-placeholder {
+  display: grid;
+  flex: 1;
+  place-items: center;
 }
 
 /* Pierre Trees places the context menu in a zero-width slot at the row. */
-.thread-files-tree-menu {
+.dx-menu.thread-files-tree-menu {
   position: absolute;
   top: 100%;
   right: 0;
   z-index: 200;
   display: flex;
   flex-direction: column;
+}
+
+.thread-files-tree-menu > hr {
+  border: 0;
 }
 
 .thread-files-tree-menu > button {
@@ -505,18 +452,18 @@
 }
 
 .thread-file-media-audio {
-  padding: 24px;
+  padding: var(--space-6);
 }
 
 .thread-file-media-audio figure {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2-5);
   width: min(480px, 100%);
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 .thread-file-media-audio figure > svg {
@@ -529,7 +476,7 @@
   max-width: 100%;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-md);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

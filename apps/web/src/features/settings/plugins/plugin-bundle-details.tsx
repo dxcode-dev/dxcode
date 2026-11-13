@@ -215,7 +215,7 @@ export function PluginBundleDetails({
         {canMutate ? (
           <Button
             size="xs"
-            variant="ghost"
+            variant="danger"
             className="plugin-bundle-remove"
             disabled={busy}
             onClick={() => setConfirming(true)}

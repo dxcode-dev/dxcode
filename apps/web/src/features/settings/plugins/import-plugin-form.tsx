@@ -8,6 +8,7 @@ import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { Tab, Tabs, TabsList } from "../../../shared/ui/tabs.js";
 import { BundleItems } from "./plugin-bundle-items.js";
 import type { PluginBundleUpload } from "./plugin-bundle-mutations.js";
 import {
@@ -175,28 +176,23 @@ export function ImportPluginForm({
 
   const disabled = busy || reading !== undefined;
   const tabs = (
-    <div
-      className="usage-tabs plugin-bundle-tabs"
-      role="tablist"
-      aria-label="Import from"
+    <Tabs
+      variant="segmented"
+      className="plugin-bundle-tabs"
+      value={tab}
+      onValueChange={(next: typeof tab) => {
+        setTab(next);
+        setError(undefined);
+      }}
     >
-      {(["source", "catalog"] as const).map((item) => (
-        <button
-          key={item}
-          id={`${id}-tab-${item}`}
-          type="button"
-          role="tab"
-          aria-selected={tab === item}
-          aria-controls={`${id}-panel`}
-          onClick={() => {
-            setTab(item);
-            setError(undefined);
-          }}
-        >
-          {item === "source" ? "GitHub or ZIP" : "Catalog"}
-        </button>
-      ))}
-    </div>
+      <TabsList aria-label="Import from">
+        {(["source", "catalog"] as const).map((item) => (
+          <Tab key={item} value={item} id={`${id}-tab-${item}`}>
+            {item === "source" ? "GitHub or ZIP" : "Catalog"}
+          </Tab>
+        ))}
+      </TabsList>
+    </Tabs>
   );
   if (tab === "catalog") {
     return (

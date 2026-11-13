@@ -1,8 +1,14 @@
-import { Menu } from "@base-ui/react/menu";
 import type { GitHubSubscriptionData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { Ellipsis } from "lucide-react";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import { GitHubOutlineIcon } from "../../../shared/ui/github-icon.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
 import { errorText, subscriptionStatus } from "./automation-text.js";
 import { useAutomationAction } from "./automations-queries.js";
 
@@ -38,47 +44,42 @@ export function SubscriptionRow({
           <span className="sr-only">{status}</span>
         </span>
       </a>
-      <Menu.Root>
-        <Menu.Trigger
-          className="automation-icon-button"
+      <MenuRoot>
+        <MenuTrigger
+          className={buttonVariants({
+            variant: "subtle",
+            size: "icon-xs",
+            className: "automation-icon-button",
+          })}
           aria-label={`Actions for ${subscription.title}`}
           disabled={action.isPending}
         >
           <Ellipsis aria-hidden="true" />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="thread-menu-positioner automation-menu-positioner"
-            align="end"
-            sideOffset={4}
+        </MenuTrigger>
+        <MenuPopup align="end">
+          {subscription.state === "active" ? (
+            <MenuItem
+              onClick={() =>
+                action.mutate({
+                  kind: "github",
+                  id: subscription.id,
+                  enabled: !subscription.enabled,
+                })
+              }
+            >
+              <span>{subscription.enabled ? "Disable" : "Enable"}</span>
+            </MenuItem>
+          ) : null}
+          <MenuItem
+            tone="danger"
+            onClick={() =>
+              action.mutate({ kind: "github", id: subscription.id })
+            }
           >
-            <Menu.Popup className="thread-menu-popup">
-              {subscription.state === "active" ? (
-                <Menu.Item
-                  className="thread-menu-item"
-                  onClick={() =>
-                    action.mutate({
-                      kind: "github",
-                      id: subscription.id,
-                      enabled: !subscription.enabled,
-                    })
-                  }
-                >
-                  <span>{subscription.enabled ? "Disable" : "Enable"}</span>
-                </Menu.Item>
-              ) : null}
-              <Menu.Item
-                className="thread-menu-item automation-delete"
-                onClick={() =>
-                  action.mutate({ kind: "github", id: subscription.id })
-                }
-              >
-                <span>Delete</span>
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+            <span>Delete</span>
+          </MenuItem>
+        </MenuPopup>
+      </MenuRoot>
       {action.error === null ? null : (
         <p className="automation-error" role="alert">
           {errorText(action.error)}

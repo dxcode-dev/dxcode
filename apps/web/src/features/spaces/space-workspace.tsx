@@ -1,4 +1,3 @@
-import { Drawer } from "@base-ui/react/drawer";
 import type { SpaceData, SpaceThreadItem, ThreadDetailData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,6 +14,7 @@ import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import type { ThreadAutomationsSlot } from "../../shared/thread-automations-slot.js";
 import { Button } from "../../shared/ui/button.js";
 import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
+import { DrawerContent, DrawerRoot } from "../../shared/ui/drawer.js";
 import { deleteThreadMutationOptions } from "../threads/thread-mutations.js";
 import { EditSpaceDialog } from "./edit-space-dialog.js";
 import { SpacePostFilesContext } from "./posts/space-post-files-context.js";
@@ -103,24 +103,16 @@ function SpaceDetailsSheet({
   readonly children: React.ReactNode;
 }) {
   return (
-    <Drawer.Root open={open} onOpenChange={onOpenChange} swipeDirection="down">
-      <Drawer.Portal>
-        <Drawer.Backdrop className="space-sheet-backdrop" />
-        <Drawer.Viewport className="space-sheet-viewport">
-          <Drawer.Popup className="space-sheet" aria-label="Space Details">
-            <Drawer.Close
-              className="space-sheet-handle"
-              aria-label="Close Space Details"
-            >
-              <span />
-            </Drawer.Close>
-            <Drawer.Content className="space-sheet-content">
-              {children}
-            </Drawer.Content>
-          </Drawer.Popup>
-        </Drawer.Viewport>
-      </Drawer.Portal>
-    </Drawer.Root>
+    <DrawerRoot open={open} onOpenChange={onOpenChange} swipeDirection="down">
+      <DrawerContent
+        className="space-sheet"
+        layer="panel"
+        aria-label="Space Details"
+        handleLabel="Close Space Details"
+      >
+        {children}
+      </DrawerContent>
+    </DrawerRoot>
   );
 }
 

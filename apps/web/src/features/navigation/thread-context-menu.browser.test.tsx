@@ -67,13 +67,13 @@ describe("Thread context archive touchpoints", () => {
       ),
     );
 
-    const menu = document.querySelector(".thread-context-menu");
+    const menu = document.querySelector(".dx-menu");
     expect(menu?.textContent).toContain("Pin");
     expect(menu?.textContent).not.toContain("Hide");
     expect(menu?.textContent).toContain("Archive");
     expect(menu?.textContent).toContain("Copy");
     const archive = Array.from(
-      document.querySelectorAll<HTMLElement>(".thread-context-item"),
+      document.querySelectorAll<HTMLElement>(".dx-menu-item"),
     ).find((item) => item.textContent?.trim() === "Archive");
     await React.act(() => archive?.click());
     expect(mounted.onSetArchived).toHaveBeenCalledExactlyOnceWith(true);
@@ -92,15 +92,15 @@ describe("Thread context archive touchpoints", () => {
 
     await React.act(() => mounted.trigger.dispatchEvent(touchStart));
     await React.act(() => vi.advanceTimersByTime(499));
-    expect(document.querySelector(".thread-context-menu")).toBeNull();
+    expect(document.querySelector(".dx-menu")).toBeNull();
     await React.act(() => vi.advanceTimersByTime(1));
 
-    const menu = document.querySelector(".thread-context-menu");
+    const menu = document.querySelector(".dx-menu");
     expect(menu?.textContent).toContain("Archive");
     expect(menu?.textContent).toContain("Copy");
     expect(menu?.textContent).not.toContain("Hide");
     const archive = Array.from(
-      document.querySelectorAll<HTMLElement>(".thread-context-item"),
+      document.querySelectorAll<HTMLElement>(".dx-menu-item"),
     ).find((item) => item.textContent?.trim() === "Archive");
     await React.act(() => archive?.click());
     expect(mounted.onSetArchived).toHaveBeenCalledExactlyOnceWith(true);

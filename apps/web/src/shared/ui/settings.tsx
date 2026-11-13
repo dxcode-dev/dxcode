@@ -2,6 +2,8 @@ import { AlertTriangle } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "../utils.js";
 import { Button } from "./button.js";
+import { Select, type SelectOption } from "./select.js";
+import { Switch } from "./switch.js";
 
 /**
  * The one settings page heading: a compact title row, an optional muted
@@ -112,49 +114,12 @@ export function SettingsRow({
   );
 }
 
-export function SettingsToggle({
-  checked,
-  onCheckedChange,
-  label,
-  disabled = false,
-  pending = false,
-  describedBy,
-}: {
-  readonly checked: boolean;
-  readonly onCheckedChange: (checked: boolean) => void;
-  readonly label: string;
-  readonly disabled?: boolean;
-  /**
-   * Shows `checked` while it saves and ignores presses until it settles. It
-   * stays focusable, so keyboard focus does not jump away mid-save.
-   */
-  readonly pending?: boolean;
-  /** Id of the hint that explains the toggle's state. */
-  readonly describedBy?: string;
-}) {
-  return (
-    <button
-      type="button"
-      className="settings-toggle"
-      data-checked={checked || undefined}
-      data-pending={pending || undefined}
-      aria-label={label}
-      aria-pressed={checked}
-      aria-busy={pending || undefined}
-      aria-disabled={pending || undefined}
-      aria-describedby={describedBy}
-      disabled={disabled}
-      onClick={() => {
-        if (!pending) onCheckedChange(!checked);
-      }}
-    >
-      <span />
-    </button>
-  );
-}
+/** A setting's on/off switch; see `Switch`. */
+export const SettingsToggle = Switch;
 
-export type SettingsSelectOption = readonly [value: string, label: string];
+export type SettingsSelectOption = SelectOption;
 
+/** A setting's choice list; see `Select`. */
 export function SettingsSelect({
   id,
   value,
@@ -171,20 +136,14 @@ export function SettingsSelect({
   readonly disabled?: boolean;
 }) {
   return (
-    <select
+    <Select
       id={id}
-      className="settings-select"
       aria-label={label}
       value={value}
       disabled={disabled}
-      onChange={(event) => onValueChange(event.target.value)}
-    >
-      {options.map(([optionValue, optionLabel]) => (
-        <option value={optionValue} key={optionValue}>
-          {optionLabel}
-        </option>
-      ))}
-    </select>
+      options={options}
+      onValueChange={onValueChange}
+    />
   );
 }
 

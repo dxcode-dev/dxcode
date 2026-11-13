@@ -1,8 +1,14 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { ThreadId } from "@dx/domain";
 import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import { X } from "lucide-react";
 import { openedArtifactSheet } from "../../shared/navigation/open-artifact.js";
+import { Button } from "../../shared/ui/button.js";
+import {
+  SheetClose,
+  SheetContent,
+  SheetRoot,
+  SheetTitle,
+} from "../../shared/ui/sheet.js";
 import { ArtifactsView } from "./artifacts-view.js";
 import "./artifact-sheet.css";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
@@ -42,31 +48,34 @@ export function ArtifactSheet({
     });
   };
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : close())}>
-      <Dialog.Portal>
-        <Dialog.Popup className="artifact-sheet">
-          <div className="artifact-sheet-bar">
-            <Dialog.Title className="artifact-sheet-title">
-              Artifact
-            </Dialog.Title>
-            <Dialog.Close
-              className="artifact-sheet-close"
-              aria-label="Close artifact"
-            >
-              <X aria-hidden="true" />
-              <span>Close</span>
-            </Dialog.Close>
-          </div>
-          <div className="artifact-sheet-body">
-            <ArtifactsView
-              threadId={threadId}
-              active
-              readOnly={readOnly}
-              dictation={dictation}
-            />
-          </div>
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <SheetRoot open onOpenChange={(open) => (open ? undefined : close())}>
+      {/* Under the app's dialogs, so comments and confirmations open over
+          it. */}
+      <SheetContent
+        size="full"
+        layer="panel"
+        padded={false}
+        className="artifact-sheet"
+      >
+        <div className="artifact-sheet-bar">
+          <SheetTitle className="artifact-sheet-title">Artifact</SheetTitle>
+          <SheetClose
+            render={<Button variant="ghost" className="artifact-sheet-close" />}
+            aria-label="Close artifact"
+          >
+            <X aria-hidden="true" />
+            <span>Close</span>
+          </SheetClose>
+        </div>
+        <div className="artifact-sheet-body">
+          <ArtifactsView
+            threadId={threadId}
+            active
+            readOnly={readOnly}
+            dictation={dictation}
+          />
+        </div>
+      </SheetContent>
+    </SheetRoot>
   );
 }

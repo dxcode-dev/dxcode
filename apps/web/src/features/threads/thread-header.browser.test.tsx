@@ -173,7 +173,7 @@ describe("ThreadHeader", () => {
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     const archiveItem = Array.from(
-      document.querySelectorAll<HTMLElement>(".thread-menu-item"),
+      document.querySelectorAll<HTMLElement>(".dx-menu-item"),
     ).find((item) => item.textContent?.trim() === "Archive");
     expect(archiveItem).toBeDefined();
     await React.act(() => archiveItem?.click());
@@ -199,7 +199,7 @@ describe("ThreadHeader", () => {
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
     const unarchiveItem = Array.from(
-      document.querySelectorAll<HTMLElement>(".thread-menu-item"),
+      document.querySelectorAll<HTMLElement>(".dx-menu-item"),
     ).find((item) => item.textContent?.trim() === "Unarchive");
     expect(unarchiveItem).toBeDefined();
     await React.act(() => unarchiveItem?.click());

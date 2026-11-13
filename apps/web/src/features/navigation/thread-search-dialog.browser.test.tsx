@@ -173,7 +173,7 @@ describe("ThreadSearchDialog", () => {
   it("inserts filters from the chips and runs syntax examples", async () => {
     await render();
     const chip = [
-      ...document.querySelectorAll<HTMLButtonElement>(".thread-search-filter"),
+      ...document.querySelectorAll<HTMLButtonElement>(".thread-search-key"),
     ].find((button) => button.textContent === "project:");
     await act(() => chip?.click());
     expect(combobox().value).toBe("project:");

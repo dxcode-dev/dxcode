@@ -1,4 +1,3 @@
-import { Dialog } from "@base-ui/react/dialog";
 import type { CatalogProviderData, ConnectionData } from "@dx/api";
 import { modelMappingText, parseModelMappingText } from "@dx/domain";
 import { KeyRound, LockKeyhole, X } from "lucide-react";
@@ -6,6 +5,13 @@ import { type FormEvent, useState } from "react";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
 import { ProviderMark } from "../../../shared/ui/provider-marks.js";
+import {
+  SheetClose,
+  SheetContent,
+  SheetDescription,
+  SheetRoot,
+  SheetTitle,
+} from "../../../shared/ui/sheet.js";
 import type { ConnectionDialogSubmit } from "./connection-dialog.js";
 import {
   type HeaderRow,
@@ -117,186 +123,172 @@ export const ProviderKeySheet = ({
   const requiredFields = provider.fields.filter((field) => field.required);
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && onClose()}>
-      <Dialog.Portal>
-        <Dialog.Backdrop className="dialog-backdrop" />
-        <Dialog.Popup className="routing-sheet">
-          <header className="routing-sheet-header">
-            <ProviderTile providerId={provider.id} />
-            <div className="routing-sheet-heading">
-              <Dialog.Title className="routing-sheet-title">
-                {existing === undefined
-                  ? providerSheetTitle(presentation)
-                  : `Edit ${existing.name}`}
-              </Dialog.Title>
-              {description === undefined ? null : (
-                <Dialog.Description className="routing-sheet-description">
-                  {description}
-                </Dialog.Description>
+    <SheetRoot open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="routing-sheet">
+        <header className="routing-sheet-header">
+          <ProviderTile providerId={provider.id} />
+          <div className="routing-sheet-heading">
+            <SheetTitle className="routing-sheet-title">
+              {existing === undefined
+                ? providerSheetTitle(presentation)
+                : `Edit ${existing.name}`}
+            </SheetTitle>
+            {description === undefined ? null : (
+              <SheetDescription className="routing-sheet-description">
+                {description}
+              </SheetDescription>
+            )}
+          </div>
+        </header>
+        <div className="routing-sheet-body">
+          <form
+            className="routing-sheet-form"
+            autoComplete="off"
+            onSubmit={submit}
+          >
+            <div className="routing-sheet-field">
+              <label htmlFor="model-provider-api-key">
+                {presentation.keyLabel}
+              </label>
+              <div className="routing-sheet-secret">
+                <Input
+                  size="sm"
+                  id="model-provider-api-key"
+                  type="password"
+                  autoComplete="new-password"
+                  spellCheck={false}
+                  required={existing === undefined}
+                  placeholder={
+                    existing?.credential?.present === true
+                      ? `Stored ···${existing.credential.tail ?? ""}, leave blank to keep`
+                      : presentation.placeholder
+                  }
+                  value={apiKey}
+                  onChange={(event) => setApiKey(event.target.value)}
+                />
+                <span
+                  role="img"
+                  aria-label="Encrypted at rest on dx's servers"
+                  title="Encrypted at rest on dx's servers"
+                >
+                  <LockKeyhole />
+                </span>
+              </div>
+              {presentation.help === undefined ? null : (
+                <p className="routing-sheet-help">{presentation.help}</p>
+              )}
+              {fieldErrors.apiKey === undefined ? null : (
+                <p className="model-routing-field-error">
+                  {fieldErrors.apiKey}
+                </p>
               )}
             </div>
-          </header>
-          <div className="routing-sheet-body">
-            <form
-              className="routing-sheet-form"
-              autoComplete="off"
-              onSubmit={submit}
-            >
+            <ProviderSettingsFields
+              presentation={presentation}
+              fields={requiredFields}
+              values={fields}
+              onValues={setFields}
+              region={region}
+              onRegion={setRegion}
+              fieldErrors={fieldErrors}
+            />
+            <ProviderModelsSection
+              providerId={provider.id}
+              providerName={presentation.name}
+              models={provider.models}
+              mappingText={mappingText}
+              onMappingText={setMappingText}
+              errors={[
+                ...mappingErrors,
+                ...(fieldErrors.models === undefined
+                  ? []
+                  : [fieldErrors.models]),
+              ]}
+            />
+            {showName ? (
               <div className="routing-sheet-field">
-                <label htmlFor="model-provider-api-key">
-                  {presentation.keyLabel}
+                <label htmlFor="model-provider-key-name">
+                  Display Name (Optional)
                 </label>
-                <div className="routing-sheet-secret">
-                  <Input
-                    className="routing-sheet-control"
-                    id="model-provider-api-key"
-                    type="password"
-                    autoComplete="new-password"
-                    spellCheck={false}
-                    required={existing === undefined}
-                    placeholder={
-                      existing?.credential?.present === true
-                        ? `Stored ···${existing.credential.tail ?? ""}, leave blank to keep`
-                        : presentation.placeholder
-                    }
-                    value={apiKey}
-                    onChange={(event) => setApiKey(event.target.value)}
-                  />
-                  <span
-                    role="img"
-                    aria-label="Encrypted at rest on dx's servers"
-                    title="Encrypted at rest on dx's servers"
-                  >
-                    <LockKeyhole />
-                  </span>
-                </div>
-                {presentation.help === undefined ? null : (
-                  <p className="routing-sheet-help">{presentation.help}</p>
-                )}
-                {fieldErrors.apiKey === undefined ? null : (
+                <Input
+                  size="sm"
+                  id="model-provider-key-name"
+                  placeholder={defaultName}
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+                {fieldErrors.name === undefined ? null : (
                   <p className="model-routing-field-error">
-                    {fieldErrors.apiKey}
+                    {fieldErrors.name}
                   </p>
                 )}
               </div>
-              <ProviderSettingsFields
-                presentation={presentation}
-                fields={requiredFields}
-                values={fields}
-                onValues={setFields}
-                region={region}
-                onRegion={setRegion}
-                fieldErrors={fieldErrors}
+            ) : null}
+            {presentation.headers && showHeaders ? (
+              <ProviderHeadersField
+                stored={existing?.headers ?? []}
+                cleared={clearHeaders}
+                onClear={() => setClearHeaders(true)}
+                rows={headers}
+                onRows={setHeaders}
+                {...(fieldErrors.headers === undefined
+                  ? {}
+                  : { error: fieldErrors.headers })}
               />
-              <ProviderModelsSection
-                providerId={provider.id}
-                providerName={presentation.name}
-                models={provider.models}
-                mappingText={mappingText}
-                onMappingText={setMappingText}
-                errors={[
-                  ...mappingErrors,
-                  ...(fieldErrors.models === undefined
-                    ? []
-                    : [fieldErrors.models]),
-                ]}
-              />
-              {showName ? (
-                <div className="routing-sheet-field">
-                  <label htmlFor="model-provider-key-name">
-                    Display Name (Optional)
-                  </label>
-                  <Input
-                    className="routing-sheet-control"
-                    id="model-provider-key-name"
-                    placeholder={defaultName}
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                  />
-                  {fieldErrors.name === undefined ? null : (
-                    <p className="model-routing-field-error">
-                      {fieldErrors.name}
-                    </p>
-                  )}
-                </div>
-              ) : null}
-              {presentation.headers && showHeaders ? (
-                <ProviderHeadersField
-                  stored={existing?.headers ?? []}
-                  cleared={clearHeaders}
-                  onClear={() => setClearHeaders(true)}
-                  rows={headers}
-                  onRows={setHeaders}
-                  {...(fieldErrors.headers === undefined
-                    ? {}
-                    : { error: fieldErrors.headers })}
-                />
-              ) : null}
-              {showName && (!presentation.headers || showHeaders) ? null : (
-                <div className="routing-sheet-inline-actions">
-                  {showName ? null : (
-                    <Button
-                      type="button"
-                      size="xs"
-                      className="routing-sheet-button"
-                      variant="outline"
-                      onClick={() => setShowName(true)}
-                    >
-                      Display Name
-                    </Button>
-                  )}
-                  {presentation.headers && !showHeaders ? (
-                    <Button
-                      type="button"
-                      size="xs"
-                      className="routing-sheet-button"
-                      variant="outline"
-                      onClick={() => {
-                        setShowHeaders(true);
-                        if (headers.length === 0)
-                          setHeaders([
-                            { key: Date.now(), name: "", value: "" },
-                          ]);
-                      }}
-                    >
-                      Headers
-                    </Button>
-                  ) : null}
-                </div>
-              )}
-              {submitError === undefined ? null : (
-                <p className="model-routing-field-error">{submitError}</p>
-              )}
-              <div className="routing-sheet-footer">
-                <Button
-                  type="button"
-                  size="xs"
-                  className="routing-sheet-button"
-                  variant="outline"
-                  onClick={onClose}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  size="xs"
-                  className="routing-sheet-button"
-                  disabled={busy}
-                >
-                  {busy
-                    ? "Saving…"
-                    : existing === undefined
-                      ? "Create"
-                      : "Save"}
-                </Button>
+            ) : null}
+            {showName && (!presentation.headers || showHeaders) ? null : (
+              <div className="routing-sheet-inline-actions">
+                {showName ? null : (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => setShowName(true)}
+                  >
+                    Display Name
+                  </Button>
+                )}
+                {presentation.headers && !showHeaders ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    onClick={() => {
+                      setShowHeaders(true);
+                      if (headers.length === 0)
+                        setHeaders([{ key: Date.now(), name: "", value: "" }]);
+                    }}
+                  >
+                    Headers
+                  </Button>
+                ) : null}
               </div>
-            </form>
-          </div>
-          <Dialog.Close className="routing-sheet-close" aria-label="Close">
-            <X />
-          </Dialog.Close>
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+            )}
+            {submitError === undefined ? null : (
+              <p className="model-routing-field-error">{submitError}</p>
+            )}
+            <div className="routing-sheet-footer">
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                onClick={onClose}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" size="xs" disabled={busy}>
+                {busy ? "Saving…" : existing === undefined ? "Create" : "Save"}
+              </Button>
+            </div>
+          </form>
+        </div>
+        <SheetClose
+          className="dx-sheet-close routing-sheet-close"
+          aria-label="Close"
+        >
+          <X />
+        </SheetClose>
+      </SheetContent>
+    </SheetRoot>
   );
 };

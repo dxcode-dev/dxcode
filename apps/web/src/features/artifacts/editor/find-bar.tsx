@@ -1,5 +1,7 @@
 import { ChevronDown, ChevronUp, X } from "lucide-react";
 import * as React from "react";
+import { Button } from "../../../shared/ui/button.js";
+import { Input } from "../../../shared/ui/input.js";
 import type {
   ArtifactSession,
   ArtifactSessionSnapshot,
@@ -28,7 +30,8 @@ export function FindBar({
         : `${find.current + 1} of ${find.count}`;
   return (
     <search className="artifact-find" aria-label="Find">
-      <input
+      <Input
+        size="sm"
         ref={(node) => {
           node?.focus();
           node?.select();
@@ -51,8 +54,9 @@ export function FindBar({
       <span className="artifact-find-count" aria-live="polite">
         {count}
       </span>
-      <button
-        type="button"
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="artifact-icon-button"
         aria-label="Previous Match"
         title="Previous match (Shift+Enter)"
@@ -60,9 +64,10 @@ export function FindBar({
         onClick={() => session.findStep(-1)}
       >
         <ChevronUp aria-hidden="true" />
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="artifact-icon-button"
         aria-label="Next Match"
         title="Next match (Enter)"
@@ -70,16 +75,17 @@ export function FindBar({
         onClick={() => session.findStep(1)}
       >
         <ChevronDown aria-hidden="true" />
-      </button>
-      <button
-        type="button"
+      </Button>
+      <Button
+        variant="subtle"
+        size="icon-xs"
         className="artifact-icon-button"
         aria-label="Close Find"
         title="Close (Escape)"
         onClick={onClose}
       >
         <X aria-hidden="true" />
-      </button>
+      </Button>
     </search>
   );
 }

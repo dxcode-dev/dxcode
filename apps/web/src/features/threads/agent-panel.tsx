@@ -26,6 +26,7 @@ import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import { Textarea } from "../../shared/ui/textarea.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
@@ -733,7 +734,7 @@ function ThreadErrorCard({
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="subtle"
           size="icon-xs"
           className="thread-error-dismiss"
           aria-label="Dismiss error"
@@ -1028,7 +1029,8 @@ function AgentComposer({
         ref={ref}
         {...dropTarget}
       >
-        <textarea
+        <Textarea
+          variant="bare"
           ref={attachTextarea}
           aria-label="Message"
           data-command-target="thread-composer"
@@ -1096,7 +1098,8 @@ function AgentComposer({
           {showSend ? (
             <Button
               type="submit"
-              size="icon-sm"
+              size="icon-xs"
+              shape="round"
               className="composer-submit"
               aria-label={
                 editing !== undefined
@@ -1105,8 +1108,7 @@ function AgentComposer({
                     ? "Send steering message"
                     : "Send message"
               }
-              aria-busy={draftLocked || undefined}
-              data-submitting={draftLocked ? "" : undefined}
+              busy={draftLocked}
               disabled={draftLocked || uploading || !composing}
             >
               {draftLocked ? (
@@ -1124,7 +1126,8 @@ function AgentComposer({
             <Button
               type="button"
               variant="secondary"
-              size="icon-sm"
+              size="icon-xs"
+              shape="round"
               className="composer-submit"
               aria-label="Stop agent"
               onClick={onAbort}

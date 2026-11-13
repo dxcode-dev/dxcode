@@ -1,0 +1,220 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's button: see button.tsx. In the components layer, so a feature's own
+   class still adjusts one button without fighting specificity. */
+@layer components {
+  .dx-button {
+    position: relative;
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    border: 0;
+    border-radius: var(--radius-sm);
+    outline: none;
+    font-family: inherit;
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+    text-decoration: none;
+    cursor: pointer;
+    transition:
+      background-color var(--duration-fast),
+      color var(--duration-fast),
+      opacity var(--duration-fast),
+      box-shadow var(--duration-fast);
+  }
+  .dx-button:focus-visible {
+    box-shadow: var(--focus-ring);
+  }
+  .dx-button:disabled {
+    pointer-events: none;
+    opacity: 0.5;
+  }
+  /* aria-disabled keeps the pointer, so its title still explains why. */
+  .dx-button[aria-disabled="true"] {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  :is(
+    .dx-button--ghost,
+    .dx-button--subtle,
+    .dx-button--outline
+  )[aria-disabled="true"]:hover {
+    background: transparent;
+  }
+  .dx-button svg {
+    flex-shrink: 0;
+    pointer-events: none;
+  }
+
+  .dx-button--primary {
+    color: var(--primary-foreground);
+    background: var(--primary);
+  }
+  .dx-button--destructive {
+    color: var(--on-destructive);
+    background: var(--destructive);
+  }
+  .dx-button--primary:hover,
+  .dx-button--destructive:hover {
+    opacity: 0.9;
+  }
+  .dx-button--secondary {
+    color: var(--secondary-foreground);
+    background: var(--secondary);
+  }
+  .dx-button--secondary:hover {
+    opacity: 0.8;
+  }
+  .dx-button--outline {
+    color: inherit;
+    background: transparent;
+    border: 1px solid var(--input);
+  }
+  .dx-button--outline:focus-visible {
+    border-color: var(--ring);
+  }
+  .dx-button--ghost {
+    color: inherit;
+    background: transparent;
+  }
+  /* Subtle: a muted icon or label that lights up on hover, for toolbars
+     and row actions. */
+  .dx-button--subtle {
+    color: var(--muted-foreground);
+    background: transparent;
+  }
+  .dx-button--subtle:hover,
+  .dx-button--subtle[data-popup-open],
+  .dx-button--subtle[aria-pressed="true"] {
+    color: var(--foreground);
+    background: var(--accent);
+  }
+  /* Danger: a quiet action that removes or deletes, in red text. */
+  .dx-button--danger {
+    color: var(--destructive);
+    background: transparent;
+  }
+  .dx-button--danger:hover {
+    background: color-mix(in srgb, var(--destructive) 12%, transparent);
+  }
+  /* A toggle chip: outline that stays highlighted while pressed. */
+  .dx-button--outline[aria-pressed="true"] {
+    color: var(--foreground);
+    border-color: var(--foreground);
+    background: var(--secondary);
+  }
+  /* Link: text that acts, inline with a sentence. */
+  .dx-button--link {
+    height: auto;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    font-weight: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+  .dx-button--link:hover {
+    color: var(--foreground);
+  }
+  .dx-button--outline:hover,
+  .dx-button--ghost:hover,
+  .dx-button--ghost[data-popup-open] {
+    color: var(--accent-foreground);
+    background: var(--accent);
+  }
+
+  /* Busy: an action under way, such as sending or recording; muted fill,
+     full strength even while disabled. */
+  .dx-button[data-busy] {
+    background: var(--muted);
+    opacity: 1;
+  }
+  .dx-button--block {
+    width: 100%;
+  }
+  .dx-button--round {
+    border-radius: var(--radius-full);
+  }
+  .dx-button--tone {
+    color: var(--button-tone);
+    border-color: color-mix(in srgb, var(--button-tone) 45%, transparent);
+    background: color-mix(in srgb, var(--button-tone) 12%, transparent);
+  }
+  .dx-button--tone:hover {
+    color: var(--button-tone);
+    background: color-mix(in srgb, var(--button-tone) 18%, transparent);
+  }
+  .dx-button--success {
+    --button-tone: var(--success);
+  }
+  .dx-button--warning {
+    --button-tone: var(--warning);
+  }
+  .dx-button--tone-danger {
+    --button-tone: var(--destructive);
+  }
+  .dx-button--info {
+    --button-tone: var(--unread);
+  }
+
+  .dx-button--lg {
+    height: calc(var(--control-lg) + var(--space-1));
+    padding: 0 var(--space-4);
+    font-size: var(--text-lg);
+    line-height: var(--leading-5);
+  }
+  .dx-button--lg svg {
+    width: var(--icon-lg);
+    height: var(--icon-lg);
+  }
+  .dx-button--icon-2xs {
+    width: 20px;
+    height: 20px;
+  }
+  .dx-button--icon-2xs svg {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+  }
+  .dx-button--md {
+    height: var(--control-lg);
+    padding: 0 var(--space-4);
+    font-size: var(--text-md);
+    line-height: var(--leading-5);
+  }
+  .dx-button--sm {
+    height: var(--control-md);
+    gap: var(--space-1-5);
+    padding: 0 var(--space-3);
+    font-size: var(--text-sm);
+    line-height: var(--leading-4);
+  }
+  .dx-button--xs {
+    height: var(--control-xs);
+    gap: var(--space-1);
+    padding: 0 var(--space-2);
+    font-size: var(--text-sm);
+    line-height: var(--leading-4);
+  }
+  .dx-button svg {
+    width: 14px;
+    height: 14px;
+  }
+  .dx-button--icon {
+    padding: 0;
+  }
+  .dx-button--icon-md {
+    width: var(--control-lg);
+    height: var(--control-lg);
+  }
+  .dx-button--icon-sm {
+    width: var(--control-md);
+    height: var(--control-md);
+  }
+  .dx-button--icon-xs {
+    width: var(--control-xs);
+    height: var(--control-xs);
+  }
+}

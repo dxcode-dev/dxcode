@@ -4,19 +4,19 @@
   display: flex;
   width: 100%;
   max-width: 41rem;
-  margin: 0 auto 8px;
+  margin: 0 auto var(--space-2);
   padding-right: 64px;
 }
 .plugin-prompt-card {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr);
-  gap: 8px;
+  gap: var(--space-2);
   width: 100%;
-  padding: 10px 12px;
+  padding: var(--space-2-5) var(--space-3);
   pointer-events: auto;
   color: var(--muted-foreground);
   border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
-  border-radius: 14px;
+  border-radius: var(--radius-2xl);
   background: color-mix(in srgb, var(--background) 96%, transparent);
   box-shadow: var(--shadow-sm);
   backdrop-filter: blur(8px);
@@ -25,24 +25,24 @@
 .plugin-prompt-card > svg {
   width: 14px;
   height: 14px;
-  margin-top: 2px;
+  margin-top: var(--space-0-5);
   color: var(--primary);
 }
 .plugin-prompt-copy {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
+  gap: var(--space-1-5);
+  font-size: var(--text-sm);
   line-height: 17px;
 }
 .plugin-prompt-copy strong {
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 650;
 }
 .plugin-prompt-source {
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .plugin-prompt-message {
   margin: 0;
@@ -57,7 +57,7 @@
 .plugin-prompt-options {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
 }
 .plugin-prompt-option {
   height: auto;
@@ -65,7 +65,7 @@
   justify-content: flex-start;
   flex-direction: column;
   align-items: flex-start;
-  padding-block: 6px;
+  padding-block: var(--space-1-5);
   text-align: left;
   white-space: normal;
 }
@@ -80,12 +80,12 @@
 .plugin-prompt-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: var(--space-1-5);
 }
 .plugin-quick-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -120,9 +120,9 @@
   height: 100%;
 }
 .plugin-pane-state {
-  padding: 16px;
+  padding: var(--space-4);
   color: var(--muted-foreground);
-  font-size: 13px;
+  font-size: var(--text-md);
 }
 @media (max-width: 640px) {
   .plugin-ui-row {
@@ -139,15 +139,15 @@
 }
 .dx-prompt-card code {
   color: var(--foreground);
-  font: 12px / 17px var(--font-mono-family);
+  font: var(--text-sm) / 17px var(--font-mono);
 }
 .dx-prompt-hint {
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .dx-change-items {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-1);
   max-height: min(42vh, 360px);
   margin: 0;
   padding: 0;
@@ -170,24 +170,24 @@
   min-width: 0;
   overflow: hidden;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .dx-change-file {
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
 .dx-change-toggle {
   display: flex;
   width: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
+  gap: var(--space-1-5);
+  padding: var(--space-1) var(--space-2);
   color: inherit;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: none;
   cursor: pointer;
   text-align: left;
@@ -211,11 +211,11 @@
 .dx-change-toggle .dx-change-label {
   flex: 1;
   color: var(--foreground);
-  font: 12px / 18px var(--font-mono-family);
+  font: var(--text-sm) / var(--leading-4-5) var(--font-mono);
 }
 .dx-change-count {
   flex: none;
-  font: 11px / 18px var(--font-mono-family);
+  font: var(--text-xs) / var(--leading-4-5) var(--font-mono);
 }
 .dx-change-count .diff-removed {
   color: var(--destructive);
@@ -223,11 +223,11 @@
 .dx-change-code {
   max-height: 240px;
   margin: 0;
-  padding: 6px 8px;
+  padding: var(--space-1-5) var(--space-2);
   overflow: auto;
   color: var(--foreground);
   border-top: 1px solid var(--border);
-  font: 11px / 17px var(--font-mono-family);
+  font: var(--text-xs) / 17px var(--font-mono);
   tab-size: 2;
   white-space: pre;
 }

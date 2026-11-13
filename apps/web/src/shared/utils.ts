@@ -1,8 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
 
-export const cn = (...inputs: ReadonlyArray<ClassValue>) =>
-  twMerge(clsx(inputs));
+/** Joins class names. Parts style from CSS classes, so no utility merging. */
+export const cn = (...inputs: ReadonlyArray<ClassValue>) => clsx(inputs);
 
 /** How long ago `timestamp` was; render reads it through `useTimeText`. */
 export const formatRelativeTime = (

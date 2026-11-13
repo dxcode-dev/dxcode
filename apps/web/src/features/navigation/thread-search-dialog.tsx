@@ -1,3 +1,6 @@
+import { Badge } from "../../shared/ui/badge.js";
+import { Input } from "../../shared/ui/input.js";
+import "./thread-search.css";
 import type { SearchThreadsItem } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
@@ -146,7 +149,7 @@ function ThreadSearchResult({
               )
             }
           />
-          <span className="thread-search-badge">
+          <Badge>
             {item.visibility === "private" ? (
               <>
                 <Lock aria-hidden="true" /> Private
@@ -154,17 +157,15 @@ function ThreadSearchResult({
             ) : (
               "Workspace"
             )}
-          </span>
+          </Badge>
           {item.workspaceDeleted === true ? (
-            <span className="thread-search-badge">Deleted workspace</span>
+            <Badge>Deleted workspace</Badge>
           ) : item.projectDeleted === true ? (
-            <span className="thread-search-badge">Deleted project</span>
+            <Badge>Deleted project</Badge>
           ) : item.archived ? (
-            <span className="thread-search-badge">Archived</span>
+            <Badge>Archived</Badge>
           ) : item.state === "working" ? (
-            <span className="thread-search-badge" data-active="">
-              Active
-            </span>
+            <Badge tone="success">Active</Badge>
           ) : null}
         </small>
         {item.matchedSearchText === undefined ? null : (
@@ -274,7 +275,8 @@ export function ThreadSearchDialog({
         <>
           <div className="thread-search-input-wrap">
             <Search aria-hidden="true" />
-            <input
+            <Input
+              variant="bare"
               ref={focusCombobox}
               role="combobox"
               aria-label="Search workspace threads"
@@ -312,17 +314,19 @@ export function ThreadSearchDialog({
           <div className="thread-search-filters">
             <div className="thread-search-filter-keys">
               {FILTERS.map((filter) => (
-                <button
+                <Button
+                  variant="subtle"
+                  size="xs"
                   key={filter.key}
                   type="button"
-                  className="thread-search-filter"
+                  className="thread-search-key"
                   title={filter.hint}
                   onPointerEnter={() => setHint(filter.hint)}
                   onFocus={() => setHint(filter.hint)}
                   onClick={() => insertFilter(filter.key)}
                 >
                   {filter.key}
-                </button>
+                </Button>
               ))}
             </div>
             <span className="thread-search-filter-hint">{hint}</span>

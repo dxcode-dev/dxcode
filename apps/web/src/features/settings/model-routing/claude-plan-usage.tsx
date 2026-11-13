@@ -10,6 +10,8 @@ import { RefreshCw } from "lucide-react";
 import { useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useNowMinute } from "../../../shared/hooks/use-clock.js";
+import { Button } from "../../../shared/ui/button.js";
+import { Radio } from "../../../shared/ui/checkbox.js";
 import { claudePlanWhen } from "../../../shared/ui/claude-plan-when.js";
 import { ClaudePlanWindows } from "../../../shared/ui/claude-plan-windows.js";
 import {
@@ -103,7 +105,9 @@ export const ClaudePlanPanel = ({
           {usage === undefined ? null : (
             <span>As of {claudePlanWhen(usage.observedAt, now)}</span>
           )}
-          <button
+          <Button
+            variant="subtle"
+            size="icon-xs"
             type="button"
             className="claude-plan-refresh"
             aria-label="Refresh plan usage"
@@ -115,7 +119,7 @@ export const ClaudePlanPanel = ({
               aria-hidden="true"
               className={refresh.isFetching ? "spin" : undefined}
             />
-          </button>
+          </Button>
         </div>
         {refresh.isError ? (
           <p className="model-routing-field-error" role="alert">
@@ -158,9 +162,13 @@ export const ClaudePlanPanel = ({
       >
         <legend>Claude Usage</legend>
         {EXTRA_USAGE_OPTIONS.map((option) => (
-          <label key={option.title} className="claude-plan-option">
-            <input
-              type="radio"
+          <label
+            key={option.title}
+            className="claude-plan-option"
+            htmlFor={`${name}-${String(option.value)}`}
+          >
+            <Radio
+              id={`${name}-${String(option.value)}`}
               name={name}
               checked={allowExtraUsage === option.value}
               disabled={!canMutate || choose.isPending}

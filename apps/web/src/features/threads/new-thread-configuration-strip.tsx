@@ -1,5 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
-import { Select } from "@base-ui/react/select";
 import type {
   ChoicesData,
   GraphData,
@@ -23,7 +21,6 @@ import {
   ArrowRight,
   Bot,
   Check,
-  ChevronRight,
   Folder,
   LoaderCircle,
   Plus,
@@ -39,8 +36,32 @@ import {
 import { useNewProjectSurface } from "../../shared/new-project-surface.js";
 import { useTheme } from "../../shared/theme/theme-provider.js";
 import { Button } from "../../shared/ui/button.js";
+import { chipVariants } from "../../shared/ui/chip-variants.js";
+import {
+  ChoiceSelectEmpty,
+  ChoiceSelectItem,
+  ChoiceSelectItemText,
+  ChoiceSelectLabel,
+  ChoiceSelectList,
+  ChoiceSelectPopup,
+  ChoiceSelectRoot,
+  ChoiceSelectSearch,
+  ChoiceSelectSeparator,
+  ChoiceSelectTrigger,
+  ChoiceSelectValue,
+} from "../../shared/ui/choice-select.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
-import { MenuItemText } from "../../shared/ui/menu-item-text.js";
+import {
+  MenuItemHint,
+  MenuItemText,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuRoot,
+  MenuSubmenuRoot,
+  MenuSubmenuTrigger,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import {
   angularDistance,
   DIAL_MODE_ORDER,
@@ -484,7 +505,7 @@ function ModePicker({
     );
 
   return (
-    <Select.Root
+    <ChoiceSelectRoot
       // A pinned model (Claude Code or raw) or a plugin agent means no mode
       // is selected.
       value={model === undefined && agent === undefined ? profile : null}
@@ -498,8 +519,13 @@ function ModePicker({
         onProfileChange(value);
       }}
     >
-      <Select.Trigger
-        className="new-thread-config-pill new-thread-mode"
+      <ChoiceSelectTrigger
+        variant="bare"
+        className={chipVariants({
+          variant: "soft",
+          size: "lg",
+          className: "new-thread-config-pill new-thread-mode",
+        })}
         data-claude-code={claudeCode || undefined}
         data-plugin-agent={agent === undefined ? undefined : true}
         style={
@@ -545,7 +571,7 @@ function ModePicker({
         ) : model === undefined ? (
           <>
             <span className="new-thread-mode-label">Mode: </span>
-            <Select.Value />
+            <ChoiceSelectValue />
           </>
         ) : (
           <>
@@ -558,96 +584,87 @@ function ModePicker({
             </span>
           </>
         )}
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Positioner
-          className="reasoning-positioner"
-          side="bottom"
-          align="start"
-          sideOffset={8}
-          collisionPadding={12}
-          alignItemWithTrigger={false}
-        >
-          <Select.Popup className="reasoning-popup">
-            <ReasoningModeConsole
-              profile={profile}
-              onProfileChange={onProfileChange}
-              onFocusDial={focusModeDial}
-              choices={choices}
-              routingGraph={routingGraph}
-              selectedModel={model}
-              onModelChange={(value) => {
-                onModelChange(value);
-                if (value !== undefined) onOpenChange(false);
-              }}
-              pickerTab={pickerTab}
-              onPickerTabChange={setPickerTab}
-              pluginAgentModes={pluginAgentModes}
-              pluginAgentMode={agent?.mode}
-              onPluginAgentSelect={(mode) => {
-                onPluginAgentModeChange?.(mode);
-                onOpenChange(false);
-              }}
-              effort={effort}
-              onEffortChange={onEffortChange}
-              onClaudeCodeSelect={(next, close) => {
-                onModelChange(next);
-                if (close) onOpenChange(false);
-              }}
-            />
-            {pickerTab === "modes" ? (
-              <ClaudeCodeModeOption
-                choices={choices}
-                model={model}
-                effort={effort}
-                onEffortChange={onEffortChange}
-                onSelect={(next, close) => {
-                  onModelChange(next);
-                  if (close) onOpenChange(false);
-                }}
-              />
-            ) : null}
-            {pickerTab === "modes" ? (
-              <Select.List className="reasoning-list">
-                {REASONING_MODES.map((mode) => (
-                  <Select.Item
-                    key={mode.id}
-                    value={mode.id}
-                    className="reasoning-option"
-                    aria-describedby={`reasoning-${mode.id}-description`}
-                  >
-                    <Select.ItemIndicator className="reasoning-check">
-                      <Check />
-                    </Select.ItemIndicator>
-                    <span>
-                      <span className="mode-option-heading">
-                        <Select.ItemText>{mode.id}</Select.ItemText>
-                        <ServingBadge
-                          compact
-                          name={
-                            choices?.modes.find((m) => m.mode === mode.id)
-                              ?.servingConnectionName
-                          }
-                          connection={routingGraph?.connections.find(
-                            (c) =>
-                              c.connectionId ===
-                              routingGraph.edges.find((e) => e.mode === mode.id)
-                                ?.connectionId,
-                          )}
-                        />
-                      </span>
-                      <small id={`reasoning-${mode.id}-description`}>
-                        {mode.description}
-                      </small>
-                    </span>
-                  </Select.Item>
-                ))}
-              </Select.List>
-            ) : null}
-          </Select.Popup>
-        </Select.Positioner>
-      </Select.Portal>
-    </Select.Root>
+      </ChoiceSelectTrigger>
+      <ChoiceSelectPopup
+        positionerClassName="reasoning-positioner"
+        className="reasoning-popup"
+        sideOffset={8}
+        collisionPadding={12}
+      >
+        <ReasoningModeConsole
+          profile={profile}
+          onProfileChange={onProfileChange}
+          onFocusDial={focusModeDial}
+          choices={choices}
+          routingGraph={routingGraph}
+          selectedModel={model}
+          onModelChange={(value) => {
+            onModelChange(value);
+            if (value !== undefined) onOpenChange(false);
+          }}
+          pickerTab={pickerTab}
+          onPickerTabChange={setPickerTab}
+          pluginAgentModes={pluginAgentModes}
+          pluginAgentMode={agent?.mode}
+          onPluginAgentSelect={(mode) => {
+            onPluginAgentModeChange?.(mode);
+            onOpenChange(false);
+          }}
+          effort={effort}
+          onEffortChange={onEffortChange}
+          onClaudeCodeSelect={(next, close) => {
+            onModelChange(next);
+            if (close) onOpenChange(false);
+          }}
+        />
+        {pickerTab === "modes" ? (
+          <ClaudeCodeModeOption
+            choices={choices}
+            model={model}
+            effort={effort}
+            onEffortChange={onEffortChange}
+            onSelect={(next, close) => {
+              onModelChange(next);
+              if (close) onOpenChange(false);
+            }}
+          />
+        ) : null}
+        {pickerTab === "modes" ? (
+          <ChoiceSelectList className="reasoning-list">
+            {REASONING_MODES.map((mode) => (
+              <ChoiceSelectItem
+                key={mode.id}
+                value={mode.id}
+                className="reasoning-option"
+                aria-describedby={`reasoning-${mode.id}-description`}
+              >
+                <span>
+                  <span className="mode-option-heading">
+                    <ChoiceSelectItemText>{mode.id}</ChoiceSelectItemText>
+                    <ServingBadge
+                      compact
+                      name={
+                        choices?.modes.find((m) => m.mode === mode.id)
+                          ?.servingConnectionName
+                      }
+                      connection={routingGraph?.connections.find(
+                        (c) =>
+                          c.connectionId ===
+                          routingGraph.edges.find((e) => e.mode === mode.id)
+                            ?.connectionId,
+                      )}
+                    />
+                  </span>
+                  <small id={`reasoning-${mode.id}-description`}>
+                    {mode.description}
+                  </small>
+                </span>
+              </ChoiceSelectItem>
+            ))}
+          </ChoiceSelectList>
+        ) : null}
+      </ChoiceSelectPopup>
+    </ChoiceSelectRoot>
   );
 }
 
@@ -674,14 +691,17 @@ const unavailableHint = (project: ProjectData) => {
 function ProjectOption({ project }: { readonly project: ProjectData }) {
   const hint = unavailableHint(project);
   return (
-    <Select.Item
+    <ChoiceSelectItem
       value={project.id}
       className="project-picker-option"
       disabled={hint !== undefined}
     >
-      <Select.ItemText className="project-picker-name" title={project.name}>
+      <ChoiceSelectItemText
+        className="dx-picker-item-label project-picker-name"
+        title={project.name}
+      >
         {project.name}
-      </Select.ItemText>
+      </ChoiceSelectItemText>
       {project.repository ? (
         <span
           className="project-picker-repository"
@@ -693,10 +713,7 @@ function ProjectOption({ project }: { readonly project: ProjectData }) {
           </small>
         </span>
       ) : null}
-      <Select.ItemIndicator className="project-picker-check">
-        <Check />
-      </Select.ItemIndicator>
-    </Select.Item>
+    </ChoiceSelectItem>
   );
 }
 
@@ -756,7 +773,7 @@ function ProjectPicker({
     (project) => !recentIds.has(project.id),
   );
   return (
-    <Select.Root
+    <ChoiceSelectRoot
       value={projectId || "no-project"}
       disabled={locked}
       onOpenChange={(open) => {
@@ -772,99 +789,90 @@ function ProjectPicker({
         chooseProject(value === "no-project" ? "" : (value as ProjectId));
       }}
     >
-      <Select.Trigger
+      <ChoiceSelectTrigger
+        variant="bare"
         ref={projectTriggerRef}
-        className="new-thread-config-pill new-thread-project"
+        className={chipVariants({
+          variant: "soft",
+          size: "lg",
+          className: "new-thread-config-pill new-thread-project",
+        })}
         aria-label={`Project: ${projectName}`}
         title={`Project: ${projectName}`}
       >
         <Folder aria-hidden="true" />
         <span className="new-thread-project-prefix">Project: </span>
-        <Select.Value>{projectName}</Select.Value>
-      </Select.Trigger>
-      <Select.Portal>
-        <Select.Positioner
-          className="thread-context-positioner"
-          side="bottom"
-          align="start"
-          sideOffset={8}
-          collisionPadding={12}
-          alignItemWithTrigger={false}
-        >
-          <Select.Popup className="thread-context-popup project-picker-popup">
-            <label className="thread-context-search">
-              <input
-                type="search"
-                aria-label="Filter projects"
-                placeholder="Choose a project…"
-                value={projectQuery}
-                onChange={(event) => setProjectQuery(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Escape") event.stopPropagation();
-                }}
-              />
-              <ShortcutKeycaps keycaps={["⌃", "J"]} />
-            </label>
-            <Select.List className="thread-context-list">
-              <Select.Item value="no-project" className="project-picker-option">
-                <Select.ItemText className="project-picker-name">
-                  No Project
-                </Select.ItemText>
-                <Select.ItemIndicator className="project-picker-check">
-                  <Check />
-                </Select.ItemIndicator>
-              </Select.Item>
-              {recentProjects.length > 0 ? (
-                <>
-                  <div className="project-picker-heading">Recent</div>
-                  {recentProjects.map((project) => (
-                    <ProjectOption key={project.id} project={project} />
-                  ))}
-                </>
-              ) : null}
-              {otherProjects.length > 0 ? (
-                <>
-                  <div className="project-picker-heading">Projects</div>
-                  {otherProjects.map((project) => (
-                    <ProjectOption key={project.id} project={project} />
-                  ))}
-                </>
-              ) : null}
-              {visibleProjects.length === 0 ? (
-                <p className="project-picker-empty">
-                  {projectQuery.trim()
-                    ? "No projects found."
-                    : "No projects yet."}
-                </p>
-              ) : null}
-              {hasMoreProjects ? (
-                <button
-                  type="button"
-                  className="thread-context-load-more"
-                  disabled={loadingMoreProjects}
-                  onClick={onLoadMoreProjects}
-                >
-                  {loadingMoreProjects ? "Loading…" : "More projects"}
-                </button>
-              ) : null}
-              {NewProject === undefined ? null : (
-                <>
-                  <Select.Separator className="project-picker-separator" />
-                  <Select.Item
-                    value={NEW_PROJECT}
-                    className="project-picker-option project-picker-new"
-                  >
-                    <Plus aria-hidden="true" />
-                    <Select.ItemText className="project-picker-name">
-                      New Project
-                    </Select.ItemText>
-                  </Select.Item>
-                </>
-              )}
-            </Select.List>
-          </Select.Popup>
-        </Select.Positioner>
-      </Select.Portal>
+        <ChoiceSelectValue>{projectName}</ChoiceSelectValue>
+      </ChoiceSelectTrigger>
+      <ChoiceSelectPopup
+        className="project-picker-popup"
+        sideOffset={8}
+        collisionPadding={12}
+      >
+        <ChoiceSelectSearch
+          aria-label="Filter projects"
+          placeholder="Choose a project…"
+          value={projectQuery}
+          onChange={(event) => setProjectQuery(event.target.value)}
+          trailing={<ShortcutKeycaps keycaps={["⌃", "J"]} />}
+        />
+        <ChoiceSelectList className="project-picker-list">
+          <ChoiceSelectItem
+            value="no-project"
+            className="project-picker-option"
+          >
+            <ChoiceSelectItemText className="dx-picker-item-label project-picker-name">
+              No Project
+            </ChoiceSelectItemText>
+          </ChoiceSelectItem>
+          {recentProjects.length > 0 ? (
+            <>
+              <ChoiceSelectLabel>Recent</ChoiceSelectLabel>
+              {recentProjects.map((project) => (
+                <ProjectOption key={project.id} project={project} />
+              ))}
+            </>
+          ) : null}
+          {otherProjects.length > 0 ? (
+            <>
+              <ChoiceSelectLabel>Projects</ChoiceSelectLabel>
+              {otherProjects.map((project) => (
+                <ProjectOption key={project.id} project={project} />
+              ))}
+            </>
+          ) : null}
+          {visibleProjects.length === 0 ? (
+            <ChoiceSelectEmpty>
+              {projectQuery.trim() ? "No projects found." : "No projects yet."}
+            </ChoiceSelectEmpty>
+          ) : null}
+          {hasMoreProjects ? (
+            <button
+              type="button"
+              className="dx-picker-action thread-context-load-more"
+              disabled={loadingMoreProjects}
+              onClick={onLoadMoreProjects}
+            >
+              {loadingMoreProjects ? "Loading…" : "More projects"}
+            </button>
+          ) : null}
+          {NewProject === undefined ? null : (
+            <>
+              <ChoiceSelectSeparator />
+              <ChoiceSelectItem
+                value={NEW_PROJECT}
+                check={false}
+                className="project-picker-option project-picker-new"
+              >
+                <Plus aria-hidden="true" />
+                <ChoiceSelectItemText className="dx-picker-item-label project-picker-name">
+                  New Project
+                </ChoiceSelectItemText>
+              </ChoiceSelectItem>
+            </>
+          )}
+        </ChoiceSelectList>
+      </ChoiceSelectPopup>
       {newProjectMounted && NewProject !== undefined ? (
         // The dialog renders its own New Project button, which /projects
         // shows. Here the picker entry opens it, so `hidden` (display: none)
@@ -884,7 +892,7 @@ function ProjectPicker({
           />
         </span>
       ) : null}
-    </Select.Root>
+    </ChoiceSelectRoot>
   );
 }
 
@@ -975,9 +983,13 @@ function OrbPicker({
   readonly onSelect: (runnerProfileId: RunnerProfileId) => void;
 }) {
   return (
-    <Menu.Root disabled={disabled || groups === undefined}>
-      <Menu.Trigger
-        className="new-thread-config-pill new-thread-orb-size"
+    <MenuRoot disabled={disabled || groups === undefined}>
+      <MenuTrigger
+        className={chipVariants({
+          variant: "soft",
+          size: "lg",
+          className: "new-thread-config-pill new-thread-orb-size",
+        })}
         aria-label={
           groups === undefined ? "Loading your Orb providers" : selectedName
         }
@@ -998,94 +1010,87 @@ function OrbPicker({
         <span>
           {groups === undefined ? "Loading Orbs…" : selectedProfile.label}
         </span>
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-context-positioner"
-          side="bottom"
-          align="start"
-          sideOffset={8}
-          collisionPadding={12}
-        >
-          <Menu.Popup className="thread-menu-popup orb-picker-popup">
-            {groups?.map((group) => {
-              const hint = orbProviderHint(group.orb);
-              return (
-                <Menu.SubmenuRoot key={group.adapter}>
-                  <Menu.SubmenuTrigger
-                    className="thread-menu-item orb-picker-provider"
-                    title={
-                      group.orb?.description ??
-                      pauseResumeNote(group.provider?.pauseResume ?? null)
-                    }
-                  >
-                    <OrbProviderLogo
-                      providerId={group.adapter}
-                      className="orb-provider-logo"
-                    />
-                    <span className="orb-picker-provider-name">
-                      {group.orb?.displayName ??
-                        (group.provider === undefined
-                          ? group.adapter
-                          : orbProviderName(group.provider))}
-                      {group.orb?.displayName !== undefined ||
-                      orbProviderBetaFeature(group.adapter) ===
-                        undefined ? null : (
-                        <span className="orb-provider-beta">Beta</span>
-                      )}
-                    </span>
-                    {hint === undefined ? null : (
-                      <small className="orb-picker-provider-hint">{hint}</small>
-                    )}
-                    <ChevronRight aria-hidden="true" />
-                  </Menu.SubmenuTrigger>
-                  <Menu.Portal>
-                    <Menu.Positioner
-                      className="thread-context-positioner"
-                      sideOffset={6}
-                      collisionPadding={12}
+      </MenuTrigger>
+      <MenuPopup
+        className="orb-picker-popup"
+        side="bottom"
+        align="start"
+        sideOffset={8}
+        collisionPadding={12}
+      >
+        {groups?.map((group) => {
+          const hint = orbProviderHint(group.orb);
+          return (
+            <MenuSubmenuRoot key={group.adapter}>
+              <MenuSubmenuTrigger
+                className="orb-picker-provider"
+                title={
+                  group.orb?.description ??
+                  pauseResumeNote(group.provider?.pauseResume ?? null)
+                }
+              >
+                <OrbProviderLogo
+                  providerId={group.adapter}
+                  className="orb-provider-logo"
+                />
+                <span className="orb-picker-provider-name">
+                  {group.orb?.displayName ??
+                    (group.provider === undefined
+                      ? group.adapter
+                      : orbProviderName(group.provider))}
+                  {group.orb?.displayName !== undefined ||
+                  orbProviderBetaFeature(group.adapter) === undefined ? null : (
+                    <span className="orb-provider-beta">Beta</span>
+                  )}
+                </span>
+                {hint === undefined ? null : (
+                  <MenuItemHint>{hint}</MenuItemHint>
+                )}
+              </MenuSubmenuTrigger>
+              <MenuPopup
+                className="orb-picker-popup"
+                sideOffset={6}
+                collisionPadding={12}
+              >
+                <MenuRadioGroup
+                  value={selectedProfile.id}
+                  onValueChange={(value: RunnerProfileId) => onSelect(value)}
+                >
+                  {group.profiles.map((runnerProfile) => (
+                    <MenuRadioItem
+                      key={runnerProfile.id}
+                      className="orb-picker-size"
+                      value={runnerProfile.id}
+                      label={runnerProfile.label}
+                      closeOnClick
+                      disabled={
+                        runnerProfile.availability !== "available" ||
+                        group.orb.status !== "ready" ||
+                        !isProfileAllowed(runnerProfile)
+                      }
                     >
-                      <Menu.Popup className="thread-menu-popup orb-picker-popup">
-                        <Menu.RadioGroup
-                          value={selectedProfile.id}
-                          onValueChange={(value: RunnerProfileId) =>
-                            onSelect(value)
-                          }
-                        >
-                          {group.profiles.map((runnerProfile) => (
-                            <Menu.RadioItem
-                              key={runnerProfile.id}
-                              value={runnerProfile.id}
-                              label={runnerProfile.label}
-                              closeOnClick
-                              className="thread-menu-item orb-picker-size"
-                              disabled={
-                                runnerProfile.availability !== "available" ||
-                                group.orb.status !== "ready" ||
-                                !isProfileAllowed(runnerProfile)
-                              }
-                            >
-                              <MenuItemText
-                                title={runnerProfile.label}
-                                description={formatOrbResources(runnerProfile)}
-                              />
-                              <Menu.RadioItemIndicator className="orb-picker-dot" />
-                            </Menu.RadioItem>
-                          ))}
-                        </Menu.RadioGroup>
-                      </Menu.Popup>
-                    </Menu.Positioner>
-                  </Menu.Portal>
-                </Menu.SubmenuRoot>
-              );
-            })}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+                      <MenuItemText
+                        title={runnerProfile.label}
+                        description={formatOrbResources(runnerProfile)}
+                      />
+                    </MenuRadioItem>
+                  ))}
+                </MenuRadioGroup>
+              </MenuPopup>
+            </MenuSubmenuRoot>
+          );
+        })}
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
+/** The Orb picker's pill: a soft, large Chip. */
+const ORB_PILL = chipVariants({
+  variant: "soft",
+  size: "lg",
+  className: "new-thread-config-pill new-thread-orb-size",
+});
 export function NewThreadConfigurationStrip({
   projects,
   projectId,
@@ -1243,7 +1248,7 @@ export function NewThreadConfigurationStrip({
         // only thing to choose.
         <button
           type="button"
-          className="new-thread-config-pill new-thread-orb-size"
+          className={ORB_PILL}
           disabled={locked || onConnectOrbProvider === undefined}
           onClick={onConnectOrbProvider}
         >
@@ -1253,7 +1258,7 @@ export function NewThreadConfigurationStrip({
       ) : selectedRunnerProfile === undefined ? (
         <button
           type="button"
-          className="new-thread-config-pill new-thread-orb-size"
+          className={ORB_PILL}
           aria-label={
             runnerProfileLoading
               ? "Orb"
@@ -1279,7 +1284,7 @@ export function NewThreadConfigurationStrip({
         // composer stays usable and a send starts on the starting size.
         <button
           type="button"
-          className="new-thread-config-pill new-thread-orb-size"
+          className={ORB_PILL}
           aria-label="Orb providers didn't load. Retry"
           title="Orb providers didn't load. Retry"
           disabled={locked || onRunnerOrbsRetry === undefined}
@@ -1354,12 +1359,13 @@ export function NewThreadConfigurationStrip({
         <Button
           type="submit"
           size="icon-sm"
+          shape="round"
+          busy={submitting}
           className="new-thread-submit"
           aria-label={
             retrying ? "Retry sending message" : "Create thread and send"
           }
           aria-busy={submitting || undefined}
-          data-submitting={submitting ? "" : undefined}
           disabled={submitting || (!ready && !dictationActive)}
         >
           {submitting ? (

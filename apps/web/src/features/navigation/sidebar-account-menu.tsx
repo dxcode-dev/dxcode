@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { PersonalAccountData, SettingsContextData } from "@dx/api";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
@@ -15,6 +14,12 @@ import { useIdentity } from "../../shared/auth/auth-context.js";
 import { useCommandPaletteSurface } from "../../shared/commands/command-provider.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 
 export function SidebarAccountMenu({
   personalAccount,
@@ -45,8 +50,8 @@ export function SidebarAccountMenu({
 
   return (
     <div className="sidebar-account-shell">
-      <Menu.Root>
-        <Menu.Trigger
+      <MenuRoot>
+        <MenuTrigger
           className="sidebar-account-row"
           aria-label="Open account menu"
         >
@@ -62,88 +67,75 @@ export function SidebarAccountMenu({
             <small>{email}</small>
           </span>
           <ChevronsUpDown className="account-chevrons" />
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner
-            className="sidebar-menu-positioner"
-            side="top"
-            align="start"
-            sideOffset={4}
+        </MenuTrigger>
+        <MenuPopup side="top" align="start">
+          <MenuItem
+            disabled={auth === undefined}
+            onClick={() => auth?.logout()}
           >
-            <Menu.Popup className="sidebar-menu account-menu">
-              <Menu.Item
-                className="sidebar-menu-item"
-                disabled={auth === undefined}
-                onClick={() => auth?.logout()}
-              >
-                <LogOut /> Sign out
-              </Menu.Item>
-              <Menu.Item
-                className="sidebar-menu-item"
-                onClick={() => {
-                  onNavigate();
-                  commandSurfaces.openKeymap();
-                }}
-              >
-                <Keyboard /> <span className="sidebar-menu-label">Keymap</span>
-                <ShortcutKeycaps keycaps={commandSurfaces.keymapKeycaps} />
-              </Menu.Item>
-              <Menu.Item
-                className="sidebar-menu-item"
-                onClick={() => {
-                  onNavigate();
-                  commandSurfaces.openPalette();
-                }}
-              >
-                <Command />
-                <span className="sidebar-menu-label">Command Palette</span>
-                <ShortcutKeycaps keycaps={commandSurfaces.paletteKeycaps} />
-              </Menu.Item>
-              {bugReportReader ? (
-                <Menu.Item
-                  className="sidebar-menu-item"
-                  onClick={() => {
-                    onNavigate();
-                    void navigate({ to: "/bug-reports/all" });
-                  }}
-                >
-                  <Bug /> All Bug Reports
-                </Menu.Item>
-              ) : null}
-              {workspace === undefined ? null : (
-                <Menu.Item
-                  className="sidebar-menu-item"
-                  onClick={() => {
-                    onNavigate();
-                    void navigate({
-                      to: "/workspaces/$workspaceSlug",
-                      params: { workspaceSlug: workspace.shortName },
-                      state: settingsNavigationState(
-                        router.state.location.href,
-                      ),
-                    });
-                  }}
-                >
-                  <Building2 /> {workspace.displayName} Settings
-                </Menu.Item>
-              )}
-              <Menu.Item
-                className="sidebar-menu-item"
-                onClick={() => {
-                  onNavigate();
-                  void navigate({
-                    to: "/settings",
-                    state: settingsNavigationState(router.state.location.href),
-                  });
-                }}
-              >
-                {workspace === undefined ? <Settings /> : <UserRound />}
-                Personal Settings
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+            <LogOut />
+            <span>Sign out</span>
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              onNavigate();
+              commandSurfaces.openKeymap();
+            }}
+          >
+            <Keyboard />
+            <span>Keymap</span>
+            <ShortcutKeycaps keycaps={commandSurfaces.keymapKeycaps} />
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              onNavigate();
+              commandSurfaces.openPalette();
+            }}
+          >
+            <Command />
+            <span>Command Palette</span>
+            <ShortcutKeycaps keycaps={commandSurfaces.paletteKeycaps} />
+          </MenuItem>
+          {bugReportReader ? (
+            <MenuItem
+              onClick={() => {
+                onNavigate();
+                void navigate({ to: "/bug-reports/all" });
+              }}
+            >
+              <Bug />
+              <span>All Bug Reports</span>
+            </MenuItem>
+          ) : null}
+          {workspace === undefined ? null : (
+            <MenuItem
+              onClick={() => {
+                onNavigate();
+                void navigate({
+                  to: "/workspaces/$workspaceSlug",
+                  params: { workspaceSlug: workspace.shortName },
+                  state: settingsNavigationState(router.state.location.href),
+                });
+              }}
+            >
+              <Building2 />
+              <span>{workspace.displayName} Settings</span>
+            </MenuItem>
+          )}
+          <MenuItem
+            onClick={() => {
+              onNavigate();
+              void navigate({
+                to: "/settings",
+                state: settingsNavigationState(router.state.location.href),
+              });
+            }}
+          >
+            {workspace === undefined ? <Settings /> : <UserRound />}
+            <span>Personal Settings</span>
+          </MenuItem>
+        </MenuPopup>
+      </MenuRoot>
     </div>
   );
 }

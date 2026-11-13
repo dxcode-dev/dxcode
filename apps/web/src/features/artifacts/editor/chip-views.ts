@@ -16,12 +16,16 @@ import {
 
 export type NodeViews = NonNullable<EditorProps["nodeViews"]>;
 
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import {
   type Chip,
   chipTag,
   hiddenChipTags,
   parseChip,
 } from "../markdown/chips.js";
+
+/** An editor tool built outside React: a ghost Button. */
+const TOOL_CLASS = `${buttonVariants({ variant: "subtle", size: "xs" })} artifact-tool`;
 
 /** What the chip and view node views ask of the editor around them. */
 export interface ChipViewHost {
@@ -240,14 +244,14 @@ class ImageView implements NodeView {
     this.#tools.className = "artifact-image-tools";
     this.#tools.contentEditable = "false";
     this.#open = document.createElement("a");
-    this.#open.className = "artifact-tool";
+    this.#open.className = TOOL_CLASS;
     this.#open.target = "_blank";
     this.#open.rel = "noopener noreferrer";
     this.#open.textContent = "Open";
     this.#open.setAttribute("aria-label", "Open image");
     const alt = document.createElement("button");
     alt.type = "button";
-    alt.className = "artifact-tool";
+    alt.className = TOOL_CLASS;
     alt.textContent = "Alt text";
     alt.setAttribute("aria-label", "Alt text");
     alt.addEventListener("mousedown", (event) => event.preventDefault());

@@ -222,7 +222,7 @@ export function OrbMemoryNotice({ threadId }: { readonly threadId: ThreadId }) {
         </div>
         <Button
           type="button"
-          variant="ghost"
+          variant="subtle"
           size="icon-xs"
           className="orb-memory-dismiss"
           aria-label="Hide memory notice"

@@ -1,16 +1,17 @@
+@import "./tokens.css";
+
 .markdown.transcript-markdown {
   /* A Code Font family the person chose replaces Plex. */
-  --markdown-mono: var(--code-font-family, "IBM Plex Mono", monospace);
-  --markdown-keyword: light-dark(#a52270, #ff7ac6);
+  --markdown-keyword: var(--code-keyword);
 
   color: var(--chat-foreground);
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 13px;
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
   font-feature-settings: "ss06", "ss07";
   font-synthesis: none;
   text-rendering: auto;
   letter-spacing: normal;
-  line-height: 20px;
+  line-height: var(--leading-5);
   overflow-wrap: anywhere;
   min-width: 0;
 }
@@ -30,7 +31,7 @@
 }
 .markdown.transcript-markdown h4 {
   font-size: 1.15em;
-  font-weight: 600;
+  font-weight: var(--weight-semibold);
   line-height: 1.2;
   margin: 1.2em 0 0.4em;
 }
@@ -66,7 +67,7 @@
   text-decoration: none;
 }
 .markdown.transcript-markdown code {
-  font-family: var(--markdown-mono);
+  font-family: var(--font-code);
   font-feature-settings: normal;
   background: var(--muted);
 }
@@ -75,8 +76,8 @@
   margin: 1.1em 0;
 }
 .markdown.transcript-markdown pre {
-  font: var(--code-font-size, 12.5px) / 1.375 var(--markdown-mono);
-  padding: 8px 36px 8px 12px;
+  font: var(--text-code) / 1.375 var(--font-code);
+  padding: var(--space-2) 36px var(--space-2) var(--space-3);
   background: color-mix(in oklab, var(--chat-foreground) 5%, transparent);
   outline: 1px solid
     color-mix(in oklab, var(--chat-foreground) 10%, transparent);
@@ -94,11 +95,11 @@
   letter-spacing: 0;
 }
 .markdown.transcript-markdown .markdown-diagram pre {
-  padding-block: 16px;
+  padding-block: var(--space-4);
   background: color-mix(in srgb, var(--chat-foreground) 3%, var(--background));
 }
 .markdown.transcript-markdown .markdown-diagram code {
-  line-height: 1.25;
+  line-height: var(--leading-tight);
 }
 .diagram-structure {
   color: color-mix(in srgb, var(--chat-foreground) 42%, transparent);
@@ -120,7 +121,7 @@
 }
 .markdown.transcript-markdown .markdown-mermaid-scroll {
   overflow-x: auto;
-  padding: 16px 12px;
+  padding: var(--space-4) var(--space-3);
   background: color-mix(in srgb, var(--chat-foreground) 3%, var(--background));
   outline: 1px solid
     color-mix(in oklab, var(--chat-foreground) 10%, transparent);
@@ -136,7 +137,7 @@
 }
 .markdown.transcript-markdown .markdown-math-display {
   margin: 0.9em 0;
-  padding-block: 2px;
+  padding-block: var(--space-0-5);
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -163,7 +164,7 @@
   width: 100%;
   min-width: 100%;
   font-size: 0.93em;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   box-shadow: 0 0 0 1px var(--divider);
 }
 .markdown.transcript-markdown th,
@@ -176,6 +177,8 @@
 .markdown.transcript-markdown tbody tr:last-child td {
   border-bottom: 0;
 }
+/* Copy, wrap, and diagram toggles float over a block's top right corner
+   and show while the block is hovered or focused. */
 .markdown.transcript-markdown .transcript-copy,
 .markdown-wrap,
 .markdown.transcript-markdown .markdown-mermaid-toggle {
@@ -183,17 +186,16 @@
   z-index: 1;
   top: 4px;
   right: 4px;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
   color: var(--muted-foreground);
   background: var(--background);
-  cursor: pointer;
   opacity: 0;
+}
+.markdown.transcript-markdown .transcript-copy:hover,
+.markdown-wrap:hover,
+.markdown.transcript-markdown .markdown-mermaid-toggle:hover,
+.markdown-view-action:hover {
+  color: var(--foreground);
+  background: var(--accent);
 }
 .markdown-wrap,
 .markdown.transcript-markdown .markdown-mermaid .markdown-mermaid-toggle {
@@ -208,11 +210,6 @@
   position: static;
   grid-row: 1;
   justify-self: end;
-}
-.markdown-wrap svg,
-.markdown-mermaid-toggle svg {
-  width: 14px;
-  height: 14px;
 }
 .markdown.transcript-markdown .transcript-code-block:hover > button,
 .markdown.transcript-markdown .transcript-code-block:focus-within > button,
@@ -230,18 +227,18 @@
 }
 .markdown.transcript-markdown .hljs-string,
 .markdown.transcript-markdown .hljs-attr {
-  color: light-dark(#556b19, #e6db74);
+  color: var(--code-string);
 }
 .markdown.transcript-markdown .hljs-number,
 .markdown.transcript-markdown .hljs-literal {
-  color: light-dark(#6e40aa, #bd93f9);
+  color: var(--code-number);
 }
 .markdown.transcript-markdown .hljs-comment {
   color: var(--muted-foreground);
 }
 .markdown.transcript-markdown .hljs-title,
 .markdown.transcript-markdown .hljs-built_in {
-  color: light-dark(#087b85, #8be9fd);
+  color: var(--code-title);
 }
 .markdown.transcript-markdown > :first-child {
   margin-top: 0;
@@ -257,19 +254,13 @@
   }
 }
 
-@media (max-width: 767px) {
-  .transcript-preview .agent-transcript {
-    padding-inline: 16px;
-  }
-}
-
 /* ```dx-view blocks: the view sits on the reply's own background. */
 .markdown-view-drawing {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .markdown-view-drawing svg {
   width: 14px;
@@ -300,7 +291,7 @@
 .markdown-view:fullscreen {
   display: flex;
   flex-direction: column;
-  padding: 24px;
+  padding: var(--space-6);
   background: var(--background);
 }
 .markdown-view:fullscreen .markdown-view-slot {
@@ -322,8 +313,8 @@
 .markdown-view-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 2px;
-  margin-top: 4px;
+  gap: var(--space-0-5);
+  margin-top: var(--space-1);
   opacity: 0;
 }
 .markdown-view:hover > .markdown-view-actions,
@@ -334,53 +325,22 @@
 .markdown.transcript-markdown .markdown-view-actions .transcript-copy,
 .markdown-view-action {
   position: static;
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
   color: var(--muted-foreground);
   background: transparent;
-  cursor: pointer;
   opacity: 1;
 }
-.markdown.transcript-markdown .markdown-view-actions .transcript-copy:hover,
-.markdown-view-action:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.markdown.transcript-markdown .markdown-view-actions .transcript-copy svg,
-.markdown-view-action svg {
-  width: 14px;
-  height: 14px;
-}
 .markdown-view-note {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .markdown-view-link {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-  font-size: 12px;
-}
-.markdown-view-button {
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  color: var(--foreground);
-  background: transparent;
-  font: inherit;
-  cursor: pointer;
-}
-.markdown-view-button:hover {
-  background: var(--accent);
+  gap: var(--space-2);
+  margin-top: var(--space-1-5);
+  font-size: var(--text-sm);
 }
 @media (pointer: coarse) {
   .markdown-view-actions {
@@ -399,8 +359,8 @@
   max-width: 100%;
   max-height: 480px;
   margin: 0.75em 0;
-  border-radius: 4px;
-  background: #000;
+  border-radius: var(--radius-xs);
+  background: var(--media-background);
 }
 .markdown.transcript-markdown audio.markdown-media {
   display: block;
@@ -418,12 +378,12 @@
   cursor: zoom-in;
   background: none;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .markdown.transcript-markdown .markdown-image-open > img {
   display: block;
   max-width: 100%;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
 }
 .markdown.transcript-markdown .markdown-image-open:focus-visible {
   outline: 2px solid var(--accent);
@@ -436,14 +396,14 @@
   margin: 0.75em 0;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .markdown.transcript-markdown .markdown-gallery-stage {
   position: relative;
   display: grid;
   place-items: center;
   height: min(60vh, 420px);
-  background: #000;
+  background: var(--media-background);
 }
 .markdown.transcript-markdown .markdown-gallery-open {
   display: grid;
@@ -461,21 +421,17 @@
   max-height: min(60vh, 420px);
   object-fit: contain;
 }
+/* Controls over the image: a dark glass Button in every appearance. */
 .markdown.transcript-markdown .markdown-gallery-step,
 .markdown.transcript-markdown .markdown-gallery-expand {
   position: absolute;
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  color: white;
-  background: rgb(0 0 0 / 55%);
-  border: 0;
-  border-radius: 50%;
+  color: var(--on-media);
+  background: color-mix(in srgb, var(--shadow-ink) 55%, transparent);
+  border-radius: var(--radius-full);
 }
 .markdown.transcript-markdown .markdown-gallery-step:hover,
 .markdown.transcript-markdown .markdown-gallery-expand:hover {
-  background: rgb(0 0 0 / 80%);
+  background: color-mix(in srgb, var(--shadow-ink) 80%, transparent);
 }
 .markdown.transcript-markdown .markdown-gallery-step svg,
 .markdown.transcript-markdown .markdown-gallery-expand svg {
@@ -496,15 +452,15 @@
 .markdown.transcript-markdown .markdown-gallery-expand {
   top: 8px;
   right: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .markdown.transcript-markdown .markdown-gallery-caption {
   display: flex;
-  gap: 12px;
+  gap: var(--space-3);
   align-items: center;
   justify-content: space-between;
-  padding: 6px 10px;
-  font-size: 12px;
+  padding: var(--space-1-5) var(--space-2-5);
+  font-size: var(--text-sm);
   color: var(--muted-foreground);
 }
 .markdown.transcript-markdown .markdown-gallery-name {
@@ -523,5 +479,5 @@
 .markdown-view.is-mcp-app.is-bordered .markdown-view-slot {
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }

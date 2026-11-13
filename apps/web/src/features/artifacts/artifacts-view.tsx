@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadArtifact, ThreadArtifactKind } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,6 +5,17 @@ import { useSearch } from "@tanstack/react-router";
 import { Check, ChevronDown, FileText } from "lucide-react";
 import * as React from "react";
 import { useShowArtifact } from "../../shared/navigation/open-artifact.js";
+import { Button } from "../../shared/ui/button.js";
+import { EmptyState } from "../../shared/ui/empty-state.js";
+import {
+  MenuGroup,
+  MenuItem,
+  MenuLabel,
+  MenuPopup,
+  MenuRoot,
+  MenuSeparator,
+  MenuTrigger,
+} from "../../shared/ui/menu.js";
 import {
   artifactListOptions,
   artifactOptions,
@@ -64,8 +74,8 @@ function ArtifactSwitcher({
   const SelectedIcon =
     selected === undefined ? FileText : artifactKindView(selected.kind).icon;
   return (
-    <Menu.Root>
-      <Menu.Trigger className="artifact-switcher" aria-label="Switch Artifact">
+    <MenuRoot>
+      <MenuTrigger className="artifact-switcher" aria-label="Switch Artifact">
         <SelectedIcon aria-hidden="true" />
         <span>
           {selected === undefined
@@ -75,71 +85,50 @@ function ArtifactSwitcher({
               : `${selected.folder} / ${selected.title}`}
         </span>
         <ChevronDown aria-hidden="true" />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="start"
-          sideOffset={4}
-        >
-          <Menu.Popup
-            className="thread-menu-popup thread-actions-menu artifact-switcher-menu"
-            aria-label="Artifacts"
-          >
-            {byFolder(artifacts).map(([folder, list]) => (
-              <Menu.Group key={folder}>
-                {folder === "" ? null : (
-                  <Menu.GroupLabel className="artifact-folder-label">
-                    {folder}
-                  </Menu.GroupLabel>
-                )}
-                {list.map((artifact) => {
-                  const Icon = artifactKindView(artifact.kind).icon;
-                  return (
-                    <Menu.Item
-                      key={artifact.id}
-                      className="thread-menu-item"
-                      data-folder={folder === "" ? undefined : true}
-                      data-kind={artifact.kind}
-                      onClick={() => onSelect(artifact.id)}
-                    >
-                      <Icon
-                        className="artifact-switcher-kind"
-                        aria-hidden="true"
-                      />
-                      <span className="artifact-switcher-title">
-                        {artifact.title}
-                      </span>
-                      {artifact.id === selected?.id ? (
-                        <Check aria-hidden="true" />
-                      ) : null}
-                    </Menu.Item>
-                  );
-                })}
-              </Menu.Group>
+      </MenuTrigger>
+      <MenuPopup
+        align="start"
+        className="artifact-switcher-menu"
+        aria-label="Artifacts"
+      >
+        {byFolder(artifacts).map(([folder, list]) => (
+          <MenuGroup key={folder}>
+            {folder === "" ? null : <MenuLabel>{folder}</MenuLabel>}
+            {list.map((artifact) => {
+              const Icon = artifactKindView(artifact.kind).icon;
+              return (
+                <MenuItem
+                  key={artifact.id}
+                  data-folder={folder === "" ? undefined : true}
+                  data-kind={artifact.kind}
+                  onClick={() => onSelect(artifact.id)}
+                >
+                  <Icon aria-hidden="true" />
+                  <span>{artifact.title}</span>
+                  {artifact.id === selected?.id ? (
+                    <Check aria-hidden="true" />
+                  ) : null}
+                </MenuItem>
+              );
+            })}
+          </MenuGroup>
+        ))}
+        {canCreate ? (
+          <>
+            {artifacts.length === 0 ? null : <MenuSeparator />}
+            {creatable.map((view) => (
+              <MenuItem key={view.kind} onClick={() => onCreate(view.kind)}>
+                <view.icon aria-hidden="true" />
+                <span>
+                  {creatable.length > 1 ? view.newLabel : "New Artifact"}
+                </span>
+              </MenuItem>
             ))}
-            {canCreate ? (
-              <>
-                {artifacts.length === 0 ? null : (
-                  <Menu.Separator className="thread-menu-separator" />
-                )}
-                {creatable.map((view) => (
-                  <Menu.Item
-                    key={view.kind}
-                    className="thread-menu-item"
-                    onClick={() => onCreate(view.kind)}
-                  >
-                    <view.icon aria-hidden="true" />
-                    {creatable.length > 1 ? view.newLabel : "New Artifact"}
-                  </Menu.Item>
-                ))}
-              </>
-            ) : null}
-            {extra}
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+          </>
+        ) : null}
+        {extra}
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
@@ -164,9 +153,11 @@ function OpenArtifact({
       <section className="artifact-view">
         <header className="artifact-header">{switcher()}</header>
         {query.isError ? (
-          <div className="artifacts-state" role="alert">
-            {message(query.error)}
-          </div>
+          <EmptyState
+            className="artifacts-state"
+            tone="error"
+            title={message(query.error)}
+          />
         ) : (
           loading
         )}
@@ -253,42 +244,49 @@ export function ArtifactsView({
   );
   if (list.data === undefined)
     return list.isError ? (
-      <div className="artifacts-state" role="alert">
-        {message(list.error)}
-      </div>
+      <EmptyState
+        className="artifacts-state"
+        tone="error"
+        title={message(list.error)}
+      />
     ) : (
       loading
     );
   if (selected === undefined)
     return (
-      <div className="artifacts-empty">
-        <FileText aria-hidden="true" />
-        <p>
-          No artifacts yet. Ask the agent to write or draw one, or start a blank
-          one.
-        </p>
-        {readOnly ? null : (
-          <div className="artifacts-new-row">
-            {ARTIFACT_KIND_VIEWS.map((view) => (
-              <button
-                key={view.kind}
-                type="button"
-                className="artifacts-new"
-                disabled={create.isPending}
-                onClick={() => startBlank(view.kind)}
-              >
-                <view.icon aria-hidden="true" />
-                {view.newLabel}
-              </button>
-            ))}
-          </div>
-        )}
-        {create.isError ? (
-          <p className="artifacts-error" role="alert">
-            {message(create.error)}
-          </p>
-        ) : null}
-      </div>
+      <EmptyState
+        className="artifacts-empty"
+        icon={<FileText />}
+        title="No artifacts yet. Ask the agent to write or draw one, or start a blank one."
+        action={
+          readOnly && !create.isError ? undefined : (
+            <>
+              {readOnly ? null : (
+                <div className="artifacts-new-row">
+                  {ARTIFACT_KIND_VIEWS.map((view, index) => (
+                    <Button
+                      key={view.kind}
+                      size="sm"
+                      variant={index === 0 ? "default" : "outline"}
+                      className="artifacts-new"
+                      disabled={create.isPending}
+                      onClick={() => startBlank(view.kind)}
+                    >
+                      <view.icon aria-hidden="true" />
+                      {view.newLabel}
+                    </Button>
+                  ))}
+                </div>
+              )}
+              {create.isError ? (
+                <p className="artifacts-error" role="alert">
+                  {message(create.error)}
+                </p>
+              ) : null}
+            </>
+          )
+        }
+      />
     );
   return (
     <OpenArtifact

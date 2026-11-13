@@ -1,7 +1,7 @@
-import { Menu } from "@base-ui/react/menu";
 import { ClipboardType, Copy, Link2, Pencil } from "lucide-react";
 import * as React from "react";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { MenuItem } from "../../shared/ui/menu.js";
 import type { MessageMenuRow } from "./message-actions.js";
 import {
   copyMessageLink,
@@ -48,27 +48,19 @@ export function MessageMenuItems({
         </time>
       ) : null}
       {canEditMessage(row, editing) ? (
-        <Menu.Item
-          className="thread-context-item"
-          data-message-edit=""
-          onClick={() => editing?.start(row)}
-        >
+        <MenuItem data-message-edit="" onClick={() => editing?.start(row)}>
           <Pencil />
           <span>Edit</span>
           <ShortcutKeycaps keycaps={["E"]} />
-        </Menu.Item>
+        </MenuItem>
       ) : null}
-      <Menu.Item
-        className="thread-context-item"
-        onClick={() => void copyMessageText(row.text)}
-      >
+      <MenuItem onClick={() => void copyMessageText(row.text)}>
         <Copy />
         <span>{user ? "Copy Message" : "Copy as Markdown"}</span>
         <ShortcutKeycaps keycaps={copyKeycaps} />
-      </Menu.Item>
+      </MenuItem>
       {user ? null : (
-        <Menu.Item
-          className="thread-context-item"
+        <MenuItem
           onClick={() => {
             const content = document
               .getElementById(row.id)
@@ -78,16 +70,13 @@ export function MessageMenuItems({
         >
           <ClipboardType />
           <span>Copy with Styling</span>
-        </Menu.Item>
+        </MenuItem>
       )}
       {link === undefined ? null : (
-        <Menu.Item
-          className="thread-context-item"
-          onClick={() => void copyMessageLink(link)}
-        >
+        <MenuItem onClick={() => void copyMessageLink(link)}>
           <Link2 />
           <span>Copy Link</span>
-        </Menu.Item>
+        </MenuItem>
       )}
     </>
   );

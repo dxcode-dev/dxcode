@@ -6,6 +6,10 @@
  */
 import { type EditorState, Plugin, PluginKey } from "prosemirror-state";
 import { Decoration, DecorationSet } from "prosemirror-view";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
+
+/** An editor tool built outside React: a ghost Button. */
+const TOOL_CLASS = `${buttonVariants({ variant: "subtle", size: "xs" })} artifact-tool`;
 
 export interface ImageUpload {
   readonly id: string;
@@ -63,7 +67,7 @@ const placeholder = (upload: ImageUpload, host: ImageUploadHost) => {
   ] as const) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "artifact-tool";
+    button.className = TOOL_CLASS;
     button.textContent = text;
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => run(upload.id));

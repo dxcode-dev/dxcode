@@ -1,0 +1,83 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's tabs and segmented control: see tabs.tsx. */
+@layer components {
+  .dx-tabs-list {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+  .dx-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1-5);
+    height: var(--control-sm);
+    padding: 0 var(--space-2);
+    color: var(--muted-foreground);
+    border: 0;
+    border-radius: var(--radius-sm);
+    outline: none;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .dx-tab:hover {
+    color: var(--foreground);
+  }
+  .dx-tab:focus-visible {
+    box-shadow: var(--focus-ring);
+  }
+  .dx-tab svg {
+    width: 14px;
+    height: 14px;
+  }
+  .dx-tab[data-disabled] {
+    opacity: 0.5;
+  }
+  /* Underline: the active tab's text and a 2px bar under it. */
+  [data-variant="underline"] > .dx-tabs-list {
+    border-bottom: 1px solid var(--divider);
+  }
+  [data-variant="underline"] .dx-tab {
+    height: calc(var(--control-md) + 2px);
+    border-radius: 0;
+    box-shadow: inset 0 -2px 0 transparent;
+  }
+  [data-variant="underline"] .dx-tab[data-active] {
+    color: var(--foreground);
+    box-shadow: inset 0 -2px 0 var(--foreground);
+  }
+  /* Segmented: a pill group; the active option is raised. */
+  [data-variant="segmented"] > .dx-tabs-list,
+  .dx-segmented {
+    display: inline-flex;
+    gap: var(--space-0-5);
+    padding: var(--space-0-5);
+    border-radius: var(--radius-md);
+    background: var(--muted);
+  }
+  [data-variant="segmented"] .dx-tab,
+  .dx-segmented {
+    min-width: 0;
+    margin: 0;
+    border: 0;
+  }
+  .dx-segmented .dx-tab {
+    height: var(--control-xs);
+    border-radius: var(--radius-sm);
+  }
+  [data-variant="segmented"] .dx-tab[data-active],
+  .dx-segmented .dx-tab[data-active] {
+    color: var(--foreground);
+    background: var(--background);
+    box-shadow: var(--shadow-sm);
+  }
+  .dx-tabs-panel {
+    outline: none;
+  }
+}

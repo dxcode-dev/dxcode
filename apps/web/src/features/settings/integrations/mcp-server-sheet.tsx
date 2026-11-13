@@ -1,6 +1,6 @@
-import { Dialog } from "@base-ui/react/dialog";
-import { Menu } from "@base-ui/react/menu";
-import { Check, ChevronDown, ChevronRight, RefreshCw, X } from "lucide-react";
+import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import "./integrations.css";
+import { ChevronDown, ChevronRight, RefreshCw, X } from "lucide-react";
 import * as React from "react";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -9,7 +9,19 @@ import {
   DialogRoot,
   DialogTitle,
 } from "../../../shared/ui/dialog.js";
-import { MenuItemText } from "../../../shared/ui/menu-item-text.js";
+import {
+  MenuItemText,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
+import {
+  SheetClose,
+  SheetContent,
+  SheetRoot,
+} from "../../../shared/ui/sheet.js";
 import { SettingsToggle } from "../settings-primitives.js";
 import { McpLogo } from "./integration-card.js";
 import type { McpServersMutationAction } from "./mcp-mutations.js";
@@ -49,25 +61,26 @@ function Sheet({
   readonly children: React.ReactNode;
 }) {
   return (
-    <Dialog.Root
+    <SheetRoot
       open={open}
       onOpenChange={(next) => {
         if (!next) onClose();
       }}
     >
-      <Dialog.Portal>
-        <Dialog.Backdrop className="mcp-sheet-backdrop" />
-        <Dialog.Viewport className="mcp-sheet-viewport">
-          <Dialog.Popup className="mcp-sheet" aria-label={label}>
-            <span className="mcp-sheet-handle" aria-hidden="true" />
-            {children}
-            <Dialog.Close className="mcp-sheet-close" aria-label="Close">
-              <X />
-            </Dialog.Close>
-          </Dialog.Popup>
-        </Dialog.Viewport>
-      </Dialog.Portal>
-    </Dialog.Root>
+      <SheetContent className="mcp-sheet" aria-label={label}>
+        {children}
+        <SheetClose
+          className={buttonVariants({
+            variant: "subtle",
+            size: "icon-xs",
+            className: "mcp-sheet-close",
+          })}
+          aria-label="Close"
+        >
+          <X />
+        </SheetClose>
+      </SheetContent>
+    </SheetRoot>
   );
 }
 
@@ -96,8 +109,8 @@ function ToolPolicyMenu({
   readonly onChoose: (policy: "allow" | "disabled") => void;
 }) {
   return (
-    <Menu.Root>
-      <Menu.Trigger
+    <MenuRoot>
+      <MenuTrigger
         disabled={disabled}
         render={
           <Button
@@ -112,38 +125,23 @@ function ToolPolicyMenu({
       >
         {POLICY_COPY[tool.policy].label}
         <ChevronDown />
-      </Menu.Trigger>
-      <Menu.Portal>
-        <Menu.Positioner
-          className="thread-menu-positioner"
-          align="end"
-          sideOffset={4}
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuRadioGroup
+          value={tool.policy}
+          onValueChange={(value) => onChoose(value as "allow" | "disabled")}
         >
-          <Menu.Popup className="thread-menu-popup mcp-menu-popup">
-            <Menu.RadioGroup
-              value={tool.policy}
-              onValueChange={(value) => onChoose(value as "allow" | "disabled")}
-            >
-              {(["allow", "disabled"] as const).map((policy) => (
-                <Menu.RadioItem
-                  key={policy}
-                  value={policy}
-                  className="thread-menu-item mcp-menu-radio"
-                >
-                  <Menu.RadioItemIndicator className="mcp-menu-indicator">
-                    <Check />
-                  </Menu.RadioItemIndicator>
-                  <MenuItemText
-                    title={POLICY_COPY[policy].label}
-                    description={POLICY_COPY[policy].detail}
-                  />
-                </Menu.RadioItem>
-              ))}
-            </Menu.RadioGroup>
-          </Menu.Popup>
-        </Menu.Positioner>
-      </Menu.Portal>
-    </Menu.Root>
+          {(["allow", "disabled"] as const).map((policy) => (
+            <MenuRadioItem key={policy} value={policy}>
+              <MenuItemText
+                title={POLICY_COPY[policy].label}
+                description={POLICY_COPY[policy].detail}
+              />
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </MenuRoot>
   );
 }
 
@@ -169,7 +167,7 @@ function ReviewToolDialog({
       }}
     >
       {tool ? (
-        <DialogContent className="mcp-review-dialog">
+        <DialogContent size="xl" className="mcp-review-dialog">
           <DialogTitle>Allow {tool.name}?</DialogTitle>
           <DialogDescription>
             Allowing covers this exact name, description, and input schema. If
@@ -597,8 +595,7 @@ export function McpServerSheet({
               </div>
               <Button
                 size="xs"
-                variant="ghost"
-                className="mcp-danger"
+                variant="danger"
                 disabled={busy}
                 onClick={() => setDeleting(true)}
               >

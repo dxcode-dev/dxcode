@@ -14,7 +14,9 @@
     "vite.config.ts",
     "vite-local.ts",
     "vitest.browser.config.ts",
-    "vitest.browser-touch.config.ts"
+    "vitest.browser-touch.config.ts",
+    ".storybook/*.ts",
+    ".storybook/*.tsx"
   ],
   "references": [
     { "path": "../../packages/domain" },

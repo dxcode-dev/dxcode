@@ -5,6 +5,7 @@ import { Button } from "../../../shared/ui/button.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { PluginStatusBadge } from "../plugins/plugin-status-badge.js";
 import { SettingsSelect } from "../settings-primitives.js";
 import type {
   OneTimeTriggerCapability,
@@ -270,12 +271,10 @@ export function TriggerDetails({
                         ? ""
                         : `, ${failureLabel[delivery.failureCode]}`}
                     </span>
-                    <em
-                      className="plugin-bundle-status-pill"
-                      data-tone={status.tone}
-                    >
-                      {status.label}
-                    </em>
+                    <PluginStatusBadge
+                      tone={status.tone}
+                      label={status.label}
+                    />
                     {delivery.status === "dead-letter" &&
                     delivery.idempotent &&
                     trigger.status === "active" ? (
@@ -330,7 +329,7 @@ export function TriggerDetails({
       <footer className="plugin-bundle-actions">
         <Button
           size="xs"
-          variant="ghost"
+          variant="danger"
           className="plugin-bundle-remove"
           disabled={busy}
           onClick={() => setConfirming(true)}

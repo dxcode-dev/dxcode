@@ -87,7 +87,13 @@ export function SignInEmailForm({
           />
         </SignInField>
       ) : null}
-      <Button type="submit" className="sign-in-primary" disabled={pending}>
+      <Button
+        type="submit"
+        size="lg"
+        block
+        className="sign-in-primary"
+        disabled={pending}
+      >
         {pending
           ? "Please wait…"
           : method === "link"
@@ -97,7 +103,9 @@ export function SignInEmailForm({
               : "Sign in"}
       </Button>
       {canSwitchMethod ? (
-        <button
+        <Button
+          variant="subtle"
+          size="sm"
           type="button"
           className="sign-in-switch"
           onClick={() =>
@@ -109,7 +117,7 @@ export function SignInEmailForm({
             : passwordSignUp
               ? "Create an account with a password"
               : "Sign in with a password"}
-        </button>
+        </Button>
       ) : null}
     </form>
   );

@@ -10,9 +10,9 @@
   display: flex;
   flex: none;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   height: 44px;
-  padding: 0 10px 0 24px;
+  padding: 0 var(--space-2-5) 0 var(--space-6);
   border-bottom: 1px solid var(--divider);
 }
 .thread-usage-title {
@@ -21,55 +21,25 @@
   margin: 0;
   overflow: hidden;
   color: var(--foreground);
-  font-size: 13px;
+  font-size: var(--text-md);
   font-weight: 400;
-  line-height: 20px;
+  line-height: var(--leading-5);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .thread-usage-title > span {
   color: var(--muted-foreground);
 }
-.thread-usage-close {
-  display: grid;
-  flex: none;
-  width: 26px;
-  height: 26px;
-  place-items: center;
-  padding: 0;
-  color: var(--muted-foreground);
-  border: 0;
-  border-radius: 5px;
-  background: transparent;
-}
-.thread-usage-close:hover {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.thread-usage-close svg {
-  width: 15px;
-  height: 15px;
-}
 .thread-usage-body {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 20px;
+  gap: var(--space-5);
   min-height: 0;
-  padding: 24px;
+  padding: var(--space-6);
   overflow-y: auto;
   overscroll-behavior: contain;
   outline: none;
-}
-.thread-usage-state {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  margin: 0;
-  padding: 48px 16px;
-  color: var(--muted-foreground);
-  font-size: 12px;
 }
 
 /* Section cards: Settings cards with the title over the content. */
@@ -80,7 +50,7 @@
 }
 .thread-usage-card > .settings-card-header {
   min-height: 0;
-  padding: 14px 16px 0;
+  padding: var(--space-3-5) var(--space-4) 0;
   border-bottom: 0;
 }
 .thread-usage-cost > .settings-card-header {
@@ -98,17 +68,17 @@
 }
 .thread-usage-section {
   display: grid;
-  gap: 12px;
+  gap: var(--space-3);
   min-width: 0;
-  padding: 8px 16px 16px;
+  padding: var(--space-2) var(--space-4) var(--space-4);
   color: var(--foreground);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4-5);
 }
 .thread-usage-section > p {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 17.875px;
 }
 .thread-usage-section a {
@@ -120,9 +90,9 @@
   color: var(--foreground);
 }
 .thread-usage-section > p.thread-usage-unavailable {
-  padding: 4px 0;
+  padding: var(--space-1) 0;
   color: var(--foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 
 /* Claude Code: what dx does not see. */
@@ -130,9 +100,9 @@
   display: grid;
   flex: none;
   grid-template-columns: 16px minmax(0, 1fr);
-  gap: 12px;
-  padding: 16px 18px;
-  border-radius: 6px;
+  gap: var(--space-3);
+  padding: var(--space-4) 18px;
+  border-radius: var(--radius-sm);
   background: color-mix(in srgb, var(--foreground) 6%, transparent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
 }
@@ -143,15 +113,15 @@
   color: var(--muted-foreground);
 }
 .thread-usage-notice strong {
-  font-size: 13px;
-  font-weight: 600;
-  line-height: 18px;
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-4-5);
 }
 .thread-usage-notice p {
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
   color: var(--muted-foreground);
-  font-size: 12px;
-  line-height: 20px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-5);
 }
 
 /* Cost. */
@@ -159,11 +129,11 @@
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: var(--space-2) var(--space-3);
 }
 .thread-usage-total {
-  font-size: 24px;
-  font-weight: 600;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
   line-height: 32px;
@@ -171,13 +141,13 @@
 .thread-usage-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
+  gap: var(--space-1-5);
+  padding: 5px var(--space-2-5);
   color: var(--thread-color-blue);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: color-mix(in srgb, var(--thread-color-blue) 13%, transparent);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
 }
 .thread-usage-pill svg {
   width: 14px;
@@ -187,40 +157,40 @@
 .thread-usage-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   width: fit-content;
 }
-.thread-usage-toggle .settings-toggle {
+.thread-usage-toggle .dx-switch {
   flex: none;
 }
 .thread-usage-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px 24px;
+  gap: var(--space-4) var(--space-6);
   margin: 0;
-  padding: 16px;
+  padding: var(--space-4);
   border-top: 1px solid var(--divider);
 }
 .thread-usage-stat {
   display: grid;
   align-content: start;
-  gap: 2px;
+  gap: var(--space-0-5);
   min-width: 0;
 }
 .thread-usage-stat dt {
   color: var(--muted-foreground);
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--text-xs);
+  line-height: var(--leading-4);
 }
 .thread-usage-stat dd {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 17.875px;
 }
 .thread-usage-stat dd:first-of-type {
   color: var(--foreground);
-  font-size: 18px;
+  font-size: var(--text-heading);
   font-variant-numeric: tabular-nums;
   line-height: 28px;
 }
@@ -228,7 +198,7 @@
 /* Model Routing. */
 .thread-usage-routes {
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -237,10 +207,10 @@
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
+  gap: var(--space-3);
+  padding: var(--space-2-5) var(--space-3-5);
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .thread-usage-route > svg {
   width: 16px;
@@ -255,14 +225,14 @@
 .thread-usage-route-copy span,
 .thread-usage-route-price span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 17px;
 }
 .thread-usage-route strong {
   overflow: hidden;
-  font-size: 12px;
-  font-weight: 500;
-  line-height: 18px;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-4-5);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -282,7 +252,7 @@
   overflow-x: auto;
 }
 .thread-usage-table {
-  margin-top: 4px;
+  margin-top: var(--space-1);
 }
 .thread-usage-models {
   min-width: 520px;
@@ -299,8 +269,8 @@
   background: color-mix(in srgb, var(--foreground) 3%, transparent);
 }
 .thread-usage-table td {
-  padding-top: 10px;
-  padding-bottom: 10px;
+  padding-top: var(--space-2-5);
+  padding-bottom: var(--space-2-5);
 }
 .thread-usage-name {
   display: grid;
@@ -312,18 +282,18 @@
 }
 .thread-usage-name code {
   color: var(--muted-foreground);
-  font-family: var(--font-mono-family);
-  font-size: 10px;
-  line-height: 14px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-3-5);
 }
 .thread-usage-name > span:not(:first-child),
 .thread-usage-name small {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 15px;
 }
 .usage-list-detail .thread-usage-name > span:first-child {
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .thread-usage-muted {
   color: var(--muted-foreground);
@@ -334,7 +304,7 @@
   border: 0;
   background: none;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-xs);
   text-decoration: underline;
   text-underline-offset: 2px;
   cursor: pointer;
@@ -350,63 +320,63 @@
 
 /* Orb System Metrics. */
 .thread-usage-metrics > .settings-card-header {
-  padding-bottom: 12px;
+  padding-bottom: var(--space-3);
   border-bottom: 1px solid var(--divider);
 }
 .thread-usage-metrics .thread-usage-section {
-  padding-top: 14px;
+  padding-top: var(--space-3-5);
 }
 .thread-usage-orb-id {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-1-5);
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
 }
 .thread-usage-orb-id code {
   padding: 1px 5px;
   overflow-wrap: anywhere;
   color: var(--foreground);
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--muted);
-  font-family: var(--font-mono-family);
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
 }
 .thread-usage-boxes {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: var(--space-3);
 }
 .thread-usage-box {
   display: grid;
-  gap: 4px;
-  padding: 10px 12px;
+  gap: var(--space-1);
+  padding: var(--space-2-5) var(--space-3);
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .thread-usage-box span {
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   line-height: 15px;
 }
 .thread-usage-box strong {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
 .thread-usage-chart {
   display: grid;
-  gap: 10px;
+  gap: var(--space-2-5);
   margin: 0;
-  padding: 12px 12px 10px;
+  padding: var(--space-3) var(--space-3) var(--space-2-5);
   border: 1px solid var(--divider);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 .thread-usage-plot {
   position: relative;
   height: 84px;
-  margin: 6px 0 4px 34px;
+  margin: var(--space-1-5) 0 var(--space-1) 34px;
 }
 .thread-usage-plot svg {
   position: absolute;
@@ -420,8 +390,8 @@
   left: -34px;
   width: 28px;
   color: var(--muted-foreground);
-  font-size: 9px;
-  line-height: 1;
+  font-size: var(--text-3xs);
+  line-height: var(--leading-none);
   text-align: right;
   transform: translateY(-50%);
 }
@@ -448,11 +418,11 @@
 .thread-usage-chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 14px;
+  gap: var(--space-1) var(--space-3-5);
   margin: 0;
   padding: 0;
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   list-style: none;
 }
 .thread-usage-chart-legend li {
@@ -473,18 +443,18 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .thread-usage-context-used,
 .thread-usage-context-model {
   margin: 0;
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .thread-usage-context-used strong {
   color: var(--foreground);
-  font-size: 15px;
-  font-weight: 500;
+  font-size: var(--text-xl);
+  font-weight: var(--weight-medium);
   font-variant-numeric: tabular-nums;
 }
 .thread-usage-context-model {
@@ -496,7 +466,7 @@
   display: flex;
   height: 14px;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   background: var(--muted);
 }
 .thread-usage-context-bar > span {
@@ -522,8 +492,8 @@
 .thread-usage-legend {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px 32px;
-  margin: 2px 0 0;
+  gap: var(--space-3) var(--space-8);
+  margin: var(--space-0-5) 0 0;
   padding: 0;
   list-style: none;
 }
@@ -531,7 +501,7 @@
   display: grid;
   grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
-  column-gap: 8px;
+  column-gap: var(--space-2);
   min-width: 0;
 }
 .thread-usage-swatch {
@@ -546,27 +516,27 @@
 }
 .thread-usage-legend-value small {
   color: var(--muted-foreground);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 .thread-usage-legend-servers {
   display: grid;
   grid-column: 2 / -1;
-  gap: 2px;
-  margin: 2px 0 0;
+  gap: var(--space-0-5);
+  margin: var(--space-0-5) 0 0;
   padding: 0;
   list-style: none;
 }
 .thread-usage-legend-servers li {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
   color: var(--muted-foreground);
-  font-size: 11px;
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
 }
 .thread-usage-legend-servers code {
-  font-family: var(--font-mono-family);
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
 }
 
 /* A phone: a bottom sheet that scrolls inside. */
@@ -579,13 +549,13 @@
     width: 100%;
     max-height: 92dvh;
     margin-top: 0;
-    border-radius: 18px 18px 0 0;
+    border-radius: var(--radius-3xl) var(--radius-3xl) 0 0;
   }
   .thread-usage-header {
-    padding: 0 8px 0 16px;
+    padding: 0 var(--space-2) 0 var(--space-4);
   }
   .thread-usage-body {
-    gap: 16px;
+    gap: var(--space-4);
     padding: 16px 12px calc(24px + env(safe-area-inset-bottom));
   }
   .thread-usage-stats {
@@ -601,8 +571,8 @@
     grid-template-columns: minmax(0, 1fr);
   }
   .thread-usage-route {
-    gap: 10px;
-    padding: 10px 12px;
+    gap: var(--space-2-5);
+    padding: var(--space-2-5) var(--space-3);
   }
   /* Every column fits: the cached share wraps under the input, and the
      headings wrap. */
@@ -613,7 +583,7 @@
     white-space: normal;
   }
   .thread-usage-table {
-    font-size: 11px;
+    font-size: var(--text-xs);
   }
   .thread-usage-table :is(th, td) {
     padding-right: 3px;
@@ -621,17 +591,17 @@
   }
   .thread-usage-table :is(th, td):first-child {
     width: 18px;
-    padding-left: 6px;
+    padding-left: var(--space-1-5);
   }
   .thread-usage-table :is(th, td):last-child {
-    padding-right: 10px;
+    padding-right: var(--space-2-5);
   }
   /* The cached share may wrap too: kept on one line, it set the column's
      width and pushed the table past a phone's edge in wider fonts. */
   .thread-usage-cached {
     display: block;
     color: var(--muted-foreground);
-    font-size: 10px;
+    font-size: var(--text-2xs);
     white-space: normal;
   }
   .thread-usage-models td:nth-child(2) {

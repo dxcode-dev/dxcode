@@ -1,4 +1,3 @@
-import { Popover } from "@base-ui/react/popover";
 import {
   type MessageAttachment,
   parseMessageAttachments,
@@ -22,6 +21,11 @@ import {
 } from "../../../shared/reactions/reactions.js";
 import { Avatar, ParticipantStack } from "../../../shared/ui/avatar.js";
 import { Button } from "../../../shared/ui/button.js";
+import {
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
+} from "../../../shared/ui/popover.js";
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
 import { ThreadReferenceContext } from "../../../shared/ui/thread-reference-context.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
@@ -66,23 +70,24 @@ function EditedMarker({
 }) {
   const [open, setOpen] = React.useState(false);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger
+    <PopoverRoot open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
         className="space-post-edited"
         aria-label="Edited, show earlier versions"
       >
         edited
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Positioner side="bottom" align="start" sideOffset={4}>
-          <Popover.Popup className="space-post-revisions">
-            {open ? (
-              <Revisions spaceThreadId={spaceThreadId} postId={post.id} />
-            ) : null}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent
+        side="bottom"
+        align="start"
+        sideOffset={4}
+        className="space-post-revisions"
+      >
+        {open ? (
+          <Revisions spaceThreadId={spaceThreadId} postId={post.id} />
+        ) : null}
+      </PopoverContent>
+    </PopoverRoot>
   );
 }
 
@@ -378,26 +383,28 @@ function SpacePostRow({
               />
             ) : null}
             {permissions.comment ? (
-              <button
-                type="button"
+              <Button
+                variant="subtle"
+                size="icon-xs"
                 className="space-post-action"
                 aria-label="Comment"
                 title="Comment"
                 onClick={() => openComments(post.id)}
               >
                 <MessagesSquare aria-hidden="true" />
-              </button>
+              </Button>
             ) : null}
             {mine && permissions.react ? (
-              <button
-                type="button"
+              <Button
+                variant="subtle"
+                size="icon-xs"
                 className="space-post-action"
                 aria-label="Edit"
                 title="Edit"
                 onClick={() => setEditing(true)}
               >
                 <Pencil aria-hidden="true" />
-              </button>
+              </Button>
             ) : null}
           </div>
         )}

@@ -1,0 +1,291 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's pickers: Combobox (searchable) and ChoiceSelect (a custom-rendered
+   choice list). Their trigger looks like the native Select; their list
+   shares the menu's surface and rows. See combobox.tsx and
+   choice-select.tsx. */
+@layer components {
+  .dx-picker-trigger {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-width: 0;
+    padding: 0 var(--space-2);
+    color: var(--foreground);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-sm);
+    outline: none;
+    background: var(--background);
+    font: inherit;
+    font-size: var(--text-sm);
+    text-align: left;
+    cursor: pointer;
+    transition:
+      border-color var(--duration-fast),
+      box-shadow var(--duration-fast);
+  }
+  .dx-picker-trigger[data-size="sm"] {
+    height: var(--control-sm);
+  }
+  .dx-picker-trigger[data-size="md"] {
+    height: var(--control-md);
+  }
+  .dx-picker-trigger[data-size="lg"] {
+    height: var(--control-lg);
+    font-size: var(--text-md);
+  }
+  .dx-picker-trigger:focus-visible {
+    border-color: var(--ring);
+    box-shadow: var(--focus-ring);
+  }
+  .dx-picker-trigger[data-popup-open] {
+    border-color: var(--ring);
+  }
+  .dx-picker-trigger:disabled,
+  .dx-picker-trigger[data-disabled] {
+    cursor: default;
+    opacity: 0.5;
+  }
+  .dx-picker-trigger > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-picker-trigger[data-placeholder] > span {
+    color: var(--muted-foreground);
+  }
+  /* The trailing chevron. */
+  .dx-picker-trigger > svg:last-child {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    margin-left: auto;
+    color: var(--muted-foreground);
+  }
+
+  /* A typed field with a list toggle at its end. */
+  .dx-combobox-field {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    color: var(--muted-foreground);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-sm);
+    background: var(--background);
+    transition:
+      border-color var(--duration-fast),
+      box-shadow var(--duration-fast);
+  }
+  .dx-combobox-field[data-size="sm"] {
+    height: var(--control-sm);
+  }
+  .dx-combobox-field[data-size="md"] {
+    height: var(--control-md);
+  }
+  .dx-combobox-field[data-size="lg"] {
+    height: var(--control-lg);
+  }
+  .dx-combobox-field[data-disabled],
+  .dx-combobox-field:has(> input:disabled) {
+    opacity: 0.5;
+  }
+  .dx-combobox-field:focus-within {
+    border-color: var(--ring);
+    box-shadow: var(--focus-ring);
+  }
+  .dx-combobox-field > input {
+    flex: 1;
+    min-width: 0;
+    height: 100%;
+    padding: 0 var(--space-2) 0 var(--space-2-5);
+    color: var(--foreground);
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-sm);
+  }
+  .dx-combobox-field > input::placeholder {
+    color: var(--muted-foreground);
+  }
+  .dx-combobox-toggle {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--control-sm);
+    height: 100%;
+    padding: 0;
+    color: var(--muted-foreground);
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .dx-combobox-toggle:hover {
+    color: var(--foreground);
+  }
+  .dx-combobox-toggle svg {
+    width: 14px;
+    height: 14px;
+  }
+
+  .dx-picker-positioner {
+    z-index: var(--z-popover);
+    outline: none;
+  }
+  .dx-picker {
+    display: flex;
+    flex-direction: column;
+    min-width: var(--anchor-width);
+    max-width: min(var(--available-width), calc(100vw - 16px));
+    max-height: var(--available-height);
+    overflow: hidden;
+    color: var(--popover-foreground);
+    border: 1px solid var(--outline);
+    border-radius: var(--radius-lg);
+    outline: none;
+    background: var(--popover);
+    box-shadow: var(--shadow-lg);
+    transform-origin: var(--transform-origin);
+    transition:
+      opacity var(--duration-fast) ease,
+      transform var(--duration-fast) ease;
+  }
+  .dx-picker[data-width="anchor"] {
+    width: var(--anchor-width);
+  }
+  .dx-picker[data-starting-style],
+  .dx-picker[data-ending-style] {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+  .dx-picker-list {
+    flex: 1;
+    min-height: 0;
+    max-height: min(320px, var(--available-height));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 5px;
+    outline: 0;
+    scroll-padding-block: 5px;
+  }
+  .dx-picker-list[data-empty] {
+    padding: 0;
+  }
+  /* A search row at the list's top. */
+  .dx-picker-search {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--control-lg);
+    padding: 0 var(--space-2-5);
+    color: var(--muted-foreground);
+    border-bottom: 1px solid var(--divider);
+    font-size: var(--text-sm);
+  }
+  .dx-picker-search > svg {
+    width: 14px;
+    height: 14px;
+    flex: none;
+  }
+  .dx-picker-search > input {
+    flex: 1;
+    min-width: 0;
+    color: var(--foreground);
+    border: 0;
+    outline: 0;
+    background: transparent;
+    font: inherit;
+  }
+  .dx-picker-search > input::placeholder {
+    color: var(--muted-foreground);
+  }
+  .dx-picker-item,
+  .dx-picker-action {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: calc(var(--control-sm) + 2px);
+    padding: var(--space-1-5) var(--space-2);
+    color: inherit;
+    border: 0;
+    border-radius: var(--radius-sm);
+    outline: 0;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-md);
+    line-height: var(--leading-4-5);
+    text-align: left;
+    cursor: default;
+    user-select: none;
+  }
+  .dx-picker-item[data-highlighted],
+  .dx-picker-action:hover:not(:disabled) {
+    background: var(--accent);
+  }
+  .dx-picker-item[data-disabled] {
+    cursor: not-allowed;
+    opacity: 0.42;
+  }
+  .dx-picker-item > svg {
+    width: 14px;
+    height: 14px;
+    flex: none;
+    color: var(--muted-foreground);
+  }
+  .dx-picker-item-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-picker-check {
+    display: grid;
+    flex: none;
+    place-items: center;
+    margin-left: auto;
+    color: var(--foreground);
+  }
+  .dx-picker-check svg {
+    width: 14px;
+    height: 14px;
+  }
+  /* A row that acts instead of choosing, such as "More projects". */
+  .dx-picker-action {
+    color: var(--muted-foreground);
+    cursor: pointer;
+  }
+  .dx-picker-action:hover:not(:disabled) {
+    color: var(--foreground);
+  }
+  .dx-picker-action:disabled {
+    cursor: wait;
+  }
+  .dx-picker-label {
+    padding: var(--space-2-5) var(--space-2) var(--space-1);
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+  }
+  .dx-picker-empty {
+    margin: 0;
+    padding: var(--space-3);
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    line-height: var(--leading-4);
+  }
+  /* The empty row renders with no text while items match. */
+  .dx-picker-empty:empty {
+    display: none;
+  }
+  .dx-picker-separator {
+    height: 1px;
+    margin: 5px -5px;
+    background: var(--divider);
+  }
+}

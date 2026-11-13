@@ -1,4 +1,3 @@
-import { Menu } from "@base-ui/react/menu";
 import type { ThreadId } from "@dx/domain";
 import {
   CalendarClock,
@@ -6,6 +5,7 @@ import {
   CircleDot,
   GitPullRequest,
 } from "lucide-react";
+import { MenuItem } from "../../../shared/ui/menu.js";
 import {
   type AutomationView,
   automationViews,
@@ -29,11 +29,7 @@ export function ThreadAutomationMenuItems({
   const data = useThreadAutomations(threadId).data;
   return automationViews(data).map(({ view, label }) =>
     include === undefined || include(view) ? (
-      <Menu.Item
-        key={view}
-        className="thread-menu-item"
-        onClick={() => onOpen(view)}
-      >
+      <MenuItem key={view} onClick={() => onOpen(view)}>
         {view === "issues" ? (
           <CircleDot />
         ) : view === "pulls" ? (
@@ -44,7 +40,7 @@ export function ThreadAutomationMenuItems({
           <CalendarClock />
         )}
         <span>{label}</span>
-      </Menu.Item>
+      </MenuItem>
     ) : null,
   );
 }
