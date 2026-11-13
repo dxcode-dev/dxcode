@@ -11,6 +11,7 @@ import {
   isMissingArtifact,
 } from "../artifact-document-queries.js";
 import { artifactHref } from "./artifact-embed-links.js";
+import { useArtifactHost } from "./artifact-host.js";
 
 /** A folder name the artifact store takes: one name, no `/`. */
 const folderProblem = (folder: string) =>
@@ -24,7 +25,8 @@ const folderProblem = (folder: string) =>
  * The switcher's file actions, as the reference editor has them: Move to
  * Folder… and Delete Artifact…, for people who can edit. `items` go in the
  * switcher's menu; `dialogs` render beside the editor, since the menu
- * closes as an item is chosen.
+ * closes as an item is chosen. A standalone artifact is alone in its home,
+ * so it has no folder to move to.
  */
 export function useArtifactFileActions({
   session,
@@ -41,6 +43,7 @@ export function useArtifactFileActions({
   readonly readOnly: boolean;
 }) {
   const queryClient = useQueryClient();
+  const host = useArtifactHost();
   const [moving, setMoving] = React.useState(false);
   const [target, setTarget] = React.useState(folder);
   const [deleting, setDeleting] = React.useState(false);
@@ -80,15 +83,17 @@ export function useArtifactFileActions({
     <>
       <MenuSeparator />
       {copyLink}
-      <MenuItem
-        onClick={() => {
-          setTarget(folder);
-          setMoving(true);
-        }}
-      >
-        <FolderInput aria-hidden="true" />
-        Move to Folder…
-      </MenuItem>
+      {host.inThread ? (
+        <MenuItem
+          onClick={() => {
+            setTarget(folder);
+            setMoving(true);
+          }}
+        >
+          <FolderInput aria-hidden="true" />
+          Move to Folder…
+        </MenuItem>
+      ) : null}
       <MenuItem tone="danger" onClick={() => setDeleting(true)}>
         <Trash2 aria-hidden="true" />
         Delete Artifact…
@@ -135,7 +140,11 @@ export function useArtifactFileActions({
         open={deleting}
         onOpenChange={setDeleting}
         title="Delete this artifact?"
-        description="It is deleted for everyone in this Thread, with its comments."
+        description={
+          host.inThread
+            ? "It is deleted for everyone in this Thread, with its comments."
+            : "It is deleted for everyone who can open it, with its comments."
+        }
         confirmLabel="Delete"
         destructive
         pending={remove.isPending}
@@ -143,7 +152,12 @@ export function useArtifactFileActions({
           ? { error: "Couldn't delete it. Try again." }
           : {})}
         onConfirm={() =>
-          remove.mutate(undefined, { onSuccess: () => setDeleting(false) })
+          remove.mutate(undefined, {
+            onSuccess: () => {
+              setDeleting(false);
+              host.onDeleted?.();
+            },
+          })
         }
       />
     </>

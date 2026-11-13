@@ -442,9 +442,12 @@ const mentionOf = (member: {
 /** Insert ▸ Date, Time, Dropdown, Toggle, and Mention. */
 export function ChipInsertItems({
   threadId,
+  agent,
   onInsert,
 }: {
   readonly threadId: ThreadId;
+  /** The Thread has an agent to mention; a standalone artifact's has none. */
+  readonly agent: boolean;
   readonly onInsert: (source: string) => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
@@ -503,11 +506,15 @@ export function ChipInsertItems({
           <span>Mention</span>
         </MenuSubmenuTrigger>
         <MenuPopup alignOffset={-5} aria-label="Mention">
-          <MenuItem
-            onClick={() => onInsert(chipSource({ kind: "agent", name: "dx" }))}
-          >
-            @dx (the agent)
-          </MenuItem>
+          {agent ? (
+            <MenuItem
+              onClick={() =>
+                onInsert(chipSource({ kind: "agent", name: "dx" }))
+              }
+            >
+              @dx (the agent)
+            </MenuItem>
+          ) : null}
           {people.map((member) => (
             <MenuItem
               key={member.userId}

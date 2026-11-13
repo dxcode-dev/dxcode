@@ -36,6 +36,7 @@ import {
   resolveArtifactCommentMutation,
 } from "../artifact-comments-queries.js";
 import { ArtifactApiError } from "../artifacts-api.js";
+import { useArtifactHost } from "./artifact-host.js";
 
 /**
  * A comment being written: on a quote in the current revision, or on a part
@@ -107,10 +108,12 @@ function CommentComposer({
   const { identity } = useAuthenticatedIdentity();
   const members =
     useQuery(threadMembersQueryOptions(identity.id, threadId)).data ?? [];
-  const mentions = useCommentMentions({ members, body, setBody, box });
+  // A standalone artifact's home has no agent: no dx to ask or mention.
+  const { agent } = useArtifactHost();
+  const mentions = useCommentMentions({ members, body, setBody, box, agent });
   // The box shows `@dx` as people read it; it posts as the mention. Judged
   // as it will post: a picked person named "dx …" is that person, not dx.
-  const asking = asksAgent(mentions.post(body));
+  const asking = agent && asksAgent(mentions.post(body));
   const submit = () => {
     const value = body.trim();
     if (value === "" || pending) return;
@@ -189,17 +192,19 @@ function CommentComposer({
         >
           <AtSign aria-hidden="true" />
         </Button>
-        <Button
-          variant="subtle"
-          size="icon-xs"
-          className="artifact-comment-icon artifact-comment-ask"
-          aria-label="Ask @dx"
-          title={asking ? "Don't ask dx" : "Ask dx to reply"}
-          aria-pressed={asking}
-          onClick={() => setBody(toggleAgent(body))}
-        >
-          <DxWordmark size="small" />
-        </Button>
+        {agent ? (
+          <Button
+            variant="subtle"
+            size="icon-xs"
+            className="artifact-comment-icon artifact-comment-ask"
+            aria-label="Ask @dx"
+            title={asking ? "Don't ask dx" : "Ask dx to reply"}
+            aria-pressed={asking}
+            onClick={() => setBody(toggleAgent(body))}
+          >
+            <DxWordmark size="small" />
+          </Button>
+        ) : null}
         {dictation === undefined ? null : (
           <dictation.Textarea
             textareaRef={box}

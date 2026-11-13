@@ -67,6 +67,7 @@ import {
 import { embedDecorations } from "./artifact-embed-links.js";
 import { ArtifactEmbeds } from "./artifact-embeds.js";
 import { useArtifactFileActions } from "./artifact-file-actions.js";
+import { useArtifactHost } from "./artifact-host.js";
 import type {
   ArtifactSession,
   ArtifactSessionSnapshot,
@@ -670,6 +671,7 @@ function ArtifactToolbar({
   // The mic's words show on a line under the toolbar, which scrolls sideways
   // and would cut off a bubble.
   const [noticeHost, setNoticeHost] = React.useState<HTMLElement | null>(null);
+  const reach = useArtifactHost();
   return (
     <>
       <fieldset className="artifact-toolbar" aria-label="Artifact tools">
@@ -736,6 +738,7 @@ function ArtifactToolbar({
             </MenuItem>
             <ChipInsertItems
               threadId={threadId}
+              agent={reach.agent}
               onInsert={(source) => run((state) => insertChip(state, source))}
             />
           </MenuPopup>
@@ -751,11 +754,13 @@ function ArtifactToolbar({
           <MessageSquarePlus aria-hidden="true" />
           <span>Comment</span>
         </Button>
-        <NotifyAgentButton
-          threadId={threadId}
-          artifactId={artifactId}
-          revision={snapshot.revision}
-        />
+        {reach.agent ? (
+          <NotifyAgentButton
+            threadId={threadId}
+            artifactId={artifactId}
+            revision={snapshot.revision}
+          />
+        ) : null}
         {snapshot.selection.inTable ? (
           <TableTools
             onAction={(action) => run((state) => tableAction(state, action))}
@@ -1072,6 +1077,7 @@ export function ArtifactEditor({
   // `@` lists the Thread's people; comments show their pictures.
   const { identity } = useAuthenticatedIdentity();
   const people = useCommentPeople(identity, threadId);
+  const reach = useArtifactHost();
   const comments = useQuery(
     artifactCommentsOptions(threadId, initial.artifact.id),
   );
@@ -1105,7 +1111,7 @@ export function ArtifactEditor({
     holdArtifactSession(queryClient, threadId, initial, session);
     const stopFollowing = session.followQuery();
     const stopComments = session.followComments();
-    const stopViewer = session.followViewer(identity.id);
+    const stopViewer = session.followViewer(identity.id, reach.agent);
     const warn = (event: BeforeUnloadEvent) => {
       if (session.dirty) event.preventDefault();
     };
@@ -1262,6 +1268,7 @@ export function ArtifactEditor({
               threadId={threadId}
               session={session}
               selection={snapshot.selection}
+              sendToThread={reach.composer}
               hidden={
                 readOnly ||
                 snapshot.selection.focused !== true ||

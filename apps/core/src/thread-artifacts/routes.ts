@@ -516,6 +516,10 @@ export const threadArtifactRoutes = new Hono<AppEnv>()
         { waitUntil: (promise) => afterResponse(context, promise) },
       );
       if (notified === undefined) return refuse(context, "ARTIFACT_NOT_FOUND");
+      if (notified === "no-agent")
+        return refuse(context, "INVALID_REQUEST", {
+          message: "A standalone artifact has no agent to notify.",
+        });
       context.header("Cache-Control", "no-store");
       return context.json(
         Schema.encodeUnknownSync(NotifyArtifactAgentResponseSchema)({

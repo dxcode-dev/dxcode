@@ -29,9 +29,11 @@ import { settingsRoutes } from "../../../src/settings/routes.js";
 import { attributeSubmission } from "../../../src/thread-sharing/middleware.js";
 import { createThreadMessageEditRoutes } from "../../../src/threads/message-edit-route.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
+import { FixtureClaudeCodeAgent } from "./agents/fixture-claude-code-agent.js";
 import { FixtureLifecycleAgent } from "./agents/fixture-lifecycle-agent.js";
 import { FixturePlanAgent } from "./agents/fixture-plan-agent.js";
 import { armAttachmentPoison } from "./attachment-poison.js";
+import { claudeCodeCalls } from "./claude-code-history.js";
 import { heavyTurnResponses } from "./heavy-history.js";
 import { planLimitRoutes } from "./plan-limit.js";
 import { recoveryWakes } from "./recovery-probe.js";
@@ -470,6 +472,9 @@ app.post("/__fixture/scenario/:name", (context) => {
   return context.body(null, 204);
 });
 app.get("/__fixture/model-requests", (context) => context.json(modelRequests));
+app.get("/__fixture/claude-code-calls", (context) =>
+  context.json(claudeCodeCalls()),
+);
 app.get("/__fixture/command-runs/:threadId", (context) =>
   context.json(commandRuns(context.req.param("threadId"))),
 );
@@ -625,6 +630,9 @@ app.route("/v1/agents/dx", createAgentRouter(FixtureLifecycleAgent));
 app.use("/v1/agents/plan/:threadId", authorizeThread);
 app.use("/v1/agents/plan/:threadId/:subpath{.+}", authorizeThread);
 app.route("/v1/agents/plan", createAgentRouter(FixturePlanAgent));
+app.use("/v1/agents/claude-code/:threadId", authorizeThread);
+app.use("/v1/agents/claude-code/:threadId/:subpath{.+}", authorizeThread);
+app.route("/v1/agents/claude-code", createAgentRouter(FixtureClaudeCodeAgent));
 app.notFound(notFoundHandler);
 app.onError(errorHandler);
 

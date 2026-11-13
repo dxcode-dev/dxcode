@@ -64,13 +64,15 @@ const MARKS: ReadonlyArray<{
  * and formats nothing, so it adds only Comment, below the text, clear of
  * that menu. The parent keys it by the selection, so what it shows (an open
  * Link field, "Copied") starts afresh for each selection. Ctrl/Cmd+K in the
- * same artifact opens Link.
+ * same artifact opens Link. Send to Thread shows only where a Thread
+ * composer is on the page.
  */
 export function SelectionToolbar({
   threadId,
   session,
   selection,
   hidden,
+  sendToThread,
   onComment,
 }: {
   readonly threadId: ThreadId;
@@ -78,6 +80,8 @@ export function SelectionToolbar({
   readonly selection: ArtifactSelection;
   /** A reader who cannot edit, or a comment already being written. */
   readonly hidden: boolean;
+  /** A Thread composer is on the page to quote the selection into. */
+  readonly sendToThread: boolean;
   readonly onComment: () => void;
 }) {
   const touch = React.useSyncExternalStore(
@@ -232,29 +236,31 @@ export function SelectionToolbar({
           >
             <Copy aria-hidden="true" />
           </Button>
-          <Button
-            variant="subtle"
-            size="xs"
-            className="artifact-selection-button"
-            aria-label="Send to Thread"
-            title="Send to Thread"
-            onMouseDown={keep}
-            onClick={() => {
-              draft.set(withQuote(draft.get(), session.selectionMarkdown()));
-              const composer = document.querySelector<HTMLElement>(
-                '[data-command-target="thread-composer"]',
-              );
-              composer?.focus();
-              if (composer instanceof HTMLTextAreaElement)
-                composer.setSelectionRange(
-                  composer.value.length,
-                  composer.value.length,
+          {sendToThread ? (
+            <Button
+              variant="subtle"
+              size="xs"
+              className="artifact-selection-button"
+              aria-label="Send to Thread"
+              title="Send to Thread"
+              onMouseDown={keep}
+              onClick={() => {
+                draft.set(withQuote(draft.get(), session.selectionMarkdown()));
+                const composer = document.querySelector<HTMLElement>(
+                  '[data-command-target="thread-composer"]',
                 );
-              setStatus("Added to your message");
-            }}
-          >
-            <SendHorizontal aria-hidden="true" />
-          </Button>
+                composer?.focus();
+                if (composer instanceof HTMLTextAreaElement)
+                  composer.setSelectionRange(
+                    composer.value.length,
+                    composer.value.length,
+                  );
+                setStatus("Added to your message");
+              }}
+            >
+              <SendHorizontal aria-hidden="true" />
+            </Button>
+          ) : null}
         </>
       )}
       {status === undefined ? null : (

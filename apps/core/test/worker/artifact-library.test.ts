@@ -24,6 +24,10 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { createArtifactTools } from "../../src/thread-artifacts/agent-tools.js";
+import {
+  artifactCommented,
+  type DeliverArtifactWake,
+} from "../../src/thread-artifacts/ask-effects.js";
 import { threadArtifactRoutes } from "../../src/thread-artifacts/routes.js";
 import { createArtifact } from "../../src/thread-artifacts/store.js";
 import { project, thread } from "./fixtures.js";
@@ -50,6 +54,8 @@ import { runRepositories } from "./runtime.js";
  *   missing from the library, or an unshared Thread's leak into it;
  * - the artifact home shows up as a Thread in the owner's Thread list, or
  *   an agent message or Orb request reaches it;
+ * - Notify agent on a standalone artifact tries to wake its home, or a
+ *   comment that asks @dx there does, while a Thread's still wakes;
  * - the agent lists, reads, or edits an artifact its Thread's owner cannot
  *   open, edits one shared view-only, or cannot reach a shared one at all.
  */
@@ -294,6 +300,54 @@ describe("the Artifacts library", () => {
       message: "hello",
     });
     expect(control.status).toBe(202);
+  });
+
+  it("refuses Notify agent on a standalone artifact and wakes no agent for @dx in its comments", async () => {
+    const created = await createStandalone(ownerApi, "No agent here", {
+      markdown: "Ship it today.\n",
+    });
+    const notify = await ownerApi(
+      `/v1/threads/${created.threadId}/artifacts/${created.id}/notify`,
+      "POST",
+    );
+    expect(notify.status).toBe(400);
+    expect(notify.body.data).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "A standalone artifact has no agent to notify.",
+    });
+
+    const wakes: Parameters<DeliverArtifactWake>[0][] = [];
+    const deliver: DeliverArtifactWake = async (wake) => {
+      wakes.push(wake);
+    };
+    const asked = (threadId: ThreadId, artifactId: string, commentId: string) =>
+      artifactCommented(
+        bindings,
+        {
+          threadId,
+          artifactId,
+          commentId,
+          quote: "Ship it",
+          body: "@[dx](agent) can you check this?",
+          writer: { kind: "user", userId: owner },
+        },
+        { deliver },
+      );
+    await asked(created.threadId, created.id, "cmt_standalone");
+    expect(wakes).toEqual([]);
+
+    // The control: the same comment in a Thread wakes its agent.
+    const threadId = await newThread(owner);
+    const inThread = await createArtifact(bindings, {
+      threadId,
+      title: "With an agent",
+      markdown: "Ship it today.\n",
+      writer: { kind: "user", userId: owner },
+    });
+    if (inThread.kind !== "saved") throw new Error("Expected the artifact.");
+    await asked(threadId, inThread.value.artifact.id, "cmt_thread");
+    expect(wakes).toHaveLength(1);
+    expect(wakes[0]?.threadId).toBe(threadId);
   });
 
   it("keeps a private artifact invisible to everyone else, then shares it with the workspace", async () => {

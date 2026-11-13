@@ -77,6 +77,15 @@ export const artifactLibraryOptions = () =>
   });
 
 /** Where an artifact lives and what the person may do with it. */
+/** An artifact was deleted: forget it, and list the library afresh. */
+export const forgetLibraryArtifact = (
+  queryClient: QueryClient,
+  artifactId: string,
+) => {
+  queryClient.removeQueries({ queryKey: libraryKeys.item(artifactId) });
+  void queryClient.invalidateQueries({ queryKey: libraryKeys.list() });
+};
+
 export const artifactLibraryItemOptions = (artifactId: string) =>
   queryOptions({
     queryKey: libraryKeys.item(artifactId),

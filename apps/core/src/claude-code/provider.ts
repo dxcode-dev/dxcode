@@ -21,7 +21,11 @@ import {
   type SimpleStreamOptions,
   type Usage,
 } from "@earendil-works/pi-ai";
-import type { getModelInvocationContext, Sandbox } from "@flue/runtime";
+import type {
+  getModelInvocationContext,
+  Sandbox,
+  SelectContextAttachments,
+} from "@flue/runtime";
 import { claudeCodeExecutor } from "../executor/sandbox.js";
 import { claudeCodeLogger } from "../logging.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
@@ -557,11 +561,44 @@ const isRecordedSegment = (message: Context["messages"][number]) =>
  * wants its next segment. `previous` is the turn new input interrupts, with
  * how many of its segments Flue recorded.
  */
+const isInput = (message: Context["messages"][number]) =>
+  message.role === "user" && !isLifecycleSignal(message);
+
+/**
+ * Where the latest turn starts: its newest user input, and the last
+ * assistant message before it. Everything after that message is the input
+ * Claude is given; the rest is in Claude's own session already.
+ */
+const turnBounds = (messages: Context["messages"]) => {
+  const lastUser = messages.findLastIndex(isInput);
+  return {
+    lastUser,
+    turnStart: messages.findLastIndex(
+      ({ role }, index) => role === "assistant" && index < lastUser,
+    ),
+  };
+};
+
+/**
+ * The context messages whose images Flue loads for a call: the latest
+ * turn's user input, the only images Claude Code is sent. Claude's session
+ * already holds every earlier image, and the transcript reads them from
+ * Flue's attachment route, so loading them would only hold a long Thread's
+ * whole history of screenshots in the Durable Object's memory.
+ */
+export const claudeCodeContextAttachments: SelectContextAttachments = (
+  messages,
+) => {
+  const context = messages as Context["messages"];
+  const { turnStart } = turnBounds(context);
+  return context.map(
+    (message, index) => index > turnStart && message.role === "user",
+  );
+};
+
 const position = (context: Context) => {
   const messages = context.messages;
-  const isInput = (message: Context["messages"][number]) =>
-    message.role === "user" && !isLifecycleSignal(message);
-  const lastUser = messages.findLastIndex(isInput);
+  const { lastUser, turnStart } = turnBounds(messages);
   const lastAssistant = messages.findLastIndex(
     ({ role }) => role === "assistant",
   );
@@ -572,9 +609,6 @@ const position = (context: Context) => {
   const segment = messages.slice(lastUser + 1).filter(isRecordedSegment).length;
   const anchor = messages[lastUser];
   // The input that started this turn: everything after the turn before it.
-  const turnStart = messages.findLastIndex(
-    ({ role }, index) => role === "assistant" && index < lastUser,
-  );
   const turnInput = messages.slice(turnStart + 1, lastUser + 1).filter(isInput);
   // Segments Flue recorded before the latest interruption of this turn.
   const interruption = messages.findLastIndex(

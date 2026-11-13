@@ -33,6 +33,7 @@ export function useCommentMentions({
   setBody,
   box,
   initialPicked,
+  agent = true,
 }: {
   /** The Thread's people, from its members query. */
   readonly members: ReadonlyArray<ThreadMemberData>;
@@ -41,6 +42,8 @@ export function useCommentMentions({
   readonly box: React.RefObject<HTMLTextAreaElement | null>;
   /** People already mentioned in a text being edited (`draftOf`). */
   readonly initialPicked?: PickedPeople;
+  /** Whether `@` offers dx; a standalone artifact's home has no agent. */
+  readonly agent?: boolean;
 }) {
   const { identity } = useAuthenticatedIdentity();
   const [picked, setPicked] = React.useState<PickedPeople>(
@@ -52,7 +55,7 @@ export function useCommentMentions({
   const items =
     typing === undefined
       ? []
-      : commentPeopleItems(typing.query, members, identity.id);
+      : commentPeopleItems(typing.query, members, identity.id, agent);
 
   /** Follows the caret: opens the list while a mention is being typed. */
   const track = (value: string, caret: number) => {

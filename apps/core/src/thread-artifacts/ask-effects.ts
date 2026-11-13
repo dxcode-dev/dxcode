@@ -32,17 +32,21 @@ import {
 
 /** Who can open the Thread: its owner, and its members while it is shared. */
 export const threadReaders = async (db: D1Database, threadId: string) => {
-  const owner = await db
+  const thread = await db
     .prepare(
-      "SELECT owner_user_id FROM threads WHERE id = ? AND lifecycle_state != 'deleted'",
+      "SELECT owner_user_id, artifact_home FROM threads WHERE id = ? AND lifecycle_state != 'deleted'",
     )
     .bind(threadId)
-    .first<string>("owner_user_id");
-  if (owner === null) return { owner: undefined, readers: new Set<string>() };
+    .first<{ owner_user_id: string; artifact_home: number | null }>();
+  if (thread === null)
+    return { owner: undefined, readers: new Set<string>(), agent: false };
+  const owner = thread.owner_user_id;
   const members = await threadMembers(db, threadId as ThreadId);
   return {
     owner,
     readers: new Set([owner, ...members.map(({ userId }) => userId)]),
+    /** A standalone artifact's home never runs an agent to wake. */
+    agent: thread.artifact_home !== 1,
   };
 };
 
@@ -284,7 +288,7 @@ export const artifactCommented = async (
   const db = bindings.DB;
   if (db === undefined) return;
   const now = options.now ?? Date.now();
-  const { owner, readers } = await threadReaders(db, event.threadId);
+  const { owner, readers, agent } = await threadReaders(db, event.threadId);
   if (owner === undefined) return;
   const title =
     (await db
@@ -313,7 +317,8 @@ export const artifactCommented = async (
         artifactId: event.artifactId,
         excerpt: `${title}: ${event.body.replace(/@\[([^\]]+)\]\((?:user:[^)]+|agent|here)\)/g, "@$1")}`,
       });
-    if (writerId === undefined || !AGENT_MENTION.test(event.body)) return;
+    if (writerId === undefined || !agent || !AGENT_MENTION.test(event.body))
+      return;
     // A mention wakes the agent right away, or joins the trailing wake of
     // one that just did.
     if (
@@ -386,7 +391,8 @@ const notifyWakeBody = async (
 /**
  * Notify agent (#1765): a person asks the Thread's agent to look at an
  * artifact. It wakes the Thread once, now, with what people changed since
- * the agent last saved it. Undefined when the artifact or Thread is gone.
+ * the agent last saved it. Undefined when the artifact or Thread is gone;
+ * `"no-agent"` for a standalone artifact, whose home runs no agent.
  */
 export const notifyArtifactAgent = async (
   bindings: Bindings,
@@ -409,8 +415,9 @@ export const notifyArtifactAgent = async (
     input.artifactId,
   );
   if (current === undefined) return undefined;
-  const { owner } = await threadReaders(db, input.threadId);
+  const { owner, agent } = await threadReaders(db, input.threadId);
   if (owner === undefined) return undefined;
+  if (!agent) return "no-agent" as const;
   const { artifact } = current;
   const now = options.now ?? Date.now();
   // Clicks after one that just woke the agent join its trailing wake.

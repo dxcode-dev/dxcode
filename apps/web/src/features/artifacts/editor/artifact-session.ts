@@ -793,12 +793,14 @@ export class ArtifactSession {
 
   #people: ReadonlyArray<ThreadMemberData> = [];
   #viewerId = "";
+  /** Whether `@` offers dx: a standalone artifact's home has no agent. */
+  #agent = true;
 
   readonly #suggestHost: SuggestHost = {
     items: (match) =>
       match.kind === "slash"
         ? slashItems(match.query)
-        : peopleItems(match.query, this.#people, this.#viewerId),
+        : peopleItems(match.query, this.#people, this.#viewerId, this.#agent),
     pick: (view, match, item) => this.#pick(view, match, item),
   };
 
@@ -1045,8 +1047,12 @@ export class ArtifactSession {
     if (item !== undefined) this.#pick(view, match, item);
   };
 
-  /** Follows what depends on the reader: `@`'s people and linked Projects. */
-  followViewer(viewerId: string) {
+  /**
+   * Follows what depends on the reader: `@`'s people and linked Projects.
+   * `agent` is whether `@` offers dx.
+   */
+  followViewer(viewerId: string, agent = true) {
+    this.#agent = agent;
     const stopPeople = this.followPeople(viewerId);
     const stopProjects = this.followProjects(viewerId);
     return () => {

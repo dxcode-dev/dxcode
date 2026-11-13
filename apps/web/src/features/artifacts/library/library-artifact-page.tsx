@@ -1,7 +1,7 @@
 import type { ArtifactLibraryItem, ArtifactSharing } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import {
   ArrowLeft,
   ChevronDown,
@@ -31,8 +31,10 @@ import {
 } from "../../../shared/ui/menu.js";
 import { artifactOptions } from "../artifact-document-queries.js";
 import { OpenArtifact } from "../artifacts-view.js";
+import { ArtifactHostProvider } from "../editor/artifact-host.js";
 import {
   artifactLibraryItemOptions,
+  forgetLibraryArtifact,
   shareArtifactMutation,
 } from "./artifact-library-queries.js";
 import "./artifact-library.css";
@@ -208,7 +210,9 @@ function LibraryArtifactHeader({
 /**
  * `/artifacts/<id>`: any artifact the person may open, in the full editor,
  * wherever it lives. Someone who may not open it learns only that it is
- * not there. `presence` joins the artifact's Thread for live edits.
+ * not there. `presence` joins the artifact's Thread for live edits. No
+ * Thread composer is here, and a standalone artifact's home has no agent,
+ * so the editor offers neither Send to Thread nor, for one, the agent.
  */
 export function LibraryArtifactPage({
   artifactId,
@@ -218,6 +222,8 @@ export function LibraryArtifactPage({
   readonly presence: (threadId: ThreadId) => React.ReactNode;
 }) {
   const found = useQuery(artifactLibraryItemOptions(artifactId));
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
   if (found.data === undefined)
     return (
       <section className="library-artifact-page">
@@ -242,20 +248,33 @@ export function LibraryArtifactPage({
       </section>
     );
   const item = found.data;
+  const standalone = item.source.kind === "standalone";
   return (
     <section className="library-artifact-page" data-kind={item.kind}>
       {presence(item.threadId)}
-      <OpenArtifact
-        key={`${item.id}:${item.access}`}
-        threadId={item.threadId}
-        artifactId={item.id}
-        active
-        readOnly={item.access === "view"}
-        switcher={(extra) => (
-          <LibraryArtifactHeader item={item} extra={extra} />
-        )}
-        dictation={undefined}
-      />
+      <ArtifactHostProvider
+        value={{
+          agent: !standalone,
+          composer: false,
+          inThread: !standalone,
+          onDeleted: () => {
+            forgetLibraryArtifact(queryClient, item.id);
+            void navigate({ to: "/artifacts" });
+          },
+        }}
+      >
+        <OpenArtifact
+          key={`${item.id}:${item.access}`}
+          threadId={item.threadId}
+          artifactId={item.id}
+          active
+          readOnly={item.access === "view"}
+          switcher={(extra) => (
+            <LibraryArtifactHeader item={item} extra={extra} />
+          )}
+          dictation={undefined}
+        />
+      </ArtifactHostProvider>
     </section>
   );
 }

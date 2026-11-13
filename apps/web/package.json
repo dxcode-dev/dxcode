@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.112",
+  "version": "0.2.113",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -22,8 +22,8 @@
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
     "@excalidraw/excalidraw": "0.18.1",
-    "@flue/react": "file:../../third-party/flue/react-40ad547deb58ab7f9f80fa072e9d267079c30735.tgz",
-    "@flue/sdk": "file:../../third-party/flue/sdk-40ad547deb58ab7f9f80fa072e9d267079c30735.tgz",
+    "@flue/react": "file:../../third-party/flue/react-df4cbd8b7d96266906d9549ecac4e4d4290dbb00.tgz",
+    "@flue/sdk": "file:../../third-party/flue/sdk-df4cbd8b7d96266906d9549ecac4e4d4290dbb00.tgz",
     "@fontsource/dm-mono": "5.3.0",
     "@fontsource/dm-sans": "5.3.0",
     "@fontsource/ibm-plex-mono": "5.3.0",

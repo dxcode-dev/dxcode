@@ -27,6 +27,10 @@
     {
       "tag": "v2-flue-fixture-plan-agent",
       "new_sqlite_classes": ["FlueFixturePlanAgentAgent"]
+    },
+    {
+      "tag": "v3-flue-fixture-claude-code-agent",
+      "new_sqlite_classes": ["FlueFixtureClaudeCodeAgentAgent"]
     }
   ]
 }

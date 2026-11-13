@@ -23,17 +23,19 @@ export interface PersonItem {
 
 /**
  * Whom `@query` can mention: dx, then the Thread's people (its owner and its
- * members while it is shared) other than you, by name or username.
+ * members while it is shared) other than you, by name or username. `agent`
+ * false leaves dx out: a standalone artifact's home has no agent.
  */
 export const peopleItems = (
   query: string,
   members: ReadonlyArray<ThreadMemberData>,
   viewerId: string,
+  agent = true,
 ): ReadonlyArray<PersonItem> => {
   const wanted = query.toLowerCase();
-  const agent: PersonItem = { id: "agent", label: "dx", hint: "the agent" };
+  const dx: PersonItem = { id: "agent", label: "dx", hint: "the agent" };
   return [
-    ...(startsAWord("dx agent", wanted) ? [agent] : []),
+    ...(agent && startsAWord("dx agent", wanted) ? [dx] : []),
     ...members.flatMap((member) =>
       member.userId !== viewerId &&
       (startsAWord(member.name, wanted) ||
@@ -67,7 +69,8 @@ export const commentPeopleItems = (
   query: string,
   members: ReadonlyArray<ThreadMemberData>,
   viewerId: string,
+  agent = true,
 ): ReadonlyArray<PersonItem> => [
-  ...peopleItems(query, members, viewerId),
+  ...peopleItems(query, members, viewerId, agent),
   ...(startsAWord("here everyone", query.toLowerCase()) ? [HERE_ITEM] : []),
 ];

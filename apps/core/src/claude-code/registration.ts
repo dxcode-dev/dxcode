@@ -7,6 +7,7 @@ import { claudeCodeExecutor, executorSandbox } from "../executor/sandbox.js";
 import type { ClaudePlanAccess } from "./plan.js";
 import {
   type ClaudeCodeProviderDeps,
+  claudeCodeContextAttachments,
   createClaudeCodeProvider,
 } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
@@ -89,5 +90,8 @@ export const registerClaudeCodeProvider = (input: {
         return (await response.json<{ plan: ClaudePlanAccess }>()).plan;
       },
     }),
+    // Flue loads only the images Claude Code is sent: a long Thread's
+    // history of screenshots would not fit in the Durable Object.
+    { selectContextAttachments: claudeCodeContextAttachments },
   );
 };
