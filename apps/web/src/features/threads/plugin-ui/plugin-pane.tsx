@@ -15,6 +15,7 @@ import type { PluginPaneTab } from "../panes/pane-layout.js";
 import type { PluginPaneMenuProps } from "../panes/pane-views.js";
 import { pluginUiQueryOptions, threadQueryOptions } from "../thread-queries.js";
 import {
+  isPluginPaneGone,
   pluginPaneMessageMutationOptions,
   pluginPaneMessagesQueryOptions,
   pluginPaneViewQueryOptions,
@@ -86,8 +87,13 @@ function PluginPaneBody({
   const live = useQuery(pluginUiQueryOptions(threadId)).data?.panes?.find(
     (entry) => entry.plugin === tab.plugin && entry.pane === tab.pane,
   )?.live as PluginPaneLive | undefined;
-  // A failed refetch keeps the pane it already shows.
-  if (view.data === undefined && view.isError)
+  // A failed refetch keeps the pane it already shows, unless the pane is gone:
+  // then its view stops, so it no longer calls a plugin that was turned off
+  // or removed. A view that loads again after that (its plugin is back) shows.
+  const gone =
+    isPluginPaneGone(view.error) ||
+    (isPluginPaneGone(post.error) && post.submittedAt > view.dataUpdatedAt);
+  if (gone || (view.data === undefined && view.isError))
     return (
       <p className="plugin-pane-state" role="status">
         {tab.title} is not available in this Thread. Its plugin may be off or

@@ -6,7 +6,7 @@ import {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { mutationOptions, queryOptions } from "@tanstack/react-query";
-import { request } from "../../../shared/api/client.js";
+import { ApiError, request } from "../../../shared/api/client.js";
 import { pluginPaneMessagesKey } from "../thread-queries.js";
 
 /**
@@ -39,7 +39,7 @@ export const pluginPaneViewQueryOptions = (
         )
       ).data,
     staleTime: 30_000,
-    retry: 1,
+    retry: (failures, error) => !isPluginPaneGone(error) && failures < 1,
   });
 
 /** The pane's kept posts in the Thread, oldest first. */
@@ -62,6 +62,20 @@ export const pluginPaneMessagesQueryOptions = (
     staleTime: 30_000,
     retry: 1,
   });
+
+/**
+ * The pane is gone from the Thread: its plugin was turned off or removed, or
+ * no longer offers it. The pane stops its view instead of letting it keep
+ * calling a plugin that is not there.
+ */
+export class PluginPaneGoneError extends Error {
+  override readonly name = "PluginPaneGoneError";
+}
+
+/** Whether a pane request failed because the pane no longer exists. */
+export const isPluginPaneGone = (error: unknown) =>
+  error instanceof PluginPaneGoneError ||
+  (error instanceof ApiError && error.code === "PLUGIN_PANE_NOT_FOUND");
 
 const errorDetail = (error: unknown) =>
   error !== null &&
@@ -91,7 +105,16 @@ export const pluginPaneMessageMutationOptions = (
           )
         ).data.result;
       } catch (error) {
+        if (isPluginPaneGone(error))
+          throw new PluginPaneGoneError(errorDetail(error));
         throw new Error(errorDetail(error));
       }
+    },
+    // The pane is gone: reload its view, which then says so for good.
+    onError: (error, _message, _result, context) => {
+      if (isPluginPaneGone(error))
+        void context.client.invalidateQueries({
+          queryKey: pluginPaneViewQueryOptions(threadId, plugin, pane).queryKey,
+        });
     },
   });
