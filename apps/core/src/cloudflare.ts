@@ -14,6 +14,7 @@ import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
 import { installContentFreeFlueTracing } from "./observability/flue-tracing.js";
 import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-provider.js";
+import { dxContextAttachments } from "./runtime/context-attachments.js";
 import { classifyRunFailure, runRetryDelayMs } from "./runtime/run-failure.js";
 import { scheduled } from "./scheduled.js";
 import { createDxModelRoutingProvider } from "./settings/model-byok/flue-provider.js";
@@ -83,7 +84,9 @@ if (
   bindings.DX_LOCAL_MODEL_PREVIEW === "1" &&
   bindings.AI !== undefined
 ) {
-  setProvider(createDxCloudflareModelProvider(bindings.AI));
+  setProvider(createDxCloudflareModelProvider(bindings.AI), {
+    selectContextAttachments: dxContextAttachments,
+  });
 } else if (
   bindings.DX_RUNTIME_MODE !== "local" &&
   bindings.DB !== undefined &&

@@ -20,6 +20,7 @@ import {
   imageInfo,
 } from "../../plugins/execution/media/image.js";
 import { AGENT_RUN_LIMIT_MS } from "../../runtime/agent-run-limit.js";
+import { dxContextAttachments } from "../../runtime/context-attachments.js";
 import {
   classifyRunFailure,
   markRunFailure,
@@ -657,6 +658,8 @@ export const createDxModelRoutingProvider = (
     }) as Provider["streamSimple"],
   };
   const options: FlueProviderOptions = {
+    // Flue loads only the images a call can hold in the Durable Object.
+    selectContextAttachments: dxContextAttachments,
     resolveModel: async (
       specifier: { providerId: string; modelId: string },
       context: ModelResolutionContext,

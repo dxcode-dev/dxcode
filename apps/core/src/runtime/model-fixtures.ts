@@ -16,6 +16,7 @@ import {
 } from "@earendil-works/pi-ai/providers/faux";
 import { setProvider } from "@flue/runtime";
 import { Schema } from "effect";
+import { dxContextAttachments } from "./context-attachments.js";
 import { RICH_REPLY_TEXT } from "./model-fixture-rich-reply.js";
 import {
   LOCAL_MODEL_FIXTURE_MODEL,
@@ -332,5 +333,7 @@ export const createLocalModelFixtureProvider = () => {
 };
 
 export const registerLocalModelFixtureProvider = () => {
-  setProvider(createLocalModelFixtureProvider());
+  setProvider(createLocalModelFixtureProvider(), {
+    selectContextAttachments: dxContextAttachments,
+  });
 };

@@ -31,6 +31,10 @@
     {
       "tag": "v3-flue-fixture-claude-code-agent",
       "new_sqlite_classes": ["FlueFixtureClaudeCodeAgentAgent"]
+    },
+    {
+      "tag": "v4-flue-fixture-dx-history-agent",
+      "new_sqlite_classes": ["FlueFixtureDxHistoryAgentAgent"]
     }
   ]
 }
