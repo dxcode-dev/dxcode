@@ -3,6 +3,7 @@ import {
   type BoardDocument,
   boardElementLabel,
   boardFromText,
+  boardLayoutNotes,
   boardToText,
   liveBoardElements,
   parseBoard,
@@ -45,6 +46,11 @@ export interface ArtifactKindHandler {
   ) =>
     | { readonly ok: true; readonly body: string }
     | { readonly ok: false; readonly message: string };
+  /**
+   * What reads badly once drawn, which the agent's text cannot show it,
+   * such as a board's shapes on top of each other. Empty when nothing does.
+   */
+  readonly layoutNotes?: (body: string) => ReadonlyArray<string>;
   /**
    * Comments sit on quoted text (`quote`), or on a part of the artifact by
    * id (`target`), such as a board's shape.
@@ -90,6 +96,7 @@ const board: ArtifactKindHandler = {
       : parsed;
   },
   toText: (body) => boardToText(boardOf(body)),
+  layoutNotes: (body) => boardLayoutNotes(boardOf(body)),
   fromText: (text, current) => {
     const result = boardFromText(text, boardOf(current));
     return result.ok

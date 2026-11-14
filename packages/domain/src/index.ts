@@ -18,6 +18,7 @@ export {
 export {
   type BoardTextResult,
   boardFromText,
+  boardLayoutNotes,
   boardTextElementCount,
   boardToText,
 } from "./artifacts/board-text.js";

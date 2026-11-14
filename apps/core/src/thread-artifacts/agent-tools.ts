@@ -97,6 +97,71 @@ export const applyArtifactEdits = (
   return { ok: true, markdown: text };
 };
 
+/**
+ * Edits to a board's lines. Models copying a line into JSON often escape a
+ * label's `\n` twice, so an edit that matches nowhere is tried again with
+ * each doubled backslash read as one. When that matches nowhere either, the
+ * error shows the board's current line for each id the edit names.
+ */
+const applyBoardEdits = (
+  text: string,
+  edits: ReadonlyArray<{ readonly old_str: string; readonly new_str: string }>,
+): ReturnType<typeof applyArtifactEdits> => {
+  const applied = applyArtifactEdits(text, edits);
+  if (applied.ok) return applied;
+  const single = (value: string) => value.replaceAll("\\\\", "\\");
+  const retried = applyArtifactEdits(
+    text,
+    edits.map((edit) => ({
+      old_str: single(edit.old_str),
+      new_str: single(edit.new_str),
+    })),
+  );
+  if (retried.ok) return retried;
+  const lines = text.split("\n");
+  const current = [
+    ...new Set(
+      edits.flatMap(({ old_str }) =>
+        single(old_str)
+          .split("\n")
+          .filter((line) => !text.includes(line))
+          .flatMap((line) => {
+            const [kind, id] = line.trim().split(/\s+/);
+            const found = lines.find((candidate) =>
+              candidate.startsWith(`${kind} ${id} `),
+            );
+            return found === undefined ? [] : [found];
+          }),
+      ),
+    ),
+  ];
+  return current.length === 0
+    ? applied
+    : {
+        ok: false,
+        message: `${applied.message} The board's current line for each element the edit names:\n${current.join("\n")}`,
+      };
+};
+
+/**
+ * A title for an artifact created without one: a document's first heading,
+ * or a board's first text, else its first line.
+ */
+const fallbackTitle = (text: string, kind: string) => {
+  const lines = text.split("\n").map((line) => line.trim());
+  const found =
+    kind === "board"
+      ? lines
+          .map((line) => /^text\s+\S+\s+"((?:[^"\\]|\\.)*)"/.exec(line)?.[1])
+          .find((words) => words !== undefined)
+          ?.replaceAll("\\n", " ")
+          .replace(/\\(.)/g, "$1")
+      : (lines.find((line) => /^#{1,6}\s/.test(line)) ??
+        lines.find((line) => line !== ""));
+  const title = (found ?? "").replace(/^#{1,6}\s+/, "").trim();
+  return title === "" ? "Untitled" : title.slice(0, ARTIFACT_TITLE_MAX_LENGTH);
+};
+
 const isHeading = (line: string) => /^#{1,6}\s/.test(line);
 
 /**
@@ -313,7 +378,7 @@ const commentOperation = v.object({
 });
 
 const DESCRIPTION = [
-  "List, read, create, update, and delete artifacts: documents that belong to this Thread, which people open, edit, and comment on beside the conversation. A Thread holds any number of artifacts, grouped in folders. Write an artifact for what people will read: reports, notes, running records, plans for their review, and findings you combine from several child Threads. Keep your own working plans, scratch notes, screenshots, and data exports as files under `~/.dx/work/<topic>/` in the workspace, outside the repository, and answer one-off questions in your reply.",
+  'List, read, create, update, and delete artifacts: documents that belong to this Thread, which people open, edit, and comment on beside the conversation. A Thread holds any number of artifacts, grouped in folders. Write an artifact for what people will read: reports, notes, running records, plans for their review, and findings you combine from several child Threads. Keep your own working plans, scratch notes, screenshots, and data exports as files under `~/.dx/work/<topic>/` in the workspace, outside the repository, and answer one-off questions in your reply. For a diagram, flowchart, or sketch, create a drawing board (type "board"), described under Drawing boards below; load the drawing-boards skill before you draw or edit one.',
   "You read and write artifacts as Markdown: GitHub-flavored Markdown plus `- [ ]`/`- [x]` checklists; `@[Name](user:USER_ID)` mentions of people and `@[dx](agent)` of yourself; `{{date:YYYY-MM-DD}}` and `{{time:ISO_INSTANT}}` chips; `{{project:PROJECT_ID|Name}}` project chips; `{{dropdown:Todo|*Doing:blue|Done:green}}` chips, where `*` marks the selection and colors are gray, blue, green, yellow, red, and purple (inside a table cell, write each of a chip's `|` as `\\|`); and `{{toggle:key|Label}}`, a button each reader uses to show or hide the chips tagged with its key, as in `{{time#key:ISO_INSTANT}}`. A fenced `dx-view` block holding one self-contained HTML page renders as an interactive view; the creating-views skill explains how to write one. To show an image, store the file with `dxd files put <path>` in the workspace and write `![description](<printed url>)`; it stays with this Thread, so only people who can open it see it. People add images from the editor the same way. An artifact holds at most 2 MB of Markdown.",
   "Keep artifacts shallow, because people navigate them by hand. An artifact is one page: use headings for its sections, including parallel parts such as one per meeting or per option. Keep artifacts at the top level, and use a folder (one level, a single name) only to group several related artifacts. Before creating one, list the existing artifacts and extend a matching one instead of starting a parallel one.",
   "read returns at most 500 lines with the artifact's revision. When that is not the whole artifact, it adds an outline of the heading lines with their line numbers; start_line and end_line read other parts. It also returns the open comments and, when people saved changes after your last save, edited_by_people_since: a diff of what they changed.",
@@ -326,8 +391,9 @@ const DESCRIPTION = [
 ].join("\n\n");
 
 const BOARD_DESCRIPTION = [
-  'Drawing boards: create one with type "board" for a diagram, flowchart, sketch, or whiteboard people draw on with you. You read and write a board as text, one element per line, in the markdown field: `<kind> <id> "label" key=value …`, where the label and the keys are optional. Kinds: rect, ellipse, diamond, text (its words in quotes are required), arrow, line, frame (a labelled area), and freehand and image, which only people draw (their lines only move or resize them). Connect shapes with `arrow <id> <from_id> -> <to_id> "label"`, as in `arrow a1 cart -> pay "next"` (the id and the label may be left out); dx routes it. In a flowchart, draw steps as rect, decisions as diamond, and start or end as ellipse, each with its label in quotes; use text only for free notes. Keys: x, y, w, h (pixels; leave positions out for new shapes and dx lays them out below what is there, in rows following the arrows), fill and stroke (#rrggbb, fill=none), width (stroke width), dash (solid, dashed, dotted), rough (0 clean, 1 hand-drawn, 2 sketchy), opacity, font (hand, normal, code), size (font size), align (text), head and tail (arrowheads: arrow, triangle, dot, bar, none), points (a line\'s or unconnected arrow\'s points relative to x,y, as 0,0;120,40), frame (the id of the frame it sits in), link. An optional first line `board background=#rrggbb` sets the canvas color.',
-  "Writing a board back: a line read and written back unchanged changes nothing; a changed attribute changes that element; a line left out deletes its element; a new id creates one. Ids are letters, digits, _ and -. Keep the ids people's shapes have. Use edits (old_str/new_str on whole lines) for small changes. Comments on a board sit on a shape: add one with quote set to the shape's id. To show a board inside a document, put the board's link (create and read return it) on a line of its own in the document, as a Markdown link such as `[Checkout flow](link)`: people see the board's preview there and open it to edit.",
+  'Drawing boards: a board is a canvas people draw on with you. You read and write it as text in the markdown field, one element per line: `<kind> <id> "label" key=value …`, such as `rect login "Log in" x=0 y=0 w=180 h=80 fill=blue`. The id comes right after the kind; the label and the keys are optional, and a key is always written key=value. Kinds: rect, ellipse, diamond, text (a free note; its words in quotes are required), arrow, line, frame (a labelled area), and freehand and image, which only people draw (their lines only move or resize them). Connect shapes with `arrow <id> <from_id> -> <to_id> "label"`, as in `arrow a1 cart -> pay "next"`; the id and the label may be left out, and dx draws the arrow between the shapes\' outlines. Write a line break in a label as \\n. A shape\'s label wraps to the shape\'s width, and the shape grows taller when the wrapped label needs it.',
+  "Keys: x, y (the top-left corner, in pixels; y grows downward), w, h (shapes and frames only; text sizes to its words), fill and stroke (#rrggbb, or black, white, gray, red, pink, purple, blue, cyan, teal, green, yellow, orange; fill=none), width (stroke width), dash (solid, dashed, dotted), rough (0 clean, 1 hand-drawn, 2 sketchy), opacity, font (hand, normal, code), size (font size, 20 by default), align (text), head and tail (arrowheads: arrow, triangle, dot, bar, none), points (a line's or unconnected arrow's points relative to x,y, as 0,0;120,40), frame (the id of the frame it sits in; the frame hides what sticks out of it), link. Shapes written without x and y are laid out by dx below what is there, in rows following the arrows. An optional first line `board background=#rrggbb` sets the canvas color.",
+  "Writing a board back: a line read and written back unchanged changes nothing; a changed attribute changes that element; a line left out deletes its element; a new id creates one. Ids are letters, digits, _ and -. Keep the ids people's shapes have. Use edits (old_str/new_str on whole lines) for small changes. When create or update returns layout_notes, the board was saved but reads badly once drawn, such as shapes on top of each other or an arrow through a shape: fix each note with update. Comments on a board sit on a shape: add one with quote set to the shape's id. To show a board inside a document, put the board's link (create and read return it) on a line of its own in the document, as a Markdown link such as `[Checkout flow](link)`: people see the board's preview there and open it to edit.",
 ].join("\n\n");
 
 /**
@@ -424,7 +490,9 @@ export const createArtifactTools = (
         v.pipe(
           v.string(),
           v.maxLength(ARTIFACT_TITLE_MAX_LENGTH),
-          v.description("create: the title. update: a new title."),
+          v.description(
+            "create: the title; left out, the first heading, or a board's first text, names it. update: a new title.",
+          ),
         ),
       ),
       markdown: v.optional(
@@ -679,7 +747,7 @@ export const createArtifactTools = (
             { ...context.bindings, DB: context.db },
             {
               ownerUserId: (await ownerReader()).userId,
-              title: need(data.title, "title"),
+              title: data.title ?? fallbackTitle(data.markdown ?? "", kind),
               kind,
               markdown: body.body,
               writer,
@@ -696,7 +764,7 @@ export const createArtifactTools = (
           saved = settle(
             await createArtifact(context.bindings, {
               threadId: target,
-              title: need(data.title, "title"),
+              title: data.title ?? fallbackTitle(data.markdown ?? "", kind),
               kind,
               markdown: body.body,
               ...(data.folder === undefined ? {} : { folder: data.folder }),
@@ -732,7 +800,10 @@ export const createArtifactTools = (
           const currentText = handler.toText(current.markdown);
           let text = data.markdown ?? currentText;
           if (data.edits !== undefined) {
-            const applied = applyArtifactEdits(currentText, data.edits);
+            const applied =
+              current.artifact.kind === "board"
+                ? applyBoardEdits(currentText, data.edits)
+                : applyArtifactEdits(currentText, data.edits);
             if (!applied.ok) throw new Error(applied.message);
             text = applied.markdown;
           }
@@ -790,6 +861,12 @@ export const createArtifactTools = (
         if (context.waitUntil === undefined) await effects;
         else context.waitUntil(effects);
       }
+      // A board the agent just wrote: what would read badly once drawn.
+      const layoutNotes =
+        previous === undefined
+          ? []
+          : (artifactKind(saved.artifact.kind).layoutNotes?.(saved.markdown) ??
+            []);
       return {
         output: {
           saved: true,
@@ -804,6 +881,7 @@ export const createArtifactTools = (
           revision: saved.artifact.revision,
           size_bytes: saved.artifact.sizeBytes,
           ...(commentResults.length === 0 ? {} : { comments: commentResults }),
+          ...(layoutNotes.length === 0 ? {} : { layout_notes: layoutNotes }),
         },
       };
     },

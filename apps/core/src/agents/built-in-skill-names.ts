@@ -8,6 +8,7 @@ export const BUILT_IN_SKILL_NAMES = [
   "building-schedules",
   "building-skills",
   "creating-views",
+  "drawing-boards",
   "explaining-code",
   "orb-setup",
   "planning-work",

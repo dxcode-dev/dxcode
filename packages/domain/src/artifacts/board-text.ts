@@ -62,6 +62,46 @@ const DRAWN = new Set<Kind>(["freehand", "image"]);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const COLOR = /^(#[0-9a-fA-F]{3,8}|transparent)$/;
 
+/**
+ * Color names a model writes instead of a hex color, from the board
+ * editor's palette: a fill gets the light shade, a stroke the strong one.
+ */
+const NAMED_COLORS: Record<string, { fill: string; stroke: string }> = {
+  black: { fill: "#1e1e1e", stroke: "#1e1e1e" },
+  white: { fill: "#ffffff", stroke: "#ffffff" },
+  gray: { fill: "#e9ecef", stroke: "#868e96" },
+  grey: { fill: "#e9ecef", stroke: "#868e96" },
+  red: { fill: "#ffc9c9", stroke: "#e03131" },
+  pink: { fill: "#fcc2d7", stroke: "#c2255c" },
+  purple: { fill: "#d0bfff", stroke: "#6741d9" },
+  blue: { fill: "#a5d8ff", stroke: "#1971c2" },
+  cyan: { fill: "#99e9f2", stroke: "#0c8599" },
+  teal: { fill: "#96f2d7", stroke: "#099268" },
+  green: { fill: "#b2f2bb", stroke: "#2f9e44" },
+  yellow: { fill: "#ffec99", stroke: "#f08c00" },
+  orange: { fill: "#ffd8a8", stroke: "#e8590c" },
+};
+
+/**
+ * A palette color's name, so a board reads back as the agent wrote it:
+ * `fill=green` reads as `fill=green`, not as its hex value.
+ */
+const COLOR_NAME: Record<"fill" | "stroke", ReadonlyMap<string, string>> = {
+  fill: new Map(
+    Object.entries(NAMED_COLORS)
+      .reverse()
+      .map(([name, { fill }]) => [fill, name]),
+  ),
+  stroke: new Map(
+    Object.entries(NAMED_COLORS)
+      .reverse()
+      .map(([name, { stroke }]) => [stroke, name]),
+  ),
+};
+
+/** A shape line to copy, shown in errors about a line's shape. */
+const LINE_EXAMPLE = 'rect login "Log in" x=0 y=0 w=180 h=80';
+
 const DEFAULT_STROKE = "#1e1e1e";
 const DEFAULT_FONT_SIZE = 20;
 const FONT_FAMILY = { hand: 5, normal: 6, code: 8 } as const;
@@ -88,6 +128,10 @@ const labelOf = (board: BoardDocument, element: BoardElement) =>
       !candidate.isDeleted &&
       candidate.type === "text",
   );
+
+/** A label's words as written, before the editor wrapped them to fit. */
+const labelWords = (label: BoardElement | undefined) =>
+  label === undefined ? undefined : (label.originalText ?? label.text);
 
 interface Attribute {
   readonly key: string;
@@ -367,7 +411,7 @@ const lineFor = (board: BoardDocument, element: BoardElement) => {
       : kind === "frame"
         ? (element.name ?? undefined)
         : SHAPES.has(kind) || kind === "arrow"
-          ? labelOf(board, element)?.text
+          ? labelWords(labelOf(board, element))
           : undefined;
   if (
     label !== undefined &&
@@ -377,7 +421,12 @@ const lineFor = (board: BoardDocument, element: BoardElement) => {
     parts.push(quote(label));
   for (const key of shownAttributes(element, kind)) {
     const text = ATTRIBUTES[key]?.read(element, board);
-    if (text !== undefined) parts.push(`${key}=${value(text)}`);
+    if (text === undefined) continue;
+    const named =
+      key === "fill" || key === "stroke"
+        ? COLOR_NAME[key].get(text.toLowerCase())
+        : undefined;
+    parts.push(`${key}=${named ?? value(text)}`);
   }
   return parts.join(" ");
 };
@@ -486,19 +535,35 @@ const parseLine = (
   if (trimmed === "" || trimmed.startsWith("//")) return undefined;
   const written = tokenize(trimmed);
   if (typeof written === "string") return { error: written };
-  // `arrow a -> b`, without an id: named after its ends.
-  const autoId =
-    written[0]?.text === "arrow" &&
-    written[2]?.kind === "word" &&
-    written[2].text === "->" &&
-    written[1]?.kind === "word" &&
-    written[3]?.kind === "word";
+  // `arrow a -> b` or `arrow from=a to=b`, without an id: named after its
+  // ends.
+  const arrowEnd = (key: string) =>
+    written
+      .find(
+        (token) => token.kind === "word" && token.text.startsWith(`${key}=`),
+      )
+      ?.text.slice(key.length + 1);
+  const arrowEnds =
+    written[0]?.text !== "arrow"
+      ? undefined
+      : written[2]?.kind === "word" &&
+          written[2].text === "->" &&
+          written[1]?.kind === "word" &&
+          written[3]?.kind === "word"
+        ? [written[1].text, written[3].text]
+        : written[1]?.kind === "word" &&
+            /^(from|to)=/.test(written[1].text) &&
+            arrowEnd("from") !== undefined &&
+            arrowEnd("to") !== undefined
+          ? [arrowEnd("from"), arrowEnd("to")]
+          : undefined;
+  const autoId = arrowEnds !== undefined;
   const tokens: Token[] = autoId
     ? [
         written[0] as Token,
         {
           kind: "word",
-          text: `${written[1]?.text}-to-${written[3]?.text}`.slice(0, 60),
+          text: `${arrowEnds[0]}-to-${arrowEnds[1]}`.slice(0, 60),
         },
         ...written.slice(1),
       ]
@@ -506,12 +571,12 @@ const parseLine = (
   const [kindToken, idToken, ...rest] = tokens;
   if (kindToken === undefined || !(kindToken.text in KIND_TYPE))
     return {
-      error: `starts with "${kindToken?.text ?? ""}"; a line starts with one of ${Object.keys(KIND_TYPE).join(", ")}`,
+      error: `starts with "${kindToken?.text ?? ""}"; a line starts with one of ${Object.keys(KIND_TYPE).join(", ")}, then an id, as in ${LINE_EXAMPLE}`,
     };
   const kind = kindToken.text as Kind;
   if (idToken?.kind !== "word" || !ID.test(idToken.text))
     return {
-      error: "needs an id after the kind: letters, digits, _ and -, at most 64",
+      error: `needs an id after the kind: letters, digits, _ and -, at most 64, as in ${LINE_EXAMPLE}`,
     };
   let from: string | undefined;
   let to: string | undefined;
@@ -538,10 +603,15 @@ const parseLine = (
     const equals = token.text.indexOf("=");
     if (equals <= 0)
       return {
-        error: `has "${token.text}" where a key=value or a "quoted label" goes`,
+        error: `has "${token.text}" where a key=value or a "quoted label" goes; write positions and sizes as keys, as in ${LINE_EXAMPLE}`,
       };
     const key = token.text.slice(0, equals);
-    const text = token.text.slice(equals + 1);
+    const given = token.text.slice(equals + 1);
+    const named =
+      key === "fill" || key === "stroke"
+        ? NAMED_COLORS[given.toLowerCase()]?.[key]
+        : undefined;
+    const text = named ?? given;
     if (key === "from" || key === "to") {
       if (kind !== "arrow") return { error: `${key}= is for arrows` };
       if (!ID.test(text)) return { error: `${key}= needs a shape id` };
@@ -559,7 +629,13 @@ const parseLine = (
       !attribute.check(text) ||
       (key === "points" && (kind === "freehand") !== /^\d+$/.test(text))
     )
-      return { error: `has an invalid ${key}: "${text}"` };
+      return {
+        error: `has an invalid ${key}: "${text}"${
+          key === "fill" || key === "stroke"
+            ? `; write #rrggbb or one of ${Object.keys(NAMED_COLORS).join(", ")}${key === "fill" ? ", none" : ""}`
+            : ""
+        }`,
+      };
     attributes.set(key, text);
   }
   if (kind === "text" && label === undefined)
@@ -644,6 +720,116 @@ const measure = (text: string, fontSize: number) => {
   return {
     width: Math.ceil(longest * fontSize * 0.55) + 4,
     height: Math.ceil(lines.length * fontSize * LINE_HEIGHT),
+  };
+};
+
+/** Space the editor keeps between a shape's outline and its label. */
+const LABEL_PADDING = 5;
+
+/**
+ * The label broken into lines of at most `perLine` characters, at word
+ * boundaries, as the editor wraps a label wider than its shape; a longer
+ * word keeps a line of its own. Each line the agent wrote stays a line.
+ */
+const wrapLabel = (text: string, perLine: number) =>
+  text
+    .split("\n")
+    .flatMap((written) => {
+      const lines: string[] = [];
+      let current = "";
+      for (const word of written.split(" ")) {
+        const joined = current === "" ? word : `${current} ${word}`;
+        if (current === "" || [...joined].length <= perLine) current = joined;
+        else {
+          lines.push(current);
+          current = word;
+        }
+      }
+      lines.push(current);
+      return lines;
+    })
+    .join("\n");
+
+/**
+ * How much of the shape's inside a label of this size takes: at most 1 when
+ * it fits. A rectangle holds the box; a diamond or ellipse holds it when its
+ * corners stay inside the outline.
+ */
+const labelShare = (
+  type: string,
+  inside: { width: number; height: number },
+  label: { width: number; height: number },
+) => {
+  const across = label.width / inside.width;
+  const down = label.height / inside.height;
+  return type === "diamond"
+    ? across + down
+    : type === "ellipse"
+      ? Math.hypot(across, down)
+      : Math.max(across, down);
+};
+
+/**
+ * A shape's label wrapped to fit inside it, with the fewest lines that fit,
+ * and the height the shape needs when no wrapping fits its height.
+ */
+const fitLabelIn = (
+  container: BoardElement,
+  label: string,
+  fontSize: number,
+) => {
+  const inside = {
+    width: Math.max(1, container.width - LABEL_PADDING * 2),
+    height: Math.max(1, container.height - LABEL_PADDING * 2),
+  };
+  const lines = label.split("\n");
+  const longest = Math.max(1, ...lines.map((line) => [...line].length));
+  const longestWord = Math.max(
+    1,
+    ...lines.flatMap((line) => line.split(" ").map((word) => [...word].length)),
+  );
+  // measure() guesses wide on purpose; the editor's font averages about
+  // 0.48 of its size per character, so fitting uses a closer guess.
+  const charWidth = fontSize * 0.5;
+  const fitted = (text: string) => {
+    const size = measure(text, fontSize);
+    return { width: (size.width * 0.5) / 0.55, height: size.height };
+  };
+  // Wider than this, a line can never fit across the shape.
+  const widest = Math.max(
+    1,
+    Math.floor(
+      (inside.width *
+        (container.type === "diamond"
+          ? 0.6
+          : container.type === "ellipse"
+            ? 0.75
+            : 1) -
+        4) /
+        charWidth,
+    ),
+  );
+  // Fewest lines that fit, breaking only between words.
+  const narrowest = Math.max(longestWord, Math.min(widest, longest));
+  for (let perLine = longest; perLine >= narrowest; perLine--) {
+    const text = wrapLabel(label, perLine);
+    if (labelShare(container.type, inside, fitted(text)) <= 1)
+      return { text, size: measure(text, fontSize), height: container.height };
+  }
+  const text = wrapLabel(label, narrowest);
+  const size = measure(text, fontSize);
+  const close = fitted(text);
+  const across = Math.min(0.9, close.width / inside.width);
+  const needed =
+    container.type === "diamond"
+      ? close.height / (1 - across)
+      : container.type === "ellipse"
+        ? close.height / Math.sqrt(1 - across * across)
+        : close.height + 16;
+  return {
+    text,
+    size,
+    height: Math.max(container.height, Math.ceil(needed + LABEL_PADDING * 2)),
   };
 };
 
@@ -1166,35 +1352,57 @@ export const boardFromText = (
       continue;
     }
     const fields = textFields(line.attributes, current);
+    // A shape's label wraps to the shape's width, and the shape grows
+    // taller when the wrapped label needs it; an arrow's stays as written.
+    // Only a new or changed label or shape is fitted, so a line written
+    // back as read changes nothing.
+    const refit =
+      current === undefined ||
+      labelWords(current) !== wanted ||
+      current.fontFamily !== fields.fontFamily ||
+      current.fontSize !== fields.fontSize ||
+      geometryChanged.has(line.id);
+    if (!refit) continue;
+    const fitted = SHAPES.has(line.kind)
+      ? fitLabelIn(container, wanted, fields.fontSize)
+      : undefined;
+    if (fitted !== undefined && fitted.height !== container.height)
+      set(
+        changed.has(container.id)
+          ? { ...container, height: fitted.height }
+          : touched(container, { height: fitted.height }),
+      );
+    const shown = fitted?.text ?? wanted;
     if (current === undefined) {
       const id = elements.has(`${line.id}-label`)
         ? randomId()
         : `${line.id}-label`;
-      set(
-        newText(id, wanted, {
+      set({
+        ...newText(id, shown, {
           ...fields,
           containerId: line.id,
           textAlign: "center",
         }),
-      );
-      geometryChanged.add(line.id);
+        originalText: wanted,
+      });
     } else if (
-      current.text !== wanted ||
+      current.text !== shown ||
+      labelWords(current) !== wanted ||
       current.fontFamily !== fields.fontFamily ||
       current.fontSize !== fields.fontSize
     ) {
-      const size = measure(wanted, fields.fontSize);
+      const size = measure(shown, fields.fontSize);
       set(
         touched(current, {
-          text: wanted,
+          text: shown,
           originalText: wanted,
           ...fields,
           width: size.width,
           height: size.height,
         }),
       );
-      geometryChanged.add(line.id);
     }
+    geometryChanged.add(line.id);
   }
 
   // Arrows: bind each to its ends and re-route those whose ends moved.
@@ -1227,6 +1435,8 @@ export const boardFromText = (
         elbowed: false,
       }),
     );
+    // Its label follows it to the new middle.
+    geometryChanged.add(line.id);
   }
 
   // Each label sits centered in its container.
@@ -1305,3 +1515,180 @@ export const boardFromText = (
 /** The elements text shows, so callers can count them. */
 export const boardTextElementCount = (board: BoardDocument) =>
   liveBoardElements(board).filter((element) => listed(board, element)).length;
+
+// ---------------------------------------------------------------- checking
+
+interface Box {
+  readonly x: number;
+  readonly y: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+const overlapArea = (a: Box, b: Box) =>
+  Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) *
+  Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+
+/** Whether the segment from p to q passes through the box's inside. */
+const crosses = (
+  p: { x: number; y: number },
+  q: { x: number; y: number },
+  box: Box,
+) => {
+  const inset = 6;
+  let low = 0;
+  let high = 1;
+  const dx = q.x - p.x;
+  const dy = q.y - p.y;
+  for (const [delta, distance] of [
+    [-dx, p.x - (box.x + inset)],
+    [dx, box.x + box.width - inset - p.x],
+    [-dy, p.y - (box.y + inset)],
+    [dy, box.y + box.height - inset - p.y],
+  ] as const) {
+    if (delta === 0) {
+      if (distance < 0) return false;
+      continue;
+    }
+    const t = distance / delta;
+    if (delta < 0) low = Math.max(low, t);
+    else high = Math.min(high, t);
+    if (low > high) return false;
+  }
+  return true;
+};
+
+const MAX_LAYOUT_NOTES = 12;
+
+/**
+ * What would read badly on the drawn board, which the agent writing text
+ * cannot see: shapes on top of each other, arrows through shapes, arrow
+ * labels over shapes, and shapes sticking out of their frame. Each note
+ * names the ids to move. Empty when nothing reads badly.
+ */
+export const boardLayoutNotes = (board: BoardDocument): string[] => {
+  const live = liveBoardElements(board);
+  const shapes = live.filter((element) => {
+    const kind = kindOf(element);
+    return (
+      kind !== undefined &&
+      (SHAPES.has(kind) || (kind === "text" && element.containerId == null))
+    );
+  });
+  const notes: string[] = [];
+  const note = (text: string) => {
+    if (notes.length < MAX_LAYOUT_NOTES) notes.push(text);
+  };
+  for (const [index, a] of shapes.entries())
+    for (const b of shapes.slice(index + 1)) {
+      const area = overlapArea(a, b);
+      if (area > 0.1 * Math.min(a.width * a.height, b.width * b.height))
+        note(`${a.id} and ${b.id} overlap; move one of them`);
+    }
+  for (const arrow of live) {
+    if (arrow.type !== "arrow" || (arrow.points?.length ?? 0) < 2) continue;
+    const points = arrow.points as ReadonlyArray<BoardPoint>;
+    const ends = new Set(
+      [arrow.startBinding?.elementId, arrow.endBinding?.elementId].filter(
+        (id) => id != null,
+      ),
+    );
+    for (let index = 1; index < points.length; index++) {
+      const [px, py] = points[index - 1] as BoardPoint;
+      const [qx, qy] = points[index] as BoardPoint;
+      const through = shapes.find(
+        (shape) =>
+          !ends.has(shape.id) &&
+          crosses(
+            { x: arrow.x + px, y: arrow.y + py },
+            { x: arrow.x + qx, y: arrow.y + qy },
+            shape,
+          ),
+      );
+      if (through !== undefined) {
+        note(
+          `arrow ${arrow.id} passes through ${through.id}; move ${through.id} or the arrow's ends so the straight line between them is clear`,
+        );
+        break;
+      }
+    }
+    const label = labelOf(board, arrow);
+    if (label === undefined || label.text === "") continue;
+    const on = shapes.find(
+      (shape) => overlapArea(label, shape) > 0 && shape.id !== label.id,
+    );
+    const [sx, sy] = points[0] as BoardPoint;
+    const [ex, ey] = points.at(-1) as BoardPoint;
+    const length = Math.hypot(ex - sx, ey - sy);
+    // The room the label takes along the arrow, plus a little line each side.
+    const needed = Math.ceil(
+      (Math.abs(ex - sx) * label.width + Math.abs(ey - sy) * label.height) /
+        Math.max(length, 1) +
+        40,
+    );
+    const room = `the arrow is ${Math.round(length)}px long and its label needs about ${needed}px, so move ${[...ends].join(" and ")} about ${Math.max(20, needed - Math.round(length))}px further apart or shorten the label`;
+    const short = needed - 40 > length + 8;
+    if (on !== undefined)
+      note(
+        `arrow ${arrow.id}'s label ${quote(labelWords(label) ?? "")} sits on ${on.id}; ${
+          short
+            ? room
+            : `the label sits at the arrow's middle, so move ${on.id} off the line between ${[...ends].join(" and ")}`
+        }`,
+      );
+    else if (short)
+      note(
+        `arrow ${arrow.id}'s label ${quote(labelWords(label) ?? "")} is longer than the arrow; ${room}`,
+      );
+  }
+  const arrows = live.filter(
+    (element) =>
+      element.type === "arrow" &&
+      element.startBinding != null &&
+      element.endBinding != null,
+  );
+  for (const [index, a] of arrows.entries())
+    for (const b of arrows.slice(index + 1)) {
+      const ends = (arrow: BoardElement) =>
+        [arrow.startBinding?.elementId, arrow.endBinding?.elementId]
+          .sort()
+          .join(" ");
+      if (ends(a) === ends(b))
+        note(
+          `arrows ${a.id} and ${b.id} both join ${ends(a).replace(" ", " and ")} and are drawn on top of each other; keep one, or send one through another step`,
+        );
+      else {
+        const first = labelOf(board, a);
+        const second = labelOf(board, b);
+        if (
+          first !== undefined &&
+          second !== undefined &&
+          overlapArea(first, second) > 0
+        )
+          note(
+            `the labels of arrows ${a.id} and ${b.id} overlap; move their shapes apart or shorten a label`,
+          );
+      }
+    }
+  const frames = live.filter((element) => element.type === "frame");
+  const frameBox = (frame: BoardElement) =>
+    `(x=${round(frame.x)} y=${round(frame.y)} w=${round(frame.width)} h=${round(frame.height)})`;
+  for (const element of shapes)
+    for (const frame of frames) {
+      const inside =
+        element.x >= frame.x &&
+        element.y >= frame.y &&
+        element.x + element.width <= frame.x + frame.width &&
+        element.y + element.height <= frame.y + frame.height;
+      if (inside) continue;
+      if (element.frameId === frame.id)
+        note(
+          `${element.id} sticks out of frame ${frame.id} ${frameBox(frame)}; the frame hides what is outside it, so move ${element.id} in or make the frame bigger`,
+        );
+      else if (overlapArea(element, frame) > 0)
+        note(
+          `${element.id} crosses the border of frame ${frame.id} ${frameBox(frame)}; move it fully inside (and set frame=${frame.id}) or fully outside, or resize the frame`,
+        );
+    }
+  return notes;
+};

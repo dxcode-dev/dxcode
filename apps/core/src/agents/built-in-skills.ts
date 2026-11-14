@@ -18,6 +18,7 @@ import buildingSchedules from "./built-in-skills/building-schedules/skill.md?raw
 import buildingSkills from "./built-in-skills/building-skills/skill.md?raw";
 import creatingViewsPreview from "./built-in-skills/creating-views/scripts/preview.mjs?raw";
 import creatingViews from "./built-in-skills/creating-views/skill.md?raw";
+import drawingBoards from "./built-in-skills/drawing-boards/skill.md?raw";
 import explainingCode from "./built-in-skills/explaining-code/skill.md?raw";
 import orbSetup from "./built-in-skills/orb-setup/skill.md?raw";
 import planningWork from "./built-in-skills/planning-work/skill.md?raw";
@@ -89,6 +90,7 @@ const sources: ReadonlyArray<{
       "scripts/kit/icons.svg": viewIcons,
     },
   },
+  { name: "drawing-boards", files: { "SKILL.md": drawingBoards } },
   { name: "explaining-code", files: { "SKILL.md": explainingCode } },
   { name: "orb-setup", files: { "SKILL.md": orbSetup } },
   { name: "planning-work", files: { "SKILL.md": planningWork } },

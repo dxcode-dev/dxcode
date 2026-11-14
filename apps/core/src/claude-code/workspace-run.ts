@@ -156,6 +156,10 @@ const CLI_ENVIRONMENT = {
   // A dx tool may run as long as the turn; the dx MCP server bounds the wait.
   MCP_TOOL_TIMEOUT: String(31 * 60_000),
   MCP_TIMEOUT: "30000",
+  // Claude Code cuts an MCP tool's description at 4096 characters by
+  // default. Several dx tools describe more than that (artifact's board
+  // format sits past it), so a cut would hide part of their contract.
+  CLAUDE_CODE_MAX_MCP_DESCRIPTION_LENGTH: "32768",
 };
 
 /**
