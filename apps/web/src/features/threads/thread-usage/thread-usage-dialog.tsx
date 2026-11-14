@@ -36,11 +36,13 @@ import { settingsContextQueryOptions } from "../../settings/settings-context-que
 import {
   byokSentence,
   formatCount,
+  formatInputBreakdown,
   formatPercent,
   formatUsd,
   formatUsdMills,
   routeKindTitle,
   routingSource,
+  totalInput,
 } from "./thread-usage-format.js";
 import { OrbMetricsCard } from "./thread-usage-metrics.js";
 import { threadUsageQueryOptions } from "./thread-usage-queries.js";
@@ -48,7 +50,7 @@ import { ModelsCard, ToolsCard } from "./thread-usage-tables.js";
 import "./thread-usage.css";
 
 const COST_INFO =
-  "Model costs are estimates at list prices. Orb time is what this deployment charged in credits, or the Orb provider's list price.";
+  "Model costs are estimates at list prices. A cache write is a cache miss, billed above uncached input; only cache reads count as cached. Orb time is what this deployment charged in credits, or the Orb provider's list price.";
 const LIST_PRICE_INFO =
   "What these tokens cost at the model's list price. The connection's provider bills the actual amount.";
 const BYOK_LABEL = "Include bring-your-own-key inference at list price";
@@ -183,8 +185,13 @@ function CostCard({ data }: { readonly data: ThreadUsageData }) {
   ]
     .filter((part) => part !== undefined)
     .join(" ");
-  const cached = data.tokens.cacheRead + data.tokens.cacheWrite;
-  const input = data.tokens.input + cached;
+  const inputParts = {
+    uncached: data.tokens.input,
+    cacheWrite: data.tokens.cacheWrite,
+    cacheRead: data.tokens.cacheRead,
+  };
+  const input = totalInput(inputParts);
+  const breakdown = formatInputBreakdown(inputParts);
   const models = [
     ...new Set(data.models.map((model) => modelDisplayName(model.modelName))),
   ];
@@ -232,10 +239,12 @@ function CostCard({ data }: { readonly data: ThreadUsageData }) {
           <dd>{formatCount(input + data.tokens.output)}</dd>
           <dd>
             {`${formatCount(input)} input + ${formatCount(data.tokens.output)} output`}
-            {input === 0
-              ? null
-              : ` (${formatPercent(cached, input)}% of input cached)`}
           </dd>
+          {breakdown === undefined ? null : (
+            <dd>
+              {`${breakdown} (${formatPercent(data.tokens.cacheRead, input)}% read from cache)`}
+            </dd>
+          )}
         </div>
         <div className="thread-usage-stat">
           <dt>Requests</dt>

@@ -540,6 +540,13 @@
 }
 
 /* A phone: a bottom sheet that scrolls inside. */
+/* An input's uncached, cache-write, and cache-read parts, under its total. */
+.thread-usage-cached {
+  display: block;
+  color: var(--muted-foreground);
+  font-size: var(--text-2xs);
+}
+
 @media (max-width: 640px) {
   .modal-surface-viewport:has(> .thread-usage-dialog) {
     place-items: end center;
@@ -596,12 +603,9 @@
   .thread-usage-table :is(th, td):last-child {
     padding-right: var(--space-2-5);
   }
-  /* The cached share may wrap too: kept on one line, it set the column's
+  /* The input breakdown may wrap too: kept on one line, it set the column's
      width and pushed the table past a phone's edge in wider fonts. */
   .thread-usage-cached {
-    display: block;
-    color: var(--muted-foreground);
-    font-size: var(--text-2xs);
     white-space: normal;
   }
   .thread-usage-models td:nth-child(2) {

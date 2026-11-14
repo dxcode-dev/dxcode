@@ -3,7 +3,9 @@
  * real queries and schemas, in the app's own styles. Ways it could fail,
  * each covered below:
  *   1. Totals, tokens, or the cached share add up wrong, or the BYOK
- *      sentence names the wrong scope or kind.
+ *      sentence names the wrong scope or kind. A cache write is a cache
+ *      miss: counting it as cached showed a Thread's first turn, and a turn
+ *      after the cache expired, as 100% cached.
  *   2. A route's source line links to the wrong settings, or a deployment
  *      route links anywhere.
  *   3. A model's requests or the Orb's sessions are read before their row
@@ -271,7 +273,7 @@ const metricsOf = (disk: boolean) =>
   });
 
 /** Answers the dialog's reads and records each URL it asked for. */
-const serve = (summary: typeof usage, disk = true) => {
+const serve = (summary: typeof usage, disk = true, pages = requestPages) => {
   const metrics =
     summary.orb === null
       ? { orbId: null, samples: [], memory: null }
@@ -288,8 +290,8 @@ const serve = (summary: typeof usage, disk = true) => {
       ? Schema.encodeSync(ThreadUsageDataSchema)(summary)
       : path.endsWith("/usage/requests")
         ? url.searchParams.has("cursor")
-          ? requestPages.second
-          : requestPages.first
+          ? pages.second
+          : pages.first
         : path.endsWith("/usage/orb-sessions")
           ? sessions
           : path.endsWith("/usage/orb-metrics")
@@ -405,7 +407,7 @@ describe("Thread Usage", () => {
       ...(cost?.querySelectorAll<HTMLElement>(".thread-usage-stat") ?? []),
     ].map((stat) => stat.textContent);
     expect(stats).toEqual([
-      "Total Tokens492,057491,412 input + 645 output (92.5% of input cached)",
+      "Total Tokens492,057491,412 input + 645 output36,856 uncached · 0 cache write · 454,556 cache read (92.5% read from cache)",
       "Requests18",
       "Models2GPT-5.6 Luna, Clef Flash",
     ]);
@@ -438,7 +440,7 @@ describe("Thread Usage", () => {
       [
         "",
         "GPT-5.6 Lunaopenai/gpt-5.6-luna16 requests",
-        "490,556",
+        "490,55636,000 uncached · 0 cache write · 454,556 cache read",
         "600",
         "$0",
         "$0.02",
@@ -507,6 +509,142 @@ describe("Thread Usage", () => {
     ).toEqual([]);
   });
 
+  it("counts cache writes as misses: a first turn and a resumed turn are not cached", async () => {
+    // Real production requests, Claude Opus 5.5 on the
+    // Anthropic API: a Thread's first turn (thr_41dc94a4), its next turn,
+    // and a turn 103 minutes after the last (thr_c752b9f3), when the 5-minute
+    // cache had expired. Anthropic's input_tokens leaves out both cache
+    // reads and cache writes.
+    const turns = [
+      {
+        at: "2026-11-13T10:19:34.727Z",
+        input: 4,
+        read: 0,
+        write: 284_026,
+        output: 978,
+        micros: 1_439_706,
+      },
+      {
+        at: "2026-11-13T10:54:42.736Z",
+        input: 2,
+        read: 36_765,
+        write: 6_780,
+        output: 199,
+        micros: 45_241,
+      },
+      {
+        at: "2026-11-13T10:54:39.416Z",
+        input: 4,
+        read: 0,
+        write: 36_765,
+        output: 195,
+        micros: 187_741,
+      },
+    ];
+    const anthropic = Schema.decodeUnknownSync(ThreadUsageDataSchema)({
+      ...Schema.encodeSync(ThreadUsageDataSchema)(usage),
+      totalMicros: 1_672_688,
+      byokListPriceMicros: 0,
+      creditsMicros: 0,
+      listPriceMicros: 1_672_688,
+      tokens: {
+        input: 10,
+        cacheRead: 36_765,
+        cacheWrite: 327_571,
+        output: 1_372,
+      },
+      requests: 3,
+      routes: [
+        {
+          connectionId: "deployment",
+          name: "Anthropic",
+          kind: "deployment",
+          scope: null,
+          ownerName: null,
+          requests: 3,
+          listPriceMicros: 1_672_688,
+        },
+      ],
+      models: [
+        {
+          providerId: "anthropic",
+          modelId: "claude-opus-5-5",
+          modelName: "Claude Opus 5.5",
+          requests: 3,
+          inputTokens: 10,
+          cacheReadTokens: 36_765,
+          cacheWriteTokens: 327_571,
+          outputTokens: 1_372,
+          dxCostMicros: 1_672_688,
+          listPriceMicros: 1_672_688,
+          unpricedRequests: 0,
+        },
+      ],
+      orb: null,
+    });
+    serve(anthropic, true, {
+      first: Schema.decodeUnknownSync(ThreadUsageRequestsDataSchema)({
+        requests: turns.map((turn, index) => ({
+          id: `req_${index}`,
+          occurredAt: turn.at,
+          purpose: "agent",
+          outcome: "success",
+          routeName: "Anthropic",
+          inputTokens: turn.input,
+          cacheReadTokens: turn.read,
+          cacheWriteTokens: turn.write,
+          outputTokens: turn.output,
+          dxCostMicros: turn.micros,
+          listPriceMicros: turn.micros,
+        })),
+        nextCursor: null,
+      }),
+      second: requestPages.second,
+    });
+    await openDialog(anthropic);
+
+    // 36,765 of 364,346 input tokens were read from the cache: 10.1%.
+    const stats = [
+      ...(card("Cost")?.querySelectorAll<HTMLElement>(".thread-usage-stat") ??
+        []),
+    ].map((stat) => stat.textContent);
+    expect(stats[0]).toBe(
+      "Total Tokens365,718364,346 input + 1,372 output10 uncached · 327,571 cache write · 36,765 cache read (10.1% read from cache)",
+    );
+
+    const models = card("By Model");
+    const cells = (row: HTMLElement | null | undefined) =>
+      [...(row?.querySelectorAll("td") ?? [])].map((cell) => cell.textContent);
+    expect(cells(models?.querySelector("tbody > tr"))[2]).toBe(
+      "364,34610 uncached · 327,571 cache write · 36,765 cache read",
+    );
+    await React.act(() => button("Expand Claude Opus 5.5")?.click());
+    await vi.waitFor(() => expect(detailRows(models)).toHaveLength(3));
+    expect(detailRows(models).map((row) => cells(row).slice(2))).toEqual([
+      // Resumed after the cache expired: all of it written again.
+      [
+        "284,0304 uncached · 284,026 cache write · 0 cache read",
+        "978",
+        "$1.44",
+        "$1.44",
+      ],
+      // The next turn reads what the first wrote.
+      [
+        "43,5472 uncached · 6,780 cache write · 36,765 cache read",
+        "199",
+        "$0.05",
+        "$0.05",
+      ],
+      // The Thread's first turn: nothing cached yet.
+      [
+        "36,7694 uncached · 36,765 cache write · 0 cache read",
+        "195",
+        "$0.19",
+        "$0.19",
+      ],
+    ]);
+  });
+
   it("reads a model's requests when its row opens, a page at a time", async () => {
     const urls = serve(usage);
     await openDialog();
@@ -524,7 +662,7 @@ describe("Thread Usage", () => {
       /^Nov 10, \d\d:\d\d:19\.822\s(AM|PM)AgentVia Acme OpenAI$/,
     );
     expect(cells(first).slice(2)).toEqual([
-      "88 (+34,652 cached)",
+      "34,74088 uncached · 652 cache write · 34,000 cache read",
       "7",
       "$0",
       "<$0.01",
@@ -542,8 +680,12 @@ describe("Thread Usage", () => {
         .map((url) => url.searchParams.get("cursor")),
     ).toEqual([null, "2026-11-10T03:10:36.822Z|req_49"]);
     // The first page stays, the second follows it, and no more is offered.
-    expect(cells(detailRows(models)[0])[2]).toBe("88 (+34,652 cached)");
-    expect(cells(detailRows(models)[51])[2]).toBe("139 (+34,652 cached)");
+    expect(cells(detailRows(models)[0])[2]).toBe(
+      "34,74088 uncached · 652 cache write · 34,000 cache read",
+    );
+    expect(cells(detailRows(models)[51])[2]).toBe(
+      "34,791139 uncached · 652 cache write · 34,000 cache read",
+    );
     expect(button("Show more")).toBeUndefined();
 
     await React.act(() => button("Collapse GPT-5.6 Luna")?.click());

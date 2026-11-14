@@ -39,6 +39,27 @@ export const formatCount = (value: number) => counts.format(value);
 export const formatPercent = (part: number, whole: number) =>
   whole <= 0 ? "0" : ((part / whole) * 100).toFixed(1);
 
+/**
+ * Input split the way providers bill it: uncached input, cache writes, and
+ * cache reads, which dx records apart (Anthropic's `input_tokens` leaves out
+ * both cache fields). A cache write is a cache miss, billed above uncached
+ * input, so only cache reads count as cached.
+ */
+export interface InputTokenCounts {
+  readonly uncached: number;
+  readonly cacheWrite: number;
+  readonly cacheRead: number;
+}
+
+export const totalInput = (input: InputTokenCounts) =>
+  input.uncached + input.cacheWrite + input.cacheRead;
+
+/** "10 uncached · 327,571 cache write · 36,765 cache read", or undefined with no cache use. */
+export const formatInputBreakdown = (input: InputTokenCounts) =>
+  input.cacheWrite === 0 && input.cacheRead === 0
+    ? undefined
+    : `${formatCount(input.uncached)} uncached · ${formatCount(input.cacheWrite)} cache write · ${formatCount(input.cacheRead)} cache read`;
+
 /** "8.5s", "14m27.752s", or "1h02m03.004s". */
 export const formatDuration = (ms: number) => {
   if (ms < 60_000) return `${Number((ms / 1_000).toFixed(3))}s`;

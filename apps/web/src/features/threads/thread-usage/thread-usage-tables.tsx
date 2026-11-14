@@ -13,10 +13,13 @@ import { SettingsCard } from "../../../shared/ui/settings.js";
 import {
   formatCount,
   formatDuration,
+  formatInputBreakdown,
   formatInstant,
   formatOrbSize,
   formatUsd,
   formatUsdMills,
+  type InputTokenCounts,
+  totalInput,
 } from "./thread-usage-format.js";
 import {
   threadOrbSessionsQueryOptions,
@@ -35,19 +38,14 @@ const OUTCOME_LABELS: Partial<Record<ThreadUsageRequest["outcome"], string>> = {
   cancelled: "Cancelled",
 };
 
-/** "88 (+34,652 cached)", or "88" with nothing cached. */
-function InputTokens({
-  uncached,
-  cached,
-}: {
-  readonly uncached: number;
-  readonly cached: number;
-}) {
+/** The total input, with its uncached, cache-write, and cache-read parts below. */
+function InputTokens(props: InputTokenCounts) {
+  const breakdown = formatInputBreakdown(props);
   return (
     <>
-      {formatCount(uncached)}
-      {cached === 0 ? null : (
-        <span className="thread-usage-cached">{` (+${formatCount(cached)} cached)`}</span>
+      {formatCount(totalInput(props))}
+      {breakdown === undefined ? null : (
+        <span className="thread-usage-cached">{breakdown}</span>
       )}
     </>
   );
@@ -196,9 +194,11 @@ function ModelRows({
           </div>
         </td>
         <td className="usage-list-number">
-          {formatCount(
-            model.inputTokens + model.cacheReadTokens + model.cacheWriteTokens,
-          )}
+          <InputTokens
+            uncached={model.inputTokens}
+            cacheWrite={model.cacheWriteTokens}
+            cacheRead={model.cacheReadTokens}
+          />
         </td>
         <td className="usage-list-number">{formatCount(model.outputTokens)}</td>
         <td className="usage-list-number">{formatUsd(model.dxCostMicros)}</td>
@@ -250,7 +250,8 @@ function ModelRequests({
             <td className="usage-list-number">
               <InputTokens
                 uncached={request.inputTokens}
-                cached={request.cacheReadTokens + request.cacheWriteTokens}
+                cacheWrite={request.cacheWriteTokens}
+                cacheRead={request.cacheReadTokens}
               />
             </td>
             <td className="usage-list-number">
