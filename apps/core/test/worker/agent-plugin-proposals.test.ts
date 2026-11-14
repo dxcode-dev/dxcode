@@ -10,7 +10,7 @@ import {
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
 import { HttpResponse, http } from "msw";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import {
@@ -42,8 +42,33 @@ import { runRepositories } from "./runtime.js";
  *   or the reviewed hash doesn't match;
  * - an update proposal hides wider permissions from the reviewer;
  * - a decided proposal is decided again, or a rejected one changes plugins;
- * - the agent's Thread never hears the outcome (its ask stays unticked).
+ * - the proposal writes an ask into an artifact, or the agent's Thread
+ *   never hears the outcome.
  */
+
+// Flue's run is stood in for: the agent route only records the message it
+// admits, so a test sees what woke the Thread.
+const delivered = vi.hoisted(() => ({
+  messages: [] as Array<{ threadId: string; body: string }>,
+}));
+
+vi.mock("../../src/agents/routes.js", async () => {
+  const { Hono } = await import("hono");
+  const { useAgentAdmission } = await import("../../src/agents/admission.js");
+  const routes = useAgentAdmission(new Hono());
+  routes.post("/:threadId", async (context) => {
+    const body = (await context.req.json()) as {
+      body: string;
+      idempotencyKey: string;
+    };
+    delivered.messages.push({
+      threadId: context.req.param("threadId"),
+      body: body.body,
+    });
+    return context.json({ submissionId: `sub_${body.idempotencyKey}` }, 202);
+  });
+  return { dxAgentRoutes: routes };
+});
 
 const owner = Schema.decodeSync(UserId)("plugin-proposal-owner");
 const member = Schema.decodeSync(UserId)("plugin-proposal-member");
@@ -252,6 +277,7 @@ const planMarkdown = async (threadId: string) => {
 
 beforeEach(async () => {
   head = commits.first;
+  delivered.messages.length = 0;
   await env.DB.batch([
     env.DB.prepare(
       'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
@@ -307,11 +333,10 @@ describe("manage_skills plugin proposals", () => {
       `${ORIGIN}/workspaces/${workspaceSlug}/plugins?proposal=${proposalId}`,
     );
 
-    // Nothing took effect, and the owner is asked in the Plan.
+    // Nothing took effect, and no artifact: the agent shares the review link.
     expect(await pluginRows()).toEqual([]);
-    const plan = await planMarkdown(threadId);
-    expect(plan).toContain("- [ ] @[Plugin Owner](user:plugin-proposal-owner)");
-    expect(plan).toContain(proposalId);
+    expect(await planMarkdown(threadId)).toBeUndefined();
+    expect(proposed.note).toContain(proposed.review_url as string);
 
     // The Plugins page lists it with what it would install and reach.
     const page = await app(owner)(workspace);
@@ -372,11 +397,14 @@ describe("manage_skills plugin proposals", () => {
         version: "1.0.0",
       },
     ]);
-    const after = await planMarkdown(threadId);
-    expect(after).toContain(
-      "- [x] @[Plugin Owner](user:plugin-proposal-owner)",
-    );
-    expect(after).toContain("Approved");
+    // The decision wakes the agent's Thread with the outcome.
+    expect(delivered.messages).toEqual([
+      {
+        threadId,
+        body: expect.stringContaining(`plugin proposal ${proposalId}`),
+      },
+    ]);
+    expect(delivered.messages[0]?.body).toContain("Approved");
 
     const again = await app(owner)(
       `${workspace}/proposals/${proposalId}/approve`,

@@ -53,6 +53,7 @@ import type { AppEnv } from "../../http/types.js";
 import { authorizationLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import { settleOwnerAsk } from "../../thread-artifacts/owner-ask.js";
+import { wakeOnProposalDecided } from "../proposal-decided.js";
 import { SettingsService } from "../service.js";
 import { exportSkillVersion, SkillImportRejected } from "./import.js";
 import { skillLayers } from "./layers.js";
@@ -516,8 +517,9 @@ const registerRoutes = (
     ).pipe(Effect.map(({ proposalId }) => proposalId));
 
   /**
-   * Ticks the owner's review ask in the proposing Thread, which wakes it
-   * with the outcome. Best effort: the decision already stands.
+   * Tells the proposing Thread's agent the outcome: a proposal made before
+   * asks left artifacts ticks its review ask, which wakes the Thread; any
+   * other wakes it directly. Best effort: the decision already stands.
    */
   const settleAsk = (
     context: Context<AppEnv>,
@@ -529,7 +531,18 @@ const registerRoutes = (
     outcome: string,
   ) =>
     row.ask_artifact_id === null
-      ? Effect.void
+      ? Effect.promise(() =>
+          wakeOnProposalDecided(
+            context.env,
+            {
+              threadId: row.thread_id,
+              proposalId: row.id,
+              what: "skill",
+              outcome,
+            },
+            (promise) => context.executionCtx.waitUntil(promise),
+          ),
+        )
       : Effect.promise(() =>
           settleOwnerAsk(context.env, {
             threadId: row.thread_id,

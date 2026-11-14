@@ -7,6 +7,7 @@ import {
   ARTIFACT_TITLE_MAX_LENGTH,
   THREAD_ARTIFACT_MAX_STORED_BYTES,
   type ThreadArtifact,
+  type ThreadArtifactAudience,
   type ThreadArtifactAuthor,
   type ThreadArtifactKind,
 } from "@dx/api";
@@ -16,10 +17,16 @@ import { moveQuote } from "./anchors.js";
 import { artifactKind } from "./kinds.js";
 
 /**
- * A Thread's artifacts: one D1 row per artifact, one D1 row per kept
- * revision, and each revision's Markdown as an immutable R2 object. The
- * routes (people) and the agent's tool both write through here, so the
- * compare-and-swap, the size limits, and the retention rule hold for both.
+ * Artifacts: one D1 row per artifact, one D1 row per kept revision, and each
+ * revision's Markdown as an immutable R2 object. The routes (people) and the
+ * agent's tool both write through here, so the compare-and-swap, the size
+ * limits, and the retention rule hold for both.
+ *
+ * An artifact lives in a Thread (`threadId`) or stands alone, owned by a
+ * person with no Thread: every function names where with `threadId`, a
+ * Thread's id or `null` for a standalone artifact. A standalone artifact is
+ * found by its own id alone; who may open it is decided before these run
+ * (artifact-library/access.ts).
  */
 
 export type ArtifactBindings = Pick<Bindings, "DB" | "DX_STORAGE">;
@@ -29,9 +36,15 @@ export type ArtifactWriter =
   | { readonly kind: "user"; readonly userId: string }
   | { readonly kind: "agent"; readonly submissionId?: string };
 
+/** A Thread's id, or `null` for a standalone artifact. */
+export type ArtifactThreadId = string | null;
+
 export interface ArtifactRow {
   readonly id: string;
-  readonly thread_id: string;
+  readonly thread_id: string | null;
+  readonly owner_user_id: string | null;
+  readonly shared_workspace_id: string | null;
+  readonly workspace_access: "none" | "view" | "edit";
   readonly kind: ThreadArtifactKind;
   readonly folder: string;
   readonly title: string;
@@ -40,6 +53,7 @@ export interface ArtifactRow {
   readonly stored_bytes: number;
   readonly created_by_kind: "user" | "agent";
   readonly created_by_user_id: string | null;
+  readonly audience: ThreadArtifactAudience;
   readonly created_at: number;
   readonly updated_at: number;
   readonly deleted_at: number | null;
@@ -93,12 +107,26 @@ export const isArtifactId = (value: string | undefined | null) =>
 export const artifactThreadPrefix = (threadId: string) =>
   `thread-artifacts/${threadId}/`;
 
+/** Everything a standalone artifact stores: its bodies and its images. */
+export const standaloneArtifactPrefix = (artifactId: string) =>
+  `standalone-artifacts/${artifactId}/`;
+
+/** Where a standalone artifact's image is stored. */
+export const standaloneArtifactImageKey = (
+  artifactId: string,
+  imageId: string,
+  name: string,
+) => `${standaloneArtifactPrefix(artifactId)}images/${imageId}/${name}`;
+
 export const artifactRevisionKey = (
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
   revision: number,
   sha256: string,
-) => `${artifactThreadPrefix(threadId)}${artifactId}/${revision}-${sha256}.md`;
+) =>
+  threadId === null
+    ? `${standaloneArtifactPrefix(artifactId)}${revision}-${sha256}.md`
+    : `${artifactThreadPrefix(threadId)}${artifactId}/${revision}-${sha256}.md`;
 
 const encoder = new TextEncoder();
 
@@ -154,7 +182,7 @@ const rememberBody = (key: string, markdown: string, size: number) => {
 
 const readBody = async (
   bucket: R2Bucket,
-  threadId: string,
+  threadId: ArtifactThreadId,
   revision: Pick<
     RevisionRow,
     "artifact_id" | "revision" | "sha256" | "size_bytes"
@@ -189,7 +217,7 @@ const author = (
 
 const artifactData = (row: ArtifactListRow): ThreadArtifact => ({
   id: row.id,
-  threadId: row.thread_id as ThreadId,
+  threadId: row.thread_id as ThreadId | null,
   kind: row.kind,
   folder: row.folder,
   title: row.title,
@@ -206,6 +234,7 @@ const artifactData = (row: ArtifactListRow): ThreadArtifact => ({
     row.updated_by_name,
   ),
   openCommentCount: row.open_comment_count,
+  ...(row.audience === "agent" ? { audience: "agent" as const } : {}),
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
@@ -252,11 +281,15 @@ export const listArtifacts = async (
   return results.map(artifactData);
 };
 
-const findArtifact = (db: D1Database, threadId: string, artifactId: string) =>
+const findArtifact = (
+  db: D1Database,
+  threadId: ArtifactThreadId,
+  artifactId: string,
+) =>
   db
     .prepare(
       `${SELECT_ARTIFACT}
-        WHERE artifact.id = ?1 AND artifact.thread_id = ?2
+        WHERE artifact.id = ?1 AND artifact.thread_id IS ?2
           AND artifact.deleted_at IS NULL`,
     )
     .bind(artifactId, threadId)
@@ -284,7 +317,7 @@ const withMarkdown = async (
 /** The artifact and its current Markdown; undefined when it is not this Thread's. */
 export const readArtifact = async (
   bindings: ArtifactBindings,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
 ): Promise<ArtifactWithMarkdown | undefined> => {
   const { db, bucket } = bindingsOf(bindings);
@@ -301,7 +334,7 @@ export interface ArtifactRevision {
 /** One kept revision of a live artifact of this Thread. */
 export const readArtifactRevision = async (
   bindings: ArtifactBindings,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
   revision: number,
 ): Promise<ArtifactRevision | undefined> => {
@@ -314,7 +347,7 @@ export const readArtifactRevision = async (
          JOIN thread_artifact AS artifact ON artifact.id = revision.artifact_id
          LEFT JOIN "user" AS person ON person.id = revision.author_user_id
         WHERE revision.artifact_id = ?1 AND revision.revision = ?2
-          AND artifact.thread_id = ?3 AND artifact.deleted_at IS NULL`,
+          AND artifact.thread_id IS ?3 AND artifact.deleted_at IS NULL`,
     )
     .bind(artifactId, revision, threadId)
     .first<RevisionRow>();
@@ -345,12 +378,22 @@ const prepareBody = async (markdown: string) => {
   return { bytes, sha256: await sha256Hex(bytes) };
 };
 
-const threadStoredBytes = async (db: D1Database, threadId: string) =>
+/**
+ * What counts against the storage limit: every artifact of the Thread, or a
+ * standalone artifact's own revisions.
+ */
+const storedBytes = async (
+  db: D1Database,
+  threadId: ArtifactThreadId,
+  artifactId: string,
+) =>
   (await db
     .prepare(
-      "SELECT COALESCE(SUM(stored_bytes), 0) AS bytes FROM thread_artifact WHERE thread_id = ?",
+      threadId === null
+        ? "SELECT stored_bytes AS bytes FROM thread_artifact WHERE id = ?"
+        : "SELECT COALESCE(SUM(stored_bytes), 0) AS bytes FROM thread_artifact WHERE thread_id = ?",
     )
-    .bind(threadId)
+    .bind(threadId ?? artifactId)
     .first<number>("bytes")) ?? 0;
 
 const putBody = (
@@ -374,15 +417,22 @@ const writerColumns = (writer: ArtifactWriter) =>
         submissionId: writer.submissionId?.slice(0, 128) ?? null,
       };
 
-/** Creates an artifact at revision 1 in a live Thread. */
+/**
+ * Creates an artifact at revision 1 in a live Thread, or, with `threadId`
+ * null, a standalone artifact private to `ownerUserId`.
+ */
 export const createArtifact = async (
   bindings: ArtifactBindings,
   input: {
-    readonly threadId: string;
+    readonly threadId: ArtifactThreadId;
+    /** The owner of a standalone artifact; required when `threadId` is null. */
+    readonly ownerUserId?: string;
     readonly title: string;
     readonly folder?: string;
     /** `document` when left out. */
     readonly kind?: ThreadArtifactKind;
+    /** `people` when left out; `agent` for the agent's own notes. */
+    readonly audience?: ThreadArtifactAudience;
     readonly markdown: string;
     readonly writer: ArtifactWriter;
     readonly now?: number;
@@ -407,7 +457,10 @@ export const createArtifact = async (
   const { bytes, sha256 } = await prepareBody(body);
   if (bytes.byteLength > ARTIFACT_MAX_BYTES)
     return { kind: "too-large", sizeBytes: bytes.byteLength };
-  const stored = await threadStoredBytes(db, input.threadId);
+  if (input.threadId === null && input.ownerUserId === undefined)
+    return { kind: "not-found" };
+  const stored =
+    input.threadId === null ? 0 : await storedBytes(db, input.threadId, "");
   if (stored + bytes.byteLength > THREAD_ARTIFACT_MAX_STORED_BYTES)
     return { kind: "storage-full", storedBytes: stored };
   const id = newArtifactId();
@@ -420,11 +473,11 @@ export const createArtifact = async (
     db
       .prepare(
         `INSERT INTO thread_artifact
-           (id, thread_id, folder, title, current_revision, size_bytes,
-            stored_bytes, created_by_kind, created_by_user_id, created_at,
-            updated_at, deleted_at, kind)
-         SELECT ?1, ?2, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?8, NULL, ?9
-          WHERE EXISTS (
+           (id, thread_id, owner_user_id, folder, title, current_revision,
+            size_bytes, stored_bytes, created_by_kind, created_by_user_id,
+            created_at, updated_at, deleted_at, kind, audience)
+         SELECT ?1, ?2, ?10, ?3, ?4, 1, ?5, ?5, ?6, ?7, ?8, ?8, NULL, ?9, ?11
+          WHERE ?2 IS NULL OR EXISTS (
             SELECT 1 FROM threads WHERE id = ?2 AND lifecycle_state != 'deleted'
           )`,
       )
@@ -438,6 +491,8 @@ export const createArtifact = async (
         writer.userId,
         now,
         kind,
+        input.threadId === null ? (input.ownerUserId ?? null) : null,
+        input.audience ?? "people",
       ),
     db
       .prepare(
@@ -480,12 +535,14 @@ export const createArtifact = async (
 export const saveArtifact = async (
   bindings: ArtifactBindings,
   input: {
-    readonly threadId: string;
+    readonly threadId: ArtifactThreadId;
     readonly artifactId: string;
     readonly baseRevision: number;
     readonly markdown: string;
     readonly title?: string;
     readonly folder?: string;
+    /** Moves it between people's lists and the agent's own notes. */
+    readonly audience?: ThreadArtifactAudience;
     readonly force?: boolean;
     readonly writer: ArtifactWriter;
     readonly now?: number;
@@ -526,7 +583,7 @@ export const saveArtifact = async (
     if (current === null) return { kind: "not-found" };
     if (input.force !== true && current.current_revision !== input.baseRevision)
       return { kind: "conflict", current: await withMarkdown(bucket, current) };
-    const stored = await threadStoredBytes(db, input.threadId);
+    const stored = await storedBytes(db, input.threadId, input.artifactId);
     if (stored + bytes.byteLength > THREAD_ARTIFACT_MAX_STORED_BYTES)
       return { kind: "storage-full", storedBytes: stored };
     const base = current.current_revision;
@@ -553,8 +610,8 @@ export const saveArtifact = async (
               SET current_revision = ?3, size_bytes = ?4,
                   stored_bytes = stored_bytes + ?4,
                   title = COALESCE(?5, title), folder = COALESCE(?6, folder),
-                  updated_at = ?7
-            WHERE id = ?1 AND thread_id = ?2 AND current_revision = ?8
+                  audience = COALESCE(?9, audience), updated_at = ?7
+            WHERE id = ?1 AND thread_id IS ?2 AND current_revision = ?8
               AND deleted_at IS NULL`,
         )
         .bind(
@@ -566,6 +623,7 @@ export const saveArtifact = async (
           folder ?? null,
           now,
           base,
+          input.audience ?? null,
         ),
       db
         .prepare(
@@ -706,7 +764,7 @@ const revisionExists = async (
  */
 export const compactArtifactRevisions = async (
   bindings: ArtifactBindings,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
 ) => {
   const { db, bucket } = bindingsOf(bindings);
@@ -715,7 +773,7 @@ export const compactArtifactRevisions = async (
       `SELECT revision.revision, revision.sha256
          FROM thread_artifact_revision AS revision
          JOIN thread_artifact AS artifact ON artifact.id = revision.artifact_id
-        WHERE revision.artifact_id = ?1 AND artifact.thread_id = ?2
+        WHERE revision.artifact_id = ?1 AND artifact.thread_id IS ?2
           AND (revision.author_kind = 'agent' OR artifact.kind IN (
             SELECT value FROM json_each(?4)
           ))
@@ -772,12 +830,13 @@ const restoreStoredBytes = (db: D1Database, artifactId: string) =>
     .bind(artifactId);
 
 /**
- * Removes a deleted artifact's revisions and bodies; its row stays, marked
- * deleted. Idempotent: bodies go first, so a retry finds the rows again.
+ * Removes a deleted artifact's revisions and bodies, and a standalone one's
+ * images; its row stays, marked deleted. Idempotent: bodies go first, so a
+ * retry finds the rows again.
  */
 const purgeArtifactBodies = async (
   bindings: ArtifactBindings,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
 ) => {
   const { db, bucket } = bindingsOf(bindings);
@@ -808,6 +867,8 @@ const purgeArtifactBodies = async (
     }
     if (results.length < 500) break;
   }
+  if (threadId === null)
+    await deletePrefix(bucket, standaloneArtifactPrefix(artifactId));
   await db.batch([
     db
       .prepare("DELETE FROM thread_artifact_comment WHERE artifact_id = ?")
@@ -825,7 +886,7 @@ const purgeArtifactBodies = async (
  */
 export const deleteArtifact = async (
   bindings: ArtifactBindings,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
   now = Date.now(),
 ) => {
@@ -834,7 +895,7 @@ export const deleteArtifact = async (
   const row = await db
     .prepare(
       `UPDATE thread_artifact SET deleted_at = COALESCE(deleted_at, ?3)
-        WHERE id = ?1 AND thread_id = ?2
+        WHERE id = ?1 AND thread_id IS ?2
         RETURNING id`,
     )
     .bind(artifactId, threadId, now)
@@ -860,13 +921,23 @@ export const sweepDeletedArtifacts = async (
       ORDER BY deleted_at LIMIT ?`,
   )
     .bind(limit)
-    .all<{ id: string; thread_id: string }>();
+    .all<{ id: string; thread_id: string | null }>();
   for (const { id, thread_id } of results)
     await purgeArtifactBodies(bindings, thread_id, id);
   return results.length;
 };
 
 const DELETE_PAGE = 1_000;
+
+/** Deletes every object under `prefix`, a page at a time. */
+export const deletePrefix = async (bucket: R2Bucket, prefix: string) => {
+  for (;;) {
+    const page = await bucket.list({ prefix, limit: DELETE_PAGE });
+    if (page.objects.length > 0)
+      await bucket.delete(page.objects.map(({ key }) => key));
+    if (!page.truncated) break;
+  }
+};
 
 /**
  * Removes every artifact a deleted Thread had: its bodies under the
@@ -879,15 +950,7 @@ export const deleteThreadArtifacts = async (
 ) => {
   const bucket = bindings.DX_STORAGE;
   if (bucket !== undefined)
-    for (;;) {
-      const page = await bucket.list({
-        prefix: artifactThreadPrefix(threadId),
-        limit: DELETE_PAGE,
-      });
-      if (page.objects.length > 0)
-        await bucket.delete(page.objects.map(({ key }) => key));
-      if (!page.truncated) break;
-    }
+    await deletePrefix(bucket, artifactThreadPrefix(threadId));
   const db = bindings.DB;
   if (db === undefined) return;
   await db.batch([

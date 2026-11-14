@@ -1,5 +1,5 @@
 import type { ThreadArtifactComment } from "@dx/api";
-import type { ThreadId, UserId } from "@dx/domain";
+import type { UserId } from "@dx/domain";
 import {
   CaptureUpdateAction,
   Excalidraw,
@@ -37,8 +37,11 @@ import {
   MenuTrigger,
 } from "../../../shared/ui/menu.js";
 import { cn } from "../../../shared/utils.js";
-import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
-import { artifactCommentsOptions } from "../artifact-comments-queries.js";
+import {
+  artifactCommentsOptions,
+  artifactMembersOptions,
+} from "../artifact-comments-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import { type ArtifactDocument, artifactsApi } from "../artifacts-api.js";
 import {
   CommentCard,
@@ -394,7 +397,7 @@ export function BoardEditor({
   switcher,
   dictation,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly initial: ArtifactDocument;
   readonly readOnly: boolean;
   readonly switcher:
@@ -470,7 +473,7 @@ export function BoardEditor({
     session.setNames((userId) => {
       const members =
         queryClient.getQueryData(
-          threadMembersQueryOptions(identity.id as UserId, threadId).queryKey,
+          artifactMembersOptions(identity.id as UserId, threadId).queryKey,
         ) ?? [];
       const member = members.find((entry) => entry.userId === userId);
       return member === undefined

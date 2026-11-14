@@ -80,7 +80,10 @@ const libraryItem = (
   access: "edit",
   sharing: "edit",
   revision: 1,
+  createdBy: { kind: "agent" },
   updatedBy: { kind: "agent" },
+  pinned: false,
+  folderId: null,
   createdAt: 0,
   updatedAt: 0,
 });

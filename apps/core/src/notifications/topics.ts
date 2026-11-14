@@ -125,8 +125,8 @@ const snoozeWoke: NotificationTopicDefinition = {
 };
 
 /**
- * Anything an agent sends a person: its `notify_user` tool, an ask
- * (`request_attention`) or mention it writes in an artifact or comment, a
+ * Anything an agent sends a person: its `notify_user` tool, an ask or
+ * mention it writes in an artifact or comment, a
  * Space agent's post that mentions them, and a mention in a message another
  * Thread's agent or an automation sent. It never reaches the Mentions inbox,
  * which is for people. Push by default; email only for someone who opts in,

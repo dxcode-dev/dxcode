@@ -1,16 +1,5 @@
-/**
- * Editor sessions outlive the editor's view. Moving the Artifacts tab to
- * another pane, splitting, opening the phone sheet, or switching tabs
- * unmounts the editor and mounts a new one; the new one takes the session the
- * old one left, so the document, the caret, undo history, unsaved edits, and
- * an open `/` or `@` menu carry on instead of reloading from Markdown.
- *
- * Sessions are kept per QueryClient (so a sign-out or a test starts clean),
- * per Thread and artifact. A session no view has taken back within
- * `RELEASED_FOR` is let go, saving what it holds first.
- */
-import type { ThreadId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
+import type { ArtifactScope } from "../artifact-scope.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
 import { ArtifactSession } from "./artifact-session.js";
 
@@ -24,7 +13,7 @@ interface Entry {
 
 const byClient = new WeakMap<QueryClient, Map<string, Entry>>();
 
-const keyOf = (threadId: ThreadId, artifactId: string) =>
+const keyOf = (threadId: ArtifactScope, artifactId: string) =>
   `${threadId}\n${artifactId}`;
 
 const entriesOf = (queryClient: QueryClient) => {
@@ -73,7 +62,7 @@ export const artifactSessionFor = (
 /** A view took the session: keep it. */
 export const holdArtifactSession = (
   queryClient: QueryClient,
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   initial: ArtifactDocument,
   session: ArtifactSession,
 ) => {
@@ -88,7 +77,7 @@ export const holdArtifactSession = (
 /** The view let the session go: keep it a while for the next view. */
 export const releaseArtifactSession = (
   queryClient: QueryClient,
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   initial: ArtifactDocument,
   session: ArtifactSession,
 ) => {

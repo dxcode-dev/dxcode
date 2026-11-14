@@ -25,13 +25,13 @@ import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
-import { createOwnerAskTools } from "../../src/owner-asks/agent-tools.js";
 import { buildSpaceSetupMessage } from "../../src/spaces/agent/setup-message.js";
 import { messageCommentRoutes } from "../../src/spaces/message-comments/routes.js";
 import { clearSpaceEyesOnSettle } from "../../src/spaces/posts/eyes.js";
 import { reportTurnToSpace } from "../../src/spaces/report-back.js";
 import { spaceRoutes } from "../../src/spaces/routes.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
+import { createArtifactTools } from "../../src/thread-artifacts/agent-tools.js";
 import { createThreadTools } from "../../src/threads/agent-tools.js";
 import { ownerRequest } from "../../src/threads/owner-request.js";
 import { project } from "./fixtures.js";
@@ -909,8 +909,8 @@ describe("Messages the Space's agent receives", () => {
       waiting,
       "Waiting on Ada's go-ahead to deploy a preview and a Claude plan token.",
     );
-    // A child that asks its owner with request_attention first.
-    const [requestAttention] = createOwnerAskTools(
+    // A child that asks its owner in an artifact it shares with them first.
+    const [artifactTool] = createArtifactTools(
       asking,
       () => ({
         db: env.DB,
@@ -918,14 +918,15 @@ describe("Messages the Space's agent receives", () => {
       }),
       "sub_child",
     );
-    if (requestAttention === undefined)
-      throw new Error("No request_attention.");
-    await requestAttention.run({
+    if (artifactTool === undefined) throw new Error("No artifact tool.");
+    await artifactTool.run({
       data: {
-        kind: "approval",
-        summary: "Approve deploying a preview of the coupon fix",
+        action: "create",
+        title: "Preview checklist",
+        markdown: `- [ ] @[Owner](user:${owner}) Approve deploying a preview of the coupon fix\n`,
       },
       toolCallId: "call_ask",
+      log: { info() {}, warn() {}, error() {}, debug() {} },
     } as never);
     await report(asking, "Waiting on Ada's approval to deploy a preview.");
 

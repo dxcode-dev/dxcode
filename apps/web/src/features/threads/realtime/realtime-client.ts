@@ -9,7 +9,15 @@ import {
 import { recordConnectionEvent } from "../../../shared/diagnostics/client-diagnostics.js";
 import type { BoardLiveEvent } from "../../../shared/realtime/board-live.js";
 import {
+  type PresenceScope,
+  type PresenceTopic,
+  presenceScope,
+  presenceTopic,
+  scopeThread,
+} from "../../../shared/realtime/presence-scope.js";
+import {
   invalidateAllArtifacts,
+  invalidateArtifactLibrary,
   invalidateArtifacts,
 } from "../../artifacts/artifacts-queries.js";
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
@@ -111,22 +119,25 @@ export class RealtimeClient {
   #cursor?: number;
   #reconnect?: ReturnType<typeof setTimeout>;
   #heartbeat?: ReturnType<typeof setInterval>;
-  #topic?: `thread:${ThreadId}`;
-  /** The Threads views hold, oldest first; the newest is `#topic`. */
-  readonly #observers: Array<{ readonly topic: `thread:${ThreadId}` }> = [];
+  #topic?: PresenceTopic;
+  /**
+   * The Threads (or standalone artifacts) views hold, oldest first; the
+   * newest is `#topic`.
+   */
+  readonly #observers: Array<{ readonly topic: PresenceTopic }> = [];
   /** The current topic's join was refused; retried once the Thread changes. */
-  #deniedTopic?: `thread:${ThreadId}`;
+  #deniedTopic?: PresenceTopic;
   readonly #workspaceStatuses = new Map<ThreadId, WorkspaceStatus>();
   /** Per waking Thread, the timer that marks the wake slow. */
   readonly #slowWakeTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   readonly #workspaceStatusListeners = new Map<ThreadId, Set<() => void>>();
-  readonly #presentUsers = new Map<ThreadId, ReadonlyArray<UserId>>();
-  /** Live drawing listeners, by `<threadId>\n<artifactId>`. */
+  readonly #presentUsers = new Map<PresenceScope, ReadonlyArray<UserId>>();
+  /** Live drawing listeners, by `<scope>\n<artifactId>`. */
   readonly #boardListeners = new Map<
     string,
     Set<(event: BoardLiveEvent) => void>
   >();
-  readonly #presenceListeners = new Map<ThreadId, Set<() => void>>();
+  readonly #presenceListeners = new Map<PresenceScope, Set<() => void>>();
   /** Who is typing a comment, per Thread, by client, until it lapses. */
   readonly #typing = new Map<
     ThreadId,
@@ -201,8 +212,8 @@ export class RealtimeClient {
    * hub holds one topic per socket, so the newest held Thread is joined and,
    * once it lets go, the one before it is joined again.
    */
-  observeThread(threadId: ThreadId) {
-    const observer = { topic: `thread:${threadId}` as const };
+  observeThread(threadId: PresenceScope) {
+    const observer = { topic: presenceTopic(threadId) };
     this.#observers.push(observer);
     this.#joinNewestTopic();
     return () => {
@@ -236,7 +247,7 @@ export class RealtimeClient {
     return this.#workspaceStatuses.get(threadId);
   }
 
-  observePresentUsers(threadId: ThreadId, listener: () => void) {
+  observePresentUsers(threadId: PresenceScope, listener: () => void) {
     const listeners = this.#presenceListeners.get(threadId) ?? new Set();
     listeners.add(listener);
     this.#presenceListeners.set(threadId, listeners);
@@ -247,7 +258,7 @@ export class RealtimeClient {
   }
 
   /** People with this Thread open right now, one entry per user. */
-  presentUsers(threadId: ThreadId): ReadonlyArray<UserId> | undefined {
+  presentUsers(threadId: PresenceScope): ReadonlyArray<UserId> | undefined {
     return this.#presentUsers.get(threadId);
   }
 
@@ -289,8 +300,12 @@ export class RealtimeClient {
    * a board and what they are drawing. Only for the Thread the viewer has
    * open; callers throttle it.
    */
-  sendBoard(threadId: ThreadId, artifactId: string, payload: BoardLivePayload) {
-    const topic = `thread:${threadId}` as const;
+  sendBoard(
+    threadId: PresenceScope,
+    artifactId: string,
+    payload: BoardLivePayload,
+  ) {
+    const topic = presenceTopic(threadId);
     if (
       this.#topic !== topic ||
       this.#deniedTopic === topic ||
@@ -310,7 +325,7 @@ export class RealtimeClient {
 
   /** Others' live drawing on one board, as it arrives. */
   observeBoard(
-    threadId: ThreadId,
+    threadId: PresenceScope,
     artifactId: string,
     listener: (event: BoardLiveEvent) => void,
   ) {
@@ -491,6 +506,15 @@ export class RealtimeClient {
         this.#userId,
         event.threadId,
       );
+    } else if (event.type === "artifact.invalidated") {
+      // Sharing may have changed: try the refused artifact once more.
+      const topic = `artifact:${event.artifactId}` as const;
+      if (this.#deniedTopic === topic) {
+        this.#deniedTopic = undefined;
+        this.#send("presence.join", topic);
+      }
+      void invalidateArtifacts(this.#queryClient, topic);
+      void invalidateArtifactLibrary(this.#queryClient);
     } else if (event.type === "plugin-ui.invalidated") {
       void invalidatePluginUi(this.#queryClient, event.threadId);
     } else if (event.type === "plugin-pane.invalidated") {
@@ -518,15 +542,17 @@ export class RealtimeClient {
       if (this.#typing.delete(event.threadId))
         this.#publishTyping(event.threadId);
     } else if (event.type === "presence.typing") {
-      this.#receiveTyping(event.topic.slice("thread:".length) as ThreadId, {
-        userId: event.userId,
-        clientId: event.clientId,
-        scope: event.scope,
-      });
+      const threadId = scopeThread(presenceScope(event.topic));
+      if (threadId !== undefined)
+        this.#receiveTyping(threadId, {
+          userId: event.userId,
+          clientId: event.clientId,
+          scope: event.scope,
+        });
     } else if (event.type === "presence.board") {
       if (event.userId === this.#userId && event.clientId === this.#clientId)
         return;
-      const key = `${event.topic.slice("thread:".length)}\n${event.scope}`;
+      const key = `${presenceScope(event.topic)}\n${event.scope}`;
       for (const listener of this.#boardListeners.get(key) ?? [])
         listener({
           userId: event.userId,
@@ -559,20 +585,22 @@ export class RealtimeClient {
       }
       this.#notifyWorkspaceStatus(threadId);
     } else if (event.type === "presence.snapshot") {
-      const threadId = event.topic.slice("thread:".length) as ThreadId;
+      const threadId = presenceScope(event.topic);
       const previous = new Set(this.#presentUsers.get(threadId) ?? []);
       const present = [
         ...new Set(event.participants.map(({ userId }) => userId)),
       ];
       this.#presentUsers.set(threadId, present);
       // Someone new opened a shared Thread: refresh it for their name.
+      const thread = scopeThread(threadId);
       if (
+        thread !== undefined &&
         previous.size > 0 &&
         present.some(
           (userId) => userId !== this.#userId && !previous.has(userId),
         )
       )
-        this.#rows.threadChanged(threadId);
+        this.#rows.threadChanged(thread);
       this.#presenceListeners.get(threadId)?.forEach((listener) => {
         listener();
       });
@@ -586,7 +614,7 @@ export class RealtimeClient {
 
   #send(
     type: "presence.join" | "presence.leave" | "presence.heartbeat",
-    topic: `thread:${ThreadId}`,
+    topic: PresenceTopic,
   ) {
     if (this.#socket?.readyState !== WebSocket.OPEN) return;
     this.#socket.send(JSON.stringify({ type, topic }));

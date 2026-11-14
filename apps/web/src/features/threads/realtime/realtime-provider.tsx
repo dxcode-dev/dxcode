@@ -6,6 +6,7 @@ import {
   BoardLiveContext,
   type BoardLiveHub,
 } from "../../../shared/realtime/board-live.js";
+import type { PresenceScope } from "../../../shared/realtime/presence-scope.js";
 import { RealtimeClient, type ThreadTyping } from "./realtime-client.js";
 
 const RealtimeContext = React.createContext<RealtimeClient | undefined>(
@@ -44,7 +45,8 @@ export function RealtimeProvider({
 
 const presenceSnapshot = () => undefined;
 
-export const useThreadPresence = (threadId: ThreadId) => {
+/** Joins the Thread's presence, or a standalone artifact's, while mounted. */
+export const useThreadPresence = (threadId: PresenceScope) => {
   const client = React.use(RealtimeContext);
   const subscribe = (_onStoreChange: () => void) =>
     client?.observeThread(threadId) ?? (() => undefined);
@@ -61,7 +63,7 @@ export const useThreadWorkspaceStatus = (threadId: ThreadId) => {
 };
 
 /** Users who have this Thread open now; subscribes without joining. */
-export const useThreadPresentUsers = (threadId: ThreadId) => {
+export const useThreadPresentUsers = (threadId: PresenceScope) => {
   const client = React.use(RealtimeContext);
   const subscribe = (onStoreChange: () => void) =>
     client?.observePresentUsers(threadId, onStoreChange) ?? (() => undefined);

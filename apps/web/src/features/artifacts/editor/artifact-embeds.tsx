@@ -1,9 +1,10 @@
-import { parseBoard, type ThreadId } from "@dx/domain";
+import { parseBoard } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { FileText, Shapes } from "lucide-react";
 import { createPortal } from "react-dom";
 import { artifactOptions } from "../artifact-document-queries.js";
+import { type ArtifactScope, scopeOf } from "../artifact-scope.js";
 import { BoardPreview } from "../board/board-preview.js";
 import { artifactLibraryItemOptions } from "../library/artifact-library-queries.js";
 import {
@@ -17,7 +18,7 @@ function EmbedPreview({
   threadId,
   artifactId,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly artifactId: string;
 }) {
   const query = useQuery(artifactOptions(threadId, artifactId));
@@ -90,7 +91,7 @@ function LibraryEmbed({ artifactId }: { readonly artifactId: string }) {
       </p>
     ) : null;
   return (
-    <EmbedPreview threadId={found.data.threadId} artifactId={artifactId} />
+    <EmbedPreview threadId={scopeOf(found.data)} artifactId={artifactId} />
   );
 }
 

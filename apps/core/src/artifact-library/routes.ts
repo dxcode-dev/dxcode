@@ -1,10 +1,14 @@
 import {
   ARTIFACT_LIBRARY_LIMIT,
+  ArtifactFolderRequestSchema,
+  ArtifactFolderResponseSchema,
   type ArtifactLibraryErrorCode,
   ArtifactLibraryFilterSchema,
   ArtifactLibraryItemResponseSchema,
   ArtifactLibraryResponseSchema,
   CreateStandaloneArtifactRequestSchema,
+  DeleteArtifactFolderResponseSchema,
+  MoveArtifactToFolderRequestSchema,
   UpdateArtifactSharingRequestSchema,
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
@@ -13,10 +17,22 @@ import { Option, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import { readBoundedText } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
-import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
+import { scheduleArtifactInvalidation } from "../realtime/publication.js";
 import { canUseSharedThreads } from "../thread-sharing/access.js";
-import { createStandaloneArtifact, shareStandaloneArtifact } from "./homes.js";
 import { findLibraryItem, type LibraryReader, listLibrary } from "./library.js";
+import {
+  createFolder,
+  deleteFolder,
+  type FolderResult,
+  listFolders,
+  moveToFolder,
+  renameFolder,
+  setPinned,
+} from "./personal.js";
+import {
+  createStandaloneArtifact,
+  shareStandaloneArtifact,
+} from "./standalone.js";
 
 const logger = getLogger(["dx", "artifact-library"]);
 
@@ -29,7 +45,9 @@ const STATUS = {
   ARTIFACT_SHARING_OWNER_ONLY: 403,
   ARTIFACT_SHARING_STANDALONE_ONLY: 409,
   ARTIFACT_SHARING_UNAVAILABLE: 409,
-  ARTIFACT_PROJECT_REQUIRED: 409,
+  ARTIFACT_FOLDER_NOT_FOUND: 404,
+  ARTIFACT_FOLDER_EXISTS: 409,
+  ARTIFACT_FOLDER_LIMIT: 409,
   ARTIFACTS_UNAVAILABLE: 503,
 } as const satisfies Record<ArtifactLibraryErrorCode, number>;
 
@@ -40,7 +58,9 @@ const MESSAGES: Record<ArtifactLibraryErrorCode, string> = {
   ARTIFACT_SHARING_STANDALONE_ONLY:
     "This artifact belongs to a Thread; share the Thread instead.",
   ARTIFACT_SHARING_UNAVAILABLE: "Join or create a workspace to share.",
-  ARTIFACT_PROJECT_REQUIRED: "Create a Project first, then make artifacts.",
+  ARTIFACT_FOLDER_NOT_FOUND: "Folder not found.",
+  ARTIFACT_FOLDER_EXISTS: "You already have a folder with that name.",
+  ARTIFACT_FOLDER_LIMIT: "You have as many folders as you can keep.",
   ARTIFACTS_UNAVAILABLE: "Artifacts are temporarily unavailable.",
 };
 
@@ -123,14 +143,103 @@ const answerItem = async (
   );
 };
 
+const answerFolder = (
+  context: Context<AppEnv>,
+  result: FolderResult,
+  status: 200 | 201,
+) => {
+  switch (result.kind) {
+    case "not-found":
+      return refuse(context, "ARTIFACT_FOLDER_NOT_FOUND");
+    case "exists":
+      return refuse(context, "ARTIFACT_FOLDER_EXISTS");
+    case "limit":
+      return refuse(context, "ARTIFACT_FOLDER_LIMIT");
+    case "saved":
+      context.header("Cache-Control", "no-store");
+      return context.json(
+        Schema.encodeUnknownSync(ArtifactFolderResponseSchema)({
+          status: "success",
+          data: { folder: result.folder },
+        }),
+        status,
+      );
+  }
+};
+
+/** Pins or unpins an artifact the reader may open, for them alone. */
+const pin = async (
+  context: Context<AppEnv>,
+  db: D1Database,
+  pinned: boolean,
+) => {
+  const reader = readerOf(context);
+  const item = await findLibraryItem(
+    db,
+    reader,
+    context.req.param("artifactId") ?? "",
+  );
+  if (item === undefined) return refuse(context, "ARTIFACT_NOT_FOUND");
+  await setPinned(db, reader.userId, item.id, pinned);
+  return answerItem(context, db, item.id, 200);
+};
+
 /**
  * `/v1/artifacts`: the Artifacts library. Lists every artifact the person
  * may open, creates standalone artifacts, finds where one lives (what an
  * `/artifacts/<id>` link opens), and shares standalone ones. Reading and
  * saving go through `/v1/threads/:threadId/artifacts` with the item's
- * `threadId`, behind the same Thread authorization as any artifact.
+ * `threadId`, or `/v1/standalone-artifacts/:artifactId` when it has none.
  */
 export const artifactLibraryRoutes = new Hono<AppEnv>()
+  .post(
+    "/folders",
+    handle("create-folder", async (context, db) => {
+      const body = await decodeJson(context, ArtifactFolderRequestSchema);
+      if (body === undefined) return refuse(context, "INVALID_REQUEST");
+      return answerFolder(
+        context,
+        await createFolder(db, readerOf(context).userId, body.name),
+        201,
+      );
+    }),
+  )
+  .patch(
+    "/folders/:folderId",
+    handle("rename-folder", async (context, db) => {
+      const body = await decodeJson(context, ArtifactFolderRequestSchema);
+      if (body === undefined) return refuse(context, "INVALID_REQUEST");
+      return answerFolder(
+        context,
+        await renameFolder(
+          db,
+          readerOf(context).userId,
+          context.req.param("folderId") ?? "",
+          body.name,
+        ),
+        200,
+      );
+    }),
+  )
+  .delete(
+    "/folders/:folderId",
+    handle("delete-folder", async (context, db) => {
+      const deleted = await deleteFolder(
+        db,
+        readerOf(context).userId,
+        context.req.param("folderId") ?? "",
+      );
+      if (!deleted) return refuse(context, "ARTIFACT_FOLDER_NOT_FOUND");
+      context.header("Cache-Control", "no-store");
+      return context.json(
+        Schema.encodeUnknownSync(DeleteArtifactFolderResponseSchema)({
+          status: "success",
+          data: { deleted: true },
+        }),
+        200,
+      );
+    }),
+  )
   .get(
     "/",
     handle("list", async (context, db) => {
@@ -149,7 +258,10 @@ export const artifactLibraryRoutes = new Hono<AppEnv>()
       return context.json(
         Schema.encodeUnknownSync(ArtifactLibraryResponseSchema)({
           status: "success",
-          data: { items },
+          data: {
+            items,
+            folders: await listFolders(db, readerOf(context).userId),
+          },
         }),
         200,
       );
@@ -174,8 +286,6 @@ export const artifactLibraryRoutes = new Hono<AppEnv>()
           writer: { kind: "user", userId: principal.userId },
         },
       );
-      if (result.kind === "no-project")
-        return refuse(context, "ARTIFACT_PROJECT_REQUIRED");
       if (result.kind === "invalid")
         return refuse(context, "INVALID_REQUEST", result.message);
       logger.info("Standalone artifact created.", {
@@ -191,6 +301,31 @@ export const artifactLibraryRoutes = new Hono<AppEnv>()
     handle("find", (context, db) =>
       answerItem(context, db, context.req.param("artifactId") ?? "", 200),
     ),
+  )
+  .put(
+    "/:artifactId/pin",
+    handle("pin", (context, db) => pin(context, db, true)),
+  )
+  .delete(
+    "/:artifactId/pin",
+    handle("unpin", (context, db) => pin(context, db, false)),
+  )
+  .put(
+    "/:artifactId/folder",
+    handle("file", async (context, db) => {
+      const body = await decodeJson(context, MoveArtifactToFolderRequestSchema);
+      if (body === undefined) return refuse(context, "INVALID_REQUEST");
+      const reader = readerOf(context);
+      const item = await findLibraryItem(
+        db,
+        reader,
+        context.req.param("artifactId") ?? "",
+      );
+      if (item === undefined) return refuse(context, "ARTIFACT_NOT_FOUND");
+      if (!(await moveToFolder(db, reader.userId, item.id, body.folderId)))
+        return refuse(context, "ARTIFACT_FOLDER_NOT_FOUND");
+      return answerItem(context, db, item.id, 200);
+    }),
   )
   .put(
     "/:artifactId/sharing",
@@ -212,7 +347,7 @@ export const artifactLibraryRoutes = new Hono<AppEnv>()
       if (item.source.kind !== "standalone")
         return refuse(context, "ARTIFACT_SHARING_STANDALONE_ONLY");
       const result = await shareStandaloneArtifact(db, {
-        homeId: item.threadId,
+        artifactId: item.id,
         ownerUserId: reader.userId as UserId,
         sharing: body.sharing,
       });
@@ -224,11 +359,11 @@ export const artifactLibraryRoutes = new Hono<AppEnv>()
         artifactId: item.id,
         sharing: body.sharing,
       });
-      await scheduleRealtimeInvalidation(
+      // Every member's library may gain or lose it.
+      await scheduleArtifactInvalidation(
         () => context.executionCtx,
         context.env,
-        item.threadId,
-        "thread.invalidated",
+        item.id,
         "audience",
       );
       return answerItem(context, db, item.id, 200);

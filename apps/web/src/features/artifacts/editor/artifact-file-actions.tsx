@@ -1,4 +1,3 @@
-import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderInput, Link2, Trash2 } from "lucide-react";
 import * as React from "react";
@@ -10,6 +9,7 @@ import {
   deleteArtifactMutation,
   isMissingArtifact,
 } from "../artifact-document-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import { artifactHref } from "./artifact-embed-links.js";
 import { useArtifactHost } from "./artifact-host.js";
 
@@ -25,8 +25,8 @@ const folderProblem = (folder: string) =>
  * The switcher's file actions, as the reference editor has them: Move to
  * Folder… and Delete Artifact…, for people who can edit. `items` go in the
  * switcher's menu; `dialogs` render beside the editor, since the menu
- * closes as an item is chosen. A standalone artifact is alone in its home,
- * so it has no folder to move to.
+ * closes as an item is chosen. A standalone artifact has no Thread, so no
+ * Thread folder to move to.
  */
 export function useArtifactFileActions({
   session,
@@ -37,7 +37,7 @@ export function useArtifactFileActions({
 }: {
   /** The open artifact's session, of any type: it moves the artifact. */
   readonly session: { readonly moveTo: (folder: string) => void };
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly artifactId: string;
   readonly folder: string;
   readonly readOnly: boolean;

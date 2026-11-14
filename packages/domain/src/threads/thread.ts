@@ -107,11 +107,6 @@ export const Thread = Schema.Struct({
   executionMode: Schema.optional(ThreadExecutionMode),
   /** The person whose message made a Space's agent start this Thread. */
   requestedByUserId: Schema.optional(UserId),
-  /**
-   * The hidden home of one standalone artifact (the Artifacts library): no
-   * agent runs in it and no Orb starts for it. Absent for every other Thread.
-   */
-  artifactHome: Schema.optional(Schema.Literal(true)),
 });
 
 export type Thread = typeof Thread.Type;

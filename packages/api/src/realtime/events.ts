@@ -10,7 +10,13 @@ const ClientId = Schema.String.check(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
   ),
 );
-const PresenceTopic = Schema.TemplateLiteral(["thread:", ThreadId]);
+/** A Thread, or a standalone artifact, someone has open. */
+const PresenceTopic = Schema.Union([
+  Schema.TemplateLiteral(["thread:", ThreadId]),
+  Schema.TemplateLiteral(["artifact:", Schema.String]).check(
+    Schema.isPattern(/^artifact:art_[0-9a-f]{32}$/),
+  ),
+]);
 
 export const RealtimeReadyEvent = Schema.Struct({
   type: Schema.Literal("ready"),
@@ -58,6 +64,15 @@ export const RealtimeInvalidationEvent = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("artifacts.invalidated"),
     threadId: ThreadId,
+    revision: Revision,
+  }),
+  /**
+   * A standalone artifact changed: it was saved, commented on, shared, or
+   * deleted. Content-free; refetch it and the Artifacts library.
+   */
+  Schema.Struct({
+    type: Schema.Literal("artifact.invalidated"),
+    artifactId: Schema.String.check(Schema.isPattern(/^art_[0-9a-f]{32}$/)),
     revision: Revision,
   }),
   /**

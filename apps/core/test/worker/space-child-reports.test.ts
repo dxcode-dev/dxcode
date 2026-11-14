@@ -461,9 +461,9 @@ describe("a Space's coordinator hears each change of its children", {
           submissionId: "sub_silent",
           parts: [
             text("I'll ask the owner."),
-            toolCall("request_attention", {
-              kind: "question",
-              summary: "Which name should the plugin use?",
+            toolCall("notify_user", {
+              title: "Plugin name",
+              body: "Which name should the plugin use?",
             }),
           ],
           outcome: "completed",

@@ -1,3 +1,4 @@
+import { moveHomeArtifacts } from "./artifact-library/moves.js";
 import { purgeUnsentAttachments } from "./attachments/store.js";
 import { attachmentTransfer } from "./attachments/transfer.js";
 import { sweepAutomations } from "./automations/sweep.js";
@@ -192,6 +193,24 @@ export const scheduled = (
           cause,
         }),
     ),
+  );
+  // Standalone artifacts that lived in an artifact home until 0198: their
+  // R2 objects move from the home's prefix to their own.
+  context.waitUntil(
+    moveHomeArtifacts(bindings)
+      .then((moved) => {
+        if (moved > 0)
+          threadArtifactLogger.info("Home artifacts moved.", {
+            event: "standalone_artifact_moved",
+            moved,
+          });
+      })
+      .catch((cause) =>
+        threadArtifactLogger.error("Home artifact move failed.", {
+          event: "standalone_artifact_move_failed",
+          cause,
+        }),
+      ),
   );
   // Notify agent's trailing wakes: each closed window others joined gets
   // one, built now (thread-artifacts/agent-wake-window.ts).

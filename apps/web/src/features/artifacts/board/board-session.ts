@@ -5,7 +5,6 @@ import {
   type BoardFile,
   parseBoard,
   serializeBoard,
-  type ThreadId,
 } from "@dx/domain";
 import {
   CaptureUpdateAction,
@@ -30,6 +29,7 @@ import type {
   BoardLiveEvent,
 } from "../../../shared/realtime/board-live.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import {
   type ArtifactDocument,
   type ArtifactsApi,
@@ -155,7 +155,7 @@ const sameOrigin = (url: string) => {
 };
 
 export class BoardSession {
-  readonly #threadId: ThreadId;
+  readonly #threadId: ArtifactScope;
   readonly #artifactId: string;
   readonly #api: ArtifactsApi;
   readonly #queryClient: QueryClient;
@@ -207,7 +207,7 @@ export class BoardSession {
   readonly #listeners = new Set<() => void>();
 
   constructor(options: {
-    readonly threadId: ThreadId;
+    readonly threadId: ArtifactScope;
     readonly initial: ArtifactDocument;
     readonly api: ArtifactsApi;
     readonly queryClient: QueryClient;

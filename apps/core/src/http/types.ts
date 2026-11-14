@@ -251,8 +251,6 @@ export interface Variables {
   readonly threadKind?: "thread" | "space";
   /** The Thread's plugin type, `<plugin>/<type>`, when it has one. */
   readonly threadPluginType?: string;
-  /** The authorized Thread is a standalone artifact's hidden home. */
-  readonly threadArtifactHome?: boolean;
   /** The Thread POST is a chat message: Flue records it without a model call. */
   readonly chatDelivery: boolean;
   /**

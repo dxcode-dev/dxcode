@@ -33,8 +33,7 @@ export interface SpaceAgentProfile {
  * purpose: tools that write into or read from the caller's own Orb
  * (`view_media`, `download_thread_changes`, `download_thread_file`,
  * `upload_thread_file`), `wait_for_threads` (a Space ends its turn and
- * hears reports), GitHub subscriptions and links, `request_attention` (a
- * Space asks with `set_thread_status` and a post), and installed plugins,
+ * hears reports), GitHub subscriptions and links, and installed plugins,
  * which run in an Orb.
  */
 export const SPACE_KEPT_DX_TOOLS: ReadonlySet<string> = new Set([

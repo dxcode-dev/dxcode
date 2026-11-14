@@ -10,16 +10,10 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { Hono } from "hono";
-import * as v from "valibot";
 import { beforeEach, describe, expect, it } from "vitest";
 import { authorizeThread } from "../../src/auth/authorize-thread.js";
-import {
-  claudeCodeDxTools,
-  runClaudeCodeSubagentDxCall,
-} from "../../src/claude-code/dx-tools.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
-import { createOwnerAskTools } from "../../src/owner-asks/agent-tools.js";
 import {
   artifactsEditedByPeopleNote,
   createArtifactTools,
@@ -42,8 +36,7 @@ import { runRepositories } from "./runtime.js";
 
 /**
  * Asks in artifacts (#1606) in workerd with real D1 and R2: checklist items
- * that mention people, request_attention writing the agent's ask for the
- * owner, Notify agent and @dx comment mentions that wake the Thread, and
+ * that mention people, Notify agent and @dx comment mentions that wake the Thread, and
  * mention notifications. The wake's delivery is replaced; it records what it
  * was sent.
  *
@@ -52,10 +45,6 @@ import { runRepositories } from "./runtime.js";
  *   through Notify agent, a comment that mentions it, or the next turn's
  *   note), or the next turn's note does not list the artifact they edited;
  * - a mention notifies someone who cannot open the Thread, or the writer;
- * - request_attention points at another Thread's artifact; writes an
- *   attention row instead of an ask; loses the ask in a Thread with no
- *   Plan artifact or in another Project; adds it twice; splits a list; or
- *   takes a summary that breaks the item;
  * - a person's comment that mentions the agent does not wake the Thread
  *   right away, or one inside the wake window never reaches the agent; a
  *   comment's people mentions notify outsiders;
@@ -191,41 +180,12 @@ const personSaves = async (
   return result.value;
 };
 
-/** request_attention as the agent calls it: Flue validates the input first. */
-const requestAttention = async (
-  threadId: string,
-  data: Record<string, unknown>,
-) => {
-  const [tool] = createOwnerAskTools(threadId, () => ({
-    db: env.DB,
-    bindings,
-  }));
-  if (tool === undefined) throw new Error("Expected request_attention.");
-  const parsed = v.parse(tool.input as v.GenericSchema, data);
-  return (
-    (await tool.run({
-      data: parsed,
-      toolCallId: "call",
-      log: { info() {}, warn() {}, error() {}, debug() {} },
-    } as never)) as { output: Record<string, unknown> }
-  ).output;
-};
-
 const markdownOf = async (threadId: string, artifactId: string) =>
   (
     (await (
       await app(owner)(`/v1/threads/${threadId}/artifacts/${artifactId}`)
     ).json()) as ThreadArtifactResponse
   ).data.markdown;
-
-const attentionRows = async (threadId: string) =>
-  Number(
-    await env.DB.prepare(
-      "SELECT count(*) AS n FROM thread_attention_request WHERE thread_id = ?",
-    )
-      .bind(threadId)
-      .first("n"),
-  );
 
 const notifications = (recipient: string) =>
   env.DB.prepare(
@@ -364,183 +324,6 @@ describe("asks in artifacts", () => {
     // Olive was already mentioned; Maya wrote her own mention.
     expect(await notifications(owner)).toHaveLength(1);
     expect(await notifications(member)).toEqual([]);
-  });
-
-  it("lets request_attention point only at this Thread's artifact, and adds nothing where the owner's ask already is", async () => {
-    const threadId = await newThread();
-    const other = await newThread();
-    const created = await createArtifact(bindings, {
-      threadId: other,
-      title: "Elsewhere",
-      markdown: "x",
-      writer: { kind: "agent" },
-    });
-    if (created.kind !== "saved") throw new Error("Expected an artifact.");
-    const artifactId = await agentWrites(threadId, PLAN);
-    await expect(
-      requestAttention(threadId, {
-        kind: "approval",
-        summary: "Approve merging #1240",
-        artifact_id: created.value.artifact.id,
-      }),
-    ).rejects.toThrow(/not in this Thread/);
-    expect(
-      await requestAttention(threadId, {
-        kind: "approval",
-        summary: "Approve merging #1240",
-        artifact_id: artifactId,
-      }),
-    ).toMatchObject({ listed: true, artifact_id: artifactId, revision: 1 });
-    expect(await markdownOf(threadId, artifactId)).toBe(PLAN);
-    expect(await attentionRows(threadId)).toBe(0);
-  });
-
-  it("puts the ask of a Claude Code Thread's mcp__dx__request_attention call in its Plan artifact, through the same tool", async () => {
-    const threadId = await newThread();
-    // Claude Code mode registers dx's tools under the MCP server's prefix.
-    claudeCodeDxTools(
-      threadId,
-      createOwnerAskTools(threadId, () => ({ db: env.DB, bindings })),
-    );
-    const results = new Map<string, string>();
-    await runClaudeCodeSubagentDxCall(
-      threadId,
-      {
-        id: "toolu_ask",
-        name: "mcp__dx__request_attention",
-        input: { kind: "approval", summary: "Approve the release notes" },
-      },
-      {
-        log: { info() {}, warn() {}, error() {}, debug() {} },
-        harness: {
-          sandbox: {
-            writeFile: async (path: string, content: string) => {
-              results.set(path, content);
-            },
-          },
-        },
-      } as never,
-    );
-    // Claude reads the tool's result from the file the MCP server waits on.
-    const [result] = [...results.values()];
-    expect(JSON.parse(result ?? "{}")).toMatchObject({ isError: false });
-    const { artifact_id: planId } = JSON.parse(
-      JSON.parse(result ?? "{}").content[0].text,
-    ) as { artifact_id: string };
-    expect(await markdownOf(threadId, planId)).toBe(
-      "- [ ] @[Olive Owner](user:asks-owner) Approve the release notes\n",
-    );
-    expect((await notifications(owner)).at(-1)).toMatchObject({
-      topic: "agent_notification",
-    });
-    expect(await attentionRows(threadId)).toBe(0);
-  });
-
-  it("puts request_attention's ask in the Thread's Plan artifact, in any Project, notifying the owner, and a tick there wakes nothing", async () => {
-    // A Thread in the owner's own Project, with no artifact yet.
-    const personal = project(
-      "prj_00000000-0000-4000-8000-00000000a902",
-      owner,
-      "Personal",
-    );
-    if (
-      (await env.DB.prepare("SELECT 1 AS found FROM projects WHERE id = ?")
-        .bind(personal.id)
-        .first("found")) === null
-    )
-      await runRepositories(
-        Effect.gen(function* () {
-          yield* (yield* ProjectRepository).insert(personal);
-        }),
-      );
-    sequence += 1;
-    const entity = thread(
-      `thr_00000000-0000-4000-8000-${(0xa90000 + sequence).toString(16).padStart(12, "0")}`,
-      personal.id,
-      owner,
-    );
-    await runRepositories(
-      Effect.gen(function* () {
-        yield* (yield* ThreadRepository).insert(entity);
-      }),
-    );
-    const threadId = entity.id as ThreadId;
-    const workspaceThread = await newThread();
-
-    const first = await requestAttention(threadId, {
-      kind: "approval",
-      summary: "  Approve merging PR #12  ",
-      url: "https://github.com/acme/app/pull/12",
-    });
-    expect(first).toMatchObject({ listed: true, title: "Plan", revision: 1 });
-    const planId = String(first.artifact_id);
-    expect(await markdownOf(threadId, planId)).toBe(
-      "- [ ] @[Olive Owner](user:asks-owner) Approve merging PR #12 ([link](https://github.com/acme/app/pull/12))\n",
-    );
-    // No attention row: the ask lives in the artifact.
-    expect(await attentionRows(threadId)).toBe(0);
-    // The owner's mention notifies them.
-    expect((await notifications(owner)).at(-1)).toMatchObject({
-      topic: "agent_notification",
-    });
-
-    // The same ask again adds nothing; another joins the same list.
-    expect(
-      await requestAttention(threadId, {
-        kind: "approval",
-        summary: "Approve merging PR #12",
-        url: "https://github.com/acme/app/pull/12",
-      }),
-    ).toMatchObject({ artifact_id: planId, revision: 1 });
-    await requestAttention(threadId, {
-      kind: "question",
-      summary: "Which region should the bucket live in?",
-    });
-    expect(await markdownOf(threadId, planId)).toBe(
-      [
-        "- [ ] @[Olive Owner](user:asks-owner) Approve merging PR #12 ([link](https://github.com/acme/app/pull/12))",
-        "- [ ] @[Olive Owner](user:asks-owner) Which region should the bucket live in?",
-        "",
-      ].join("\n"),
-    );
-
-    // A Plan a person already wrote takes the ask at its end.
-    const written = await agentWrites(workspaceThread, "# Plan\n\nShip it.\n");
-    expect(
-      await requestAttention(workspaceThread, {
-        kind: "question",
-        summary: "Ship today?",
-      }),
-    ).toMatchObject({ artifact_id: written, revision: 2 });
-    expect(await markdownOf(workspaceThread, written)).toBe(
-      "# Plan\n\nShip it.\n\n- [ ] @[Olive Owner](user:asks-owner) Ship today?\n",
-    );
-
-    // The owner ticks one in the Plan: the Thread does not wake.
-    await personSaves(threadId, planId, owner, (text) =>
-      text.replace(
-        "- [ ] @[Olive Owner](user:asks-owner) Which region",
-        "- [x] @[Olive Owner](user:asks-owner) Which region",
-      ),
-    );
-    expect(wakes).toEqual([]);
-
-    // Bad input is refused before anything is written.
-    for (const bad of [
-      { kind: "question", summary: "" },
-      { kind: "question", summary: "Two\nlines" },
-      { kind: "question", summary: "Look", url: "javascript:alert(1)" },
-      { kind: "question", summary: "Look", url: "https://x.test/a b" },
-    ])
-      await expect(requestAttention(threadId, bad)).rejects.toThrow();
-    // Only the tick changed the Plan since.
-    expect(await markdownOf(threadId, planId)).toBe(
-      [
-        "- [ ] @[Olive Owner](user:asks-owner) Approve merging PR #12 ([link](https://github.com/acme/app/pull/12))",
-        "- [x] @[Olive Owner](user:asks-owner) Which region should the bucket live in?",
-        "",
-      ].join("\n"),
-    );
   });
 
   it("notifies everyone who can open the Thread of a comment's @here, except its writer, and wakes no agent (#1808)", async () => {

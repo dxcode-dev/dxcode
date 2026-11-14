@@ -9,10 +9,7 @@ import {
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import { Effect, Result, Schema } from "effect";
 import * as v from "valibot";
-import {
-  addOwnerAsk,
-  settleOwnerAsk,
-} from "../../thread-artifacts/owner-ask.js";
+import { settleOwnerAsk } from "../../thread-artifacts/owner-ask.js";
 import type { ThreadToolsContext } from "../../threads/agent-tools.js";
 import { pluginBundleLayers } from "../plugins/bundles/layers.js";
 import {
@@ -26,7 +23,6 @@ import {
   proposalBundle,
   proposalScopes,
   proposeSkill,
-  recordProposalAsk,
   SkillProposalRefused,
   threadProposals,
 } from "./proposals.js";
@@ -37,9 +33,9 @@ import {
  * change before it takes effect (plugin plan M5).
  *
  * The tool never saves a skill. `propose` files the skill's full content as
- * a pending proposal (`proposals.ts`) and asks the owner to review it in the
- * Thread's Plan artifact, linking to the Skills settings page. Approving it
- * there saves it for new Threads and ticks the ask, which wakes this Thread.
+ * a pending proposal (`proposals.ts`) for the owner to review on the Skills
+ * settings page. Approving or rejecting it there wakes this Thread
+ * (`proposal-decided.ts`).
  *
  * `propose_plugin` does the same for plugins (plugin plan M5): it reads a
  * plugin from GitHub, pinned to the commit it read, and files it for review
@@ -121,8 +117,8 @@ export const createSkillTools = (
     name: "manage_skills",
     description: description([
       "Create, update, or install the owner's settings skills: reusable instructions dx loads in every new Thread the owner starts (personal), or that every member of their workspace starts (workspace). A person reviews each change before it takes effect.",
-      "list: the scopes you can propose in, the skills each holds, and your proposals from this Thread with their status. read: a skill's active version, to base an update on. propose: a new skill, or a new version of the skill with the same name in that scope. It saves nothing: it files the full skill for review, and adds an ask for the owner to this Thread's Plan artifact that links to the review. When they approve, the skill loads in new Threads, not this one, and the ask is ticked, which wakes this Thread; when they reject it, the ask is ticked as Rejected.",
-      "Plugins: list also shows the installed plugins in each scope. propose_plugin proposes installing a plugin from a public GitHub URL (url), such as https://github.com/owner/repo/tree/main/plugins/name, or updating an installed plugin to its source's latest commit (name). It installs nothing: it reads the plugin, pinned to that commit, files it for review on the Plugins settings page, and asks the owner in this Thread's Plan artifact. The review lists the permissions its code asks for, and what an update adds. Approval installs or updates it for new Threads. Plugins from a ZIP cannot be proposed; ask the person to upload them.",
+      "list: the scopes you can propose in, the skills each holds, and your proposals from this Thread with their status. read: a skill's active version, to base an update on. propose: a new skill, or a new version of the skill with the same name in that scope. It saves nothing: it files the full skill for review on the Skills settings page and returns the review link; give the owner that link in your reply. When they approve, the skill loads in new Threads, not this one; approving or rejecting wakes this Thread with the outcome.",
+      "Plugins: list also shows the installed plugins in each scope. propose_plugin proposes installing a plugin from a public GitHub URL (url), such as https://github.com/owner/repo/tree/main/plugins/name, or updating an installed plugin to its source's latest commit (name). It installs nothing: it reads the plugin, pinned to that commit, files it for review on the Plugins settings page, and returns the review link to give the owner in your reply; their decision wakes this Thread. The review lists the permissions its code asks for, and what an update adds. Approval installs or updates it for new Threads. Plugins from a ZIP cannot be proposed; ask the person to upload them.",
       "To install a skill from a repository or the web, read its SKILL.md and text files and propose them: the SKILL.md frontmatter's name and description, its body as instructions, and its text files as resources under resources/. Scripts and binary files cannot be settings skills; leave those in the repository's .agents/skills. Proposing again for the same skill from this Thread replaces your earlier pending proposal. After proposing, tell the person what you proposed and that it waits for their review.",
     ]),
     input: v.object({
@@ -364,25 +360,6 @@ export const createSkillTools = (
           ),
         );
         const reviewUrl = `${origin(context.bindings)}${reviewPath(scopes, target, proposal.id, "plugins")}`;
-        const what =
-          proposal.change === "new"
-            ? `installing the ${target.scope} plugin ${proposal.displayName}`
-            : `updating the ${target.scope} plugin ${proposal.displayName}${proposal.version === undefined ? "" : ` to ${proposal.version}`}`;
-        let asked = false;
-        try {
-          const ask = await addOwnerAsk(context, callingThreadId, {
-            summary: `Review ${what}, which dx proposed (${proposal.id})`,
-            ...(reviewUrl.startsWith("https://") ||
-            reviewUrl.startsWith("http://")
-              ? { url: reviewUrl }
-              : {}),
-            submissionId,
-          });
-          await run(recordProposalAsk(db, proposal.id, ask.artifactId));
-          asked = true;
-        } catch {
-          asked = false;
-        }
         return {
           output: {
             proposal_id: proposal.id,
@@ -395,9 +372,7 @@ export const createSkillTools = (
               : { version: proposal.version }),
             ...(proposal.widens ? { asks_for_more_permissions: true } : {}),
             review_url: reviewUrl,
-            note: asked
-              ? "Nothing is installed yet. The owner is asked in this Thread's Plan artifact to review it. Tell them what you proposed and that it waits for their review in Settings → Plugins; don't call request_attention for it."
-              : `Nothing is installed yet. Adding the review ask failed, so give the owner this link to review it: ${reviewUrl}`,
+            note: `Nothing is installed yet. In your reply, tell the owner what you proposed and that it waits for their review in Settings → Plugins, with this link: ${reviewUrl}. Their decision wakes this Thread.`,
           },
         };
       }
@@ -477,25 +452,6 @@ export const createSkillTools = (
       );
       const path = reviewPath(scopes, target, proposal.id);
       const reviewUrl = `${origin(context.bindings)}${path}`;
-      const what =
-        proposal.change === "new"
-          ? `the new ${target.scope} skill ${proposal.name}`
-          : `version ${(proposal.currentVersion ?? 0) + 1} of the ${target.scope} skill ${proposal.name}`;
-      let asked = false;
-      try {
-        const ask = await addOwnerAsk(context, callingThreadId, {
-          summary: `Review ${what} that dx proposed (${proposal.id})`,
-          ...(reviewUrl.startsWith("https://") ||
-          reviewUrl.startsWith("http://")
-            ? { url: reviewUrl }
-            : {}),
-          submissionId,
-        });
-        await run(recordProposalAsk(db, proposal.id, ask.artifactId));
-        asked = true;
-      } catch {
-        asked = false;
-      }
       return {
         output: {
           proposal_id: proposal.id,
@@ -507,9 +463,7 @@ export const createSkillTools = (
             ? {}
             : { current_version: proposal.currentVersion }),
           review_url: reviewUrl,
-          note: asked
-            ? "Nothing is saved yet. The owner is asked in this Thread's Plan artifact to review it. Tell them what you proposed and that it waits for their review in Settings → Skills; don't call request_attention for it."
-            : `Nothing is saved yet. Adding the review ask failed, so give the owner this link to review it: ${reviewUrl}`,
+          note: `Nothing is saved yet. In your reply, tell the owner what you proposed and that it waits for their review in Settings → Skills, with this link: ${reviewUrl}. Their decision wakes this Thread.`,
         },
       };
     },

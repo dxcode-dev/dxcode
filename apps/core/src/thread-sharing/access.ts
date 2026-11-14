@@ -46,8 +46,6 @@ export interface SharedThreadGrant {
   readonly snoozed: boolean;
   /** The Thread is a Space. */
   readonly space: boolean;
-  /** The Thread is a standalone artifact's hidden home. */
-  readonly artifactHome: boolean;
   readonly access: SharedThreadAccess;
   /** The Thread's plugin type. */
   readonly pluginThreadType?: string;
@@ -64,7 +62,7 @@ export const findSharedThreadGrant = async (
     .prepare(
       `SELECT thread.owner_user_id, thread.lifecycle_state,
               thread.snoozed_until IS NOT NULL AS snoozed,
-              thread.kind, thread.plugin_thread_type, thread.artifact_home,
+              thread.kind, thread.plugin_thread_type,
               ${sharedThreadAccessSql("thread", "?3")} AS access
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
@@ -79,7 +77,6 @@ export const findSharedThreadGrant = async (
       snoozed: number;
       kind: string;
       plugin_thread_type: string | null;
-      artifact_home: number;
       access: SharedThreadAccess;
     }>();
   return row === null
@@ -89,7 +86,6 @@ export const findSharedThreadGrant = async (
         lifecycleState: row.lifecycle_state,
         snoozed: row.snoozed === 1,
         space: row.kind === "space",
-        artifactHome: row.artifact_home === 1,
         access: row.access,
         ...(row.plugin_thread_type === null
           ? {}

@@ -1,5 +1,5 @@
 import type { MessageAutomation, MessagePlugin } from "@dx/api";
-import { Clock, FileText, Globe, MessagesSquare } from "lucide-react";
+import { Clock, FileText, Globe, MessagesSquare, Settings } from "lucide-react";
 import * as React from "react";
 import { DisclosureTrigger } from "../../shared/ui/disclosure.js";
 import { PluginIcon } from "../../shared/ui/plugin-icon.js";
@@ -9,8 +9,9 @@ import { conciseAge } from "./sharing/sharing-format.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 
 /**
- * A message the Thread's schedule, a GitHub subscription, or a person's tick
- * or answer in an artifact delivered after a turn ended. A schedule wake-up
+ * A message the Thread's schedule, a GitHub subscription, a person's tick
+ * or answer in an artifact, or a decision on a Settings page delivered after
+ * a turn ended. A schedule wake-up
  * or an artifact wake is one collapsed line opening to its text; GitHub
  * events show one row each.
  */
@@ -28,6 +29,7 @@ export function AutomationMessage({
     return <GitHubEventRows text={text} pending={pending} />;
   const artifact = automation === "artifact";
   const external = automation === "external";
+  const settings = automation === "settings";
   return (
     <div className="thread-source-message" data-open={open ? "" : undefined}>
       <DisclosureTrigger
@@ -39,6 +41,8 @@ export function AutomationMessage({
           <FileText strokeWidth={2} />
         ) : external ? (
           <Globe strokeWidth={2} />
+        ) : settings ? (
+          <Settings strokeWidth={2} />
         ) : (
           <Clock strokeWidth={2} />
         )}
@@ -47,7 +51,9 @@ export function AutomationMessage({
             ? "From an artifact"
             : external
               ? "Sent from outside dx"
-              : "Scheduled wake-up"}
+              : settings
+                ? "From Settings"
+                : "Scheduled wake-up"}
         </span>
         {pending ? <small>Steering</small> : null}
       </DisclosureTrigger>

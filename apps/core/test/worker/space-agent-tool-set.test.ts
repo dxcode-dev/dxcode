@@ -152,7 +152,6 @@ const ORDINARY_TOOLS = [
   "notify_user",
   "read_thread",
   "read_web_page",
-  "request_attention",
   "send_thread_message",
   "set_schedule",
   "thread_file_url",

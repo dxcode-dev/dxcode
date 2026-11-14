@@ -17,7 +17,7 @@ import {
   type ThreadArtifactComment,
   type ThreadMemberData,
 } from "@dx/api";
-import type { ThreadId, UserId } from "@dx/domain";
+import type { UserId } from "@dx/domain";
 import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import {
   type EditorState,
@@ -36,8 +36,9 @@ import type {
   SuggestMenuState,
 } from "../../../shared/comments/suggest-menu.js";
 import { projectKeys } from "../../projects/project-queries.js";
-import { threadKeys } from "../../threads/thread-queries.js";
+import { artifactMembersOptions } from "../artifact-comments-queries.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import {
   ArtifactApiError,
   type ArtifactDocument,
@@ -249,7 +250,7 @@ const retryable = (error: unknown) =>
   error.status === 429;
 
 export class ArtifactSession {
-  readonly #threadId: ThreadId;
+  readonly #threadId: ArtifactScope;
   readonly #artifactId: string;
   readonly #api: ArtifactsApi;
   readonly #queryClient: QueryClient;
@@ -296,7 +297,7 @@ export class ArtifactSession {
     queryClient,
     delay = 800,
   }: {
-    readonly threadId: ThreadId;
+    readonly threadId: ArtifactScope;
     readonly initial: ArtifactDocument;
     readonly api: ArtifactsApi;
     readonly queryClient: QueryClient;
@@ -1061,10 +1062,16 @@ export class ArtifactSession {
     };
   }
 
-  /** Keeps `@` following the Thread's people (its members query). */
+  /**
+   * Keeps `@` following the artifact's people (its members query): the
+   * Thread's, or those a standalone artifact is shared with.
+   */
   followPeople(viewerId: string) {
     this.#viewerId = viewerId;
-    const key = threadKeys.members(viewerId as UserId, this.#threadId);
+    const key = artifactMembersOptions(
+      viewerId as UserId,
+      this.#threadId,
+    ).queryKey;
     const take = (data: unknown) => {
       if (Array.isArray(data))
         this.#people = data as ReadonlyArray<ThreadMemberData>;

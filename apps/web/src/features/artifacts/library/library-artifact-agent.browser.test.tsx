@@ -1,8 +1,8 @@
 /**
  * An artifact opened from the Artifacts library (`/artifacts/<id>`) offers
- * only what reaches someone from there. A standalone artifact lives in a
- * home that never runs an agent, and the library page has no Thread
- * composer, so agent and Thread actions would go nowhere.
+ * only what reaches someone from there. A standalone artifact has no Thread
+ * and so no agent, and the library page has no Thread composer, so agent
+ * and Thread actions would go nowhere.
  *
  * Ways it can fail, each covered below:
  *  1. A standalone artifact shows Notify agent in its toolbar.
@@ -11,7 +11,7 @@
  *  3. A comment box offers Ask @dx, or its `@` list offers dx, on a
  *     standalone artifact.
  *  4. The body's `@` list, or Insert ▸ Mention, offers dx there.
- *  5. The switcher offers Move to Folder for an artifact alone in its home,
+ *  5. The switcher offers Move to Folder for a standalone artifact,
  *     Delete says it leaves "this Thread", or a delete strands the person on
  *     a page for an artifact that is gone.
  *  6. The fix goes too far: a Thread's artifact opened from the library
@@ -36,8 +36,11 @@ import { userEvent } from "vitest/browser";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
 import { createQueryClient } from "../../../shared/query/query-client.js";
 import { MenuPopup, MenuRoot, MenuTrigger } from "../../../shared/ui/menu.js";
-import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
-import { artifactCommentsOptions } from "../artifact-comments-queries.js";
+import {
+  artifactCommentsOptions,
+  artifactMembersOptions,
+} from "../artifact-comments-queries.js";
+import { scopeOf } from "../artifact-scope.js";
 import { ArtifactEditor } from "../editor/artifact-editor.js";
 import { LibraryArtifactPage } from "./library-artifact-page.js";
 
@@ -51,9 +54,16 @@ const COMMENT = `cmt_${"2".repeat(32)}`;
 
 type Source = "standalone" | "thread";
 
-const artifact = (): ThreadArtifact => ({
+/** A standalone artifact has no Thread; its routes are its own. */
+const threadOf = (source: Source) => (source === "standalone" ? null : home);
+const baseOf = (source: Source) =>
+  source === "standalone"
+    ? `/v1/standalone-artifacts/${ARTIFACT}`
+    : `/v1/threads/${home}/artifacts/${ARTIFACT}`;
+
+const artifact = (source: Source = "thread"): ThreadArtifact => ({
   id: ARTIFACT,
-  threadId: home,
+  threadId: threadOf(source),
   kind: "document",
   folder: "",
   title: "Launch notes",
@@ -70,7 +80,7 @@ const libraryItem = (source: Source) => ({
   id: ARTIFACT,
   kind: "document",
   title: "Launch notes",
-  threadId: home,
+  threadId: threadOf(source),
   source:
     source === "standalone"
       ? { kind: "standalone" }
@@ -79,7 +89,10 @@ const libraryItem = (source: Source) => ({
   access: "owner",
   sharing: "edit",
   revision: 1,
+  createdBy: { kind: "user", userId, name: "Viewer Self" },
   updatedBy: { kind: "user", userId, name: "Viewer Self" },
+  pinned: false,
+  folderId: null,
   createdAt: 0,
   updatedAt: 0,
 });
@@ -131,12 +144,12 @@ const stubServer = (source: Source) =>
       Promise.resolve(Response.json({ status: "success", data }));
     if (method === "GET" && url === `/v1/artifacts/${ARTIFACT}`)
       return ok({ item: libraryItem(source) });
-    if (method === "GET" && url === `/v1/threads/${home}/artifacts/${ARTIFACT}`)
-      return ok({ artifact: artifact(), markdown: `${QUOTE} on Friday.\n` });
-    if (
-      method === "DELETE" &&
-      url === `/v1/threads/${home}/artifacts/${ARTIFACT}`
-    ) {
+    if (method === "GET" && url === baseOf(source))
+      return ok({
+        artifact: artifact(source),
+        markdown: `${QUOTE} on Friday.\n`,
+      });
+    if (method === "DELETE" && url === baseOf(source)) {
       deleted.push(url);
       return ok({ deleted: true });
     }
@@ -161,18 +174,26 @@ const stubServer = (source: Source) =>
   });
 
 /** Seeds what the editor reads besides the artifact: its comment, people. */
-const seed = (client: ReturnType<typeof createQueryClient>) => {
-  client.setQueryData(artifactCommentsOptions(home, ARTIFACT).queryKey, [
-    comment(),
-  ]);
-  client.setQueryData(threadMembersQueryOptions(userId, home).queryKey, [
-    {
-      userId: "usr_maya",
-      name: "Maya Member",
-      handle: "maya",
-      email: "maya@example.com",
-    },
-  ] as never);
+const seed = (
+  client: ReturnType<typeof createQueryClient>,
+  source: Source = "thread",
+) => {
+  client.setQueryData(
+    artifactCommentsOptions(scopeOf(artifact(source)), ARTIFACT).queryKey,
+    [comment()],
+  );
+  // Who `@` lists: the Thread's members, or those the artifact is shared with.
+  client.setQueryData(
+    artifactMembersOptions(userId, scopeOf(artifact(source))).queryKey,
+    [
+      {
+        userId: "usr_maya",
+        name: "Maya Member",
+        handle: "maya",
+        email: "maya@example.com",
+      },
+    ] as never,
+  );
 };
 
 const render = async (
@@ -204,7 +225,7 @@ const render = async (
 const openInLibrary = async (source: Source) => {
   stubServer(source);
   const client = createQueryClient();
-  seed(client);
+  seed(client, source);
   const rootRoute = createRootRoute({ component: () => <Outlet /> });
   const router = createRouter({
     routeTree: rootRoute.addChildren([
@@ -415,7 +436,7 @@ describe("a standalone artifact in the library", () => {
     if (confirm === undefined) throw new Error("No Delete button.");
     await userEvent.click(confirm);
     await waitFor(() => router.state.location.pathname === "/artifacts");
-    expect(deleted).toEqual([`/v1/threads/${home}/artifacts/${ARTIFACT}`]);
+    expect(deleted).toEqual([`/v1/standalone-artifacts/${ARTIFACT}`]);
     expect(document.body.textContent).toContain("The library");
   });
 });

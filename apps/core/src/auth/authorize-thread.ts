@@ -30,7 +30,6 @@ interface ThreadAuthorizationResult {
   readonly lifecycleState?: ThreadLifecycleState;
   readonly snoozed?: boolean;
   readonly space?: boolean;
-  readonly artifactHome?: boolean;
   readonly access?: "owner" | "contribute" | "view";
   readonly ownerUserId?: string;
   /** The Thread's plugin type, from the row authorization reads. */
@@ -66,7 +65,6 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
         lifecycleState: owned.lifecycleState,
         snoozed: owned.snoozedUntil !== undefined,
         space: owned.kind === "space",
-        artifactHome: owned.artifactHome === true,
         access: "owner",
         ownerUserId: principal.userId,
         pluginThreadType: owned.pluginThreadType,
@@ -85,7 +83,6 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
             lifecycleState: grant.lifecycleState,
             snoozed: grant.snoozed,
             space: grant.space,
-            artifactHome: grant.artifactHome,
             access: grant.access,
             ownerUserId: grant.ownerUserId,
             pluginThreadType: grant.pluginThreadType,
@@ -226,6 +223,5 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
   context.set("threadKind", result.space === true ? "space" : "thread");
   if (result.pluginThreadType !== undefined)
     context.set("threadPluginType", result.pluginThreadType);
-  context.set("threadArtifactHome", result.artifactHome === true);
   await next();
 };

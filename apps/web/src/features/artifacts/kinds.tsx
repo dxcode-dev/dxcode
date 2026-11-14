@@ -1,14 +1,14 @@
 import type { ThreadArtifactKind } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { FileText, type LucideIcon, Shapes } from "lucide-react";
 import type * as React from "react";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
+import type { ArtifactScope } from "./artifact-scope.js";
 import type { ArtifactDocument } from "./artifacts-api.js";
 
 /** What every artifact type's editor receives from the Artifacts view. */
 export interface ArtifactEditorProps {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly initial: ArtifactDocument;
   readonly readOnly: boolean;
   /** The header's switcher; given file actions for its menu. */

@@ -1,4 +1,3 @@
-import type { ThreadId } from "@dx/domain";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { ArrowUp, Check, Pencil, Trash2, X } from "lucide-react";
 import * as React from "react";
@@ -24,7 +23,8 @@ import {
 import { PopoverContent, PopoverRoot } from "../../../shared/ui/popover.js";
 import { ProjectsIcon } from "../../../shared/ui/projects-icon.js";
 import { projectsQueryOptions } from "../../projects/project-queries.js";
-import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
+import { artifactMembersOptions } from "../artifact-comments-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import {
   CHIP_COLORS,
   type Chip,
@@ -445,13 +445,13 @@ export function ChipInsertItems({
   agent,
   onInsert,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   /** The Thread has an agent to mention; a standalone artifact's has none. */
   readonly agent: boolean;
   readonly onInsert: (source: string) => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
-  const members = useQuery(threadMembersQueryOptions(identity.id, threadId));
+  const members = useQuery(artifactMembersOptions(identity.id, threadId));
   const people = (members.data ?? []).filter(
     (member) => member.userId !== identity.id,
   );

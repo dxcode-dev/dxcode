@@ -1,5 +1,4 @@
 import type { ArtifactLibraryItem, ArtifactSharing } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import {
@@ -30,6 +29,7 @@ import {
   MenuTrigger,
 } from "../../../shared/ui/menu.js";
 import { artifactOptions } from "../artifact-document-queries.js";
+import { type ArtifactScope, scopeOf } from "../artifact-scope.js";
 import { OpenArtifact } from "../artifacts-view.js";
 import { ArtifactHostProvider } from "../editor/artifact-host.js";
 import {
@@ -136,7 +136,7 @@ function LibraryArtifactHeader({
   const Icon = item.kind === "board" ? Shapes : FileText;
   // The open artifact's own query follows renames as they save.
   const title =
-    useQuery(artifactOptions(item.threadId, item.id)).data?.artifact.title ??
+    useQuery(artifactOptions(scopeOf(item), item.id)).data?.artifact.title ??
     item.title;
   return (
     <>
@@ -162,7 +162,7 @@ function LibraryArtifactHeader({
             <Link2 aria-hidden="true" />
             <span>Copy link</span>
           </MenuItem>
-          {item.source.kind === "standalone" ? null : (
+          {item.threadId === null ? null : (
             <MenuItem
               render={
                 <Link
@@ -219,7 +219,7 @@ export function LibraryArtifactPage({
   presence,
 }: {
   readonly artifactId: string;
-  readonly presence: (threadId: ThreadId) => React.ReactNode;
+  readonly presence: (scope: ArtifactScope) => React.ReactNode;
 }) {
   const found = useQuery(artifactLibraryItemOptions(artifactId));
   const queryClient = useQueryClient();
@@ -251,7 +251,7 @@ export function LibraryArtifactPage({
   const standalone = item.source.kind === "standalone";
   return (
     <section className="library-artifact-page" data-kind={item.kind}>
-      {presence(item.threadId)}
+      {presence(scopeOf(item))}
       <ArtifactHostProvider
         value={{
           agent: !standalone,
@@ -265,7 +265,7 @@ export function LibraryArtifactPage({
       >
         <OpenArtifact
           key={`${item.id}:${item.access}`}
-          threadId={item.threadId}
+          threadId={scopeOf(item)}
           artifactId={item.id}
           active
           readOnly={item.access === "view"}

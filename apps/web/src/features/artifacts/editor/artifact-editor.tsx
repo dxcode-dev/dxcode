@@ -1,5 +1,5 @@
 import type { ThreadArtifactComment } from "@dx/api";
-import type { ProjectId, ThreadId } from "@dx/domain";
+import type { ProjectId } from "@dx/domain";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import {
@@ -52,6 +52,7 @@ import {
 } from "../../../shared/ui/menu.js";
 import { cn } from "../../../shared/utils.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
 import { artifactsApi } from "../artifacts-api.js";
 import {
@@ -655,7 +656,7 @@ function ArtifactToolbar({
   onWide,
   dictation,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly artifactId: string;
   readonly snapshot: ArtifactSessionSnapshot;
   readonly wide: boolean;
@@ -1035,7 +1036,7 @@ export function ArtifactEditor({
   switcher,
   dictation: dictationSlot,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly initial: ArtifactDocument;
   readonly readOnly: boolean;
   /**

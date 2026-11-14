@@ -1,6 +1,7 @@
 import type { BoardLivePayload } from "@dx/api";
-import type { ThreadId, UserId } from "@dx/domain";
+import type { UserId } from "@dx/domain";
 import * as React from "react";
+import type { PresenceScope } from "./presence-scope.js";
 
 /**
  * Live drawing on a board, between the realtime client (which owns the
@@ -18,12 +19,12 @@ export interface BoardLiveEvent {
 
 export interface BoardLiveHub {
   readonly send: (
-    threadId: ThreadId,
+    threadId: PresenceScope,
     artifactId: string,
     payload: BoardLivePayload,
   ) => boolean;
   readonly observe: (
-    threadId: ThreadId,
+    threadId: PresenceScope,
     artifactId: string,
     listener: (event: BoardLiveEvent) => void,
   ) => () => void;
@@ -41,7 +42,7 @@ export const BoardLiveContext = React.createContext<BoardLiveHub | undefined>(
 );
 
 export const useBoardLiveChannel = (
-  threadId: ThreadId,
+  threadId: PresenceScope,
   artifactId: string,
 ): BoardLiveChannel => {
   const hub = React.use(BoardLiveContext);

@@ -460,7 +460,6 @@ export const toolLine = (name: string, input: unknown): string | undefined => {
   }
   if (tool === "send_thread_message") return "Messaging a thread";
   if (tool === "wait_for_threads") return "Waiting on threads";
-  if (tool === "request_attention") return "Asking for input";
   if (tool === "manage_dx") return "Managing dx settings";
   if (tool === "artifact") return "Writing an artifact";
   if (/grep|search/.test(tool)) {

@@ -19,10 +19,11 @@ export type RealtimeThreadEventType =
   | "comments.invalidated"
   | "space.posts.invalidated"
   | "reactions.invalidated"
+  | "artifact.invalidated"
   | "workspace.status";
 export type InvalidationType = Exclude<
   RealtimeThreadEventType,
-  "workspace.status"
+  "workspace.status" | "artifact.invalidated"
 >;
 export type WorkspaceStatus = "waking" | "ready";
 /**
@@ -223,6 +224,56 @@ const publishRealtimeThreadEvent = async (
   }
 };
 
+/**
+ * Tells everyone with a standalone artifact open that it changed: saved,
+ * commented, shared, or deleted. Its owner always hears it, on their own
+ * revision stream; others hear it while present on `artifact:<id>`, or
+ * every member of the owner's workspace (`audience`) when sharing changed,
+ * so their libraries refresh.
+ */
+export const publishArtifactInvalidation = async (
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  artifactId: string,
+  recipients: RealtimeRecipients = "thread",
+): Promise<void> => {
+  if (bindings.DB === undefined || bindings.REALTIME_HUB === undefined) return;
+  try {
+    const ownerUserId = await bindings.DB.prepare(
+      "SELECT owner_user_id FROM thread_artifact WHERE id = ? AND thread_id IS NULL",
+    )
+      .bind(artifactId)
+      .first<UserId>("owner_user_id");
+    if (ownerUserId === null) return;
+    const audience = await homeAudienceForUser(bindings.DB, ownerUserId);
+    const response = await bindings.REALTIME_HUB.getByName(audience).fetch(
+      "https://realtime.internal/invalidate",
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          [AUDIENCE_HEADER]: audience,
+          [PARTICIPANT_HEADER]: ownerUserId,
+          [CLIENT_HEADER]: crypto.randomUUID(),
+        },
+        body: JSON.stringify({
+          type: "artifact.invalidated",
+          artifactId,
+          ownerUserId,
+          ...(recipients === "thread" ? {} : { recipients }),
+        }),
+      },
+    );
+    if (!response.ok)
+      throw new Error(`Realtime hub returned ${response.status}.`);
+  } catch (cause) {
+    realtimeLogger.warn("Realtime artifact event publication failed.", {
+      event: "realtime_artifact_event_publication_failed",
+      artifactId,
+      cause,
+    });
+  }
+};
+
 /** An event for one user's open apps only. */
 export type UserInvalidationType =
   | "notifications.invalidated"
@@ -309,6 +360,32 @@ export const scheduleUserInvalidation = async (
   type: UserInvalidationType,
 ): Promise<void> => {
   const publication = publishUserInvalidation(bindings, userId, type);
+  try {
+    executionContext().waitUntil(publication);
+  } catch (cause) {
+    if (
+      cause instanceof Error &&
+      cause.message === missingExecutionContextMessage
+    )
+      return publication;
+    throw cause;
+  }
+};
+
+/** Publishes a standalone artifact's event after the response, or now. */
+export const scheduleArtifactInvalidation = async (
+  executionContext: () => {
+    readonly waitUntil: (promise: Promise<unknown>) => void;
+  },
+  bindings: Pick<Bindings, "DB" | "REALTIME_HUB">,
+  artifactId: string,
+  recipients: RealtimeRecipients = "thread",
+): Promise<void> => {
+  const publication = publishArtifactInvalidation(
+    bindings,
+    artifactId,
+    recipients,
+  );
   try {
     executionContext().waitUntil(publication);
   } catch (cause) {

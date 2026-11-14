@@ -17,8 +17,8 @@ import { deleteSpacePost, insertSpacePost } from "./store.js";
 
 /**
  * Whether the reporting thread has an open ask: an unchecked checklist item
- * mentioning a person in one of its artifacts, as `request_attention`
- * writes for its owner (`thread_open_ask`, which its card reads as Needs
+ * mentioning a person in one of its artifacts (`thread_open_ask`, which
+ * its card reads as Needs
  * you). The mention notified that person, so the Space's agent need not ask
  * them again. Undefined when it has none: then no one was notified of
  * anything the report waits on.

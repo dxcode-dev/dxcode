@@ -6,10 +6,10 @@ import {
   threadAgentUrl,
 } from "@dx/api";
 import type {
-  ThinkingLevel,
   ModeId,
   ProjectId,
   RunnerProfileId,
+  ThinkingLevel,
   ThreadId,
   ThreadTitle,
   UserId,

@@ -64,14 +64,12 @@
 
 .artifact-library-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) 14px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   min-height: 60px;
-  padding: var(--space-2-5) var(--space-4);
+  padding-right: var(--space-3);
   border-bottom: 1px solid var(--divider);
-  color: var(--foreground);
-  text-decoration: none;
 }
 .artifact-library-row:last-child {
   border-bottom: 0;
@@ -79,9 +77,63 @@
 .artifact-library-row:hover {
   background: var(--accent);
 }
-.artifact-library-row:focus-visible {
+
+/* The row's main target: an artifact's link, or a folder's button. */
+.artifact-library-row-link {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-3);
+  align-self: stretch;
+  min-width: 0;
+  padding: var(--space-2-5) 0 var(--space-2-5) var(--space-4);
+  border: 0;
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  background: transparent;
+  cursor: pointer;
+}
+.artifact-library-row-link:focus-visible {
   outline: 2px solid var(--ring);
   outline-offset: -2px;
+}
+
+/* Quiet until the row is pointed at or the menu is focused. */
+@media (hover: hover) {
+  .artifact-library-row-menu {
+    opacity: 0;
+  }
+  .artifact-library-row:hover .artifact-library-row-menu,
+  .artifact-library-row-menu:focus-visible,
+  .artifact-library-row-menu[data-popup-open] {
+    opacity: 1;
+  }
+}
+
+.artifact-library-pin {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: var(--space-1);
+  color: var(--muted-foreground);
+  vertical-align: -1px;
+}
+
+.artifact-library-folder-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--divider);
+  font-size: var(--text-sm);
+}
+.artifact-library-folder-header > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
 }
 
 .artifact-library-icon {
@@ -153,12 +205,6 @@
   white-space: nowrap;
 }
 
-.artifact-library-chevron {
-  width: 14px;
-  height: 14px;
-  color: var(--muted-foreground);
-}
-
 .artifact-library-error {
   margin: 0;
   padding: var(--space-2) var(--space-4);
@@ -209,10 +255,14 @@
     gap: var(--space-3);
     padding: var(--space-3);
   }
+  /* Search and filters stay on top as the list scrolls, on the page's own
+     surface, so no band of another color shows between or behind them. */
   .artifact-library-pane {
     z-index: 1;
-    padding-bottom: var(--space-1);
-    background: var(--background);
+    gap: var(--space-2);
+    margin: calc(var(--space-3) * -1) calc(var(--space-3) * -1) 0;
+    padding: 0 var(--space-3) var(--space-2);
+    background: var(--surface);
   }
   .artifact-library-search input {
     height: 44px;
@@ -223,7 +273,21 @@
   }
   .artifact-library-row {
     min-height: 64px;
-    padding: var(--space-3);
+  }
+  .artifact-library-row-link {
+    padding: var(--space-3) 0 var(--space-3) var(--space-3);
+  }
+  /* The filters scroll sideways on one line. */
+  .artifact-library-filter[data-orientation="vertical"] {
+    flex-direction: row;
+    align-self: flex-start;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .artifact-library-filter[data-orientation="vertical"] .dx-tab {
+    flex: none;
+    width: auto;
   }
   .library-artifact-source,
   .library-artifact-share-label {
@@ -243,11 +307,4 @@
     padding: 0;
     justify-content: center;
   }
-}
-
-/* The filters share the pane's width evenly. */
-.artifact-library-filter {
-  display: grid;
-  grid-auto-columns: minmax(0, 1fr);
-  grid-auto-flow: column;
 }

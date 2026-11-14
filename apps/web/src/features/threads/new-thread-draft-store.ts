@@ -1,8 +1,8 @@
 import type {
-  ThinkingLevel,
   ModeId,
   ProjectId,
   RunnerProfileId,
+  ThinkingLevel,
   ThreadId,
   ThreadVisibility,
   UserId,

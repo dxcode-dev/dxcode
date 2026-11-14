@@ -2,10 +2,9 @@ import * as React from "react";
 
 /**
  * Where an artifact is open, and so what it can reach besides its readers.
- * Inside a Thread or Space everything is there. A standalone artifact lives
- * in a home that never runs an agent and holds that one artifact, and the
- * library page has no Thread composer, so the editor hides what would go
- * nowhere there.
+ * Inside a Thread or Space everything is there. A standalone artifact has
+ * no Thread, so no agent and no Thread folders, and the library page has
+ * no Thread composer, so the editor hides what would go nowhere there.
  */
 export interface ArtifactHost {
   /**

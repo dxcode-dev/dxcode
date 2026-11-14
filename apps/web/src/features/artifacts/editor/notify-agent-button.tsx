@@ -1,8 +1,8 @@
-import type { ThreadId } from "@dx/domain";
 import { useMutation } from "@tanstack/react-query";
 import { Check, Send } from "lucide-react";
 import { Button } from "../../../shared/ui/button.js";
 import { notifyArtifactAgentMutation } from "../artifact-document-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 
 /**
  * Notify agent (#1765): edits don't wake the agent, so this wakes it once
@@ -15,7 +15,7 @@ export function NotifyAgentButton({
   artifactId,
   revision,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly artifactId: string;
   /** The revision the editor's content is based on. */
   readonly revision: number;

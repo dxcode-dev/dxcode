@@ -1,7 +1,8 @@
-import type { ThreadId, UserId } from "@dx/domain";
+import type { UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import type { CommentPeople } from "../../../shared/comments/comment-text.js";
-import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
+import { artifactMembersOptions } from "../artifact-comments-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 
 /**
  * Who can be named in the Thread's comments, by user ID: its members, which
@@ -10,9 +11,9 @@ import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-que
  */
 export const useCommentPeople = (
   viewer: { readonly id: UserId; readonly name: string },
-  threadId: ThreadId,
+  threadId: ArtifactScope,
 ): CommentPeople => {
-  const members = useQuery(threadMembersQueryOptions(viewer.id, threadId));
+  const members = useQuery(artifactMembersOptions(viewer.id, threadId));
   return new Map<string, { readonly name: string; readonly image?: string }>([
     [viewer.id, { name: viewer.name }],
     ...(members.data ?? []).map(

@@ -1,5 +1,4 @@
 import type { ThreadArtifactComment } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowUp, AtSign, Check, MessageSquare } from "lucide-react";
 import * as React from "react";
@@ -30,11 +29,12 @@ import { PopoverContent, PopoverRoot } from "../../../shared/ui/popover.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { cn, formatRelativeTime } from "../../../shared/utils.js";
-import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import {
+  artifactMembersOptions,
   createArtifactCommentMutation,
   resolveArtifactCommentMutation,
 } from "../artifact-comments-queries.js";
+import type { ArtifactScope } from "../artifact-scope.js";
 import { ArtifactApiError } from "../artifacts-api.js";
 import { useArtifactHost } from "./artifact-host.js";
 
@@ -79,7 +79,7 @@ function CommentComposer({
   dictation,
   threadId,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly label: string;
   readonly placeholder: string;
   readonly pending: boolean;
@@ -107,7 +107,7 @@ function CommentComposer({
   // `@` lists the Thread's people, dx, and @here (#1808).
   const { identity } = useAuthenticatedIdentity();
   const members =
-    useQuery(threadMembersQueryOptions(identity.id, threadId)).data ?? [];
+    useQuery(artifactMembersOptions(identity.id, threadId)).data ?? [];
   // A standalone artifact's home has no agent: no dx to ask or mention.
   const { agent } = useArtifactHost();
   const mentions = useCommentMentions({ members, body, setBody, box, agent });
@@ -347,7 +347,7 @@ export function CommentCard({
   readonly readOnly: boolean;
   readonly people: CommentPeople;
   readonly dictation: DictationSlot | undefined;
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly artifactId: string;
   /** A new comment saved: its card opens in place of the draft's. */
   readonly onPosted: (id: string) => void;

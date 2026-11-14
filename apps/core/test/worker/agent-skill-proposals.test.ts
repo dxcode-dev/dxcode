@@ -48,8 +48,8 @@ import { runRepositories } from "./runtime.js";
  *   new version;
  * - a decided proposal is decided again, or a rejected one changes skills;
  * - two pending proposals from one Thread for one skill both await review;
- * - the owner is not asked to review, or the agent's Thread never hears the
- *   outcome (its ask stays unticked).
+ * - the proposal writes an ask into an artifact, the agent is not given the
+ *   review link to share, or its Thread never hears the outcome.
  */
 
 // Flue's run is stood in for: the agent route only records the message it
@@ -274,10 +274,10 @@ describe("manage_skills proposals", () => {
     expect(await skillRows()).toEqual([]);
     expect(await resolved()).toEqual([]);
 
-    // The owner is asked in the Plan, with the review link.
-    const plan = await planMarkdown(threadId);
-    expect(plan).toContain("- [ ] @[Proposal Owner](user:proposal-owner)");
-    expect(plan).toContain(proposalId);
+    // No artifact: the agent shares the review link in its reply.
+    expect(await planMarkdown(threadId)).toBeUndefined();
+    expect(await listArtifacts(bindings, threadId)).toEqual([]);
+    expect(proposed.note).toContain(proposed.review_url as string);
 
     // The Skills page lists it for review, with what it would save.
     const page = await app(owner)(personal);
@@ -316,17 +316,13 @@ describe("manage_skills proposals", () => {
       "release-notes",
     ]);
 
-    // The ask is ticked, which wakes the agent's Thread with the outcome.
-    const after = await planMarkdown(threadId);
-    expect(after).toContain("- [x] @[Proposal Owner](user:proposal-owner)");
-    expect(after).toContain("Approved");
+    // The decision wakes the agent's Thread with the outcome.
     expect(delivered.messages).toEqual([
       {
         threadId,
-        body: expect.stringContaining("A person decided an ask in artifact"),
+        body: expect.stringContaining(`skill proposal ${proposalId}`),
       },
     ]);
-    expect(delivered.messages[0]?.body).toContain("Who: Proposal Owner");
     expect(delivered.messages[0]?.body).toContain("Approved");
 
     // Decided once only, and the agent sees the outcome.
@@ -490,7 +486,12 @@ describe("manage_skills proposals", () => {
     );
     expect(rejected.status).toBe(200);
     expect(await skillRows()).toEqual([]);
-    expect(await planMarkdown(threadId)).toContain("Rejected");
+    expect(delivered.messages).toEqual([
+      {
+        threadId,
+        body: expect.stringContaining("Rejected."),
+      },
+    ]);
     const status = await manage({ action: "list" });
     expect(status.proposals).toEqual([
       expect.objectContaining({ status: "rejected" }),
@@ -522,14 +523,6 @@ describe("manage_skills proposals", () => {
         }),
       ]),
     );
-    // The replaced proposal's ask is ticked, not left open.
-    const plan = await planMarkdown(threadId);
-    expect(plan).toMatch(
-      new RegExp(
-        `- \\[x\\] .*${first.proposal_id}.*Replaced by ${second.proposal_id}`,
-      ),
-    );
-    expect(plan).toMatch(new RegExp(`- \\[ \\] .*${second.proposal_id}`));
     const firstApprove = await app(owner)(
       `${personal}/proposals/${first.proposal_id}/approve`,
       "POST",

@@ -90,7 +90,12 @@ export interface MessagePlugin {
  * `external`: text from outside dx started the Thread, such as a website's
  * feedback widget or a plugin's webhook trigger.
  */
-export type MessageAutomation = "schedule" | "github" | "artifact" | "external";
+export type MessageAutomation =
+  | "schedule"
+  | "github"
+  | "artifact"
+  | "settings"
+  | "external";
 
 /** Tagging the agent sends a message to it, even beside member tags. */
 export const AGENT_MENTION = "dx";
@@ -249,6 +254,7 @@ export const parseMessageAuthor = (
     ...(fields.get("automation") === "schedule" ||
     fields.get("automation") === "github" ||
     fields.get("automation") === "artifact" ||
+    fields.get("automation") === "settings" ||
     fields.get("automation") === "external"
       ? { automation: fields.get("automation") as MessageAutomation }
       : {}),

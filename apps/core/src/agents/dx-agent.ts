@@ -76,7 +76,6 @@ import {
   unsavedStopNote,
   WORKSPACE_UNSAVED_STOP_SIGNAL,
 } from "../orb-disk/unsaved-stop.js";
-import { createOwnerAskTools } from "../owner-asks/agent-tools.js";
 import {
   agentPluginHostContext,
   agentThreadToolsContext,
@@ -330,14 +329,6 @@ const dxTools = (
   if (promptData?.bugReportReader === true)
     for (const tool of createBugReportTools(threadId, agentThreadToolsContext))
       tools.push(withToolFailureMessage(tool));
-  // request_attention: an ask for the owner in the Thread's Plan artifact,
-  // which notifies them.
-  for (const tool of createOwnerAskTools(
-    threadId,
-    agentThreadToolsContext,
-    promptData?.plugins?.submissionId,
-  ))
-    tools.push(withToolFailureMessage(tool));
   // manage_dx: the owner's dx settings, changed only after they apply each
   // change on a card above the composer.
   tools.push(

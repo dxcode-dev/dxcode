@@ -79,9 +79,21 @@ export const ThreadArtifactAuthorSchema = Schema.Union([
 ]);
 export type ThreadArtifactAuthor = typeof ThreadArtifactAuthorSchema.Type;
 
+/**
+ * Who an artifact is for: `people` lists it for everyone who can open its
+ * Thread; `agent` marks the agent's own notes, which people's lists leave
+ * out unless they choose to show agent notes.
+ */
+export const ThreadArtifactAudienceSchema = Schema.Literals([
+  "people",
+  "agent",
+]);
+export type ThreadArtifactAudience = typeof ThreadArtifactAudienceSchema.Type;
+
 export const ThreadArtifactSchema = Schema.Struct({
   id: ThreadArtifactIdSchema,
-  threadId: ThreadId,
+  /** The Thread it belongs to; null for a standalone artifact. */
+  threadId: Schema.NullOr(ThreadId),
   kind: ThreadArtifactKindSchema,
   folder: Schema.String,
   title: Schema.String,
@@ -94,6 +106,8 @@ export const ThreadArtifactSchema = Schema.Struct({
   updatedBy: ThreadArtifactAuthorSchema,
   /** Unresolved comments, replies not counted. */
   openCommentCount: Schema.Int,
+  /** Present only on the agent's own notes; left out means `people`. */
+  audience: Schema.optional(Schema.Literal("agent")),
   createdAt: Schema.Number,
   updatedAt: Schema.Number,
 });
@@ -294,6 +308,7 @@ export type ThreadArtifactImageResponse =
 export const ThreadArtifactErrorCodeSchema = Schema.Literals([
   "INVALID_REQUEST",
   "ARTIFACT_NOT_FOUND",
+  "ARTIFACT_READ_ONLY",
   "ARTIFACT_COMMENT_NOT_FOUND",
   "ARTIFACT_QUOTE_NOT_FOUND",
   "ARTIFACT_COMMENT_LIMIT",

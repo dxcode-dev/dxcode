@@ -68,6 +68,46 @@ export const threadMembers = async (
   (await memberRows(db, threadId)).map(memberData);
 
 /**
+ * Who can open a standalone artifact besides its owner, the owner included:
+ * active members of the workspace it is shared with, by name; none while
+ * it is private or the owner has left that workspace.
+ */
+export const standaloneArtifactMembers = async (
+  db: D1Database,
+  artifactId: string,
+): Promise<ReadonlyArray<ThreadMemberData>> =>
+  (
+    await db
+      .prepare(
+        `SELECT "user".id AS user_id,
+                ${displayNameSql('"user"', "account")} AS name,
+                account.username AS handle, "user".email,
+                ${userImageSql('"user"', "account")} AS image
+           FROM thread_artifact AS artifact
+           JOIN organization ON organization.id = artifact.shared_workspace_id
+                            AND organization.lifecycleState = 'active'
+           JOIN member ON member.organizationId = organization.id
+           JOIN "user" ON "user".id = member.userId
+           JOIN personal_account AS account ON account.user_id = "user".id
+          WHERE artifact.id = ?1 AND artifact.thread_id IS NULL
+            AND artifact.workspace_access != 'none'
+            AND ${activeMemberSql("organization.id", "artifact.owner_user_id")}
+          ORDER BY name COLLATE NOCASE, "user".id
+          LIMIT 500`,
+      )
+      .bind(artifactId)
+      .all<{
+        user_id: string;
+        name: string | null;
+        handle: string;
+        email: string;
+        image: string | null;
+      }>()
+  ).results.map((row) =>
+    memberData({ ...row, conversation_mode: null, kind: null }),
+  );
+
+/**
  * A shared Thread's members with its mode and kind, in one read; no
  * conversation while it is private. A Space is always in agent mode: every
  * message in it goes to its agent.

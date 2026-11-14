@@ -809,7 +809,7 @@ describe("Space thread cards in workerd with real D1", () => {
     });
     await setActivity(childId, "idle");
 
-    // The agent asks for something with request_attention's checklist item.
+    // The agent asks a person for something with a checklist item.
     const [artifactTool] = createArtifactTools(childId, () => ({
       db: env.DB,
       bindings,

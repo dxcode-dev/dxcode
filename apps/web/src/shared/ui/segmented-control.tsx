@@ -4,13 +4,15 @@ import "./tabs.css";
 
 /**
  * A pill group of plain buttons for a choice that is not a tab panel, such
- * as a filter: the chosen option has `aria-pressed`.
+ * as a filter: the chosen option has `aria-pressed`. `vertical` stacks the
+ * choices full width, for a side pane with longer labels.
  */
 export function SegmentedControl<Value extends string>({
   value,
   onValueChange,
   options,
   label,
+  orientation = "horizontal",
   className,
 }: {
   readonly value: Value;
@@ -19,11 +21,13 @@ export function SegmentedControl<Value extends string>({
     readonly [value: Value, label: React.ReactNode]
   >;
   readonly label: string;
+  readonly orientation?: "horizontal" | "vertical";
   readonly className?: string;
 }) {
   return (
     <fieldset
       aria-label={label}
+      data-orientation={orientation}
       className={cn("dx-tabs-list dx-segmented", className)}
     >
       {options.map(([optionValue, optionLabel]) => (

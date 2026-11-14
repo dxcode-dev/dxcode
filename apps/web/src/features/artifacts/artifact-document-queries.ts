@@ -1,10 +1,10 @@
 import type { ThreadArtifactKind } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
 import {
   mutationOptions,
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
+import type { ArtifactScope } from "./artifact-scope.js";
 import {
   ArtifactApiError,
   type ArtifactDocument,
@@ -14,7 +14,7 @@ import {
 } from "./artifacts-api.js";
 import { artifactKeys, invalidateArtifacts } from "./artifacts-queries.js";
 
-export const artifactListOptions = (threadId: ThreadId, active = true) =>
+export const artifactListOptions = (threadId: ArtifactScope, active = true) =>
   queryOptions({
     queryKey: artifactKeys.list(threadId),
     queryFn: ({ signal }) => artifactsApi.list(threadId, signal),
@@ -24,7 +24,7 @@ export const artifactListOptions = (threadId: ThreadId, active = true) =>
   });
 
 export const artifactOptions = (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
   active = true,
 ) =>
@@ -40,7 +40,7 @@ export const artifactOptions = (
 /** A save's answer is the artifact's newest revision: show it at once. */
 export const acceptSavedArtifact = (
   client: QueryClient,
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   saved: ArtifactDocument,
 ) => {
   const key = artifactKeys.detail(threadId, saved.artifact.id);
@@ -55,7 +55,7 @@ export const acceptSavedArtifact = (
 
 export const createArtifactMutation = (
   client: QueryClient,
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   onCreated: (created: ArtifactDocument) => void,
 ) =>
   mutationOptions({
@@ -77,7 +77,7 @@ export const isMissingArtifact = (error: unknown) =>
 /** Deletes an artifact, then refreshes the Thread's artifacts. */
 export const deleteArtifactMutation = (
   client: QueryClient,
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
 ) =>
   mutationOptions({
@@ -87,7 +87,7 @@ export const deleteArtifactMutation = (
 
 /** Notify agent: one wake for the artifact's Thread, with what changed. */
 export const notifyArtifactAgentMutation = (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
 ) =>
   mutationOptions({

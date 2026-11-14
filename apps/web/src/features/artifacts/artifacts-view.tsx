@@ -2,14 +2,16 @@ import type { ThreadArtifact, ThreadArtifactKind } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
-import { Check, ChevronDown, FileText } from "lucide-react";
+import { Bot, Check, ChevronDown, FileText } from "lucide-react";
 import * as React from "react";
 import { useShowArtifact } from "../../shared/navigation/open-artifact.js";
 import { Button } from "../../shared/ui/button.js";
 import { EmptyState } from "../../shared/ui/empty-state.js";
 import {
+  MenuCheckboxItem,
   MenuGroup,
   MenuItem,
+  MenuItemHint,
   MenuLabel,
   MenuPopup,
   MenuRoot,
@@ -21,6 +23,7 @@ import {
   artifactOptions,
   createArtifactMutation,
 } from "./artifact-document-queries.js";
+import type { ArtifactScope } from "./artifact-scope.js";
 import {
   ARTIFACT_KIND_VIEWS,
   type ArtifactKindView,
@@ -59,6 +62,7 @@ function ArtifactSwitcher({
   onCreate,
   creatable,
   canCreate,
+  agentNotes,
   extra,
 }: {
   readonly artifacts: ReadonlyArray<ThreadArtifact>;
@@ -68,6 +72,12 @@ function ArtifactSwitcher({
   /** The types this person may create. */
   readonly creatable: ReadonlyArray<ArtifactKindView>;
   readonly canCreate: boolean;
+  /** The agent's own notes: how many, and whether the list shows them. */
+  readonly agentNotes: {
+    readonly count: number;
+    readonly shown: boolean;
+    readonly onShownChange: (shown: boolean) => void;
+  };
   /** The open artifact's file actions, from the editor. */
   readonly extra?: React.ReactNode;
 }) {
@@ -103,7 +113,11 @@ function ArtifactSwitcher({
                   data-kind={artifact.kind}
                   onClick={() => onSelect(artifact.id)}
                 >
-                  <Icon aria-hidden="true" />
+                  {artifact.audience === "agent" ? (
+                    <Bot aria-label="Agent note" />
+                  ) : (
+                    <Icon aria-hidden="true" />
+                  )}
                   <span>{artifact.title}</span>
                   {artifact.id === selected?.id ? (
                     <Check aria-hidden="true" />
@@ -113,9 +127,24 @@ function ArtifactSwitcher({
             })}
           </MenuGroup>
         ))}
-        {canCreate ? (
+        {agentNotes.count === 0 ? null : (
           <>
             {artifacts.length === 0 ? null : <MenuSeparator />}
+            <MenuCheckboxItem
+              checked={agentNotes.shown}
+              onCheckedChange={agentNotes.onShownChange}
+            >
+              <Bot aria-hidden="true" />
+              <span>Show agent notes</span>
+              <MenuItemHint>{agentNotes.count}</MenuItemHint>
+            </MenuCheckboxItem>
+          </>
+        )}
+        {canCreate ? (
+          <>
+            {artifacts.length === 0 && agentNotes.count === 0 ? null : (
+              <MenuSeparator />
+            )}
             {creatable.map((view) => (
               <MenuItem key={view.kind} onClick={() => onCreate(view.kind)}>
                 <view.icon aria-hidden="true" />
@@ -140,7 +169,7 @@ export function OpenArtifact({
   switcher,
   dictation,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly artifactId: string;
   readonly active: boolean;
   readonly readOnly: boolean;
@@ -212,12 +241,26 @@ export function ArtifactsView({
       openArtifact(created.artifact.id),
     ),
   );
-  const artifacts = list.data ?? [];
+  const all = list.data ?? [];
+  // The agent's own notes stay out of the list until this person shows
+  // them; a link to one still opens it.
+  const [showAgentNotes, setShowAgentNotes] = React.useState(false);
+  const agentNoteCount = all.filter(
+    (artifact) => artifact.audience === "agent",
+  ).length;
+  const artifacts = showAgentNotes
+    ? all
+    : all.filter((artifact) => artifact.audience !== "agent");
+  const agentNotes = {
+    count: agentNoteCount,
+    shown: showAgentNotes,
+    onShownChange: setShowAgentNotes,
+  };
   // Without an `artifact` parameter the view keeps showing the artifact it
   // first chose, even when another one becomes the newest.
   const [pinned, setPinned] = React.useState<string>();
   const selected =
-    artifacts.find((artifact) => artifact.id === requested) ??
+    all.find((artifact) => artifact.id === requested) ??
     artifacts.find((artifact) => artifact.id === pinned) ??
     artifacts[0];
   if (
@@ -239,6 +282,7 @@ export function ArtifactsView({
       onCreate={startBlank}
       creatable={ARTIFACT_KIND_VIEWS}
       canCreate={!readOnly && !create.isPending}
+      agentNotes={agentNotes}
       extra={extra}
     />
   );
@@ -259,7 +303,7 @@ export function ArtifactsView({
         icon={<FileText />}
         title="No artifacts yet. Ask the agent to write or draw one, or start a blank one."
         action={
-          readOnly && !create.isError ? undefined : (
+          readOnly && !create.isError && agentNoteCount === 0 ? undefined : (
             <>
               {readOnly ? null : (
                 <div className="artifacts-new-row">
@@ -277,6 +321,18 @@ export function ArtifactsView({
                     </Button>
                   ))}
                 </div>
+              )}
+              {agentNoteCount === 0 ? null : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowAgentNotes(true)}
+                >
+                  <Bot aria-hidden="true" />
+                  {agentNoteCount === 1
+                    ? "Show 1 agent note"
+                    : `Show ${agentNoteCount} agent notes`}
+                </Button>
               )}
               {create.isError ? (
                 <p className="artifacts-error" role="alert">

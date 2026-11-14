@@ -80,7 +80,10 @@ import {
 } from "./source-control/github/routes.js";
 import { messageCommentRoutes } from "./spaces/message-comments/routes.js";
 import { spaceRoutes } from "./spaces/routes.js";
-import { threadArtifactRoutes } from "./thread-artifacts/routes.js";
+import {
+  standaloneArtifactRoutes,
+  threadArtifactRoutes,
+} from "./thread-artifacts/routes.js";
 import { threadChangesRoutes } from "./thread-changes/routes.js";
 import { threadDeletionRoutes } from "./thread-deletion/routes.js";
 import { threadDesktopRoutes } from "./thread-desktop/routes.js";
@@ -147,6 +150,8 @@ app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 // The Artifacts library: every artifact the person may open.
 app.route("/v1/artifacts", artifactLibraryRoutes);
+// A standalone artifact's reads and writes, authorized by the artifact.
+app.route("/v1/standalone-artifacts", standaloneArtifactRoutes);
 app.route("/v1/attachments", attachmentRoutes);
 app.route("/v1/avatars", avatarRoutes);
 app.route("/v1/bug-reports", bugReportRoutes);

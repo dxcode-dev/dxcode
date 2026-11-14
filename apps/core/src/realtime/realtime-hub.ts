@@ -13,6 +13,7 @@ import {
 } from "../auth/session-sockets.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { realtimeLogger } from "../logging.js";
+import { activeMemberSql } from "../settings/members/membership-sql.js";
 import {
   sharedThreadAccessSql,
   sharedThreadVisibleSql,
@@ -31,7 +32,23 @@ import {
 const AUDIENCE_KEY = "audience";
 export const PRESENCE_HEARTBEAT_TIMEOUT_MS = 30_000;
 
-type PresenceTopic = `thread:${ThreadId}`;
+/** A Thread, or a standalone artifact (`artifact:art_…`), people have open. */
+type PresenceTopic = `thread:${ThreadId}` | `artifact:${string}`;
+
+const ARTIFACT_ID = /^art_[0-9a-f]{32}$/;
+
+const decodeTopic = (value: unknown): PresenceTopic | undefined => {
+  if (typeof value !== "string") return undefined;
+  if (value.startsWith("artifact:"))
+    return ARTIFACT_ID.test(value.slice("artifact:".length))
+      ? (value as PresenceTopic)
+      : undefined;
+  if (!value.startsWith("thread:")) return undefined;
+  const threadId = Schema.decodeUnknownOption(ThreadId)(
+    value.slice("thread:".length),
+  );
+  return Option.isSome(threadId) ? `thread:${threadId.value}` : undefined;
+};
 
 interface SocketAttachment {
   readonly audience: AudienceKey;
@@ -55,7 +72,9 @@ interface PresenceEntry {
 
 interface ThreadEvent {
   readonly type: RealtimeThreadEventType;
-  readonly threadId: ThreadId;
+  /** Every event names a Thread, except `artifact.invalidated`'s artifact. */
+  readonly threadId?: ThreadId;
+  readonly artifactId?: string;
   readonly ownerUserId: UserId;
   readonly status?: WorkspaceStatus;
   readonly summaryChanged?: true;
@@ -108,6 +127,7 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
         ![
           "type",
           "threadId",
+          "artifactId",
           "ownerUserId",
           "status",
           "summaryChanged",
@@ -116,8 +136,25 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
     )
   )
     return undefined;
-  const threadId = Schema.decodeUnknownOption(ThreadId)(value.threadId);
   const ownerUserId = Schema.decodeUnknownOption(UserId)(value.ownerUserId);
+  if (value.type === "artifact.invalidated")
+    return typeof value.artifactId === "string" &&
+      ARTIFACT_ID.test(value.artifactId) &&
+      value.threadId === undefined &&
+      value.status === undefined &&
+      value.summaryChanged === undefined &&
+      Option.isSome(ownerUserId) &&
+      (value.recipients === undefined ||
+        value.recipients === "thread" ||
+        value.recipients === "audience")
+      ? {
+          type: "artifact.invalidated",
+          artifactId: value.artifactId,
+          ownerUserId: ownerUserId.value,
+          recipients: value.recipients === "audience" ? "audience" : "thread",
+        }
+      : undefined;
+  const threadId = Schema.decodeUnknownOption(ThreadId)(value.threadId);
   if (
     ![
       "thread.invalidated",
@@ -133,6 +170,7 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
       "reactions.invalidated",
       "workspace.status",
     ].includes(String(value.type)) ||
+    value.artifactId !== undefined ||
     Option.isNone(threadId) ||
     Option.isNone(ownerUserId) ||
     (value.type === "workspace.status" &&
@@ -288,14 +326,7 @@ export class RealtimeHub extends DurableObject<Bindings> {
     }
     if (typeof input !== "object" || input === null || !("type" in input))
       return;
-    const rawTopic = "topic" in input ? input.topic : undefined;
-    const decodedThreadId =
-      typeof rawTopic === "string" && rawTopic.startsWith("thread:")
-        ? Schema.decodeUnknownOption(ThreadId)(rawTopic.slice("thread:".length))
-        : Option.none();
-    const topic = Option.isSome(decodedThreadId)
-      ? (`thread:${decodedThreadId.value}` as const)
-      : undefined;
+    const topic = decodeTopic("topic" in input ? input.topic : undefined);
     const now = Date.now();
     this.#restorePresence();
     this.#prunePresence(now);
@@ -492,7 +523,10 @@ export class RealtimeHub extends DurableObject<Bindings> {
     const threadEvent = decodeThreadEvent(await request.json());
     if (threadEvent === undefined) return new Response(null, { status: 400 });
     this.#restorePresence();
-    const topic = `thread:${threadEvent.threadId}` as const;
+    const topic: PresenceTopic =
+      threadEvent.artifactId === undefined
+        ? `thread:${threadEvent.threadId as ThreadId}`
+        : `artifact:${threadEvent.artifactId}`;
     const sockets = this.ctx.getWebSockets().flatMap((socket) => {
       const attachment = socket.deserializeAttachment() as
         | SocketAttachment
@@ -528,7 +562,9 @@ export class RealtimeHub extends DurableObject<Bindings> {
         socket.send(
           JSON.stringify({
             type: threadEvent.type,
-            threadId: threadEvent.threadId,
+            ...(threadEvent.artifactId === undefined
+              ? { threadId: threadEvent.threadId }
+              : { artifactId: threadEvent.artifactId }),
             ...(threadEvent.status === undefined
               ? {}
               : { status: threadEvent.status }),
@@ -608,10 +644,40 @@ export class RealtimeHub extends DurableObject<Bindings> {
       | SocketAttachment
       | undefined;
     if (attachment === undefined) return undefined;
-    const threadId = topic.slice("thread:".length);
     const workspaceId = attachment.audience.startsWith("workspace:")
       ? attachment.audience.slice("workspace:".length)
       : undefined;
+    if (topic.startsWith("artifact:")) {
+      // A standalone artifact: its owner edits; members of the workspace it
+      // is shared with, which is their home workspace, read or edit.
+      const row = await this.env.DB.prepare(
+        `SELECT CASE WHEN artifact.owner_user_id = ?2 THEN 'edit'
+                     ELSE artifact.workspace_access END AS access
+           FROM thread_artifact AS artifact
+          WHERE artifact.id = ?1
+            AND artifact.thread_id IS NULL
+            AND artifact.deleted_at IS NULL
+            AND (
+              artifact.owner_user_id = ?2
+              OR (
+                ?3 IS NOT NULL
+                AND artifact.workspace_access != 'none'
+                AND artifact.shared_workspace_id = ?3
+                AND ${activeMemberSql("?3", "?2")}
+                AND ${activeMemberSql("?3", "artifact.owner_user_id")}
+              )
+            )`,
+      )
+        .bind(
+          topic.slice("artifact:".length),
+          attachment.participant,
+          workspaceId ?? null,
+        )
+        .first<{ access: string }>();
+      if (row === null) return undefined;
+      return row.access === "edit" ? "edit" : "view";
+    }
+    const threadId = topic.slice("thread:".length);
     const row = await this.env.DB.prepare(
       `SELECT CASE WHEN thread.owner_user_id = ?2 THEN 'contribute'
                    ELSE ${sharedThreadAccessSql("thread", "?4")} END AS access

@@ -71,6 +71,16 @@
     height: var(--control-xs);
     border-radius: var(--radius-sm);
   }
+  .dx-segmented[data-orientation="vertical"] {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .dx-segmented[data-orientation="vertical"] .dx-tab {
+    justify-content: flex-start;
+    width: 100%;
+    height: var(--control-sm);
+  }
   [data-variant="segmented"] .dx-tab[data-active],
   .dx-segmented .dx-tab[data-active] {
     color: var(--foreground);

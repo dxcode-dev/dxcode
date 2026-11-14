@@ -293,18 +293,6 @@ export const proposeSkill = Effect.fn("proposeSkill")(function* (
   } as const;
 });
 
-export const recordProposalAsk = (
-  db: D1Database,
-  proposalId: string,
-  artifactId: string,
-) =>
-  query("agentProposal.recordAsk", () =>
-    db
-      .prepare("UPDATE agent_proposal SET ask_artifact_id = ? WHERE id = ?")
-      .bind(artifactId, proposalId)
-      .run(),
-  );
-
 /** A Thread's skill proposals, newest first, for the agent to follow up. */
 export const threadProposals = (db: D1Database, threadId: string) =>
   query(

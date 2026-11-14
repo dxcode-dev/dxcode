@@ -2,6 +2,7 @@ import {
   type CreateThreadArtifactCommentRequest,
   type CreateThreadArtifactRequest,
   DeleteThreadArtifactResponseSchema,
+  GetThreadMembersResponseSchema,
   NotifyArtifactAgentResponseSchema,
   type SaveThreadArtifactRequest,
   type ThreadArtifact,
@@ -12,10 +13,10 @@ import {
   ThreadArtifactListResponseSchema,
   ThreadArtifactResponseSchema,
 } from "@dx/api";
-import type { ThreadId } from "@dx/domain";
 import { Schema } from "effect";
 import { noticeUnauthenticated } from "../../shared/auth/session-ended.js";
 import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
+import { type ArtifactScope, scopeThread } from "./artifact-scope.js";
 
 /** An artifact with its current Markdown. */
 export interface ArtifactDocument {
@@ -43,10 +44,21 @@ export const isArtifactConflict = (
   error.code === "ARTIFACT_CONFLICT" &&
   error.current !== undefined;
 
-const artifactsUrl = (threadId: ThreadId, artifactId?: string) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/artifacts${
+/**
+ * An artifact's routes: under its Thread, or, for a standalone artifact,
+ * `/v1/standalone-artifacts/<id>`, which has no list or create (the
+ * library makes standalone artifacts).
+ */
+const artifactsUrl = (threadId: ArtifactScope, artifactId?: string) => {
+  const thread = scopeThread(threadId);
+  if (thread === undefined)
+    return `/v1/standalone-artifacts/${encodeURIComponent(
+      artifactId ?? threadId.slice("artifact:".length),
+    )}`;
+  return `/v1/threads/${encodeURIComponent(thread)}/artifacts${
     artifactId === undefined ? "" : `/${encodeURIComponent(artifactId)}`
   }`;
+};
 
 const send = async <S extends Schema.ConstraintDecoder<unknown>>(
   url: string,
@@ -80,7 +92,10 @@ const send = async <S extends Schema.ConstraintDecoder<unknown>>(
   return Schema.decodeUnknownPromise(schema)(body);
 };
 
-export const listArtifacts = async (threadId: ThreadId, signal?: AbortSignal) =>
+export const listArtifacts = async (
+  threadId: ArtifactScope,
+  signal?: AbortSignal,
+) =>
   (
     await send(artifactsUrl(threadId), ThreadArtifactListResponseSchema, {
       ...(signal === undefined ? {} : { signal }),
@@ -88,7 +103,7 @@ export const listArtifacts = async (threadId: ThreadId, signal?: AbortSignal) =>
   ).data.artifacts;
 
 export const getArtifact = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
   signal?: AbortSignal,
 ): Promise<ArtifactDocument> =>
@@ -101,7 +116,7 @@ export const getArtifact = async (
   ).data;
 
 export const createArtifact = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   input: CreateThreadArtifactRequest,
 ): Promise<ArtifactDocument> =>
   (
@@ -116,7 +131,7 @@ export const createArtifact = async (
  * with an `ARTIFACT_CONFLICT` error carrying that revision.
  */
 export const saveArtifact = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
   input: SaveThreadArtifactRequest,
 ): Promise<ArtifactDocument> =>
@@ -148,7 +163,7 @@ export const artifactImageBlob = async (
 
 /** Every comment and reply on an artifact, oldest first, resolved ones too. */
 export const listArtifactComments = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
   signal?: AbortSignal,
 ) =>
@@ -162,7 +177,7 @@ export const listArtifactComments = async (
 
 /** A comment on a quote in the current revision, or a reply. */
 export const createArtifactComment = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
   input: CreateThreadArtifactCommentRequest,
 ) =>
@@ -176,7 +191,7 @@ export const createArtifactComment = async (
 
 /** Resolves a comment, hiding it and its replies. */
 export const resolveArtifactComment = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
   commentId: string,
 ) =>
@@ -188,8 +203,24 @@ export const resolveArtifactComment = async (
     )
   ).data.comment;
 
+/** Who `@` lists on a standalone artifact: the members it is shared with. */
+export const getStandaloneArtifactMembers = async (
+  artifactId: string,
+  signal?: AbortSignal,
+) =>
+  (
+    await send(
+      `/v1/standalone-artifacts/${encodeURIComponent(artifactId)}/members`,
+      GetThreadMembersResponseSchema,
+      signal === undefined ? {} : { signal },
+    )
+  ).data.members;
+
 /** Deletes an artifact with its revisions and comments. */
-export const deleteArtifact = async (threadId: ThreadId, artifactId: string) =>
+export const deleteArtifact = async (
+  threadId: ArtifactScope,
+  artifactId: string,
+) =>
   (
     await send(
       artifactsUrl(threadId, artifactId),
@@ -203,7 +234,7 @@ export const deleteArtifact = async (threadId: ThreadId, artifactId: string) =>
  * changed since it last saved the artifact.
  */
 export const notifyArtifactAgent = async (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   artifactId: string,
 ) =>
   (
@@ -237,11 +268,12 @@ const ownPath = (url: string) => {
 
 /**
  * Uploads an image's bytes to the Thread
- * (`POST /v1/threads/:threadId/artifacts/images`), reporting the share sent
+ * (`POST /v1/threads/:threadId/artifacts/images`), or to a standalone
+ * artifact (`POST /v1/standalone-artifacts/:id/images`), reporting the share sent
  * (0 to 1), which fetch cannot. Refusals throw `ArtifactApiError`.
  */
 const uploadArtifactImage = (
-  threadId: ThreadId,
+  threadId: ArtifactScope,
   file: File,
   onProgress: (share: number) => void,
 ): Promise<ArtifactImage> =>

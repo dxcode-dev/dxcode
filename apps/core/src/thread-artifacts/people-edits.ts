@@ -3,6 +3,7 @@ import { artifactKind } from "./kinds.js";
 import { wrapPeopleText } from "./people-text.js";
 import {
   type ArtifactBindings,
+  type ArtifactThreadId,
   type ArtifactWithMarkdown,
   readArtifactRevision,
 } from "./store.js";
@@ -36,7 +37,7 @@ const newestRevisions = async (db: D1Database, artifactId: string) => {
 /** The diff from kept revision `from` to the current one. */
 const diffFrom = async (
   context: EditsContext,
-  threadId: string,
+  threadId: ArtifactThreadId,
   current: ArtifactWithMarkdown,
   from: number,
   label: string,
@@ -71,7 +72,7 @@ const diffFrom = async (
  */
 export const editedByPeopleSince = async (
   context: EditsContext,
-  threadId: string,
+  threadId: ArtifactThreadId,
   current: ArtifactWithMarkdown,
 ) => {
   const newest = await newestRevisions(context.db, current.artifact.id);
@@ -91,7 +92,7 @@ export const editedByPeopleSince = async (
  */
 export const changesForAgent = async (
   context: EditsContext,
-  threadId: string,
+  threadId: ArtifactThreadId,
   current: ArtifactWithMarkdown,
 ) => {
   const newest = await newestRevisions(context.db, current.artifact.id);

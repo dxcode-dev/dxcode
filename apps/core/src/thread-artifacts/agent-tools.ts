@@ -11,13 +11,16 @@ import {
 import type { ThreadId } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import * as v from "valibot";
-import { createStandaloneArtifact } from "../artifact-library/homes.js";
 import {
   findLibraryItem,
   type LibraryReader,
   listLibrary,
 } from "../artifact-library/library.js";
-import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { createStandaloneArtifact } from "../artifact-library/standalone.js";
+import {
+  publishArtifactInvalidation,
+  publishRealtimeInvalidation,
+} from "../realtime/publication.js";
 import { threadMembers } from "../thread-sharing/members.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
 import { artifactCommented, artifactSaved } from "./ask-effects.js";
@@ -31,6 +34,7 @@ import { personMention } from "./owner-ask.js";
 import { editedByPeopleSince } from "./people-edits.js";
 import { UNTRUSTED_NOTE, wrapPeopleText } from "./people-text.js";
 import {
+  type ArtifactThreadId,
   type ArtifactWithMarkdown,
   type ArtifactWriter,
   createArtifact,
@@ -210,6 +214,7 @@ const listing = (artifact: ThreadArtifact) => ({
   revision: artifact.revision,
   last_saved_by: authorName(artifact.updatedBy),
   open_comments: artifact.openCommentCount,
+  ...(artifact.audience === "agent" ? { audience: "agent" } : {}),
   updated_at: new Date(artifact.updatedAt).toISOString(),
 });
 
@@ -378,7 +383,7 @@ const commentOperation = v.object({
 });
 
 const DESCRIPTION = [
-  'List, read, create, update, and delete artifacts: documents that belong to this Thread, which people open, edit, and comment on beside the conversation. A Thread holds any number of artifacts, grouped in folders. Write an artifact for what people will read: reports, notes, running records, plans for their review, and findings you combine from several child Threads. Keep your own working plans, scratch notes, screenshots, and data exports as files under `~/.dx/work/<topic>/` in the workspace, outside the repository, and answer one-off questions in your reply. For a diagram, flowchart, or sketch, create a drawing board (type "board"), described under Drawing boards below; load the drawing-boards skill before you draw or edit one.',
+  'List, read, create, update, and delete artifacts: documents and drawing boards that belong to this Thread, which people open, edit, and comment on beside the conversation. Create one only when a person asks for a document or a board, or when a person will need to read or edit it after this turn: a spec or proposal to review, a report or runbook to share, a plan the team keeps updating, or a diagram. Everything else goes in your reply: small plans, questions, approvals, status updates, and one-off answers. "Approve merging PR #1931?" and "Plan: fix the button in three steps" are replies; "Write up the launch plan we will keep updating" and "Draw the sign-in flow" are artifacts. For your own notes on long-running work, create an artifact with audience "agent": it stays out of the artifact lists people see unless they choose to show agent notes, and it survives Orb resets. Keep scratch files, screenshots, and data exports under `~/.dx/work/<topic>/` in the workspace, outside the repository. For a diagram, flowchart, or sketch, create a drawing board (type "board"), described under Drawing boards below; load the drawing-boards skill before you draw or edit one.',
   "You read and write artifacts as Markdown: GitHub-flavored Markdown plus `- [ ]`/`- [x]` checklists; `@[Name](user:USER_ID)` mentions of people and `@[dx](agent)` of yourself; `{{date:YYYY-MM-DD}}` and `{{time:ISO_INSTANT}}` chips; `{{project:PROJECT_ID|Name}}` project chips; `{{dropdown:Todo|*Doing:blue|Done:green}}` chips, where `*` marks the selection and colors are gray, blue, green, yellow, red, and purple (inside a table cell, write each of a chip's `|` as `\\|`); and `{{toggle:key|Label}}`, a button each reader uses to show or hide the chips tagged with its key, as in `{{time#key:ISO_INSTANT}}`. A fenced `dx-view` block holding one self-contained HTML page renders as an interactive view; the creating-views skill explains how to write one. To show an image, store the file with `dxd files put <path>` in the workspace and write `![description](<printed url>)`; it stays with this Thread, so only people who can open it see it. People add images from the editor the same way. An artifact holds at most 2 MB of Markdown.",
   "Keep artifacts shallow, because people navigate them by hand. An artifact is one page: use headings for its sections, including parallel parts such as one per meeting or per option. Keep artifacts at the top level, and use a folder (one level, a single name) only to group several related artifacts. Before creating one, list the existing artifacts and extend a matching one instead of starting a parallel one.",
   "read returns at most 500 lines with the artifact's revision. When that is not the whole artifact, it adds an outline of the heading lines with their line numbers; start_line and end_line read other parts. It also returns the open comments and, when people saved changes after your last save, edited_by_people_since: a diff of what they changed.",
@@ -386,7 +391,7 @@ const DESCRIPTION = [
   "Comments sit on text and are never part of the Markdown; they stay on their text when you rewrite around it. Add, reply to, and resolve comments with comments on create or update. When a comment asks for a change, make it and reply saying what you changed. Resolving hides the comment and its replies, so resolve only when someone asks.",
   "Beyond this Thread: list with scope \"all\" lists every artifact this Thread's owner can open (their standalone artifacts from the Artifacts library, artifacts shared with them, and those of their other Threads and Spaces), with query to search titles. Each listed artifact shows where it lives and access: read works on any of them, update and comments need access owner or edit. create with standalone true makes a standalone artifact in the owner's Artifacts library instead of this Thread; it starts private to the owner, who shares it from the library. Every artifact opens at the link /artifacts/<artifact_id>; a line holding only that link in a document shows the linked artifact's preview. Never use artifacts from elsewhere to reach what the owner asked you not to touch.",
   "A new artifact is visible to everyone who can open this Thread. delete never deletes by itself: it shows the user a card to confirm. Delete only when the user asks.",
-  "When you need the owner's answer or approval, call request_attention: it adds the ask to the Thread's Plan artifact as an unchecked checklist item that mentions them, which notifies them. To ask someone else in the Thread, write the item yourself, such as `- [ ] @[Name](user:USER_ID) Review the pricing table`; list returns `people`: who can open this Thread, each with the exact mention to copy. A mention notifies that person. When someone ticks an ask or writes under it and sends it with Notify agent, or mentions you in a comment, this Thread wakes with a message saying so; read the artifact and carry on. When the owner answers an ask in the conversation instead, tick it yourself.",
+  "To ask someone in this Thread to act on an artifact, write a checklist item in it that mentions them, such as `- [ ] @[Name](user:USER_ID) Review the pricing table`; list returns `people`: who can open this Thread, each with the exact mention to copy. A mention notifies that person. When someone ticks an item or writes under it and sends it with Notify agent, or mentions you in a comment, this Thread wakes with a message saying so; read the artifact and carry on. Ask the owner for answers and approvals in your reply, not in an artifact.",
   UNTRUSTED_NOTE,
 ].join("\n\n");
 
@@ -486,6 +491,14 @@ export const createArtifactTools = (
           ),
         ),
       ),
+      audience: v.optional(
+        v.pipe(
+          v.picklist(["people", "agent"]),
+          v.description(
+            "create and update: people (the default) for what people will read; agent for your own notes on long-running work, which people's artifact lists leave out unless they choose to show agent notes.",
+          ),
+        ),
+      ),
       title: v.optional(
         v.pipe(
           v.string(),
@@ -571,12 +584,14 @@ export const createArtifactTools = (
         kind: "agent",
         ...(submissionId === undefined ? {} : { submissionId }),
       };
-      const changed = (where: string) =>
-        publishRealtimeInvalidation(
-          context.bindings,
-          where as ThreadId,
-          "artifacts.invalidated",
-        );
+      const changed = (where: ArtifactThreadId, artifactId: string) =>
+        where === null
+          ? publishArtifactInvalidation(context.bindings, artifactId)
+          : publishRealtimeInvalidation(
+              context.bindings,
+              where as ThreadId,
+              "artifacts.invalidated",
+            );
       const need = <T>(value: T | undefined, name: string): T => {
         if (value === undefined)
           throw new Error(`${data.action} needs ${name}.`);
@@ -594,6 +609,7 @@ export const createArtifactTools = (
 
       if (data.action === "list" && data.scope === "all") {
         const items = await listLibrary(context.db, await ownerReader(), {
+          filter: "everything",
           ...(data.query === undefined ? {} : { query: data.query }),
           limit: 200,
         });
@@ -622,10 +638,14 @@ export const createArtifactTools = (
       }
 
       /**
-       * The Thread holding `artifactId`: this one, or another the owner may
-       * open. Writes need the owner's edit access there.
+       * Where `artifactId` lives: this Thread, another the owner may open,
+       * or nowhere (`null`) for a standalone artifact the owner may open.
+       * Writes need the owner's edit access there.
        */
-      const locate = async (artifactId: string, write: boolean) => {
+      const locate = async (
+        artifactId: string,
+        write: boolean,
+      ): Promise<ArtifactThreadId> => {
         if (
           (await readArtifact(context.bindings, threadId, artifactId)) !==
           undefined
@@ -644,7 +664,7 @@ export const createArtifactTools = (
           throw new Error(
             `This Thread's owner can only view artifact ${artifactId}; nothing was saved. Ask its owner for edit access.`,
           );
-        return item.threadId as string;
+        return item.threadId;
       };
 
       if (data.action === "list") {
@@ -669,7 +689,7 @@ export const createArtifactTools = (
           ? undefined
           : need(data.artifact_id, "artifact_id");
       // Delete stays in this Thread: its card is the owner's here.
-      let target =
+      let target: ArtifactThreadId =
         artifactId === undefined || data.action === "delete"
           ? threadId
           : await locate(artifactId, data.action === "update");
@@ -743,6 +763,10 @@ export const createArtifactTools = (
         );
         if (!body.ok) throw new Error(body.message);
         if (data.standalone === true) {
+          if (data.audience === "agent")
+            throw new Error(
+              "Agent notes belong to this Thread; create them without standalone.",
+            );
           const made = await createStandaloneArtifact(
             { ...context.bindings, DB: context.db },
             {
@@ -753,12 +777,8 @@ export const createArtifactTools = (
               writer,
             },
           );
-          if (made.kind === "no-project")
-            throw new Error(
-              "The owner has no Project yet, so no standalone artifact can be made. Nothing was saved.",
-            );
           if (made.kind === "invalid") throw new Error(made.message);
-          target = made.homeId;
+          target = null;
           saved = made.value;
         } else
           saved = settle(
@@ -768,6 +788,9 @@ export const createArtifactTools = (
               kind,
               markdown: body.body,
               ...(data.folder === undefined ? {} : { folder: data.folder }),
+              ...(data.audience === undefined
+                ? {}
+                : { audience: data.audience }),
               writer,
             }),
           );
@@ -785,10 +808,11 @@ export const createArtifactTools = (
           data.edits !== undefined ||
           data.markdown !== undefined ||
           data.title !== undefined ||
-          data.folder !== undefined;
+          data.folder !== undefined ||
+          data.audience !== undefined;
         if (!rewrites && (data.comments ?? []).length === 0)
           throw new Error(
-            "update needs edits, markdown, comments, title, or folder.",
+            "update needs edits, markdown, comments, title, folder, or audience.",
           );
         // Comments alone save no revision.
         saved = current;
@@ -817,7 +841,9 @@ export const createArtifactTools = (
           const unchanged =
             markdown === current.markdown &&
             data.title === undefined &&
-            data.folder === undefined;
+            data.folder === undefined &&
+            (data.audience === undefined ||
+              data.audience === (current.artifact.audience ?? "people"));
           if (!unchanged) {
             const result = await saveArtifact(context.bindings, {
               threadId: target,
@@ -826,6 +852,9 @@ export const createArtifactTools = (
               markdown,
               ...(data.title === undefined ? {} : { title: data.title }),
               ...(data.folder === undefined ? {} : { folder: data.folder }),
+              ...(data.audience === undefined
+                ? {}
+                : { audience: data.audience }),
               ...(data.force === true ? { force: true } : {}),
               writer,
             });
@@ -844,7 +873,7 @@ export const createArtifactTools = (
         data.comments ?? [],
         writer,
       );
-      await changed(target);
+      await changed(target, saved.artifact.id);
       if (previous !== undefined) {
         // Mentions the agent wrote notify their people; asks it wrote are
         // indexed. An agent's own save never wakes its Thread.
@@ -878,6 +907,7 @@ export const createArtifactTools = (
           ...(target === threadId ? {} : { lives_in: "elsewhere" }),
           title: saved.artifact.title,
           folder: saved.artifact.folder,
+          ...(saved.artifact.audience === "agent" ? { audience: "agent" } : {}),
           revision: saved.artifact.revision,
           size_bytes: saved.artifact.sizeBytes,
           ...(commentResults.length === 0 ? {} : { comments: commentResults }),
@@ -942,7 +972,7 @@ const conflictText = (
 
 const applyCommentOperations = async (
   context: ThreadToolsContext,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
   operations: ReadonlyArray<v.InferOutput<typeof commentOperation>>,
   writer: ArtifactWriter,

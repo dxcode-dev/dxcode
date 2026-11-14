@@ -199,7 +199,8 @@ To create, update, or install one, use the `manage_dx` tool with `topic: "skills
 4. Tell the user in one line what changed. A saved skill loads in new Threads, not this one.
 
 When the user would rather review it later in Settings → Skills, use `operation: "propose"`
-instead: it files the skill for review and adds an ask to the Thread's Plan artifact.
+instead: it files the skill for review and returns a review link to give the user in your
+reply. Their decision wakes this Thread.
 
 To install a repository or internet skill as a settings skill, create it from its `SKILL.md`
 frontmatter's `name` and `description`, its body as the instructions, and its text reference

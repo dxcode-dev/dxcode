@@ -50,7 +50,6 @@ const ThreadRow = Schema.Struct({
   snooze_woke_at: Schema.optional(Schema.NullOr(Schema.String)),
   // The plugin Thread type, `<plugin>/<type>`; set only at creation.
   plugin_thread_type: Schema.optional(Schema.NullOr(Schema.String)),
-  artifact_home: Schema.optional(Schema.NullOr(Schema.Number)),
 });
 
 type ThreadRow = typeof ThreadRow.Type;
@@ -134,7 +133,6 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
                 ? {}
                 : { startedByThreadId: row.started_by_thread_id }),
               ...(row.kind === "space" ? { kind: "space" } : {}),
-              ...(row.artifact_home === 1 ? { artifactHome: true } : {}),
               ...(row.execution_mode === "executor"
                 ? { executionMode: "executor" }
                 : {}),
@@ -634,8 +632,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               snoozed_until,
               snoozed_at,
               snooze_woke_at,
-              plugin_thread_type,
-              artifact_home
+              plugin_thread_type
             FROM threads
             WHERE id = ${threadId}
               AND owner_user_id = ${reader.userId}
@@ -979,7 +976,6 @@ export const ThreadRepositoryD1 = Layer.effect(
                 AND ${inReachableScope("thread", reader)}
                 AND ${projectId ? sql`thread.project_id = ${projectId}` : sql`1 = 1`}
                 AND thread.lifecycle_state != 'deleted'
-                AND thread.artifact_home = 0
                 AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})`;
             const rows = yield* (
               cursor === undefined

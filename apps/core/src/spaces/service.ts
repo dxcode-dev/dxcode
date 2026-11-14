@@ -113,7 +113,7 @@ export const spaceWorkspaceId = async (
  * - `working`: a turn is running, its first one from when the first message
  *   is stored, shipped or not: a shipped thread asked for more is open again;
  * - `needs_you`: it asked a person for something: an open ask in one of its
- *   artifacts (`request_attention`), or a recorded question or approval;
+ *   artifacts, or a recorded question or approval;
  * - `failed`: its last turn failed, unless it only waits for its Claude
  *   plan to reset and then runs again by itself (`plan_wait`), or the
  *   failure came before the thread shipped;

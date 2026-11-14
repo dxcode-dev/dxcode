@@ -9,6 +9,7 @@ import type { Bindings } from "../http/types.js";
 import { findQuote } from "./anchors.js";
 import { artifactKind } from "./kinds.js";
 import {
+  type ArtifactThreadId,
   type ArtifactWithMarkdown,
   type ArtifactWriter,
   readArtifact,
@@ -101,7 +102,7 @@ const commentData = (
  */
 export const listArtifactComments = async (
   bindings: ArtifactBindings,
-  threadId: string,
+  threadId: ArtifactThreadId,
   artifactId: string,
 ): Promise<ReadonlyArray<ThreadArtifactComment> | undefined> => {
   const current = await readArtifact(bindings, threadId, artifactId);
@@ -140,7 +141,7 @@ const findComment = (db: D1Database, artifactId: string, commentId: string) =>
 export const addArtifactComment = async (
   bindings: ArtifactBindings,
   input: {
-    readonly threadId: string;
+    readonly threadId: ArtifactThreadId;
     readonly artifactId: string;
     readonly body: string;
     readonly writer: ArtifactWriter;
@@ -256,7 +257,7 @@ export const addArtifactComment = async (
 export const resolveArtifactComment = async (
   bindings: ArtifactBindings,
   input: {
-    readonly threadId: string;
+    readonly threadId: ArtifactThreadId;
     readonly artifactId: string;
     readonly commentId: string;
     readonly now?: number;

@@ -3,7 +3,10 @@ import { ThreadId, UserId } from "@dx/domain";
 import { Schema } from "effect";
 import { beforeEach, describe, expect, it } from "vitest";
 import app from "../../src/app.js";
-import { publishRealtimeInvalidation } from "../../src/realtime/publication.js";
+import {
+  publishArtifactInvalidation,
+  publishRealtimeInvalidation,
+} from "../../src/realtime/publication.js";
 
 const user = (sequence: number) =>
   Schema.decodeUnknownSync(UserId)(
@@ -236,6 +239,75 @@ describe("RealtimeHub", () => {
     ownerSocket.socket.close();
     memberSocket.socket.close();
     outsiderSocket.socket.close();
+  });
+
+  it("admits people to a standalone artifact by its own sharing and tells them it changed", async () => {
+    const artifactId = `art_${"5".repeat(32)}`;
+    const topic = `artifact:${artifactId}`;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO thread_artifact
+         (id, thread_id, owner_user_id, title, current_revision, size_bytes,
+          stored_bytes, created_by_kind, created_at, updated_at)
+       VALUES (?, NULL, ?, 'Standalone', 1, 0, 0, 'user', 1, 1)`,
+    )
+      .bind(artifactId, owner)
+      .run();
+    const audience = `workspace:${workspace}`;
+    const ownerSocket = await connect(audience, owner, client(31));
+    const memberSocket = await connect(audience, member, client(32));
+    const [ownerReady, memberReady] = (await Promise.all([
+      ownerSocket.first,
+      memberSocket.first,
+    ])) as Array<{ revision: number }>;
+
+    // Private: only its owner joins.
+    const ownerJoined = nextMessage(ownerSocket.socket);
+    ownerSocket.socket.send(JSON.stringify({ type: "presence.join", topic }));
+    await expect(ownerJoined).resolves.toMatchObject({
+      type: "presence.snapshot",
+      topic,
+    });
+    const denied = nextMessage(memberSocket.socket);
+    memberSocket.socket.send(JSON.stringify({ type: "presence.join", topic }));
+    await expect(denied).resolves.toEqual({ type: "presence.denied", topic });
+
+    // Shared with the workspace: the member joins and hears its changes.
+    await env.DB.prepare(
+      "UPDATE thread_artifact SET workspace_access = 'view', shared_workspace_id = ? WHERE id = ?",
+    )
+      .bind(workspace, artifactId)
+      .run();
+    const ownerObservedMember = nextMessage(ownerSocket.socket);
+    const memberJoined = nextMessage(memberSocket.socket);
+    memberSocket.socket.send(JSON.stringify({ type: "presence.join", topic }));
+    await expect(memberJoined).resolves.toMatchObject({
+      type: "presence.snapshot",
+      topic,
+    });
+    await expect(ownerObservedMember).resolves.toMatchObject({
+      participants: [
+        { userId: owner, clientId: client(31) },
+        { userId: member, clientId: client(32) },
+      ],
+    });
+    const ownerEvent = nextMessage(ownerSocket.socket);
+    const memberEvent = nextMessage(memberSocket.socket);
+    await publishArtifactInvalidation(
+      { DB: env.DB, REALTIME_HUB: env.REALTIME_HUB },
+      artifactId,
+    );
+    await expect(ownerEvent).resolves.toEqual({
+      type: "artifact.invalidated",
+      artifactId,
+      revision: (ownerReady?.revision ?? 0) + 1,
+    });
+    await expect(memberEvent).resolves.toEqual({
+      type: "artifact.invalidated",
+      artifactId,
+      revision: (memberReady?.revision ?? 0) + 1,
+    });
+    ownerSocket.socket.close();
+    memberSocket.socket.close();
   });
 
   it("relays comment typing only to others present on the Thread, storing nothing", async () => {

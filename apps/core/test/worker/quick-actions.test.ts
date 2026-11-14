@@ -8,7 +8,6 @@ import {
 } from "../../src/agents/dx-agent-prompt.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
-import { createOwnerAskTools } from "../../src/owner-asks/agent-tools.js";
 import {
   type QuickActionsCaller,
   workersAiQuickActions,
@@ -187,10 +186,6 @@ const ENDING =
 
 describe("Composer quick actions", () => {
   it("never tells the agent: no tool, no prompt line", () => {
-    const tools = createOwnerAskTools("thr_x", () => {
-      throw new Error("not called");
-    });
-    expect(tools.map(({ name }) => name)).toEqual(["request_attention"]);
     for (const prompt of [dxAgentPrompt, claudeCodeModePrompt])
       expect(prompt).not.toMatch(/offer_replies|quick action|reply chip/i);
   });

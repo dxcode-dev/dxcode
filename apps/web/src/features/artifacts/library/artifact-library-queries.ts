@@ -1,12 +1,16 @@
 import {
+  type ArtifactFolder,
+  ArtifactFolderResponseSchema,
   type ArtifactLibraryFilter,
   type ArtifactLibraryItem,
   ArtifactLibraryItemResponseSchema,
   ArtifactLibraryResponseSchema,
   type ArtifactSharing,
+  DeleteArtifactFolderResponseSchema,
   type ThreadArtifactKind,
 } from "@dx/api";
 import {
+  keepPreviousData,
   mutationOptions,
   type QueryClient,
   queryOptions,
@@ -15,13 +19,14 @@ import { Schema } from "effect";
 import { noticeUnauthenticated } from "../../../shared/auth/session-ended.js";
 import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
 import { ArtifactApiError } from "../artifacts-api.js";
+import { ARTIFACT_LIBRARY_KEY } from "../artifacts-queries.js";
 
 /**
  * The Artifacts library's data: every artifact the person may open
  * (`/v1/artifacts`), one artifact's location for an `/artifacts/<id>` link,
  * creating a standalone artifact, and sharing it. Reading and saving the
- * artifact itself use the Thread artifact queries with the item's
- * `threadId`.
+ * artifact itself use the artifact queries with the item's scope
+ * (`scopeOf`): its Thread, or the standalone artifact itself.
  */
 
 const send = async <S extends Schema.ConstraintDecoder<unknown>>(
@@ -53,24 +58,36 @@ const send = async <S extends Schema.ConstraintDecoder<unknown>>(
 };
 
 export const libraryKeys = {
-  all: ["artifact-library"] as const,
-  list: () => [...libraryKeys.all, "list"] as const,
+  all: ARTIFACT_LIBRARY_KEY,
+  lists: () => [...libraryKeys.all, "list"] as const,
+  list: (filter: ArtifactLibraryFilter, query: string) =>
+    [...libraryKeys.lists(), filter, query.trim()] as const,
   item: (artifactId: string) =>
     [...libraryKeys.all, "item", artifactId] as const,
 };
 
 /**
- * Every artifact the person may open, newest save first. Search and
- * filters run on this list as the person types, so one request serves
- * them all.
+ * The artifacts the person may open in `filter`, whose titles hold `query`:
+ * their pins first, then what they made, then the rest, newest save first;
+ * and their folders.
  */
-export const artifactLibraryOptions = () =>
+export const artifactLibraryOptions = (
+  filter: ArtifactLibraryFilter = "all",
+  query = "",
+) =>
   queryOptions({
-    queryKey: libraryKeys.list(),
-    queryFn: async ({ signal }) =>
-      (await send("/v1/artifacts", ArtifactLibraryResponseSchema, { signal }))
-        .data.items,
+    queryKey: libraryKeys.list(filter, query),
+    queryFn: async ({ signal }) => {
+      const search = new URLSearchParams({ filter });
+      if (query.trim() !== "") search.set("q", query.trim());
+      return (
+        await send(`/v1/artifacts?${search}`, ArtifactLibraryResponseSchema, {
+          signal,
+        })
+      ).data;
+    },
     staleTime: 10_000,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: "always",
     // Someone may share an artifact with this person at any time.
     refetchInterval: 30_000,
@@ -83,7 +100,7 @@ export const forgetLibraryArtifact = (
   artifactId: string,
 ) => {
   queryClient.removeQueries({ queryKey: libraryKeys.item(artifactId) });
-  void queryClient.invalidateQueries({ queryKey: libraryKeys.list() });
+  void queryClient.invalidateQueries({ queryKey: libraryKeys.lists() });
 };
 
 export const artifactLibraryItemOptions = (artifactId: string) =>
@@ -104,7 +121,7 @@ export const artifactLibraryItemOptions = (artifactId: string) =>
 
 const accept = (client: QueryClient, item: ArtifactLibraryItem) => {
   client.setQueryData(libraryKeys.item(item.id), item);
-  void client.invalidateQueries({ queryKey: libraryKeys.list() });
+  void client.invalidateQueries({ queryKey: libraryKeys.lists() });
 };
 
 export const createStandaloneArtifactMutation = (
@@ -144,30 +161,71 @@ export const shareArtifactMutation = (
     onSuccess: (item) => accept(client, item),
   });
 
-/** What the library's filter chips select. */
-export const matchesFilter = (
-  item: ArtifactLibraryItem,
-  filter: ArtifactLibraryFilter,
-  userId: string,
-) => {
-  switch (filter) {
-    case "all":
-      return true;
-    case "mine":
-      return item.source.kind === "standalone" && item.owner.userId === userId;
-    case "shared":
-      return item.owner.userId !== userId;
-    case "threads":
-      return item.source.kind !== "standalone";
-  }
-};
+/** Pins or unpins an artifact, for the person alone. */
+export const pinArtifactMutation = (client: QueryClient, artifactId: string) =>
+  mutationOptions({
+    mutationFn: async (pinned: boolean) =>
+      (
+        await send(
+          `/v1/artifacts/${encodeURIComponent(artifactId)}/pin`,
+          ArtifactLibraryItemResponseSchema,
+          { method: pinned ? "PUT" : "DELETE" },
+        )
+      ).data.item,
+    onSuccess: (item) => accept(client, item),
+  });
 
-/** Whether `item`'s title holds every word of `query`, case-insensitively. */
-export const matchesQuery = (item: ArtifactLibraryItem, query: string) => {
-  const title = item.title.toLocaleLowerCase();
-  return query
-    .toLocaleLowerCase()
-    .split(/\s+/)
-    .filter((word) => word !== "")
-    .every((word) => title.includes(word));
-};
+/** Files an artifact in one of the person's folders, or takes it out. */
+export const fileArtifactMutation = (client: QueryClient, artifactId: string) =>
+  mutationOptions({
+    mutationFn: async (folderId: string | null) =>
+      (
+        await send(
+          `/v1/artifacts/${encodeURIComponent(artifactId)}/folder`,
+          ArtifactLibraryItemResponseSchema,
+          { method: "PUT", body: JSON.stringify({ folderId }) },
+        )
+      ).data.item,
+    onSuccess: (item) => accept(client, item),
+  });
+
+/** Makes a folder, or renames one when `folderId` is given. */
+export const saveFolderMutation = (
+  client: QueryClient,
+  onSaved?: (folder: ArtifactFolder) => void,
+) =>
+  mutationOptions({
+    mutationFn: async (input: {
+      readonly folderId?: string;
+      readonly name: string;
+    }) =>
+      (
+        await send(
+          input.folderId === undefined
+            ? "/v1/artifacts/folders"
+            : `/v1/artifacts/folders/${encodeURIComponent(input.folderId)}`,
+          ArtifactFolderResponseSchema,
+          {
+            method: input.folderId === undefined ? "POST" : "PATCH",
+            body: JSON.stringify({ name: input.name.trim() }),
+          },
+        )
+      ).data.folder,
+    onSuccess: (folder) => {
+      void client.invalidateQueries({ queryKey: libraryKeys.lists() });
+      onSaved?.(folder);
+    },
+  });
+
+/** Deletes a folder; its artifacts go back to the top of the library. */
+export const deleteFolderMutation = (client: QueryClient) =>
+  mutationOptions({
+    mutationFn: (folderId: string) =>
+      send(
+        `/v1/artifacts/folders/${encodeURIComponent(folderId)}`,
+        DeleteArtifactFolderResponseSchema,
+        { method: "DELETE" },
+      ),
+    onSuccess: () =>
+      client.invalidateQueries({ queryKey: libraryKeys.lists() }),
+  });

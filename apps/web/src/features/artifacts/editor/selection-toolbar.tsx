@@ -15,6 +15,7 @@ import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
 import { useThreadDraftValue } from "../../threads/thread-draft-queries.js";
+import { type ArtifactScope, scopeThread } from "../artifact-scope.js";
 import type { ArtifactSelection, ArtifactSession } from "./artifact-session.js";
 import { type SelectionMark, withQuote } from "./selection-format.js";
 
@@ -75,7 +76,7 @@ export function SelectionToolbar({
   sendToThread,
   onComment,
 }: {
-  readonly threadId: ThreadId;
+  readonly threadId: ArtifactScope;
   readonly session: ArtifactSession;
   readonly selection: ArtifactSelection;
   /** A reader who cannot edit, or a comment already being written. */
@@ -89,7 +90,7 @@ export function SelectionToolbar({
     coarse,
     () => false,
   );
-  const draft = useThreadDraftValue(threadId);
+  const thread = scopeThread(threadId);
   const [linking, setLinking] = React.useState(false);
   const [status, setStatus] = React.useState<string>();
   const element = React.useRef<HTMLDivElement>(null);
@@ -236,30 +237,12 @@ export function SelectionToolbar({
           >
             <Copy aria-hidden="true" />
           </Button>
-          {sendToThread ? (
-            <Button
-              variant="subtle"
-              size="xs"
-              className="artifact-selection-button"
-              aria-label="Send to Thread"
-              title="Send to Thread"
-              onMouseDown={keep}
-              onClick={() => {
-                draft.set(withQuote(draft.get(), session.selectionMarkdown()));
-                const composer = document.querySelector<HTMLElement>(
-                  '[data-command-target="thread-composer"]',
-                );
-                composer?.focus();
-                if (composer instanceof HTMLTextAreaElement)
-                  composer.setSelectionRange(
-                    composer.value.length,
-                    composer.value.length,
-                  );
-                setStatus("Added to your message");
-              }}
-            >
-              <SendHorizontal aria-hidden="true" />
-            </Button>
+          {sendToThread && thread !== undefined ? (
+            <SendToThreadButton
+              threadId={thread}
+              session={session}
+              onSent={setStatus}
+            />
           ) : null}
         </>
       )}
@@ -270,5 +253,43 @@ export function SelectionToolbar({
         </span>
       )}
     </div>
+  );
+}
+
+/** Send to Thread: quotes the selection into the Thread's composer. */
+function SendToThreadButton({
+  threadId,
+  session,
+  onSent,
+}: {
+  readonly threadId: ThreadId;
+  readonly session: ArtifactSession;
+  readonly onSent: (status: string) => void;
+}) {
+  const draft = useThreadDraftValue(threadId);
+  return (
+    <Button
+      variant="subtle"
+      size="xs"
+      className="artifact-selection-button"
+      aria-label="Send to Thread"
+      title="Send to Thread"
+      onMouseDown={keep}
+      onClick={() => {
+        draft.set(withQuote(draft.get(), session.selectionMarkdown()));
+        const composer = document.querySelector<HTMLElement>(
+          '[data-command-target="thread-composer"]',
+        );
+        composer?.focus();
+        if (composer instanceof HTMLTextAreaElement)
+          composer.setSelectionRange(
+            composer.value.length,
+            composer.value.length,
+          );
+        onSent("Added to your message");
+      }}
+    >
+      <SendHorizontal aria-hidden="true" />
+    </Button>
   );
 }
