@@ -1,6 +1,7 @@
 import { USAGE_EVENT_RETENTION_DAYS } from "@dx/domain";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { purgeStartupPhasesBefore } from "../../observability/startup-phase-retention.js";
+import { purgeExpiredPluginHostUsage } from "../../plugins/hosts/usage.js";
 import { purgeExpiredPluginUsageEvents } from "../../plugins/metering.js";
 import { purgeExpiredSubmissionPluginTools } from "../../plugins/submission-tools.js";
 import {
@@ -80,6 +81,7 @@ export const scheduleUsageRetention = (
       purgeExpiredWorkspaceUsageAudit(bindings.DB, before),
       purgeStartupPhasesBefore(bindings.DB, before),
       purgeExpiredPluginUsageEvents(bindings.DB, before),
+      purgeExpiredPluginHostUsage(bindings.DB, before),
       purgeExpiredSubmissionPluginTools(bindings.DB, before),
       backfillUsageRollups(bindings.DB, ROLLUP_BACKFILL_CHUNKS),
       backfillWorkspaceUsageRollups(bindings.DB, ROLLUP_BACKFILL_CHUNKS),
@@ -95,6 +97,7 @@ export const scheduleUsageRetention = (
           auditResult,
           startupResult,
           pluginResult,
+          hostUsageResult,
           toolsResult,
           rollupsBackfilled,
           workspaceRollupsBackfilled,
@@ -106,6 +109,7 @@ export const scheduleUsageRetention = (
             deletedAuditEvents: auditResult.meta.changes,
             deletedStartupPhases: startupResult.meta.changes,
             deletedPluginUsageEvents: pluginResult.meta.changes,
+            deletedPluginHostUsage: hostUsageResult.meta.changes,
             deletedSubmissionPluginTools: toolsResult.meta.changes,
             rollupsBackfilled,
             workspaceRollupsBackfilled,

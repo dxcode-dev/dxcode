@@ -92,6 +92,10 @@ const preOrbProviderPreparationBindingOmission = "ORB_PROVIDER_PREPARATION";
 const preBitbucketTokenCoordinatorBindingOmission =
   "BITBUCKET_TOKEN_COORDINATOR";
 const preGitHubTokenCoordinatorBindingOmission = "GITHUB_TOKEN_COORDINATOR";
+// Plugins' Durable Object host.
+const prePluginDurableHostBindingOmission = "PLUGIN_DURABLE_HOST";
+// Stages deployed before the plugin stream relay lack it.
+const prePluginStreamRelayBindingOmission = "PLUGIN_STREAM_RELAY";
 // Plugin code's Dynamic Worker loader. Stages deployed before it, and the
 // props Alchemy records for a worker_loader binding, lack it.
 const preWorkerLoaderBindingOmission = "LOADER";
@@ -133,6 +137,8 @@ const destroyWorkerBindingOmissions = new Set([
   "EMAIL",
   "GITHUB_TOKEN_COORDINATOR",
   "ORB_PROVIDER_PREPARATION",
+  "PLUGIN_DURABLE_HOST",
+  "PLUGIN_STREAM_RELAY",
   "REALTIME_HUB",
   "THREAD_SEARCH_INDEX",
 ]);
@@ -161,6 +167,8 @@ const workerDurableObjectBindings = [
   ["FLUE_DX_AGENT_AGENT", "FlueDxAgentAgent"],
   ["GITHUB_TOKEN_COORDINATOR", "GitHubTokenCoordinatorObject"],
   ["ORB_PROVIDER_PREPARATION", "OrbProviderPreparationObject"],
+  ["PLUGIN_DURABLE_HOST", "PluginDurableHostObject"],
+  ["PLUGIN_STREAM_RELAY", "PluginStreamRelay"],
   ["PLUGIN_TRIGGER_DELIVERY", "PluginTriggerDeliveryObject"],
   ["REALTIME_HUB", "RealtimeHub"],
   [
@@ -1428,6 +1436,20 @@ const validateWorkerProps = (
       ) &&
       !(
         !current &&
+        (representation === "persisted" ||
+          representation === "prior" ||
+          allowDestroyWorkerBindingOmissions) &&
+        name === prePluginDurableHostBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" ||
+          representation === "prior" ||
+          allowDestroyWorkerBindingOmissions) &&
+        name === prePluginStreamRelayBindingOmission
+      ) &&
+      !(
+        !current &&
         (representation === "persisted" || representation === "prior") &&
         name === preDeploymentTargetBindingOmission
       ) &&
@@ -1677,7 +1699,19 @@ const validOrbContainerBinding = (
   );
 };
 
-const assertExactOrbContainersIdentity = (node, operation, selection) => {
+// The Orb Worker binds the stage's own D1 (the plugin container object
+// writes plugin_host_usage): the Database resource's ID, or one recorded.
+const validOrbDatabaseId = (value, context, resolved) =>
+  value === undefined ||
+  context.databaseIds.has(value) ||
+  (!resolved && dependsExactlyOn(value, "Database", "databaseId"));
+
+const assertExactOrbContainersIdentity = (
+  node,
+  operation,
+  selection,
+  context,
+) => {
   // A deploy names only the current Orb Worker; recorded state, and every
   // representation a destroy reads from it, may hold the legacy name.
   const recorded = recordedOrbWorkerNames(selection.stage);
@@ -1699,7 +1733,15 @@ const assertExactOrbContainersIdentity = (node, operation, selection) => {
     ([value]) => value !== undefined,
   ))
     if (
-      !exactKeys(props, ["recipeHash", "workerName"]) ||
+      !(
+        exactKeys(props, ["recipeHash", "workerName"]) ||
+        (exactKeys(props, ["databaseId", "recipeHash", "workerName"]) &&
+          validOrbDatabaseId(
+            props.databaseId,
+            context,
+            props === node.state?.props || props === node.state?.old?.props,
+          ))
+      ) ||
       !names.has(props.workerName) ||
       !/^[a-f0-9]{64}$/.test(props.recipeHash ?? "")
     )
@@ -1712,7 +1754,9 @@ const assertExactOrbContainersIdentity = (node, operation, selection) => {
     if (
       !(
         (interrupted && exactKeys(attr, ["workerName"])) ||
-        (exactKeys(attr, ["recipeHash", "workerName"]) &&
+        ((exactKeys(attr, ["recipeHash", "workerName"]) ||
+          (exactKeys(attr, ["databaseId", "recipeHash", "workerName"]) &&
+            context.databaseIds.has(attr.databaseId))) &&
           /^[a-f0-9]{64}$/.test(attr.recipeHash ?? ""))
       ) ||
       !recorded.has(attr.workerName)
@@ -2908,7 +2952,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   if (id === "E2BProfiles")
     assertExactE2BProfilesIdentity(node, operation, selection);
   if (id === "OrbContainers")
-    assertExactOrbContainersIdentity(node, operation, selection);
+    assertExactOrbContainersIdentity(node, operation, selection, context);
   if (id === "Database" || id === "Storage")
     assertExactStorageIdentity(node, selection, id, operation);
   if (id === "AccessTurnstile") assertExactTurnstileIdentity(node, selection);

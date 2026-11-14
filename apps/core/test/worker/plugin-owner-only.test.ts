@@ -35,7 +35,10 @@ import { runRepositories } from "./runtime.js";
  * - the owner loses their own command or pane;
  * - a member's call to a workspace install is refused;
  * - a member's call reaches the plugin as the owner (`ctx.caller`);
- * - a member's call is audited as the owner's alone (no `actorUserId`).
+ * - a member's call is audited as the owner's alone (no `actorUserId`);
+ * - a member reaches the owner's personal plugin through a workspace
+ *   plugin's `ctx.plugins.call`, so it runs on the member's input with the
+ *   owner's secrets and hosts; or the owner's own such call is refused.
  */
 
 const origin = "http://dx.test";
@@ -69,7 +72,16 @@ const code = `export default function (dx) {
 }`;
 
 let installs = 0;
-const install = async (target: PluginTarget, userId: UserId, name: string) => {
+const install = async (
+  target: PluginTarget,
+  userId: UserId,
+  name: string,
+  /** Manifest fields and code beyond the default command and pane. */
+  extra: {
+    readonly dxcode?: Record<string, unknown>;
+    readonly code?: string;
+  } = {},
+) => {
   installs += 1;
   const bundle = await Effect.runPromise(
     readZipArchive(
@@ -92,11 +104,12 @@ const install = async (target: PluginTarget, userId: UserId, name: string) => {
                   ui: ["pane", "quick-action"],
                   threads: ["read"],
                 },
+                ...extra.dxcode,
               },
             },
           }),
         },
-        { name: "dev.dxcode/index.js", content: code },
+        { name: "dev.dxcode/index.js", content: extra.code ?? code },
       ]),
       { maxArchiveBytes: 16 * 1024 * 1024, maxEntries: 1_000 },
     ).pipe(
@@ -370,5 +383,87 @@ describe("the owner's plugins in a shared Thread", () => {
       expect(JSON.parse(row.detail_json)).toMatchObject({
         actorUserId: shared.member.userId,
       });
+  });
+
+  it("refuses a member's call through a workspace plugin to the owner's personal plugin", async () => {
+    const shared = await sharedThread();
+    // The owner's personal plugin, exporting what runs with their secrets.
+    await install(
+      { scope: "personal", id: shared.owner.userId } as PluginTarget,
+      shared.owner.userId,
+      "com.acme.vault",
+      {
+        dxcode: {
+          exports: [{ name: "read", description: "Reads the owner's vault." }],
+        },
+        code: `export default function (dx) {
+  dx.expose({ read: async (_args, ctx) => ({ vault: "opened", caller: ctx.caller.userId }) });
+}`,
+      },
+    );
+    // A workspace plugin whose pane asks the owner's plugin.
+    await install(
+      { scope: "workspace", id: shared.workspaceId } as PluginTarget,
+      shared.owner.userId,
+      "com.acme.relay",
+      {
+        dxcode: {
+          permissions: {
+            events: [],
+            ui: ["pane"],
+            plugins: ["com.acme.vault"],
+          },
+        },
+        code: `export default function (dx) {
+  dx.registerPane({
+    id: "board",
+    title: "Board",
+    html: "<p>relay</p>",
+    onMessage: (_message, ctx) =>
+      ctx.plugins.call("com.acme.vault", "read", {}).then(
+        (value) => ({ ok: value }),
+        (error) => ({ name: error.name, code: error.code }),
+      ),
+  });
+}`,
+      },
+    );
+    const result = async (response: Response) => {
+      expect(response.status, await response.clone().text()).toBe(200);
+      return (
+        (await response.json()) as {
+          data: { result: { ok?: unknown; name?: string; code?: string } };
+        }
+      ).data.result;
+    };
+
+    // The owner's own click reaches their plugin.
+    expect(
+      await result(await postPane(shared.owner.call, "com.acme.relay")),
+    ).toEqual({ ok: { vault: "opened", caller: shared.owner.userId } });
+    // The member's click is refused before the owner's plugin runs.
+    expect(
+      await result(await postPane(shared.member.call, "com.acme.relay")),
+    ).toEqual({ name: "PluginCallRefused", code: "owner-only" });
+
+    const rows = (
+      await env.DB.prepare(
+        `SELECT outcome, detail_json FROM plugin_audit
+          WHERE thread_id = ? AND plugin_name = 'com.acme.relay'
+            AND action = 'plugin.call' ORDER BY created_at, id`,
+      )
+        .bind(shared.threadId)
+        .all<{ outcome: string; detail_json: string }>()
+    ).results.map((row) => {
+      const detail = JSON.parse(row.detail_json) as {
+        code?: string;
+        actorUserId?: string;
+      };
+      return [row.outcome, detail.code ?? null, detail.actorUserId ?? null];
+    });
+    expect(rows).toEqual([
+      ["success", null, null],
+      ["rejected", "owner-only", shared.member.userId],
+    ]);
   });
 });

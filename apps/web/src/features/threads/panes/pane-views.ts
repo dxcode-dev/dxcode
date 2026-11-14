@@ -56,6 +56,10 @@ export interface PluginPaneOption {
   readonly pane: string;
   readonly title: string;
   readonly pluginTitle: string;
+  /** A full-width tab rather than a pane. */
+  readonly kind?: "tab";
+  /** The tab's own icon, `lucide:<name>` or an asset hash. */
+  readonly icon?: string;
 }
 
 /** What the Views menu hands the plugins' pane items, which load lazily. */
@@ -72,6 +76,13 @@ export interface PaneContents {
     tab: import("./pane-layout.js").PluginPaneTab,
     active: boolean,
   ) => React.ReactNode;
+  /**
+   * In an archived Thread, whether its plugin keeps the pane's tab
+   * (`archivedThreads` "show"); absent keeps every plugin tab.
+   */
+  readonly pluginShown?: (
+    tab: import("./pane-layout.js").PluginPaneTab,
+  ) => boolean;
   /** The Views menu's items for the plugins' panes, loaded lazily. */
   readonly pluginMenu?: (props: PluginPaneMenuProps) => React.ReactNode;
   readonly file: (

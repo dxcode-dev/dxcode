@@ -6,6 +6,7 @@ import {
   type PluginBundleUpdatePreviewData,
   type PluginProposalData,
   RevokePluginShareLinksResponseSchema,
+  type SetPluginBundlePolicyRequest,
 } from "@dx/api";
 import type { PluginId, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
@@ -27,6 +28,7 @@ import {
   previewPluginBundle,
   previewPluginBundleUpdate,
   removePluginBundle,
+  setPluginBundleDev,
   setPluginBundleEnabled,
   setPluginBundleSettings,
   updatePluginBundle,
@@ -57,18 +59,18 @@ export type PluginBundleAction =
     }
   | { readonly type: "remove"; readonly pluginId: PluginId }
   | {
-      readonly type: "policy";
-      readonly allowPersonalOverrides?: boolean;
-      readonly allowRepositoryPlugins?: boolean;
-    };
+      readonly type: "dev";
+      readonly pluginId: PluginId;
+      readonly enabled: boolean;
+      /** The Thread whose Orb may reload it; needed to turn it on. */
+      readonly threadId?: string;
+    }
+  | ({ readonly type: "policy" } & SetPluginBundlePolicyRequest);
 
 /** The workspace's plugin policies; an absent field stays as is. */
 const setPluginBundlePolicy = (
   target: PluginsTarget,
-  policy: {
-    readonly allowPersonalOverrides?: boolean;
-    readonly allowRepositoryPlugins?: boolean;
-  },
+  policy: SetPluginBundlePolicyRequest,
 ) =>
   request(
     `${pluginBundlesBase(target)}/policy`,
@@ -96,19 +98,22 @@ const mutate = async (
         action.acceptPermissions === true,
       );
       return;
+    case "dev":
+      await setPluginBundleDev(
+        target,
+        action.pluginId,
+        action.enabled,
+        action.threadId,
+      );
+      return;
     case "remove":
       await removePluginBundle(target, action.pluginId);
       return;
-    case "policy":
-      await setPluginBundlePolicy(target, {
-        ...(action.allowPersonalOverrides === undefined
-          ? {}
-          : { allowPersonalOverrides: action.allowPersonalOverrides }),
-        ...(action.allowRepositoryPlugins === undefined
-          ? {}
-          : { allowRepositoryPlugins: action.allowRepositoryPlugins }),
-      });
+    case "policy": {
+      const { type: _type, ...policy } = action;
+      await setPluginBundlePolicy(target, policy);
       return;
+    }
   }
 };
 

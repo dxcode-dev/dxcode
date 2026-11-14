@@ -59,6 +59,10 @@
         "class_name": "RealtimeHub"
       },
       {
+        "name": "PLUGIN_STREAM_RELAY",
+        "class_name": "PluginStreamRelay"
+      },
+      {
         "name": "BYOK_CREDENTIAL_COORDINATOR",
         "class_name": "ByokCredentialCoordinatorObject"
       },
@@ -77,6 +81,10 @@
       {
         "name": "GITHUB_TOKEN_COORDINATOR",
         "class_name": "GitHubTokenCoordinatorObject"
+      },
+      {
+        "name": "PLUGIN_DURABLE_HOST",
+        "class_name": "PluginDurableHostObject"
       }
     ]
   },
@@ -116,6 +124,14 @@
     {
       "tag": "v9-github-token-coordinator",
       "new_sqlite_classes": ["GitHubTokenCoordinatorObject"]
+    },
+    {
+      "tag": "v10-plugin-durable-host",
+      "new_sqlite_classes": ["PluginDurableHostObject"]
+    },
+    {
+      "tag": "v11-plugin-stream-relay",
+      "new_sqlite_classes": ["PluginStreamRelay"]
     }
   ]
 }

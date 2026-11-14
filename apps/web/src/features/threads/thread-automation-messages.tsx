@@ -1,7 +1,8 @@
 import type { MessageAutomation, MessagePlugin } from "@dx/api";
-import { Clock, FileText, Globe, MessagesSquare, Puzzle } from "lucide-react";
+import { Clock, FileText, Globe, MessagesSquare } from "lucide-react";
 import * as React from "react";
 import { DisclosureTrigger } from "../../shared/ui/disclosure.js";
+import { PluginIcon } from "../../shared/ui/plugin-icon.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { GitHubEventRows } from "./automations/github-event-rows.js";
 import { conciseAge } from "./sharing/sharing-format.js";
@@ -131,9 +132,14 @@ export function PluginPostMessage({
               : ""
         }`}
       >
-        <span className="plugin-post-icon" aria-hidden="true">
-          <Puzzle />
-        </span>
+        <PluginIcon
+          name={plugin.name}
+          icon={
+            plugin.iconHash === undefined ? undefined : { src: plugin.iconHash }
+          }
+          size={16}
+          className="plugin-post-icon"
+        />
         <span className="plugin-post-name">{plugin.name}</span>
         <span className="plugin-post-kind">{kind}</span>
         {plugin.scope === "personal" ? null : (

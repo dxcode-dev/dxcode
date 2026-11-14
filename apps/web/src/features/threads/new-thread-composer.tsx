@@ -3,6 +3,7 @@ import type {
   GraphData,
   OrbResolvedProvider,
   PluginAgentModeData,
+  PluginThreadTypeOption,
   ProjectData,
   ThreadMemberData,
 } from "@dx/api";
@@ -67,6 +68,9 @@ export function NewThreadComposer({
   pluginAgentModes,
   pluginAgentMode,
   onPluginAgentModeChange,
+  pluginThreadTypes,
+  pluginThreadType,
+  onPluginThreadTypeChange,
   choices,
   routingGraph,
   dictationControls,
@@ -111,6 +115,9 @@ export function NewThreadComposer({
   readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
   readonly pluginAgentMode?: string;
   readonly onPluginAgentModeChange?: (mode: string | undefined) => void;
+  readonly pluginThreadTypes?: ReadonlyArray<PluginThreadTypeOption>;
+  readonly pluginThreadType?: string;
+  readonly onPluginThreadTypeChange?: (type: string | undefined) => void;
   readonly choices?: ChoicesData;
   readonly routingGraph?: GraphData;
   readonly dictationControls?: React.ReactNode;
@@ -260,6 +267,11 @@ export function NewThreadComposer({
         pluginAgentModes={pluginAgentModes}
         pluginAgentMode={pluginAgentMode}
         onPluginAgentModeChange={onPluginAgentModeChange}
+        {...(pluginThreadTypes === undefined ? {} : { pluginThreadTypes })}
+        {...(pluginThreadType === undefined ? {} : { pluginThreadType })}
+        {...(onPluginThreadTypeChange === undefined
+          ? {}
+          : { onPluginThreadTypeChange })}
         dictationControls={dictationControls}
         dictationActive={dictationActive}
         dictationHideSubmit={dictationHideSubmit}

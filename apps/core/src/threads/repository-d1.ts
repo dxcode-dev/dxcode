@@ -48,6 +48,8 @@ const ThreadRow = Schema.Struct({
   snoozed_until: Schema.optional(Schema.NullOr(Schema.String)),
   snoozed_at: Schema.optional(Schema.NullOr(Schema.String)),
   snooze_woke_at: Schema.optional(Schema.NullOr(Schema.String)),
+  // The plugin Thread type, `<plugin>/<type>`; set only at creation.
+  plugin_thread_type: Schema.optional(Schema.NullOr(Schema.String)),
   artifact_home: Schema.optional(Schema.NullOr(Schema.Number)),
 });
 
@@ -150,6 +152,10 @@ export const decodeThreadRows = (rows: ReadonlyArray<unknown>) =>
               row.snooze_woke_at === undefined
                 ? {}
                 : { snoozeWokeAt: row.snooze_woke_at }),
+              ...(row.plugin_thread_type === null ||
+              row.plugin_thread_type === undefined
+                ? {}
+                : { pluginThreadType: row.plugin_thread_type }),
             });
           }),
         ),
@@ -292,6 +298,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   kind,
                   execution_mode,
                   requested_by_user_id,
+                  plugin_thread_type,
                   created_at,
                   updated_at
                 )
@@ -318,6 +325,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.kind ?? "thread"},
                   ${encoded.executionMode ?? "orb"},
                   ${encoded.requestedByUserId ?? null},
+                  ${encoded.pluginThreadType ?? null},
                   ${encoded.createdAt}, ${encoded.updatedAt}
                 )
               `;
@@ -626,6 +634,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               snoozed_until,
               snoozed_at,
               snooze_woke_at,
+              plugin_thread_type,
               artifact_home
             FROM threads
             WHERE id = ${threadId}
@@ -684,7 +693,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
                 kind, execution_mode, requested_by_user_id,
-                snoozed_until, snoozed_at, snooze_woke_at
+                snoozed_until, snoozed_at, snooze_woke_at, plugin_thread_type
               FROM threads
               WHERE id = ${threadId}
                 AND owner_user_id = ${ownerUserId}
@@ -740,7 +749,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
                 kind, execution_mode, requested_by_user_id,
-                snoozed_until, snoozed_at, snooze_woke_at
+                snoozed_until, snoozed_at, snooze_woke_at, plugin_thread_type
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(unavailable("thread.setSnoozedUntilOwned")(cause)),
@@ -790,7 +799,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
                 kind, execution_mode, requested_by_user_id,
-                snoozed_until, snoozed_at, snooze_woke_at
+                snoozed_until, snoozed_at, snooze_woke_at, plugin_thread_type
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(unavailable("thread.updateOwned")(cause)),
@@ -856,7 +865,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 last_activity_at, activity_status, lifecycle_state, pinned_at,
                 title_pending_until, color, parent_thread_id, started_by_thread_id,
                 kind, execution_mode, requested_by_user_id,
-                snoozed_until, snoozed_at, snooze_woke_at
+                snoozed_until, snoozed_at, snooze_woke_at, plugin_thread_type
             `.pipe(
               Effect.catchTag("SqlError", (cause) =>
                 Effect.fail(
@@ -960,6 +969,7 @@ export const ThreadRepositoryD1 = Layer.effect(
               thread.agent_instructions_version, thread.model_selection,
               thread.runner_profile_id, thread.title_pending_until, thread.color,
               thread.snoozed_until, thread.snoozed_at, thread.snooze_woke_at,
+              thread.plugin_thread_type,
               thread.parent_thread_id, thread.started_by_thread_id,
               thread.kind, thread.requested_by_user_id,
               thread.plugin_snapshot_json, thread.skill_snapshot_json,

@@ -39,6 +39,7 @@ const sameRequest = (
   previous.effort === next.effort &&
   previous.claudeConnectionId === next.claudeConnectionId &&
   previous.pluginAgentMode === next.pluginAgentMode &&
+  previous.pluginThreadType === next.pluginThreadType &&
   previous.runnerProfileId === next.runnerProfileId &&
   previous.visibility === next.visibility &&
   previous.body === next.body &&
@@ -62,6 +63,7 @@ export async function submitNewThread({
   effort,
   claudePlan,
   pluginAgentMode,
+  pluginThreadType,
   runnerProfileId,
   visibility,
   projects,
@@ -86,6 +88,8 @@ export async function submitNewThread({
   readonly claudePlan?: string;
   /** An installed plugin's agent mode the Thread starts in. */
   readonly pluginAgentMode?: string;
+  /** An installed plugin's Thread type the Thread starts as. */
+  readonly pluginThreadType?: string;
   readonly runnerProfileId?: RunnerProfileId;
   /** `workspace` shares the Thread with the workspace from its start. */
   readonly visibility?: ThreadVisibility;
@@ -150,6 +154,7 @@ export async function submitNewThread({
       ...(claudeEffort === undefined ? {} : { effort: claudeEffort }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
+      ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
       runnerProfileId,
       ...(visibility === "workspace" ? { visibility } : {}),
       body,
@@ -192,6 +197,7 @@ export async function submitNewThread({
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
+      ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
       ...(visibility === "workspace" ? { visibility } : {}),
       threadId,
       initialMessage: {

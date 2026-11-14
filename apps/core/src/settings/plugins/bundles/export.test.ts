@@ -212,6 +212,39 @@ describe("exportPluginBundle", () => {
     );
   });
 
+  it.each([
+    [{ host: { durable: "dev.dxcode/live.js" } }],
+    [{ entry: "dev.dxcode/index.js", host: { durable: "dev.dxcode/live.js" } }],
+    [{ entry: "dev.dxcode/index.js" }],
+  ])("round-trips the code layer's host form %j", async (dx) => {
+    const modules = [
+      { path: "dev.dxcode/index.js", content: "export default () => {};\n" },
+      { path: "dev.dxcode/live.js", content: "export default () => {};\n" },
+    ];
+    const original = await read(
+      await buildZip([
+        {
+          name: "plugin.json",
+          content: JSON.stringify({
+            $schema: PLUGIN,
+            name: "acme.hosts",
+            extensions: { "dev.dxcode": { apiVersion: 1, ...dx } },
+          }),
+        },
+        ...source.filter(({ name }) => name.startsWith("skills/triage")),
+        ...modules.map(({ path, content }) => ({ name: path, content })),
+      ]),
+    );
+    expect(original.bundle.manifest.code).toBeDefined();
+    const exported = await exportPluginBundle({
+      ...installed(original.bundle),
+      codeModules: modules,
+    });
+    const again = await read(exported.bytes);
+    expect(again.bundle.manifest.code).toEqual(original.bundle.manifest.code);
+    expect(again.bundle.integrity).toBe(original.bundle.integrity);
+  });
+
   it("keeps a PNG icon byte for byte, and refuses one that is not a PNG", async () => {
     const png = Uint8Array.from([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 250, 0,

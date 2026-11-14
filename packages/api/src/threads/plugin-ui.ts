@@ -1,5 +1,13 @@
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
+import {
+  PluginIconRefSchema,
+  PluginIconSetSchema,
+} from "../settings/plugin-icons.js";
+import {
+  PluginTabEntry,
+  PluginThreadTypeEntry,
+} from "../settings/plugin-views.js";
 
 /**
  * What installed plugins' code shows in a Thread, drawn by dx's own
@@ -42,9 +50,17 @@ export const PluginSelectChoice = Schema.Struct({
 
 export type PluginSelectChoice = typeof PluginSelectChoice.Type;
 
+/**
+ * The plugin's manifest name beside its display name (`plugin`), so the
+ * page finds its icon even when two plugins share a display name; absent
+ * from older servers.
+ */
+const PluginName = Schema.optional(Text(96));
+
 const PromptBase = {
   id: Text(64),
   plugin: Text(96),
+  pluginName: PluginName,
   title: Text(120),
   message: OptionalText(2_000),
   createdAt: Schema.String,
@@ -134,6 +150,7 @@ export const PluginNoticeLevel = Schema.Literals([
 export const PluginNotice = Schema.Struct({
   id: Text(64),
   plugin: Text(96),
+  pluginName: PluginName,
   message: Text(500),
   level: PluginNoticeLevel,
   createdAt: Schema.String,
@@ -154,6 +171,7 @@ export type PluginQuickActionKind = typeof PluginQuickActionKind.Type;
 export const PluginQuickAction = Schema.Struct({
   id: Text(64),
   plugin: Text(96),
+  pluginName: PluginName,
   label: Text(48),
   action: PluginQuickActionKind,
   /**
@@ -176,8 +194,11 @@ export const PluginCommand = Schema.Struct({
   /** `<install id>:<command id>`: what the run request names. */
   id: Text(200),
   plugin: Text(96),
+  pluginName: PluginName,
   title: Text(80),
   description: OptionalText(200),
+  /** The command's own icon; the plugin's icon when absent. */
+  icon: Schema.optional(PluginIconRefSchema),
 });
 
 export type PluginCommand = typeof PluginCommand.Type;
@@ -188,6 +209,7 @@ export type PluginCommand = typeof PluginCommand.Type;
  */
 export const PluginLinkPattern = Schema.Struct({
   plugin: Text(96),
+  pluginName: PluginName,
   pattern: Text(200),
   flags: Schema.optional(Schema.String.check(Schema.isPattern(/^[imsu]*$/))),
   url: Text(500),
@@ -225,14 +247,39 @@ export const PluginPaneEntry = Schema.Struct({
   version: Text(200),
   /** The latest request from the plugin's code to open it, if recent. */
   openedAt: Schema.optional(Schema.String),
+  /** The pane's own icon; the plugin's icon when absent. */
+  icon: Schema.optional(PluginIconRefSchema),
+  /**
+   * The Thread is archived and the plugin says `archivedThreads:
+   * "show"`: the pane draws its last snapshot and takes no input.
+   */
+  readOnly: Schema.optional(Schema.Boolean),
   /**
    * The Thread owner's personal plugin, seen by a member: only the owner
    * may send it messages, so the pane shows without controls.
    */
   ownerOnly: Schema.optional(Schema.Literal(true)),
+  /**
+   * Present at a trusted tier only: the pane gets `window.dx.stream`, and
+   * what its `panes[].connect` declared: hosts it may reach, WebRTC, and
+   * the Thread's own Portal URLs for its ports.
+   */
+  // Its shape is `PluginPaneLive`; the pane's lazy chunk reads it, so the
+  // Thread page's first load carries no schema for it.
+  live: Schema.optional(Schema.Unknown),
 });
 
 export type PluginPaneEntry = typeof PluginPaneEntry.Type;
+
+/** A trusted pane's `live` entry. */
+export interface PluginPaneLive {
+  readonly hosts: ReadonlyArray<string>;
+  readonly webrtc: boolean;
+  readonly portals: ReadonlyArray<{
+    readonly port: number;
+    readonly url: string;
+  }>;
+}
 
 /** One `post` a pane receives, in order of `seq`. */
 export const PluginPaneMessage = Schema.Struct({
@@ -270,6 +317,26 @@ export const PostPluginPaneMessageResponseSchema = successResponse(
   Schema.Struct({ result: Schema.Unknown }),
 );
 
+/** A plugin whose items show in the Thread, with its icon. */
+export const PluginUiPlugin = Schema.Struct({
+  /** Its display name, as items name it. */
+  title: Text(96),
+  /** Its manifest name. */
+  name: Text(96),
+  icon: Schema.optional(PluginIconSetSchema),
+});
+
+export type PluginUiPlugin = typeof PluginUiPlugin.Type;
+
+/** A tool a plugin adds to the Thread's agent, with its icon. */
+export const PluginUiTool = Schema.Struct({
+  name: Text(64),
+  /** Its plugin's display name. */
+  plugin: Text(96),
+  pluginName: PluginName,
+  icon: Schema.optional(PluginIconRefSchema),
+});
+
 export const PluginThreadUiResponseSchema = successResponse(
   Schema.Struct({
     /** Oldest first: the page shows the first and says how many wait. */
@@ -281,6 +348,17 @@ export const PluginThreadUiResponseSchema = successResponse(
     linkPatterns: Schema.Array(PluginLinkPattern),
     /** Panes the Thread's plugins offer; absent from older servers. */
     panes: Schema.optional(Schema.Array(PluginPaneEntry)),
+    /**
+     * Each running plugin's icon, by the display name every item above
+     * carries as `plugin` (`pluginTitle` on panes).
+     */
+    plugins: Schema.optional(Schema.Array(PluginUiPlugin)),
+    /** The agent tools the plugins add, for their transcript rows. */
+    tools: Schema.optional(Schema.Array(PluginUiTool)),
+    /** Full-width tabs the Thread's plugins offer. */
+    tabs: Schema.optional(Schema.Array(PluginTabEntry)),
+    /** The Thread's plugin type, when it has one. */
+    threadType: Schema.optional(PluginThreadTypeEntry),
   }),
 );
 
@@ -349,6 +427,10 @@ export const PluginThreadUiErrorResponseSchema = Schema.Union([
   errorResponse(
     "PLUGIN_PANE_NOT_FOUND",
     "No installed plugin offers that pane in this Thread.",
+  ),
+  errorResponse(
+    "PLUGIN_THREAD_ARCHIVED",
+    "The Thread is archived. Restore it to use its plugins.",
   ),
   Schema.Struct({
     status: Schema.Literal("error"),

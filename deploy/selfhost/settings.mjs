@@ -527,6 +527,12 @@ export const DERIVED_BINDINGS = Object.freeze([
   "DX_E2B_TIMEOUT_MS",
   "DX_MANAGED_SSH_SIGNING_ENABLED",
   "DX_MIGRATION_MANIFEST_VERSION",
+  "DX_PLUGIN_CONTAINER_DAILY_MS",
+  "DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS",
+  // Plugin trust tier limit overrides: an operator sets them as the deploy
+  // variable DX_DEPLOYMENT_PLUGIN_TIER_LIMITS (JSON keyed by tier); unset
+  // keeps the defaults, so the installer asks nothing.
+  "DX_PLUGIN_TIER_LIMITS",
   "DX_PREVIEW_ORB_IMAGE",
   "DX_PUSH_VAPID_PRIVATE_KEY",
   "DX_PUSH_VAPID_PUBLIC_KEY",
@@ -538,6 +544,7 @@ export const DERIVED_BINDINGS = Object.freeze([
   "DX_WORKER_LOGS",
   "DX_WORKSPACE_INACTIVITY_MS",
   "ORB_CONTAINER",
+  "PLUGIN_CONTAINER",
   "THREAD_EXECUTOR",
 ]);
 

@@ -2,6 +2,8 @@ import icons from "@dx/api/views/kit/icons.svg?raw";
 import css from "@dx/api/views/kit/kit.css?raw";
 import js from "@dx/api/views/kit/kit.js?raw";
 import {
+  usesPluginUi,
+  VIEW_FRAME_CONNECTED_PATH,
   VIEW_FRAME_MESSAGE,
   VIEW_FRAME_PATH,
   VIEW_HOST_MESSAGE,
@@ -9,6 +11,7 @@ import {
   type ViewKit,
   viewDocument,
 } from "@dx/api/views/view-frame.mjs";
+import type { ThreadId } from "@dx/domain";
 import { Maximize2 } from "lucide-react";
 import * as React from "react";
 import { useTheme } from "../theme/theme-provider.js";
@@ -20,6 +23,49 @@ import type { McpAppViewProps } from "./mcp-app-view.js";
 // This module is the lazy chunk `MarkdownView` loads with the first view: the
 // frame, the message bridge, and the kit (styles, `window.ui`, and icons).
 const viewKit: ViewKit = { css, js, icons };
+
+type PaneLiveHandle = (
+  method: string,
+  params: Readonly<Record<string, unknown>> | undefined,
+  id: string | number | undefined,
+) => boolean;
+interface PortalPlacement {
+  readonly url: string;
+  readonly rect: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+}
+/** Loaded only when a trusted pane opens: its stream, WebRTC, Portal. */
+const loadPaneLive = () =>
+  import("../../features/threads/plugin-ui/pane-live.js");
+/** The Preview pane's sandbox for the Thread's own Portal. */
+const PORTAL_SANDBOX =
+  "allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads";
+
+/**
+ * `@dxcode/plugin-ui`'s code, a chunk of its own that loads only with the
+ * first plugin frame that asks for it. A failed load leaves such frames
+ * plain HTML.
+ */
+let pluginUiCode: Promise<string | undefined> | undefined;
+const loadPluginUi = () => {
+  pluginUiCode ??= import("@dxcode/plugin-ui/plugin-ui.js?minified").then(
+    (module) => module.default,
+    () => {
+      // Later frames try again, such as after a deploy renamed the chunk.
+      setTimeout(() => {
+        pluginUiCode = undefined;
+      }, 30_000);
+      return undefined;
+    },
+  );
+  return pluginUiCode;
+};
+const usePluginUi = (html: string) =>
+  usesPluginUi(html) ? React.use(loadPluginUi()) : undefined;
 
 /**
  * The last height each view reported, so a view that scrolls back into a
@@ -114,9 +160,17 @@ const sendDocument = (
   frame: HTMLIFrameElement,
   document: string,
   mcpApp: boolean,
+  // Only a trusted pane that declared WebRTC is written unguarded.
+  guarded = true,
 ) =>
   frame.contentWindow?.postMessage(
-    { source: VIEW_HOST_MESSAGE, type: "document", document, mcpApp },
+    {
+      source: VIEW_HOST_MESSAGE,
+      type: "document",
+      document,
+      mcpApp,
+      ...(guarded ? {} : { guarded: false }),
+    },
     "*",
   );
 
@@ -201,12 +255,14 @@ const mcpHostFor = (
   frame: HTMLIFrameElement,
   call: McpAppCall,
   theme: "light" | "dark",
+  palette: string,
 ) => {
   const existing = mcpHosts.get(frame);
   if (existing !== undefined) return existing;
   const host = createMcpAppHost({
     ...call,
     theme,
+    palette,
     send: (message) =>
       frame.contentWindow?.postMessage(
         { source: VIEW_HOST_MESSAGE, type: "mcp", message },
@@ -230,6 +286,7 @@ function ViewDocument({
   document,
   title,
   scheme,
+  palette,
   mcp,
   onOpenLink,
   onError,
@@ -238,6 +295,7 @@ function ViewDocument({
   readonly document: string;
   readonly title: string;
   readonly scheme: "light" | "dark";
+  readonly palette: string;
   readonly mcp?: McpAppCall;
   readonly onOpenLink: (url: string) => void;
   readonly onError: (message: string) => void;
@@ -259,10 +317,11 @@ function ViewDocument({
     else slot.append(frame);
     schemes.set(frame, scheme);
     sendScheme(frame);
-    const host = mcp === undefined ? undefined : mcpHostFor(frame, mcp, scheme);
+    const host =
+      mcp === undefined ? undefined : mcpHostFor(frame, mcp, scheme, palette);
     if (host !== undefined) {
       mcpHandlers.set(frame, { onOpenLink, onSize: resize });
-      host.setTheme(scheme);
+      host.setTheme(scheme, palette);
     }
     const stop = receiveFrom(frame, (message) => {
       if (message.type === "size") resize(message.height);
@@ -312,7 +371,7 @@ function FramedView({
   readonly className?: string;
   readonly actions: React.ReactNode;
 }) {
-  const { resolvedAppearance } = useTheme();
+  const { resolvedAppearance, palette } = useTheme();
   const [link, setLink] = React.useState<string>();
   const [error, setError] = React.useState<string>();
   const [escaped, setEscaped] = React.useState(false);
@@ -338,6 +397,7 @@ function FramedView({
           document={document}
           title={title}
           scheme={resolvedAppearance}
+          palette={palette}
           mcp={mcp}
           onOpenLink={setLink}
           onError={(message) => setError((current) => current ?? message)}
@@ -392,8 +452,10 @@ function FramedView({
 
 export function ViewFrame({ source, actions }: MarkdownViewProps) {
   const { palette } = useTheme();
+  // A view may ask for @dxcode/plugin-ui, as a plugin frame does.
+  const pluginUi = usePluginUi(source);
   // Built once per source and palette: a theme switch only messages the view.
-  const document = viewDocument(source, { kit: viewKit, palette });
+  const document = viewDocument(source, { kit: viewKit, palette, pluginUi });
   return (
     <FramedView
       document={document}
@@ -409,7 +471,12 @@ export function ViewFrame({ source, actions }: MarkdownViewProps) {
  * share a view from sharing a parked frame, and so each other's results.
  */
 export function McpAppFrame({ view, cardKey }: McpAppViewProps) {
-  const document = `${viewDocument(view.html, { kit: viewKit, mcpApp: true })}\n<!-- ${cardKey.replaceAll("-->", "")} -->\n`;
+  const { palette } = useTheme();
+  const pluginUi = usePluginUi(view.html);
+  // The palette when the card mounts: a later change reaches it as
+  // `styles.variables`, without reloading the card.
+  const [initialPalette] = React.useState(palette);
+  const document = `${viewDocument(view.html, { kit: viewKit, mcpApp: true, palette: initialPalette, pluginUi })}\n<!-- ${cardKey.replaceAll("-->", "")} -->\n`;
   return (
     <FramedView
       document={document}
@@ -446,19 +513,47 @@ export interface PluginPaneFrameProps {
   ) => () => void;
   /** Sends a view's `dx/plugin.post`; absent for view-only people. */
   readonly onPost?: (message: unknown) => Promise<unknown>;
+  /**
+   * A trusted pane (`PaneLiveProps` as JSON, so an equal entry from a
+   * refetch keeps the mounted frame): `window.dx`, its connect hosts,
+   * WebRTC, and Portals.
+   */
+  readonly liveJson?: string;
 }
 
+export interface PaneLiveProps {
+  readonly threadId: ThreadId;
+  readonly plugin: string;
+  readonly pane: string;
+  readonly hosts: ReadonlyArray<string>;
+  readonly webrtc: boolean;
+  readonly portals: ReadonlyArray<{
+    readonly port: number;
+    readonly url: string;
+  }>;
+}
+
+/** A trusted pane's live entry, from the JSON its pane passes. */
+const parseLive = (liveJson: string | undefined) =>
+  liveJson === undefined ? undefined : (JSON.parse(liveJson) as PaneLiveProps);
+
 /** A pane's frame; it gets its document each time its shell loads. */
-const paneFrame = (document: string, title: string) => {
+const paneFrame = (
+  document: string,
+  title: string,
+  connected = false,
+  guarded = true,
+) => {
   const frame = window.document.createElement("iframe");
   frame.className = "markdown-view-frame plugin-pane-frame";
   frame.title = title;
   frame.sandbox.add("allow-scripts");
   frame.referrerPolicy = "no-referrer";
-  frame.src = VIEW_FRAME_PATH;
+  // A trusted pane with connect hosts loads the connected shell.
+  frame.src = connected ? VIEW_FRAME_CONNECTED_PATH : VIEW_FRAME_PATH;
   // For the frame's lifetime, as `takeFrame`'s.
   frame.addEventListener("load", () => {
-    sendDocument(frame, document, true);
+    sendDocument(frame, document, true, guarded);
     sendScheme(frame);
   });
   return frame;
@@ -474,12 +569,33 @@ export function PluginPaneFrame({
   title,
   subscribeMessages,
   onPost,
+  liveJson,
 }: PluginPaneFrameProps) {
-  const { resolvedAppearance } = useTheme();
+  // Only strings reach the frame's attach, so an equal entry keeps it.
+  const liveDocument = parseLive(liveJson);
+  const { resolvedAppearance, palette } = useTheme();
   const [link, setLink] = React.useState<string>();
   const [error, setError] = React.useState<string>();
   const [escaped, setEscaped] = React.useState(false);
-  const document = viewDocument(html, { kit: viewKit, mcpApp: true });
+  const pluginUi = usePluginUi(html);
+  // The palette is read when the frame attaches, as the scheme is.
+  const [initialPalette] = React.useState(palette);
+  const document = viewDocument(html, {
+    kit: viewKit,
+    mcpApp: true,
+    palette: initialPalette,
+    pluginUi,
+    ...(liveDocument === undefined
+      ? {}
+      : {
+          trusted: true,
+          webrtc: liveDocument.webrtc,
+          pane: { id: liveDocument.pane, hosts: liveDocument.hosts },
+        }),
+  });
+  const [portals, setPortals] = React.useState<
+    ReadonlyMap<string, PortalPlacement>
+  >(() => new Map());
   /** The mounted frame and its host, so a theme change only re-themes it. */
   const mounted = React.useRef<{
     readonly frame: HTMLIFrameElement;
@@ -491,7 +607,36 @@ export function PluginPaneFrame({
   const [initialScheme] = React.useState(resolvedAppearance);
   const attach = (slot: HTMLDivElement | null) => {
     if (slot === null) return;
-    const frame = paneFrame(document, title);
+    const live = parseLive(liveJson);
+    const frame = paneFrame(
+      document,
+      title,
+      live !== undefined && live.hosts.length > 0,
+      !(live?.webrtc === true),
+    );
+    // A trusted pane's window.dx, loaded only for such a pane.
+    let session: { handle: PaneLiveHandle; close: () => void } | undefined;
+    let sessionClosed = false;
+    const sessionReady =
+      live === undefined
+        ? undefined
+        : loadPaneLive().then(({ createPaneLive }) => {
+            if (sessionClosed) return;
+            session = createPaneLive({
+              ...live,
+              live,
+              frame,
+              canSend: onPost !== undefined,
+              onPortal: (key, placement) =>
+                setPortals((current) => {
+                  const next = new Map(current);
+                  if (placement === undefined) next.delete(key);
+                  else next.set(key, placement);
+                  return next;
+                }),
+            });
+          });
+    const pending: Array<Parameters<PaneLiveHandle>> = [];
     schemes.set(frame, initialScheme);
     let delivered = 0;
     let latest: ReadonlyArray<{
@@ -511,6 +656,7 @@ export function PluginPaneFrame({
       toolInput: {},
       toolResult: {},
       theme: initialScheme,
+      palette: initialPalette,
       send: (message) =>
         frame.contentWindow?.postMessage(
           { source: VIEW_HOST_MESSAGE, type: "mcp", message },
@@ -521,6 +667,22 @@ export function PluginPaneFrame({
       pane: {
         onReady: deliver,
         ...(onPost === undefined ? {} : { onPost }),
+        ...(sessionReady === undefined
+          ? {}
+          : {
+              onExtension: (method, params, id) => {
+                if (!/^dx\/(?:stream|rtc|portal|csp)\./.test(method))
+                  return false;
+                if (session !== undefined)
+                  return session.handle(method, params, id);
+                pending.push([method, params, id]);
+                void sessionReady.then(() => {
+                  for (const args of pending.splice(0))
+                    session?.handle(...args);
+                });
+                return true;
+              },
+            }),
       },
     });
     const stop = receiveFrom(frame, (message) => {
@@ -547,6 +709,8 @@ export function PluginPaneFrame({
     slot.append(frame);
     mounted.current = { frame, host };
     return () => {
+      sessionClosed = true;
+      session?.close();
       mounted.current = undefined;
       unsubscribe();
       stop();
@@ -560,7 +724,7 @@ export function PluginPaneFrame({
     if (node === null || current === undefined) return;
     schemes.set(current.frame, resolvedAppearance);
     sendScheme(current.frame);
-    current.host.setTheme(resolvedAppearance);
+    current.host.setTheme(resolvedAppearance, palette);
   };
   if (escaped)
     return (
@@ -571,6 +735,24 @@ export function PluginPaneFrame({
   return (
     <div className="plugin-pane-view">
       <div ref={attach} className="plugin-pane-slot" />
+      {/* The Thread's own Portal, drawn over the box the pane reserved. */}
+      {[...portals].map(([key, { url, rect }]) => (
+        <iframe
+          key={key}
+          className="plugin-pane-portal"
+          src={url}
+          title={`Portal ${new URL(url).host}`}
+          sandbox={PORTAL_SANDBOX}
+          allow="clipboard-write"
+          style={{
+            // Clamped to the pane: never over the rest of dx.
+            left: Math.max(0, rect.x),
+            top: Math.max(0, rect.y),
+            width: `min(${Math.max(0, rect.width)}px, calc(100% - ${Math.max(0, rect.x)}px))`,
+            height: `min(${Math.max(0, rect.height)}px, calc(100% - ${Math.max(0, rect.y)}px))`,
+          }}
+        />
+      ))}
       <span ref={applyScheme} hidden />
       {link !== undefined && (
         <div className="markdown-view-link" aria-live="polite">

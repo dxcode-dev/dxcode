@@ -34,7 +34,9 @@ import {
 import { rememberClaudeCodeSandbox } from "../claude-code/runs.js";
 import {
   type ClaudeCodeToolGate,
+  type ClaudeCodeToolResultObserver,
   setClaudeCodeToolGate,
+  setClaudeCodeToolResultObserver,
 } from "../claude-code/tool-gate.js";
 import {
   CLAUDE_CODE_MIRROR_TOOLS,
@@ -100,6 +102,7 @@ import {
   type CodePluginRuntime,
   createPluginTools,
   decidePluginToolCall,
+  observePluginToolResult,
   usePluginCodeLifecycle,
   withPluginToolEvents,
   withPluginWorkspaceToolEvents,
@@ -447,6 +450,73 @@ const claudeCodeToolGateFor = (
                 ? decision.output
                 : JSON.stringify(decision.output),
         };
+      };
+
+/**
+ * What plugins see as the output of one of Claude Code's own tools: Bash's
+ * text, as dx mode's shell_command gives it, and other tools' results as
+ * Claude Code reports them.
+ */
+const claudeToolOutput = (response: unknown): unknown => {
+  if (
+    typeof response === "object" &&
+    response !== null &&
+    typeof (response as { stdout?: unknown }).stdout === "string"
+  ) {
+    const { stdout, stderr } = response as {
+      stdout: string;
+      stderr?: unknown;
+    };
+    return typeof stderr === "string" && stderr !== ""
+      ? `${stdout}${stdout.endsWith("\n") || stdout === "" ? "" : "\n"}${stderr}`
+      : stdout;
+  }
+  return response;
+};
+
+/**
+ * A replaced output in the shape Claude Code checks for the tool, which
+ * falls back to the tool's own output when it does not match: Bash keeps
+ * its fields with the new text as stdout.
+ */
+const claudeToolResponse = (response: unknown, output: unknown): unknown =>
+  typeof response === "object" &&
+  response !== null &&
+  typeof (response as { stdout?: unknown }).stdout === "string"
+    ? {
+        ...response,
+        stdout: typeof output === "string" ? output : JSON.stringify(output),
+        stderr: "",
+      }
+    : typeof response === "string" && typeof output !== "string"
+      ? JSON.stringify(output)
+      : output;
+
+/**
+ * Installed plugins' tool.result handlers for Claude Code's own tools,
+ * through its PostToolUse hook, or none when no plugin handles tool.result.
+ */
+const claudeCodeToolResultObserverFor = (
+  runtime: CodePluginRuntime | undefined,
+): ClaudeCodeToolResultObserver | undefined =>
+  runtime?.plugins.some(({ events }) => events.includes("tool.result")) !== true
+    ? undefined
+    : async (result) => {
+        const observed = await observePluginToolResult(
+          runtime,
+          {
+            tool: result.toolName,
+            callId: result.toolUseId,
+            input: result.input,
+          },
+          { status: "done", output: claudeToolOutput(result.response) },
+        );
+        return observed?.modified === true
+          ? {
+              replace: true,
+              output: claudeToolResponse(result.response, observed.output),
+            }
+          : { replace: false };
       };
 
 /** The delivered message's text, for plugins' agent.start. */
@@ -890,6 +960,11 @@ export function DxAgent(props: AgentProps) {
       // Claude's own tools run in the CLI: installed plugins' tool.call
       // handlers decide them through Claude Code's PreToolUse hook.
       setClaudeCodeToolGate(props.id, claudeCodeToolGateFor(codePlugins));
+      // ...and their tool.result handlers through its PostToolUse hook.
+      setClaudeCodeToolResultObserver(
+        props.id,
+        claudeCodeToolResultObserverFor(codePlugins),
+      );
       // Each delivered message starts on fresh Claude Code state: nothing a
       // failed submission cached may fail it.
       useAgentStart(({ harness }) => {

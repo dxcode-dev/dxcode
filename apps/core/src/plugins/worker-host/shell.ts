@@ -173,8 +173,18 @@ if cd -- ${quote(directory)} 2>/dev/null; then
   job=$!
   set +m
   printf '%s' "$job" >"$state/${runId}"
-  # The call may have ended while the command started.
-  [[ -e "$state/${runId}.stop" ]] && kill -TERM -- "-$job" 2>/dev/null
+  # The call may have ended while the command started. A TERM that reaches
+  # the job before it runs \`timeout\` is lost: until then it has this
+  # script's TERM handler, which the EXIT trap installed. So the command
+  # gets a second to end, then KILL, which nothing can catch.
+  if [[ -e "$state/${runId}.stop" ]]; then
+    kill -TERM -- "-$job" 2>/dev/null
+    for _ in {1..10}; do
+      kill -0 -- "-$job" 2>/dev/null || break
+      sleep 0.1
+    done
+    kill -KILL -- "-$job" 2>/dev/null
+  fi
   wait "$job"
   code=$?
   kill -KILL -- "-$job" 2>/dev/null

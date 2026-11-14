@@ -647,6 +647,8 @@ export const createProductionPackage = async ({
     "sw.js",
     // The dx-view shell, served with its own policy.
     "view-frame.html",
+    // A trusted plugin pane's shell, with its own policy.
+    "view-frame-connected.html",
   ];
   const web = readGraph(webBuildRoot, {
     source: "index.html",
@@ -1032,6 +1034,7 @@ export const validateProductionPackage = async (root) => {
     "assets/social-card.png",
     "assets/sw.js",
     "assets/view-frame.html",
+    "assets/view-frame-connected.html",
     "assets/dxd",
   ]);
   const docsFiles = (manifest.graph?.docs ?? []).map((path) => {

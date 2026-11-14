@@ -10,18 +10,13 @@ import {
 } from "../../../shared/ui/github-status.js";
 import { TitleBarItemSlot } from "../title-bar-item.js";
 import type { TitleBarItem, TitleBarItemRef } from "../title-bar-overflow.js";
-import { AutomationsPanel } from "./automations-panel.js";
 import { AutomationsPopover } from "./automations-popover.js";
 import {
-  type AutomationView,
   hasThreadAutomations,
   useThreadAutomations,
 } from "./automations-queries.js";
-import {
-  CiRunList,
-  IssueList,
-  PullRequestList,
-} from "./github-header-lists.js";
+import { AutomationViewContent } from "./lazy-automation-views.js";
+import "./automations.css";
 
 /** The open PR wins the icon; else merged when all merged, else closed. */
 const pullState = (pulls: ThreadAutomationsData["pullRequests"]) =>
@@ -49,27 +44,6 @@ const listening = (data: ThreadAutomationsData) => {
         .join(" · ") || "Schedule and GitHub events",
   };
 };
-
-/** What one entry opens: the PR list, the CI list, or the listeners. */
-export function AutomationViewContent({
-  threadId,
-  data,
-  view,
-}: {
-  readonly threadId: ThreadId;
-  readonly data: ThreadAutomationsData;
-  readonly view: AutomationView;
-}) {
-  return view === "issues" ? (
-    <IssueList issues={data.issues} />
-  ) : view === "pulls" ? (
-    <PullRequestList pulls={data.pullRequests} />
-  ) : view === "ci" ? (
-    <CiRunList runs={data.ciRuns} />
-  ) : (
-    <AutomationsPanel threadId={threadId} data={data} />
-  );
-}
 
 /**
  * The header's entries: the issues the Thread works on, the pull requests
@@ -127,7 +101,11 @@ export function ThreadAutomationsButton({
                 </>
               }
             >
-              <IssueList issues={issues} />
+              <AutomationViewContent
+                threadId={threadId}
+                data={data}
+                view="issues"
+              />
             </AutomationsPopover>,
           )}
       {pulls.length === 0
@@ -146,7 +124,11 @@ export function ThreadAutomationsButton({
                 </>
               }
             >
-              <PullRequestList pulls={pulls} />
+              <AutomationViewContent
+                threadId={threadId}
+                data={data}
+                view="pulls"
+              />
             </AutomationsPopover>,
           )}
       {latestCi === undefined
@@ -165,7 +147,11 @@ export function ThreadAutomationsButton({
                 </>
               }
             >
-              <CiRunList runs={data.ciRuns} />
+              <AutomationViewContent
+                threadId={threadId}
+                data={data}
+                view="ci"
+              />
             </AutomationsPopover>,
           )}
       {!hasThreadAutomations(data)
@@ -186,7 +172,11 @@ export function ThreadAutomationsButton({
                 </>
               }
             >
-              <AutomationsPanel threadId={threadId} data={data} />
+              <AutomationViewContent
+                threadId={threadId}
+                data={data}
+                view="listeners"
+              />
             </AutomationsPopover>,
           )}
     </>

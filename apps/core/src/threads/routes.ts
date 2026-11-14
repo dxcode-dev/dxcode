@@ -17,6 +17,7 @@ import {
   CreateThreadOrbUnavailableResponseSchema,
   CreateThreadPersistenceUnavailableResponseSchema,
   CreateThreadPluginAgentModeUnavailableResponseSchema,
+  CreateThreadPluginThreadTypeUnavailableResponseSchema,
   CreateThreadPolicyDeniedResponseSchema,
   CreateThreadProjectlessForbiddenResponseSchema,
   CreateThreadProjectNotFoundResponseSchema,
@@ -161,6 +162,12 @@ import {
   OrbUnavailable,
   resolveThreadExecutionPin,
 } from "../plugins/execution/orb-providers.js";
+import { durableThreadLifecycle } from "../plugins/hosts/durable/lifecycle.js";
+import { notifyPluginsOfArchive } from "../plugins/thread-ui/archive.js";
+import {
+  checkPluginThreadType,
+  PluginThreadTypeNotOffered,
+} from "../plugins/views/thread-types.js";
 import { ProjectRepositoryD1 } from "../projects/repository-d1.js";
 import {
   publishRealtimeInvalidation,
@@ -311,6 +318,12 @@ class PluginAgentModeUnavailable extends Schema.TaggedError<PluginAgentModeUnava
   { message: Schema.String },
 ) {}
 
+/** The plugin Thread type asked for is not one the person may start. */
+class PluginThreadTypeUnavailable extends Schema.TaggedError<PluginThreadTypeUnavailable>()(
+  "PluginThreadTypeUnavailable",
+  { message: Schema.String },
+) {}
+
 /** Workspace visibility was asked for, but the owner has no workspace. */
 class CreationSharingUnavailable extends Schema.TaggedError<CreationSharingUnavailable>()(
   "CreationSharingUnavailable",
@@ -371,6 +384,13 @@ const threadCreationOptions = (
           : { requestedByUserId: creation.requestedByUserId as UserId }),
       };
 
+/** Adds the checked plugin Thread type to the creation options. */
+const withPluginThreadType = (
+  options: ReturnType<typeof threadCreationOptions>,
+  pluginThreadType: string | undefined,
+) =>
+  pluginThreadType === undefined ? options : { ...options, pluginThreadType };
+
 const parentColorField = (
   parentColors: ReadonlyMap<ThreadId, ThreadColor>,
   thread: Pick<Thread, "parentThreadId">,
@@ -395,6 +415,9 @@ const threadData = (thread: Thread): ThreadData => ({
   pinnedAt: thread.pinnedAt,
   ...threadSnoozeData(thread),
   ...(thread.color === undefined ? {} : { color: thread.color }),
+  ...(thread.pluginThreadType === undefined
+    ? {}
+    : { pluginThreadType: thread.pluginThreadType }),
   ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
   ...(thread.parentThreadId === undefined
@@ -875,6 +898,24 @@ export const createThreadRoutes = (
                       cause,
                     ),
             });
+      // A plugin Thread type is checked before anything is written.
+      const pluginThreadType = input.pluginThreadType;
+      if (pluginThreadType !== undefined)
+        yield* Effect.tryPromise({
+          try: () =>
+            checkPluginThreadType(db, {
+              ownerUserId: principal.userId,
+              ref: pluginThreadType,
+              requestId: context.get("requestId"),
+            }),
+          catch: (cause) =>
+            cause instanceof PluginThreadTypeNotOffered
+              ? new PluginThreadTypeUnavailable({ message: cause.message })
+              : PersistenceUnavailable.new(
+                  { operation: "thread.checkPluginThreadType" },
+                  cause,
+                ),
+        });
       // An agent that names its own model decides it: a Claude plan the
       // composer still held for another selection does not apply.
       // A Claude Code agent with no plan picked takes the one with the most
@@ -1216,7 +1257,10 @@ export const createThreadRoutes = (
                         sharedWorkspaceId === undefined
                           ? undefined
                           : "workspace",
-                        threadCreationOptions(context.get("threadCreation")),
+                        withPluginThreadType(
+                          threadCreationOptions(context.get("threadCreation")),
+                          pluginThreadType,
+                        ),
                       )
                       .pipe(
                         // Only the parent lookup reports a missing Thread here.
@@ -1759,6 +1803,20 @@ export const createThreadRoutes = (
               },
             }),
             400,
+          ),
+        PluginThreadTypeUnavailable: (failure: PluginThreadTypeUnavailable) =>
+          context.json(
+            Schema.encodeUnknownSync(
+              CreateThreadPluginThreadTypeUnavailableResponseSchema,
+            )({
+              status: "error",
+              data: {
+                code: "PLUGIN_THREAD_TYPE_UNAVAILABLE",
+                message: failure.message,
+                requestId,
+              },
+            }),
+            422,
           ),
         PluginAgentModeUnavailable: (failure: PluginAgentModeUnavailable) =>
           context.json(
@@ -2831,6 +2889,20 @@ export const createThreadRoutes = (
             "thread.invalidated",
           ),
         );
+      // ─── Durable host ───
+      // Thread-scoped plugin jobs pause on archive (unless the plugin is
+      // `live` there) and resume on restore; in the background.
+      for (const changed of [thread, ...children])
+        try {
+          context.executionCtx.waitUntil(
+            durableThreadLifecycle(
+              context.env,
+              changed.id,
+              body.archived,
+              requestId,
+            ),
+          );
+        } catch {}
       let orbStopping = false;
       if (body.archived) {
         // The agent stops before its Orb: a turn left running would fail
@@ -2898,6 +2970,38 @@ export const createThreadRoutes = (
             ),
           ),
         )).some(Boolean);
+      }
+      // Plugins hear the archive or restore once the agent has stopped,
+      // after the response; waiting prompts are cancelled on archive. One
+      // Thread at a time, under the per-request Dynamic Worker limit.
+      let notifying: Promise<unknown> = Promise.resolve();
+      for (const changed of [thread, ...children]) {
+        const notified = notifying
+          .then(() =>
+            notifyPluginsOfArchive(context.env, {
+              threadId: changed.id,
+              ownerUserId: principal.userId,
+              archived: body.archived,
+              requestId,
+            }),
+          )
+          .catch((cause: unknown) =>
+            threadPersistenceLogger.warn(
+              "Plugins could not hear the archive.",
+              {
+                event: "plugin_archive_notify_failed",
+                requestId,
+                threadId: changed.id,
+                error: cause instanceof Error ? cause.message : String(cause),
+              },
+            ),
+          );
+        notifying = notified;
+      }
+      try {
+        context.executionCtx.waitUntil(notifying);
+      } catch {
+        // No request context (tests): it already runs.
       }
       // Whatever changed is published and stopped; then a child that could
       // not be written reports the outage.

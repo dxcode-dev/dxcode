@@ -254,6 +254,11 @@
       "filename": "0048_release_v0.2.112.sql",
       "sha256": "f1c48e0b5b3c284fd137a1869981af721a99ddbbaa4b63f3806518200b029aa0",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0049_release_v0.2.118.sql",
+      "sha256": "e9768a6eeddda361e53ad922ad7998a6c2892a386f1b035d35285278d30fdf30",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [
@@ -315,6 +320,18 @@
       "tag": "v9-github-token-coordinator",
       "newSqliteClasses": ["GitHubTokenCoordinatorObject"],
       "sha256": "16d0a7e054572da258c7366f1232750621f4859b744d32f25683dd56307b7c3c",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v10-plugin-durable-host",
+      "newSqliteClasses": ["PluginDurableHostObject"],
+      "sha256": "4224d0fb5bd291dbdab853ab47741fc8126a8dc7c743cdec07755fc87f6c8514",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v11-plugin-stream-relay",
+      "newSqliteClasses": ["PluginStreamRelay"],
+      "sha256": "d827c85a3ae2456d3334f85e07402d2e055e7227618f45a9bf7868b262252694",
       "classification": "non-destructive"
     }
   ]

@@ -4,11 +4,13 @@ import { Schema } from "effect";
 import { lazy, Suspense } from "react";
 import { AuthGate } from "./features/authentication/auth-gate.js";
 import { sessionQueryOptions } from "./features/authentication/sign-in-queries.js";
+import { loadSignedOut } from "./features/authentication/signed-out-loader.js";
 import {
   forgetShellPrefetch,
   startShellPrefetch,
 } from "./features/navigation/shell-queries.js";
 import { AccountThemeProvider } from "./features/settings/account/account-theme-provider.js";
+import { peekBootSessionRead } from "./shared/auth/boot-session.js";
 import { onSessionEnded } from "./shared/auth/session-ended.js";
 import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
 import { queryClient } from "./shared/query/query-client.js";
@@ -20,6 +22,13 @@ installClientDiagnostics();
 // index.html's title is the landing title crawlers read; from here React
 // renders every title, and FallbackTitle shows "dx" where no page names one.
 document.head.querySelector(":scope > title")?.remove();
+
+// A signed-out visitor's pages load lazily: start their download the moment
+// the boot's session check finds nobody signed in (before the session query
+// below takes that answer), so it overlaps the app's evaluation.
+void peekBootSessionRead().then((session) => {
+  if (session === null) void loadSignedOut();
+});
 
 // The session query starts at boot, taking the check bootstrap sent, and
 // AuthGate's query joins it. The shell's data starts the moment that query

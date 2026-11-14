@@ -10,6 +10,7 @@ import { getLogger } from "@logtape/logtape";
 import { Effect, Result } from "effect";
 import * as v from "valibot";
 import pluginApiSource from "../../agents/built-in-skills/building-plugins/reference/plugin-api.ts.txt?raw";
+import pluginUiReadme from "../../agents/built-in-skills/building-plugins/reference/plugin-ui.md?raw";
 import pluginReadme from "../../agents/built-in-skills/building-plugins/reference/README.md?raw";
 import type { ThreadToolsContext } from "../../threads/agent-tools.js";
 import { ownerRequest } from "../../threads/owner-request.js";
@@ -1025,12 +1026,16 @@ const pluginReferenceParts = () => [
     .map((part) => part.trim())
     .filter((part) => part !== "")
     .map((text) => ({ source: "@dxcode/plugin types", text })),
+  ...pluginUiReadme.split(/\n(?=##+ )/).map((part) => ({
+    source: "@dxcode/plugin-ui",
+    text: part.trim(),
+  })),
 ];
 
 /** The full reference, or the parts whose text mentions `query`. */
 const pluginDocs = (query: string | undefined) => {
   if (query === undefined || query === "")
-    return `The full @dxcode/plugin reference: README.md, then the API's types (src/index.ts).\n\n${pluginReadme}\n\n---\n\n${pluginApiSource}`;
+    return `The full @dxcode/plugin reference: README.md, then the API's types (src/index.ts), then the @dxcode/plugin-ui components for pane HTML.\n\n${pluginReadme}\n\n---\n\n${pluginApiSource}\n\n---\n\n${pluginUiReadme}`;
   const needle = query.toLowerCase();
   const matches = pluginReferenceParts().filter(({ text }) =>
     text.toLowerCase().includes(needle),

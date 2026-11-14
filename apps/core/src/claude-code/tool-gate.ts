@@ -56,3 +56,52 @@ export const setClaudeCodeToolGate = (
 };
 
 export const claudeCodeToolGate = (threadId: string) => gates.get(threadId);
+
+/**
+ * Installed plugins' `tool.result` handlers see Claude Code's own tools
+ * through its PostToolUse hook, the same way: the bridge prints each
+ * finished call as a `dx_hook_result` line, dx runs the handlers and writes
+ * `mcp/hooks/<tool_use id>.result.json`, and the bridge answers the hook,
+ * with `updatedToolOutput` when a handler replaced the output. Observing
+ * fails open: with no answer in time, Claude gets the tool's own output.
+ */
+export interface ClaudeCodeHookResult {
+  readonly toolUseId: string;
+  readonly toolName: string;
+  readonly input: Record<string, unknown>;
+  /** The tool's output as Claude Code reports it (`tool_response`). */
+  readonly response: unknown;
+}
+
+/** The output Claude should see instead of the tool's own, if any. */
+export type ClaudeCodeResultAnswer =
+  | { readonly replace: false }
+  | { readonly replace: true; readonly output: unknown };
+
+export type ClaudeCodeToolResultObserver = (
+  result: ClaudeCodeHookResult,
+) => Promise<ClaudeCodeResultAnswer>;
+
+/** The line type the bridge prints for each finished call. */
+export const CLAUDE_CODE_RESULT_HOOK_LINE = "dx_hook_result";
+
+/**
+ * Seconds the bridge waits for dx's answer to a finished call before Claude
+ * gets the tool's own output: each handler has 10 seconds, so a few
+ * observing plugins fit.
+ */
+export const CLAUDE_CODE_RESULT_HOOK_WAIT_SECONDS = 45;
+
+const observers = new Map<string, ClaudeCodeToolResultObserver>();
+
+/** Sets, or with undefined clears, the Thread's result observer. */
+export const setClaudeCodeToolResultObserver = (
+  threadId: string,
+  observer: ClaudeCodeToolResultObserver | undefined,
+) => {
+  if (observer === undefined) observers.delete(threadId);
+  else observers.set(threadId, observer);
+};
+
+export const claudeCodeToolResultObserver = (threadId: string) =>
+  observers.get(threadId);

@@ -6,9 +6,10 @@ import type {
   ThreadPaneTab,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { Puzzle, X } from "lucide-react";
+import { X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
+import { PluginPaneIcon } from "../plugin-ui/lazy-plugin-ui-icons.js";
 import { absolutePathFor, sandboxFileUrl } from "../transcript-file-link.js";
 import {
   currentPaneDrag,
@@ -181,10 +182,24 @@ const fileLocationLabel = (tab: Extract<ThreadPaneTab, { kind: "file" }>) =>
       ? tab.target.path
       : `${tab.target.worktreeLabel}: ${tab.target.path}`;
 
-function TabIcon({ tab }: { readonly tab: ThreadPaneTab }) {
+function TabIcon({
+  tab,
+  threadId,
+}: {
+  readonly tab: ThreadPaneTab;
+  readonly threadId: ThreadId;
+}) {
   if (tab.kind === "agent") return <OrbIcon aria-hidden="true" />;
   if (tab.kind === "file") return null;
-  if (tab.kind === "plugin") return <Puzzle aria-hidden="true" />;
+  if (tab.kind === "plugin")
+    return (
+      <PluginPaneIcon
+        threadId={threadId}
+        plugin={tab.plugin}
+        pane={tab.pane}
+        title={tab.title}
+      />
+    );
   const { Icon } = PANE_VIEWS[tab.kind];
   return <Icon aria-hidden="true" />;
 }
@@ -249,7 +264,7 @@ function PaneTab({
         tabIndex={active ? 0 : -1}
         onClick={() => dispatch({ type: "activate", pane: pane.id, tab: id })}
       >
-        <TabIcon tab={tab} />
+        <TabIcon tab={tab} threadId={threadId} />
         <span className="pane-tab-label">{label}</span>
         {dirty ? <span className="pane-tab-dirty" aria-hidden="true" /> : null}
       </button>

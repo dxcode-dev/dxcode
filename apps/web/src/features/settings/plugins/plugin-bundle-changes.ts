@@ -51,6 +51,13 @@ export const permissionLabel = {
   settings: "Required settings",
   mcp: "MCP hosts",
   commands: "Local commands",
+  binaries: "Native tools",
+  plugins: "Calls plugins",
+  views: "Views",
+  exports: "Exports",
+  tier: "Trust tier",
+  hosts: "Hosts",
+  jobs: "Background jobs",
 } as const satisfies Record<PluginPermissionChange["permission"], string>;
 
 /** Each grant the update adds or drops, added ones first. */

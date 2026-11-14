@@ -1,0 +1,20 @@
+{
+  "name": "@dxcode/plugin-ui",
+  "version": "0.1.0",
+  "description": "Web components in dx's design language for dx plugin panes, tabs, pages, and MCP Apps views.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "sideEffects": true,
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/plugin-ui.js"
+    },
+    "./plugin-ui.js": "./src/plugin-ui.js"
+  },
+  "files": [
+    "src",
+    "LICENSE",
+    "README.md"
+  ]
+}

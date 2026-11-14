@@ -1,8 +1,11 @@
 import type { PluginBundleData } from "@dx/api";
-import { Package, Settings } from "lucide-react";
+import { Settings } from "lucide-react";
+import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
+import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
 import { SettingsToggle } from "../settings-primitives.js";
 import { type BundleRun, bundleHint } from "./plugin-bundle-presentation.js";
+import { tierBadge } from "./plugin-trust-presentation.js";
 
 export function PluginBundleRow({
   bundle,
@@ -25,16 +28,26 @@ export function PluginBundleRow({
   readonly onOpen: (trigger: HTMLButtonElement) => void;
 }) {
   const hint = bundleHint(bundle);
+  const badge = tierBadge(bundle.trust);
   return (
     <div className="first-party-plugin-row" data-plugin-bundle={bundle.name}>
-      <span className="first-party-plugin-creator" aria-hidden="true">
-        {bundle.icon === undefined ? (
-          <Package />
-        ) : (
-          <img className="plugin-bundle-icon" src={bundle.icon} alt="" />
-        )}
-      </span>
+      <PluginIcon
+        name={bundle.displayName}
+        icon={bundle.iconSet}
+        legacySrc={bundle.icon}
+        size={20}
+        className="plugin-bundle-row-icon"
+      />
       <strong>{bundle.displayName}</strong>
+      {badge === undefined ? null : (
+        <Badge
+          className="plugin-tier-badge"
+          data-tier={bundle.trust?.tier}
+          title={`Trust tier: ${badge}`}
+        >
+          {badge}
+        </Badge>
+      )}
       {hint === undefined ? null : <span>{hint}</span>}
       {updateAvailable && canMutate && onUpdate !== undefined ? (
         <Button

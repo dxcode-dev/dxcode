@@ -3,7 +3,6 @@ import {
   requestMagicLink,
   signInWithGoogle,
   signInWithPassword,
-  signOut,
   signUpWithPassword,
 } from "../../shared/auth/auth-client.js";
 import {
@@ -108,15 +107,4 @@ export function useGoogleSignIn() {
   // The browser leaves for Google; the callback is a new page load.
   // react-doctor-disable-next-line react-doctor/query-mutation-missing-invalidation
   return useMutation({ mutationFn: signInWithGoogle });
-}
-
-export function useSignOut(onSignedOut: () => void) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: signOut,
-    onSuccess: () => {
-      onSignedOut();
-      queryClient.setQueryData(sessionQueryOptions.queryKey, null);
-    },
-  });
 }

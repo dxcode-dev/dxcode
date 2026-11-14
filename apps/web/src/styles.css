@@ -1343,20 +1343,7 @@
   font-size: var(--text-xs);
   line-height: var(--leading-4);
 }
-.plugin-post-icon {
-  display: inline-grid;
-  width: 16px;
-  height: 16px;
-  flex: none;
-  place-items: center;
-  border-radius: var(--radius-full);
-  color: var(--primary);
-  background: color-mix(in srgb, var(--primary) 14%, transparent);
-}
-.plugin-post-icon > svg {
-  width: 10px;
-  height: 10px;
-}
+/* The posting plugin's icon: PluginIcon (shared/ui/plugin-icon.css). */
 .plugin-post-name {
   min-width: 0;
   overflow: hidden;
@@ -7517,6 +7504,18 @@ img.orb-provider-logo {
   min-width: 0;
   flex-direction: column;
 }
+/* A plugin command's icon, then its title and plugin. */
+.command-palette-item > span.plugin-icon:first-child {
+  display: inline-grid;
+  flex: none;
+  flex-direction: initial;
+}
+.command-palette-item > .plugin-icon + span {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
 .command-palette-item strong {
   font-size: var(--text-xl);
   font-weight: var(--weight-medium);
@@ -8082,6 +8081,12 @@ img.orb-provider-logo {
 .plugin-bundle-form > header h2 {
   margin: 0;
 }
+.plugin-bundle-form > header > .plugin-bundle-header-icon {
+  margin-bottom: 6px;
+}
+.dialog-popup p.plugin-bundle-warning {
+  color: var(--warning);
+}
 .dialog-popup p.plugin-bundle-description,
 .dialog-popup .plugin-bundle-form > header > p {
   font-size: var(--text-sm);
@@ -8316,6 +8321,78 @@ img.orb-provider-logo {
   padding: var(--space-2) var(--space-3-5);
   border-top: 1px solid var(--divider);
 }
+/* Background jobs: rows like the bundle's item list. */
+.plugin-jobs .plugin-job {
+  gap: 10px;
+  padding: 7px 14px;
+}
+/* Not the item list's stretching text span: the icon keeps its size. */
+.plugin-bundle-group li.plugin-job > .plugin-job-icon {
+  flex: none;
+  min-width: 0;
+}
+.plugin-job-main {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 1px;
+}
+.plugin-job-main strong {
+  overflow: hidden;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-job-main span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-jobs .plugin-job .plugin-bundle-status-pill {
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.plugin-jobs .plugin-job .plugin-bundle-status-pill[data-tone="added"] {
+  color: var(--success);
+}
+.plugin-jobs .plugin-job .plugin-bundle-status-pill[data-tone="removed"] {
+  color: var(--destructive);
+}
+.dialog-popup .plugin-jobs > p.plugin-bundle-help {
+  margin: 0;
+  padding: 8px 14px;
+  border-top: 1px solid var(--divider);
+  color: var(--muted-foreground);
+}
+.dialog-popup .plugin-jobs > p.plugin-jobs-blocked {
+  border-top: 0;
+  color: var(--warning);
+}
+.plugin-jobs-live {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+}
+@media (max-width: 640px) {
+  .plugin-jobs .plugin-job {
+    flex-wrap: wrap;
+  }
+  .plugin-job-main {
+    flex-basis: calc(100% - 30px);
+  }
+  .plugin-jobs .plugin-job .plugin-bundle-status-pill {
+    margin-left: 0;
+  }
+  .plugin-jobs .plugin-job button {
+    margin-left: auto;
+  }
+}
 .plugin-bundle-setting-input {
   width: min(14rem, 45vw);
 }
@@ -8416,6 +8493,83 @@ img.orb-provider-logo {
 }
 .plugin-bundle-actions .plugin-bundle-remove {
   margin-right: auto;
+}
+/* Plugin trust tiers: the row's tier badge and the admin's trust form. */
+.first-party-plugin-row > .plugin-tier-badge {
+  flex: none;
+  padding: 1px 6px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-full);
+  font-size: var(--text-2xs);
+  line-height: 14px;
+}
+.first-party-plugin-row > .plugin-tier-badge[data-tier="verified"] {
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+.plugin-trust-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.plugin-trust-field > label,
+.plugin-trust-field > legend {
+  padding: 0;
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+.plugin-trust-field > span {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.plugin-trust-field > span[role="alert"] {
+  color: var(--destructive);
+}
+.plugin-trust-field > .dx-select {
+  justify-self: start;
+}
+.plugin-trust-form > .plugin-trust-error {
+  margin: 0;
+  color: var(--destructive);
+  font-size: var(--text-sm);
+}
+.plugin-trust-projects {
+  display: grid;
+  max-height: 180px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  border: 1px solid var(--divider);
+  border-radius: var(--radius-md);
+  list-style: none;
+}
+.plugin-trust-projects li + li {
+  border-top: 1px solid var(--divider);
+}
+/* Above `.dialog-popup form label`, which would stack the row. */
+.plugin-trust-form .plugin-trust-projects label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  font-size: var(--text-sm);
+}
+.plugin-trust-projects .dx-checkbox {
+  flex: none;
+}
+.plugin-trust-projects code {
+  overflow: hidden;
+  margin-left: auto;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .skills-page {
@@ -12504,4 +12658,8 @@ body:has(.dx-app-shell) {
 .skill-proposal-diff > span[data-kind="-"] {
   color: var(--destructive);
   background: color-mix(in srgb, currentColor 10%, transparent);
+}
+/* A plugin's icon sits where dx's own plugins show their 22 px mark. */
+.first-party-plugin-row > .plugin-bundle-row-icon {
+  margin: 0 1px;
 }

@@ -6,8 +6,25 @@ import {
 import { claudePlanReadingFromEvent } from "./plan.js";
 import {
   CLAUDE_CODE_HOOK_LINE,
+  CLAUDE_CODE_RESULT_HOOK_LINE,
   type ClaudeCodeHookRequest,
+  type ClaudeCodeHookResult,
 } from "./tool-gate.js";
+
+/** Every string in a JSON value, masked. */
+const maskDeep = <T>(masker: SecretMasker, value: T): T =>
+  (typeof value === "string"
+    ? masker.mask(value)
+    : Array.isArray(value)
+      ? value.map((item) => maskDeep(masker, item))
+      : value !== null && typeof value === "object"
+        ? Object.fromEntries(
+            Object.entries(value).map(([key, item]) => [
+              key,
+              maskDeep(masker, item),
+            ]),
+          )
+        : value) as T;
 
 /**
  * Reads the Claude Code CLI's `--output-format stream-json` events and
@@ -240,6 +257,8 @@ export class ClaudeCodeStream {
    * has not taken yet (tool-gate.ts).
    */
   readonly hookRequests: ClaudeCodeHookRequest[] = [];
+  /** Finished calls the bridge printed for plugins' `tool.result`. */
+  readonly hookResults: ClaudeCodeHookResult[] = [];
   /** The plan's limits from the latest `rate_limit_event`. */
   planReading: ClaudePlanReading | undefined;
   /** When dx read `planReading` (epoch seconds). */
@@ -333,6 +352,21 @@ export class ClaudeCodeStream {
             toolUseId: event.tool_use_id,
             toolName: event.tool_name,
             input: input ?? {},
+          });
+        return;
+      }
+      case CLAUDE_CODE_RESULT_HOOK_LINE: {
+        if (
+          typeof event.tool_use_id === "string" &&
+          /^[A-Za-z0-9_-]+$/.test(event.tool_use_id) &&
+          typeof event.tool_name === "string"
+        )
+          // Plugins see what a workspace read would show: secrets masked.
+          this.hookResults.push({
+            toolUseId: event.tool_use_id,
+            toolName: event.tool_name,
+            input: maskDeep(this.masker, record(event.tool_input) ?? {}),
+            response: maskDeep(this.masker, event.tool_response),
           });
         return;
       }

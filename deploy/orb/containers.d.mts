@@ -30,6 +30,8 @@ export function retryContainerSettings<
 }): Promise<Result>;
 export function deployOrbWorker(input: {
   workerName: string;
+  /** The stage's D1 database, bound as DB for plugin container usage. */
+  databaseId?: string;
   workspaceRoot: string;
   stateDirectory: string;
   environment?: NodeJS.ProcessEnv;

@@ -1,14 +1,17 @@
 import {
   type PluginNotice,
   type PluginPaneEntry,
+  type PluginThreadUiData,
   PluginThreadUiErrorResponseSchema,
   PluginThreadUiResponseSchema,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
+import { createElement } from "react";
 import { toast } from "sonner";
 import { request } from "../../../shared/api/client.js";
 import { requestPluginPane } from "../../../shared/commands/thread-open-view-event.js";
 import { linkRemarkFor } from "./plugin-link-remark.js";
+import { iconForItem } from "./plugin-ui-icon-lookup.js";
 
 /**
  * The request behind `pluginUiQueryOptions` (thread-queries.ts), loaded
@@ -20,7 +23,10 @@ import { linkRemarkFor } from "./plugin-link-remark.js";
 /** Notices already toasted on this page, so a refetch never repeats one. */
 const toasted = new Set<string>();
 
-const showNotices = (notices: ReadonlyArray<PluginNotice>) => {
+const showNotices = (
+  notices: ReadonlyArray<PluginNotice>,
+  plugins: PluginThreadUiData["plugins"],
+) => {
   for (const notice of notices) {
     if (toasted.has(notice.id)) continue;
     toasted.add(notice.id);
@@ -32,7 +38,24 @@ const showNotices = (notices: ReadonlyArray<PluginNotice>) => {
           : notice.level === "error"
             ? toast.error
             : toast.info;
-    show(notice.message, { description: notice.plugin });
+    // The plugin's icon by URL, a plain image: a query module draws no
+    // components. Without one, the toast keeps its level's own icon.
+    const src = iconForItem({ plugins }, notice)?.src;
+    show(notice.message, {
+      description: notice.plugin,
+      ...(src === undefined
+        ? {}
+        : {
+            icon: createElement("img", {
+              src: `/v1/plugins/icons/${src}`,
+              alt: "",
+              width: 16,
+              height: 16,
+              decoding: "async",
+              style: { borderRadius: "var(--radius-xs)" },
+            }),
+          }),
+    });
   }
 };
 
@@ -69,7 +92,16 @@ export const loadPluginUi = async (threadId: ThreadId, signal: AbortSignal) => {
     { signal },
     PluginThreadUiErrorResponseSchema,
   );
-  showNotices(data.notices);
+  showNotices(data.notices, data.plugins);
   queueMicrotask(() => openRequestedPanes(threadId, data.panes ?? []));
-  return { ...data, linkRemark: linkRemarkFor(data.linkPatterns) };
+  return {
+    ...data,
+    linkRemark: linkRemarkFor(
+      data.linkPatterns.map((link) => {
+        const icon = iconForItem(data, link);
+        const iconHash = icon?.src ?? icon?.monochrome;
+        return iconHash === undefined ? link : { ...link, iconHash };
+      }),
+    ),
+  };
 };

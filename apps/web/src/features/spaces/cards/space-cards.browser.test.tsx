@@ -126,6 +126,8 @@ interface Server {
   fresh?: SpaceThreadItem[];
   catchUp: { since: string; until: string; body: string } | null;
   dismissed: number;
+  /** How often each thread's own card read was asked for. */
+  reads?: Map<string, number>;
 }
 
 const serve = (server: Server) =>
@@ -138,6 +140,7 @@ const serve = (server: Server) =>
       });
     const one = /^\/v1\/spaces\/[^/]+\/threads\/([^/]+)$/.exec(path)?.[1];
     if (one !== undefined) {
+      server.reads?.set(one, (server.reads.get(one) ?? 0) + 1);
       const found = [...server.items, ...(server.fresh ?? [])].find(
         ({ id }) => id === one,
       );
@@ -574,6 +577,50 @@ it("renders thread links in a Space's messages as cards or chips", async () => {
   expect(
     plain?.querySelectorAll(".markdown-file-link-unavailable").length,
   ).toBe(5);
+});
+
+it("shows a link alone to a thread outside the Space as its chip, not an endless card", async () => {
+  const server: Server = {
+    items: everyState(),
+    catchUp: null,
+    dismissed: 0,
+    reads: new Map(),
+  };
+  serve(server);
+  // A thread another thread started, which the Space did not: its own read
+  // answers 404, as Core does for any thread that is not the Space's.
+  const outside = "thr_00000000-0000-4000-8000-00000000c0aa";
+  await mount(() => (
+    <ThreadReferenceContext.Provider value={spaceThreadReferences}>
+      <RichMarkdown>
+        {[
+          `[Rebuild the payment step](/threads/${child(2)})`,
+          `[Social video studio](https://dx.example.com/threads/${outside})`,
+        ].join("\n")}
+      </RichMarkdown>
+    </ThreadReferenceContext.Provider>
+  ));
+  await until(
+    () =>
+      document.querySelectorAll(".space-thread-card:not([data-loading])")
+        .length === 1 && document.querySelector(".space-thread-chip") !== null,
+  );
+  // The Space's own thread is its card; the other is a chip with the link's
+  // text, and no card waits for a thread the Space will never list.
+  expect(
+    [...document.querySelectorAll(".space-thread-card-title")].map(
+      (title) => title.textContent,
+    ),
+  ).toEqual(["Rebuild the payment step"]);
+  expect(
+    [...document.querySelectorAll(".space-thread-chip")].map(
+      (chip) => chip.textContent,
+    ),
+  ).toEqual(["Social video studio"]);
+  await settle(1_000);
+  expect(document.querySelector(".space-thread-card[data-loading]")).toBeNull();
+  // It asks once, not again for every reader of the answer.
+  expect(server.reads?.get(outside)).toBe(1);
 });
 
 it("shows a child's first message as its requester's, noting the Space started it", async () => {

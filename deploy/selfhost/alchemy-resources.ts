@@ -43,8 +43,8 @@ type E2BProfilesResource = Alchemy.Resource<
  */
 type OrbContainersResource = Alchemy.Resource<
   "Dx.OrbContainers",
-  { workerName: string; recipeHash: string },
-  { workerName: string; recipeHash?: string }
+  { workerName: string; recipeHash: string; databaseId?: string },
+  { workerName: string; recipeHash?: string; databaseId?: string }
 >;
 
 export const HeldSecret = Alchemy.Resource<HeldSecretResource>("Dx.HeldSecret");
@@ -153,13 +153,17 @@ const orbContainersProvider = () =>
   Provider.succeed(OrbContainers, {
     reconcile: ({ output, news }) =>
       output?.recipeHash === news.recipeHash &&
-      output.workerName === news.workerName
+      output.workerName === news.workerName &&
+      output.databaseId === news.databaseId
         ? Effect.succeed(output)
         : Effect.tryPromise({
             try: async (signal) => {
               await deployOrbWorker({
                 signal,
                 workerName: news.workerName,
+                ...(news.databaseId === undefined
+                  ? {}
+                  : { databaseId: news.databaseId }),
                 workspaceRoot,
                 stateDirectory: resolve(
                   workspaceRoot,
@@ -187,6 +191,9 @@ const orbContainersProvider = () =>
               return {
                 workerName: news.workerName,
                 recipeHash: news.recipeHash,
+                ...(news.databaseId === undefined
+                  ? {}
+                  : { databaseId: news.databaseId }),
               };
             },
             catch: (cause) =>

@@ -245,6 +245,8 @@ export const deleteWorkspace = async (
       "skill_workspace_policy",
       "trusted_plugin_workspace_policy",
       "workspace_policy",
+      // What the workspace's plugin hosts cost.
+      "plugin_host_usage",
     ].map((table) => statement(`DELETE FROM ${table} WHERE workspace_id = ?1`)),
     // Invites and members.
     statement("DELETE FROM workspace_invite_link WHERE organization_id = ?1"),

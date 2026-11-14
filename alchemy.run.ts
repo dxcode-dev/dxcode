@@ -298,6 +298,10 @@ export default Alchemy.Stack(
       workspaceInactivityMs: Config.option(
         Config.Number("DX_DEPLOYMENT_WORKSPACE_INACTIVITY_MS"),
       ),
+      // Plugin trust tier limits (PluginTierLimitsConfig JSON), any stage.
+      pluginTierLimits: Config.option(
+        Config.String("DX_DEPLOYMENT_PLUGIN_TIER_LIMITS"),
+      ),
       turnstileTestKeys: Config.withDefault(
         Config.Boolean("DX_DEPLOYMENT_TURNSTILE_TEST_KEYS"),
         false,
@@ -592,18 +596,6 @@ export default Alchemy.Stack(
             recipeHash: yield* Effect.promise(() => e2bRecipeHash()),
           } as never)
         : undefined;
-    // Cloudflare Containers runs in this account: the Orb Worker owns one
-    // container per Thread, and Core binds its namespace across scripts.
-    const orbContainers = !cloudflareInstalled
-      ? undefined
-      : Option.isSome(configuration.orbWorkerName)
-        ? yield* OrbContainers("OrbContainers", {
-            workerName: configuration.orbWorkerName.value,
-            recipeHash: orbRecipeHash(import.meta.dirname),
-          })
-        : yield* Effect.die(
-            "DX_DEPLOYMENT_ORB_WORKER_NAME is required for Cloudflare Containers.",
-          );
     // Hosted stages run on Containers whenever they install it; a self-host
     // keeps E2B first, and a deployment with no provider defaults to an E2B
     // size people connect (scripts/alchemy-deployment.mjs checks the same
@@ -629,6 +621,38 @@ export default Alchemy.Stack(
       return yield* Effect.die(
         "DX_DEPLOYMENT_TURNSTILE_TEST_KEYS is restricted to previews.",
       );
+
+    // Shape only: the Worker decodes it against PluginTierLimitsConfig and
+    // keeps the defaults, logging an error, when a value doesn't fit.
+    if (Option.isSome(configuration.pluginTierLimits)) {
+      const tiers = new Set([
+        "sandboxed",
+        "personal-dev",
+        "workspace-trusted",
+        "verified",
+      ]);
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(configuration.pluginTierLimits.value);
+      } catch {
+        parsed = undefined;
+      }
+      if (
+        typeof parsed !== "object" ||
+        parsed === null ||
+        Array.isArray(parsed) ||
+        !Object.entries(parsed).every(
+          ([tier, limits]) =>
+            tiers.has(tier) &&
+            typeof limits === "object" &&
+            limits !== null &&
+            !Array.isArray(limits),
+        )
+      )
+        return yield* Effect.die(
+          "DX_DEPLOYMENT_PLUGIN_TIER_LIMITS must be a JSON object of limit overrides keyed by tier.",
+        );
+    }
 
     if (Option.isSome(configuration.workspaceInactivityMs)) {
       const inactivityMs = configuration.workspaceInactivityMs.value;
@@ -709,6 +733,20 @@ export default Alchemy.Stack(
       migrations: `apps/core/${migrationManifest.d1Directory}`,
       readReplication: { mode: "auto" },
     });
+    // Cloudflare Containers runs in this account: the Orb Worker owns one
+    // container per Thread, and Core binds its namespace across scripts.
+    const orbContainers = !cloudflareInstalled
+      ? undefined
+      : Option.isSome(configuration.orbWorkerName)
+        ? yield* OrbContainers("OrbContainers", {
+            workerName: configuration.orbWorkerName.value,
+            recipeHash: orbRecipeHash(import.meta.dirname),
+            // The plugin container object writes plugin_host_usage itself.
+            databaseId: database.databaseId,
+          })
+        : yield* Effect.die(
+            "DX_DEPLOYMENT_ORB_WORKER_NAME is required for Cloudflare Containers.",
+          );
     // Browsers upload attachment parts and read attachments straight from
     // R2 through presigned URLs, so the bucket admits this origin.
     const bucket = yield* Cloudflare.R2.Bucket("Storage", {
@@ -910,11 +948,25 @@ export default Alchemy.Stack(
               DX_E2B_TIMEOUT_MS: "300000",
             }
           : {}),
+        ...(Option.isSome(configuration.pluginTierLimits)
+          ? { DX_PLUGIN_TIER_LIMITS: configuration.pluginTierLimits.value }
+          : {}),
         ...(Option.isSome(configuration.workspaceInactivityMs)
           ? {
               DX_WORKSPACE_INACTIVITY_MS: String(
                 configuration.workspaceInactivityMs.value,
               ),
+            }
+          : {}),
+        // Branch previews cap each plugin install's container time at two
+        // minutes a day, so the over-cap path is provable and a preview
+        // never runs up container time (plugins/hosts/container).
+        ...(configuration.environment === "preview"
+          ? {
+              DX_PLUGIN_CONTAINER_DAILY_MS: "120000",
+              // Four minutes of container time a day for a workspace's
+              // installs together, so the workspace cap is provable.
+              DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS: "240000",
             }
           : {}),
         DX_DEPLOYMENT_REVISION: configuration.revision,
@@ -1112,6 +1164,11 @@ export default Alchemy.Stack(
               // Executor-mode Threads' agent containers (no Orb).
               THREAD_EXECUTOR: Cloudflare.DurableObject("THREAD_EXECUTOR", {
                 className: "ThreadExecutorObject",
+                scriptName: orbContainers.workerName,
+              }),
+              // The `container` plugin host: one container per install.
+              PLUGIN_CONTAINER: Cloudflare.DurableObject("PLUGIN_CONTAINER", {
+                className: "PluginContainerObject",
                 scriptName: orbContainers.workerName,
               }),
             }),

@@ -6,6 +6,8 @@
 
 import { createHash } from "node:crypto";
 import {
+  VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY,
+  VIEW_FRAME_CONNECTED_PATH,
   VIEW_FRAME_CONTENT_SECURITY_POLICY,
   VIEW_FRAME_PATH,
 } from "../../../../packages/api/src/views/view-frame.mjs";
@@ -21,7 +23,12 @@ export const CSP_REPORT_PATH = "/api/csp-reports";
 export const CSP_ENFORCED = true;
 
 /** The policies reports name, so a report says which header it broke. */
-export const CSP_POLICIES = Object.freeze(["app", "api", "docs"]);
+export const CSP_POLICIES = Object.freeze([
+  "app",
+  "api",
+  "docs",
+  "pane-connect",
+]);
 
 const TURNSTILE = "https://challenges.cloudflare.com";
 /**
@@ -189,6 +196,10 @@ export const staticHeaders = ({
     VIEW_FRAME_PATH,
     ...detach,
     `  Content-Security-Policy: ${VIEW_FRAME_CONTENT_SECURITY_POLICY}`,
+    // A trusted pane's shell; its view narrows requests to its hosts.
+    VIEW_FRAME_CONNECTED_PATH,
+    ...detach,
+    `  Content-Security-Policy: ${VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY}`,
   ];
   if (docsHtml !== undefined)
     rules.push(

@@ -87,14 +87,23 @@ const describe = (item: SpaceThreadItem) =>
 /**
  * A thread a Space started, as a live card in the Space's chat: its state,
  * title, status line, when it last moved, and who asked for it. Opens the
- * thread beside the chat.
+ * thread beside the chat. A thread the Space did not start, such as one
+ * another thread started, has no card: `fallback` shows instead, the link as
+ * its author wrote it, else the thread's chip.
  */
-export function SpaceThreadCard({ threadId }: { readonly threadId: string }) {
+export function SpaceThreadCard({
+  threadId,
+  fallback,
+}: {
+  readonly threadId: string;
+  readonly fallback?: React.ReactNode;
+}) {
   const { identity } = useAuthenticatedIdentity();
   const spaceThreadId = useSpaceThreadId();
   const item = useSpaceThreadItem(identity.id, spaceThreadId, threadId);
   const open = useOpenSpaceThread();
   const selected = useSelectedThread() === threadId;
+  if (item === null) return fallback ?? <SpaceThreadChip threadId={threadId} />;
   if (item === undefined)
     return (
       <button
@@ -180,7 +189,7 @@ export function SpaceThreadChip({
       type="button"
       className="space-thread-chip"
       data-state={item?.state}
-      aria-label={item === undefined ? undefined : describe(item)}
+      aria-label={item == null ? undefined : describe(item)}
       onClick={() => open(threadId as ThreadId)}
     >
       <SpaceThreadStateIcon state={item?.state} />

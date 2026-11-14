@@ -5,6 +5,7 @@ import { threadDaemonLogger } from "../logging.js";
 import {
   DAEMON_STORAGE_PATH,
   forwardDaemonAttachment,
+  forwardDaemonPluginDev,
   forwardDaemonStorage,
   forwardDaemonUpgrade,
 } from "./daemon-ingress.js";
@@ -59,6 +60,13 @@ export const threadDaemonRoutes = new Hono<AppEnv>()
         match === null ? "/invalid" : (match[2] ?? ""),
       );
     },
+  )
+  .post("/dxd/:threadId/plugin-dev", (context) =>
+    forwardDaemonPluginDev(
+      context.req.raw,
+      context.env.THREAD_EXECUTION,
+      context.req.param("threadId"),
+    ),
   )
   .get("/dxd/:threadId", ingress)
   .get("/threads/:threadId/dxd", ingress);

@@ -6,6 +6,7 @@ import {
   type ClaudePlanUsage,
   claudePlanBlockedUntil,
   claudePlanWindowName,
+  generateThreadTitle,
   isClaudeCodeModel,
   isDeploymentOnlyOrbProvider,
   ModeId,
@@ -937,9 +938,13 @@ export const createThreadTools = (
               parentThreadId: callingThreadId,
               ...(projectId === undefined ? {} : { projectId }),
               // An explicit title is final: DxTitleAgent does not replace it.
+              // Shortened as a Thread title is, so a long one never fails.
               ...(data.title === undefined
                 ? {}
-                : { title: data.title, generateTitle: false }),
+                : {
+                    title: generateThreadTitle(data.title),
+                    generateTitle: false,
+                  }),
               ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
               ...(selection === undefined ? {} : { selection }),
               ...(data.claude_plan === undefined

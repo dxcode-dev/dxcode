@@ -1,4 +1,5 @@
 import type { Bindings } from "../../http/types.js";
+import { mapPluginsLimited } from "../worker-host/concurrency.js";
 import type { PluginInstallRecord } from "../worker-host/host.js";
 import {
   listOwnerCodePluginInstalls,
@@ -64,50 +65,47 @@ const agentModesOf = async (
     ({ code }) =>
       code.permissions.agents === true && (code.agentModes ?? []).length > 0,
   );
-  const lists = await Promise.all(
-    installs.map(async (install) => {
-      try {
-        const described = await describePlugin(bindings, db, install);
-        return described.agentModes.flatMap(({ key, agent }) => {
-          const declared = (install.code.agentModes ?? []).find(
-            (mode) => mode.key === key,
-          );
-          if (declared === undefined) return [];
-          return [
-            {
-              agentMode: pluginAgentModeId(install.name, key),
-              install,
-              key,
-              label: declared.label,
-              ...(declared.description === undefined
-                ? {}
-                : { description: declared.description }),
-              ...(declared.color === undefined
-                ? {}
-                : { color: declared.color }),
-              // A mode's Thread shows the declared label unless the agent
-              // names its own.
-              definition:
-                agent.display === undefined
-                  ? {
-                      ...agent,
-                      display: {
-                        label: declared.label,
-                        ...(declared.color === undefined
-                          ? {}
-                          : { color: declared.color }),
-                      },
-                    }
-                  : agent,
-            },
-          ];
-        });
-      } catch (error) {
-        logPluginFailure(install, "start", error);
-        return [];
-      }
-    }),
-  );
+  // Under the per-request Dynamic Worker limit.
+  const lists = await mapPluginsLimited(installs, async (install) => {
+    try {
+      const described = await describePlugin(bindings, db, install);
+      return described.agentModes.flatMap(({ key, agent }) => {
+        const declared = (install.code.agentModes ?? []).find(
+          (mode) => mode.key === key,
+        );
+        if (declared === undefined) return [];
+        return [
+          {
+            agentMode: pluginAgentModeId(install.name, key),
+            install,
+            key,
+            label: declared.label,
+            ...(declared.description === undefined
+              ? {}
+              : { description: declared.description }),
+            ...(declared.color === undefined ? {} : { color: declared.color }),
+            // A mode's Thread shows the declared label unless the agent
+            // names its own.
+            definition:
+              agent.display === undefined
+                ? {
+                    ...agent,
+                    display: {
+                      label: declared.label,
+                      ...(declared.color === undefined
+                        ? {}
+                        : { color: declared.color }),
+                    },
+                  }
+                : agent,
+          },
+        ];
+      });
+    } catch (error) {
+      logPluginFailure(install, "start", error);
+      return [];
+    }
+  });
   return lists.flat();
 };
 

@@ -21,6 +21,7 @@ import {
   ChoiceSelectTrigger,
 } from "../../shared/ui/choice-select.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import { LazyPluginIcon } from "../../shared/ui/lazy-plugin-icon.js";
 import { SegmentedControl } from "../../shared/ui/segmented-control.js";
 import {
   EFFORTS,
@@ -231,7 +232,13 @@ export function ModelPicker({
               {agents.map((entry) => (
                 <ChoiceSelectItem key={entry.mode} value={entry.mode}>
                   <ChoiceSelectItemDetail
-                    icon={<Bot />}
+                    icon={
+                      <LazyPluginIcon
+                        name={entry.plugin}
+                        icon={entry.icon}
+                        size={16}
+                      />
+                    }
                     title={entry.label}
                     detail={`${entry.plugin} · ${
                       entry.model === undefined

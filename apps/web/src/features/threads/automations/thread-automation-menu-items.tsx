@@ -5,6 +5,8 @@ import {
   CircleDot,
   GitPullRequest,
 } from "lucide-react";
+import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { preloadAutomationViews } from "./automation-views-loader.js";
 import { MenuItem } from "../../../shared/ui/menu.js";
 import {
   type AutomationView,
@@ -26,10 +28,18 @@ export function ThreadAutomationMenuItems({
   readonly include?: (view: AutomationView) => boolean;
   readonly onOpen: (view: AutomationView) => void;
 }) {
+  // The menu just opened: load what its entries open before one is chosen.
+  useMountEffect(preloadAutomationViews);
   const data = useThreadAutomations(threadId).data;
   return automationViews(data).map(({ view, label }) =>
     include === undefined || include(view) ? (
-      <MenuItem key={view} onClick={() => onOpen(view)}>
+      <MenuItem
+        key={view}
+        onPointerEnter={preloadAutomationViews}
+        onPointerDown={preloadAutomationViews}
+        onFocus={preloadAutomationViews}
+        onClick={() => onOpen(view)}
+      >
         {view === "issues" ? (
           <CircleDot />
         ) : view === "pulls" ? (

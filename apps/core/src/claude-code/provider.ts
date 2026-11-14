@@ -46,7 +46,10 @@ import {
 import { type ClaudePlanAccess, claudePlanBlockedCause } from "./plan.js";
 import { claudeCodeRuns, forgetClaudeCodeThread } from "./runs.js";
 import type { ClaudeCodeBlock, ClaudeCodeSegment } from "./stream.js";
-import { claudeCodeToolGate } from "./tool-gate.js";
+import {
+  claudeCodeToolGate,
+  claudeCodeToolResultObserver,
+} from "./tool-gate.js";
 import { mirroredToolCall } from "./tools.js";
 import {
   type ClaudeCodeInputBlock,
@@ -985,6 +988,9 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
               ...(claudeCodeToolGate(threadId) === undefined
                 ? {}
                 : { gateTools: true }),
+              ...(claudeCodeToolResultObserver(threadId) === undefined
+                ? {}
+                : { observeToolResults: true }),
               // A Thread on its executor keeps only its profile's built-ins;
               // a plugin agent's Thread, only those its tool list keeps.
               ...(claudeCodeExecutor(threadId) !== undefined

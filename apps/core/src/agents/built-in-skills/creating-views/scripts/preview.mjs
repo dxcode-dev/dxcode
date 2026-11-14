@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Previews a dx-view document the way the dx web app frames it: view-frame.mjs and kit/ are the
-// same files the web app uses, so the CSP, theme tokens, kit, and bridge match. Screenshots the
+// same files the web app uses, so the CSP, theme tokens, kit, and bridge match; plugin-ui.js is
+// @dxcode/plugin-ui, inlined when the view asks for it. Screenshots the
 // view at the reply width (720px) and at phone width (360px) in light and dark themes, and prints
 // page errors. Needs agent-browser (see the using-agent-browser skill).
 //
 // Usage: node preview.mjs <view.html> [output-dir] [--palette daydream|deadpan]
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { viewDocument } from "./view-frame.mjs";
@@ -31,6 +32,14 @@ const kit = {
   js: readFileSync(join(kitDir, "kit.js"), "utf8"),
   icons: readFileSync(join(kitDir, "icons.svg"), "utf8"),
 };
+// @dxcode/plugin-ui, for a view with <script type="module" src="dx:plugin-ui">.
+const pluginUiPath = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "plugin-ui.js",
+);
+const pluginUi = existsSync(pluginUiPath)
+  ? readFileSync(pluginUiPath, "utf8")
+  : undefined;
 const outDir = resolve(output ?? `/tmp/dx-view-preview-${Date.now()}`);
 mkdirSync(outDir, { recursive: true });
 
@@ -46,7 +55,7 @@ let failed = false;
 try {
   for (const scheme of ["light", "dark"]) {
     const file = join(outDir, `${name}-${scheme}.html`);
-    writeFileSync(file, viewDocument(html, { kit, palette, scheme }));
+    writeFileSync(file, viewDocument(html, { kit, palette, scheme, pluginUi }));
     for (const width of [720, 360]) {
       browser("set", "viewport", String(width), "900", "2");
       browser("open", `file://${file}`);

@@ -22,6 +22,9 @@ const WorkspacePolicyRow = Schema.Struct({
   allow_personal_execution_overrides: Schema.Number,
   allow_personal_plugin_install_overrides: Schema.Number,
   allow_repository_plugins: Schema.Number,
+  plugin_tier_cap: Schema.String,
+  trusted_plugin_project_ids: Schema.String,
+  trusted_plugin_signers: Schema.String,
   revision: Schema.Number,
   updated_at: Schema.DateTimeUtcFromString,
 });
@@ -37,6 +40,9 @@ const selectPolicy = `SELECT
   allow_personal_execution_overrides,
   allow_personal_plugin_install_overrides,
   allow_repository_plugins,
+  plugin_tier_cap,
+  trusted_plugin_project_ids,
+  trusted_plugin_signers,
   revision,
   updated_at
 FROM workspace_policy`;
@@ -69,6 +75,9 @@ const decodePolicy = Effect.fn("WorkspacePolicyRepositoryD1.decodePolicy")(
         allowPersonalPluginInstallOverrides:
           row.allow_personal_plugin_install_overrides === 1,
         allowRepositoryPlugins: row.allow_repository_plugins === 1,
+        pluginTierCap: row.plugin_tier_cap,
+        trustedPluginProjectIds: JSON.parse(row.trusted_plugin_project_ids),
+        trustedPluginSigners: JSON.parse(row.trusted_plugin_signers),
       },
       revision: row.revision,
       updatedAt: row.updated_at,
@@ -150,6 +159,9 @@ export const WorkspacePolicyRepositoryD1 = (db: D1Database) => {
                 allow_personal_execution_overrides = ?,
                 allow_personal_plugin_install_overrides = ?,
                 allow_repository_plugins = ?,
+                plugin_tier_cap = COALESCE(?, plugin_tier_cap),
+                trusted_plugin_project_ids = COALESCE(?, trusted_plugin_project_ids),
+                trusted_plugin_signers = COALESCE(?, trusted_plugin_signers),
                 revision = revision + 1,
                 updated_at = ?
               WHERE workspace_id = ? AND revision = ?`,
@@ -164,6 +176,13 @@ export const WorkspacePolicyRepositoryD1 = (db: D1Database) => {
                 input.restrictions.allowPersonalExecutionOverrides ? 1 : 0,
                 input.restrictions.allowPersonalPluginInstallOverrides ? 1 : 0,
                 input.restrictions.allowRepositoryPlugins ? 1 : 0,
+                input.restrictions.pluginTierCap ?? null,
+                input.restrictions.trustedPluginProjectIds === undefined
+                  ? null
+                  : JSON.stringify(input.restrictions.trustedPluginProjectIds),
+                input.restrictions.trustedPluginSigners === undefined
+                  ? null
+                  : JSON.stringify(input.restrictions.trustedPluginSigners),
                 updatedAt,
                 workspaceId,
                 expectedRevision,

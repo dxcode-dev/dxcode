@@ -107,10 +107,18 @@ export const insertPaneEvent = async (
     readonly paneId: string;
     readonly kind: "post" | "open" | "call";
     readonly messageJson?: string;
+    /**
+     * Posts and calls a minute at the plugin's trust tier
+     * (`paneMessagesPerMinute`); opens keep their own limit.
+     */
+    readonly perMinute?: number;
   },
 ) => {
   const now = new Date();
-  const limit = LIMITS[input.kind];
+  const limit =
+    input.kind === "open" || input.perMinute === undefined
+      ? LIMITS[input.kind]
+      : input.perMinute;
   const [inserted] = await db.batch([
     db
       .prepare(
@@ -208,4 +216,62 @@ export const recentPaneOpens = async (db: D1Database, threadId: string) => {
       row.opened_at,
     ]),
   );
+};
+
+// --- Pane snapshots for archived Threads ---
+
+/** Replaces the pane's saved state in the Thread (migration 0187). */
+export const savePaneSnapshot = async (
+  db: D1Database,
+  input: {
+    readonly threadId: string;
+    readonly pluginId: string;
+    readonly pluginName: string;
+    readonly paneId: string;
+    readonly stateJson: string;
+  },
+) => {
+  await db
+    .prepare(
+      `INSERT INTO plugin_pane_snapshot
+         (thread_id, plugin_name, pane_id, plugin_id, state_json, updated_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+       ON CONFLICT (thread_id, plugin_name, pane_id) DO UPDATE
+         SET plugin_id = excluded.plugin_id,
+             state_json = excluded.state_json,
+             updated_at = excluded.updated_at`,
+    )
+    .bind(
+      input.threadId,
+      input.pluginName,
+      input.paneId,
+      input.pluginId,
+      input.stateJson,
+      new Date().toISOString(),
+    )
+    .run();
+};
+
+/**
+ * The pane's saved state as the one message an archived Thread shows, or
+ * none when the plugin never saved one.
+ */
+export const readPaneSnapshot = async (
+  db: D1Database,
+  input: {
+    readonly threadId: string;
+    readonly pluginName: string;
+    readonly paneId: string;
+  },
+): Promise<PluginPaneMessage[]> => {
+  const row = await db
+    .prepare(
+      `SELECT state_json FROM plugin_pane_snapshot
+        WHERE thread_id = ? AND plugin_name = ? AND pane_id = ?`,
+    )
+    .bind(input.threadId, input.pluginName, input.paneId)
+    .first<{ state_json: string }>();
+  return row === null
+    ? []
+    : [{ seq: 1, message: JSON.parse(row.state_json) as unknown }];
 };

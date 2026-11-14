@@ -78,6 +78,11 @@ export interface MessagePlugin {
   readonly name: string;
   /** Who installed it: the owner, their workspace, or the repository. */
   readonly scope: "personal" | "workspace" | "repository";
+  /**
+   * The sha256 of the icon of the version that posted it, served at
+   * `/v1/plugins/icons/<hash>`, so old messages keep their icon.
+   */
+  readonly iconHash?: string;
 }
 
 /** Senders that wake a Thread on the owner's behalf. */
@@ -141,7 +146,12 @@ export const formatMessageAuthor = ({
   }${edited === true ? ' edited="true"' : ""}${
     plugin === undefined
       ? ""
-      : ` plugin="${escapeAttribute(plugin.name)}" plugin_id="${escapeAttribute(plugin.id)}" plugin_scope="${plugin.scope}"`
+      : ` plugin="${escapeAttribute(plugin.name)}" plugin_id="${escapeAttribute(plugin.id)}" plugin_scope="${plugin.scope}"${
+          plugin.iconHash !== undefined &&
+          /^[0-9a-f]{64}$/.test(plugin.iconHash)
+            ? ` plugin_icon="${plugin.iconHash}"`
+            : ""
+        }`
   } />\n`;
 
 /**
@@ -170,10 +180,18 @@ const pluginOf = (
   const id = fields.get("plugin_id");
   const name = fields.get("plugin");
   const scope = fields.get("plugin_scope");
+  const iconHash = fields.get("plugin_icon");
   return id &&
     name &&
     (scope === "personal" || scope === "workspace" || scope === "repository")
-    ? { id, name, scope }
+    ? {
+        id,
+        name,
+        scope,
+        ...(iconHash !== undefined && /^[0-9a-f]{64}$/.test(iconHash)
+          ? { iconHash }
+          : {}),
+      }
     : undefined;
 };
 

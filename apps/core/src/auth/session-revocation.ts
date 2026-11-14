@@ -26,14 +26,11 @@ export const sessionRevocationWindowMs = 5_000;
 const retainedMs = sessionCookieCacheMaxAgeSeconds * 1000;
 /** Re-read this far behind the newest record, in case D1's clock stepped back. */
 const clockSlackMs = 60_000;
-/** A waiter abandons a shared read after this and reads for itself. */
-const readTimeoutMs = 2_000;
 
 const ended = new Map<string, number>();
 /** The newest `ended_at` read, on D1's clock. */
 let readThrough = 0;
 let readAt = Number.NEGATIVE_INFINITY;
-let reading: Promise<void> | undefined;
 
 const readEnded = async (db: D1Database) => {
   const startedAt = Date.now();
@@ -55,39 +52,18 @@ const readEnded = async (db: D1Database) => {
   readAt = startedAt;
 };
 
-const timedOut = (milliseconds: number) => {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const promise = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), milliseconds);
-  });
-  return { promise, cancel: () => clearTimeout(timer) };
-};
-
 /**
- * Refreshes the view when older than `maxAgeMs`. Concurrent requests share
- * one read, but a request cancelled mid-read can leave it pending forever, so
- * a waiter gives up on another request's read after `readTimeoutMs`, drops
- * it, and reads itself. A failed read fails the request.
+ * Refreshes the view when older than `maxAgeMs`, with a read of the request's
+ * own. Requests never wait on each other's reads: Workers cannot hand one
+ * request's I/O to another, so a read whose request is gone never settles
+ * for anyone else, and awaiting it can fail every later request in the
+ * isolate. Only the plain results are shared. A failed read fails the request.
  */
 const refresh = async (db: D1Database, maxAgeMs: number): Promise<void> => {
   const age = Date.now() - readAt;
   // A clock that stepped back makes the last read look newer than it is.
   if (age >= 0 && age < maxAgeMs) return;
-  const shared = reading;
-  if (shared !== undefined) {
-    const timeout = timedOut(readTimeoutMs);
-    try {
-      if ((await Promise.race([shared, timeout.promise])) !== "timeout") return;
-    } finally {
-      timeout.cancel();
-    }
-    if (reading === shared) reading = undefined;
-  }
-  const read = readEnded(db).finally(() => {
-    if (reading === read) reading = undefined;
-  });
-  reading ??= read;
-  await read;
+  await readEnded(db);
 };
 
 /**
@@ -102,6 +78,19 @@ export const sessionEnded = async (
 ): Promise<boolean> => {
   await refresh(db, maxAgeMs);
   return ended.has(sessionId);
+};
+
+/**
+ * Which of `sessionIds` ended, after one read when the view is older than
+ * `maxAgeMs`, for a caller that checks many sessions in one request.
+ */
+export const sessionsEnded = async (
+  db: D1Database,
+  sessionIds: Iterable<string>,
+  maxAgeMs: number,
+): Promise<ReadonlySet<string>> => {
+  await refresh(db, maxAgeMs);
+  return new Set([...sessionIds].filter((sessionId) => ended.has(sessionId)));
 };
 
 /**

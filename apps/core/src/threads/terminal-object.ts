@@ -51,10 +51,12 @@ import {
   DXD_MAX_CLIENT_FRAME_BYTES,
   DXD_MAX_CONTROL_FRAME_BYTES,
   DXD_MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
+  DXD_MAX_PLUGIN_CAPABILITY_FRAME_BYTES,
   DXD_MAX_REQUEST_FRAME_BYTES,
   DXD_MAX_RESPONSE_FRAME_BYTES,
   DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
   DXD_MCP_START_TIMEOUT_MS,
+  DXD_PLUGIN_START_TIMEOUT_MS,
   DXD_PROTOCOL_MAJOR,
   DXD_PROXY_MAX_HEAD_FRAME_BYTES,
   DXD_PROXY_MAX_STREAM_ID,
@@ -79,6 +81,11 @@ import {
   DxdFilesReadResult,
   DxdMcpRequestOperation,
   type DxdOperation,
+  DxdPluginCapabilityMessage,
+  DxdPluginInvokeOperation,
+  type DxdPluginResult,
+  DxdPluginStatusOperation,
+  DxdPluginStopOperation,
   DxdProxyClientMessage,
   DxdProxyPortsResult,
   DxdResponseEnvelope,
@@ -127,6 +134,14 @@ import {
   summarizeOrbRuns,
 } from "../orb-usage/runs.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
+import {
+  OrbCapabilityRelay,
+  type OrbCapabilityTarget,
+} from "../plugins/hosts/orb/capability-relay.js";
+import {
+  OrbUsageBatch,
+  type OrbUsageBilling,
+} from "../plugins/hosts/orb/usage-batch.js";
 import {
   publishChangesInvalidation,
   publishRealtimeInvalidation,
@@ -209,6 +224,8 @@ const DAEMON_REQUEST_TIMEOUT_MS = 5_000;
 const STORAGE_TRANSFER_TIMEOUT_MS = 15 * 60_000;
 /** How often a running transfer counts as workspace activity. */
 const STORAGE_TRANSFER_ACTIVITY_MS = 60_000;
+/** Orb plugin calls in flight at once, of the shared daemon request slots. */
+const MAX_CONCURRENT_ORB_PLUGIN_CALLS = 8;
 /** How long a transfer waits for an older daemon to update itself. */
 const STORAGE_DAEMON_UPDATE_WAIT_MS = 120_000;
 /** The image's desktop start script waits up to 45 s for its gateway. */
@@ -409,6 +426,8 @@ interface DaemonAuthority {
   readonly terminalSessions?: boolean;
   /** The connected daemon lists, opens, and focuses Desktop windows. */
   readonly desktop?: boolean;
+  /** The connected daemon runs plugins’ Orb processes (`plugin.*`). */
+  readonly pluginHost?: boolean;
 }
 
 interface DaemonAttachment {
@@ -640,6 +659,18 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   readonly #readinessWaiters = new Set<() => void>();
   readonly #terminalWaiters = new Set<(state: DxdTerminalHeartbeat) => void>();
   readonly #pendingRequests = new Map<string, PendingDaemonRequest>();
+  /** Orb plugin calls in flight, each with its Worker’s capabilities. */
+  readonly #orbCapabilities = new OrbCapabilityRelay();
+  #orbUsageBatch: OrbUsageBatch | undefined;
+  /** Orb plugin usage, batched here and flushed once a minute. */
+  get #orbUsage() {
+    this.#orbUsageBatch ??= new OrbUsageBatch({
+      storage: this.ctx.storage,
+      db: () => this.env.DB,
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
+    return this.#orbUsageBatch;
+  }
   readonly #filesRootSnapshotVersions = new Map<string, string>();
   readonly #pendingWorkloadIdentityRequests = new Set<string>();
   #observingChanges?: Promise<void>;
@@ -877,6 +908,145 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
   }
 
+  /**
+   * The Orb plugin host: one `plugin.invoke`,
+   * `plugin.status`, or `plugin.stop` for this Thread’s Orb. An invoke wakes
+   * the Orb, waits for a daemon that runs plugin processes, and relays the
+   * process’s capability calls to `capabilities` (the calling Worker’s
+   * PluginHost) until it answers. Status and stop never wake the Orb.
+   */
+  async orbPlugin(
+    threadId: string,
+    raw: unknown,
+    capabilities?: OrbCapabilityTarget,
+    billing?: OrbUsageBilling,
+  ): Promise<
+    | DxdPluginResult
+    | {
+        readonly kind: "daemon";
+        readonly outcome: "known" | "unknown" | "outdated" | "invalid";
+      }
+  > {
+    const id = Schema.decodeUnknownOption(ThreadId)(threadId);
+    if (Option.isNone(id)) return { kind: "daemon", outcome: "known" };
+    const invoke = Schema.decodeUnknownOption(DxdPluginInvokeOperation)(raw, {
+      onExcessProperty: "error",
+    });
+    const other = Option.isSome(invoke)
+      ? Option.none()
+      : Schema.decodeUnknownOption(
+          Schema.Union([DxdPluginStatusOperation, DxdPluginStopOperation]),
+        )(raw, { onExcessProperty: "error" });
+    if (Option.isNone(invoke) && Option.isNone(other))
+      return { kind: "daemon", outcome: "invalid" };
+    // Orb calls may run for minutes; they must never take every shared
+    // daemon request slot from Files, Changes, and MCP.
+    if (
+      Option.isSome(invoke) &&
+      this.#orbCapabilities.size >= MAX_CONCURRENT_ORB_PLUGIN_CALLS
+    )
+      return {
+        kind: "unavailable",
+        reason: "busy",
+        message: `At most ${MAX_CONCURRENT_ORB_PLUGIN_CALLS} plugin calls run in an Orb at once; try again shortly.`,
+      };
+    if (Option.isSome(invoke)) {
+      if (!(await this.#activateWithRetry(id.value)).ok)
+        return { kind: "daemon", outcome: "known" };
+      // A daemon that just woke may still be updating itself, as for MCP.
+      const updateDeadline = Date.now() + STORAGE_DAEMON_UPDATE_WAIT_MS;
+      while (
+        this.#authority?.threadId === id.value &&
+        this.#authority.pluginHost !== true &&
+        Date.now() < updateDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        if (
+          this.#currentDaemonSocket() === undefined &&
+          !(await this.#activateWithRetry(id.value)).ok
+        )
+          return { kind: "daemon", outcome: "known" };
+      }
+    } else if (
+      this.#authority?.threadId !== id.value ||
+      this.#currentDaemonSocket() === undefined
+    )
+      // Asleep or gone: nothing of the plugin runs, and asking must not wake it.
+      return Option.getOrThrow(other).operation === "plugin.stop"
+        ? { kind: "stopped", count: 0 }
+        : { kind: "status", state: "cold", since: Date.now() };
+    const current = this.#authority;
+    if (current?.threadId !== id.value)
+      return { kind: "daemon", outcome: "known" };
+    if (current.pluginHost !== true)
+      return { kind: "daemon", outcome: "outdated" };
+    const socket = this.#currentDaemonSocket();
+    if (socket === undefined) return { kind: "daemon", outcome: "known" };
+    const operation = Option.isSome(invoke)
+      ? invoke.value
+      : Option.getOrThrow(other);
+    const requestId = randomBase64Url(18);
+    const started = Date.now();
+    const close =
+      Option.isSome(invoke) && capabilities !== undefined
+        ? this.#orbCapabilities.open(requestId, {
+            socket,
+            generation: current.generation,
+            target: capabilities,
+          })
+        : () => undefined;
+    // A running call keeps the Orb awake, as an MCP request does.
+    const recordActivity = () =>
+      ExecutionWorkspaces.recordResidentTerminalInput(id.value).catch(
+        () => undefined,
+      );
+    let activity: ReturnType<typeof setInterval> | undefined;
+    if (Option.isSome(invoke)) {
+      await recordActivity();
+      activity = setInterval(
+        () => void recordActivity(),
+        STORAGE_TRANSFER_ACTIVITY_MS,
+      );
+    }
+    try {
+      const response = await this.#dispatchDaemonOperation(
+        current,
+        operation,
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        Option.isSome(invoke)
+          ? DXD_PLUGIN_START_TIMEOUT_MS + invoke.value.timeoutMs + 10_000
+          : 15_000,
+        requestId,
+      );
+      if (!response.ok) {
+        const failure = (await response.json().catch(() => undefined)) as
+          | { outcome?: "known" | "unknown" }
+          | undefined;
+        return {
+          kind: "daemon",
+          outcome: failure?.outcome === "unknown" ? "unknown" : "known",
+        };
+      }
+      const result = (await response.json()) as DxdPluginResult;
+      // "Send the runtime" is dx's own handshake, not a plugin call.
+      const handshake =
+        result.kind === "unavailable" && result.reason === "runtime";
+      if (Option.isSome(invoke) && billing !== undefined && !handshake)
+        this.#orbUsage.record(
+          billing,
+          result.kind === "result" ? "success" : "error",
+          started,
+          Date.now(),
+        );
+      if (Option.isNone(invoke) && operation.operation === "plugin.stop")
+        this.ctx.waitUntil(this.#orbUsage.flush("stopped"));
+      return result;
+    } finally {
+      close();
+      if (activity !== undefined) clearInterval(activity);
+    }
+  }
+
   async #fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     // A new Thread wakes this object early; see initial-objects.ts.
@@ -888,6 +1058,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/daemon/attachment")
       return this.#serveDaemonAttachment(request);
     if (path === "/daemon/storage") return this.#serveDaemonStorage(request);
+    if (path === "/daemon/plugin-dev")
+      return this.#serveDaemonPluginDev(request);
     if (path === "/environment/refresh")
       return this.#refreshEnvironment(request);
     if (path === "/changes/refresh") return this.#queueChangesRefresh(request);
@@ -3161,13 +3333,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     operation: DxdOperation,
     maximumBytes: number,
     timeoutMs: number,
+    requestId = randomBase64Url(18),
   ): Promise<Response> {
     if (
       !this.#sameDaemonAuthority(authority) ||
       this.#pendingRequests.size >= MAX_PENDING_DAEMON_REQUESTS
     )
       return Promise.resolve(daemonFailureResponse("known"));
-    const requestId = randomBase64Url(18);
     const frame = JSON.stringify({
       type: "request",
       generation: authority.generation,
@@ -4118,6 +4290,19 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
+   * `dxd plugin dev`: a personal plugin's new files from a folder in this
+   * Thread's Orb. Only this Thread's own key reaches it.
+   */
+  async #serveDaemonPluginDev(request: Request) {
+    const threadId = await this.#authenticateDaemonRequest(request);
+    if (threadId instanceof Response) return threadId;
+    const body = await request.text();
+    // Loaded on use: plugin bundle code stays out of the Worker's startup.
+    const { reloadDevPlugin } = await import("../plugins/trust/dev-reload.js");
+    return reloadDevPlugin(this.env, { threadId, body });
+  }
+
+  /**
    * Thread storage for `dxd files put` and `dxd files get`. Only a request
    * carrying this Thread's own key reaches it, so a Thread writes only its
    * own storage; `thread-storage/daemon.ts` decides the rest.
@@ -4582,6 +4767,52 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         this.#proxyRelay.receiveDaemonMessage(socket, proxyMessage.value);
       return;
     }
+    // ─── The Orb host’s capability relay ───
+    if (messageType === "plugin.capability") {
+      const capability =
+        frameBytes > DXD_MAX_PLUGIN_CAPABILITY_FRAME_BYTES
+          ? Option.none()
+          : Schema.decodeUnknownOption(DxdPluginCapabilityMessage)(decoded, {
+              onExcessProperty: "error",
+            });
+      if (Option.isNone(capability)) {
+        // A plugin process wrote something dx cannot read: refuse that one
+        // call, never the daemon connection Terminal and Files share.
+        const loose = decoded as {
+          generation?: unknown;
+          requestId?: unknown;
+          callId?: unknown;
+        };
+        if (
+          frameBytes <= DXD_MAX_PLUGIN_CAPABILITY_FRAME_BYTES &&
+          typeof loose.generation === "string" &&
+          typeof loose.requestId === "string" &&
+          Number.isInteger(loose.callId)
+        ) {
+          try {
+            socket.send(
+              JSON.stringify({
+                type: "plugin.capability-result",
+                generation: loose.generation,
+                requestId: loose.requestId,
+                callId: loose.callId,
+                ok: false,
+                error: "dx could not read that capability request.",
+              }),
+            );
+          } catch {
+            // The daemon is gone.
+          }
+          return;
+        }
+        socket.close(1008, "Invalid daemon message.");
+        return;
+      }
+      if (!current) return;
+      // Answered as it settles: a slow capability holds no other frame.
+      void this.#orbCapabilities.receive(socket, capability.value);
+      return;
+    }
     if (
       ((messageType === "register" ||
         messageType === "heartbeat" ||
@@ -4671,6 +4902,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         terminalSessions:
           control.value.capabilities.terminalSessions !== undefined,
         desktop: control.value.capabilities.desktop !== undefined,
+        pluginHost: control.value.capabilities.pluginHost !== undefined,
       };
       this.#orbMemory.reset();
       this.#orbDisk.reset();

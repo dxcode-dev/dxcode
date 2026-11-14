@@ -62,6 +62,11 @@ interface PluginShareLinksShape {
   readonly shared: (
     pluginIds: ReadonlyArray<PluginId>,
   ) => Effect.Effect<ReadonlySet<string>, PersistenceUnavailable>;
+  /** `shared` for every install of a target, without its IDs first. */
+  readonly sharedForTarget: (target: {
+    readonly scope: string;
+    readonly id: string;
+  }) => Effect.Effect<ReadonlySet<string>, PersistenceUnavailable>;
   /** The shared install's active version for each open link, by link ID. */
   readonly activeVersions: (
     linkIds: ReadonlyArray<string>,
@@ -123,6 +128,28 @@ export const PluginShareLinksD1 = (db: D1Database) =>
           catch: (cause) =>
             PersistenceUnavailable.new(
               { operation: "pluginShareLink.revoke" },
+              cause,
+            ),
+        }),
+      sharedForTarget: (target) =>
+        Effect.tryPromise({
+          try: async () =>
+            new Set(
+              (
+                await db
+                  .prepare(
+                    `SELECT DISTINCT link.plugin_id FROM plugin_share_link link
+                       JOIN trusted_plugin plugin ON plugin.id = link.plugin_id
+                      WHERE link.revoked_at IS NULL
+                        AND plugin.scope = ?1 AND plugin.target_id = ?2`,
+                  )
+                  .bind(target.scope, target.id)
+                  .all<{ plugin_id: string }>()
+              ).results.map(({ plugin_id }) => plugin_id),
+            ),
+          catch: (cause) =>
+            PersistenceUnavailable.new(
+              { operation: "pluginShareLink.sharedForTarget" },
               cause,
             ),
         }),

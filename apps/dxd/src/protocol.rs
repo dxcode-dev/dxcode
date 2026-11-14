@@ -169,6 +169,14 @@ pub struct McpCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may send `plugin.invoke`, `plugin.status`, and
+/// `plugin.stop`, which run plugin code as a process in the Orb, and answer
+/// its `plugin.capability` requests; see [`crate::plugin_host`].
+#[derive(Serialize)]
+pub struct PluginHostCapability {
+    pub version: u8,
+}
+
 /// Version 1: Core may name Terminals besides `default` (up to eight run at
 /// once) and send `terminal.close`; heartbeats list them as `terminals`. See
 /// [`crate::terminals`].
@@ -190,6 +198,7 @@ pub struct Capabilities {
     pub terminal_sessions: TerminalSessionsCapability,
     pub mcp: McpCapability,
     pub desktop: DesktopCapability,
+    pub plugin_host: PluginHostCapability,
 }
 
 impl Capabilities {
@@ -207,6 +216,7 @@ impl Capabilities {
             terminal_sessions: TerminalSessionsCapability { version: 1 },
             mcp: McpCapability { version: 1 },
             desktop: DesktopCapability { version: 1 },
+            plugin_host: PluginHostCapability { version: 1 },
         }
     }
 }
@@ -435,6 +445,17 @@ pub enum ClientMessage<'a> {
         outcome: &'a CandidateOutcome,
     },
     ChangesDirty,
+    /// A plugin process's capability request during a `plugin.invoke`.
+    #[serde(rename = "plugin.capability")]
+    PluginCapability {
+        generation: &'a str,
+        #[serde(rename = "requestId")]
+        request_id: &'a str,
+        #[serde(rename = "callId")]
+        call_id: u32,
+        method: &'a str,
+        args: &'a serde_json::Value,
+    },
     #[serde(rename = "workload-identity.request")]
     WorkloadIdentityRequest {
         generation: &'a str,
@@ -467,6 +488,7 @@ pub enum OperationResult {
     Disk(crate::disk::DiskResult),
     Storage(crate::storage::TransferResult),
     Mcp(crate::mcp::McpResult),
+    Plugin(crate::plugin_host::PluginResult),
 }
 
 /// Requests that serve Portals and the Desktop rather than one stream.
@@ -565,6 +587,29 @@ pub enum McpOperation {
     },
 }
 
+/// One request to the Orb plugin host; see [`crate::plugin_host`].
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum PluginOperation {
+    #[serde(rename = "plugin.invoke")]
+    Invoke {
+        process: Box<crate::plugin_host::ProcessSpec>,
+        call: crate::plugin_host::CallSpec,
+        #[serde(rename = "timeoutMs")]
+        timeout_ms: u64,
+    },
+    #[serde(rename = "plugin.status")]
+    Status { key: String },
+    #[serde(rename = "plugin.stop")]
+    Stop {
+        #[serde(default)]
+        key: Option<String>,
+        #[serde(rename = "installId", default)]
+        install_id: Option<String>,
+        reason: String,
+    },
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum RequestOperation {
@@ -575,6 +620,7 @@ pub enum RequestOperation {
     Disk(DiskOperation),
     Storage(StorageOperation),
     Mcp(McpOperation),
+    Plugin(PluginOperation),
 }
 
 #[derive(Deserialize)]
@@ -595,7 +641,8 @@ impl RequestOperation {
             | Self::Memory(_)
             | Self::Disk(_)
             | Self::Storage(_)
-            | Self::Mcp(_) => None,
+            | Self::Mcp(_)
+            | Self::Plugin(_) => None,
         }
     }
 }
@@ -649,6 +696,20 @@ pub enum ServerMessage {
         #[serde(rename = "requestId")]
         request_id: String,
         result: WorkloadIdentityResult,
+    },
+    /// Core's answer to one `plugin.capability` request.
+    #[serde(rename = "plugin.capability-result")]
+    PluginCapabilityResult {
+        generation: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        #[serde(rename = "callId")]
+        call_id: u32,
+        ok: bool,
+        #[serde(default)]
+        value: serde_json::Value,
+        #[serde(default)]
+        error: Option<String>,
     },
     #[serde(rename = "proxy.open")]
     ProxyOpen(crate::proxy::ProxyOpen),

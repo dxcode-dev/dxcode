@@ -14,6 +14,9 @@ mod files_write;
 mod mcp;
 mod memory;
 mod observer;
+mod plugin_dev;
+#[path = "plugin-host/mod.rs"]
+mod plugin_host;
 mod protocol;
 mod proxy;
 mod services;
@@ -114,6 +117,9 @@ fn start() -> Result<(), StartExit> {
         }
         Some("files") => {
             return attachments::run_cli(&arguments[1..]).map_err(|()| StartExit::Command);
+        }
+        Some("plugin") => {
+            return plugin_dev::run_cli(&arguments[1..]).map_err(|()| StartExit::Command);
         }
         Some("changes-capture") => {
             return changes::run_cli().map_err(|()| StartExit::Command);
@@ -408,7 +414,7 @@ mod tests {
             })
             .unwrap(),
             format!(
-                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}},"mcp":{{"version":1}},"desktop":{{"version":1}}}}}}"#
+                r#"{{"type":"register","protocolMajor":2,"release":"{RELEASE}","capabilities":{{"terminal":{{"version":1}},"workloadIdentity":{{"version":1}},"files":{{"version":1}},"proxy":{{"version":1}},"memory":{{"version":1}},"disk":{{"version":1}},"storage":{{"version":1}},"terminalSessions":{{"version":1}},"mcp":{{"version":1}},"desktop":{{"version":1}},"pluginHost":{{"version":1}}}}}}"#
             )
         );
         assert_eq!(

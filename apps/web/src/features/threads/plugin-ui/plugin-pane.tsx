@@ -1,3 +1,4 @@
+import type { PluginPaneLive } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import {
   QueryObserver,
@@ -56,28 +57,41 @@ function PluginPaneBody({
   const post = useMutation(
     pluginPaneMessageMutationOptions(threadId, tab.plugin, tab.pane),
   );
-  // The Thread owner's personal plugin: a member sees it, without controls.
+  // An archived Thread whose plugin says "show" draws the pane's last
+  // snapshot; it takes no clicks and sends the plugin nothing.
   const { identity } = useAuthenticatedIdentity();
-  const ownerOnly =
-    useQuery({
-      ...pluginUiQueryOptions(threadId),
-      select: (data) =>
-        data.panes?.find(
-          (entry) => entry.plugin === tab.plugin && entry.pane === tab.pane,
-        )?.ownerOnly === true,
-    }).data === true;
+  const entryFlags = useQuery({
+    ...pluginUiQueryOptions(threadId),
+    select: (data) => {
+      const entry = data.panes?.find(
+        (candidate) =>
+          candidate.plugin === tab.plugin && candidate.pane === tab.pane,
+      );
+      return {
+        readOnly: entry?.readOnly === true,
+        ownerOnly: entry?.ownerOnly === true,
+      };
+    },
+  }).data;
+  const readOnly = entryFlags?.readOnly === true;
+  // The Thread owner's personal plugin: a member sees it, without controls.
+  const ownerOnly = entryFlags?.ownerOnly === true;
   const ownerName = useQuery({
     ...threadQueryOptions(identity.id, threadId),
     enabled: false,
     select: (thread) =>
       thread.participants?.find(({ owner }) => owner)?.name ?? "the owner",
   }).data;
+  // A trusted pane's live entry, from the plugin UI already loaded.
+  const live = useQuery(pluginUiQueryOptions(threadId)).data?.panes?.find(
+    (entry) => entry.plugin === tab.plugin && entry.pane === tab.pane,
+  )?.live as PluginPaneLive | undefined;
   // A failed refetch keeps the pane it already shows.
   if (view.data === undefined && view.isError)
     return (
       <p className="plugin-pane-state" role="status">
         {tab.title} is not available in this Thread. Its plugin may be off or
-        removed.
+        removed, or hide its panes while the Thread is archived.
       </p>
     );
   if (view.data === undefined)
@@ -102,16 +116,40 @@ function PluginPaneBody({
         html={view.data.html}
         title={tab.title}
         subscribeMessages={subscribeMessages}
-        {...(canPost && !ownerOnly ? { onPost: post.mutateAsync } : {})}
+        {...(canPost && !readOnly && !ownerOnly
+          ? { onPost: post.mutateAsync }
+          : {})}
+        {...(live === undefined
+          ? {}
+          : {
+              // By value: a refetch with the same entry keeps the frame.
+              liveJson: JSON.stringify({
+                threadId,
+                plugin: tab.plugin,
+                pane: tab.pane,
+                ...live,
+              }),
+            })}
       />
     </React.Suspense>
   );
-  if (!ownerOnly) return frame;
+  if (ownerOnly && !readOnly)
+    return (
+      <div className="plugin-pane-archived" data-owner-only="">
+        <p className="plugin-pane-read-only" role="status">
+          <Lock aria-hidden="true" />
+          Only {ownerName ?? "the owner"} can use this plugin here.
+        </p>
+        <div className="plugin-pane-archived-frame" inert>
+          {frame}
+        </div>
+      </div>
+    );
+  if (!readOnly) return frame;
   return (
-    <div className="plugin-pane-archived" data-owner-only="">
+    <div className="plugin-pane-archived" data-read-only="">
       <p className="plugin-pane-read-only" role="status">
-        <Lock aria-hidden="true" />
-        Only {ownerName ?? "the owner"} can use this plugin here.
+        Archived. This is the last view {tab.title} saved; it does not update.
       </p>
       <div className="plugin-pane-archived-frame" inert>
         {frame}
@@ -148,6 +186,15 @@ export function PluginPaneMenuItems({
   threadId,
   renderItem,
 }: PluginPaneMenuProps & { readonly threadId: ThreadId }) {
-  const panes = useQuery(pluginUiQueryOptions(threadId)).data?.panes ?? [];
-  return <>{panes.map(renderItem)}</>;
+  const data = useQuery(pluginUiQueryOptions(threadId)).data;
+  // Full-width tabs first, then panes; both open as plugin tabs.
+  const tabs = (data?.tabs ?? []).map((tab) => ({
+    plugin: tab.plugin,
+    pane: tab.tab,
+    title: tab.title,
+    pluginTitle: tab.pluginTitle,
+    kind: "tab" as const,
+    ...(tab.icon === undefined ? {} : { icon: tab.icon }),
+  }));
+  return <>{[...tabs, ...(data?.panes ?? [])].map(renderItem)}</>;
 }

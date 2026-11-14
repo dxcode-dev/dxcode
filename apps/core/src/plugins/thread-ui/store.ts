@@ -352,6 +352,7 @@ const decodeQuickAction = Schema.decodeUnknownOption(PluginQuickAction);
 
 interface PromptRow {
   readonly id: string;
+  readonly plugin_id: string;
   readonly plugin_name: string;
   readonly kind: string;
   readonly spec_json: string;
@@ -359,16 +360,24 @@ interface PromptRow {
   readonly expires_at: string;
 }
 
-/** The Thread's waiting prompts and recent notices, oldest first. */
-export const listThreadPrompts = async (db: D1Database, threadId: string) => {
-  const rows = await db
+/**
+ * The Thread's waiting prompts and recent notices, oldest first, each with
+ * its plugin's manifest name when the install still runs.
+ */
+export const listThreadPrompts = async (
+  db: D1Database,
+  threadId: string,
+  /** Each running install's plugin name, by install id, as quick actions take it. */
+  pluginsPromise: Promise<ReadonlyMap<string, string>>,
+) => {
+  const rowsPromise = db
     .prepare(
-      `SELECT id, plugin_name, kind, spec_json, created_at, expires_at
+      `SELECT id, plugin_id, plugin_name, kind, spec_json, created_at, expires_at
          FROM plugin_ui_prompt
         WHERE thread_id = ?1 AND expires_at > ?2 AND status = 'pending'
         UNION ALL
        SELECT * FROM (
-         SELECT id, plugin_name, kind, spec_json, created_at, expires_at
+         SELECT id, plugin_id, plugin_name, kind, spec_json, created_at, expires_at
            FROM plugin_ui_prompt
           WHERE thread_id = ?1 AND expires_at > ?2 AND status = 'shown'
           ORDER BY created_at DESC, id DESC
@@ -377,13 +386,19 @@ export const listThreadPrompts = async (db: D1Database, threadId: string) => {
     )
     .bind(threadId, new Date().toISOString())
     .all<PromptRow>();
+  const [rows, plugins] = await Promise.all([rowsPromise, pluginsPromise]);
   const prompts: PluginPrompt[] = [];
   const notices: PluginNotice[] = [];
   for (const row of rows.results) {
-    const spec = JSON.parse(row.spec_json) as Record<string, unknown>;
+    const { pluginName: _ignored, ...spec } = JSON.parse(
+      row.spec_json,
+    ) as Record<string, unknown>;
+    const pluginName = plugins.get(row.plugin_id);
+    const named = pluginName === undefined ? {} : { pluginName };
     if (row.kind === "notify") {
       const notice = decodeNotice({
         ...spec,
+        ...named,
         id: row.id,
         plugin: row.plugin_name,
         createdAt: row.created_at,
@@ -393,6 +408,7 @@ export const listThreadPrompts = async (db: D1Database, threadId: string) => {
     }
     const prompt = decodePrompt({
       ...spec,
+      ...named,
       id: row.id,
       plugin: row.plugin_name,
       kind: row.kind,
@@ -517,6 +533,7 @@ export const listThreadQuickActions = async (
     const action = decodeQuickAction({
       id: row.id,
       plugin: row.plugin_name,
+      pluginName,
       label: row.label,
       action: row.action,
       args: withOwner(

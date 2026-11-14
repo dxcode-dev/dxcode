@@ -42,7 +42,8 @@ const getSpaceThread = async (
 /**
  * One thread's card: from the Space's thread list, which every card shares
  * and realtime refreshes, or read alone while the list does not have it yet,
- * such as a thread started a moment ago.
+ * such as a thread started a moment ago. Undefined while it loads; null when
+ * the Space has no such thread, such as one another thread started.
  */
 export const useSpaceThreadItem = (
   userId: UserId,
@@ -64,9 +65,16 @@ export const useSpaceThreadItem = (
       getSpaceThread(spaceThreadId as ThreadId, threadId, signal),
     enabled: spaceThreadId !== undefined && list.data === null,
     retry: false,
+    // A card that gives way to the thread's chip mounts another reader of
+    // this query: an answer that the Space has no such thread stands until
+    // the list refreshes, instead of each new reader asking again.
+    retryOnMount: false,
     staleTime: 30_000,
   });
-  return list.data ?? single.data;
+  if (list.data != null) return list.data;
+  if (single.data !== undefined) return single.data;
+  // Once refused, it stays so while a refresh asks again.
+  return list.data === null && single.errorUpdateCount > 0 ? null : undefined;
 };
 
 const getCatchUp = async (

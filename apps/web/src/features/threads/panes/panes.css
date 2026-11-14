@@ -409,6 +409,8 @@
   height: 100%;
   padding: 0 5px;
   overflow-x: auto;
+  /* A revealed tab keeps the strip's inset instead of sitting on its edge. */
+  scroll-padding-inline: 5px;
   overscroll-behavior-x: contain;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
@@ -455,6 +457,12 @@
   width: 20px;
   height: 20px;
   flex: none;
+}
+/* A long title ends in an ellipsis, so a tab always fits the strip whole. */
+.stacked-tab-label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stacked-tab[data-kind="file"] .stacked-tab-label {
   font-family: var(--font-mono);

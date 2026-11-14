@@ -8,6 +8,7 @@ import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
+import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
 import { Tab, Tabs, TabsList } from "../../../shared/ui/tabs.js";
 import { BundleItems } from "./plugin-bundle-items.js";
 import type { PluginBundleUpload } from "./plugin-bundle-mutations.js";
@@ -100,6 +101,13 @@ export function ImportPluginForm({
         }}
       >
         <header>
+          <PluginIcon
+            name={manifest.displayName}
+            icon={manifest.iconSet}
+            files={review.data.iconFiles}
+            size={64}
+            className="plugin-bundle-header-icon"
+          />
           <DialogTitle>Review {manifest.displayName}</DialogTitle>
           <PluginBundleSourceLine
             source={source}
@@ -122,6 +130,12 @@ export function ImportPluginForm({
           code={manifest.code}
           skipped={manifest.skipped}
         />
+        {manifest.code?.hosts?.orb === undefined ? null : (
+          <p className="plugin-bundle-help plugin-bundle-warning" role="note">
+            Its Orb code runs in each Thread&apos;s Orb with the Thread&apos;s
+            files, environment, and secrets, whatever its secrets grant says.
+          </p>
+        )}
         {review.upload.type === "catalog" &&
         source.type === "github" &&
         source.catalog === undefined ? (

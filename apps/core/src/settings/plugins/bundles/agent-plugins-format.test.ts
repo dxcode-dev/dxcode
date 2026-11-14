@@ -308,6 +308,219 @@ describe("readPluginBundle with an Agent Plugins package", () => {
     expect(bundle.manifest.skills.map(({ name }) => name)).toEqual(["review"]);
   });
 
+  // The object form of `host`. Ways it can go wrong:
+  // - an unknown host kind, or a value that is not a string path;
+  // - a path outside dev.dxcode/, a TypeScript file, or a missing module;
+  // - an object naming no host at all;
+  // - `worker` not defaulting to `entry`, or `entry` left pointing at a
+  //   module the Worker host should not load when only `durable` is named;
+  // - `entry` and `host.worker` naming different modules;
+  // - the plain string form changing for plugins that never used hosts.
+  const codeBundle = (dx: Record<string, unknown>, files: string[]) =>
+    parsed([
+      manifest({
+        name: "p",
+        extensions: { "dev.dxcode": { apiVersion: 1, ...dx } },
+      }),
+      aSkill,
+      ...files.map((name) => ({ name, content: "export default () => {}" })),
+    ]);
+
+  it("normalizes the object form of host into entry plus hosts", async () => {
+    const both = await codeBundle(
+      { entry: "dev.dxcode/index.js", host: { durable: "dev.dxcode/live.js" } },
+      ["dev.dxcode/index.js", "dev.dxcode/live.js"],
+    );
+    expect(both.manifest.code?.entry).toBe("dev.dxcode/index.js");
+    expect(both.manifest.code?.host).toBe("worker");
+    expect(both.manifest.code?.hosts).toEqual({
+      worker: "dev.dxcode/index.js",
+      durable: "dev.dxcode/live.js",
+    });
+    const durableOnly = await codeBundle(
+      { host: { durable: "dev.dxcode/live.js" } },
+      ["dev.dxcode/live.js"],
+    );
+    expect(durableOnly.manifest.code?.entry).toBe("dev.dxcode/live.js");
+    expect(durableOnly.manifest.code?.hosts).toEqual({
+      durable: "dev.dxcode/live.js",
+    });
+    const plain = await codeBundle({ entry: "dev.dxcode/index.js" }, [
+      "dev.dxcode/index.js",
+    ]);
+    expect(plain.manifest.code?.hosts).toBeUndefined();
+  });
+
+  it.each([
+    [{ host: { gpu: "dev.dxcode/a.js" } }, "dx has no host named gpu"],
+    [{ host: { durable: 3 } }, "host.durable must name an entry module"],
+    [{ host: { durable: "live.js" } }, "inside the dev.dxcode/ folder"],
+    [{ host: { durable: "dev.dxcode/live.ts" } }, "dx runs JavaScript"],
+    [
+      { host: { durable: "dev.dxcode/gone.js" } },
+      "dev.dxcode/gone.js is missing",
+    ],
+    [{ host: {} }, "names no entry module"],
+    [
+      { entry: "dev.dxcode/a.js", host: { worker: "dev.dxcode/b.js" } },
+      "entry and host.worker name different modules",
+    ],
+    [
+      { host: "orb", entry: "dev.dxcode/a.js" },
+      "host must be worker, or an object",
+    ],
+  ])("turns the code layer off for host %j", async (dx, reason) => {
+    const bundle = await codeBundle(dx, ["dev.dxcode/a.js", "dev.dxcode/b.js"]);
+    expect(bundle.manifest.code).toBeUndefined();
+    expect(
+      bundle.manifest.skipped.find(
+        ({ path }) => path === "plugin.json#extensions.dev.dxcode",
+      )?.reason,
+    ).toContain(reason);
+  });
+
+  // `binaries` (the Orb and container hosts). Ways it can go wrong:
+  // - a url without a sha256, or an http url, reaches a host to download;
+  // - an apt name or binary name that could carry shell or path syntax;
+  // - a bundled path outside the plugin, or one that is missing;
+  // - two binaries with one name, or an entry naming nothing to install;
+  // - binaries lost on store or export, so a re-import reads fewer tools.
+  it("reads binaries and keeps them through export", async () => {
+    const bundle = await codeBundle(
+      {
+        entry: "dev.dxcode/a.js",
+        binaries: [
+          { name: "adb", apt: "adb" },
+          {
+            name: "scrcpy-server",
+            url: "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1",
+            sha256:
+              "958f0944a62f23b1f33a16e9eb14844c1a04b882ca175a738c16d23cb22b86c0",
+          },
+          { name: "helper", path: "./dev.dxcode/b.js" },
+        ],
+      },
+      ["dev.dxcode/a.js", "dev.dxcode/b.js"],
+    );
+    expect(bundle.manifest.code?.binaries).toEqual([
+      { name: "adb", apt: "adb" },
+      {
+        name: "scrcpy-server",
+        url: "https://github.com/Genymobile/scrcpy/releases/download/v3.1/scrcpy-server-v3.1",
+        sha256:
+          "958f0944a62f23b1f33a16e9eb14844c1a04b882ca175a738c16d23cb22b86c0",
+      },
+      { name: "helper", path: "dev.dxcode/b.js" },
+    ]);
+  });
+
+  it.each([
+    [{ name: "x", url: "https://example.com/x" }, "needs the file"],
+    [
+      { name: "x", url: "http://example.com/x", sha256: "a".repeat(64) },
+      "Each binary needs",
+    ],
+    [{ name: "x", apt: "adb; rm -rf /" }, "Each binary needs"],
+    // apt-get reads a trailing "-" as "remove this package".
+    [{ name: "x", apt: "openssh-server-" }, "Each binary needs"],
+    [{ name: "x", apt: "-oAPT::Get=1" }, "Each binary needs"],
+    [{ name: "../x", apt: "adb" }, "Each binary needs"],
+    [{ name: "x" }, "needs apt, url, or path"],
+    [{ name: "x", apt: "adb", path: "dev.dxcode/a.js" }, "choose one"],
+    [{ name: "x", path: "../../etc/passwd" }, "must stay inside the plugin"],
+    [{ name: "x", path: "dev.dxcode/gone" }, "dev.dxcode/gone is missing"],
+  ])("turns the code layer off for binary %j", async (binary, reason) => {
+    const bundle = await codeBundle(
+      { entry: "dev.dxcode/a.js", binaries: [binary] },
+      ["dev.dxcode/a.js"],
+    );
+    expect(bundle.manifest.code).toBeUndefined();
+    expect(
+      bundle.manifest.skipped.find(
+        ({ path }) => path === "plugin.json#extensions.dev.dxcode",
+      )?.reason,
+    ).toContain(reason);
+  });
+
+  it("keeps the plugin's files when a binary names one, so the Orb gets it", async () => {
+    const bundle = await parsed([
+      manifest({
+        name: "p",
+        extensions: {
+          "dev.dxcode": {
+            apiVersion: 1,
+            entry: "dev.dxcode/a.js",
+            binaries: [{ name: "tool", path: "bin/tool" }],
+          },
+        },
+      }),
+      aSkill,
+      { name: "dev.dxcode/a.js", content: "export default () => {}" },
+      { name: "bin/tool", content: "#!/bin/sh\necho hi\n" },
+    ]);
+    expect(bundle.manifest.code?.binaries).toEqual([
+      { name: "tool", path: "bin/tool" },
+    ]);
+    expect(bundle.manifest.package).toBeDefined();
+  });
+
+  it("stores a download url normalized, and refuses one URL cannot parse", async () => {
+    const sha256 = "a".repeat(64);
+    const ok = await codeBundle(
+      {
+        entry: "dev.dxcode/a.js",
+        binaries: [{ name: "x", url: "https://Example.COM/x", sha256 }],
+      },
+      ["dev.dxcode/a.js"],
+    );
+    expect(ok.manifest.code?.binaries?.[0]?.url).toBe("https://example.com/x");
+    const bad = await codeBundle(
+      {
+        entry: "dev.dxcode/a.js",
+        binaries: [{ name: "x", url: "https://[x", sha256 }],
+      },
+      ["dev.dxcode/a.js"],
+    );
+    expect(bad.manifest.code).toBeUndefined();
+  });
+
+  // The Orb host: its process has the Thread's files, environment, and
+  // secrets, so an orb entry without permissions.shell is refused.
+  it("refuses an orb entry without permissions.shell", async () => {
+    const without = await codeBundle(
+      { host: { worker: "dev.dxcode/a.js", orb: "dev.dxcode/b.js" } },
+      ["dev.dxcode/a.js", "dev.dxcode/b.js"],
+    );
+    expect(without.manifest.code).toBeUndefined();
+    expect(
+      without.manifest.skipped.find(
+        ({ path }) => path === "plugin.json#extensions.dev.dxcode",
+      )?.reason,
+    ).toContain("needs permissions.shell");
+    const withShell = await codeBundle(
+      {
+        host: { worker: "dev.dxcode/a.js", orb: "dev.dxcode/b.js" },
+        permissions: { shell: true },
+      },
+      ["dev.dxcode/a.js", "dev.dxcode/b.js"],
+    );
+    expect(withShell.manifest.code?.hosts?.orb).toBe("dev.dxcode/b.js");
+  });
+
+  it("refuses two binaries with one name", async () => {
+    const bundle = await codeBundle(
+      {
+        entry: "dev.dxcode/a.js",
+        binaries: [
+          { name: "adb", apt: "adb" },
+          { name: "adb", apt: "android-tools-adb" },
+        ],
+      },
+      ["dev.dxcode/a.js"],
+    );
+    expect(bundle.manifest.code).toBeUndefined();
+  });
+
   it("reads only the root manifest and mcp.json", async () => {
     const bundle = await parsed([
       manifest({ name: "root-wins", displayName: "Root" }),

@@ -1,4 +1,6 @@
 import {
+  MAX_TRUSTED_PLUGIN_PROJECTS,
+  MAX_TRUSTED_PLUGIN_SIGNERS,
   McpServerEndpoint,
   McpServerId,
   PluginBundleCode,
@@ -7,11 +9,13 @@ import {
   PluginBundleSource,
   PluginId,
   PluginIntegrity,
+  PluginTier,
   SkillId,
   Timestamp,
 } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
+import { PluginIconSetSchema } from "./plugin-icons.js";
 
 /** A skill a plugin bundle installed into the Skills store. */
 export const PluginBundleSkillDataSchema = Schema.Struct({
@@ -56,6 +60,41 @@ export const PluginSignatureDataSchema = Schema.Struct({
 
 export type PluginSignatureData = typeof PluginSignatureDataSchema.Type;
 
+/**
+ * The icon set's files as `data:` URLs by hash, so the install review
+ * draws them before they are stored.
+ */
+const PreviewIconFiles = Schema.optional(
+  Schema.Record(Schema.String, Schema.String),
+);
+/**
+ * The tier the install runs at in its owner's Threads, why, and what the
+ * manifest asks for that the tier drops.
+ */
+export const PluginTrustDataSchema = Schema.Struct({
+  tier: PluginTier,
+  reason: Schema.Literals([
+    "scope",
+    "cap",
+    "requested",
+    "not-owner",
+    "signature",
+  ]),
+  /** Features the tier drops; each is shown as "Needs workspace trust". */
+  blocked: Schema.Array(
+    Schema.Struct({ feature: Schema.String, needs: PluginTier }),
+  ),
+});
+
+export type PluginTrustData = typeof PluginTrustDataSchema.Type;
+
+/** The workspace's plugin trust settings, for its admins. */
+export const PluginTrustPolicyDataSchema = Schema.Struct({
+  tierCap: PluginTier,
+  trustedProjectIds: Schema.Array(Schema.String),
+  trustedSigners: Schema.Array(Schema.String),
+});
+
 export const PluginBundleDataSchema = Schema.Struct({
   id: PluginId,
   scope: Schema.Literals(["personal", "workspace"]),
@@ -65,6 +104,8 @@ export const PluginBundleDataSchema = Schema.Struct({
   version: Schema.optional(Schema.String),
   /** The plugin's icon as a `data:` URL, sanitized when it is an SVG. */
   icon: Schema.optional(Schema.String),
+  /** Its icon files by hash, served at `/v1/plugins/icons/<hash>`. */
+  iconSet: Schema.optional(PluginIconSetSchema),
   enabled: Schema.Boolean,
   source: PluginBundleSource,
   integrity: PluginIntegrity,
@@ -89,6 +130,29 @@ export const PluginBundleDataSchema = Schema.Struct({
   shared: Schema.optional(Schema.Boolean),
   /** The active version's verified signature, when it is signed. */
   signature: Schema.optional(PluginSignatureDataSchema),
+  /** The trust tier it runs at, when it has code. */
+  trust: Schema.optional(PluginTrustDataSchema),
+  /**
+   * Hot reload is on, so `dxd plugin dev` in one of its owner's Threads
+   * may reload it from a folder in the Orb; `last` is the latest reload.
+   */
+  dev: Schema.optional(
+    Schema.Struct({
+      enabledAt: Schema.String,
+      /** The one Thread whose Orb may reload it. */
+      threadId: Schema.String,
+      threadTitle: Schema.optional(Schema.String),
+      reloads: Schema.Int,
+      /** It turns itself off then unless a reload uses it first. */
+      expiresAt: Schema.String,
+      last: Schema.optional(
+        Schema.Struct({
+          folder: Schema.String,
+          reloadedAt: Schema.String,
+        }),
+      ),
+    }),
+  ),
   installedAt: Timestamp,
   updatedAt: Timestamp,
 });
@@ -135,6 +199,13 @@ export const PluginPermissionChangeSchema = Schema.Struct({
     "settings",
     "mcp",
     "commands",
+    "binaries",
+    "plugins",
+    "views",
+    "exports",
+    "tier",
+    "hosts",
+    "jobs",
   ]),
   added: Schema.Array(Schema.String),
   removed: Schema.Array(Schema.String),
@@ -155,6 +226,7 @@ export const PluginProposalDataSchema = Schema.Struct({
   source: PluginBundleSource,
   integrity: PluginIntegrity,
   manifest: PluginBundleManifest,
+  iconFiles: PreviewIconFiles,
   /** An update only: what it changes, as the update review shows it. */
   permissions: Schema.optional(
     Schema.Struct({
@@ -217,15 +289,35 @@ export const ListPluginBundlesResponseSchema = successResponse(
      * in `.agents/plugins` load in its Threads.
      */
     repositoryPluginsAllowed: Schema.optional(Schema.Boolean),
+    /** Workspace lists only, the plugin trust settings. */
+    pluginTrust: Schema.optional(PluginTrustPolicyDataSchema),
     /** Pending agent proposals; only for people who could decide them. */
     proposals: Schema.optional(Schema.Array(PluginProposalDataSchema)),
   }),
 );
 
+/** Turns personal-dev hot reload on or off for a personal plugin. */
+export const SetPluginDevRequestSchema = Schema.Struct({
+  enabled: Schema.Boolean,
+  /** The one Thread whose Orb may reload it; needed to turn it on. */
+  threadId: Schema.optional(Schema.String.check(Schema.isMaxLength(128))),
+});
+
 /** Changes the workspace's plugin policies; an absent field stays as is. */
 export const SetPluginBundlePolicyRequestSchema = Schema.Struct({
   allowPersonalOverrides: Schema.optional(Schema.Boolean),
   allowRepositoryPlugins: Schema.optional(Schema.Boolean),
+  pluginTierCap: Schema.optional(PluginTier),
+  trustedPluginProjectIds: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMaxLength(128))).check(
+      Schema.isMaxLength(MAX_TRUSTED_PLUGIN_PROJECTS),
+    ),
+  ),
+  trustedPluginSigners: Schema.optional(
+    Schema.Array(
+      Schema.String.check(Schema.isPattern(/^SHA256:[A-Za-z0-9+/]{43}$/)),
+    ).check(Schema.isMaxLength(MAX_TRUSTED_PLUGIN_SIGNERS)),
+  ),
 });
 
 export type SetPluginBundlePolicyRequest =
@@ -236,6 +328,7 @@ export type PluginBundleListData =
 
 export const PluginBundlePreviewDataSchema = Schema.Struct({
   manifest: PluginBundleManifest,
+  iconFiles: PreviewIconFiles,
   source: PluginBundleSource,
   integrity: PluginIntegrity,
   /** Reasons the bundle cannot be installed in this scope. */

@@ -2,6 +2,7 @@ import viewIcons from "@dx/api/views/kit/icons.svg?raw";
 import viewKitCss from "@dx/api/views/kit/kit.css?raw";
 import viewKitJs from "@dx/api/views/kit/kit.js?raw";
 import viewFrame from "@dx/api/views/view-frame.mjs?raw";
+import pluginUi from "@dxcode/plugin-ui/plugin-ui.js?raw";
 import { defineSkill, type Sandbox, type SkillDefinition } from "@flue/runtime";
 import { parse } from "yaml";
 import { encodeBase64 } from "../encoding/base64.js";
@@ -12,6 +13,7 @@ import {
 } from "./built-in-skill-names.js";
 import browserUse from "./built-in-skills/browser-use/skill.md?raw";
 import buildingPluginsApi from "./built-in-skills/building-plugins/reference/plugin-api.ts.txt?raw";
+import buildingPluginsUi from "./built-in-skills/building-plugins/reference/plugin-ui.md?raw";
 import buildingPluginsReadme from "./built-in-skills/building-plugins/reference/README.md?raw";
 import buildingPlugins from "./built-in-skills/building-plugins/skill.md?raw";
 import buildingSchedules from "./built-in-skills/building-schedules/skill.md?raw";
@@ -73,14 +75,16 @@ const sources: ReadonlyArray<{
       "SKILL.md": buildingPlugins,
       "reference/README.md": buildingPluginsReadme,
       "reference/plugin-api.ts.txt": buildingPluginsApi,
+      "reference/plugin-ui.md": buildingPluginsUi,
     },
   },
   { name: "building-schedules", files: { "SKILL.md": buildingSchedules } },
   { name: "building-skills", files: { "SKILL.md": buildingSkills } },
   {
     name: "creating-views",
-    // The frame and kit are the web app's own (@dx/api/views), so a preview
-    // frames a view exactly as the transcript does.
+    // The frame and kits are the web app's own (@dx/api/views and
+    // @dxcode/plugin-ui), so a preview frames a view exactly as the
+    // transcript does.
     files: {
       "SKILL.md": creatingViews,
       "scripts/preview.mjs": creatingViewsPreview,
@@ -88,6 +92,7 @@ const sources: ReadonlyArray<{
       "scripts/kit/kit.css": viewKitCss,
       "scripts/kit/kit.js": viewKitJs,
       "scripts/kit/icons.svg": viewIcons,
+      "scripts/plugin-ui.js": pluginUi,
     },
   },
   { name: "drawing-boards", files: { "SKILL.md": drawingBoards } },

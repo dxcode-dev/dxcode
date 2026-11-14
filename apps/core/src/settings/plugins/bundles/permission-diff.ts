@@ -1,8 +1,11 @@
 import {
   isStdioMcpServer,
+  PLUGIN_TIERS,
   type PluginBundleManifest,
   type PluginCodeThreadGrant,
+  pluginHostKinds,
   pluginThreadGrants,
+  tierAtLeast,
 } from "@dx/domain";
 
 /**
@@ -26,7 +29,17 @@ export type PluginPermission =
   | "shell"
   | "settings"
   | "mcp"
-  | "commands";
+  | "commands"
+  | "binaries"
+  | "plugins"
+  | "views"
+  | "exports"
+  // The tiers the manifest's `tier` ceiling lets it reach,
+  // so raising the ceiling is a widening that needs a new review; and the
+  // hosts and background jobs the trusted tiers unlock.
+  | "tier"
+  | "hosts"
+  | "jobs";
 
 export interface PluginPermissionChange {
   readonly permission: PluginPermission;
@@ -52,7 +65,18 @@ const lists = (manifest: Grants) => {
   const code = manifest.code;
   const permissions = code?.permissions;
   return {
-    code: code === undefined ? [] : ["runs code"],
+    code:
+      code === undefined
+        ? []
+        : [
+            "runs code",
+            // ─── The Orb host is a new way to run ───
+            ...(code.hosts?.orb === undefined
+              ? []
+              : [
+                  "runs in each Thread's Orb with its files, environment, and secrets",
+                ]),
+          ],
     events: permissions?.events ?? [],
     network: permissions?.network ?? [],
     secrets: permissions?.secrets ?? [],
@@ -96,6 +120,48 @@ const lists = (manifest: Grants) => {
         ),
       ),
     ],
+    // A native tool the Orb or container host installs; a new source is a
+    // new review.
+    binaries: (code?.binaries ?? []).map(({ name, apt, url, sha256, path }) =>
+      apt !== undefined
+        ? `${name} (Debian package ${apt})`
+        : url !== undefined
+          ? `${name} (${url}${path === undefined ? "" : ` ${path}`}, sha256 ${sha256})`
+          : `${name} (${path} in the plugin)`,
+    ),
+    // Other plugins it may call, and the views it draws.
+    plugins: [...(permissions?.plugins ?? [])],
+    views: [
+      ...(code?.views?.tabs ?? []).map(({ title }) => `Tab: ${title}`),
+      ...(code?.views?.pages ?? []).map(({ title }) => `Page: ${title}`),
+      ...(code?.views?.threadTypes ?? []).map(
+        ({ title }) => `Thread type: ${title}`,
+      ),
+    ],
+    // A new export is something more other plugins may call.
+    exports: (code?.exports ?? []).map(({ name }) => name),
+    tier:
+      code === undefined
+        ? []
+        : PLUGIN_TIERS.filter((tier) =>
+            tierAtLeast(code.tier ?? "verified", tier),
+          ),
+    hosts:
+      code === undefined
+        ? []
+        : pluginHostKinds(code).filter((kind) => kind !== "worker"),
+    jobs: (() => {
+      const jobs = (code as { readonly jobs?: unknown } | undefined)?.jobs;
+      return Array.isArray(jobs)
+        ? jobs.map((job, index) =>
+            typeof job === "object" &&
+            job !== null &&
+            typeof (job as { id?: unknown }).id === "string"
+              ? (job as { id: string }).id
+              : `job ${index + 1}`,
+          )
+        : [];
+    })(),
   } satisfies Record<PluginPermission, ReadonlyArray<string>>;
 };
 
@@ -114,6 +180,13 @@ const order: ReadonlyArray<PluginPermission> = [
   "settings",
   "mcp",
   "commands",
+  "binaries",
+  "plugins",
+  "views",
+  "exports",
+  "tier",
+  "hosts",
+  "jobs",
 ];
 
 export const pluginPermissionDiff = (

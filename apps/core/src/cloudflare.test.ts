@@ -15,6 +15,7 @@ const registration = vi.hoisted(() => ({
 
 vi.mock("cloudflare:workers", () => ({
   DurableObject: class {},
+  RpcTarget: class {},
   WorkerEntrypoint: class {},
   get env() {
     return registration.env;
@@ -44,6 +45,7 @@ vi.mock("./settings/model-byok/invocation.js", () => ({
   ByokCredentialCoordinatorObject: class {},
 }));
 vi.mock("./settings/triggers/durable-object.js", () => ({
+  PluginDurableHostObject: class {},
   PluginTriggerDeliveryObject: class {},
 }));
 vi.mock("./thread-search/index-object.js", () => ({

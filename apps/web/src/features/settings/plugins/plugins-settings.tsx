@@ -1,5 +1,6 @@
+import type { PluginBundleListData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useSearch } from "@tanstack/react-router";
 import { Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
@@ -38,6 +39,7 @@ import { pluginBundlesQueryOptions } from "./plugin-bundle-queries.js";
 import { usePluginBundleQuickUpdate } from "./plugin-bundle-quick-update.js";
 import { PluginBundleRow } from "./plugin-bundle-row.js";
 import { PluginProposals } from "./plugin-proposals.js";
+import { PluginTrustSettings } from "./plugin-trust-settings.js";
 import {
   type FirstPartyPluginAction,
   firstPartyPluginsMutationOptions,
@@ -317,7 +319,19 @@ export function PluginsSettings({
   );
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<string>();
-  const [editing, setEditing] = React.useState<string>();
+  // A `dxd plugin dev` link: open that plugin, with hot reload offered for
+  // the Thread it came from.
+  const search = useSearch({ strict: false }) as {
+    readonly hotReload?: unknown;
+    readonly thread?: unknown;
+  };
+  const hotReload =
+    typeof search.hotReload === "string" && typeof search.thread === "string"
+      ? { pluginId: search.hotReload, threadId: search.thread }
+      : undefined;
+  const [editing, setEditing] = React.useState<string | undefined>(
+    () => hotReload?.pluginId,
+  );
   const finalFocus = React.useRef<HTMLElement | null>(null);
   const run: Run = async (action, success) => {
     setBusy(true);
@@ -463,43 +477,13 @@ export function PluginsSettings({
             />
           ))}
           {target.scope === "workspace" && bundles.data !== undefined ? (
-            <SettingsRow
-              title="Members can use their own copy of a plugin"
-              control={
-                <MemberPolicyToggle
-                  checked={bundles.data.personalOverridesAllowed === true}
-                  disabled={!canImport || busy}
-                  label="Members can use their own copy of a plugin"
-                  subject="personal plugin overrides"
-                  description="When on, a member's own copy of a plugin this workspace installs runs instead of the workspace's, for that member only. When off, their copy is paused. The two never run together."
-                  onConfirm={(value) =>
-                    runBundle(
-                      { type: "policy", allowPersonalOverrides: value },
-                      "Workspace plugin policy updated.",
-                    )
-                  }
-                />
-              }
-            />
-          ) : null}
-          {target.scope === "workspace" && bundles.data !== undefined ? (
-            <SettingsRow
-              title="Load plugins from repositories"
-              control={
-                <MemberPolicyToggle
-                  checked={bundles.data.repositoryPluginsAllowed !== false}
-                  disabled={!canImport || busy}
-                  label="Load plugins from repositories"
-                  subject="repository plugins"
-                  description="When on, plugins a project's repository commits in .agents/plugins load in its Threads. An installed plugin of the same name is used instead."
-                  onConfirm={(value) =>
-                    runBundle(
-                      { type: "policy", allowRepositoryPlugins: value },
-                      "Workspace plugin policy updated.",
-                    )
-                  }
-                />
-              }
+            <WorkspaceBundlePolicies
+              bundles={bundles.data}
+              workspaceId={workspace?.id}
+              canMutate={canImport}
+              busy={busy}
+              run={runBundle}
+              message={message}
             />
           ) : null}
           {target.scope === "workspace" && plugins.length > 0 ? (
@@ -565,6 +549,9 @@ export function PluginsSettings({
               workspace={workspace}
               settingsReturnTo={settingsReturnTo}
               initialUpdate={quickUpdate.reviewFor(editingBundle.id)}
+              {...(hotReload?.pluginId === editingBundle.id
+                ? { hotReloadThreadId: hotReload.threadId }
+                : {})}
               onDone={close}
               key={editingBundle.id}
             />
@@ -597,5 +584,76 @@ export function PluginsSettings({
         )}
       </DialogRoot>
     </div>
+  );
+}
+
+/**
+ * A workspace's rules for installed plugins: members' own copies, which
+ * repositories' plugins it trusts, and plugins from repositories.
+ */
+function WorkspaceBundlePolicies({
+  bundles,
+  workspaceId,
+  canMutate,
+  busy,
+  run,
+  message,
+}: {
+  readonly bundles: PluginBundleListData;
+  readonly workspaceId: string | undefined;
+  readonly canMutate: boolean;
+  readonly busy: boolean;
+  readonly run: BundleRun;
+  readonly message: string | undefined;
+}) {
+  return (
+    <>
+      <SettingsRow
+        title="Members can use their own copy of a plugin"
+        control={
+          <MemberPolicyToggle
+            checked={bundles.personalOverridesAllowed === true}
+            disabled={!canMutate || busy}
+            label="Members can use their own copy of a plugin"
+            subject="personal plugin overrides"
+            description="When on, a member's own copy of a plugin this workspace installs runs instead of the workspace's, for that member only. When off, their copy is paused. The two never run together."
+            onConfirm={(value) =>
+              run(
+                { type: "policy", allowPersonalOverrides: value },
+                "Workspace plugin policy updated.",
+              )
+            }
+          />
+        }
+      />
+      {bundles.pluginTrust === undefined ? null : (
+        <PluginTrustSettings
+          trust={bundles.pluginTrust}
+          workspaceId={workspaceId}
+          canMutate={canMutate}
+          busy={busy}
+          run={run}
+          message={message}
+        />
+      )}
+      <SettingsRow
+        title="Load plugins from repositories"
+        control={
+          <MemberPolicyToggle
+            checked={bundles.repositoryPluginsAllowed !== false}
+            disabled={!canMutate || busy}
+            label="Load plugins from repositories"
+            subject="repository plugins"
+            description="When on, plugins a project's repository commits in .agents/plugins load in its Threads. An installed plugin of the same name is used instead."
+            onConfirm={(value) =>
+              run(
+                { type: "policy", allowRepositoryPlugins: value },
+                "Workspace plugin policy updated.",
+              )
+            }
+          />
+        }
+      />
+    </>
   );
 }

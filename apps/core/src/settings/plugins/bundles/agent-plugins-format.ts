@@ -17,7 +17,11 @@ import {
   reject,
   truncate,
 } from "./bundle-reader.js";
-import { DX_EXTENSION_NAMESPACE, readDxExtension } from "./dx-extension.js";
+import {
+  codeNeedsPluginFiles,
+  DX_EXTENSION_NAMESPACE,
+  readDxExtension,
+} from "./dx-extension.js";
 import { buildPluginPackage } from "./plugin-package.js";
 import { checkStdioServer } from "./stdio-server.js";
 
@@ -214,6 +218,7 @@ export const readAgentPluginsFolder = Effect.fn("readAgentPluginsFolder")(
     const code = yield* readDxExtension(
       folder,
       extensions[DX_EXTENSION_NAMESPACE],
+      pluginName.value,
     );
 
     const displayName =
@@ -277,7 +282,8 @@ export const readAgentPluginsFolder = Effect.fn("readAgentPluginsFolder")(
       }
     }
 
-    const runsLocally = mcpServers.some(isStdioMcpServer);
+    const runsLocally =
+      mcpServers.some(isStdioMcpServer) || codeNeedsPluginFiles(code);
     return yield* finishBundle(folder, {
       ...(runsLocally ? { package: yield* buildPluginPackage(folder) } : {}),
       format: "agent-plugins",
@@ -288,6 +294,10 @@ export const readAgentPluginsFolder = Effect.fn("readAgentPluginsFolder")(
       skills,
       mcpServers,
       code,
+      // The icon is read even when dx's code layer is off.
+      iconBlock: isRecord(extensions[DX_EXTENSION_NAMESPACE])
+        ? (extensions[DX_EXTENSION_NAMESPACE] as Record<string, unknown>).icon
+        : undefined,
     });
   },
 );

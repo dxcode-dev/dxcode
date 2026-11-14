@@ -1,14 +1,22 @@
-import type { PluginPaneEntry, PluginPrompt, PluginQuickAction } from "@dx/api";
+import type {
+  PluginIconSetData,
+  PluginPaneEntry,
+  PluginPrompt,
+  PluginQuickAction,
+  PluginThreadUiData,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Puzzle } from "lucide-react";
+import { PanelsTopLeft } from "lucide-react";
 import { toast } from "sonner";
 import { requestPluginPane } from "../../../shared/commands/thread-open-view-event.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
+import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import { pluginUiQueryOptions } from "../thread-queries.js";
 import { DxPromptCard } from "./dx-prompt-card.js";
+import { iconForItem } from "./plugin-ui-icon-lookup.js";
 import { answerPluginPrompt, runPluginCommand } from "./plugin-ui-mutations.js";
 import "./plugin-ui.css";
 
@@ -33,6 +41,9 @@ export function PluginThreadUi({
   const prompt = data.prompts[0];
   return (
     <>
+      {data.threadType === undefined || data.threadType.available ? null : (
+        <ThreadTypeUnavailable title={data.threadType.title} />
+      )}
       {prompt === undefined ? null : prompt.kind === "change" ||
         prompt.kind === "secret" ? (
         <DxPromptCard
@@ -47,6 +58,7 @@ export function PluginThreadUi({
           key={prompt.id}
           threadId={threadId}
           prompt={prompt}
+          icon={iconForItem(data, prompt)}
           queued={data.prompts.length - 1}
           isOwner={isOwner}
         />
@@ -56,10 +68,47 @@ export function PluginThreadUi({
           threadId={threadId}
           actions={data.quickActions}
           panes={data.panes ?? []}
+          plugins={data.plugins ?? []}
           onSend={onSend}
         />
       )}
     </>
+  );
+}
+
+/**
+ * The same notice where there is no composer: a View member's Thread,
+ * whose plugin type is not shown to them.
+ */
+export function PluginThreadTypeNotice({
+  threadId,
+}: {
+  readonly threadId: ThreadId;
+}) {
+  const type = useQuery({
+    ...pluginUiQueryOptions(threadId),
+    select: (data) => data.threadType,
+  }).data;
+  return type === undefined || type.available ? null : (
+    <ThreadTypeUnavailable title={type.title} />
+  );
+}
+
+/**
+ * A Thread whose plugin type is off, removed, or no longer trusted opens
+ * as a plain chat; this says why its view is missing.
+ */
+function ThreadTypeUnavailable({ title }: { readonly title: string }) {
+  return (
+    <div className="plugin-ui-row">
+      <p className="plugin-thread-type-notice" role="note">
+        <PanelsTopLeft aria-hidden="true" />
+        <span>
+          {title} view is unavailable here, so this Thread shows its chat. Its
+          plugin may be off, removed, or not trusted for you.
+        </span>
+      </p>
+    </div>
   );
 }
 
@@ -68,9 +117,11 @@ function PluginPromptCard({
   prompt,
   queued,
   isOwner,
+  icon,
 }: {
   readonly threadId: ThreadId;
   readonly prompt: Exclude<PluginPrompt, { kind: "change" | "secret" }>;
+  readonly icon: PluginIconSetData | undefined;
   readonly queued: number;
   readonly isOwner: boolean;
 }) {
@@ -104,7 +155,12 @@ function PluginPromptCard({
         data-kind={prompt.kind}
         onSubmit={submit}
       >
-        <Puzzle aria-hidden="true" />
+        <PluginIcon
+          name={prompt.plugin}
+          icon={icon}
+          size={20}
+          className="plugin-prompt-icon"
+        />
         <div className="plugin-prompt-copy">
           <span className="plugin-prompt-source">
             {prompt.plugin}
@@ -226,11 +282,13 @@ function PluginQuickActions({
   threadId,
   actions,
   panes,
+  plugins,
   onSend,
 }: {
   readonly threadId: ThreadId;
   readonly actions: ReadonlyArray<PluginQuickAction>;
   readonly panes: ReadonlyArray<PluginPaneEntry>;
+  readonly plugins: NonNullable<PluginThreadUiData["plugins"]>;
   readonly onSend: (message: string) => void;
 }) {
   const perform = (action: PluginQuickAction) => {
@@ -273,6 +331,11 @@ function PluginQuickActions({
               title={action.plugin}
               onClick={() => perform(action)}
             >
+              <PluginIcon
+                name={action.plugin}
+                icon={iconForItem({ plugins }, action)}
+                size={16}
+              />
               {action.label}
             </Button>
           </li>

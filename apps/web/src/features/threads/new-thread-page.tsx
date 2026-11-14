@@ -1,5 +1,6 @@
 import type {
   PersonalComposerDefaultsData,
+  PluginThreadTypeOption,
   ProjectData,
   SettingsWorkspaceData,
   UpdatePersonalComposerDefaultsRequest,
@@ -41,6 +42,7 @@ import {
   ModalSurfaceClose,
   ModalSurfaceHeader,
 } from "../../shared/ui/modal-surface.js";
+import { pluginViewsCatalogQueryOptions } from "../plugins/plugin-views-queries.js";
 import {
   projectQueryOptions,
   projectsQueryOptions,
@@ -83,6 +85,9 @@ export function NewThreadPage() {
       <DocumentTitle name="New Thread" />
       <NewThreadModal
         initialProjectId={search.project}
+        {...(search.type === undefined
+          ? {}
+          : { initialPluginThreadType: search.type })}
         onClose={() => void navigate({ to: "/" })}
         onAccepted={() => {}}
       />
@@ -92,12 +97,15 @@ export function NewThreadPage() {
 
 export function NewThreadModal({
   initialProjectId,
+  initialPluginThreadType,
   initialPrompt,
   finalFocus,
   onClose,
   onAccepted,
 }: {
   readonly initialProjectId?: ProjectId;
+  /** A plugin Thread type, `<plugin>/<type>`, to start as. */
+  readonly initialPluginThreadType?: string;
   /** Text the composer opens with, after any draft the person already has. */
   readonly initialPrompt?: string;
   readonly finalFocus?: React.ComponentProps<typeof ModalSurface>["finalFocus"];
@@ -175,6 +183,9 @@ export function NewThreadModal({
   return (
     <ScopedNewThreadModal
       initialProjectId={initialProjectId}
+      {...(initialPluginThreadType === undefined
+        ? {}
+        : { initialPluginThreadType })}
       initialPrompt={initialPrompt}
       finalFocus={finalFocus}
       onClose={onClose}
@@ -191,6 +202,8 @@ export function NewThreadModal({
     />
   );
 }
+
+const NO_TYPES: ReadonlyArray<PluginThreadTypeOption> = [];
 
 /** Used when remembered composer choices cannot be loaded. */
 const NO_COMPOSER_DEFAULTS: PersonalComposerDefaultsData = {
@@ -457,8 +470,47 @@ function useComposerOrb({
   };
 }
 
+/** The plugin Thread type to start as; one no plugin offers is not sent. */
+function usePluginThreadTypeChoice(initial: string | undefined) {
+  const [chosen, choosePluginThreadType] = React.useState(initial);
+  const pluginThreadTypes =
+    useQuery(pluginViewsCatalogQueryOptions()).data?.threadTypes ?? NO_TYPES;
+  const pluginThreadType = pluginThreadTypes.some(({ ref }) => ref === chosen)
+    ? chosen
+    : undefined;
+  return { pluginThreadTypes, pluginThreadType, choosePluginThreadType };
+}
+
+/**
+ * Adds the opener's prompt to the saved draft, and tracks whether the
+ * composer is still open: a send outlives it when the user leaves the page
+ * mid-create.
+ */
+function useComposerOpening(
+  draftStore: ReturnType<typeof useNewThreadDraft>["store"],
+  initialPrompt: string | undefined,
+) {
+  const composerOpen = React.useRef(true);
+  useMountEffect(() => {
+    // The opener's prompt joins the saved draft rather than replacing it.
+    const draftText = draftStore.getSnapshot().text.trimEnd();
+    if (initialPrompt !== undefined && !draftText.includes(initialPrompt))
+      draftStore.setText(
+        draftText === "" ? initialPrompt : `${draftText}\n\n${initialPrompt}`,
+      );
+  });
+  useMountEffect(() => {
+    composerOpen.current = true;
+    return () => {
+      composerOpen.current = false;
+    };
+  });
+  return composerOpen;
+}
+
 function ScopedNewThreadModal({
   initialProjectId,
+  initialPluginThreadType,
   initialPrompt,
   finalFocus,
   onClose,
@@ -481,8 +533,11 @@ function ScopedNewThreadModal({
   readonly remembered: PersonalComposerDefaultsData;
   /** The remembered Project when it is not in the first loaded page. */
   readonly rememberedProject?: ProjectData;
+  readonly initialPluginThreadType?: string;
 }) {
   const navigate = useNavigate();
+  const { pluginThreadTypes, pluginThreadType, choosePluginThreadType } =
+    usePluginThreadTypeChoice(initialPluginThreadType);
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
   const registry = React.useContext(ThreadSessionRegistryContext);
@@ -540,22 +595,7 @@ function ScopedNewThreadModal({
     React.useState<ThreadVisibility>("private");
   const visibility = workspace === undefined ? "private" : chosenVisibility;
   const mentionMembers = useWorkspaceMentionMembers(identity.id, workspace);
-  // A send outlives this composer when the user leaves the page mid-create.
-  const composerOpen = React.useRef(true);
-  useMountEffect(() => {
-    // The opener's prompt joins the saved draft rather than replacing it.
-    const draftText = draftStore.getSnapshot().text.trimEnd();
-    if (initialPrompt !== undefined && !draftText.includes(initialPrompt))
-      draftStore.setText(
-        draftText === "" ? initialPrompt : `${draftText}\n\n${initialPrompt}`,
-      );
-  });
-  useMountEffect(() => {
-    composerOpen.current = true;
-    return () => {
-      composerOpen.current = false;
-    };
-  });
+  const composerOpen = useComposerOpening(draftStore, initialPrompt);
   const [error, setError] = React.useState<string>();
   const { imageCollection, images, setImages, addFiles, takeScreenshot } =
     useDraftImages(draftStore, setError);
@@ -612,6 +652,7 @@ function ScopedNewThreadModal({
         effort: pick?.effort,
         claudePlan,
         ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
+        ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
         runnerProfileId: effectiveRunnerProfileId,
         visibility,
         projects,
@@ -723,6 +764,9 @@ function ScopedNewThreadModal({
           pluginAgentModes={pluginAgentModes}
           pluginAgentMode={pluginAgentMode}
           onPluginAgentModeChange={choosePluginAgentMode}
+          pluginThreadTypes={pluginThreadTypes}
+          pluginThreadType={pluginThreadType}
+          onPluginThreadTypeChange={choosePluginThreadType}
           dictationControls={dictation.controls}
           dictationActive={dictation.active}
           dictationHideSubmit={dictation.hideSubmit}

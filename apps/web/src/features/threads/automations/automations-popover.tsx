@@ -1,4 +1,9 @@
 import type * as React from "react";
+import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import {
+  preloadAutomationViews,
+  preloadAutomationViewsWhenIdle,
+} from "./automation-views-loader.js";
 import {
   PopoverContent,
   PopoverRoot,
@@ -19,12 +24,16 @@ export function AutomationsPopover({
   readonly above?: boolean;
   readonly children: React.ReactNode;
 }) {
+  useMountEffect(preloadAutomationViewsWhenIdle);
   return (
     <PopoverRoot>
       <PopoverTrigger
         className={triggerClassName}
         aria-label={triggerLabel}
         title={triggerLabel}
+        onPointerEnter={preloadAutomationViews}
+        onPointerDown={preloadAutomationViews}
+        onFocus={preloadAutomationViews}
       >
         {trigger}
       </PopoverTrigger>

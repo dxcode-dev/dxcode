@@ -444,7 +444,7 @@ export const listSharedThreadRows = async (
         `SELECT thread.id, thread.title, thread.project_id, thread.owner_user_id,
                 thread.agent_instructions, thread.agent_instructions_revision,
                 thread.agent_instructions_version, thread.model_selection,
-                thread.runner_profile_id, thread.title_pending_until, thread.color,
+                thread.runner_profile_id, thread.title_pending_until, thread.color, thread.plugin_thread_type,
                 thread.parent_thread_id, thread.started_by_thread_id,
                 thread.kind,
                 thread.plugin_snapshot_json, thread.skill_snapshot_json,

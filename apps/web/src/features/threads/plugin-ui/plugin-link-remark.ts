@@ -14,20 +14,26 @@ export interface MarkdownNode {
   url?: string;
   title?: string | null;
   children?: MarkdownNode[];
+  data?: { hProperties?: Record<string, string> };
 }
 
 interface Rule {
   readonly regex: RegExp;
   readonly url: string;
   readonly title: string;
+  /** The plugin's icon, drawn before the link. */
+  readonly iconHash?: string;
 }
 
-const compile = (link: PluginLinkPattern): Rule | undefined => {
+const compile = (
+  link: PluginLinkPattern & { readonly iconHash?: string },
+): Rule | undefined => {
   try {
     return {
       regex: new RegExp(link.pattern, `${link.flags ?? ""}g`),
       url: link.url,
       title: link.title ?? link.plugin,
+      ...(link.iconHash === undefined ? {} : { iconHash: link.iconHash }),
     };
   } catch {
     return undefined;
@@ -66,6 +72,9 @@ const split = (rules: ReadonlyArray<Rule>, text: string): MarkdownNode[] => {
       url: fill(rule.url, match),
       title: rule.title,
       children: [{ type: "text", value: match[0] }],
+      ...(rule.iconHash === undefined
+        ? {}
+        : { data: { hProperties: { dataPluginIcon: rule.iconHash } } }),
     });
     at = match.index + match[0].length;
   }
@@ -78,7 +87,9 @@ const MAX_TEXT = 20_000;
 
 const SKIPPED = new Set(["link", "linkReference", "code", "inlineCode"]);
 
-export const remarkLinkPatterns = (links: ReadonlyArray<PluginLinkPattern>) => {
+export const remarkLinkPatterns = (
+  links: ReadonlyArray<PluginLinkPattern & { readonly iconHash?: string }>,
+) => {
   const rules = links
     .map(compile)
     .filter((rule): rule is Rule => rule !== undefined);
@@ -107,7 +118,9 @@ export const remarkLinkPatterns = (links: ReadonlyArray<PluginLinkPattern>) => {
 const built = new Map<string, ReturnType<typeof remarkLinkPatterns>>();
 
 /** The link patterns as one remark plugin, or null when there are none. */
-export const linkRemarkFor = (links: ReadonlyArray<PluginLinkPattern>) => {
+export const linkRemarkFor = (
+  links: ReadonlyArray<PluginLinkPattern & { readonly iconHash?: string }>,
+) => {
   if (links.length === 0) return null;
   const key = JSON.stringify(links);
   const plugin = built.get(key) ?? remarkLinkPatterns(links);

@@ -46,6 +46,13 @@ import { countControlAttributes } from "./sidebar-thread-count.js";
 import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";
 
+/** A plugin Thread type's row icon, loaded only for such a row. */
+const PluginThreadTypeIcon = React.lazy(() =>
+  import("../plugins/plugin-thread-type-icon.js").then((module) => ({
+    default: module.PluginThreadTypeIcon,
+  })),
+);
+
 /** A row click this soon after its menu opened is the long press lifting. */
 const LONG_PRESS_CLICK_MS = 1_000;
 
@@ -478,6 +485,12 @@ export const SidebarThreadRow = React.memo(function SidebarThreadRow({
           </span>
           {thread.pinnedAt === undefined ? null : (
             <Pin className="thread-pin-icon" aria-label="Pinned" role="img" />
+          )}
+          {thread.pluginThreadType === undefined ? null : (
+            // A plugin Thread type's icon; its code loads only for one.
+            <React.Suspense fallback={null}>
+              <PluginThreadTypeIcon threadType={thread.pluginThreadType} />
+            </React.Suspense>
           )}
           <strong data-title-overflow ref={observeTitleOverflow}>
             <span className="thread-row-title-text">

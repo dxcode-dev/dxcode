@@ -23,7 +23,7 @@ const routerPaths = () => {
     routers
       .flatMap((router) => Object.keys(router.routesByPath))
       // The signed-out catch-all only sends any other URL to sign-in.
-      .filter((path) => !path.endsWith("$")),
+      .filter((path) => path !== "/$"),
   );
 };
 
@@ -43,6 +43,9 @@ describe("App pages Core answers with 200", () => {
       "/threads/thr_1/",
       "/workspaces/acme/members",
       "/bug-reports/all",
+      "/plugins/com.acme.board/board",
+      "/plugins/com.acme.board/board/",
+      "/plugins/com.acme.board/board/a/b",
     ])
       expect(isAppRoutePath(path), path).toBe(true);
     for (const path of [
@@ -51,6 +54,7 @@ describe("App pages Core answers with 200", () => {
       "/threads/thr_1/no-such-tab",
       "/threads//thr_1",
       "/docs/no-such-page",
+      "/plugins/com.acme.board",
     ])
       expect(isAppRoutePath(path), path).toBe(false);
   });

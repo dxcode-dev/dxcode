@@ -7,6 +7,7 @@ import {
   type PluginBundlePreviewData,
   PluginBundleSettingsResponseSchema,
   type PluginBundleUpdatePreviewData,
+  PluginHostUsageResponseSchema,
   PreviewPluginBundleResponseSchema,
   PreviewPluginBundleUpdateResponseSchema,
   RemovePluginBundleResponseSchema,
@@ -200,6 +201,27 @@ export const setPluginBundleEnabled = async (
     )
   ).data;
 
+/** Turns personal-dev hot reload on or off for a personal plugin. */
+export const setPluginBundleDev = async (
+  target: PluginsTarget,
+  pluginId: PluginId,
+  enabled: boolean,
+  threadId?: string,
+) =>
+  (
+    await request(
+      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/dev`,
+      UpdatePluginBundleResponseSchema,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          enabled,
+          ...(threadId === undefined ? {} : { threadId }),
+        }),
+      },
+    )
+  ).data;
+
 export const removePluginBundle = async (
   target: PluginsTarget,
   pluginId: PluginId,
@@ -296,3 +318,22 @@ export const pluginSharePreviewQueryOptions = (
 /** A share link that no longer resolves: revoked, or never valid. */
 export const isBrokenShareLink = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
+
+// Host cost line
+/** What the plugin's long-lived hosts cost this month, per host. */
+export const pluginHostUsageQueryOptions = (
+  target: PluginsTarget,
+  pluginId: PluginId,
+) =>
+  queryOptions({
+    queryKey: ["plugin-host-usage", target, pluginId] as const,
+    queryFn: async ({ signal }) =>
+      (
+        await request(
+          `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/host-usage`,
+          PluginHostUsageResponseSchema,
+          { signal },
+        )
+      ).data,
+    staleTime: 60_000,
+  });

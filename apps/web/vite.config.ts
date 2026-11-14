@@ -1,14 +1,18 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import {
+  VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY,
+  VIEW_FRAME_CONNECTED_PATH,
   VIEW_FRAME_CONTENT_SECURITY_POLICY,
   VIEW_FRAME_PATH,
+  viewFrameConnectedShell,
   viewFrameShell,
 } from "@dx/api/views/view-frame.mjs";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
-import { defineConfig, loadEnv, type Plugin } from "vite";
+import { defineConfig, loadEnv, minify, type Plugin } from "vite";
 import { localAllowedHosts, localTranscriptCapture } from "./vite-local.js";
 
 /**
@@ -21,7 +25,18 @@ const viewFrame: Plugin = {
   name: "dx:view-frame",
   configureServer(server) {
     server.middlewares.use((request, response, next) => {
-      if (request.url?.split("?")[0] !== VIEW_FRAME_PATH) return next();
+      const path = request.url?.split("?")[0];
+      // A trusted pane's connected shell.
+      if (path === VIEW_FRAME_CONNECTED_PATH) {
+        response.setHeader("content-type", "text/html; charset=utf-8");
+        response.setHeader(
+          "content-security-policy",
+          VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY,
+        );
+        response.end(viewFrameConnectedShell());
+        return;
+      }
+      if (path !== VIEW_FRAME_PATH) return next();
       response.setHeader("content-type", "text/html; charset=utf-8");
       response.setHeader(
         "content-security-policy",
@@ -35,6 +50,11 @@ const viewFrame: Plugin = {
       type: "asset",
       fileName: `${VIEW_FRAME_PATH.slice(1)}.html`,
       source: viewFrameShell(),
+    });
+    this.emitFile({
+      type: "asset",
+      fileName: `${VIEW_FRAME_CONNECTED_PATH.slice(1)}.html`,
+      source: viewFrameConnectedShell(),
     });
   },
 };
@@ -107,11 +127,32 @@ const excalidrawAssets: Plugin = {
   },
 };
 
+/**
+ * `@dxcode/plugin-ui/plugin-ui.js?minified`: the plugin UI kit's code,
+ * minified, as a string the frame inlines into plugin views that ask for it.
+ */
+const pluginUiKit: Plugin = {
+  name: "dx:plugin-ui",
+  async load(id) {
+    const [file, query] = id.split("?");
+    if (query !== "minified" || !file?.endsWith("/plugin-ui.js")) return;
+    this.addWatchFile(file);
+    const { code, errors } = await minify(
+      "plugin-ui.js",
+      await readFile(file, "utf8"),
+      { compress: true, mangle: true },
+    );
+    if (errors.length > 0) this.error(errors[0]?.message ?? "minify failed");
+    return `export default ${JSON.stringify(code)};`;
+  },
+};
+
 // The browser test project compiles components with these same plugins.
 export const appPlugins = () => [
   tailwindcss(),
   react({ compiler: true }),
   viewFrame,
+  pluginUiKit,
 ];
 
 /**

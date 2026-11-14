@@ -7,6 +7,7 @@ import {
   McpServerLimitExceeded,
   McpServerRepository,
   type McpServerTarget,
+  type McpServerWithTools,
   type McpToolName,
   type McpToolSchemaHash,
   mcpModuleIdFor,
@@ -89,6 +90,11 @@ interface McpServerServiceShape {
       | "updatedAt"
     >,
     audit: { readonly userId: UserId; readonly requestId: string },
+    /**
+     * The scope's servers as the caller already read them, so a step of a
+     * larger write (a plugin install) reads nothing after its first write.
+     */
+    known?: { readonly existing?: ReadonlyArray<McpServerWithTools> },
   ) => Effect.Effect<StoredMcpServer, unknown>;
   readonly update: (
     target: McpServerTarget,
@@ -120,6 +126,8 @@ interface McpServerServiceShape {
       readonly authModeChanged?: boolean;
     },
     audit: { readonly userId: UserId; readonly requestId: string },
+    /** The server as the caller already read it (see `create`). */
+    known?: { readonly current?: StoredMcpServer },
   ) => Effect.Effect<StoredMcpServer, unknown>;
   readonly discover: (
     target: McpServerTarget,
@@ -216,8 +224,9 @@ export class McpServerService extends Context.Service<
       return McpServerService.of({
         list: repository.list,
         create: Effect.fn("McpServerService.create")(
-          function* (target, input, auditContext) {
-            const existing = yield* repository.list(target);
+          function* (target, input, auditContext, known) {
+            const existing =
+              known?.existing ?? (yield* repository.list(target));
             if (existing.length >= MAX_MCP_SERVERS_PER_SCOPE) {
               return yield* new McpServerLimitExceeded();
             }
@@ -255,8 +264,9 @@ export class McpServerService extends Context.Service<
           },
         ),
         update: Effect.fn("McpServerService.update")(
-          function* (target, id, input, auditContext) {
-            const current = (yield* repository.find(target, id)).server;
+          function* (target, id, input, auditContext, known) {
+            const current =
+              known?.current ?? (yield* repository.find(target, id)).server;
             if (input.moduleId !== undefined && input.moduleId !== null) {
               const moduleId = input.moduleId;
               const siblings = yield* repository.list(target);

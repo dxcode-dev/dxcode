@@ -28,6 +28,9 @@ export const ORB_IMAGE_NAME = "orb";
 /** Executor-mode Threads' agent containers (apps/core/src/executor). */
 export const EXECUTOR_CLASS = "ThreadExecutorObject";
 export const EXECUTOR_CLAUDE_CODE_IMAGE = "claude-code";
+/** The `container` plugin host (apps/core/src/plugins/hosts/container). */
+export const PLUGIN_CONTAINER_CLASS = "PluginContainerObject";
+export const PLUGIN_CONTAINER_IMAGE = "plugin";
 export const ORB_COMPATIBILITY_DATE = "2026-09-29";
 
 /** Everything that changes what the Orb Worker or its image does. */
@@ -49,6 +52,12 @@ export const orbRecipeFiles = [
   "apps/core/src/executor/executor-object.ts",
   "deploy/executor/claude-code/Dockerfile",
   "deploy/executor/claude-code/Dockerfile.dockerignore",
+  "apps/core/src/plugins/hosts/container/object.ts",
+  "apps/core/src/plugins/hosts/container/limits.ts",
+  "apps/core/src/plugins/hosts/usage.ts",
+  "deploy/plugin-container/Dockerfile",
+  "deploy/plugin-container/Dockerfile.dockerignore",
+  "deploy/plugin-container/runner.mjs",
 ];
 
 const wranglerVersion = (workspaceRoot) =>
@@ -71,7 +80,7 @@ export const orbRecipeHash = (workspaceRoot) => {
   return hash.update(wranglerVersion(workspaceRoot)).digest("hex");
 };
 
-const orbWorkerConfig = ({ workerName, workspaceRoot, image }) => ({
+const orbWorkerConfig = ({ workerName, workspaceRoot, image, databaseId }) => ({
   name: workerName,
   main: resolve(
     workspaceRoot,
@@ -110,16 +119,43 @@ const orbWorkerConfig = ({ workerName, workspaceRoot, image }) => ({
         },
       },
     },
+    {
+      class_name: PLUGIN_CONTAINER_CLASS,
+      scheduling_policy: "durable_object",
+      images: {
+        [PLUGIN_CONTAINER_IMAGE]: {
+          dockerfile: resolve(
+            workspaceRoot,
+            "deploy/plugin-container/Dockerfile",
+          ),
+          build_context: resolve(workspaceRoot, "deploy/plugin-container"),
+        },
+      },
+    },
   ],
+  // The plugin container object writes its usage to the stage's D1
+  // (plugin_host_usage), once a minute and when its container stops.
+  ...(databaseId === undefined
+    ? {}
+    : {
+        d1_databases: [
+          { binding: "DB", database_name: "dx", database_id: databaseId },
+        ],
+      }),
   durable_objects: {
     bindings: [
       { name: "ORB_CONTAINER", class_name: ORB_CONTAINER_CLASS },
       { name: "THREAD_EXECUTOR", class_name: EXECUTOR_CLASS },
+      { name: "PLUGIN_CONTAINER", class_name: PLUGIN_CONTAINER_CLASS },
     ],
   },
   migrations: [
     { tag: "v1-orb-container", new_sqlite_classes: [ORB_CONTAINER_CLASS] },
     { tag: "v2-thread-executor", new_sqlite_classes: [EXECUTOR_CLASS] },
+    {
+      tag: "v3-plugin-container",
+      new_sqlite_classes: [PLUGIN_CONTAINER_CLASS],
+    },
   ],
 });
 
@@ -968,6 +1004,7 @@ export const pruneSharedPreviewOrbImages = async ({
 /** Builds the image and deploys the Orb Worker; idempotent. */
 export const deployOrbWorker = async ({
   workerName,
+  databaseId,
   workspaceRoot,
   stateDirectory,
   environment = process.env,
@@ -1009,7 +1046,7 @@ export const deployOrbWorker = async ({
   const configPath = resolve(stateDirectory, "wrangler.json");
   writeFileSync(
     configPath,
-    `${JSON.stringify(orbWorkerConfig({ workerName, workspaceRoot, image }), null, 2)}\n`,
+    `${JSON.stringify(orbWorkerConfig({ workerName, workspaceRoot, image, databaseId }), null, 2)}\n`,
     { mode: 0o600 },
   );
   const result = await retryOrbWorkerDeploy({
@@ -1103,7 +1140,11 @@ export const destroyOrbWorker = async ({
       .filter(
         (candidate) =>
           candidate.script === workerName &&
-          [ORB_CONTAINER_CLASS, EXECUTOR_CLASS].includes(candidate.class),
+          [
+            ORB_CONTAINER_CLASS,
+            EXECUTOR_CLASS,
+            PLUGIN_CONTAINER_CLASS,
+          ].includes(candidate.class),
       )
       .map(({ id }) => id),
   );

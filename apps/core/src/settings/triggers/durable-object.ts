@@ -8,7 +8,10 @@ import {
 } from "@dx/domain";
 import { Effect, Result } from "effect";
 import type { Bindings } from "../../http/types.js";
-import { deliverCodePluginTrigger } from "../../plugins/worker-host/triggers.js";
+import {
+  codePluginTriggerLeaseMs,
+  deliverCodePluginTrigger,
+} from "../../plugins/worker-host/triggers.js";
 import { logPluginFailure } from "../../plugins/worker-host/worker.js";
 import {
   loadAuthorizedTriggerDelivery,
@@ -383,7 +386,7 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
     return json({ code: "not-found" }, 404);
   }
 
-  #claim(idempotent: boolean): DeliveryRow | undefined {
+  #claim(idempotent: boolean, leaseMs: number): DeliveryRow | undefined {
     const now = Date.now();
     const maximumAttempts = idempotent ? MAX_TRIGGER_DELIVERY_ATTEMPTS : 1;
     return this.ctx.storage.transactionSync(() => {
@@ -414,7 +417,7 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
                 lease_token = ?, lease_expires_at = ?, updated_at = ?
           WHERE id = ? AND status = 'pending'`,
         leaseToken,
-        now + TRIGGER_DELIVERY_LEASE_MS,
+        now + leaseMs,
         now,
         next.id,
       );
@@ -464,7 +467,16 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
       await this.ctx.storage.deleteAlarm();
       return;
     }
-    const delivery = this.#claim(authorization.success.trigger.idempotent);
+    // A plugin that hands deliveries to its container gets the container
+    // call's limit as its lease; others keep the 30-second lease.
+    const delivery = this.#claim(
+      authorization.success.trigger.idempotent,
+      codePluginTriggerLeaseMs(
+        this.env,
+        authorization.success.install,
+        TRIGGER_DELIVERY_LEASE_MS,
+      ),
+    );
     if (delivery === undefined || delivery.payload_json === null) {
       await this.#schedule();
       return;

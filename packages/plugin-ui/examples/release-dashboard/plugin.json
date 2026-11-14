@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json",
+  "name": "release-dashboard",
+  "displayName": "Release Dashboard",
+  "version": "1.0.0",
+  "description": "A release dashboard pane built only from @dxcode/plugin-ui components.",
+  "extensions": {
+    "dev.dxcode": {
+      "apiVersion": 1,
+      "icon": {
+        "src": "assets/icon.svg",
+        "monochrome": "assets/icon-mono.svg"
+      },
+      "entry": "dev.dxcode/index.js",
+      "host": "worker",
+      "permissions": { "ui": ["pane"] }
+    }
+  }
+}

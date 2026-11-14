@@ -7,8 +7,11 @@ import type { Components } from "react-markdown";
  * cards and chips. Without it, a link to a Thread stays a link.
  */
 export interface ThreadReferences {
-  /** A Thread on its own: a block card. */
-  readonly card: (threadId: string) => ReactNode;
+  /**
+   * A Thread on its own: a block card. `link` is its link as the message
+   * rendered it, for a Thread that has no card here.
+   */
+  readonly card: (threadId: string, link?: ReactNode) => ReactNode;
   /** A Thread named in running text: an inline chip. */
   readonly chip: (threadId: string, label: ReactNode) => ReactNode;
   /**

@@ -67,6 +67,8 @@ const dependencies = (
   ...(pluginStartedTurns.has(runtime.threadId)
     ? { turnStartedByPlugin: true }
     : {}),
+  // Plugin calls reach the installs the turn already resolved.
+  peers: async () => runtime.plugins,
 });
 
 /** Workspace gates run last, so a workspace policy decides on the input
@@ -261,6 +263,56 @@ const decide = async (
   return { kind: "allow", input, modified };
 };
 
+type PluginToolOutcome =
+  | { readonly status: "done"; readonly output: unknown }
+  | { readonly status: "error"; readonly error: string };
+
+/**
+ * Runs `tool.result` handlers for one finished call, in the resolved order;
+ * a `modify` hands its output to the next. A handler that fails is logged
+ * and skipped: observing never blocks the result.
+ */
+const notifyToolResult = async (
+  runtime: CodePluginRuntime,
+  observers: ReadonlyArray<ResolvedCodePlugin>,
+  call: {
+    readonly tool: string;
+    readonly callId: string;
+    readonly input: Record<string, unknown>;
+  },
+  result: PluginToolOutcome,
+) => {
+  let output = result.status === "done" ? result.output : undefined;
+  let modified = false;
+  for (const plugin of observers) {
+    try {
+      const answer = await dispatchPluginEvent(
+        dependencies(runtime, plugin),
+        "tool.result",
+        {
+          threadId: runtime.threadId,
+          tool: call.tool,
+          callId: call.callId,
+          input: call.input,
+          ...result,
+          ...(result.status === "done" ? { output } : {}),
+        },
+      );
+      if (
+        result.status === "done" &&
+        isRecord(answer) &&
+        answer.action === "modify"
+      ) {
+        output = answer.output;
+        modified = true;
+      }
+    } catch (error) {
+      logPluginFailure(plugin, "tool.result", error);
+    }
+  }
+  return { output, modified };
+};
+
 /**
  * Runs `tool.call` handlers before a tool and `tool.result` handlers after
  * it. Plugins run in the resolved order; the first that does not allow the
@@ -277,41 +329,8 @@ const runGated = async <R>(
   if (decision.kind === "synthesize")
     return call.replace(undefined, decision.output);
   const { input } = decision;
-  const notify = async (
-    result:
-      | { readonly status: "done"; readonly output: unknown }
-      | { readonly status: "error"; readonly error: string },
-  ) => {
-    let output = result.status === "done" ? result.output : undefined;
-    let modified = false;
-    for (const plugin of observers) {
-      try {
-        const answer = await dispatchPluginEvent(
-          dependencies(runtime, plugin),
-          "tool.result",
-          {
-            threadId: runtime.threadId,
-            tool: call.tool,
-            callId: call.callId,
-            input,
-            ...result,
-            ...(result.status === "done" ? { output } : {}),
-          },
-        );
-        if (
-          result.status === "done" &&
-          isRecord(answer) &&
-          answer.action === "modify"
-        ) {
-          output = answer.output;
-          modified = true;
-        }
-      } catch (error) {
-        logPluginFailure(plugin, "tool.result", error);
-      }
-    }
-    return { output, modified };
-  };
+  const notify = (result: PluginToolOutcome) =>
+    notifyToolResult(runtime, observers, { ...call, input }, result);
   let result: R;
   try {
     result = await call.run(input);
@@ -356,6 +375,28 @@ export const decidePluginToolCall = (
   return gated === undefined || gated.gates.length === 0
     ? undefined
     : decide(gated.runtime, gated.gates, call);
+};
+
+/**
+ * Installed plugins' `tool.result` handlers for a tool dx does not run
+ * itself, such as Claude Code's own tools, which Claude Code's PostToolUse
+ * hook reports. Undefined when no installed plugin handles `tool.result`.
+ */
+export const observePluginToolResult = (
+  runtime: CodePluginRuntime | undefined,
+  call: {
+    readonly tool: string;
+    readonly callId: string;
+    readonly input: Record<string, unknown>;
+  },
+  result: PluginToolOutcome,
+):
+  | Promise<{ readonly output: unknown; readonly modified: boolean }>
+  | undefined => {
+  const gated = gatesOf(runtime);
+  return gated === undefined || gated.observers.length === 0
+    ? undefined
+    : notifyToolResult(gated.runtime, gated.observers, call, result);
 };
 
 /** A dx tool behind installed plugins' `tool.call` and `tool.result`. */
@@ -530,7 +571,7 @@ const RESERVED_TOOL_NAMES = new Set([
 
 const MAX_TOOL_SCHEMA_BYTES = 16_384;
 
-const pluginToolNameAllowed = (name: string) =>
+export const pluginToolNameAllowed = (name: string) =>
   PLUGIN_TOOL_NAME.test(name) &&
   !RESERVED_TOOL_NAMES.has(name) &&
   !name.startsWith("mcp_") &&

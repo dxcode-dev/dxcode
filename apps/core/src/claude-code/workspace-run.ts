@@ -14,7 +14,9 @@ import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 import { CLAUDE_CODE_TOOL_BRIDGE } from "./tool-bridge.js";
 import type {
   ClaudeCodeHookDecision,
+  ClaudeCodeResultAnswer,
   ClaudeCodeToolGate,
+  ClaudeCodeToolResultObserver,
 } from "./tool-gate.js";
 
 /**
@@ -39,6 +41,10 @@ export const claudeCodeHookDecisionPath = (toolUseId: string) => {
     throw new Error("Invalid Claude Code tool call id.");
   return `${STATE_ROOT}/mcp/hooks/${toolUseId}.json`;
 };
+
+/** Where dx writes its PostToolUse answer for the bridge (tool-gate.ts). */
+export const claudeCodeHookResultPath = (toolUseId: string) =>
+  claudeCodeHookDecisionPath(toolUseId).replace(/\.json$/, ".result.json");
 
 /** Where dx writes a dx tool's result for the \`dx\` MCP server to return. */
 export const claudeCodeToolResultPath = (toolCallId: string) => {
@@ -291,6 +297,11 @@ export interface ClaudeCodeLaunch {
    * Claude's own tools runs (tool-gate.ts).
    */
   readonly gateTools?: boolean;
+  /**
+   * Installed plugins observe tool results: the bridge reports each of
+   * Claude's own tools after it runs (tool-gate.ts).
+   */
+  readonly observeToolResults?: boolean;
   /**
    * Claude's own tools to offer (\`--tools\`), or all of them when absent.
    * A Thread on its Claude host has no workspace for Bash or the file tools.
@@ -724,8 +735,9 @@ done
 BRIDGE=""
 NO_PREFIX=""
 # Plugins gate this run's tools through the bridge: without Python there is
-# no bridge, so the run fails instead of running ungated.
-if [ -e "$D/dx-hooks.json" ] && [ -z "$PYTHON" ]; then
+# no bridge, so the run fails instead of running ungated. Plugins that only
+# observe results do not stop the run.
+if [ -e "$D/dx-hooks.json" ] && ! grep -q '"toolCall":false' "$D/dx-hooks.json" && [ -z "$PYTHON" ]; then
   echo "dx needs python3 in the workspace to check Claude Code's tools with the Thread's plugins." > "$D/stderr.log"
   echo 1 > "$D/exit.tmp"
   mv "$D/exit.tmp" "$D/exit"
@@ -847,6 +859,7 @@ export type ClaudeCodeSessionPath =
 
 /** PreToolUse requests being decided in this isolate, by tool_use id. */
 const decidingHooks = new Set<string>();
+const observingHooks = new Set<string>();
 
 export class ClaudeCodeRun {
   readonly stream = new ClaudeCodeStream();
@@ -878,6 +891,8 @@ export class ClaudeCodeRun {
     private readonly reconnect?: () => Promise<Sandbox | undefined>,
     /** The Thread's plugin gate for Claude Code's own tools (tool-gate.ts). */
     private readonly gate?: () => ClaudeCodeToolGate | undefined,
+    /** The Thread's plugins' tool.result for Claude Code's own tools. */
+    private readonly observer?: () => ClaudeCodeToolResultObserver | undefined,
   ) {
     this.dir = `${claudeCodeRunsRoot}/${key}`;
     this.#sandbox = sandbox;
@@ -923,6 +938,38 @@ export class ClaudeCodeRun {
     }
   }
 
+  /**
+   * Runs plugins' tool.result for each finished call the bridge printed and
+   * writes the answer it waits for. Observing fails open: an unwritten or
+   * failed answer leaves Claude the tool's own output.
+   */
+  #answerResults() {
+    const results = this.stream.hookResults.splice(0);
+    for (const result of results) {
+      if (observingHooks.has(result.toolUseId)) continue;
+      observingHooks.add(result.toolUseId);
+      const path = claudeCodeHookResultPath(result.toolUseId);
+      void (async () => {
+        if (await this.#sandbox.exists(path).catch(() => false)) return;
+        const observer = this.observer?.();
+        const answer: ClaudeCodeResultAnswer =
+          observer === undefined
+            ? { replace: false }
+            : await observer(result).catch(
+                (): ClaudeCodeResultAnswer => ({ replace: false }),
+              );
+        await this.#sandbox.writeFile(
+          path,
+          JSON.stringify(answer.replace ? { output: answer.output } : {}),
+        );
+      })()
+        .catch(() => {
+          // The bridge gives Claude the tool's own output on its own.
+        })
+        .finally(() => observingHooks.delete(result.toolUseId));
+    }
+  }
+
   #forgetReadFailures() {
     this.#unreadableSince = undefined;
     this.#reconnected = false;
@@ -944,6 +991,7 @@ export class ClaudeCodeRun {
       this.#base,
       this.reconnect,
       this.gate,
+      this.observer,
     );
     reader.#chunk = index;
     return reader;
@@ -992,14 +1040,23 @@ export class ClaudeCodeRun {
               launch.repositorySkills,
             ),
           }),
-      ...(launch.tools.length > 0 || launch.gateTools === true
+      ...(launch.tools.length > 0 ||
+      launch.gateTools === true ||
+      launch.observeToolResults === true
         ? {
             "dx-tools.json": JSON.stringify(launch.tools),
             "dx-bridge.py": CLAUDE_CODE_TOOL_BRIDGE,
           }
         : {}),
-      // The bridge registers its PreToolUse hook when this file exists.
-      ...(launch.gateTools === true ? { "dx-hooks.json": "{}" } : {}),
+      // The bridge registers its PreToolUse and PostToolUse hooks from it.
+      ...(launch.gateTools === true || launch.observeToolResults === true
+        ? {
+            "dx-hooks.json": JSON.stringify({
+              toolCall: launch.gateTools === true,
+              toolResult: launch.observeToolResults === true,
+            }),
+          }
+        : {}),
       "input.jsonl": inputLine(launch.input),
       ...(launch.freshInput === undefined
         ? {}
@@ -1079,6 +1136,7 @@ export class ClaudeCodeRun {
         this.stream.push(line);
       }
       this.#answerHooks();
+      this.#answerResults();
       if (!ended) break;
       this.#chunk += 1;
       this.#lines = 0;

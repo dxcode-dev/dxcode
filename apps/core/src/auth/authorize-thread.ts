@@ -33,6 +33,8 @@ interface ThreadAuthorizationResult {
   readonly artifactHome?: boolean;
   readonly access?: "owner" | "contribute" | "view";
   readonly ownerUserId?: string;
+  /** The Thread's plugin type, from the row authorization reads. */
+  readonly pluginThreadType?: string | undefined;
 }
 
 export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
@@ -67,6 +69,7 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
         artifactHome: owned.artifactHome === true,
         access: "owner",
         ownerUserId: principal.userId,
+        pluginThreadType: owned.pluginThreadType,
       } satisfies ThreadAuthorizationResult;
     if (!canUseSharedThreads(principal)) return { authorized: false, threadId };
 
@@ -85,6 +88,7 @@ export const authorizeThreadRequest = Effect.fn("authorizeThreadRequest")(
             artifactHome: grant.artifactHome,
             access: grant.access,
             ownerUserId: grant.ownerUserId,
+            pluginThreadType: grant.pluginThreadType,
           }
     ) satisfies ThreadAuthorizationResult;
   },
@@ -220,6 +224,8 @@ export const authorizeThread: MiddlewareHandler<AppEnv> = async (
   );
   context.set("threadSnoozed", result.snoozed === true);
   context.set("threadKind", result.space === true ? "space" : "thread");
+  if (result.pluginThreadType !== undefined)
+    context.set("threadPluginType", result.pluginThreadType);
   context.set("threadArtifactHome", result.artifactHome === true);
   await next();
 };

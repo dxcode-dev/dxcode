@@ -1,4 +1,7 @@
-import { CLAUDE_CODE_HOOK_WAIT_SECONDS } from "./tool-gate.js";
+import {
+  CLAUDE_CODE_HOOK_WAIT_SECONDS,
+  CLAUDE_CODE_RESULT_HOOK_WAIT_SECONDS,
+} from "./tool-gate.js";
 
 /**
  * The dx tool bridge: the program between the Claude Code CLI and the run's
@@ -29,7 +32,12 @@ import { CLAUDE_CODE_HOOK_WAIT_SECONDS } from "./tool-gate.js";
  *    gate tool calls: the bridge registers a PreToolUse hook, prints each of
  *    Claude's own tool calls as a `dx_hook` line for dx, and answers the
  *    hook with dx's decision from `hooks/<tool_use id>.json`, denying the
- *    call when none arrives in time (tool-gate.ts).
+ *    call when none arrives in time (tool-gate.ts). When plugins observe
+ *    tool results, it also registers a PostToolUse hook, prints each of
+ *    Claude's own finished calls as a `dx_hook_result` line, and answers
+ *    with `updatedToolOutput` when dx's `hooks/<tool_use id>.result.json`
+ *    holds a replacement; with no answer in time Claude gets the tool's own
+ *    output.
  *
  * Python's standard library only: it also runs where the local runtime's
  * namespace hides the developer's home-directory Node.js. Each call waits in
@@ -40,8 +48,18 @@ export const CLAUDE_CODE_TOOL_BRIDGE = `import json, os, sys, threading, time
 tools_path, mcp_dir, input_path = sys.argv[1], sys.argv[2], sys.argv[3]
 results = os.path.join(mcp_dir, "results")
 hook_answers = os.path.join(mcp_dir, "hooks")
-gate_tools = os.path.exists(os.path.join(os.path.dirname(tools_path), "dx-hooks.json"))
+hooks_path = os.path.join(os.path.dirname(tools_path), "dx-hooks.json")
+try:
+    hooks_config = json.load(open(hooks_path)) if os.path.exists(hooks_path) else None
+except ValueError:
+    hooks_config = {}
+if not isinstance(hooks_config, dict) and hooks_config is not None:
+    hooks_config = {}
+# An empty file, as older dx wrote, gates tool calls.
+gate_tools = hooks_config is not None and hooks_config.get("toolCall", True) is not False
+observe_results = hooks_config is not None and hooks_config.get("toolResult") is True
 HOOK_SECONDS = ${CLAUDE_CODE_HOOK_WAIT_SECONDS}
+RESULT_SECONDS = ${CLAUDE_CODE_RESULT_HOOK_WAIT_SECONDS}
 tools = json.load(open(tools_path))
 dx_tool_names = set(tool.get("name") for tool in tools)
 for tool in tools:
@@ -199,10 +217,48 @@ def pre_tool_use(request_id, request):
         reply(request_id, hook_output("deny", "dx could not check this call: %s" % error))
 
 
+def post_tool_use(request_id, request):
+    try:
+        data = request.get("input") or {}
+        name = str(data.get("tool_name", ""))
+        tool_use = str(request.get("tool_use_id") or data.get("tool_use_id") or "")
+        # dx's own tools pass plugins' tool.result inside dx.
+        if name in dx_tool_names or not tool_use.replace("_", "").replace("-", "").isalnum():
+            reply(request_id, {})
+            return
+        path = os.path.join(hook_answers, tool_use + ".result.json")
+        with lock:
+            sys.stdout.write(json.dumps({"type": "dx_hook_result", "tool_use_id": tool_use, "tool_name": name, "tool_input": data.get("tool_input") or {}, "tool_response": data.get("tool_response")}) + "\\n")
+            sys.stdout.flush()
+        deadline = time.time() + RESULT_SECONDS
+        while time.time() < deadline:
+            if os.path.exists(path):
+                try:
+                    with open(path) as handle:
+                        answer = json.load(handle)
+                except ValueError:
+                    answer = None  # dx is still writing it
+                if isinstance(answer, dict):
+                    if "output" in answer:
+                        reply(request_id, {"hookSpecificOutput": {"hookEventName": "PostToolUse", "updatedToolOutput": answer["output"]}})
+                    else:
+                        reply(request_id, {})
+                    return
+            time.sleep(0.2)
+        reply(request_id, {})
+    except Exception:  # observing never holds up the result
+        reply(request_id, {})
+
+
 initialize = {"subtype": "initialize", "sdkMcpServers": ["dx"]}
+hooks = {}
 if gate_tools:
     # A failed answer blocks the call, and Claude Code waits past the bridge.
-    initialize["hooks"] = {"PreToolUse": [{"hookCallbackIds": ["dx-pre-tool-use"], "timeout": HOOK_SECONDS + 30, "onFailure": "block"}]}
+    hooks["PreToolUse"] = [{"hookCallbackIds": ["dx-pre-tool-use"], "timeout": HOOK_SECONDS + 30, "onFailure": "block"}]
+if observe_results:
+    hooks["PostToolUse"] = [{"hookCallbackIds": ["dx-post-tool-use"], "timeout": RESULT_SECONDS + 15}]
+if hooks:
+    initialize["hooks"] = hooks
 send({"type": "control_request", "request_id": "dx-initialize", "request": initialize})
 for line in sys.stdin:
     try:
@@ -216,6 +272,8 @@ for line in sys.stdin:
             mcp_message(message.get("request_id"), request.get("message") or {})
         elif request.get("subtype") == "hook_callback" and request.get("callback_id") == "dx-pre-tool-use":
             threading.Thread(target=pre_tool_use, args=(message.get("request_id"), request), daemon=True).start()
+        elif request.get("subtype") == "hook_callback" and request.get("callback_id") == "dx-post-tool-use":
+            threading.Thread(target=post_tool_use, args=(message.get("request_id"), request), daemon=True).start()
         else:
             refuse(message.get("request_id"), "dx does not handle %s." % request.get("subtype"))
         continue

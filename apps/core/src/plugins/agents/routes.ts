@@ -31,6 +31,9 @@ pluginAgentRoutes.get("/modes", async (context) => {
             : { description: mode.description }),
           ...(mode.color === undefined ? {} : { color: mode.color }),
           plugin: mode.install.displayName,
+          ...(mode.install.iconSet === undefined
+            ? {}
+            : { icon: mode.install.iconSet }),
           ...(mode.definition.model === undefined
             ? {}
             : { model: mode.definition.model }),

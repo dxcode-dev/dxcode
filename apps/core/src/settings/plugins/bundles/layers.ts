@@ -1,5 +1,11 @@
 import { D1Client } from "@effect/sql-d1";
 import { Layer } from "effect";
+import { coalescingD1 } from "../../../persistence/d1-coalesce.js";
+import {
+  D1WriteBatch,
+  deferredWritesD1,
+} from "../../../persistence/d1-deferred-writes.js";
+import { PluginTrustPoliciesD1 } from "../../../plugins/trust/policy.js";
 import { SettingsAudit } from "../../audit.js";
 import { EnvironmentVariableRepositoryD1 } from "../../environment-variables/repository-d1.js";
 import { McpServerRepositoryD1 } from "../../mcp-servers/repository-d1.js";
@@ -19,9 +25,26 @@ import { PluginSignaturesD1 } from "./signature.js";
 
 /** Everything plugin bundle routes and the agent's proposals run on. */
 export const pluginBundleLayers = (
-  db: D1Database,
+  binding: D1Database,
   storage: R2Bucket | undefined,
+  options: {
+    /**
+     * Hold every write back for one atomic batch that the service sends at
+     * its commit point (install and update). Off: writes go straight out.
+     */
+    readonly deferWrites?: boolean;
+  } = {},
 ) => {
+  const writes =
+    options.deferWrites === true
+      ? // Reads before the commit still go out together.
+        deferredWritesD1(coalescingD1(binding))
+      : undefined;
+  const db = writes?.db ?? binding;
+  const writeBatch =
+    writes === undefined
+      ? D1WriteBatch.immediate
+      : D1WriteBatch.deferred(writes);
   const d1 = D1Client.layer({ db });
   const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
   const settings = SettingsService.layer.pipe(Layer.provide(workspace));
@@ -62,12 +85,15 @@ export const pluginBundleLayers = (
         signatures,
         SettingsAudit.layer,
         PluginPackageStore.r2(storage),
+        writeBatch,
       ),
     ),
   );
   return Layer.mergeAll(
+    WorkspacePolicyRepositoryD1(db),
     shares,
     signatures,
+    PluginTrustPoliciesD1(db),
     workspace,
     settings,
     bundles,

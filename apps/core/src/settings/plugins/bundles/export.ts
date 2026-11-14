@@ -1,5 +1,6 @@
 import {
   isStdioMcpServer,
+  type PluginBundleManifest,
   type PluginCodeModuleContent,
   type SkillWithVersion,
   type StoredMcpServer,
@@ -33,6 +34,38 @@ const skillMarkdown = ({ active }: SkillWithVersion) =>
     { lineWidth: 0 },
   )}---\n\n${active.instructions.trim()}\n`;
 
+/**
+ * The manifest's `panes`: the declared panes (icons as paths), each with
+ * the `connect` read for it, and any pane that only has a `connect`.
+ */
+const exportPanes = (
+  code: NonNullable<PluginBundleManifest["code"]>,
+  itemPath: (icon: string) => string,
+) => {
+  const connectOf = (id: string) => {
+    const found = code.paneConnect?.find(({ pane }) => pane === id);
+    return found === undefined
+      ? undefined
+      : {
+          hosts: found.hosts,
+          portal: found.portal,
+          ...(found.webrtc === true ? { webrtc: true } : {}),
+        };
+  };
+  const declared = (code.panes ?? []).map((pane) => {
+    const connect = connectOf(pane.id);
+    return {
+      ...pane,
+      ...(pane.icon === undefined ? {} : { icon: itemPath(pane.icon) }),
+      ...(connect === undefined ? {} : { connect }),
+    };
+  });
+  const connectOnly = (code.paneConnect ?? [])
+    .filter(({ pane }) => !declared.some(({ id }) => id === pane))
+    .map(({ pane }) => ({ id: pane, connect: connectOf(pane) }));
+  return [...declared, ...connectOnly];
+};
+
 export const pluginExportFiles = (input: {
   readonly bundle: StoredPluginBundle;
   readonly skills: ReadonlyArray<SkillWithVersion>;
@@ -44,9 +77,12 @@ export const pluginExportFiles = (input: {
    * at paths the export writes itself are left out.
    */
   readonly packageFiles?: ReadonlyArray<ZipFile>;
+  /** The icon files the manifest names, by hash, from `plugin_icon`. */
+  readonly iconFiles?: ReadonlyMap<string, ExportIconFile>;
 }): ReadonlyArray<ZipFile> => {
   const { bundle } = input;
   const { manifest } = bundle;
+  const icons = exportIcons(manifest, input.iconFiles);
   const files: Array<ZipFile> = [
     {
       path: "plugin.json",
@@ -63,13 +99,20 @@ export const pluginExportFiles = (input: {
           ? {}
           : { description: manifest.description }),
         ...(manifest.code === undefined
-          ? {}
+          ? icons.block === undefined
+            ? {}
+            : { extensions: { "dev.dxcode": { icon: icons.block } } }
           : {
               extensions: {
                 "dev.dxcode": {
                   apiVersion: manifest.code.apiVersion,
-                  entry: manifest.code.entry,
-                  host: manifest.code.host,
+                  // With hosts, entry is written only as the Worker's
+                  // module, so a re-import reads the same hosts back.
+                  ...(manifest.code.hosts !== undefined &&
+                  manifest.code.hosts.worker === undefined
+                    ? {}
+                    : { entry: manifest.code.entry }),
+                  host: manifest.code.hosts ?? manifest.code.host,
                   permissions: manifest.code.permissions,
                   ...(manifest.code.settings.length === 0
                     ? {}
@@ -77,6 +120,27 @@ export const pluginExportFiles = (input: {
                   ...(manifest.code.agentModes === undefined
                     ? {}
                     : { agentModes: manifest.code.agentModes }),
+                  ...(manifest.code.tier === undefined
+                    ? {}
+                    : { tier: manifest.code.tier }),
+                  ...(manifest.code.binaries === undefined
+                    ? {}
+                    : { binaries: manifest.code.binaries }),
+                  ...(icons.block === undefined ? {} : { icon: icons.block }),
+                  ...(manifest.code.archivedThreads === undefined
+                    ? {}
+                    : { archivedThreads: manifest.code.archivedThreads }),
+                  // Declared panes, with each one's connect.
+                  ...(manifest.code.panes === undefined &&
+                  manifest.code.paneConnect === undefined
+                    ? {}
+                    : { panes: exportPanes(manifest.code, icons.itemPath) }),
+                  ...(manifest.code.durableScope === undefined
+                    ? {}
+                    : { durableScope: manifest.code.durableScope }),
+                  ...(manifest.code.jobs === undefined
+                    ? {}
+                    : { jobs: manifest.code.jobs }),
                 },
               },
             }),
@@ -150,13 +214,14 @@ export const pluginExportFiles = (input: {
       }),
     });
   }
-  if (manifest.icon !== undefined) {
+  if (manifest.icon !== undefined && icons.files.length === 0) {
     files.push({
       path:
         manifest.icon.mediaType === "image/png" ? PNG_ICON_PATH : SVG_ICON_PATH,
       content: iconBytes(manifest.icon),
     });
   }
+  files.push(...icons.files);
   const written = new Set(files.map(({ path }) => path));
   for (const file of input.packageFiles ?? []) {
     const generated =
@@ -165,12 +230,86 @@ export const pluginExportFiles = (input: {
       file.path.startsWith("skills/") ||
       file.path === PNG_ICON_PATH ||
       file.path === SVG_ICON_PATH ||
+      written.has(file.path) ||
       // The source's signature covers its files, not the export's.
       file.path === "plugin.sig";
     if (!generated && !written.has(file.path)) files.push(file);
   }
   return files;
 };
+
+// --- Icon files ---
+
+export interface ExportIconFile {
+  readonly mediaType: "image/png" | "image/svg+xml";
+  readonly bytes: Uint8Array;
+}
+
+const extensionOf = (file: ExportIconFile) =>
+  file.mediaType === "image/png" ? "png" : "svg";
+
+/**
+ * The icon block and files an export writes: the icon set under
+ * `assets/icon*.{svg,png}`, and every item icon file at the path the code
+ * names it by, so a re-import resolves the same icons.
+ */
+const exportIcons = (
+  manifest: StoredPluginBundle["manifest"],
+  stored: ReadonlyMap<string, ExportIconFile> | undefined,
+) => {
+  const files: Array<ZipFile> = [];
+  const byHash = new Map<string, string>();
+  for (const [path, hash] of Object.entries(manifest.code?.iconAssets ?? {})) {
+    const file = stored?.get(hash);
+    if (file === undefined) continue;
+    files.push({ path, content: file.bytes });
+    if (!byHash.has(hash)) byHash.set(hash, path);
+  }
+  const named = (hash: string | undefined, base: string) => {
+    if (hash === undefined) return undefined;
+    const known = byHash.get(hash);
+    if (known !== undefined) return known;
+    const file = stored?.get(hash);
+    if (file === undefined) return undefined;
+    const path = `assets/${base}.${extensionOf(file)}`;
+    files.push({ path, content: file.bytes });
+    byHash.set(hash, path);
+    return path;
+  };
+  const set = manifest.iconSet;
+  const src = named(set?.src, "icon");
+  const dark = named(set?.dark, "icon-dark");
+  const monochrome = named(set?.monochrome, "icon-mono");
+  const block =
+    src === undefined && dark === undefined && monochrome === undefined
+      ? undefined
+      : {
+          ...(src === undefined ? {} : { src }),
+          ...(dark === undefined ? {} : { dark }),
+          ...(monochrome === undefined ? {} : { monochrome }),
+          ...(set?.background === undefined
+            ? {}
+            : { background: set.background }),
+        };
+  return {
+    block,
+    files,
+    /** An item icon as written: `lucide:` as is, a hash as its file path. */
+    itemPath: (icon: string) => byHash.get(icon) ?? icon,
+  };
+};
+
+/** Every icon hash an export writes. */
+export const exportIconHashes = (manifest: StoredPluginBundle["manifest"]) => [
+  ...new Set(
+    [
+      manifest.iconSet?.src,
+      manifest.iconSet?.dark,
+      manifest.iconSet?.monochrome,
+      ...Object.values(manifest.code?.iconAssets ?? {}),
+    ].filter((hash): hash is string => hash !== undefined),
+  ),
+];
 
 export const exportPluginBundle = async (
   input: Parameters<typeof pluginExportFiles>[0],

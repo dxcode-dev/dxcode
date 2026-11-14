@@ -1,8 +1,9 @@
 /**
  * Every page the web app serves, in its router's path syntax: a `$name`
- * segment matches any one segment. Core answers these with the app and
- * status 200 on a reload or deep link, and any other unknown path with
- * status 404, so search engines index only real pages.
+ * segment matches any one segment, and a final `$` matches any rest, even
+ * none. Core answers these with the app and status 200 on a reload or deep
+ * link, and any other unknown path with status 404, so search engines index
+ * only real pages.
  */
 export const APP_ROUTE_PATHS = [
   "/",
@@ -28,6 +29,7 @@ export const APP_ROUTE_PATHS = [
   "/workspaces",
   "/workspaces/$workspaceSlug",
   "/workspaces/$workspaceSlug/$section",
+  "/plugins/$name/$id/$",
 ] as const;
 
 const segmentsOf = (path: string) =>
@@ -39,12 +41,17 @@ const routeSegments = APP_ROUTE_PATHS.map(segmentsOf);
 export const isAppRoutePath = (pathname: string): boolean => {
   if (pathname.includes("//")) return false;
   const segments = segmentsOf(pathname);
-  return routeSegments.some(
-    (route) =>
-      route.length === segments.length &&
-      route.every(
+  return routeSegments.some((route) => {
+    const splat = route.at(-1) === "$";
+    const fixed = splat ? route.slice(0, -1) : route;
+    return (
+      (splat
+        ? segments.length >= fixed.length
+        : segments.length === fixed.length) &&
+      fixed.every(
         (segment, index) =>
           segment.startsWith("$") || segment === segments[index],
-      ),
-  );
+      )
+    );
+  });
 };

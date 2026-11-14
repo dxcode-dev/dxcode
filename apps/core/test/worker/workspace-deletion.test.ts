@@ -13,6 +13,7 @@ import { authorizeThread } from "../../src/auth/authorize-thread.js";
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import { recordPluginHostUsage } from "../../src/plugins/hosts/usage.js";
 import { projectRoutes } from "../../src/projects/routes.js";
 import { settingsRoutes } from "../../src/settings/routes.js";
 import {
@@ -276,6 +277,20 @@ describe("deleting a workspace in workerd with real D1", () => {
   });
 
   it("keeps each Thread with its owner, archived and read-only, and erases the rest", async () => {
+    // What the workspace's plugin hosts cost goes with it.
+    await recordPluginHostUsage(env.DB, {
+      pluginId: "plg_wsdel",
+      pluginName: "com.example.wsdel",
+      scope: "workspace",
+      workspaceId,
+      ownerUserId: owner,
+      host: "container",
+      unitsMs: 1_000,
+      costMicroUsd: 8,
+      outcome: "success",
+      periodStart: Date.now() - 1_000,
+      periodEnd: Date.now(),
+    });
     const deleted = await send(
       owner,
       `/settings/workspaces/${slug}/delete`,
@@ -286,6 +301,14 @@ describe("deleting a workspace in workerd with real D1", () => {
     await expect(deleted.json()).resolves.toMatchObject({
       data: { deleted: true, keptThreadCount: 2, deletedThreadCount: 0 },
     });
+
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS rows FROM plugin_host_usage WHERE workspace_id = ?",
+      )
+        .bind(workspaceId)
+        .first("rows"),
+    ).toBe(0);
 
     // The workspace is gone for everyone, and its short name is free.
     expect(

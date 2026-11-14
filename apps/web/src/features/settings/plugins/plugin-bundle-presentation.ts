@@ -32,6 +32,7 @@ export const bundleHint = (bundle: PluginBundleData) => {
   if (bundle.enabled && bundle.mcpServers.some(({ reviewed }) => !reviewed)) {
     return "Review MCP tools";
   }
+  if ((bundle.trust?.blocked.length ?? 0) > 0) return "Needs workspace trust";
   return bundle.overlap?.kind === "replacing"
     ? `Used instead of ${bundle.overlap.workspaceName}'s copy`
     : undefined;

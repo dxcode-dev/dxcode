@@ -22,11 +22,8 @@
   backdrop-filter: blur(8px);
   animation: plugin-prompt-in 160ms ease-out;
 }
-.plugin-prompt-card > svg {
-  width: 14px;
-  height: 14px;
-  margin-top: var(--space-0-5);
-  color: var(--primary);
+.plugin-prompt-card > .plugin-prompt-icon {
+  margin-top: 1px;
 }
 .plugin-prompt-copy {
   display: flex;
@@ -119,36 +116,21 @@
 .plugin-pane-slot > .plugin-pane-frame {
   height: 100%;
 }
+/* The Thread's own Portal over the box a trusted pane reserved. */
+.plugin-pane-view {
+  position: relative;
+  /* The Portal stays inside the pane, wherever the view asks for it. */
+  overflow: hidden;
+}
+.plugin-pane-portal {
+  position: absolute;
+  border: 0;
+  background: var(--background);
+}
 .plugin-pane-state {
   padding: var(--space-4);
   color: var(--muted-foreground);
   font-size: var(--text-md);
-}
-.plugin-pane-read-only {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--divider);
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
-}
-.plugin-pane-read-only > svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-.plugin-pane-archived {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
-}
-.plugin-pane-archived-frame {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
 }
 @media (max-width: 640px) {
   .plugin-ui-row {
@@ -159,9 +141,6 @@
 /* dx's own cards (manage_dx): a settings change to apply, or a secret. */
 .dx-prompt-card[data-destructive="true"] {
   border-color: color-mix(in srgb, var(--destructive) 35%, var(--border));
-}
-.dx-prompt-card[data-destructive="true"] > svg {
-  color: var(--destructive);
 }
 .dx-prompt-card code {
   color: var(--foreground);
@@ -277,4 +256,76 @@
   .dx-change-toggle > svg {
     transition: none;
   }
+}
+
+/* Plugin icons on quick actions, links, and pane tabs. */
+.plugin-quick-actions .plugin-icon {
+  margin-left: -2px;
+}
+.plugin-link-icon {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin: 0 3px 0 0;
+  border-radius: var(--radius-xs);
+  vertical-align: -2px;
+  object-fit: contain;
+}
+.plugin-pane-tab-icon {
+  flex: none;
+}
+.plugin-pane-read-only {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--divider);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.plugin-pane-read-only > svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+.plugin-pane-archived {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+}
+.plugin-pane-archived-frame {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+}
+.plugin-tool-icon {
+  margin-right: 6px;
+  vertical-align: -3px;
+}
+/* A plugin Thread type whose view is unavailable. */
+.plugin-thread-type-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  line-height: 17px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: color-mix(in srgb, var(--muted) 55%, var(--background));
+}
+.plugin-thread-type-notice > svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: 1px;
+}
+/* Last: more specific than the `… > svg` sizing rules above. */
+.dx-prompt-card[data-destructive="true"] > svg {
+  color: var(--destructive);
 }

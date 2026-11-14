@@ -3,6 +3,7 @@ import type {
   GraphData,
   OrbResolvedProvider,
   PluginAgentModeData,
+  PluginThreadTypeOption,
   ProjectData,
 } from "@dx/api";
 import {
@@ -354,6 +355,8 @@ const orbProviderName = (provider: RunnerProviderPresentation) =>
 const formatOrbResources = ({ resources }: RunnerProfile) =>
   `${resources.cpuCores} CPU · ${Number((resources.memoryMb / 1024).toFixed(1))} GiB`;
 
+/** One empty list, so an absent prop keeps a stable identity. */
+const NO_THREAD_TYPES: ReadonlyArray<PluginThreadTypeOption> = [];
 /**
  * The new-Thread Orb picker: one row per provider in the resolved set, each
  * opening a submenu of its sizes. A dot marks the selected size. Until the
@@ -484,6 +487,138 @@ const ORB_PILL = chipVariants({
   size: "lg",
   className: "new-thread-config-pill new-thread-orb-size",
 });
+/**
+ * The composer's Orb slot: connect a provider when there is none, retry
+ * when the options or providers failed to load, else the Orb picker.
+ */
+function NewThreadOrbSlot({
+  locked,
+  runnerProfiles,
+  runnerProviders,
+  runnerOrbs,
+  runnerOrbsFailed,
+  onRunnerOrbsRetry,
+  runnerProfileId,
+  runnerProfileLoading,
+  allowedRunnerProfileIds,
+  onRunnerProfileChange,
+  onRunnerProfileRetry,
+  onConnectOrbProvider,
+}: {
+  readonly locked: boolean;
+  readonly runnerProfiles: ReadonlyArray<RunnerProfile>;
+  readonly runnerProviders: ReadonlyArray<RunnerProviderPresentation>;
+  readonly runnerOrbs: ReadonlyArray<OrbResolvedProvider> | undefined;
+  readonly runnerOrbsFailed: boolean;
+  readonly onRunnerOrbsRetry: (() => void) | undefined;
+  readonly runnerProfileId: RunnerProfileId | undefined;
+  readonly runnerProfileLoading: boolean;
+  readonly allowedRunnerProfileIds:
+    | ReadonlyArray<RunnerProfileId>
+    | null
+    | undefined;
+  readonly onRunnerProfileChange:
+    | ((runnerProfileId: RunnerProfileId) => void)
+    | undefined;
+  readonly onRunnerProfileRetry: (() => void) | undefined;
+  readonly onConnectOrbProvider: (() => void) | undefined;
+}) {
+  const selectedRunnerProfile = runnerProfiles.find(
+    ({ id }) => id === runnerProfileId,
+  );
+  const selectedRunnerProvider = runnerProviders.find(
+    ({ adapter }) => adapter === selectedRunnerProfile?.adapter,
+  );
+  const runnerGroups =
+    runnerOrbs === undefined
+      ? undefined
+      : runnerProfileGroups(runnerProfiles, runnerProviders, runnerOrbs);
+  const selectedOrb = runnerOrbs?.find(
+    ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
+  );
+  const selectedOrbOwner =
+    selectedOrb === undefined ? undefined : orbKeyOwner(selectedOrb.scope);
+  // The deployment's own name for its account wins, as in the menu, over
+  // the name of the provider underneath it.
+  const selectedProviderName =
+    selectedOrb?.displayName ??
+    (selectedRunnerProvider === undefined
+      ? undefined
+      : orbProviderName(selectedRunnerProvider));
+  const selectedOrbName =
+    selectedRunnerProfile === undefined
+      ? ""
+      : `Orb: ${selectedProviderName === undefined ? "" : `${selectedProviderName} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
+  const canRetryRunnerProfiles = onRunnerProfileRetry !== undefined;
+  const allowedRunnerProfileIdSet =
+    allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
+      ? undefined
+      : new Set(allowedRunnerProfileIds);
+  return runnerOrbs !== undefined && runnerOrbs.length === 0 ? (
+    // No provider runs this person's Threads yet: connecting one is the
+    // only thing to choose.
+    <button
+      type="button"
+      className={ORB_PILL}
+      disabled={locked || onConnectOrbProvider === undefined}
+      onClick={onConnectOrbProvider}
+    >
+      <OrbIcon aria-hidden="true" />
+      <span>Connect an Orb provider</span>
+    </button>
+  ) : selectedRunnerProfile === undefined ? (
+    <button
+      type="button"
+      className={ORB_PILL}
+      aria-label={
+        runnerProfileLoading
+          ? "Orb"
+          : canRetryRunnerProfiles
+            ? "Orb options unavailable. Retry"
+            : "Orb options unavailable"
+      }
+      title={
+        runnerProfileLoading
+          ? "Loading Orb options"
+          : canRetryRunnerProfiles
+            ? "Orb options unavailable. Retry"
+            : "Orb options unavailable"
+      }
+      disabled={locked || runnerProfileLoading || !canRetryRunnerProfiles}
+      onClick={onRunnerProfileRetry}
+    >
+      <OrbIcon aria-hidden="true" />
+      <span>Orb</span>
+    </button>
+  ) : runnerOrbs === undefined && runnerOrbsFailed ? (
+    // Without the provider list no size can be offered; the rest of the
+    // composer stays usable and a send starts on the starting size.
+    <button
+      type="button"
+      className={ORB_PILL}
+      aria-label="Orb providers didn't load. Retry"
+      title="Orb providers didn't load. Retry"
+      disabled={locked || onRunnerOrbsRetry === undefined}
+      onClick={onRunnerOrbsRetry}
+    >
+      <RotateCw aria-hidden="true" />
+      <span>Retry Orbs</span>
+    </button>
+  ) : (
+    <OrbPicker
+      groups={runnerGroups}
+      selectedProfile={selectedRunnerProfile}
+      selectedName={selectedOrbName}
+      disabled={locked || onRunnerProfileChange === undefined}
+      isProfileAllowed={(runnerProfile) =>
+        allowedRunnerProfileIdSet === undefined ||
+        allowedRunnerProfileIdSet.has(runnerProfile.id)
+      }
+      onSelect={(value) => onRunnerProfileChange?.(value)}
+    />
+  );
+}
+
 export function NewThreadConfigurationStrip({
   projects,
   projectId,
@@ -517,6 +652,9 @@ export function NewThreadConfigurationStrip({
   pluginAgentModes,
   pluginAgentMode,
   onPluginAgentModeChange,
+  pluginThreadTypes = NO_THREAD_TYPES,
+  pluginThreadType,
+  onPluginThreadTypeChange,
   dictationControls,
   dictationActive = false,
   dictationHideSubmit = false,
@@ -561,6 +699,10 @@ export function NewThreadConfigurationStrip({
   readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
   readonly pluginAgentMode?: string;
   readonly onPluginAgentModeChange?: (mode: string | undefined) => void;
+  /** Thread types the person's plugins offer. */
+  readonly pluginThreadTypes?: ReadonlyArray<PluginThreadTypeOption>;
+  readonly pluginThreadType?: string;
+  readonly onPluginThreadTypeChange?: (type: string | undefined) => void;
   readonly dictationControls?: ReactNode;
   readonly dictationActive?: boolean;
   readonly dictationHideSubmit?: boolean;
@@ -600,103 +742,23 @@ export function NewThreadConfigurationStrip({
     shortcutSnapshot,
     shortcutSnapshot,
   );
-  const selectedRunnerProfile = runnerProfiles.find(
-    ({ id }) => id === runnerProfileId,
-  );
-  const selectedRunnerProvider = runnerProviders.find(
-    ({ adapter }) => adapter === selectedRunnerProfile?.adapter,
-  );
-  const runnerGroups =
-    runnerOrbs === undefined
-      ? undefined
-      : runnerProfileGroups(runnerProfiles, runnerProviders, runnerOrbs);
-  const selectedOrb = runnerOrbs?.find(
-    ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
-  );
-  const selectedOrbOwner =
-    selectedOrb === undefined ? undefined : orbKeyOwner(selectedOrb.scope);
-  // The deployment's own name for its account wins, as in the menu, over
-  // the name of the provider underneath it.
-  const selectedProviderName =
-    selectedOrb?.displayName ??
-    (selectedRunnerProvider === undefined
-      ? undefined
-      : orbProviderName(selectedRunnerProvider));
-  const selectedOrbName =
-    selectedRunnerProfile === undefined
-      ? ""
-      : `Orb: ${selectedProviderName === undefined ? "" : `${selectedProviderName} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
-  const canRetryRunnerProfiles = onRunnerProfileRetry !== undefined;
-  const allowedRunnerProfileIdSet =
-    allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
-      ? undefined
-      : new Set(allowedRunnerProfileIds);
 
   return (
     <footer className="new-thread-config-strip">
-      {runnerOrbs !== undefined && runnerOrbs.length === 0 ? (
-        // No provider runs this person's Threads yet: connecting one is the
-        // only thing to choose.
-        <button
-          type="button"
-          className={ORB_PILL}
-          disabled={locked || onConnectOrbProvider === undefined}
-          onClick={onConnectOrbProvider}
-        >
-          <OrbIcon aria-hidden="true" />
-          <span>Connect an Orb provider</span>
-        </button>
-      ) : selectedRunnerProfile === undefined ? (
-        <button
-          type="button"
-          className={ORB_PILL}
-          aria-label={
-            runnerProfileLoading
-              ? "Orb"
-              : canRetryRunnerProfiles
-                ? "Orb options unavailable. Retry"
-                : "Orb options unavailable"
-          }
-          title={
-            runnerProfileLoading
-              ? "Loading Orb options"
-              : canRetryRunnerProfiles
-                ? "Orb options unavailable. Retry"
-                : "Orb options unavailable"
-          }
-          disabled={locked || runnerProfileLoading || !canRetryRunnerProfiles}
-          onClick={onRunnerProfileRetry}
-        >
-          <OrbIcon aria-hidden="true" />
-          <span>Orb</span>
-        </button>
-      ) : runnerOrbs === undefined && runnerOrbsFailed ? (
-        // Without the provider list no size can be offered; the rest of the
-        // composer stays usable and a send starts on the starting size.
-        <button
-          type="button"
-          className={ORB_PILL}
-          aria-label="Orb providers didn't load. Retry"
-          title="Orb providers didn't load. Retry"
-          disabled={locked || onRunnerOrbsRetry === undefined}
-          onClick={onRunnerOrbsRetry}
-        >
-          <RotateCw aria-hidden="true" />
-          <span>Retry Orbs</span>
-        </button>
-      ) : (
-        <OrbPicker
-          groups={runnerGroups}
-          selectedProfile={selectedRunnerProfile}
-          selectedName={selectedOrbName}
-          disabled={locked || onRunnerProfileChange === undefined}
-          isProfileAllowed={(runnerProfile) =>
-            allowedRunnerProfileIdSet === undefined ||
-            allowedRunnerProfileIdSet.has(runnerProfile.id)
-          }
-          onSelect={(value) => onRunnerProfileChange?.(value)}
-        />
-      )}
+      <NewThreadOrbSlot
+        locked={locked}
+        runnerProfiles={runnerProfiles}
+        runnerProviders={runnerProviders}
+        runnerOrbs={runnerOrbs}
+        runnerOrbsFailed={runnerOrbsFailed}
+        onRunnerOrbsRetry={onRunnerOrbsRetry}
+        runnerProfileId={runnerProfileId}
+        runnerProfileLoading={runnerProfileLoading}
+        allowedRunnerProfileIds={allowedRunnerProfileIds}
+        onRunnerProfileChange={onRunnerProfileChange}
+        onRunnerProfileRetry={onRunnerProfileRetry}
+        onConnectOrbProvider={onConnectOrbProvider}
+      />
       <ProjectPicker
         projects={projects}
         projectId={projectId}
@@ -735,13 +797,14 @@ export function NewThreadConfigurationStrip({
           onPlanChange={onClaudePlanChange}
         />
       ) : null}
-      {onVisibilityChange === undefined ? null : (
-        <NewThreadOptionsMenu
-          visibility={visibility}
-          locked={locked}
-          onVisibilityChange={onVisibilityChange}
-        />
-      )}
+      <NewThreadOptionsMenu
+        visibility={visibility}
+        locked={locked}
+        onVisibilityChange={onVisibilityChange}
+        threadTypes={pluginThreadTypes}
+        threadType={pluginThreadType}
+        onThreadTypeChange={onPluginThreadTypeChange}
+      />
       <span className="new-thread-config-spacer" />
       {dictationControls}
       {dictationHideSubmit ? null : (

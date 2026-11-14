@@ -1798,6 +1798,16 @@ fn poll_tmux(tmux: &TmuxFixture, arguments: &[&str], accept: impl Fn(&str) -> bo
     }
 }
 
+/// Whether a stopped plugin process is gone within its SIGTERM grace:
+/// "stopped" is reported when the stop begins, not when the group exits.
+async fn exits_soon(pid: u32) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while process_alive(pid) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    !process_alive(pid)
+}
+
 fn process_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
@@ -4031,4 +4041,503 @@ async fn real_daemon_lists_opens_and_focuses_desktop_windows() {
     let running = desktop.app_processes();
     assert_eq!(running.len(), 1);
     assert!(!closed.contains(&running[0]), "{closed:?} {running:?}");
+}
+
+/// dx's Orb plugin runtime, reduced to the wire protocol: it answers calls
+/// on fd 3, reports what dx gave it, relays one capability request, opens a
+/// socket on request, and exits mid-call on request.
+const FAKE_PLUGIN_RUNTIME: &str = r#"
+import net from "node:net";
+import { execFileSync } from "node:child_process";
+const channel = new net.Socket({ fd: 3, readable: true, writable: true });
+const send = (message) => channel.write(JSON.stringify(message) + "\n");
+const pending = new Map();
+let nextCid = 0;
+let buffer = "";
+const servers = [];
+channel.on("data", (chunk) => {
+  buffer += chunk;
+  for (let index; (index = buffer.indexOf("\n")) >= 0; ) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    void handle(JSON.parse(line));
+  }
+});
+console.log("plugin stdout stays out of the protocol");
+const capability = (id, method, args) =>
+  new Promise((resolve) => {
+    const cid = ++nextCid;
+    pending.set(cid, resolve);
+    send({ t: "host", id, cid, method, args });
+  });
+async function handle(message) {
+  if (message.t === "host-result") {
+    pending.get(message.cid)?.(message);
+    pending.delete(message.cid);
+    return;
+  }
+  if (message.t !== "call") return;
+  let value;
+  switch (message.method) {
+    case "describe":
+      value = {
+        pid: process.pid,
+        cwd: process.cwd(),
+        root: process.env.PLUGIN_ROOT,
+        data: process.env.PLUGIN_DATA,
+        entry: process.env.DX_PLUGIN_ENTRY,
+        name: process.env.DX_PLUGIN_NAME,
+        tool: execFileSync("hello-tool", { encoding: "utf8" }).trim(),
+        args: message.args,
+        info: message.info,
+      };
+      break;
+    case "hostCall":
+      // Holds on through SIGTERM, so a stop takes its whole grace.
+      process.on("SIGTERM", () => undefined);
+      value = { pid: process.pid };
+      break;
+    case "callTool": {
+      const answer = await capability(message.id, "storageGet", message.args);
+      const refused = await capability(message.id, "bad.name", []);
+      const notList = await capability(message.id, "log", { not: "a list" });
+      value = { answer, refused, notList };
+      break;
+    }
+    case "runCommand":
+      process.exit(3);
+    case "paneMessage":
+      send({ t: "result", id: message.id, ok: false, error: "the plugin threw" });
+      return;
+  }
+  send({ t: "result", id: message.id, ok: true, value });
+}
+await import(process.env.DX_PLUGIN_ENTRY);
+send({ t: "ready" });
+"#;
+
+fn spawn_daemon_env(fixture: &Fixture, extra: &[(&str, &str)]) -> Child {
+    let mut command = Command::new(DXD);
+    command
+        .arg("--config")
+        .arg(&fixture.config)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("USER", "user")
+        .env(
+            "DX_WORKLOAD_IDENTITY_SOCKET",
+            fixture.state.join("workload-identity.sock"),
+        )
+        .env("DXD_TMUX", "")
+        .envs(extra.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    command.spawn().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_keeps_a_process_started_while_the_old_one_retires() {
+    // Ways it could fail: the reaper, stopping an idle process (which here
+    // takes its whole SIGTERM grace), records "stopped" over a process a
+    // call started meanwhile, and dropping that entry kills the new one;
+    // or the new one starts while the old one still holds its ports.
+    use sha2::Digest;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon_env(
+        &fixture,
+        &[("DXD_PLUGIN_IDLE_MS", "1500")],
+    ));
+    let mut socket = accept(&listener).await;
+    let _register = next_text(&mut socket).await;
+    let generation = format!("gen-{}", rand::random::<u32>());
+    send(
+        &mut socket,
+        json!({"type": "registered", "generation": generation, "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000}),
+    )
+    .await;
+    let mock = serve_storage(listener, port);
+    let package = plugin_package(&[
+        (
+            "dev.dxcode/orb/main.js",
+            "globalThis.loaded = true;\n",
+            false,
+        ),
+        ("bin/hello-tool", "#!/bin/sh\necho hello\n", false),
+    ]);
+    let digest = format!("{:x}", sha2::Sha256::digest(&package));
+    mock.lock()
+        .unwrap()
+        .objects
+        .insert("pkg".into(), package.clone());
+    let runtime_sha = format!(
+        "{:x}",
+        sha2::Sha256::digest(format!("main.mjs\0{FAKE_PLUGIN_RUNTIME}\0").as_bytes())
+    );
+    let key = "orbkey-race1";
+    let invoke = |method: &str| {
+        json!({
+            "operation": "plugin.invoke",
+            "process": {
+                "key": key,
+                "installId": "plg_0123abcd-4567-4abc-8def-0123456789ac",
+                "name": "race-orb",
+                "integrity": "sha256-abc",
+                "package": {"url": format!("http://localhost:{port}/r2/pkg"), "sha256": digest, "size": package.len()},
+                "entry": "dev.dxcode/orb/main.js",
+                "runtime": {"sha256": runtime_sha, "files": [{"path": "main.mjs", "content": FAKE_PLUGIN_RUNTIME}]},
+                "binaries": [{"name": "hello-tool", "path": "bin/hello-tool"}],
+                "ports": [],
+            },
+            "call": {"method": method, "args": [], "info": {"threadId": THREAD_ID}},
+            "timeoutMs": 20000,
+        })
+    };
+    let first = memory_request(&mut socket, &generation, "race-1", invoke("hostCall")).await;
+    assert_eq!(first["kind"], "result", "{first}");
+    let old = first["value"]["pid"].as_u64().unwrap() as u32;
+    // Idle 1.5 s and a reaper tick every 0.75 s: by 2.4 s the old process is
+    // retiring, and its stop runs about 2 s (SIGTERM is ignored).
+    tokio::time::sleep(Duration::from_millis(2400)).await;
+    let during = memory_request(&mut socket, &generation, "race-2", invoke("describe")).await;
+    assert_eq!(during["kind"], "result", "{during}");
+    let new = during["value"]["pid"].as_u64().unwrap() as u32;
+    assert_ne!(new, old, "the call came after the old process retired");
+    assert!(
+        !process_alive(old),
+        "the old process was gone before the new one started"
+    );
+    // Well after the old stop finished, the new process is still the key's.
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    let status = memory_request(
+        &mut socket,
+        &generation,
+        "race-3",
+        json!({"operation": "plugin.status", "key": key}),
+    )
+    .await;
+    assert_eq!(status["state"], "running", "{status}");
+    assert!(
+        process_alive(new),
+        "the process started during the stop survived"
+    );
+    let again = memory_request(&mut socket, &generation, "race-4", invoke("describe")).await;
+    assert_eq!(
+        again["value"]["pid"].as_u64().unwrap() as u32,
+        new,
+        "{again}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_runs_a_plugins_orb_process() {
+    use sha2::Digest;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon_env(
+        &fixture,
+        &[("DXD_PLUGIN_IDLE_MS", "1500")],
+    ));
+    let mut socket = accept(&listener).await;
+    let register = next_text(&mut socket).await;
+    assert_eq!(
+        register["capabilities"]["pluginHost"]["version"], 1,
+        "{register}"
+    );
+    let generation = format!("gen-{}", rand::random::<u32>());
+    send(
+        &mut socket,
+        json!({"type": "registered", "generation": generation, "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000}),
+    )
+    .await;
+    let mock = serve_storage(listener, port);
+    let package = plugin_package(&[
+        (
+            "dev.dxcode/orb/main.js",
+            "globalThis.loaded = true;\n",
+            false,
+        ),
+        (
+            "bin/hello-tool",
+            "#!/bin/sh\necho hello from the plugin\n",
+            false,
+        ),
+    ]);
+    let digest = format!("{:x}", sha2::Sha256::digest(&package));
+    let downloaded = b"#!/bin/sh\necho downloaded\n".to_vec();
+    let downloaded_digest = format!("{:x}", sha2::Sha256::digest(&downloaded));
+    {
+        let mut mock = mock.lock().unwrap();
+        mock.objects.insert("pkg".into(), package.clone());
+        mock.objects.insert("tool".into(), downloaded);
+    }
+    // Core's digest: each file's `path\0content\0`, in order.
+    let runtime_sha = format!(
+        "{:x}",
+        sha2::Sha256::digest(format!("main.mjs\0{FAKE_PLUGIN_RUNTIME}\0").as_bytes())
+    );
+    let install = "plg_0123abcd-4567-4abc-8def-0123456789ab";
+    let lease = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let lease_port = lease.local_addr().unwrap().port();
+    let process = |key: &str, files: bool| {
+        json!({
+            "key": key,
+            "installId": install,
+            "name": "fake-orb",
+            "integrity": "sha256-abc",
+            "package": {"url": format!("http://localhost:{port}/r2/pkg"), "sha256": digest, "size": package.len()},
+            "entry": "dev.dxcode/orb/main.js",
+            "runtime": if files {
+                json!({"sha256": runtime_sha, "files": [{"path": "main.mjs", "content": FAKE_PLUGIN_RUNTIME}]})
+            } else {
+                json!({"sha256": runtime_sha})
+            },
+            "binaries": [
+                {"name": "hello-tool", "path": "bin/hello-tool"},
+                {"name": "fetched-tool", "url": format!("http://localhost:{port}/r2/tool"), "sha256": downloaded_digest},
+            ],
+            "ports": [lease_port],
+        })
+    };
+    let invoke = |key: &str, files: bool, method: &str, args: Value| {
+        json!({
+            "operation": "plugin.invoke",
+            "process": process(key, files),
+            "call": {"method": method, "args": args, "info": {"threadId": THREAD_ID}},
+            "timeoutMs": 20000,
+        })
+    };
+    let key = "orbkey-0001";
+
+    // Without the runtime on disk, dxd asks for its files; with them it starts.
+    let missing = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-1",
+        invoke(key, false, "describe", json!([])),
+    )
+    .await;
+    assert_eq!(missing["kind"], "unavailable", "{missing}");
+    assert_eq!(missing["reason"], "runtime", "{missing}");
+    let described = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-2",
+        invoke(key, true, "describe", json!(["a", 1])),
+    )
+    .await;
+    assert_eq!(described["kind"], "result", "{described}");
+    let value = &described["value"];
+    let root = fixture
+        .home
+        .join(format!(".local/share/dx/plugins/{digest}"));
+    let data = fixture
+        .home
+        .join(format!(".local/share/dx/plugin-data/{install}"));
+    assert_eq!(value["root"], root.to_str().unwrap(), "{value}");
+    assert_eq!(value["data"], data.to_str().unwrap(), "{value}");
+    assert_eq!(
+        value["entry"],
+        root.join("dev.dxcode/orb/main.js").to_str().unwrap()
+    );
+    assert_eq!(value["name"], "fake-orb");
+    assert_eq!(
+        value["tool"], "hello from the plugin",
+        "a path binary is on PATH"
+    );
+    assert_eq!(value["args"], json!(["a", 1]));
+    assert_eq!(value["info"]["threadId"], THREAD_ID);
+    let pid = value["pid"].as_u64().unwrap();
+    let bin = fixture
+        .home
+        .join(".local/share/dx/plugin-bin/key-orbkey-0001/bin/fetched-tool");
+    assert_eq!(
+        Command::new(&bin).output().unwrap().stdout,
+        b"downloaded\n",
+        "a url binary is downloaded, checked, and linked"
+    );
+    let log =
+        std::fs::read_to_string(fixture.state.join(format!("plugins/{install}.log"))).unwrap();
+    assert!(
+        log.contains("plugin stdout stays out of the protocol"),
+        "{log}"
+    );
+
+    // A capability request goes to Core and its answer back to the call.
+    send(
+        &mut socket,
+        json!({"type": "request", "generation": generation, "requestId": "plugin-3", "operation": invoke(key, false, "callTool", json!(["counter"]))}),
+    )
+    .await;
+    let capability = wait_for(&mut socket, |value| value["type"] == "plugin.capability").await;
+    assert_eq!(capability["requestId"], "plugin-3", "{capability}");
+    assert_eq!(capability["method"], "storageGet");
+    assert_eq!(capability["args"], json!(["counter"]));
+    send(
+        &mut socket,
+        json!({"type": "plugin.capability-result", "generation": generation, "requestId": "plugin-3", "callId": capability["callId"], "ok": true, "value": {"$dxBytes": "aGk="}}),
+    )
+    .await;
+    let answered = loop {
+        let value = next_text(&mut socket).await;
+        if value["type"] == "response" && value["requestId"] == "plugin-3" {
+            break value["result"].clone();
+        }
+    };
+    assert_eq!(answered["kind"], "result", "{answered}");
+    assert_eq!(
+        answered["value"]["answer"]["value"],
+        json!({"$dxBytes": "aGk="})
+    );
+    assert_eq!(answered["value"]["answer"]["ok"], true);
+    assert_eq!(answered["value"]["refused"]["ok"], false, "{answered}");
+    // Arguments that are not a list stop at dxd, never reaching Core.
+    assert_eq!(answered["value"]["notList"]["ok"], false, "{answered}");
+    assert_eq!(
+        answered["value"]["notList"]["error"], "Capability arguments must be a list.",
+        "{answered}"
+    );
+
+    // A thrown error is the plugin's, not dx's.
+    let thrown = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-4",
+        invoke(key, false, "paneMessage", json!([])),
+    )
+    .await;
+    assert_eq!(
+        thrown,
+        json!({"kind": "error", "message": "the plugin threw"})
+    );
+
+    // A connection to a declared port keeps the process up past idle.
+    let client = std::net::TcpStream::connect(("127.0.0.1", lease_port)).unwrap();
+    let (_server_side, _) = lease.accept().unwrap();
+    tokio::time::sleep(Duration::from_millis(4000)).await;
+    let status = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-5",
+        json!({"operation": "plugin.status", "key": key}),
+    )
+    .await;
+    assert_eq!(status["state"], "running", "leased: {status}");
+    assert!(process_alive(pid as u32));
+    // Once it closes, the process stops after the idle period.
+    drop(client);
+    drop(_server_side);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let status = memory_request(
+            &mut socket,
+            &generation,
+            "plugin-6",
+            json!({"operation": "plugin.status", "key": key}),
+        )
+        .await;
+        if status["state"] == "stopped" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "idle stop: {status}");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    assert!(exits_soon(pid as u32).await, "the idle process exited");
+
+    // The next call starts it again; stopping by install stops it now.
+    let again = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-7",
+        invoke(key, false, "describe", json!([])),
+    )
+    .await;
+    let second = again["value"]["pid"].as_u64().unwrap();
+    assert_ne!(second, pid);
+    // A new version of the install (a new key) stops the old process first.
+    let upgraded = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-7b",
+        invoke("orbkey-0003", false, "describe", json!([])),
+    )
+    .await;
+    let third = upgraded["value"]["pid"].as_u64().unwrap();
+    assert!(exits_soon(second as u32).await, "the old version stopped");
+    let old = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-7c",
+        json!({"operation": "plugin.status", "key": key}),
+    )
+    .await;
+    assert_eq!(old["state"], "stopped", "{old}");
+    let stopped = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-8",
+        json!({"operation": "plugin.stop", "installId": install, "reason": "uninstalled"}),
+    )
+    .await;
+    assert_eq!(stopped, json!({"kind": "stopped", "count": 1}));
+    assert!(exits_soon(third as u32).await);
+
+    // A runtime edited on disk is never run: dxd asks Core for it again.
+    let runtime_main = fixture.home.join(format!(
+        ".local/share/dx/plugin-runtime/{runtime_sha}/main.mjs"
+    ));
+    let mut edited = std::fs::read_to_string(&runtime_main).unwrap();
+    edited.push_str("\n// edited by something else in the Orb\n");
+    std::fs::write(&runtime_main, edited).unwrap();
+    let resend = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-8b",
+        invoke(key, false, "describe", json!([])),
+    )
+    .await;
+    assert_eq!(resend["kind"], "unavailable", "{resend}");
+    assert_eq!(resend["reason"], "runtime", "{resend}");
+    let restored = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-8c",
+        invoke(key, true, "describe", json!([])),
+    )
+    .await;
+    assert_eq!(restored["kind"], "result", "{restored}");
+    assert!(
+        !std::fs::read_to_string(&runtime_main)
+            .unwrap()
+            .contains("edited by something else"),
+        "the runtime was rewritten from Core's files"
+    );
+
+    // A process that exits mid-call fails the call with its log.
+    let exited = memory_request(
+        &mut socket,
+        &generation,
+        "plugin-9",
+        invoke(key, false, "runCommand", json!([])),
+    )
+    .await;
+    assert_eq!(exited["kind"], "unavailable", "{exited}");
+    assert_eq!(exited["reason"], "exited", "{exited}");
+
+    // A binary whose download does not match its digest never links.
+    let mut tampered = invoke("orbkey-0002", false, "describe", json!([]));
+    tampered["process"]["binaries"][1]["sha256"] = json!("0".repeat(64));
+    let refused = memory_request(&mut socket, &generation, "plugin-10", tampered).await;
+    assert_eq!(refused["kind"], "unavailable", "{refused}");
+    assert_eq!(refused["reason"], "binaries", "{refused}");
+    assert!(
+        refused["message"]
+            .as_str()
+            .unwrap()
+            .contains("fetched-tool"),
+        "{refused}"
+    );
 }

@@ -81,6 +81,13 @@ export const Thread = Schema.Struct({
   /** When a snooze last ended, by its timer or the owner. */
   snoozeWokeAt: Schema.optional(Timestamp),
   color: Schema.optional(ThreadColor),
+  /**
+   * The plugin Thread type, `<plugin name>/<type id>`, whose view draws
+   * the Thread's main area. Set only when the Thread is created.
+   */
+  pluginThreadType: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(130)),
+  ),
   /** Until this time clients show a loading title while one is generated. */
   titlePendingUntil: Schema.optional(Timestamp),
   /**
@@ -131,6 +138,8 @@ export const CreateThreadInput = Schema.Struct({
   kind: Schema.optional(ThreadKind),
   executionMode: Schema.optional(ThreadExecutionMode),
   requestedByUserId: Schema.optional(UserId),
+  /** The plugin Thread type, `<plugin>/<type>`. */
+  pluginThreadType: Schema.optional(Schema.String),
 });
 
 export type CreateThreadInput = typeof CreateThreadInput.Type;

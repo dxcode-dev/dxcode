@@ -1,5 +1,4 @@
-import type * as React from "react";
-import { Fragment } from "react";
+import * as React from "react";
 import { threadIdOfHref } from "../../../shared/ui/thread-reference-context.js";
 
 /**
@@ -8,7 +7,20 @@ import { threadIdOfHref } from "../../../shared/ui/thread-reference-context.js";
  * page, never with an ordinary Thread's.
  */
 
-export type CardOf = (threadId: string) => React.ReactNode;
+/**
+ * A thread's card. `link` is its link as the message rendered it, shown
+ * instead when the thread has no card here.
+ */
+export type CardOf = (
+  threadId: string,
+  link: React.ReactNode,
+) => React.ReactNode;
+
+/** A line's link to a Thread, and the line as the message rendered it. */
+interface ThreadLine {
+  readonly threadId: string;
+  readonly link: React.ReactNode;
+}
 
 /** A syntax-tree node, as react-markdown hands it to components. */
 export interface HastNode {
@@ -48,15 +60,19 @@ const childArray = (
 
 function ThreadCards({
   card,
-  threadIds,
+  lines,
 }: {
   readonly card: CardOf;
-  readonly threadIds: ReadonlyArray<string>;
+  readonly lines: ReadonlyArray<ThreadLine>;
 }) {
+  const seen = new Set<string>();
+  const unique = lines.filter(({ threadId }) =>
+    seen.has(threadId) ? false : (seen.add(threadId), true),
+  );
   return (
     <div className="markdown-thread-cards">
-      {[...new Set(threadIds)].map((threadId) => (
-        <Fragment key={threadId}>{card(threadId)}</Fragment>
+      {unique.map(({ threadId, link }) => (
+        <React.Fragment key={threadId}>{card(threadId, link)}</React.Fragment>
       ))}
     </div>
   );
@@ -68,7 +84,7 @@ interface ParagraphBlock {
   readonly start: number;
   readonly end: number;
   /** For cards: the Threads, one per line. */
-  readonly threadIds: ReadonlyArray<string>;
+  readonly lines: ReadonlyArray<ThreadLine>;
 }
 
 /**
@@ -78,6 +94,7 @@ interface ParagraphBlock {
  */
 const paragraphBlocks = (
   nodes: ReadonlyArray<HastNode>,
+  rendered: ReadonlyArray<React.ReactNode>,
 ): ReadonlyArray<ParagraphBlock> | undefined => {
   const breaks = nodes.flatMap((child, index) =>
     child.type === "element" && child.tagName === "br" ? [index] : [],
@@ -93,15 +110,23 @@ const paragraphBlocks = (
     if (kind === "text" && nodes.slice(line.start, line.end).every(blankText))
       continue;
     const last = blocks.at(-1);
-    const threadIds = line.thread === undefined ? [] : [line.thread];
+    const lines =
+      line.thread === undefined
+        ? []
+        : [
+            {
+              threadId: line.thread,
+              link: rendered.slice(line.start, line.end),
+            },
+          ];
     if (last?.kind === kind)
       blocks[blocks.length - 1] = {
         kind,
         start: last.start,
         end: line.end,
-        threadIds: [...last.threadIds, ...threadIds],
+        lines: [...last.lines, ...lines],
       };
-    else blocks.push({ kind, start: line.start, end: line.end, threadIds });
+    else blocks.push({ kind, start: line.start, end: line.end, lines });
   }
   return blocks;
 };
@@ -122,7 +147,9 @@ export function ThreadAwareParagraph({
   const nodes = node?.children ?? [];
   const rendered = childArray(children);
   const blocks =
-    rendered.length === nodes.length ? paragraphBlocks(nodes) : undefined;
+    rendered.length === nodes.length
+      ? paragraphBlocks(nodes, rendered)
+      : undefined;
   if (blocks === undefined) return <p>{children}</p>;
   return (
     <>
@@ -130,11 +157,7 @@ export function ThreadAwareParagraph({
         block.kind === "text" ? (
           <p key={block.start}>{rendered.slice(block.start, block.end)}</p>
         ) : (
-          <ThreadCards
-            key={block.start}
-            card={card}
-            threadIds={block.threadIds}
-          />
+          <ThreadCards key={block.start} card={card} lines={block.lines} />
         ),
       )}
     </>
@@ -157,8 +180,20 @@ export function ThreadAwareList({
     (child) => child.type === "element" && child.tagName === "li",
   );
   const threads = items.map((item) => onlyThreadLink(item.children ?? []));
+  // Each rendered item's content: its link, as the message rendered it.
+  const rendered = childArray(children).flatMap((child) =>
+    React.isValidElement<{ readonly children?: React.ReactNode }>(child)
+      ? [child.props.children]
+      : [],
+  );
   return items.length > 0 && threads.every((thread) => thread !== undefined) ? (
-    <ThreadCards card={card} threadIds={threads as ReadonlyArray<string>} />
+    <ThreadCards
+      card={card}
+      lines={threads.map((threadId, index) => ({
+        threadId: threadId as string,
+        link: rendered.length === items.length ? rendered[index] : undefined,
+      }))}
+    />
   ) : (
     <Tag>{children}</Tag>
   );

@@ -96,6 +96,18 @@ export const scheduled = (
       }),
     ),
   );
+  // Plugins' Durable Objects whose install was removed or whose Thread was
+  // deleted, when the purge at that moment did not finish.
+  context.waitUntil(
+    import("./plugins/hosts/durable/objects.js")
+      .then(({ sweepDurablePurges }) => sweepDurablePurges(bindings))
+      .catch((cause) =>
+        threadDeletionLogger.error("Plugin Durable Object sweep failed.", {
+          event: "plugin_durable_purge_sweep_failed",
+          cause,
+        }),
+      ),
+  );
   // A new Thread whose request ended before its agent admitted the first
   // message must not sit silent, so its delivery retries on every tick.
   context.waitUntil(

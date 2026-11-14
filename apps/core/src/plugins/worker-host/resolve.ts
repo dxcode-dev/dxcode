@@ -2,6 +2,14 @@ import { Option } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { activeMemberSql } from "../../settings/members/membership-sql.js";
 import { pluginRunsForOwnerSql } from "../../settings/plugins/bundles/overlap.js";
+import { ensureDurableJobs } from "../hosts/durable/ensure.js";
+import { manifestIconSet } from "../icons/store.js";
+import {
+  installedPluginTier,
+  installTrustColumns,
+  installTrustFromRow,
+} from "../trust/resolve-tier.js";
+import { mapPluginsLimited } from "./concurrency.js";
 import type { PluginInstallRecord } from "./host.js";
 import {
   decodePluginCode,
@@ -29,6 +37,8 @@ export interface ResolvedCodePlugin extends PluginInstallRecord {
   readonly commands: PluginCodeDescription["commands"];
   readonly linkPatterns: PluginCodeDescription["linkPatterns"];
   readonly panes: PluginCodeDescription["panes"];
+  readonly views: PluginCodeDescription["views"];
+  readonly exports: PluginCodeDescription["exports"];
   readonly agentModes: PluginCodeDescription["agentModes"];
   readonly loadError?: string;
 }
@@ -44,6 +54,8 @@ interface InstallRow {
   readonly version: string;
   readonly integrity: string;
   readonly manifest_json: string;
+  readonly tier_cap: string | null;
+  readonly trusted_signature: number | null;
 }
 
 export const listThreadCodePluginInstalls = (
@@ -67,12 +79,25 @@ const listCodePluginInstalls = async (
   db: D1Database,
   ownerSql: string,
   key: string,
-): Promise<ReadonlyArray<PluginInstallRecord>> => {
+): Promise<ReadonlyArray<PluginInstallRecord>> =>
+  (await listCodePluginInstallsOwned(db, ownerSql, key)).installs;
+
+const listCodePluginInstallsOwned = async (
+  db: D1Database,
+  ownerSql: string,
+  key: string,
+): Promise<{
+  readonly installs: ReadonlyArray<PluginInstallRecord>;
+  readonly ownerUserId: string | undefined;
+}> => {
   const rows = await db
     .prepare(
       `WITH owner AS (${ownerSql})
-       SELECT plugin.id, plugin.scope, plugin.target_id, plugin.name,
-              version.version, version.integrity, version.manifest_json
+       SELECT (SELECT id FROM owner) AS owner_id,
+              plugin.id, plugin.scope, plugin.target_id, plugin.name,
+              version.trusted_by_user_id,
+              version.version, version.integrity, version.manifest_json,
+              ${installTrustColumns("plugin")}
          FROM trusted_plugin plugin
          JOIN trusted_plugin_version version
            ON version.plugin_id = plugin.id
@@ -86,14 +111,25 @@ const listCodePluginInstalls = async (
                  plugin.name, plugin.id`,
     )
     .bind(key)
-    .all<InstallRow>();
+    .all<
+      InstallRow & {
+        readonly owner_id: string;
+        readonly trusted_by_user_id: string | null;
+      }
+    >();
   const installs: Array<PluginInstallRecord> = [];
   const names = new Set<string>();
   for (const row of rows.results) {
     // The overlap rule already left out one of a workspace and a personal
     // copy; two workspaces installing the same plugin run the first one.
     if (names.has(row.name)) continue;
-    let manifest: { code?: unknown; displayName?: unknown };
+    let manifest: {
+      code?: unknown;
+      displayName?: unknown;
+      iconSet?: unknown;
+      icon?: unknown;
+      package?: { sha256?: unknown; size?: unknown };
+    };
     try {
       manifest = JSON.parse(row.manifest_json) as typeof manifest;
     } catch {
@@ -102,34 +138,71 @@ const listCodePluginInstalls = async (
     const code = decodePluginCode(manifest.code);
     if (Option.isNone(code)) continue;
     names.add(row.name);
+    const scope = row.scope === "workspace" ? "workspace" : "personal";
+    const iconSet = await manifestIconSet(db, manifest);
     installs.push({
+      ...(iconSet === undefined ? {} : { iconSet }),
       pluginId: row.id,
       name: row.name,
       displayName:
         typeof manifest.displayName === "string"
           ? manifest.displayName
           : row.name,
-      scope: row.scope === "workspace" ? "workspace" : "personal",
+      scope,
       targetId: row.target_id,
       version: row.version,
       integrity: row.integrity,
       code: code.value,
+      tier: installedPluginTier(
+        scope,
+        code.value.tier,
+        installTrustFromRow(row),
+      ),
+      ...(row.trusted_by_user_id === null
+        ? {}
+        : { installedByUserId: row.trusted_by_user_id }),
+      ...(typeof manifest.package?.sha256 === "string" &&
+      typeof manifest.package.size === "number"
+        ? {
+            package: {
+              sha256: manifest.package.sha256,
+              size: manifest.package.size,
+            },
+          }
+        : {}),
     });
     if (installs.length >= MAX_CODE_PLUGINS_PER_THREAD) break;
   }
-  return installs;
+  return { installs, ownerUserId: rows.results[0]?.owner_id };
 };
 
 export const resolveThreadCodePlugins = async (
   bindings: Bindings,
   db: D1Database,
   threadId: string,
-): Promise<ReadonlyArray<ResolvedCodePlugin>> =>
-  describeCodePlugins(
-    bindings,
+  /** Keeps background work alive past the response. */
+  waitUntil?: (promise: Promise<unknown>) => void,
+): Promise<ReadonlyArray<ResolvedCodePlugin>> => {
+  const { installs, ownerUserId } = await listCodePluginInstallsOwned(
     db,
-    await listThreadCodePluginInstalls(db, threadId),
+    "SELECT owner_user_id AS id FROM threads WHERE id = ?1",
+    threadId,
   );
+  // ─── Durable host ───
+  // Declared jobs start when a Thread first resolves the install: one RPC
+  // per isolate, install version, and Thread; no D1 read.
+  if (ownerUserId !== undefined) {
+    const started = ensureDurableJobs(
+      bindings,
+      db,
+      installs,
+      ownerUserId,
+      threadId,
+    );
+    if (started !== undefined) waitUntil?.(started);
+  }
+  return describeCodePlugins(bindings, db, installs);
+};
 
 /** Starts (or reuses) each install's worker and asks what its code handles. */
 export const describeCodePlugins = (
@@ -137,26 +210,28 @@ export const describeCodePlugins = (
   db: D1Database,
   installs: ReadonlyArray<PluginInstallRecord>,
 ): Promise<ReadonlyArray<ResolvedCodePlugin>> =>
-  Promise.all(
-    installs.map(async (install): Promise<ResolvedCodePlugin> => {
-      try {
-        const description = await describePlugin(bindings, db, install);
-        return { ...install, ...description };
-      } catch (error) {
-        logPluginFailure(install, "start", error);
-        return {
-          ...install,
-          events: install.code.permissions.events,
-          tools: [],
-          commands: [],
-          linkPatterns: [],
-          panes: [],
-          agentModes: [],
-          loadError:
-            error instanceof Error && error.message !== ""
-              ? error.message.slice(0, 500)
-              : "Its code did not start.",
-        };
-      }
-    }),
-  );
+  // Under the per-request Dynamic Worker limit: past it, the plugins
+  // described last failed to start and dropped out of the Thread.
+  mapPluginsLimited(installs, async (install): Promise<ResolvedCodePlugin> => {
+    try {
+      const description = await describePlugin(bindings, db, install);
+      return { ...install, ...description };
+    } catch (error) {
+      logPluginFailure(install, "start", error);
+      return {
+        ...install,
+        events: install.code.permissions.events,
+        tools: [],
+        commands: [],
+        linkPatterns: [],
+        panes: [],
+        views: [],
+        exports: [],
+        agentModes: [],
+        loadError:
+          error instanceof Error && error.message !== ""
+            ? error.message.slice(0, 500)
+            : "Its code did not start.",
+      };
+    }
+  });

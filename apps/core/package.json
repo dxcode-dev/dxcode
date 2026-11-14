@@ -1,7 +1,7 @@
 {
   "name": "@dx/core",
   "private": true,
-  "version": "0.2.117",
+  "version": "0.2.118",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -19,6 +19,7 @@
     "@better-auth/utils": "0.4.2",
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
+    "@dxcode/plugin-ui": "workspace:^",
     "@effect/sql-d1": "4.0.5",
     "@flue/runtime": "file:../../third-party/flue/runtime-9c62bf75871e708c02146d02923e62c5d2761f8d.tgz",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",

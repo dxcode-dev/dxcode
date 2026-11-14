@@ -45,6 +45,7 @@ export interface InitialThreadCreationAttempt {
   readonly effort?: ThinkingLevel;
   readonly claudeConnectionId?: string;
   readonly pluginAgentMode?: string;
+  readonly pluginThreadType?: string;
   readonly runnerProfileId?: RunnerProfileId;
   readonly visibility?: ThreadVisibility;
   readonly body: string;

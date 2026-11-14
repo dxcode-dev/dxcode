@@ -79,7 +79,12 @@ export * from "./settings/personal-security.js";
 export * from "./settings/personal-usage.js";
 export * from "./settings/plugin-bundles.js";
 export * from "./settings/plugin-catalogs.js";
+export * from "./settings/plugin-host-usage.js";
+export * from "./settings/plugin-icons.js";
+export * from "./settings/plugin-jobs.js";
 export * from "./settings/plugin-triggers.js";
+// Plugin views.
+export * from "./settings/plugin-views.js";
 export * from "./settings/project-defaults.js";
 export * from "./settings/signing-keys.js";
 export * from "./settings/skills.js";

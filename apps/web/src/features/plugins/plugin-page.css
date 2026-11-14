@@ -1,0 +1,50 @@
+/* A plugin's full page; its frame fills the page below the top bar. */
+.standard-page-content.plugin-page-content {
+  display: flex;
+  padding: 0;
+  overflow: hidden;
+}
+.plugin-page-view {
+  flex: 1;
+  min-width: 0;
+}
+.plugin-page-view > .markdown-view-frame,
+.plugin-page-view .plugin-pane-slot {
+  flex: 1;
+  min-height: 0;
+}
+.plugin-page-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-page-title > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted-foreground);
+}
+.plugin-page-title > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-page-title > small {
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.plugin-page-empty {
+  margin: auto;
+}
+.plugin-page-empty > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--muted-foreground);
+}
+@media (max-width: 640px) {
+  .plugin-page-title > small {
+    display: none;
+  }
+}

@@ -1,5 +1,5 @@
-import type { TestSpecification, Vitest } from "vitest/node";
 import { describe, expect, it } from "vitest";
+import type { TestSpecification, Vitest } from "vitest/node";
 import { WeightedShardSequencer } from "./test-shard-sequencer.js";
 
 const root = "/repo";

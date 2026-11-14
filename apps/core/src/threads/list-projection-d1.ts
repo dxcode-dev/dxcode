@@ -84,6 +84,9 @@ export const threadListItem = (
   pinnedAt: thread.pinnedAt,
   ...threadSnoozeData(thread),
   ...(thread.color === undefined ? {} : { color: thread.color }),
+  ...(thread.pluginThreadType === undefined
+    ? {}
+    : { pluginThreadType: thread.pluginThreadType }),
   ...(isThreadTitlePending(thread) ? { titlePending: true } : {}),
   agentUrl: threadAgentUrl(thread.id),
   ...(thread.parentThreadId === undefined
@@ -245,7 +248,7 @@ export const readThreadListItem = async (
       `SELECT thread.id, thread.title, thread.project_id, thread.owner_user_id,
               thread.agent_instructions, thread.agent_instructions_revision,
               thread.agent_instructions_version, thread.model_selection,
-              thread.runner_profile_id, thread.title_pending_until, thread.color,
+              thread.runner_profile_id, thread.title_pending_until, thread.color, thread.plugin_thread_type,
               thread.parent_thread_id, thread.started_by_thread_id, thread.kind,
               thread.plugin_snapshot_json, thread.skill_snapshot_json,
               thread.visibility, thread.created_at, thread.updated_at,

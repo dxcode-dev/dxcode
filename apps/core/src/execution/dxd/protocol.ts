@@ -145,6 +145,12 @@ export const DxdTerminalCapability = Schema.Struct({
    * `desktop.focus`. Without it a daemon drops its connection on them.
    */
   desktop: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may send `plugin.invoke`, `plugin.status`, and
+   * `plugin.stop` (the Orb plugin host), and the daemon relays the
+   * process’s capability calls as `plugin.capability`.
+   */
+  pluginHost: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -1161,6 +1167,141 @@ export const DxdMcpResult = Schema.Union([
 ]);
 export type DxdMcpResult = typeof DxdMcpResult.Type;
 
+// ─── The Orb host ───
+/** A call may run this long once its process is ready. */
+export const DXD_PLUGIN_MAX_CALL_TIMEOUT_MS = 300_000;
+/** Installing binaries and starting the process may take this long. */
+export const DXD_PLUGIN_START_TIMEOUT_MS = 300_000;
+/** Capability frames each way. */
+export const DXD_MAX_PLUGIN_CAPABILITY_FRAME_BYTES = 1024 * 1024;
+
+const PluginInstallId = Schema.String.check(
+  Schema.isPattern(/^plg_[A-Za-z0-9_-]{1,64}$/),
+);
+
+/**
+ * One call into an install’s Orb process, which dxd starts (installing its
+ * binaries first) when `key` has none running. `runtime.files` is sent only
+ * after dxd answers `unavailable`/`runtime`.
+ */
+export const DxdPluginInvokeOperation = Schema.Struct({
+  operation: Schema.Literal("plugin.invoke"),
+  process: Schema.Struct({
+    key: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{8,128}$/)),
+    installId: PluginInstallId,
+    name: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,128}$/)),
+    integrity: Schema.String.check(Schema.isMaxLength(256)),
+    package: Schema.Struct({
+      url: Schema.String.check(
+        Schema.isMinLength(1),
+        Schema.isMaxLength(8_192),
+      ),
+      sha256: Hex64,
+      size: DxdBytes,
+    }),
+    entry: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+    runtime: Schema.Struct({
+      sha256: Hex64,
+      files: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            path: Schema.String.check(
+              Schema.isMinLength(1),
+              Schema.isMaxLength(128),
+            ),
+            content: Schema.String,
+          }),
+        ).check(Schema.isMaxLength(8)),
+      ),
+    }),
+    binaries: Schema.Array(
+      Schema.Struct({
+        name: Schema.String,
+        apt: Schema.optional(Schema.String),
+        url: Schema.optional(Schema.String),
+        sha256: Schema.optional(Schema.String),
+        path: Schema.optional(Schema.String),
+      }),
+    ).check(Schema.isMaxLength(16)),
+    ports: Schema.Array(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+    ).check(Schema.isMaxLength(8)),
+  }),
+  call: Schema.Struct({
+    method: Schema.Literals([
+      "describe",
+      "dispatch",
+      "callTool",
+      "runCommand",
+      "paneMessage",
+      "hostCall",
+    ]),
+    args: Schema.Array(Schema.Unknown),
+    info: Schema.Unknown,
+  }),
+  timeoutMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: DXD_PLUGIN_MAX_CALL_TIMEOUT_MS }),
+  ),
+});
+export type DxdPluginInvokeOperation = typeof DxdPluginInvokeOperation.Type;
+
+export const DxdPluginStatusOperation = Schema.Struct({
+  operation: Schema.Literal("plugin.status"),
+  key: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{8,128}$/)),
+});
+
+export const DxdPluginStopOperation = Schema.Struct({
+  operation: Schema.Literal("plugin.stop"),
+  key: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{8,128}$/)),
+  ),
+  installId: Schema.optional(PluginInstallId),
+  reason: Schema.Literals(["archived", "uninstalled", "idle", "limit"]),
+});
+
+export const DxdPluginResult = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("result"), value: Schema.Unknown }),
+  Schema.Struct({
+    kind: Schema.Literal("error"),
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals([
+      "runtime",
+      "package",
+      "binaries",
+      "start",
+      "timeout",
+      "busy",
+      "too-large",
+      "exited",
+      "invalid",
+    ]),
+    message: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("status"),
+    state: Schema.Literals(["cold", "starting", "running", "stopped"]),
+    since: Schema.Number,
+  }),
+  Schema.Struct({ kind: Schema.Literal("stopped"), count: Schema.Int }),
+]);
+export type DxdPluginResult = typeof DxdPluginResult.Type;
+
+/** dxd asks for one capability on behalf of the call `requestId`. */
+export const DxdPluginCapabilityMessage = Schema.Struct({
+  type: Schema.Literal("plugin.capability"),
+  generation: DaemonGeneration,
+  requestId: DxdRequestId,
+  callId: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: 2 ** 32 - 1 }),
+  ),
+  method: Schema.String.check(Schema.isPattern(/^[A-Za-z][A-Za-z0-9]{0,63}$/)),
+  args: Schema.Array(Schema.Unknown),
+});
+export type DxdPluginCapabilityMessage = typeof DxdPluginCapabilityMessage.Type;
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
@@ -1178,6 +1319,9 @@ export const DxdOperation = Schema.Union([
   DxdStorageExportOperation,
   DxdStorageImportOperation,
   DxdMcpRequestOperation,
+  DxdPluginInvokeOperation,
+  DxdPluginStatusOperation,
+  DxdPluginStopOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 

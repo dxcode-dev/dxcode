@@ -20,10 +20,11 @@ use crate::files_sandbox::{self, SandboxReadResult};
 use crate::mcp::{McpPaths, McpServers};
 use crate::memory::{self, Memory};
 use crate::observer::Observer;
+use crate::plugin_host::{CapabilityLane, PluginHosts, PluginPaths};
 use crate::protocol::{
     Capabilities, ClientMessage, DiskOperation, EnvironmentOperation, McpOperation,
-    MemoryOperation, OperationResult, PortalOperation, PortalResult, RequestOperation,
-    ServerMessage, StorageOperation, UpdateStatus, WorkloadIdentityResult,
+    MemoryOperation, OperationResult, PluginOperation, PortalOperation, PortalResult,
+    RequestOperation, ServerMessage, StorageOperation, UpdateStatus, WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
 use crate::services::{ServicePaths, Services};
@@ -164,6 +165,8 @@ pub struct Daemon {
     disk: Disk,
     /// Plugins' local MCP servers; they outlive a session.
     mcp: McpServers,
+    /// Plugin processes (the Orb host); they outlive a session.
+    plugins: PluginHosts,
     /// The Desktop whose windows the viewer's app row lists. A local runtime
     /// has none unless `DXD_DESKTOP` names one (tests).
     desktop_paths: Option<desktop::DesktopPaths>,
@@ -214,6 +217,18 @@ impl Daemon {
                 log_directory: PathBuf::from(crate::STATE_DIR).join("mcp"),
             },
         });
+        let plugins = PluginHosts::new(match &config.local_runtime {
+            Some(local) => PluginPaths {
+                home: PathBuf::from(&local.home_directory),
+                user: std::env::var("USER").unwrap_or_else(|_| "user".into()),
+                log_directory: PathBuf::from(&local.state_directory).join("plugins"),
+            },
+            None => PluginPaths {
+                home: PathBuf::from(crate::GUEST_HOME),
+                user: "user".into(),
+                log_directory: PathBuf::from(crate::STATE_DIR).join("plugins"),
+            },
+        });
         let desktop_paths = match &config.local_runtime {
             None => Some(desktop::DesktopPaths::default()),
             Some(local) => std::env::var_os("DXD_DESKTOP")
@@ -250,6 +265,7 @@ impl Daemon {
             memory,
             disk,
             mcp,
+            plugins,
             desktop_paths,
         })
     }
@@ -1086,6 +1102,69 @@ impl Daemon {
                             }
                         });
                     }
+                    RequestOperation::Plugin(operation) => {
+                        // A call may wait minutes on the plugin; it waits as
+                        // a task, holding a blocking thread only to start.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let plugins = self.plugins.clone();
+                        tokio::spawn(async move {
+                            let result = match operation {
+                                PluginOperation::Invoke {
+                                    process,
+                                    call,
+                                    timeout_ms,
+                                } => {
+                                    let lane = CapabilityLane {
+                                        sender: sender.clone(),
+                                        generation: generation.clone(),
+                                        request_id: request_id.clone(),
+                                    };
+                                    plugins.invoke(*process, call, timeout_ms, lane).await
+                                }
+                                PluginOperation::Status { key } => plugins.status(&key),
+                                PluginOperation::Stop {
+                                    key,
+                                    install_id,
+                                    reason,
+                                } => tokio::task::spawn_blocking(move || {
+                                    let stopped =
+                                        plugins.stop(key.as_deref(), install_id.as_deref());
+                                    if let crate::plugin_host::PluginResult::Stopped { count } =
+                                        &stopped
+                                    {
+                                        eprintln!(
+                                            "dxd plugin host: stopped {count} process(es) ({})",
+                                            reason.chars().take(32).collect::<String>()
+                                        );
+                                    }
+                                    stopped
+                                })
+                                .await
+                                .unwrap_or(crate::plugin_host::PluginResult::Stopped { count: 0 }),
+                            };
+                            let encode = |result| {
+                                serde_json::to_string(&ClientMessage::Response {
+                                    generation: &generation,
+                                    request_id: &request_id,
+                                    result: OperationResult::Plugin(result),
+                                })
+                            };
+                            let text = encode(result)
+                                .ok()
+                                .filter(|text| text.len() <= crate::mcp::MAX_RESPONSE_FRAME_BYTES)
+                                .or_else(|| {
+                                    encode(crate::plugin_host::unavailable(
+                                        "too-large",
+                                        "The plugin's answer is too large for dx to relay.",
+                                    ))
+                                    .ok()
+                                });
+                            if let Some(text) = text {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
                     RequestOperation::Mcp(McpOperation::Request {
                         server,
                         method,
@@ -1185,6 +1264,17 @@ impl Daemon {
                         }
                     }
                 }
+            }
+            ServerMessage::PluginCapabilityResult {
+                generation: seen,
+                request_id,
+                call_id,
+                ok,
+                value,
+                error,
+            } if seen == generation => {
+                self.plugins
+                    .answer(&request_id, call_id, ok, value, error.unwrap_or_default());
             }
             ServerMessage::WorkloadIdentityResponse {
                 generation: seen,
@@ -1808,6 +1898,9 @@ pub fn decode_server(text: &str) -> Result<ServerMessage, SessionExit> {
         } => MAX_ENVIRONMENT_REQUEST_FRAME_BYTES,
         ServerMessage::Request { .. } | ServerMessage::ProxyOpen(_) => MAX_REQUEST_FRAME_BYTES,
         ServerMessage::WorkloadIdentityResponse { .. } => MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
+        ServerMessage::PluginCapabilityResult { .. } => {
+            crate::plugin_host::MAX_CAPABILITY_FRAME_BYTES
+        }
         _ => MAX_CONTROL_FRAME_BYTES,
     };
     if text.len() > bound {

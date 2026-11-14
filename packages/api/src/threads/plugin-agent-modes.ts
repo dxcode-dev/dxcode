@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { PluginIconSetSchema } from "../settings/plugin-icons.js";
 
 /**
  * An agent mode an installed plugin offers its person
@@ -13,6 +14,8 @@ export const PluginAgentModeDataSchema = Schema.Struct({
   color: Schema.optional(Schema.String),
   /** The plugin's display name. */
   plugin: Schema.String,
+  /** The plugin's icon. */
+  icon: Schema.optional(PluginIconSetSchema),
   /** The model the agent chose; absent when it runs on the picked mode. */
   model: Schema.optional(Schema.String),
   reasoningEffort: Schema.optional(Schema.String),

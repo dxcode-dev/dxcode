@@ -25,6 +25,15 @@ export interface Bindings {
   readonly DX_E2B_TEMPLATE?: string;
   readonly DX_E2B_TIMEOUT_MS?: string;
   readonly DX_WORKSPACE_INACTIVITY_MS?: string;
+  /**
+   * Plugin trust tier limit overrides, JSON keyed by tier
+   * (`PluginTierLimitsConfig`); unset keeps the plan §4.6 defaults.
+   */
+  readonly DX_PLUGIN_TIER_LIMITS?: string;
+  /** A lower daily container cap per plugin install; previews set it. */
+  readonly DX_PLUGIN_CONTAINER_DAILY_MS?: string;
+  /** A lower daily container-time cap per workspace; previews set it. */
+  readonly DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS?: string;
   /** Shortens the 60 s check of sockets' browser sessions in tests. */
   readonly DX_SESSION_SOCKET_CHECK_MS?: string;
   readonly DX_DXD_PUBLIC_URL?: string;
@@ -174,9 +183,28 @@ export interface Bindings {
   readonly THREAD_EXECUTOR?: DurableObjectNamespace<
     import("../executor/executor-object.js").ThreadExecutorObject
   >;
+  /**
+   * The Orb Worker's plugin container namespace: one container per plugin
+   * install with a `container` host (plugins/hosts/container).
+   */
+  readonly PLUGIN_CONTAINER?: DurableObjectNamespace<
+    import("../plugins/hosts/container/object.js").PluginContainerObject
+  >;
+  /** One relay per Thread, plugin, and pane: `ctx.ui.stream`. */
+  readonly PLUGIN_STREAM_RELAY?: DurableObjectNamespace<
+    import("../plugins/streams/relay.js").PluginStreamRelay
+  >;
   readonly AI?: Ai;
   /** Starts the Dynamic Workers plugin code runs in (plugins/worker-host). */
   readonly LOADER?: WorkerLoader;
+  /**
+   * Plugins' Durable Object host: one object per install,
+   * or per install and Thread, holding its SQLite, blob index, jobs, alarms,
+   * and watches. Absent on stages deployed before it; the host is then off.
+   */
+  readonly PLUGIN_DURABLE_HOST?: DurableObjectNamespace<
+    import("../plugins/hosts/durable/object.js").PluginDurableHostObject
+  >;
   /**
    * `quickjs` runs plugin code in QuickJS inside this Worker when there is
    * no `LOADER` (plugins/worker-host/quickjs-host.ts); an operator's choice.
@@ -221,6 +249,8 @@ export interface Variables {
   readonly threadSnoozed?: boolean;
   /** Set by Thread authorization: whether the Thread is a Space. */
   readonly threadKind?: "thread" | "space";
+  /** The Thread's plugin type, `<plugin>/<type>`, when it has one. */
+  readonly threadPluginType?: string;
   /** The authorized Thread is a standalone artifact's hidden home. */
   readonly threadArtifactHome?: boolean;
   /** The Thread POST is a chat message: Flue records it without a model call. */

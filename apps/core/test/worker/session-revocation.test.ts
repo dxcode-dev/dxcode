@@ -36,13 +36,13 @@ class Browser {
     return [...this.#cookies.keys()];
   }
 
-  async request(path: string, init: RequestInit = {}) {
+  async request(path: string, init: RequestInit = {}, using = bindings) {
     const headers = new Headers(init.headers);
     headers.set("origin", origin);
     headers.set("user-agent", this.userAgent);
     headers.set("cf-connecting-ip", this.#ipAddress);
     if (this.#cookies.size > 0) headers.set("cookie", this.cookie);
-    const response = await app.request(path, { ...init, headers }, bindings);
+    const response = await app.request(path, { ...init, headers }, using);
     for (const line of response.headers.getSetCookie()) {
       const [pair = "", ...attributes] = line.split(";");
       const separator = pair.indexOf("=");
@@ -281,5 +281,51 @@ describe("ending a browser session with the cookie cache warm", () => {
     expect(results.map((row) => row.session_id)).toEqual([
       "retention-still-protecting",
     ]);
+  });
+
+  it("never makes a sign-in check wait on another request's revocation read", async () => {
+    // Workers cannot hand one request's I/O to another: once the request
+    // that started a read is gone, the read never settles for anyone else.
+    // Here that request's read of the revocation records does not settle
+    // until the test is done.
+    let release = () => {};
+    const browser = new Browser("Chrome on laptop");
+    await browser.signUp("stuck-read@example.com");
+    await expectLive(browser);
+    const stuck: Bindings = {
+      ...bindings,
+      DB: new Proxy(env.DB, {
+        get(target, property) {
+          if (property !== "prepare") return Reflect.get(target, property);
+          return (query: string) => {
+            const statement = target.prepare(query);
+            if (!query.includes("FROM session_revocation")) return statement;
+            return {
+              bind: () => ({
+                all: () =>
+                  new Promise((resolve) => {
+                    release = () => resolve({ results: [] });
+                  }),
+              }),
+            };
+          };
+        },
+      }),
+    };
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+    vi.advanceTimersByTime(sessionRevocationWindowMs);
+    void browser.request("/v1/projects", {}, stuck);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // The next request reads for itself, at once, and is let in.
+    const next = browser.request("/v1/projects");
+    const outcome = await Promise.race([
+      next.then((response) => response.status),
+      new Promise<"waited">((resolve) =>
+        setTimeout(() => resolve("waited"), 1_000),
+      ),
+    ]);
+    release();
+    expect(outcome).toBe(200);
   });
 });

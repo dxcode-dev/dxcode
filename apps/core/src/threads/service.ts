@@ -83,6 +83,8 @@ interface ThreadServiceShape {
       readonly kind?: ThreadKind;
       readonly executionMode?: ThreadExecutionMode;
       readonly requestedByUserId?: UserId;
+      /** The plugin Thread type, checked by the route. */
+      readonly pluginThreadType?: string;
     },
   ) => Effect.Effect<
     PreparedThread,
@@ -253,6 +255,9 @@ export class ThreadService extends Context.Service<
               ...(creation?.requestedByUserId === undefined
                 ? {}
                 : { requestedByUserId: creation.requestedByUserId }),
+              ...(creation?.pluginThreadType === undefined
+                ? {}
+                : { pluginThreadType: creation.pluginThreadType }),
               ...(parentThread === undefined
                 ? {}
                 : {

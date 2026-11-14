@@ -46,7 +46,13 @@ import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
 import { confirmMissesAtPrimary, d1Session } from "./persistence/d1-session.js";
 import { pluginAgentRoutes } from "./plugins/agents/routes.js";
 import { mcpAppViewRoutes } from "./plugins/code/mcp-apps-route.js";
+import { pluginIconRoutes } from "./plugins/icons/routes.js";
+import {
+  pluginStreamProducerRoutes,
+  pluginStreamViewerRoutes,
+} from "./plugins/streams/lazy-routes.js";
 import { pluginThreadUiRoutes } from "./plugins/thread-ui/routes.js";
+import { pluginViewRoutes } from "./plugins/views/routes.js";
 import { portalAuthRoutes } from "./portals/auth-routes.js";
 import { portalHostRouting } from "./portals/host-routing.js";
 import { threadPortalRoutes } from "./portals/routes.js";
@@ -131,8 +137,12 @@ app.route("/v1/integrations/github", githubWebhookRoutes);
 // signed-in routes below.
 app.route("/v1/deployment", registeredDeploymentHookRoutes);
 app.route("/v1", threadDaemonRoutes);
+// Plugin icons by the hash of their bytes; see plugins/icons/routes.ts.
+app.route("/v1/plugins/icons", pluginIconRoutes);
 // Navigated to, not fetched: it redirects to sign-in instead of answering 401.
 app.route("/v1/portal-auth", portalAuthRoutes);
+// A plugin stream's producer, by its signed URL, no session.
+app.route("/v1/plugin-streams", pluginStreamProducerRoutes);
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 // The Artifacts library: every artifact the person may open.
@@ -154,6 +164,8 @@ app.route("/v1/notifications", notificationRoutes);
 app.route("/v1/integrations/bitbucket", bitbucketControlPlaneRoutes);
 app.route("/v1/integrations/github", githubControlPlaneRoutes);
 app.route("/v1/plugin-agents", pluginAgentRoutes);
+// Plugin pages and the caller's views catalog.
+app.route("/v1/plugins/views", pluginViewRoutes);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/projects", projectRepositoryBrowseRoutes);
 app.route("/v1/realtime", realtimeRoutes);
@@ -237,6 +249,8 @@ app.route(
 app.use("/v1/threads/:threadId/plugin-ui", authorizeThread);
 app.use("/v1/threads/:threadId/plugin-ui/*", authorizeThread);
 app.route("/v1/threads", pluginThreadUiRoutes);
+// A pane's stream viewer and ICE servers, under /plugin-ui.
+app.route("/v1/threads", pluginStreamViewerRoutes);
 // A Thread's huddle, a Space's included, and its link: shared Threads only.
 app.use("/v1/threads/:threadId/huddle", authorizeThread);
 app.use("/v1/threads/:threadId/huddle/*", authorizeThread);

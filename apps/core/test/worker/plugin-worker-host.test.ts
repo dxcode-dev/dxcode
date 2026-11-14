@@ -824,9 +824,12 @@ describe("plugin code on the QuickJS fallback (no Dynamic Worker loader)", () =>
     await install({ scope: "personal", id: userId } as PluginTarget, userId, [
       {
         name: "plugin.json",
+        // Sandboxed asks for today's 60 s per call; a personal install
+        // would otherwise run personal-dev, with 5 minutes.
         content: manifest("com.acme.timers", {
           apiVersion: 1,
           entry: "dev.dxcode/index.js",
+          tier: "sandboxed",
         }),
       },
       {

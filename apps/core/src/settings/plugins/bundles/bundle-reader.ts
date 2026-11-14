@@ -23,7 +23,11 @@ import {
 } from "../../skills/import.js";
 import type { PluginCodeModule, ReadPluginCode } from "./dx-extension.js";
 import { PluginBundleRejected } from "./errors.js";
-import { readPluginIcon } from "./plugin-icon.js";
+import {
+  type PluginIconFile,
+  readPluginIcon,
+  readPluginIconSet,
+} from "./plugin-icon.js";
 import type { ZipArchive, ZipBytes, ZipEntry, ZipText } from "./zip.js";
 
 /**
@@ -41,6 +45,8 @@ export interface ParsedBundle {
   readonly version: PluginVersion;
   /** The plugin's files for the Orb, when a local MCP server needs them. */
   readonly packageBytes?: Uint8Array;
+  /** Icon files to store in `plugin_icon` by hash. */
+  readonly iconFiles?: ReadonlyArray<PluginIconFile>;
 }
 
 const encoder = new TextEncoder();
@@ -69,6 +75,24 @@ export const reject = (reason: string) =>
 
 export const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+/** The note for a manifest field dx does not read. */
+export const NOT_A_DX_FIELD = "Not a dx field; ignored.";
+
+/**
+ * Notes every key of `raw` outside `known` as skipped under `label`, so a
+ * typo inside an entry is reported instead of acting as the default.
+ */
+export const skipUnknownFields = (
+  skip: (path: string, reason: string) => void,
+  raw: unknown,
+  known: ReadonlyArray<string>,
+  label: string,
+) => {
+  if (!isRecord(raw)) return;
+  for (const key of Object.keys(raw))
+    if (!known.includes(key)) skip(`${label}.${key}`, NOT_A_DX_FIELD);
+};
 
 export const truncate = (value: string, maximum: number) =>
   value.length <= maximum ? value : `${value.slice(0, maximum - 1)}…`;
@@ -422,6 +446,8 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
     readonly skills: ReadonlyArray<SkillPreview>;
     readonly mcpServers: ReadonlyArray<PluginBundleMcpServer>;
     readonly code?: ReadPluginCode | undefined;
+    /** `extensions["dev.dxcode"].icon` as written, when there is one. */
+    readonly iconBlock?: unknown;
     /** The plugin's files, kept when a local MCP server runs from them. */
     readonly package?: {
       readonly bytes: Uint8Array;
@@ -442,6 +468,8 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
   }
 
   const icon = yield* readPluginIcon(folder);
+  const iconSet = yield* readPluginIconSet(folder, input.iconBlock, icon);
+  const iconFiles = [...iconSet.files, ...(input.code?.iconFiles ?? [])];
   const byName = <A extends { readonly name: string }>(
     values: ReadonlyArray<A>,
   ) => [...values].sort((left, right) => left.name.localeCompare(right.name));
@@ -453,6 +481,13 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
           apiVersion: input.code.apiVersion,
           host: input.code.host,
           entry: input.code.entry,
+          ...(input.code.hosts === undefined
+            ? {}
+            : { hosts: input.code.hosts }),
+          ...(input.code.durableScope === undefined
+            ? {}
+            : { durableScope: input.code.durableScope }),
+          ...(input.code.jobs === undefined ? {} : { jobs: input.code.jobs }),
           modules: yield* Effect.promise(() =>
             Promise.all(
               (input.code?.modules ?? []).map(async ({ path, content }) => ({
@@ -467,6 +502,29 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
           ...(input.code.agentModes === undefined
             ? {}
             : { agentModes: input.code.agentModes }),
+          ...(input.code.tier === undefined ? {} : { tier: input.code.tier }),
+          ...(input.code.binaries === undefined
+            ? {}
+            : { binaries: input.code.binaries }),
+          ...(input.code.archivedThreads === undefined
+            ? {}
+            : { archivedThreads: input.code.archivedThreads }),
+          ...(input.code.panes === undefined
+            ? {}
+            : { panes: input.code.panes }),
+          ...(input.code.iconAssets === undefined
+            ? {}
+            : { iconAssets: input.code.iconAssets }),
+          ...(input.code.views === undefined
+            ? {}
+            : { views: input.code.views }),
+          ...(input.code.exports === undefined
+            ? {}
+            : { exports: input.code.exports }),
+          // Panes[].connect.
+          ...(input.code.paneConnect === undefined
+            ? {}
+            : { paneConnect: input.code.paneConnect }),
         };
   const bundleManifest = yield* Schema.decodeUnknownEffect(
     PluginBundleManifest,
@@ -488,6 +546,7 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
     ...(code === undefined ? {} : { code }),
     skipped: folder.skipped,
     ...(icon === undefined ? {} : { icon }),
+    ...(iconSet.set === undefined ? {} : { iconSet: iconSet.set }),
     ...(input.package === undefined ? {} : { package: input.package.summary }),
   }).pipe(
     Effect.mapError(
@@ -525,5 +584,6 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
     ...(input.package === undefined
       ? {}
       : { packageBytes: input.package.bytes }),
+    ...(iconFiles.length === 0 ? {} : { iconFiles }),
   } satisfies ParsedBundle;
 });

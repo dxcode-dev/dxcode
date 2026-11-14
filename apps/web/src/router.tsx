@@ -116,6 +116,11 @@ const page = {
     () => import("./features/threads/bug-reports/all-bug-reports-page.js"),
     "AllBugReportRoute",
   ),
+  // A plugin's full page, outside any Thread.
+  pluginPage: lazyRouteComponent(
+    () => import("./features/plugins/plugin-page.js"),
+    "PluginPageFromUrl",
+  ),
   joinWorkspace: lazyRouteComponent(
     () => import("./features/settings/members/join-workspace-page.js"),
     "JoinWorkspacePage",
@@ -271,6 +276,13 @@ const projectRoute = createRoute({
   ...projectRouteStates,
 });
 
+// `/plugins/<name>/<id>` and any sub-path under it.
+const pluginPageRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/plugins/$name/$id/$",
+  component: page.pluginPage,
+});
+
 const artifactLibraryRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/artifacts",
@@ -344,6 +356,9 @@ const newThreadRoute = createRoute({
     project: Option.getOrUndefined(
       Schema.decodeUnknownOption(ProjectId)(search.project),
     ),
+    // Start as a plugin Thread type, `<plugin>/<type>`.
+    // The server checks it when the Thread is created.
+    ...(typeof search.type === "string" ? { type: search.type } : {}),
   }),
   loader: ({ context }) =>
     context.queryClient.prefetchQuery(
@@ -704,6 +719,7 @@ const routeTree = rootRoute.addChildren([
     bugReportRoute,
     allBugReportsRoute,
     allBugReportRoute,
+    pluginPageRoute,
   ]),
   personalSettingsRoute,
   personalAdvancedSettingsRedirectRoute,

@@ -8,6 +8,7 @@ import {
   Timestamp,
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
+import { pluginIconStatements } from "../../../plugins/icons/store.js";
 import { workspaceCopiesFor } from "./overlap.js";
 
 const BundleRow = Schema.Struct({
@@ -116,8 +117,12 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
       insert: Effect.fn("PluginBundleRepository.insert")(function* (
         bundle,
         codeModules = [],
+        iconFiles = [],
       ) {
-        const files = yield* codeFileStatements(db, bundle, codeModules);
+        const files = [
+          ...(yield* codeFileStatements(db, bundle, codeModules)),
+          ...pluginIconStatements(db, iconFiles),
+        ];
         yield* Effect.tryPromise({
           try: () =>
             db.batch([
@@ -172,8 +177,11 @@ export const PluginBundleRepositoryD1 = (db: D1Database) =>
         });
       }),
       insertVersion: Effect.fn("PluginBundleRepository.insertVersion")(
-        function* (bundle, codeModules = []) {
-          const files = yield* codeFileStatements(db, bundle, codeModules);
+        function* (bundle, codeModules = [], iconFiles = []) {
+          const files = [
+            ...(yield* codeFileStatements(db, bundle, codeModules)),
+            ...pluginIconStatements(db, iconFiles),
+          ];
           const results = yield* Effect.tryPromise({
             try: () =>
               db.batch([

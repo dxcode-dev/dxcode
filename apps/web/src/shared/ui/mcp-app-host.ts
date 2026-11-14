@@ -1,4 +1,7 @@
-import { VIEW_MAX_HEIGHT } from "@dx/api/views/view-frame.mjs";
+import {
+  pluginStyleVariables,
+  VIEW_MAX_HEIGHT,
+} from "@dx/api/views/view-frame.mjs";
 
 /**
  * The host side of MCP Apps (the `io.modelcontextprotocol/ui` extension,
@@ -7,7 +10,8 @@ import { VIEW_MAX_HEIGHT } from "@dx/api/views/view-frame.mjs";
  *
  * dx shows the card inline and grants it nothing beyond that: it answers
  * `ui/initialize`, hands over the tool's input and result once the view is
- * initialized, keeps its theme current, and opens a link only after the
+ * initialized, keeps its theme current (light or dark, and dx's tokens as
+ * `styles.variables` for the palette), and opens a link only after the
  * person confirms. Every other request, such as `tools/call` or
  * `ui/message`, is refused as not supported, so a view cannot act for the
  * person or the model.
@@ -27,6 +31,15 @@ export interface PluginPaneHostOptions {
   readonly onReady: () => void;
   /** Sends a `dx/plugin.post` message; absent for view-only people. */
   readonly onPost?: (message: unknown) => Promise<unknown>;
+  /**
+   * A trusted pane's `window.dx` messages (`dx/stream.*`, `dx/rtc.*`,
+   * `dx/portal.*`); true when handled, and the handler answers requests.
+   */
+  readonly onExtension?: (
+    method: string,
+    params: Message | undefined,
+    id: JsonRpcId | undefined,
+  ) => boolean;
 }
 
 export interface McpAppHostOptions {
@@ -36,6 +49,8 @@ export interface McpAppHostOptions {
   readonly toolResult: unknown;
   readonly pane?: PluginPaneHostOptions;
   readonly theme: "light" | "dark";
+  /** dx's palette, whose tokens the view gets as `styles.variables`. */
+  readonly palette: string;
   /** Sends one JSON-RPC message to the view. */
   readonly send: (message: Message) => void;
   readonly onOpenLink: (url: string) => void;
@@ -44,7 +59,7 @@ export interface McpAppHostOptions {
 
 export interface McpAppHost {
   readonly receive: (message: unknown) => void;
-  readonly setTheme: (theme: "light" | "dark") => void;
+  readonly setTheme: (theme: "light" | "dark", palette: string) => void;
   /** Whether the view finished `ui/initialize`. */
   readonly ready: () => boolean;
   /** Sends a notification to an initialized view. */
@@ -64,6 +79,10 @@ const requestId = (value: unknown): JsonRpcId | undefined =>
 
 export const createMcpAppHost = (options: McpAppHostOptions): McpAppHost => {
   let theme = options.theme;
+  let palette = options.palette;
+  const styles = () => ({
+    variables: pluginStyleVariables(palette, theme),
+  });
   let initialized = false;
   let delivered = false;
   const notify = (method: string, params: unknown) =>
@@ -74,6 +93,7 @@ export const createMcpAppHost = (options: McpAppHostOptions): McpAppHost => {
     options.send({ jsonrpc: "2.0", id, error: { code, message } });
   const hostContext = () => ({
     theme,
+    styles: styles(),
     displayMode: "inline",
     availableDisplayModes: ["inline"],
     platform: "web",
@@ -168,6 +188,9 @@ export const createMcpAppHost = (options: McpAppHostOptions): McpAppHost => {
           return;
         }
         default:
+          // A trusted pane's window.dx.
+          if (options.pane?.onExtension?.(message.method, params, id) === true)
+            return;
           // Notifications dx does not use, such as logging, are dropped.
           if (id !== undefined)
             fail(
@@ -181,11 +204,15 @@ export const createMcpAppHost = (options: McpAppHostOptions): McpAppHost => {
     notify: (method, params) => {
       if (delivered) notify(method, params);
     },
-    setTheme: (next) => {
-      if (next === theme) return;
+    setTheme: (next, nextPalette) => {
+      if (next === theme && nextPalette === palette) return;
       theme = next;
+      palette = nextPalette;
       if (initialized)
-        notify("ui/notifications/host-context-changed", { theme });
+        notify("ui/notifications/host-context-changed", {
+          theme,
+          styles: styles(),
+        });
     },
   };
 };

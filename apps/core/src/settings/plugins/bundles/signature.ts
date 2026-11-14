@@ -234,6 +234,14 @@ interface PluginSignaturesShape {
     PersistenceUnavailable
   >;
   /** Fingerprints of a person's active Signing Keys page keys. */
+  /** `forPlugins` for every install's active version of a target. */
+  readonly forTarget: (target: {
+    readonly scope: string;
+    readonly id: string;
+  }) => Effect.Effect<
+    ReadonlyMap<string, PluginSignature>,
+    PersistenceUnavailable
+  >;
   readonly ownFingerprints: (
     userId: string,
   ) => Effect.Effect<ReadonlySet<string>, PersistenceUnavailable>;
@@ -271,6 +279,41 @@ export const PluginSignaturesD1 = (db: D1Database) =>
               .run(),
           catch: unavailable("pluginSignature.record"),
         }).pipe(Effect.asVoid),
+      forTarget: (target) =>
+        Effect.tryPromise({
+          try: async () => {
+            const rows = await db
+              .prepare(
+                `SELECT signature.plugin_id, signature.fingerprint,
+                        signature.public_key, signature.publisher
+                   FROM plugin_version_signature signature
+                   JOIN trusted_plugin plugin
+                     ON plugin.id = signature.plugin_id
+                    AND plugin.active_version = signature.version
+                  WHERE plugin.scope = ?1 AND plugin.target_id = ?2`,
+              )
+              .bind(target.scope, target.id)
+              .all<{
+                plugin_id: string;
+                fingerprint: string;
+                public_key: string;
+                publisher: string | null;
+              }>();
+            return new Map(
+              rows.results.map((row) => [
+                row.plugin_id,
+                {
+                  fingerprint: row.fingerprint,
+                  publicKey: row.public_key,
+                  ...(row.publisher === null
+                    ? {}
+                    : { publisher: row.publisher }),
+                } satisfies PluginSignature,
+              ]),
+            );
+          },
+          catch: unavailable("pluginSignature.forTarget"),
+        }),
       forPlugins: (plugins) =>
         plugins.length === 0
           ? Effect.succeed(new Map())

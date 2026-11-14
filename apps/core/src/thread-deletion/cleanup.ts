@@ -1,6 +1,7 @@
 import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { threadDeletionLogger } from "../logging.js";
+import { purgeDurableThread } from "../plugins/hosts/durable/objects.js";
 import { deleteThreadArtifacts } from "../thread-artifacts/store.js";
 import { ownerSearchIndex } from "../thread-search/index-client.js";
 import { deleteThreadStorage } from "../thread-storage/store.js";
@@ -15,7 +16,8 @@ export type ThreadCleanupStep =
   | "changes"
   | "attachments"
   | "storage"
-  | "artifacts";
+  | "artifacts"
+  | "plugin-objects";
 
 /**
  * How each piece outside D1 is removed. Every step is idempotent: a retry
@@ -120,6 +122,8 @@ export const purgeDeletedThread = async (
     ["attachments", () => deleteAttachments(bindings, threadId)],
     ["storage", () => deleteThreadStorage(bindings, threadId)],
     ["artifacts", () => deleteThreadArtifacts(bindings, threadId)],
+    // Plugins' Durable Objects for the Thread: their SQLite and blobs.
+    ["plugin-objects", () => purgeDurableThread(bindings, threadId)],
   ];
   const failedSteps: ThreadCleanupStep[] = [];
   for (const [step, run] of steps) {

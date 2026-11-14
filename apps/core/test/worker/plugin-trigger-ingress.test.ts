@@ -1,6 +1,6 @@
-import { env } from "cloudflare:test";
+import { env, runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/app.js";
 import type { Bindings } from "../../src/http/types.js";
 import {
@@ -46,15 +46,42 @@ const ingress = (
     bindings,
   );
 
+// An accepted event schedules its trigger's delivery alarm at once, and the
+// alarm runs on its own. Left running, it delivered during the next test,
+// after that test's setup emptied D1, or after the file ended, when its logs
+// reached a closed Vitest runner and failed the run (EnvironmentTeardownError).
+const triggerObjects = new Set<DurableObjectStub>();
+
+// Settled: nothing queued or in flight, and no alarm left. The alarm handler
+// clears its alarm last, so this also waits out its audit write.
+const deliveriesSettled = (stub: DurableObjectStub) =>
+  runInDurableObject(stub, async (_instance, state) => {
+    const { busy } = state.storage.sql
+      .exec<{ busy: number }>(
+        "SELECT COUNT(*) AS busy FROM trigger_delivery WHERE status IN ('pending', 'in-flight')",
+      )
+      .one();
+    if (busy > 0 || (await state.storage.getAlarm()) !== null)
+      throw new Error("The trigger is still delivering.");
+  });
+
+afterEach(async () => {
+  for (const stub of triggerObjects)
+    await vi.waitFor(() => deliveriesSettled(stub), {
+      timeout: 20_000,
+      interval: 50,
+    });
+  triggerObjects.clear();
+}, 30_000);
+
 const fixture = async (hmacReference?: unknown) => {
   const capability = generatePluginTriggerCapability();
   const capabilityHash = await Effect.runPromise(
     hashPluginTriggerCapability(capability),
   );
-  return {
-    capability,
-    ...(await setupPluginTrigger({ capabilityHash, hmacReference })),
-  };
+  const trigger = await setupPluginTrigger({ capabilityHash, hmacReference });
+  triggerObjects.add(trigger.stub);
+  return { capability, ...trigger };
 };
 
 const hmac = async (secret: string, input: string) => {

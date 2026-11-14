@@ -79,6 +79,8 @@ title; for a mockup it decides which state to show.
   workspace; embed what it needs, or store the file and show it with a Markdown image instead.
 - There are no popups, storage, dialogs, or form submission, and the view cannot navigate away;
   dx stops a view that tries. Clicks on `http(s)` links ask the reader before opening a new tab.
+- There are no nested frames or WebRTC: dx removes `<iframe>`, `<object>`, and `<embed>`, and
+  `RTCPeerConnection` is undefined. Draw with HTML, SVG, or a canvas instead.
   Hover, clicks, and keys work inside the frame. Nothing can draw outside it.
 - A script error shows under the view, so a broken view is never silently blank.
 - The source stays in the conversation. Keep it under 100 KB; aggregate data before embedding it.
@@ -87,8 +89,9 @@ title; for a mockup it decides which state to show.
 
 ## Tokens
 
-dx sets these on `:root`. They update live when the reader switches theme. Use them for every
-color; never write a hex value for anything dx-colored.
+dx sets these on `:root` from its design system, for the reader's palette. They update live when
+the reader switches light or dark, and follow their contrast and forced-colors settings. Use them for
+every color; never write a hex value for anything dx-colored.
 
 | Token                                     | Use                                                    |
 | ----------------------------------------- | ------------------------------------------------------ |
@@ -205,6 +208,31 @@ logo-grok.
 - `ui.sparkline(el, values, { color })` draws a 64×18 trend with an end dot.
 - `ui.tween(el, value, { format })` animates a number in place, for readouts that follow a control.
 - `ui.format(value, { compact, digits, unit, prefix, percent })` formats numbers with a real minus.
+
+## Web components: `@dxcode/plugin-ui`
+
+For forms, tables, tabs, and status, a view can also load the plugin UI kit, the same `dx-*` web
+components plugin panes use. Put its tag first; dx inlines the kit and its theme (the MCP Apps
+`--color-*`, `--font-*`, and `--border-radius-*` variables, from the same design system, with the
+same contrast settings). Without the tag, nothing extra loads.
+
+```html
+<script type="module" src="dx:plugin-ui"></script>
+<dx-card heading="Deploys">
+  <dx-button slot="actions" size="xs" variant="outline" icon="refresh-cw" id="refresh">Refresh</dx-button>
+  <dx-chip tone="success" dot id="state">Live</dx-chip>
+</dx-card>
+<script type="module">
+  document.getElementById("refresh").addEventListener("click", () => {
+    document.getElementById("state").textContent = "Refreshed";
+  });
+</script>
+```
+
+Components: `dx-button`, `dx-chip`, `dx-icon`, `dx-spinner`, `dx-card`, `dx-stat`, `dx-list` and
+`dx-list-item`, `dx-table`, `dx-input`, `dx-textarea`, `dx-select`, `dx-checkbox`, `dx-switch`,
+`dx-tabs` and `dx-tab`, `dx-empty`, `dx-code`. The building-plugins skill's `reference/plugin-ui.md`
+lists their attributes. Mix them with the view kit freely; use `window.ui` for charts.
 
 ## Layout
 

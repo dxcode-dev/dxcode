@@ -9,6 +9,10 @@ import { activeMemberSql } from "../../settings/members/membership-sql.js";
 import type { ParsedBundle } from "../../settings/plugins/bundles/bundle-reader.js";
 import { readPluginBundle } from "../../settings/plugins/bundles/read-bundle.js";
 import { readZipArchive } from "../../settings/plugins/bundles/zip.js";
+import {
+  installTrustFromRow,
+  resolvePluginTier,
+} from "../trust/resolve-tier.js";
 import type { PluginInstallRecord } from "../worker-host/host.js";
 
 /**
@@ -272,6 +276,10 @@ interface ThreadRow {
   readonly owner_user_id: string;
   readonly project_id: string;
   readonly allowed: number;
+  /** The workspace's plugin tier cap, when the Project has a workspace. */
+  readonly tier_cap: string | null;
+  /** 1 when an admin listed the Project's repository plugins as trusted. */
+  readonly repository_trusted: number;
 }
 
 /**
@@ -293,7 +301,11 @@ export const resolveRepositoryPlugins = async (
     db
       .prepare(
         `SELECT threads.owner_user_id, threads.project_id,
-                COALESCE(policy.allow_repository_plugins, 1) AS allowed
+                COALESCE(policy.allow_repository_plugins, 1) AS allowed,
+                policy.plugin_tier_cap AS tier_cap,
+                EXISTS (SELECT 1 FROM json_each(
+                          COALESCE(policy.trusted_plugin_project_ids, '[]'))
+                         WHERE value = projects.id) AS repository_trusted
            FROM threads
            JOIN projects ON projects.id = threads.project_id
            LEFT JOIN workspace_policy policy
@@ -381,6 +393,21 @@ export const resolveRepositoryPlugins = async (
                         ).filter((grant) => grant === "create"),
                       },
                     },
+                    // Sandboxed until an admin trusts the
+                    // repository.
+                    tier: resolvePluginTier({
+                      scope: "repository",
+                      signedByTrustedKey: false,
+                      repositoryTrusted: row.repository_trusted === 1,
+                      ...(manifest.code.tier === undefined
+                        ? {}
+                        : { requested: manifest.code.tier }),
+                      workspaceCap: installTrustFromRow({
+                        tier_cap: row.tier_cap,
+                        trusted_signature: 0,
+                      }).workspaceCap,
+                      callerOwnsThread: true,
+                    }).tier,
                   }
                 : undefined,
           );

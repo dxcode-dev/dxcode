@@ -75,6 +75,10 @@ export const ThreadDataSchema = Schema.Struct({
   snoozeWokeAt: Schema.optional(Timestamp),
   /** The owner's chosen color; absent means auto. */
   color: Schema.optional(ThreadColor),
+  /** The plugin Thread type, `<plugin>/<type>`; absent for a chat. */
+  pluginThreadType: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(130)),
+  ),
   /** True while DxTitleAgent may still replace `title`; show a loading state. */
   titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
@@ -281,6 +285,10 @@ export const ThreadDetailDataSchema = Schema.Struct({
   snoozeWokeAt: Schema.optional(Timestamp),
   /** The owner's chosen color; absent means auto. */
   color: Schema.optional(ThreadColor),
+  /** The plugin Thread type, `<plugin>/<type>`; absent for a chat. */
+  pluginThreadType: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(130)),
+  ),
   titlePending: Schema.optional(Schema.Boolean),
   agentUrl: ThreadAgentUrlSchema,
   agentInitialization: ThreadAgentInitializationDataSchema,

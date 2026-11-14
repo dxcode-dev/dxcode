@@ -1,0 +1,83 @@
+/* PluginIcon (shared/ui/plugin-icon.tsx): one square, four sizes. */
+.plugin-icon {
+  --plugin-icon-size: 16px;
+  --plugin-icon-radius: 4px;
+  position: relative;
+  display: inline-grid;
+  width: var(--plugin-icon-size);
+  height: var(--plugin-icon-size);
+  flex: none;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--plugin-icon-radius);
+  color: var(--foreground);
+  line-height: 1;
+  vertical-align: middle;
+}
+.plugin-icon[data-size="20"] {
+  --plugin-icon-size: 20px;
+  --plugin-icon-radius: 5px;
+}
+.plugin-icon[data-size="32"] {
+  --plugin-icon-size: 32px;
+  --plugin-icon-radius: 8px;
+}
+.plugin-icon[data-size="64"] {
+  --plugin-icon-size: 64px;
+  --plugin-icon-radius: 14px;
+}
+.plugin-icon > *,
+.plugin-icon img {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.plugin-icon .plugin-icon-lucide {
+  width: 86%;
+  height: 86%;
+  margin: auto;
+}
+.plugin-icon-mono {
+  display: block;
+  background-color: currentColor;
+  mask: var(--plugin-icon-mask) center / contain no-repeat;
+}
+/* Both themes render; the root's resolved appearance shows one. */
+.plugin-icon-dark {
+  display: none;
+}
+:root[data-resolved-appearance="dark"] .plugin-icon-light {
+  display: none;
+}
+:root[data-resolved-appearance="dark"] .plugin-icon-dark {
+  display: grid;
+}
+:root[data-resolved-appearance="dark"] .plugin-icon-dark.plugin-icon-mono {
+  display: block;
+}
+/* No dark file: the light icon on its background tile reads on dark too. */
+.plugin-icon-tile {
+  --plugin-icon-tile: var(--logo-tile);
+  place-items: center;
+  background: var(--plugin-icon-tile);
+}
+.plugin-icon-tile > img {
+  width: 76%;
+  height: 76%;
+}
+.plugin-icon-letter {
+  display: grid;
+  place-items: center;
+  color: oklch(0.38 0.11 var(--plugin-icon-hue));
+  background: oklch(0.9 0.06 var(--plugin-icon-hue));
+  font-family: var(--font-ui);
+  font-size: calc(var(--plugin-icon-size) * 0.58);
+  font-weight: 600;
+  letter-spacing: 0;
+  user-select: none;
+}
+:root[data-resolved-appearance="dark"] .plugin-icon-letter {
+  color: oklch(0.9 0.08 var(--plugin-icon-hue));
+  background: oklch(0.36 0.07 var(--plugin-icon-hue));
+}

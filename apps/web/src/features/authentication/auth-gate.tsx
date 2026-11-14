@@ -1,17 +1,13 @@
 import { UserId } from "@dx/domain";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { RouterProvider } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { lazyRouteComponent } from "@tanstack/react-router";
 import { Schema } from "effect";
 import * as React from "react";
 import { AuthContext } from "../../shared/auth/auth-context.js";
-import { Button } from "../../shared/ui/button.js";
-import { createPublicRouter } from "./public-router.js";
-import { useSignOut } from "./sign-in-mutations.js";
-import {
-  sessionQueryOptions,
-  signInOptionsQueryOptions,
-} from "./sign-in-queries.js";
-import "./sign-in.css";
+import { sessionQueryOptions } from "./sign-in-queries.js";
+import { SignInUnavailable } from "./sign-in-unavailable.js";
+import { useSignOut } from "./sign-out-mutation.js";
+import { loadSignedOut } from "./signed-out-loader.js";
 
 const DxLoading = React.lazy(() =>
   import("../../shared/brand/dx-loading.js").then((module) => ({
@@ -19,46 +15,17 @@ const DxLoading = React.lazy(() =>
   })),
 );
 
-function SignInUnavailable({
-  message,
-  onRetry,
-}: {
-  readonly message: string;
-  readonly onRetry: () => void;
-}) {
-  return (
-    <main className="sign-in-page">
-      <div className="sign-in-column">
-        <section className="sign-in-card sign-in-status" role="alert">
-          <p>{message}</p>
-          <Button type="button" variant="outline" onClick={onRetry}>
-            Try again
-          </Button>
-        </section>
-      </div>
-    </main>
-  );
-}
+// Signing out of a tab opened before a deploy asks for a chunk the deploy
+// replaced. TanStack's lazy route component, which the router's pages use,
+// reloads once to pick up the new build and keeps the loading screen
+// meanwhile instead of unmounting the app.
+const SignedOut = lazyRouteComponent(loadSignedOut, "SignedOut");
 
-function SignedOut() {
-  const queryClient = useQueryClient();
-  const options = useQuery(signInOptionsQueryOptions);
-  const router = createPublicRouter(queryClient);
-  if (options.isPending)
-    return (
-      <React.Suspense fallback={null}>
-        <DxLoading label="Loading dx…" variant="screen" />
-      </React.Suspense>
-    );
-  if (options.isError)
-    return (
-      <SignInUnavailable
-        message="Sign-in isn't available right now. Check your connection and try again."
-        onRetry={() => void options.refetch()}
-      />
-    );
-  return <RouterProvider router={router} />;
-}
+const loading = (
+  <React.Suspense fallback={null}>
+    <DxLoading label="Loading dx…" variant="screen" />
+  </React.Suspense>
+);
 
 /**
  * Shows the signed-out router until a session exists, then provides identity
@@ -90,12 +57,7 @@ export function AuthGate({
   const context =
     identity === undefined ? undefined : { identity, logout: () => logout() };
 
-  if (session.isPending)
-    return (
-      <React.Suspense fallback={null}>
-        <DxLoading label="Loading dx…" variant="screen" />
-      </React.Suspense>
-    );
+  if (session.isPending) return loading;
   if (session.isError && session.data === undefined)
     return (
       <SignInUnavailable
@@ -103,7 +65,12 @@ export function AuthGate({
         onRetry={() => void session.refetch()}
       />
     );
-  if (context === undefined) return <SignedOut />;
+  if (context === undefined)
+    return (
+      <React.Suspense fallback={loading}>
+        <SignedOut />
+      </React.Suspense>
+    );
   return (
     <AuthContext.Provider value={context}>{children}</AuthContext.Provider>
   );

@@ -64,8 +64,10 @@ button.dx-menu-item {
 .dx-menu-item[data-highlighted] svg {
   color: inherit;
 }
-/* The label grows and elides; a shortcut (role="img") keeps its width. */
-.dx-menu-item > span:not([role="img"], .dx-menu-hint, .dx-menu-check) {
+/* The label grows and elides; a shortcut (role="img") or a plugin's icon
+   keeps its width. */
+.dx-menu-item
+> span:not([role="img"], .dx-menu-hint, .dx-menu-check, .plugin-icon) {
   flex: 1;
   min-width: 0;
   overflow: hidden;

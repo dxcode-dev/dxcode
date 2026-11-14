@@ -8,7 +8,6 @@ import {
   Download,
   Grid2x2Plus,
   Plus,
-  Puzzle,
   RefreshCw,
   X,
 } from "lucide-react";
@@ -35,6 +34,7 @@ import {
   warmTerminal,
   warmTerminalAfterDwell,
 } from "../../terminal/terminal-warm-mutations.js";
+import { RoutePluginPaneIcon } from "../plugin-ui/lazy-plugin-ui-icons.js";
 import {
   canOpenTerminal,
   findViewTab,
@@ -133,7 +133,11 @@ function ViewMenuItems({
                     })
                   }
                 >
-                  <Puzzle aria-hidden="true" />
+                  <RoutePluginPaneIcon
+                    plugin={option.plugin}
+                    pane={option.pane}
+                    title={option.title}
+                  />
                   <span>{option.title}</span>
                   {locateTab(layout, id) === undefined ? null : (
                     <MenuItemHint>Open</MenuItemHint>

@@ -4,10 +4,13 @@ import * as React from "react";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { useMobile } from "../../../shared/use-mobile.js";
 import { runText } from "./automation-text.js";
-import { AutomationsPanel } from "./automations-panel.js";
+import { preloadAutomationViews } from "./automation-views-loader.js";
 import { AutomationsPopover } from "./automations-popover.js";
 import { useThreadAutomations } from "./automations-queries.js";
-import { ThreadAutomationsSheet } from "./thread-automations-sheet.js";
+import {
+  AutomationsPanel,
+  ThreadAutomationsSheet,
+} from "./lazy-automation-views.js";
 
 /**
  * At the transcript's end while no run is active: when the schedule runs
@@ -36,6 +39,9 @@ export function ThreadScheduleHint({
           type="button"
           className="automation-hint"
           aria-label={`Schedule: ${schedule.title}`}
+          onPointerEnter={preloadAutomationViews}
+          onPointerDown={preloadAutomationViews}
+          onFocus={preloadAutomationViews}
           onClick={() => setSheetOpen(true)}
         >
           {hint}

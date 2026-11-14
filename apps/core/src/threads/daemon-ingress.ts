@@ -115,6 +115,46 @@ export const forwardDaemonStorage = async (
   );
 };
 
+// Personal-dev hot reload.
+export const DAEMON_PLUGIN_DEV_PATH = /^\/v1\/dxd\/([^/]+)\/plugin-dev$/;
+/** A plugin folder as `dxd plugin dev` sends it: JSON, files in base64. */
+const MAX_PLUGIN_DEV_BODY_BYTES = 12 * 1024 * 1024;
+
+/**
+ * `dxd plugin dev <folder>`: reloads one of the Thread owner's personal
+ * plugins from a folder in the Orb. The Thread execution object checks the
+ * daemon key; `plugins/trust/dev-reload.ts` decides the rest.
+ */
+export const forwardDaemonPluginDev = async (
+  request: Request,
+  namespace: DurableObjectNamespace | undefined,
+  threadId: string | undefined,
+): Promise<Response> => {
+  if (
+    request.method !== "POST" ||
+    threadId === undefined ||
+    !THREAD_ID.test(threadId) ||
+    namespace === undefined
+  )
+    return new Response(null, { status: 404 });
+  if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
+    return new Response(null, { status: 401 });
+  const body = await readBoundedBody(request, MAX_PLUGIN_DEV_BODY_BYTES);
+  if (body === undefined) return new Response(null, { status: 413 });
+  return namespace.get(namespace.idFromName(threadId)).fetch(
+    new Request("https://thread.internal/daemon/plugin-dev", {
+      method: "POST",
+      headers: {
+        authorization: request.headers.get("authorization") ?? "",
+        "content-type": "application/json",
+        "x-dx-daemon-ingress": "1",
+        "x-dx-thread-id": threadId,
+      },
+      body,
+    }),
+  );
+};
+
 export const forwardDaemonUpgrade = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
@@ -157,6 +197,13 @@ export default {
         env.THREAD_EXECUTION,
         attachment[1],
         attachment[2],
+      );
+    const pluginDev = DAEMON_PLUGIN_DEV_PATH.exec(path);
+    if (pluginDev !== null)
+      return forwardDaemonPluginDev(
+        request,
+        env.THREAD_EXECUTION,
+        pluginDev[1],
       );
     const storage = DAEMON_STORAGE_PATH.exec(path);
     if (storage !== null)

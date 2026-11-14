@@ -342,7 +342,7 @@ fn validate(spec: &ServerSpec) -> Result<(), &'static str> {
 }
 
 /// A relative path whose every component is a plain name.
-fn safe_relative(path: &str) -> bool {
+pub(crate) fn safe_relative(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 1024
         && !path.contains('\\')
@@ -352,7 +352,7 @@ fn safe_relative(path: &str) -> bool {
 }
 
 /// Lays out the package as `PLUGIN_ROOT` once; later starts reuse it.
-fn prepare_package(
+pub(crate) fn prepare_package(
     package: &PackageRef,
     paths: &McpPaths,
     deadline: Instant,

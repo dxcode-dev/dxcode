@@ -308,23 +308,22 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
         },
       );
 
-      const toolsFor = Effect.fn("McpServerRepository.toolsFor")(function* (
-        serverIds: ReadonlyArray<McpServerId>,
+      const toolsWhere = Effect.fn("McpServerRepository.toolsWhere")(function* (
+        where: string,
+        bindings: ReadonlyArray<unknown>,
       ) {
-        if (serverIds.length === 0) return [];
-        const placeholders = serverIds.map(() => "?").join(", ");
         const result = yield* Effect.tryPromise({
           try: () =>
             db
               .prepare(
                 `SELECT server_id, name, description, input_schema_json,
-                        schema_hash, approved_schema_hash, discovered_at,
-                        reviewed_at
-                   FROM mcp_tool
-                  WHERE server_id IN (${placeholders})
-                  ORDER BY server_id, name`,
+                          schema_hash, approved_schema_hash, discovered_at,
+                          reviewed_at
+                     FROM mcp_tool
+                    WHERE ${where}
+                    ORDER BY server_id, name`,
               )
-              .bind(...serverIds)
+              .bind(...bindings)
               .all(),
           catch: unavailable("settings.mcpServers.listTools"),
         });
@@ -337,6 +336,14 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
           tool: decoded[index] as StoredMcpTool,
         }));
       });
+
+      const toolsFor = (serverIds: ReadonlyArray<McpServerId>) =>
+        serverIds.length === 0
+          ? Effect.succeed([])
+          : toolsWhere(
+              `server_id IN (${serverIds.map(() => "?").join(", ")})`,
+              serverIds,
+            );
 
       const hydrate = Effect.fn("McpServerRepository.hydrate")(function* (
         servers: ReadonlyArray<StoredMcpServer>,
@@ -353,12 +360,29 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
       const list = Effect.fn("McpServerRepository.list")(function* (
         target: McpServerTarget,
       ) {
-        const servers = yield* queryServers(
-          "WHERE scope = ? AND target_id = ? ORDER BY name, id",
-          [target.scope, target.id],
-          "settings.mcpServers.list",
+        // Servers and their tools are read together, not one after the
+        // other: the tools query selects the target's servers itself.
+        const [servers, tools] = yield* Effect.all(
+          [
+            queryServers(
+              "WHERE scope = ? AND target_id = ? ORDER BY name, id",
+              [target.scope, target.id],
+              "settings.mcpServers.list",
+            ),
+            toolsWhere(
+              `server_id IN (SELECT id FROM mcp_server
+                              WHERE scope = ? AND target_id = ?)`,
+              [target.scope, target.id],
+            ),
+          ],
+          { concurrency: "unbounded" },
         );
-        return yield* hydrate(servers);
+        return servers.map((server) => ({
+          server,
+          tools: tools
+            .filter(({ serverId }) => serverId === server.id)
+            .map(({ tool }) => tool),
+        }));
       });
 
       const find = Effect.fn("McpServerRepository.find")(function* (

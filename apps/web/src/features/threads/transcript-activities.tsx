@@ -9,6 +9,7 @@ import {
   isArtifactCardPart,
 } from "./artifact-tool-part.js";
 import { isMcpAppPart, mcpAppCardSet } from "./mcp-app-part.js";
+import { PluginToolIcon } from "./plugin-ui/lazy-plugin-ui-icons.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import {
   parseShellResult,
@@ -203,7 +204,20 @@ function ExploreOperationLabel({ part }: { readonly part: ToolPart }) {
   );
 }
 
-function ToolLabel({
+/** A tool row's label; a plugin's tool leads with the plugin's icon. */
+function ToolLabel(props: {
+  readonly category: ToolCategory;
+  readonly part: ToolPart;
+}) {
+  return (
+    <>
+      <PluginToolIcon toolName={props.part.toolName} />
+      <ToolLabelText {...props} />
+    </>
+  );
+}
+
+function ToolLabelText({
   category,
   part,
 }: {

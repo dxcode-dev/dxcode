@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.117",
+  "version": "0.2.118",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -21,6 +21,7 @@
     "@cloudflare/realtimekit": "^2.0.4",
     "@dx/api": "workspace:^",
     "@dx/domain": "workspace:^",
+    "@dxcode/plugin-ui": "workspace:^",
     "@excalidraw/excalidraw": "0.18.1",
     "@flue/react": "file:../../third-party/flue/react-9c62bf75871e708c02146d02923e62c5d2761f8d.tgz",
     "@flue/sdk": "file:../../third-party/flue/sdk-9c62bf75871e708c02146d02923e62c5d2761f8d.tgz",
@@ -83,6 +84,7 @@
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.1.2",
     "@vitest/browser-playwright": "4.1.11",
+    "axe-core": "4.14.0",
     "oxc-transform-react": "0.152.0",
     "playwright": "1.55.0",
     "playwright-core": "1.55.0",

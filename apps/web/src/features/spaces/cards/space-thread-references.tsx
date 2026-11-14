@@ -1,3 +1,4 @@
+import type * as React from "react";
 import type { Components } from "react-markdown";
 import type { ThreadReferences } from "../../../shared/ui/thread-reference-context.js";
 import { SpaceThreadCard, SpaceThreadChip } from "./space-thread-card.js";
@@ -8,7 +9,9 @@ import {
   ThreadAwareParagraph,
 } from "./thread-markdown.js";
 
-const card = (threadId: string) => <SpaceThreadCard threadId={threadId} />;
+const card = (threadId: string, link?: React.ReactNode) => (
+  <SpaceThreadCard threadId={threadId} fallback={link} />
+);
 
 /** The Markdown elements that show links to threads alone as cards. */
 const threadMarkdownComponents = (cardOf: CardOf): Components => ({

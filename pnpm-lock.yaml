@@ -250,6 +250,9 @@ importers:
       '@dx/domain':
         specifier: workspace:^
         version: link:../../packages/domain
+      '@dxcode/plugin-ui':
+        specifier: workspace:^
+        version: link:../../packages/plugin-ui
       '@effect/sql-d1':
         specifier: 4.0.5
         version: 4.0.5(effect@4.0.5)
@@ -414,6 +417,9 @@ importers:
       '@dx/domain':
         specifier: workspace:^
         version: link:../../packages/domain
+      '@dxcode/plugin-ui':
+        specifier: workspace:^
+        version: link:../../packages/plugin-ui
       '@excalidraw/excalidraw':
         specifier: 0.18.1
         version: 0.18.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -595,6 +601,9 @@ importers:
       '@vitest/browser-playwright':
         specifier: 4.1.11
         version: 4.1.11(msw@2.15.0(@types/node@26.2.0)(typescript@7.0.2))(playwright@1.55.0)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(vitest@4.1.11)
+      axe-core:
+        specifier: 4.14.0
+        version: 4.14.0
       oxc-transform-react:
         specifier: 0.152.0
         version: 0.152.0
@@ -700,6 +709,8 @@ importers:
         version: 4.0.5
 
   packages/plugin: {}
+
+  packages/plugin-ui: {}
 
 packages:
 

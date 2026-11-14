@@ -213,6 +213,24 @@
       "optional": true
     },
     {
+      "name": "DX_PLUGIN_CONTAINER_DAILY_MS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
+      "name": "DX_PLUGIN_TIER_LIMITS",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_PORTAL_DOMAIN",
       "type": "text",
       "provenance": "alchemy",
@@ -402,6 +420,23 @@
     },
     {
       "name": "ORB_PROVIDER_PREPARATION",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "PLUGIN_CONTAINER",
+      "type": "durable-object",
+      "provenance": "alchemy",
+      "optional": true,
+      "crossScript": true
+    },
+    {
+      "name": "PLUGIN_DURABLE_HOST",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
+      "name": "PLUGIN_STREAM_RELAY",
       "type": "durable-object",
       "provenance": "authored-wrangler"
     },

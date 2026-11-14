@@ -450,6 +450,7 @@ describe("plugin UI in a Thread", () => {
       {
         id: made.id,
         plugin: "com.acme.extras plugin",
+        pluginName: "com.acme.extras",
         label: "Run checks",
         action: "send-message",
         args: { text: "Run the checks." },
@@ -465,18 +466,21 @@ describe("plugin UI in a Thread", () => {
         message: "Checks are ready",
         level: "success",
         plugin: "com.acme.extras plugin",
+        pluginName: "com.acme.extras",
       }),
     ]);
     expect(shown.commands).toEqual([
       {
         id: `${pluginId}:pick-env`,
         plugin: "com.acme.extras plugin",
+        pluginName: "com.acme.extras",
         title: "Pick a deploy target",
       },
     ]);
     expect(shown.linkPatterns).toEqual([
       {
         plugin: "com.acme.extras plugin",
+        pluginName: "com.acme.extras",
         pattern: "\\bACME-(\\d+)\\b",
         url: "https://acme.example/issues/$1",
         title: "Acme issue",

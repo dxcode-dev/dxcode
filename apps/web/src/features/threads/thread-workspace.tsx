@@ -101,6 +101,7 @@ import { retryInitialThreadDispatch } from "./thread-mutations.js";
 import {
   invalidateThreadQueries,
   pluginLinkRemarkQueryOptions,
+  pluginUiQueryOptions,
   threadQueryOptions,
 } from "./thread-queries.js";
 import {
@@ -162,6 +163,10 @@ const PluginPaneMenuItems = lazyRouteComponent(
 const PluginThreadUi = lazyRouteComponent(
   () => import("./plugin-ui/plugin-thread-ui.js"),
   "PluginThreadUi",
+);
+const PluginThreadTypeNotice = lazyRouteComponent(
+  () => import("./plugin-ui/plugin-thread-ui.js"),
+  "PluginThreadTypeNotice",
 );
 const loadingArtifacts = (
   <div className="thread-files-state" role="status">
@@ -688,11 +693,19 @@ const sharedAgentPanelProps = (thread: ThreadDetailData) => {
     ? {
         onOpenModelRouting: undefined,
         readOnlyNotice: (
-          <div className="shared-composer-notice" role="note">
-            <Eye aria-hidden="true" />
-            You can view this thread. Ask {ownerName} for Contribute access to
-            send messages.
-          </div>
+          <>
+            {/* Why a plugin-typed Thread shows only its chat here. */}
+            {thread.pluginThreadType === undefined ? null : (
+              <React.Suspense fallback={null}>
+                <PluginThreadTypeNotice threadId={thread.id} />
+              </React.Suspense>
+            )}
+            <div className="shared-composer-notice" role="note">
+              <Eye aria-hidden="true" />
+              You can view this thread. Ask {ownerName} for Contribute access to
+              send messages.
+            </div>
+          </>
         ),
       }
     : { onOpenModelRouting: undefined };
@@ -1169,6 +1182,19 @@ function ThreadSessionContent({
 }) {
   const { identity } = useAuthenticatedIdentity();
   const archived = thread.lifecycleState === "archived";
+  // An archived Thread lists only the plugin panes and views (tabs, a
+  // Thread type's main view) its plugins keep (`archivedThreads` "show" or
+  // "live"); the others' tabs leave the strip until the Thread is restored.
+  // Until the list loads, no plugin tab shows.
+  const keptPluginPanes = useQuery({
+    ...pluginUiQueryOptions(thread.id),
+    enabled: archived,
+    select: (data) =>
+      new Set([
+        ...(data.panes ?? []).map(({ plugin, pane }) => `${plugin}/${pane}`),
+        ...(data.tabs ?? []).map(({ plugin, tab }) => `${plugin}/${tab}`),
+      ]),
+  }).data;
   // A card's Open on a phone shows the artifact full screen over the Thread.
   const queryClient = useQueryClient();
   const [shareOpen, setShareOpen] = React.useState(false);
@@ -1339,17 +1365,20 @@ function ThreadSessionContent({
     // so its text can still be copied.
     file: renderFile,
     dirtyTabs,
-    // Plugin code runs for active Threads only.
+    // The server decides which plugin views an archived Thread keeps
+    // (`archivedThreads`): it lists only those, read-only.
+    plugin: pluginPane,
     ...(archived
-      ? {}
-      : {
-          plugin: pluginPane,
-          pluginMenu: (props: PluginPaneMenuProps) => (
-            <React.Suspense fallback={null}>
-              <PluginPaneMenuItems threadId={thread.id} {...props} />
-            </React.Suspense>
-          ),
-        }),
+      ? {
+          pluginShown: (tab: PluginPaneTab) =>
+            keptPluginPanes?.has(`${tab.plugin}/${tab.pane}`) === true,
+        }
+      : {}),
+    pluginMenu: (props: PluginPaneMenuProps) => (
+      <React.Suspense fallback={null}>
+        <PluginPaneMenuItems threadId={thread.id} {...props} />
+      </React.Suspense>
+    ),
   };
   const page = (
     <ThreadPageLayout
@@ -1390,12 +1419,16 @@ function ThreadSessionContent({
       )}
     />
   );
-  // A View-only member's transcript links never open the Orb's files.
-  if (!toolsAvailable || thread.access === "view") return page;
+  // A View-only member's transcript links never open the Orb's files. The
+  // providers stay in place either way (undefined is their default), so the
+  // Orb becoming ready does not remount every pane.
+  const orbLinks = toolsAvailable && thread.access !== "view";
   return (
-    <ThreadFileNavigationContext value={fileNavigation}>
-      <MarkdownFileLinkContext value={resolveFileLink}>
-        <MarkdownImageSourceContext value={resolveMediaSource}>
+    <ThreadFileNavigationContext value={orbLinks ? fileNavigation : undefined}>
+      <MarkdownFileLinkContext value={orbLinks ? resolveFileLink : undefined}>
+        <MarkdownImageSourceContext
+          value={orbLinks ? resolveMediaSource : undefined}
+        >
           {page}
         </MarkdownImageSourceContext>
       </MarkdownFileLinkContext>

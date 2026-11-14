@@ -14,6 +14,10 @@ import {
   PluginBundleSourceUnavailableResponseSchema,
   PluginBundlesForbiddenResponseSchema,
   PluginBundlesUnavailableResponseSchema,
+  PluginHostUsageResponseSchema,
+  PluginJobActionRequestSchema,
+  PluginJobParamsSchema,
+  PluginJobsResponseSchema,
   PluginProposalDecidedResponseSchema,
   PluginProposalParamsSchema,
   PreviewPluginBundleResponseSchema,
@@ -21,6 +25,7 @@ import {
   RemovePluginBundleResponseSchema,
   RevokePluginShareLinksResponseSchema,
   SetPluginBundlePolicyRequestSchema,
+  SetPluginDevRequestSchema,
   UpdatePluginBundleRequestSchema,
   UpdatePluginBundleResponseSchema,
   UpdatePluginBundleSettingsRequestSchema,
@@ -48,8 +53,10 @@ import {
   type StoredPluginBundle,
   stdioCommandLine,
   WorkspacePolicyConflict,
+  WorkspacePolicyRepository,
   WorkspaceSlug,
 } from "@dx/domain";
+import { getLogger } from "@logtape/logtape";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import {
@@ -59,6 +66,23 @@ import {
 import type { AppEnv } from "../../../http/types.js";
 import { authorizationLogger } from "../../../logging.js";
 import { decodeD1Binding } from "../../../persistence/d1-binding.js";
+import { coalescingD1 } from "../../../persistence/d1-coalesce.js";
+import {
+  pluginJobAction,
+  pluginJobsView,
+} from "../../../plugins/hosts/durable/jobs-route.js";
+import {
+  purgeDurableInstall,
+  resumeDurableInstall,
+} from "../../../plugins/hosts/durable/objects.js";
+import { listPluginHostCostLines } from "../../../plugins/hosts/usage.js";
+import { readPluginIcon as readStoredIcon } from "../../../plugins/icons/store.js";
+import {
+  type PluginDevLink,
+  PluginTrustPolicies,
+} from "../../../plugins/trust/policy.js";
+import { pluginTrustData } from "../../../plugins/trust/view.js";
+
 import { settleOwnerAsk } from "../../../thread-artifacts/owner-ask.js";
 import { SettingsAudit } from "../../audit.js";
 import { McpModuleIdTaken } from "../../mcp-servers/service.js";
@@ -72,11 +96,15 @@ import {
   PluginBundleRejected,
   PluginBundleSourceUnavailable,
 } from "./errors.js";
-import { exportPluginBundle } from "./export.js";
+import {
+  type ExportIconFile,
+  exportIconHashes,
+  exportPluginBundle,
+} from "./export.js";
 import { gitHubFolderChanged } from "./github.js";
 import { pluginBundleLayers as layers } from "./layers.js";
 import { personalOverlapState } from "./overlap.js";
-import { iconDataUrl } from "./plugin-icon.js";
+import { iconDataUrl, type PluginIconFile } from "./plugin-icon.js";
 import { pluginPackageKey, readPluginPackage } from "./plugin-package.js";
 import {
   approvePluginProposal,
@@ -96,6 +124,8 @@ import {
   PluginSignatures,
   previewSignature,
 } from "./signature.js";
+
+const pluginTrustLogger = getLogger(["dx", "plugins", "trust"]);
 
 export type RouteScope =
   | { readonly mode: "personal" }
@@ -135,28 +165,72 @@ export const authorizePluginBundles = Effect.fn("authorizePluginBundles")(
  */
 const bundleContext = Effect.fn("pluginBundleContext")(function* (
   target: PluginTarget,
-  bundles: ReadonlyArray<StoredPluginBundle>,
   viewerUserId: string,
 ) {
+  // Every read selects by the target, not by bundle IDs read first, so they
+  // all go out together (one round trip on the coalescing binding).
   const repository = yield* PluginBundleRepository;
   const signatures = yield* PluginSignatures;
-  const [copies, shared, signed, own, skills, servers] = yield* Effect.all(
-    [
-      target.scope === "personal"
-        ? repository.workspaceCopies(target.id)
-        : Effect.succeed(undefined),
-      (yield* PluginShareLinks).shared(bundles.map(({ id }) => id)),
-      signatures.forPlugins(bundles),
-      signatures.ownFingerprints(viewerUserId),
-      (yield* SkillRepository).list(target),
-      (yield* McpServerRepository).list(target as McpServerTarget),
-    ],
-    { concurrency: "unbounded" },
-  );
-  return { copies, shared, signed, own, skills, servers };
+  const trustPolicies = yield* PluginTrustPolicies;
+  const [copies, shared, signed, own, skills, servers, trust, dev] =
+    yield* Effect.all(
+      [
+        target.scope === "personal"
+          ? repository.workspaceCopies(target.id)
+          : Effect.succeed(undefined),
+        (yield* PluginShareLinks).sharedForTarget(target),
+        signatures.forTarget(target),
+        signatures.ownFingerprints(viewerUserId),
+        (yield* SkillRepository).list(target),
+        (yield* McpServerRepository).list(target as McpServerTarget),
+        // The governing workspace's cap and trusted signers.
+        trustPolicies.forTarget(target),
+        target.scope === "personal"
+          ? trustPolicies.devLinksForTarget(target)
+          : Effect.succeed(new Map<string, PluginDevLink>()),
+      ],
+      { concurrency: "unbounded" },
+    );
+  return { copies, shared, signed, own, skills, servers, trust, dev };
 });
 
 type BundleContext = Effect.Success<ReturnType<typeof bundleContext>>;
+
+/** The icon files an export writes, read from `plugin_icon` at once. */
+const exportIconFiles = async (
+  db: D1Database | undefined,
+  manifest: StoredPluginBundle["manifest"],
+) => {
+  const files = new Map<string, ExportIconFile>();
+  if (db === undefined) return files;
+  await Promise.all(
+    exportIconHashes(manifest).map(async (hash) => {
+      const file = await readStoredIcon(db, hash);
+      if (file !== undefined) files.set(hash, file);
+    }),
+  );
+  return files;
+};
+
+/** The icon set's files as data URLs, for the install review. */
+const previewIconFiles = (bundle: {
+  readonly manifest: StoredPluginBundle["manifest"];
+  readonly iconFiles?: ReadonlyArray<PluginIconFile>;
+}) => {
+  const set = bundle.manifest.iconSet;
+  if (set === undefined) return {};
+  const wanted = new Set([set.src, set.dark, set.monochrome]);
+  const iconFiles: Record<string, string> = {};
+  for (const file of bundle.iconFiles ?? [])
+    if (wanted.has(file.hash))
+      iconFiles[file.hash] = iconDataUrl({
+        mediaType: file.mediaType,
+        data: btoa(
+          Array.from(file.bytes, (byte) => String.fromCharCode(byte)).join(""),
+        ),
+      });
+  return Object.keys(iconFiles).length === 0 ? {} : { iconFiles };
+};
 
 /** One bundle with the skills and MCP servers it installed. */
 const bundleData = (bundle: StoredPluginBundle, known: BundleContext) => {
@@ -184,6 +258,9 @@ const bundleData = (bundle: StoredPluginBundle, known: BundleContext) => {
     ...(bundle.manifest.icon === undefined
       ? {}
       : { icon: iconDataUrl(bundle.manifest.icon) }),
+    ...(bundle.manifest.iconSet === undefined
+      ? {}
+      : { iconSet: bundle.manifest.iconSet }),
     enabled: bundle.enabled,
     source: bundle.source,
     integrity: bundle.integrity,
@@ -221,6 +298,19 @@ const bundleData = (bundle: StoredPluginBundle, known: BundleContext) => {
     ...(signature === undefined
       ? {}
       : { signature: describeSignature(signature, known.own) }),
+    ...(bundle.manifest.code === undefined
+      ? {}
+      : {
+          trust: pluginTrustData(
+            bundle.target.scope,
+            bundle.manifest.code,
+            known.trust,
+            signature?.fingerprint,
+          ),
+        }),
+    ...(known.dev.get(bundle.id) === undefined
+      ? {}
+      : { dev: known.dev.get(bundle.id) }),
     installedAt: bundle.installedAt,
     updatedAt: bundle.updatedAt,
   } satisfies PluginBundleData;
@@ -232,7 +322,7 @@ const bundlesData = Effect.fn("pluginBundlesData")(function* (
   bundles: ReadonlyArray<StoredPluginBundle>,
   viewerUserId: string,
 ) {
-  const known = yield* bundleContext(target, bundles, viewerUserId);
+  const known = yield* bundleContext(target, viewerUserId);
   return bundles.map((bundle) => bundleData(bundle, known));
 });
 
@@ -543,11 +633,19 @@ const registerRoutes = (
 ) => {
   const operation = <A, E, R>(
     context: Context<AppEnv>,
-    use: (access: BundleAccess) => Effect.Effect<A, E, R>,
-    options: { readonly mutate: boolean },
+    use: (access: BundleAccess, db: D1Database) => Effect.Effect<A, E, R>,
+    options: {
+      readonly mutate: boolean;
+      /** Install and update: their writes go out as one atomic batch. */
+      readonly deferWrites?: boolean;
+    },
   ) =>
     Effect.gen(function* () {
-      const db = yield* decodeD1Binding(context.env.DB);
+      const binding = yield* decodeD1Binding(context.env.DB);
+      // Reads (and writes) a request issues together go to D1 as one
+      // batch, in the order issued; install and update also hold their
+      // writes back for one atomic batch (layers.ts).
+      const db = options.deferWrites === true ? binding : coalescingD1(binding);
       return yield* Effect.gen(function* () {
         const access = yield* authorizePluginBundles(
           routeFor(context),
@@ -556,8 +654,14 @@ const registerRoutes = (
         if (options.mutate && !access.canMutate) {
           return yield* new SettingsScopeForbidden({ scope: "workspace" });
         }
-        return yield* use(access);
-      }).pipe(Effect.provide(layers(db, context.env.DX_STORAGE)));
+        return yield* use(access, db);
+      }).pipe(
+        Effect.provide(
+          layers(db, context.env.DX_STORAGE, {
+            deferWrites: options.deferWrites === true,
+          }),
+        ),
+      );
     });
   const audit = (context: Context<AppEnv>) => ({
     userId: context.get("principal").userId,
@@ -593,32 +697,28 @@ const registerRoutes = (
       context,
       operation(
         context,
-        (access) =>
+        (access, db) =>
           Effect.gen(function* () {
             const repository = yield* PluginBundleRepository;
-            const db = yield* decodeD1Binding(context.env.DB);
-            // Independent reads run together; then every row's extras are
-            // read once for all bundles (bundleContext), never per bundle.
-            const [bundles, policy, pending] = yield* Effect.all(
+            // Every read runs together: on the coalescing binding they go
+            // to D1 as one batch after the access check.
+            const [bundles, policy, pending, known] = yield* Effect.all(
               [
                 repository.list(access.target),
                 access.target.scope === "workspace"
-                  ? policyView(context).pipe(
-                      Effect.map((view) => view.policy.restrictions),
-                    )
+                  ? (yield* WorkspacePolicyRepository)
+                      .get(access.target.id)
+                      .pipe(Effect.map((view) => view.restrictions))
                   : Effect.succeed(undefined),
                 // Only people who could approve a proposal see it.
                 access.canMutate
                   ? pendingPluginProposals(db, access.target)
                   : Effect.succeed([]),
+                bundleContext(access.target, context.get("principal").userId),
               ],
               { concurrency: "unbounded" },
             );
-            const items = yield* bundlesData(
-              access.target,
-              bundles,
-              context.get("principal").userId,
-            );
+            const items = bundles.map((bundle) => bundleData(bundle, known));
             // A row that no longer decodes is left out rather than failing
             // the page.
             const proposals = (yield* Effect.forEach(pending, (row) =>
@@ -640,6 +740,15 @@ const registerRoutes = (
                       personalOverridesAllowed:
                         policy.allowPersonalPluginInstallOverrides,
                       repositoryPluginsAllowed: policy.allowRepositoryPlugins,
+                    }),
+                ...(policy === undefined || !access.canMutate
+                  ? {}
+                  : {
+                      pluginTrust: {
+                        tierCap: policy.pluginTierCap ?? "verified",
+                        trustedProjectIds: policy.trustedPluginProjectIds ?? [],
+                        trustedSigners: policy.trustedPluginSigners ?? [],
+                      },
                     }),
               },
             });
@@ -683,13 +792,35 @@ const registerRoutes = (
               ...(body.allowRepositoryPlugins === undefined
                 ? {}
                 : { allowRepositoryPlugins: body.allowRepositoryPlugins }),
+              ...(body.pluginTierCap === undefined
+                ? {}
+                : { pluginTierCap: body.pluginTierCap }),
+              ...(body.trustedPluginProjectIds === undefined
+                ? {}
+                : {
+                    trustedPluginProjectIds: [
+                      ...new Set(body.trustedPluginProjectIds),
+                    ],
+                  }),
+              ...(body.trustedPluginSigners === undefined
+                ? {}
+                : {
+                    trustedPluginSigners: [
+                      ...new Set(body.trustedPluginSigners),
+                    ],
+                  }),
             };
+            const before = current.policy.restrictions;
             if (
               restrictions.allowPersonalPluginInstallOverrides !==
-                current.policy.restrictions
-                  .allowPersonalPluginInstallOverrides ||
+                before.allowPersonalPluginInstallOverrides ||
               restrictions.allowRepositoryPlugins !==
-                current.policy.restrictions.allowRepositoryPlugins
+                before.allowRepositoryPlugins ||
+              restrictions.pluginTierCap !== before.pluginTierCap ||
+              JSON.stringify(restrictions.trustedPluginProjectIds) !==
+                JSON.stringify(before.trustedPluginProjectIds) ||
+              JSON.stringify(restrictions.trustedPluginSigners) !==
+                JSON.stringify(before.trustedPluginSigners)
             ) {
               yield* policies.update(
                 context.get("principal"),
@@ -718,6 +849,11 @@ const registerRoutes = (
                 personalOverridesAllowed:
                   restrictions.allowPersonalPluginInstallOverrides,
                 repositoryPluginsAllowed: restrictions.allowRepositoryPlugins,
+                pluginTrust: {
+                  tierCap: restrictions.pluginTierCap ?? "verified",
+                  trustedProjectIds: restrictions.trustedPluginProjectIds ?? [],
+                  trustedSigners: restrictions.trustedPluginSigners ?? [],
+                },
               },
             });
           }),
@@ -1023,6 +1159,9 @@ const registerRoutes = (
                       context.get("principal").userId,
                     )
                   : undefined;
+              const iconFiles = yield* Effect.promise(() =>
+                exportIconFiles(context.env.DB, bundle.manifest),
+              );
               return yield* Effect.promise(() =>
                 exportPluginBundle(
                   {
@@ -1031,6 +1170,7 @@ const registerRoutes = (
                     mcpServers: servers,
                     codeModules,
                     packageFiles,
+                    iconFiles,
                   },
                   signer === undefined
                     ? undefined
@@ -1073,6 +1213,7 @@ const registerRoutes = (
               status: "success",
               data: {
                 manifest: preview.bundle.manifest,
+                ...previewIconFiles(preview.bundle),
                 source: preview.source,
                 integrity: preview.bundle.integrity,
                 conflicts: preview.conflicts,
@@ -1114,7 +1255,7 @@ const registerRoutes = (
               ))[0],
             });
           }),
-        { mutate: true },
+        { mutate: true, deferWrites: true },
       ),
       201,
     ),
@@ -1143,6 +1284,7 @@ const registerRoutes = (
               status: "success",
               data: {
                 manifest: preview.bundle.manifest,
+                ...previewIconFiles(preview.bundle),
                 source: preview.source,
                 integrity: preview.bundle.integrity,
                 conflicts: preview.conflicts,
@@ -1194,7 +1336,7 @@ const registerRoutes = (
               ))[0],
             });
           }),
-        { mutate: true },
+        { mutate: true, deferWrites: true },
       ),
     ),
   );
@@ -1219,6 +1361,17 @@ const registerRoutes = (
               body.enabled,
               audit(context),
             );
+            // Rich plugins (P3): jobs held while it was off resume now.
+            if (body.enabled)
+              try {
+                context.executionCtx.waitUntil(
+                  resumeDurableInstall(
+                    context.env,
+                    id,
+                    context.get("requestId"),
+                  ),
+                );
+              } catch {}
             const repository = yield* PluginBundleRepository;
             const updated = yield* repository.find(access.target, id);
             return yield* Schema.encodeUnknownEffect(
@@ -1236,6 +1389,186 @@ const registerRoutes = (
       ),
     ),
   );
+
+  // Personal-dev hot reload, on or off, for the owner's own personal plugin
+  // installed from a ZIP, bound to one of the person's own Threads: only that
+  // Thread's Orb may reload it. Only this browser request turns it on;
+  // `dxd plugin dev` can only use it.
+  router.put("/:pluginId/dev", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            if (access.target.scope !== "personal")
+              return yield* rejected(
+                "Hot reload is for your own personal plugins.",
+              );
+            const id = yield* parseId(context);
+            const body = yield* decodeJsonBody(
+              context.req,
+              SetPluginDevRequestSchema,
+              () => rejected("Send enabled: true or false."),
+            );
+            if (body.enabled && body.threadId === undefined)
+              return yield* rejected(
+                "Turn hot reload on for one Thread: run dxd plugin dev in it, and open the link it prints.",
+              );
+            const repository = yield* PluginBundleRepository;
+            const bundle = yield* repository.find(access.target, id);
+            if (body.enabled && bundle.source.type !== "zip")
+              return yield* rejected(
+                "Hot reload works for plugins installed from a ZIP.",
+              );
+            if (body.enabled && bundle.manifest.code === undefined)
+              return yield* rejected("This plugin has no code to reload.");
+            const threadId = body.enabled ? body.threadId : undefined;
+            if (threadId !== undefined) {
+              // The person's own Thread, not archived: a Thread someone
+              // shared with them is driven by its owner's Orb.
+              const db = yield* decodeD1Binding(context.env.DB);
+              const owned = yield* Effect.tryPromise({
+                try: () =>
+                  db
+                    .prepare(
+                      `SELECT 1 AS ok FROM threads
+                        WHERE id = ?1 AND owner_user_id = ?2
+                          AND lifecycle_state = 'active'`,
+                    )
+                    .bind(threadId, context.get("principal").userId)
+                    .first(),
+                catch: (cause) =>
+                  PersistenceUnavailable.new(
+                    { operation: "pluginDev.thread" },
+                    cause,
+                  ),
+              });
+              if (owned === null)
+                return yield* rejected(
+                  "Hot reload turns on only for an active Thread of your own.",
+                );
+            }
+            yield* (yield* PluginTrustPolicies).setDev(id, threadId);
+            pluginTrustLogger.info(
+              `Plugin ${bundle.name} hot reload ${body.enabled ? "on" : "off"}.`,
+              {
+                event: "plugin_dev_toggle",
+                requestId: context.get("requestId"),
+                installId: id,
+                enabled: body.enabled,
+                threadId,
+              },
+            );
+            return yield* Schema.encodeUnknownEffect(
+              UpdatePluginBundleResponseSchema,
+            )({
+              status: "success",
+              data: (yield* bundlesData(
+                access.target,
+                [bundle],
+                context.get("principal").userId,
+              ))[0],
+            });
+          }),
+        { mutate: true },
+      ),
+    ),
+  );
+
+  // ─── Durable host ───
+  // A plugin's background jobs: anyone who can list the plugin sees them;
+  // stopping or starting one takes the right to change the plugin.
+  router.get("/:pluginId/jobs", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const id = yield* parseId(context);
+            const bundle = yield* (yield* PluginBundleRepository).find(
+              access.target,
+              id,
+            );
+            const data = yield* Effect.tryPromise(() =>
+              pluginJobsView({
+                bindings: context.env,
+                bundle,
+                viewerUserId: context.get("principal").userId,
+                canMutate: access.canMutate,
+                requestId: context.get("requestId"),
+              }),
+            );
+            return yield* Schema.encodeUnknownEffect(PluginJobsResponseSchema)({
+              status: "success",
+              data,
+            });
+          }),
+        { mutate: false },
+      ),
+    ),
+  );
+
+  for (const action of ["stop", "start"] as const)
+    router.post(`/:pluginId/jobs/:jobId/${action}`, (context) =>
+      run(
+        context,
+        operation(
+          context,
+          (access) =>
+            Effect.gen(function* () {
+              const id = yield* parseId(context);
+              const { jobId } = yield* decodeRequestInput(
+                PluginJobParamsSchema,
+                { jobId: context.req.param("jobId") },
+                () => rejected("That is not a job id."),
+              );
+              const body = yield* decodeJsonBody(
+                context.req,
+                PluginJobActionRequestSchema,
+                () => rejected("Send {} or { threadId }."),
+              );
+              const bundle = yield* (yield* PluginBundleRepository).find(
+                access.target,
+                id,
+              );
+              const done = yield* Effect.tryPromise(() =>
+                pluginJobAction({
+                  bindings: context.env,
+                  bundle,
+                  viewerUserId: context.get("principal").userId,
+                  requestId: context.get("requestId"),
+                  action,
+                  jobId,
+                  ...(body.threadId === undefined
+                    ? {}
+                    : { threadId: body.threadId }),
+                }),
+              );
+              if (!done)
+                return yield* rejected(
+                  "This plugin's jobs do not run here: its tier does not allow the durable host.",
+                );
+              return yield* Schema.encodeUnknownEffect(
+                PluginJobsResponseSchema,
+              )({
+                status: "success",
+                data: yield* Effect.tryPromise(() =>
+                  pluginJobsView({
+                    bindings: context.env,
+                    bundle,
+                    viewerUserId: context.get("principal").userId,
+                    canMutate: access.canMutate,
+                    requestId: context.get("requestId"),
+                  }),
+                ),
+              });
+            }),
+          { mutate: true },
+        ),
+      ),
+    );
 
   // Install-time settings of the plugin's code. Anyone who can list the
   // plugin reads them; changing them takes the right to change the plugin.
@@ -1263,6 +1596,47 @@ const registerRoutes = (
             return yield* Schema.encodeUnknownEffect(
               PluginBundleSettingsResponseSchema,
             )({ status: "success", data: { settings } });
+          }),
+        { mutate: false },
+      ),
+    ),
+  );
+
+  // ─── Host cost line ───
+  // What the plugin's long-lived hosts cost this month, charged to the
+  // installer's workspace (decision D4). Read when its details open, never
+  // on a plugin call.
+  router.get("/:pluginId/host-usage", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const id = yield* parseId(context);
+            const bundle = yield* (yield* PluginBundleRepository).find(
+              access.target,
+              id,
+            );
+            const db = yield* decodeD1Binding(context.env.DB);
+            const now = Date.now();
+            const lines = yield* Effect.tryPromise({
+              try: () => listPluginHostCostLines(db, [bundle.id], now),
+              catch: (cause) =>
+                PersistenceUnavailable.new(
+                  { operation: "settings.pluginBundles.hostUsage" },
+                  cause,
+                ),
+            });
+            return yield* Schema.encodeUnknownEffect(
+              PluginHostUsageResponseSchema,
+            )({
+              status: "success",
+              data: {
+                month: new Date(now).toISOString().slice(0, 7),
+                lines: lines.map(({ pluginId: _pluginId, ...line }) => line),
+              },
+            });
           }),
         { mutate: false },
       ),
@@ -1330,6 +1704,12 @@ const registerRoutes = (
             const id = yield* parseId(context);
             const service = yield* PluginBundleService;
             yield* service.remove(access.target, id, audit(context));
+            // Rich plugins (P3): its Durable Objects and blobs go too.
+            try {
+              context.executionCtx.waitUntil(
+                purgeDurableInstall(context.env, id, context.get("requestId")),
+              );
+            } catch {}
             return yield* Schema.encodeUnknownEffect(
               RemovePluginBundleResponseSchema,
             )({ status: "success", data: { removedPluginId: id } });

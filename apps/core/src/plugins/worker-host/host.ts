@@ -2,8 +2,14 @@ import { RpcTarget } from "cloudflare:workers";
 import {
   EnvironmentVariableName,
   EnvironmentVariableRepository,
+  generateThreadTitle,
+  PLUGIN_HOST_KINDS,
   type PluginBundleCode,
   type PluginCodeSetting,
+  type PluginHostKind,
+  type PluginIconSet,
+  pluginHostEntry,
+  pluginHostKinds,
   pluginThreadGrants,
   type UserId,
 } from "@dx/domain";
@@ -38,9 +44,20 @@ import {
   pluginAuditLogger,
 } from "../audit/audit.js";
 import {
+  type DurableOpener,
+  durableMetaOf,
+  durableStub,
+  type PluginDurableCapabilities,
+} from "../hosts/durable/client.js";
+import { tierAllowsHost } from "../hosts/policy.js";
+import type { PluginTier } from "../hosts/tier.js";
+import type { StreamTarget } from "../streams/open.js";
+import { streamLimits, tierStreams } from "../streams/tier.js";
+import {
   insertPaneEvent,
   invalidatePluginPanes,
   paneMessageJson,
+  savePaneSnapshot,
 } from "../thread-ui/panes.js";
 import {
   promptPollDelay,
@@ -64,6 +81,9 @@ import {
   promptSpecOf,
   quickActionOf,
 } from "../thread-ui/validate.js";
+import { configuredTierLimits } from "../trust/limits.js";
+import { callPlugin } from "../views/plugin-calls.js";
+import { showsViews } from "../views/tier.js";
 import {
   type PluginShellGate,
   type PluginShellRunner,
@@ -101,6 +121,11 @@ export const NOTICES_PER_MINUTE = 10;
 export const THREAD_POSTS_PER_CALL = 5;
 /** And at most this many a minute into one Thread. */
 export const THREAD_POSTS_PER_MINUTE = 10;
+/** A plugin wakes one Thread at most this many times an hour. */
+export const WAKES_PER_HOUR = 6;
+
+/** How long `threads.create` waits for a new Thread's first message. */
+const CREATE_THREAD_SETTLE_MS = 15_000;
 
 /** The install a call runs for, as resolution recorded it. */
 export interface PluginInstallRecord {
@@ -116,6 +141,21 @@ export interface PluginInstallRecord {
   readonly version: string;
   readonly integrity: string;
   readonly code: PluginBundleCode;
+  /**
+   * The trust tier resolution granted (plugin-trust.ts), from rows loaded
+   * with the Thread's plugins. Absent means sandboxed: fail closed.
+   */
+  readonly tier?: PluginTier;
+  /** The plugin's icon files by hash, for its UI and author tags. */
+  readonly iconSet?: PluginIconSet;
+  /** Who installed it; install-wide durable work runs as them. */
+  readonly installedByUserId?: string;
+  // ─── The Orb host ───
+  /**
+   * The plugin's own files, kept for the Orb: dxd lays them out as
+   * `PLUGIN_ROOT` for the Orb host. Read with the install, no extra query.
+   */
+  readonly package?: { readonly sha256: string; readonly size: number };
 }
 
 /** What the plugin's runtime is told about a call. */
@@ -126,6 +166,13 @@ export interface PluginCallInfo {
     readonly version: string;
   };
   readonly caller: { readonly userId: string };
+  /** The tier the call runs at; `ctx.tier`. */
+  readonly tier: PluginTier;
+  /**
+   * Wall-clock time each tool call, command, pane message, or host call
+   * gets: the tier's `callMs`. Absent in calls from before tiers: 60 s.
+   */
+  readonly callMs?: number;
   /** The Thread the call runs in; absent for a webhook trigger. */
   readonly threadId?: string;
   readonly grants: {
@@ -146,7 +193,28 @@ export interface PluginCallInfo {
     readonly threadPost: boolean;
     /** `dx.createAgent(...).run`: only inside a Thread. */
     readonly agents: boolean;
+    /** `ctx.panes.get(tabId).post` for its Thread tabs. */
+    readonly views?: boolean;
+    /** `ctx.plugins.call`, when `permissions.plugins` lists any. */
+    readonly plugins?: boolean;
+    // ─── Durable host ───
+    /** `ctx.sql`, `ctx.blobs`, `ctx.jobs`: the install's Durable Object. */
+    readonly durable?: boolean;
+    /** `ctx.wake`: wake a Thread with a message. */
+    readonly wake?: boolean;
+    /** `ctx.watch`: only in the durable host. */
+    readonly watch?: boolean;
   };
+  // ─── Hosts ───
+  /**
+   * The hosts `ctx.host(kind)` may reach, tier-gated; absent when the
+   * manifest uses the plain `host: "worker"` form, so `ctx.host` is too.
+   */
+  readonly hosts?: ReadonlyArray<PluginHostKind>;
+  /** The plugin whose `ctx.plugins.call` this export call serves. */
+  readonly calledBy?: string;
+  /** `ctx.ui.stream`: panes in a Thread, at a trusted tier. */
+  readonly streams?: boolean;
 }
 
 export interface PluginHostDependencies {
@@ -184,7 +252,137 @@ export interface PluginHostDependencies {
    * them only where it can check them.
    */
   readonly shellGate?: PluginShellGate;
+  // ─── Hosts ───
+  /** The install's trust tier for this call; `sandboxed` when absent. */
+  readonly tier?: PluginTier;
+  /** The request that started the call, for log lines. */
+  readonly requestId?: string;
+  /**
+   * The webhook delivery this call serves. A retried delivery keeps it, so
+   * `threads.create` derives its Thread IDs from it and a retry finds the
+   * Threads an earlier attempt started instead of starting them again. Only
+   * the delivery's own plugin gets it, never a plugin it calls.
+   */
+  readonly deliveryId?: string;
+  /** The workspace billed for the install's long-lived hosts. */
+  readonly workspaceId?: string;
+  /** The host running this call; `worker` when absent. */
+  readonly currentHost?: PluginHostKind;
+  // ─── Plugin-to-plugin calls ───
+  /** The plugins whose calls led here, outermost first. */
+  readonly callChain?: ReadonlyArray<string>;
+  /** The plugin whose `ctx.plugins.call` this call serves. */
+  readonly calledBy?: string;
+  /** What is left of this call's time limit; set by the worker host. */
+  readonly remainingMs?: () => number;
+  /**
+   * The installs a `ctx.plugins.call` may reach, when the caller already
+   * resolved them; otherwise one D1 read when the plugin first calls.
+   */
+  readonly peers?: () => Promise<ReadonlyArray<PluginInstallRecord>>;
+  // ─── Durable host ───
+  /**
+   * The install's Durable Object, when the call runs inside it; otherwise
+   * `ctx.sql`, `ctx.blobs`, and `ctx.jobs` reach it by RPC.
+   */
+  readonly durable?: PluginDurableCapabilities;
+  /** What a durable-host call is running, so a watch it opens can reopen. */
+  readonly durableOpener?: DurableOpener;
+  /**
+   * The Thread is archived and the plugin runs there as `live`: no posts,
+   * wakes, prompts, agents, or Orb commands.
+   */
+  readonly archivedLive?: boolean;
+  /**
+   * Keeps work a call starts alive after its response, such as a new
+   * Thread's first-message delivery. Without one, `threads.create` waits for
+   * that work itself: a promise nobody holds is cancelled when the request
+   * ends, and the first message would wait for the minute sweep.
+   */
+  readonly waitUntil?: (promise: Promise<unknown>) => void;
 }
+
+/**
+ * The tier a call runs at: the caller's explicit tier, else the one
+ * resolution recorded on the install, else sandboxed (fail closed).
+ */
+export const callTier = (
+  dependencies: Pick<PluginHostDependencies, "tier" | "install">,
+): PluginTier => dependencies.tier ?? dependencies.install.tier ?? "sandboxed";
+// ─── Durable host ───
+/**
+ * The durable grants a call gets. A tier below the trusted one gets none:
+ * the feature is dropped, not refused, and the drop is logged once per
+ * isolate and install version (`plugin_durable_blocked`).
+ */
+const durableGrants = (dependencies: PluginHostDependencies) => {
+  const { install } = dependencies;
+  const tier = callTier(dependencies);
+  const wantsDurable = pluginHostEntry(install.code, "durable") !== undefined;
+  const wantsWake = install.code.permissions.wake === true;
+  if (!wantsDurable && !wantsWake) return {};
+  const trusted = tierAllowsHost(tier, "durable");
+  if (!trusted) {
+    logDurableBlocked(dependencies, tier);
+    return { durable: false, wake: false, watch: false };
+  }
+  const deployed = dependencies.bindings.PLUGIN_DURABLE_HOST !== undefined;
+  return {
+    durable: wantsDurable && deployed,
+    wake: wantsWake && dependencies.archivedLive !== true,
+    watch:
+      dependencies.currentHost === "durable" &&
+      install.code.permissions.network.length > 0,
+  };
+};
+
+const blockedLogged = new Set<string>();
+const logDurableBlocked = (
+  dependencies: PluginHostDependencies,
+  tier: PluginTier,
+) => {
+  const key = `${dependencies.install.pluginId}:${dependencies.install.integrity}:${tier}`;
+  if (blockedLogged.has(key)) return;
+  blockedLogged.add(key);
+  logger.warn(
+    `Plugin ${dependencies.install.name} asks for the durable host, which its ${tier} tier does not allow; ctx.sql, ctx.blobs, ctx.jobs, ctx.watch, ctx.wake, and its jobs are off.`,
+    {
+      event: "plugin_durable_blocked",
+      requestId: dependencies.requestId,
+      installId: dependencies.install.pluginId,
+      host: "durable",
+      tier,
+      outcome: "blocked-tier",
+      threadId: dependencies.threadId,
+    },
+  );
+};
+
+/**
+ * The time one call gets at the call's tier, from config
+ * (`DX_PLUGIN_TIER_LIMITS`); `fallback` when the bindings carry no limits.
+ */
+export const pluginCallMs = (
+  dependencies: Pick<PluginHostDependencies, "tier" | "install" | "bindings">,
+  fallback: number,
+): number =>
+  configuredTierLimits(dependencies.bindings ?? {}, callTier(dependencies))
+    .callMs || fallback;
+
+/**
+ * The hosts `ctx.fetch` may reach: the manifest's list, or none when it
+ * lists more than the call's tier allows (dropped, not trimmed).
+ */
+export const grantedNetwork = (
+  dependencies: Pick<PluginHostDependencies, "tier" | "install" | "bindings">,
+): ReadonlyArray<string> => {
+  const { network } = dependencies.install.code.permissions;
+  return network.length >
+    configuredTierLimits(dependencies.bindings ?? {}, callTier(dependencies))
+      .networkHosts
+    ? []
+    : network;
+};
 
 export const pluginCallInfo = (
   dependencies: PluginHostDependencies,
@@ -199,16 +397,24 @@ export const pluginCallInfo = (
       version: dependencies.install.version,
     },
     caller: { userId: dependencies.actorUserId ?? dependencies.ownerUserId },
+    tier: callTier(dependencies),
+    callMs: pluginCallMs(dependencies, 60_000),
     ...(dependencies.threadId === undefined
       ? {}
       : { threadId: dependencies.threadId }),
     grants: {
-      network: permissions.network.length > 0,
+      network: grantedNetwork(dependencies).length > 0,
       secrets: permissions.secrets.length > 0,
       tools:
         permissions.tools.length > 0 && dependencies.callTool !== undefined,
       ai: permissions.ai && dependencies.threadId !== undefined,
-      prompt: ui.has("prompt") && dependencies.threadId !== undefined,
+      // A call another plugin made cannot wait on a person: its time is
+      // the caller's, which keeps running.
+      prompt:
+        ui.has("prompt") &&
+        dependencies.threadId !== undefined &&
+        dependencies.calledBy === undefined &&
+        dependencies.archivedLive !== true,
       notify: ui.has("notify") && dependencies.threadId !== undefined,
       quickActions:
         ui.has("quick-action") && dependencies.threadId !== undefined,
@@ -217,17 +423,44 @@ export const pluginCallInfo = (
       // that starts Threads would run again in each one it starts.
       threads: threads.has("create") && dependencies.threadId === undefined,
       threadRead: threads.has("read"),
-      threadPost: threads.has("post"),
+      threadPost: threads.has("post") && dependencies.archivedLive !== true,
       agents:
         permissions.agents === true &&
         dependencies.threadId !== undefined &&
+        dependencies.archivedLive !== true &&
         dependencies.install.scope !== "repository",
       // A webhook delivery has no Thread, so no Orb to run commands in.
       shell:
         permissions.shell === true &&
         dependencies.threadId !== undefined &&
-        dependencies.shellGate !== undefined,
+        dependencies.shellGate !== undefined &&
+        dependencies.archivedLive !== true,
+      views:
+        dependencies.threadId !== undefined &&
+        (dependencies.install.code.views?.tabs.length ?? 0) > 0 &&
+        showsViews(dependencies.install),
+      plugins: (permissions.plugins ?? []).length > 0,
+      // ─── Durable host ───
+      ...durableGrants(dependencies),
     },
+    // ─── Hosts ───
+    ...(dependencies.install.code.hosts === undefined
+      ? {}
+      : {
+          hosts: pluginHostKinds(dependencies.install.code).filter(
+            (kind) =>
+              kind !== (dependencies.currentHost ?? "worker") &&
+              tierAllowsHost(callTier(dependencies), kind),
+          ),
+        }),
+    ...(dependencies.calledBy === undefined
+      ? {}
+      : { calledBy: dependencies.calledBy }),
+    ...(ui.has("pane") &&
+    dependencies.threadId !== undefined &&
+    tierStreams(dependencies.bindings, callTier(dependencies))
+      ? { streams: true }
+      : {}),
   };
 };
 
@@ -278,6 +511,15 @@ export class PluginHost extends RpcTarget {
     this.#open = false;
     this.#ended.abort(new Error("The plugin call ended."));
     this.#shell?.stop();
+    // A call's producers end with it.
+    for (const stream of this.#streams.values()) {
+      void stream.socket
+        ?.then((socket) => socket.close(1000, "call ended"))
+        .catch(() => undefined);
+      for (const handler of stream.handlers)
+        (handler as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    }
+    this.#streams.clear();
     if (this.#waiting.size === 0) return;
     const { db, bindings, threadId } = this.#dependencies;
     if (threadId === undefined) return;
@@ -306,12 +548,15 @@ export class PluginHost extends RpcTarget {
   }
 
   async log(level: string, message: string, data: unknown) {
-    const { install, threadId } = this.#check();
+    const dependencies = this.#check();
+    const { install, threadId } = dependencies;
     const properties = {
       event: "plugin_log",
       pluginId: install.pluginId,
       plugin: install.name,
       version: install.version,
+      tier: callTier(dependencies),
+      requestId: dependencies.requestId,
       threadId,
       data,
     };
@@ -434,9 +679,12 @@ export class PluginHost extends RpcTarget {
       throw new Error("Plugins reach only https:// URLs on port 443.");
     if (target.username !== "" || target.password !== "")
       throw new Error("A fetch URL must not hold user info.");
-    if (!hostGranted(install.code.permissions.network, target.hostname))
+    const network = grantedNetwork(this.#check());
+    if (!hostGranted(network, target.hostname))
       throw new Error(
-        `${install.name} may not reach ${target.hostname}; its manifest grants ${install.code.permissions.network.join(", ") || "no hosts"}.`,
+        network.length < install.code.permissions.network.length
+          ? `${install.name} lists more network hosts than its ${callTier(this.#check())} tier allows, so it reaches none.`
+          : `${install.name} may not reach ${target.hostname}; its manifest grants ${network.join(", ") || "no hosts"}.`,
       );
     const method = (init.method ?? "GET").toUpperCase();
     const response = await fetch(target, {
@@ -610,6 +858,26 @@ export class PluginHost extends RpcTarget {
   }
 
   /**
+   * A post to a pane needs the `pane` grant; a post to one of its Thread
+   * tabs needs the tab declared and the trusted tier.
+   */
+  #paneOrView(id: unknown) {
+    const dependencies = this.#check();
+    const { install, threadId } = dependencies;
+    const isTab =
+      typeof id === "string" &&
+      (install.code.views?.tabs ?? []).some((tab) => tab.id === id);
+    if (!isTab) return this.#ui("pane");
+    if (!showsViews(install))
+      throw new Error(
+        `${install.name}'s tabs need a trusted tier; this install runs sandboxed.`,
+      );
+    if (threadId === undefined)
+      throw new Error("Plugin UI shows in a Thread; this call has none.");
+    return { ...dependencies, threadId };
+  }
+
+  /**
    * Shows a confirm, input, or select above the Thread's composer and waits
    * for a person's answer. Resolves null when nobody answers in time.
    */
@@ -726,9 +994,36 @@ export class PluginHost extends RpcTarget {
     await invalidatePluginUi(bindings, threadId);
   }
 
+  /**
+   * Calls another plugin's exported function for `ctx.plugins.call`;
+   * dx checks the grant, both installs, and both tiers, and audits it.
+   */
+  async pluginCall(
+    plugin: unknown,
+    fn: unknown,
+    args: unknown,
+    budgetMs?: unknown,
+  ) {
+    const dependencies = this.#check();
+    if (typeof plugin !== "string" || typeof fn !== "string")
+      throw new TypeError(
+        "ctx.plugins.call takes a plugin name and a function name.",
+      );
+    return callPlugin(
+      dependencies,
+      plugin,
+      fn,
+      args,
+      typeof budgetMs === "number" && Number.isFinite(budgetMs)
+        ? budgetMs
+        : undefined,
+    );
+  }
+
   /** Sends a message to every open copy of one of its panes. */
   async panePost(id: unknown, message: unknown) {
-    const { db, bindings, install, threadId } = this.#ui("pane");
+    const dependencies = this.#paneOrView(id);
+    const { db, bindings, install, threadId } = dependencies;
     await insertPaneEvent(db, {
       threadId,
       pluginId: install.pluginId,
@@ -736,8 +1031,28 @@ export class PluginHost extends RpcTarget {
       paneId: paneIdOf(id),
       kind: "post",
       messageJson: paneMessageJson(message),
+      perMinute: configuredTierLimits(bindings, callTier(dependencies))
+        .paneMessagesPerMinute,
     });
     await invalidatePluginPanes(bindings, threadId);
+  }
+
+  /**
+   * Saves the pane's state for archived Threads: when the plugin says
+   * `archivedThreads: "show"`, an archived Thread draws the pane read-only
+   * from the last state saved here. Each call replaces the last. A pane
+   * needs the `pane` grant; a Thread tab needs only to be declared, as for
+   * posting to it.
+   */
+  async paneSnapshot(id: unknown, state: unknown) {
+    const { db, install, threadId } = this.#paneOrView(id);
+    await savePaneSnapshot(db, {
+      threadId,
+      pluginId: install.pluginId,
+      pluginName: install.name,
+      paneId: paneIdOf(id),
+      stateJson: paneMessageJson(state),
+    });
   }
 
   async removeQuickAction(id: unknown) {
@@ -935,9 +1250,13 @@ export class PluginHost extends RpcTarget {
       db,
       install,
       ownerUserId,
-      ...(dependencies.actorUserId === undefined
+      ...(this.#dependencies.actorUserId === undefined
         ? {}
-        : { actorUserId: dependencies.actorUserId }),
+        : { actorUserId: this.#dependencies.actorUserId }),
+      // Keeps the first message's delivery alive past this call.
+      ...(this.#dependencies.waitUntil === undefined
+        ? {}
+        : { waitUntil: this.#dependencies.waitUntil }),
       definition: agent,
       prompt: message,
       // Named for the agent and its request: a run started here has no
@@ -998,8 +1317,29 @@ export class PluginHost extends RpcTarget {
     readonly prompt?: unknown;
     readonly projectId?: unknown;
     readonly title?: unknown;
+    /** One of this plugin's own Thread types, by id. */
+    readonly type?: unknown;
   }) {
     const { install, bindings, ownerUserId } = this.#check();
+    if (
+      options.type !== undefined &&
+      (typeof options.type !== "string" ||
+        !(install.code.views?.threadTypes ?? []).some(
+          ({ id }) => id === options.type,
+        ))
+    )
+      throw new Error(
+        `${install.name} declares no Thread type ${String(options.type)}; a plugin starts only its own types.`,
+      );
+    // As the route checks: Thread types need the trusted tier, and never
+    // come from a repository's own plugin.
+    if (
+      options.type !== undefined &&
+      (install.scope === "repository" || !showsViews(install))
+    )
+      throw new Error(
+        `${install.name}'s Thread types need a trusted tier; this install runs ${install.tier ?? "sandboxed"}.`,
+      );
     if (
       !pluginThreadGrants(install.code.permissions.threads).includes("create")
     )
@@ -1024,26 +1364,73 @@ export class PluginHost extends RpcTarget {
     this.#threadsCreated += 1;
     if (this.#threadsCreated > 5)
       throw new Error("A plugin call may start at most 5 Threads.");
+    // A webhook delivery's Threads have IDs its retries derive again: a
+    // retry finds the Thread an earlier attempt started and returns it. The
+    // ID hashes in this install, so only its own delivery made it. A
+    // plugin's Thread is written with its first message pending in one
+    // batch, and the sweep delivers one the request did not, so a row found
+    // here has started or will; a deleted one stays deleted.
+    const threadId =
+      this.#dependencies.deliveryId === undefined
+        ? `thr_${crypto.randomUUID()}`
+        : await deliveryThreadId(
+            this.#dependencies.deliveryId,
+            install.pluginId,
+            this.#threadsCreated,
+          );
+    if (this.#dependencies.deliveryId !== undefined) {
+      const earlier = await this.#dependencies.db
+        .prepare("SELECT owner_user_id FROM threads WHERE id = ?1")
+        .bind(threadId)
+        .first<string>("owner_user_id");
+      if (earlier === ownerUserId) return { threadId };
+      if (earlier !== null)
+        throw new Error("dx could not start the Thread (HTTP 409).");
+    }
+    const outliving: Array<Promise<unknown>> = [];
     const { response, payload } = await ownerRequest(
       // A webhook's text, not the owner's: tools that act only on the
       // owner's own word (manage_dx) refuse it.
-      { bindings, ownerUserId: ownerUserId as UserId, automation: "external" },
+      {
+        bindings,
+        ownerUserId: ownerUserId as UserId,
+        automation: "external",
+        waitUntil:
+          this.#dependencies.waitUntil ??
+          ((promise) => {
+            outliving.push(promise);
+          }),
+      },
       "POST",
       "/v1/threads",
       {
-        threadId: `thr_${crypto.randomUUID()}`,
+        threadId,
         ...(options.projectId === undefined
           ? {}
           : { projectId: options.projectId }),
+        // Shortened as a Thread title is, so a long one never fails creation.
         ...(options.title === undefined
           ? {}
-          : { title: options.title, generateTitle: false }),
+          : {
+              title: generateThreadTitle(options.title),
+              generateTitle: false,
+            }),
+        ...(typeof options.type === "string"
+          ? { pluginThreadType: `${install.name}/${options.type}` }
+          : {}),
         initialMessage: {
           body: `${options.prompt}\n\n(Started by the ${install.displayName} plugin.)`,
           attachments: [],
         },
       },
     );
+    // The first message's delivery runs after the response; with no request
+    // to keep it alive, wait for it here, at most as long as a delivery takes.
+    if (outliving.length > 0)
+      await Promise.race([
+        Promise.allSettled(outliving),
+        new Promise((resolve) => setTimeout(resolve, CREATE_THREAD_SETTLE_MS)),
+      ]);
     const created = payload?.data as { readonly id?: string } | undefined;
     const failure = (
       payload?.error as { readonly message?: unknown } | undefined
@@ -1106,6 +1493,9 @@ export class PluginHost extends RpcTarget {
     return dependencies;
   }
 
+  /** Failures whose run already wrote their own `failed` row. */
+  readonly #failureAudited = new WeakSet<object>();
+
   /**
    * Runs one Thread action and records it in the plugin audit, refused or
    * not. `target` is the Thread the plugin named, or the calling Thread.
@@ -1147,17 +1537,18 @@ export class PluginHost extends RpcTarget {
       if (audited !== true) await audit("success", detail);
       return value;
     } catch (error) {
-      await audit(
-        error instanceof ThreadAccessRefused ? "rejected" : "failed",
-        {
-          reason:
-            error instanceof ThreadAccessRefused
-              ? error.reason
-              : error instanceof Error
-                ? error.message.slice(0, 300)
-                : "unknown",
-        },
-      );
+      if (!this.#failureAudited.has(error as object))
+        await audit(
+          error instanceof ThreadAccessRefused ? "rejected" : "failed",
+          {
+            reason:
+              error instanceof ThreadAccessRefused
+                ? error.reason
+                : error instanceof Error
+                  ? error.message.slice(0, 300)
+                  : "unknown",
+          },
+        );
       throw error instanceof Error ? new Error(error.message) : error;
     }
   }
@@ -1315,4 +1706,562 @@ export class PluginHost extends RpcTarget {
       return { value: { submissionId: posted.submissionId }, audited: true };
     });
   }
+
+  // ─── Hosts ───
+  /**
+   * `ctx.host(kind).call(fn, args)`: runs a function the install's code
+   * exposed in another host, with this same capability object's inputs.
+   * Refused, and logged, when the manifest names no such host or the tier
+   * does not allow it.
+   */
+  async hostCall(kind: unknown, fn: unknown, args: unknown) {
+    const dependencies = this.#check();
+    const { install } = dependencies;
+    const tier = callTier(dependencies);
+    const from = dependencies.currentHost ?? "worker";
+    const started = Date.now();
+    const { logPluginHostCall, pluginHostRefusal, pluginHostRuntime } =
+      await import("../hosts/index.js");
+    const host = (PLUGIN_HOST_KINDS as ReadonlyArray<unknown>).includes(kind)
+      ? (kind as PluginHostKind)
+      : undefined;
+    const log = (outcome: string, detail?: string) =>
+      logPluginHostCall({
+        requestId: dependencies.requestId,
+        installId: install.pluginId,
+        host: host ?? "unknown",
+        from,
+        tier,
+        call: "host-call",
+        outcome,
+        ms: Date.now() - started,
+        threadId: dependencies.threadId,
+        detail,
+      });
+    if (host === undefined) {
+      log("not-declared", `unknown host ${String(kind).slice(0, 32)}`);
+      throw new Error(`dx has no host named ${String(kind).slice(0, 32)}.`);
+    }
+    if (typeof fn !== "string" || !/^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/.test(fn)) {
+      log("failed", "bad function name");
+      throw new Error(
+        "ctx.host(kind).call takes the name of an exposed function.",
+      );
+    }
+    // A host calling itself would start a fresh call, and limit, each time.
+    if (host === from) {
+      log("failed", "a host cannot call itself");
+      throw new Error(
+        `This code already runs in the ${host} host; call the function directly.`,
+      );
+    }
+    const refusal = pluginHostRefusal(install.code, tier, host);
+    if (refusal !== undefined) {
+      log(refusal.reason);
+      throw new Error(refusal.message);
+    }
+    const runtime = pluginHostRuntime(host, {
+      dependencies: {
+        ...dependencies,
+        currentHost: host,
+      },
+    });
+    if (runtime === undefined) {
+      log("unavailable");
+      throw new Error(`This deployment does not run the ${host} host.`);
+    }
+    // The other host enforces its own limit; this call's limit pauses
+    // meanwhile, still bounded by withHost's ceiling.
+    dependencies.humanWait?.start();
+    const outcome = await Effect.runPromise(
+      runtime
+        .invoke(
+          {
+            installId: install.pluginId,
+            integrity: install.integrity,
+            ...(dependencies.threadId === undefined
+              ? {}
+              : { threadId: dependencies.threadId }),
+            workspaceId: dependencies.workspaceId ?? "",
+            tier,
+          },
+          { kind: "host-call", fn, args, from },
+        )
+        .pipe(
+          Effect.map((value) => ({ ok: true as const, value })),
+          Effect.catchTag("PluginHostError", (error) =>
+            Effect.succeed({ ok: false as const, error }),
+          ),
+        ),
+    ).finally(() => dependencies.humanWait?.end());
+    if (outcome.ok) {
+      log("ok");
+      return outcome.value;
+    }
+    log(outcome.error.reason, outcome.error.message.slice(0, 300));
+    throw new Error(outcome.error.message);
+  }
+
+  // ─── Durable host ───
+  /** The install's Durable Object: in-process inside it, else by RPC. */
+  #durable(capability: string) {
+    const dependencies = this.#check();
+    if (pluginCallInfo(dependencies).grants.durable !== true)
+      throw new Error(
+        `${capability} needs the durable host: a trusted tier and a manifest that declares jobs or host.durable.`,
+      );
+    const meta = durableMetaOf(dependencies);
+    return {
+      meta,
+      dependencies,
+      capabilities:
+        dependencies.durable ??
+        (durableStub(
+          dependencies.bindings,
+          meta,
+        ) as unknown as PluginDurableCapabilities),
+    };
+  }
+
+  /** Runs one durable capability and logs one line for it. */
+  async #durableCall<T>(
+    capability: string,
+    run: (
+      capabilities: PluginDurableCapabilities,
+      meta: ReturnType<typeof durableMetaOf>,
+    ) => Promise<T>,
+  ): Promise<T> {
+    const started = Date.now();
+    const dependencies = this.#check();
+    const log = (outcome: string, detail?: string) =>
+      logger[outcome === "ok" ? "info" : "warn"](
+        `Plugin ${dependencies.install.name} ${capability}: ${outcome}.`,
+        {
+          event: "plugin_durable_call",
+          requestId: dependencies.requestId,
+          installId: dependencies.install.pluginId,
+          host: "durable",
+          from: dependencies.currentHost ?? "worker",
+          tier: callTier(dependencies),
+          capability,
+          outcome,
+          ms: Date.now() - started,
+          threadId: dependencies.threadId,
+          ...(detail === undefined ? {} : { detail }),
+        },
+      );
+    try {
+      const { capabilities, meta } = this.#durable(capability);
+      const value = await run(capabilities, meta);
+      log("ok");
+      return value;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log(/quota/i.test(message) ? "quota" : "refused", message.slice(0, 300));
+      throw new Error(message);
+    }
+  }
+
+  async sqlExec(statement: unknown, params: unknown) {
+    return this.#durableCall("ctx.sql.exec", (capabilities, meta) =>
+      capabilities.sqlExec(
+        meta,
+        String(statement),
+        Array.isArray(params) ? params : [],
+      ),
+    );
+  }
+
+  async blobPut(key: unknown, body: unknown, meta: unknown) {
+    const contentType =
+      meta !== null &&
+      typeof meta === "object" &&
+      typeof (meta as { contentType?: unknown }).contentType === "string"
+        ? (meta as { contentType: string }).contentType.slice(0, 200)
+        : undefined;
+    if (typeof body !== "string" && !(body instanceof ArrayBuffer))
+      throw new Error("A blob's body is text or an ArrayBuffer.");
+    return this.#durableCall("ctx.blobs.put", (capabilities, durable) =>
+      capabilities.blobPut(durable, String(key), body, contentType),
+    );
+  }
+
+  async blobGet(key: unknown) {
+    return this.#durableCall("ctx.blobs.get", (capabilities, meta) =>
+      capabilities.blobGet(meta, String(key)),
+    );
+  }
+
+  async blobDelete(key: unknown) {
+    return this.#durableCall("ctx.blobs.delete", (capabilities, meta) =>
+      capabilities.blobDelete(meta, String(key)),
+    );
+  }
+
+  async blobList(prefix: unknown) {
+    return this.#durableCall("ctx.blobs.list", (capabilities, meta) =>
+      capabilities.blobList(meta, typeof prefix === "string" ? prefix : ""),
+    );
+  }
+
+  async jobsSchedule(id: unknown, when: unknown, data: unknown) {
+    return this.#durableCall("ctx.jobs.schedule", (capabilities, meta) =>
+      capabilities.jobsSchedule(
+        meta,
+        String(id),
+        when !== null && typeof when === "object"
+          ? (when as { at?: number; every?: string; cron?: string })
+          : {},
+        data ?? null,
+      ),
+    );
+  }
+
+  async jobsCancel(id: unknown) {
+    return this.#durableCall("ctx.jobs.cancel", (capabilities, meta) =>
+      capabilities.jobsCancel(meta, String(id)),
+    );
+  }
+
+  async jobsList() {
+    return this.#durableCall("ctx.jobs.list", (capabilities, meta) =>
+      capabilities.jobsList(meta),
+    );
+  }
+
+  async watchOpen(target: unknown) {
+    return this.#durableCall("ctx.watch", async (capabilities, meta) => {
+      const dependencies = this.#check();
+      if (pluginCallInfo(dependencies).grants.watch !== true)
+        throw new Error(
+          "ctx.watch runs only in the durable host, for a plugin granted network hosts.",
+        );
+      if (typeof target !== "string") throw new Error("ctx.watch takes a URL.");
+      let url: URL;
+      try {
+        url = new URL(target);
+      } catch {
+        throw new Error("ctx.watch takes an absolute wss:// or https:// URL.");
+      }
+      if (url.protocol !== "wss:" && url.protocol !== "https:")
+        throw new Error("ctx.watch takes a wss:// or https:// URL.");
+      if (url.username !== "" || url.password !== "")
+        throw new Error("A watch URL must not hold user info.");
+      if (
+        !hostGranted(
+          dependencies.install.code.permissions.network,
+          url.hostname,
+        )
+      )
+        throw new Error(
+          `${dependencies.install.name} may not reach ${url.hostname}; its manifest grants ${dependencies.install.code.permissions.network.join(", ") || "no hosts"}.`,
+        );
+      if (dependencies.durableOpener === undefined)
+        throw new Error(
+          "ctx.watch runs only inside a job or an exposed function.",
+        );
+      await capabilities.watchOpen(
+        meta,
+        url.toString(),
+        dependencies.durableOpener,
+      );
+    });
+  }
+
+  async watchClose(target: unknown) {
+    return this.#durableCall("ctx.watch.close", (capabilities, meta) =>
+      capabilities.watchClose(meta, String(target)),
+    );
+  }
+
+  /**
+   * `ctx.wake(threadId, message)`: posts a message that starts the Thread's
+   * agent, marked as the plugin's. Needs `permissions.wake` and a trusted
+   * tier, reaches only Threads the plugin may post into, refuses archived
+   * Threads, and is limited per Thread and hour by its audit rows.
+   */
+  async wake(targetId: unknown, body: unknown) {
+    return this.#audited("thread.wake", targetId, async (target) => {
+      const dependencies = this.#check();
+      const { bindings, db, install, ownerUserId, threadId } = dependencies;
+      if (pluginCallInfo(dependencies).grants.wake !== true)
+        throw new ThreadAccessRefused(
+          `${install.name} may not wake Threads: it needs permissions.wake and a trusted tier.`,
+          "not_granted",
+        );
+      if (typeof body !== "string" || body.trim() === "")
+        throw new ThreadAccessRefused(
+          "A wake needs a message.",
+          "invalid_body",
+        );
+      // As for posts: a turn a plugin's message started may not wake an
+      // agent again, or plugins could keep a Thread working forever.
+      if (dependencies.turnStartedByPlugin === true)
+        throw new ThreadAccessRefused(
+          "A plugin's message started this turn, so plugins may not wake the agent from it.",
+          "plugin_turn",
+        );
+      if (body.length > THREAD_POST_MAX_CHARS)
+        throw new ThreadAccessRefused(
+          `A wake message is at most ${THREAD_POST_MAX_CHARS.toLocaleString("en-US")} characters.`,
+          "too_long",
+        );
+      const reach = await this.#reach(target, "post");
+      if (reach.archived)
+        throw new ThreadAccessRefused(
+          "The Thread is archived; dx does not wake archived Threads.",
+          "archived",
+        );
+      const auditId = `pla_${crypto.randomUUID()}`;
+      const now = new Date();
+      const admitted = await db
+        .prepare(
+          `INSERT INTO plugin_audit (
+             id, plugin_id, plugin_name, plugin_version, scope, owner_user_id,
+             thread_id, action, target, outcome, detail_json, created_at)
+           SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, 'thread.wake', ?8, 'success', ?9, ?10
+            WHERE (SELECT count(*) FROM plugin_audit AS woke
+                    WHERE plugin_id = ?2 AND created_at > ?11 AND target = ?8
+                      AND action = 'thread.wake' AND outcome = 'success'
+                      -- A wake whose message was never posted spends none.
+                      AND NOT EXISTS (
+                        SELECT 1 FROM plugin_audit AS unsent
+                         WHERE unsent.plugin_id = ?2 AND unsent.target = ?8
+                           AND unsent.created_at >= woke.created_at
+                           AND unsent.action = 'thread.wake'
+                           AND unsent.outcome = 'failed'
+                           AND json_extract(unsent.detail_json, '$.refunds') = woke.id)) < ?12`,
+        )
+        .bind(
+          auditId,
+          install.pluginId,
+          install.name.slice(0, 214),
+          install.version.slice(0, 160),
+          install.scope,
+          ownerUserId,
+          threadId ?? null,
+          reach.id,
+          JSON.stringify(
+            auditDetail({ chars: body.length }, this.#dependencies.actorUserId),
+          ),
+          now.toISOString(),
+          new Date(now.getTime() - 3_600_000).toISOString(),
+          WAKES_PER_HOUR,
+        )
+        .run();
+      if (admitted.meta.changes === 0)
+        throw new ThreadAccessRefused(
+          `A plugin wakes one Thread at most ${WAKES_PER_HOUR} times an hour.`,
+          "rate_limit",
+        );
+      pluginAuditLogger.info(`Plugin ${install.name} thread.wake success`, {
+        event: "plugin_audit",
+        auditId,
+        requestId: dependencies.requestId,
+        pluginId: install.pluginId,
+        plugin: install.name,
+        scope: install.scope,
+        ownerUserId,
+        threadId,
+        action: "thread.wake",
+        target: reach.id,
+        outcome: "success",
+        tier: dependencies.tier,
+      });
+      const posted = await postPluginThreadMessage(bindings, {
+        ownerUserId,
+        threadId: reach.id,
+        install,
+        body,
+        note: false,
+        idempotencyKey: `plugin_wake_${install.pluginId}_${crypto.randomUUID()}`,
+      }).catch(async (error: unknown) => {
+        // A wake that never reached the Thread spends none of the hour's
+        // wakes. The audit is append-only, so a failed row names the
+        // success row it refunds, and the count above skips that wake.
+        const reason =
+          error instanceof Error ? error.message.slice(0, 300) : "unknown";
+        await insertPluginAudit(db, {
+          ...(this.#dependencies.actorUserId === undefined
+            ? {}
+            : { actorUserId: this.#dependencies.actorUserId }),
+          pluginId: install.pluginId,
+          pluginName: install.name,
+          pluginVersion: install.version,
+          scope: install.scope,
+          ownerUserId,
+          ...(threadId === undefined ? {} : { threadId }),
+          ...(dependencies.requestId === undefined
+            ? {}
+            : { requestId: dependencies.requestId }),
+          action: "thread.wake",
+          target: reach.id,
+          outcome: "failed",
+          detail: { reason, refunds: auditId },
+        });
+        const failure = new Error(reason);
+        this.#failureAudited.add(failure);
+        throw failure;
+      });
+      return { value: { submissionId: posted.submissionId }, audited: true };
+    });
+  }
+  readonly #streams = new Map<
+    string,
+    {
+      readonly target: StreamTarget;
+      socket: Promise<WebSocket> | undefined;
+      /** onMessage handlers' RPC stubs, released when the stream ends. */
+      readonly handlers: unknown[];
+    }
+  >();
+
+  #streamLog(
+    outcome: string,
+    paneId: string,
+    tier: string,
+    started: number,
+    detail?: string,
+  ) {
+    const { install, threadId, requestId, currentHost } = this.#dependencies;
+    const line = {
+      event: "plugin_stream_host",
+      requestId,
+      installId: install.pluginId,
+      streamId: `${install.name}/${paneId}`,
+      threadId,
+      host: currentHost ?? "worker",
+      tier,
+      outcome,
+      ms: Date.now() - started,
+      ...(detail === undefined ? {} : { detail }),
+    };
+    if (outcome === "ok") logger.info("Plugin stream opened.", line);
+    else logger.warn("Plugin stream refused.", line);
+  }
+
+  /**
+   * `ctx.ui.stream(paneId)`: opens the pane's stream for this plugin. The
+   * signed `url` lets a process the plugin starts be its producer; this
+   * call's own `send` and `onMessage` share one producer socket, opened on
+   * first use.
+   */
+  async streamOpen(id: unknown) {
+    const started = Date.now();
+    const dependencies = this.#ui("pane");
+    const { bindings, install, threadId } = dependencies;
+    const paneId = paneIdOf(id);
+    const tier = callTier(dependencies);
+    if (!tierStreams(bindings, tier)) {
+      this.#streamLog("blocked-tier", paneId, tier, started);
+      throw new Error("Streams need a trusted plugin tier.");
+    }
+    const target: StreamTarget = {
+      threadId,
+      pluginId: install.pluginId,
+      pluginName: install.name,
+      paneId,
+      tier,
+      bytesPerSecond: streamLimits(bindings, tier).streamBytesPerSecond,
+    };
+    const { openPluginStream } = await import("../streams/open.js");
+    const opened = await openPluginStream(bindings, target);
+    if (!this.#streams.has(paneId))
+      this.#streams.set(paneId, {
+        target,
+        socket: undefined,
+        handlers: [],
+      });
+    this.#streamLog("ok", paneId, tier, started);
+    return opened;
+  }
+
+  #producer(id: unknown) {
+    this.#check();
+    const paneId = paneIdOf(id);
+    const stream = this.#streams.get(paneId);
+    if (stream === undefined)
+      throw new Error("Open the stream with ctx.ui.stream first.");
+    if (stream.socket === undefined) {
+      const { bindings, requestId, currentHost } = this.#dependencies;
+      stream.socket = import("../streams/open.js").then(
+        ({ connectHostProducer }) =>
+          connectHostProducer(
+            bindings,
+            stream.target,
+            currentHost === "durable" ? "durable" : "worker",
+            requestId ?? crypto.randomUUID(),
+          ),
+      );
+    }
+    return stream.socket;
+  }
+
+  /** `PluginStream.send`: one message to every viewer of the pane. */
+  async streamSend(id: unknown, chunk: unknown) {
+    if (!(chunk instanceof ArrayBuffer) && typeof chunk !== "string")
+      throw new Error("A stream sends an ArrayBuffer or a string.");
+    const socket = await this.#producer(id);
+    socket.send(chunk);
+  }
+
+  /** `PluginStream.onMessage`: what the pane's viewers send. */
+  async streamOnMessage(id: unknown, handler: unknown) {
+    if (typeof handler !== "function")
+      throw new Error("onMessage takes a function.");
+    const socket = await this.#producer(id);
+    const kept = (handler as { dup?: () => unknown }).dup?.() ?? handler;
+    this.#streams.get(paneIdOf(id))?.handlers.push(kept);
+    socket.addEventListener("message", (event) => {
+      if (!this.#open) return;
+      void Promise.resolve(
+        (kept as (data: unknown) => unknown)(event.data),
+      ).catch(() => undefined);
+    });
+  }
+
+  /**
+   * `PluginStream.close`: ends this call's producer and revokes every URL
+   * issued for the stream until now.
+   */
+  async streamClose(id: unknown) {
+    const paneId = paneIdOf(id);
+    const stream = this.#streams.get(paneId);
+    if (stream === undefined) return;
+    this.#streams.delete(paneId);
+    if (stream.socket !== undefined)
+      (await stream.socket.catch(() => undefined))?.close(1000, "closed");
+    for (const handler of stream.handlers)
+      (handler as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    const { streamRelay } = await import("../streams/open.js");
+    await streamRelay(this.#check().bindings, stream.target).revoke(
+      "closed",
+      this.#dependencies.requestId,
+    );
+  }
 }
+
+/**
+ * A webhook delivery's Thread ID: the same for every attempt of the delivery,
+ * for the plugin's nth `threads.create`, as a version 4 `thr_` UUID.
+ */
+const deliveryThreadId = async (
+  deliveryId: string,
+  pluginId: string,
+  index: number,
+) => {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        `plugin-thread:${deliveryId}:${pluginId}:${index}`,
+      ),
+    ),
+  ).slice(0, 16);
+  digest[6] = ((digest[6] ?? 0) & 0x0f) | 0x40;
+  digest[8] = ((digest[8] ?? 0) & 0x3f) | 0x80;
+  const hex = [...digest]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `thr_${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};

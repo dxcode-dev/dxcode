@@ -498,6 +498,14 @@ export const postPluginThreadMessage = async (
           id: input.install.pluginId,
           name: input.install.displayName,
           scope: input.install.scope,
+          // The posting version's icon, kept with the message.
+          ...((input.install.iconSet?.src ??
+            input.install.iconSet?.monochrome) === undefined
+            ? {}
+            : {
+                iconHash: (input.install.iconSet?.src ??
+                  input.install.iconSet?.monochrome) as string,
+              }),
         },
         note: input.note,
       },

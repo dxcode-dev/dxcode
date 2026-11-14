@@ -231,9 +231,9 @@ describe("drawing boards", () => {
     ).toBe("document");
 
     // The agent's tool offers boards and makes one.
-    expect(toolDefinition(threadId).description).toContain(
-      'Drawing boards: create one with type "board"',
-    );
+    const description = toolDefinition(threadId).description;
+    expect(description).toContain('create a drawing board (type "board")');
+    expect(description).toContain("Drawing boards: a board is a canvas");
     expect(
       await toolFor(threadId)({
         action: "create",
@@ -318,6 +318,7 @@ describe("drawing boards", () => {
     expect(a1?.endBinding?.elementId).toBe("ok");
     // Laid out top to bottom along the arrows, without overlaps.
     const at = (id: string) => live.find((element) => element.id === id);
+    expect(at("login")?.backgroundColor).toBe("#a5d8ff");
     expect(at("ok")?.y).toBeGreaterThan(
       (at("login")?.y ?? 0) + (at("login")?.height ?? 0),
     );
@@ -327,8 +328,9 @@ describe("drawing boards", () => {
       artifact_id: created.artifact_id,
     });
     expect(view.type).toBe("board");
+    // A palette color reads back by its name, as an agent writes it.
     expect(view.markdown).toMatch(
-      /^rect login "Log in" x=\d+ y=\d+ w=\d+ h=\d+ fill=#a5d8ff$/m,
+      /^rect login "Log in" x=\d+ y=\d+ w=\d+ h=\d+ fill=blue$/m,
     );
     expect(view.markdown).toMatch(/^arrow a1 login -> ok "submit"$/m);
     // Writing back exactly what was read saves nothing new.

@@ -64,7 +64,12 @@ interface SkillServiceShape {
     target: SkillTarget,
     preview: SkillPreview,
     audit: AuditContext,
-    options: { readonly enabled: boolean; readonly pluginId?: PluginId },
+    options: {
+      readonly enabled: boolean;
+      readonly pluginId?: PluginId;
+      /** The scope's skills as the caller already read them. */
+      readonly existing?: ReadonlyArray<SkillWithVersion>;
+    },
   ) => Effect.Effect<SkillWithVersion, unknown>;
   readonly update: (
     target: SkillTarget,
@@ -81,6 +86,11 @@ interface SkillServiceShape {
     preview: SkillPreview,
     activate: boolean,
     audit: AuditContext,
+    /**
+     * The skill as the caller already read it, so a step of a larger write
+     * (a plugin update) reads nothing after its first write.
+     */
+    known?: { readonly current?: SkillWithVersion },
   ) => Effect.Effect<SkillWithVersion, unknown>;
   readonly changeState: (
     target: SkillTarget,
@@ -208,10 +218,14 @@ export class SkillService extends Context.Service<
           target: SkillTarget,
           preview: SkillPreview,
           auditContext: AuditContext,
-          options: { readonly enabled: boolean; readonly pluginId?: PluginId },
+          options: {
+            readonly enabled: boolean;
+            readonly pluginId?: PluginId;
+            readonly existing?: ReadonlyArray<SkillWithVersion>;
+          },
         ) {
           const { enabled } = options;
-          const existing = yield* repository.list(target);
+          const existing = options.existing ?? (yield* repository.list(target));
           if (existing.length >= MAX_SKILLS_PER_SCOPE) {
             return yield* new SkillLimitExceeded();
           }
@@ -276,8 +290,10 @@ export class SkillService extends Context.Service<
           preview: SkillPreview,
           activate: boolean,
           auditContext: AuditContext,
+          known?: { readonly current?: SkillWithVersion },
         ) {
-          const current = yield* repository.find(target, id);
+          const current =
+            known?.current ?? (yield* repository.find(target, id));
           if (preview.manifest.name !== current.skill.name) {
             return yield* new SkillIntegrityConflict();
           }
@@ -357,8 +373,22 @@ export class SkillService extends Context.Service<
             );
           },
         ),
-        publishFromPreview: (target, id, preview, activate, auditContext) =>
-          publishFromPreview(target, id, preview, activate, auditContext),
+        publishFromPreview: (
+          target,
+          id,
+          preview,
+          activate,
+          auditContext,
+          known,
+        ) =>
+          publishFromPreview(
+            target,
+            id,
+            preview,
+            activate,
+            auditContext,
+            known,
+          ),
         changeState: Effect.fn("SkillService.changeState")(
           function* (target, id, input, auditContext) {
             const current = yield* repository.find(target, id);

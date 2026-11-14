@@ -1,7 +1,8 @@
 import type { ThreadPaneLayout, ThreadPaneTab } from "@dx/api";
-import { Plus, Puzzle, X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
+import { RoutePluginPaneIcon } from "../plugin-ui/lazy-plugin-ui-icons.js";
 import {
   canOpenTerminal,
   flattenPaneTabs,
@@ -45,20 +46,43 @@ const panelId = (id: string) =>
 /**
  * Scrolls a newly chosen entry fully into view after layout, from an
  * intersection report, so choosing one never forces a layout of the view it
- * shows; an entry already in full view stays put.
+ * shows; an entry already in full view stays put. The whole entry counts,
+ * its close button included: revealing only its label left the button, and
+ * so part of the active tab, past the strip's edge on a phone.
  */
 const revealSelected = (node: HTMLElement | null) => {
   if (node === null) return;
-  const observer = new IntersectionObserver(
-    ([entry]) => {
-      observer.disconnect();
-      if (entry !== undefined && entry.intersectionRatio < 1)
-        node.scrollIntoView({ block: "nearest", inline: "nearest" });
-    },
-    { root: node.closest('[role="tablist"]'), threshold: 1 },
-  );
-  observer.observe(node);
-  return () => observer.disconnect();
+  const entryNode = node.closest<HTMLElement>(".stacked-tab") ?? node;
+  const root = node.closest('[role="tablist"]');
+  let observer: IntersectionObserver | undefined;
+  /** One look at the entry, scrolling it into view if it is clipped. */
+  const reveal = () => {
+    observer?.disconnect();
+    const current = new IntersectionObserver(
+      ([entry]) => {
+        current.disconnect();
+        if (entry !== undefined && entry.intersectionRatio < 1)
+          entryNode.scrollIntoView({ block: "nearest", inline: "nearest" });
+      },
+      { root, threshold: 1 },
+    );
+    observer = current;
+    current.observe(entryNode);
+  };
+  reveal();
+  // An entry that grows while selected (the Changes range chooser, a
+  // plugin icon) is looked at again; scrolling the strip never resizes it,
+  // so this never fights the person's own scrolling.
+  let first = true;
+  const resized = new ResizeObserver(() => {
+    if (first) first = false;
+    else reveal();
+  });
+  resized.observe(entryNode);
+  return () => {
+    observer?.disconnect();
+    resized.disconnect();
+  };
 };
 
 type RowEntry =
@@ -188,7 +212,7 @@ function RowButton({
       : tab.kind === "file"
         ? null
         : tab.kind === "plugin"
-          ? Puzzle
+          ? null
           : PANE_VIEWS[tab.kind].Icon;
   return (
     <div
@@ -214,7 +238,15 @@ function RowButton({
           )
         }
       >
-        {Icon === null ? null : <Icon aria-hidden="true" />}
+        {tab.kind === "plugin" ? (
+          <RoutePluginPaneIcon
+            plugin={tab.plugin}
+            pane={tab.pane}
+            title={label}
+          />
+        ) : Icon === null ? null : (
+          <Icon aria-hidden="true" />
+        )}
         <span className="stacked-tab-label">{label}</span>
         {dirty ? <span className="pane-tab-dirty" aria-hidden="true" /> : null}
       </button>

@@ -9,6 +9,7 @@ import {
   McpServerRepository,
   type McpServerTarget,
   mcpModuleIdFor,
+  type PersistenceUnavailable,
   type PluginBundleManifest,
   type PluginBundleRemoteMcpServer,
   PluginBundleRepository,
@@ -29,7 +30,9 @@ import {
   stdioCommandLine,
   type UserId,
 } from "@dx/domain";
+import { getLogger } from "@logtape/logtape";
 import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import { D1WriteBatch } from "../../../persistence/d1-deferred-writes.js";
 import { SettingsAudit } from "../../audit.js";
 import {
   effectiveMcpModuleId,
@@ -65,6 +68,8 @@ import {
   withPublisher,
 } from "./signature.js";
 import { readZipArchive } from "./zip.js";
+
+const writeLogger = getLogger(["dx", "settings", "plugins"]);
 
 interface AuditContext {
   readonly userId: UserId;
@@ -370,6 +375,40 @@ export class PluginBundleService extends Context.Service<
       const settingsAudit = yield* SettingsAudit;
       const policies = yield* WorkspacePolicyService;
       const catalogs = yield* PluginCatalogRepository;
+      const writeBatch = yield* D1WriteBatch;
+      /**
+       * Sends the install's or update's held-back writes as one atomic
+       * batch (where the request deferred them); a unique-key clash means
+       * someone installed the same thing meanwhile.
+       */
+      const commitWrites = (
+        auditContext: AuditContext,
+      ): Effect.Effect<
+        void,
+        PersistenceUnavailable | PluginIntegrityConflict
+      > =>
+        Effect.gen(function* () {
+          const started = Date.now();
+          const results = yield* writeBatch.commit;
+          // One line per batch sent, so a request's writes can be counted.
+          if (results.length > 0)
+            writeLogger.info("Plugin writes committed.", {
+              event: "plugin_write_batch",
+              requestId: auditContext.requestId,
+              statements: results.length,
+              ms: Date.now() - started,
+            });
+        }).pipe(
+          Effect.mapError((error) =>
+            // A unique-key clash, or a guarded write that found its row
+            // gone: someone changed the plugin meanwhile; nothing was written.
+            /UNIQUE|PRIMARY KEY|malformed JSON/.test(
+              String(error.cause ?? error),
+            )
+              ? new PluginIntegrityConflict()
+              : error,
+          ),
+        );
       // The service lives for one request, so an install that claims a
       // catalog identity reads the catalog row once, not twice.
       const foundCatalogs = new Map<string, StoredPluginCatalog | undefined>();
@@ -782,13 +821,25 @@ export class PluginBundleService extends Context.Service<
 
       const installedItems = Effect.fn("PluginBundleService.installedItems")(
         function* (target: PluginTarget, id: PluginId) {
-          const installedSkills = (yield* skillRepository.list(target)).filter(
+          const [scopeSkills, scopeServers] = yield* Effect.all(
+            [
+              skillRepository.list(target),
+              mcpRepository.list(target as McpServerTarget),
+            ],
+            { concurrency: "unbounded" },
+          );
+          const installedSkills = scopeSkills.filter(
             ({ skill }) => skill.pluginId === id,
           );
-          const installedServers = (yield* mcpRepository.list(
-            target as McpServerTarget,
-          )).filter(({ server }) => server.pluginId === id);
-          return { installedSkills, installedServers };
+          const installedServers = scopeServers.filter(
+            ({ server }) => server.pluginId === id,
+          );
+          return {
+            installedSkills,
+            installedServers,
+            scopeSkills,
+            scopeServers,
+          };
         },
       );
 
@@ -988,10 +1039,8 @@ export class PluginBundleService extends Context.Service<
             });
           }
           const { bundle } = reviewed;
-          const { installedSkills, installedServers } = yield* installedItems(
-            target,
-            id,
-          );
+          const allScope = yield* installedItems(target, id);
+          const { installedSkills, installedServers } = allScope;
           // The plugin's files are stored before anything changes, so a
           // storage failure leaves the installed version as it was.
           yield* storePackage(bundle);
@@ -1018,6 +1067,31 @@ export class PluginBundleService extends Context.Service<
               );
             }
           }
+          // Removed items free their names and their room for added ones,
+          // which check against what is stored: removals are sent first.
+          const removes =
+            installedSkills.some(
+              ({ skill }) =>
+                !bundle.skills.some(
+                  ({ manifest }) => manifest.name === skill.name,
+                ),
+            ) ||
+            installedServers.some(
+              ({ server }) =>
+                !remoteServers(bundle.manifest).some(
+                  ({ name }) => name === server.name,
+                ),
+            );
+          // Every read below happens before its own writes: the scope's
+          // skills and servers as they are once the removals landed.
+          const scope = removes
+            ? yield* commitWrites(auditContext).pipe(
+                Effect.andThen(installedItems(target, id)),
+              )
+            : {
+                scopeSkills: allScope.scopeSkills,
+                scopeServers: allScope.scopeServers,
+              };
           for (const preview of bundle.skills) {
             const installed = installedSkills.find(
               ({ skill }) => skill.name === preview.manifest.name,
@@ -1026,6 +1100,7 @@ export class PluginBundleService extends Context.Service<
               yield* skills.createFromPreview(target, preview, auditContext, {
                 enabled: true,
                 pluginId: id,
+                existing: scope.scopeSkills,
               });
             } else if (installed.active.integrity !== preview.integrity) {
               // A skill someone pinned keeps its pinned version active.
@@ -1035,6 +1110,7 @@ export class PluginBundleService extends Context.Service<
                 preview,
                 !installed.skill.pinned,
                 auditContext,
+                { current: installed },
               );
             }
           }
@@ -1072,6 +1148,7 @@ export class PluginBundleService extends Context.Service<
                   pluginId: id,
                 },
                 auditContext,
+                { existing: scope.scopeServers },
               );
             } else if (
               installed.server.endpoint !== server.endpoint ||
@@ -1102,6 +1179,7 @@ export class PluginBundleService extends Context.Service<
                     : {}),
                 },
                 auditContext,
+                { current: installed.server },
               );
             }
           }
@@ -1118,8 +1196,13 @@ export class PluginBundleService extends Context.Service<
             installedByUserId: auditContext.userId,
             updatedAt: now,
           });
-          yield* bundles.insertVersion(stored, bundle.codeModules);
+          yield* bundles.insertVersion(
+            stored,
+            bundle.codeModules,
+            bundle.iconFiles,
+          );
           yield* recordSignature(id, bundle.version, reviewed.signature);
+          yield* commitWrites(auditContext);
           yield* audit(
             "plugin_bundle.update",
             target,
@@ -1167,14 +1250,24 @@ export class PluginBundleService extends Context.Service<
               installedByUserId: auditContext.userId,
               updatedAt: now,
             });
+            // Everything the steps below check is read before the first
+            // write: under held-back writes, no step reads what another wrote.
+            const [scopeSkills, scopeServers] = yield* Effect.all(
+              [
+                skillRepository.list(target),
+                mcpRepository.list(target as McpServerTarget),
+              ],
+              { concurrency: "unbounded" },
+            );
             yield* storePackage(bundle);
-            yield* bundles.insert(stored, bundle.codeModules);
+            yield* bundles.insert(stored, bundle.codeModules, bundle.iconFiles);
             yield* recordSignature(id, bundle.version, reviewed.signature);
             yield* Effect.gen(function* () {
               for (const skill of bundle.skills) {
                 yield* skills.createFromPreview(target, skill, auditContext, {
                   enabled: true,
                   pluginId: id,
+                  existing: scopeSkills,
                 });
               }
               for (const server of remoteServers(bundle.manifest)) {
@@ -1196,8 +1289,10 @@ export class PluginBundleService extends Context.Service<
                     pluginId: id,
                   },
                   auditContext,
+                  { existing: scopeServers },
                 );
               }
+              yield* commitWrites(auditContext);
             }).pipe(
               Effect.tapError(() =>
                 removeInstalled(target, id, auditContext).pipe(Effect.ignore),

@@ -1,6 +1,18 @@
-import { MAX_PLUGIN_ICON_BYTES, type PluginBundleIcon } from "@dx/domain";
+import {
+  MAX_PLUGIN_ICON_BYTES,
+  MAX_PLUGIN_ITEM_ICONS,
+  PLUGIN_LUCIDE_ICON_PATTERN,
+  type PluginBundleIcon,
+  type PluginIconRef,
+  type PluginIconSet,
+} from "@dx/domain";
 import { Effect } from "effect";
-import type { BundleFolder } from "./bundle-reader.js";
+import {
+  type BundleFolder,
+  isRecord,
+  manifestPath,
+  skipUnknownFields,
+} from "./bundle-reader.js";
 
 /**
  * A plugin's icon, from the Agent Plugins 1.1.0 candidates dx renders
@@ -360,4 +372,238 @@ export const sanitizeSvg = (input: string): Sanitized => {
     return refuse("The icon is not a complete <svg> element.");
   }
   return { ok: true, svg: output.join("") };
+};
+
+// --- Icon sets, item icons, and hashed icon files ---
+
+/** An icon file ready to store in `plugin_icon`, keyed by its sha256. */
+export interface PluginIconFile {
+  readonly hash: string;
+  readonly mediaType: "image/png" | "image/svg+xml";
+  readonly bytes: Uint8Array;
+}
+
+/** The smallest PNG icon side dx accepts; 256 is recommended. */
+export const MIN_PNG_ICON_SIDE = 128;
+
+const hex = (bytes: ArrayBuffer) =>
+  Array.from(new Uint8Array(bytes), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+
+export const iconHash = async (bytes: Uint8Array) =>
+  hex(await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>));
+
+/** A PNG's width and height from its IHDR chunk. */
+const pngSize = (bytes: Uint8Array) => {
+  if (bytes.byteLength < 24) return undefined;
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return { width: view.getUint32(16), height: view.getUint32(20) };
+};
+
+/**
+ * Reads one icon file the manifest names: a square PNG at least 128 px, or
+ * an SVG rebuilt from the allowlist. Skips it with a reason otherwise.
+ */
+export const readIconFile = Effect.fn("readIconFile")(function* (
+  folder: BundleFolder,
+  path: string,
+  label: string,
+  /** Plugin icons need 128 px; item icons drawn at 16 to 20 px need less. */
+  minPngSide = MIN_PNG_ICON_SIDE,
+) {
+  if (!folder.files.has(path)) {
+    folder.skip(label, `${path} is missing.`);
+    return undefined;
+  }
+  if (/\.png$/i.test(path)) {
+    const read = yield* folder.peekBytes(path, MAX_PLUGIN_ICON_BYTES);
+    if (!read.ok) {
+      folder.skip(label, read.reason);
+      return undefined;
+    }
+    if (
+      read.bytes.byteLength <= PNG_SIGNATURE.length ||
+      PNG_SIGNATURE.some((byte, index) => read.bytes[index] !== byte)
+    ) {
+      folder.skip(label, `${path} is not a PNG image.`);
+      return undefined;
+    }
+    const size = pngSize(read.bytes);
+    if (
+      size === undefined ||
+      size.width !== size.height ||
+      size.width < minPngSide
+    ) {
+      folder.skip(
+        label,
+        `${path} must be a square PNG of at least ${minPngSide}×${minPngSide}${minPngSide === MIN_PNG_ICON_SIDE ? " (256×256 is best)" : ""}.`,
+      );
+      return undefined;
+    }
+    return {
+      hash: yield* Effect.promise(() => iconHash(read.bytes)),
+      mediaType: "image/png",
+      bytes: read.bytes,
+    } satisfies PluginIconFile;
+  }
+  if (/\.svg$/i.test(path)) {
+    const read = yield* folder.peek(path, MAX_PLUGIN_ICON_BYTES);
+    if (!read.ok) {
+      folder.skip(label, read.reason);
+      return undefined;
+    }
+    const clean = sanitizeSvg(read.text);
+    if (!clean.ok) {
+      folder.skip(label, clean.reason);
+      return undefined;
+    }
+    const bytes = new TextEncoder().encode(clean.svg);
+    if (bytes.byteLength > MAX_PLUGIN_ICON_BYTES) {
+      folder.skip(label, `${path} is too large.`);
+      return undefined;
+    }
+    return {
+      hash: yield* Effect.promise(() => iconHash(bytes)),
+      mediaType: "image/svg+xml",
+      bytes,
+    } satisfies PluginIconFile;
+  }
+  folder.skip(label, `${path} is not an .svg or .png file.`);
+  return undefined;
+});
+
+/** The icon file behind a legacy `icon` kept in the manifest as base64. */
+export const legacyIconFile = async (
+  icon: PluginBundleIcon,
+): Promise<PluginIconFile> => {
+  const bytes = iconBytes(icon);
+  return { hash: await iconHash(bytes), mediaType: icon.mediaType, bytes };
+};
+
+/**
+ * The plugin's icon set: `extensions["dev.dxcode"].icon` when it names one,
+ * else the legacy `assets/icon.png` or `assets/icon.svg` as `src`. A plugin
+ * with none still installs; the install review warns that it has no icon,
+ * which catalogs and the verified tier need.
+ */
+export const readPluginIconSet = Effect.fn("readPluginIconSet")(function* (
+  folder: BundleFolder,
+  block: unknown,
+  legacy: PluginBundleIcon | undefined,
+) {
+  const label = "plugin.json#extensions.dev.dxcode.icon";
+  const files: Array<PluginIconFile> = [];
+  const set: { -readonly [K in keyof PluginIconSet]: PluginIconSet[K] } = {};
+  if (block !== undefined) {
+    // A bare string is shorthand for `{ "src": ... }`.
+    const fields = typeof block === "string" ? { src: block } : block;
+    if (!isRecord(fields)) folder.skip(label, "icon must be an object.");
+    else {
+      skipUnknownFields(
+        (path, reason) => folder.skip(path, reason),
+        fields,
+        ["src", "dark", "monochrome", "background"],
+        label,
+      );
+      for (const key of ["src", "dark", "monochrome"] as const) {
+        const raw = fields[key];
+        if (raw === undefined) continue;
+        const path = typeof raw === "string" ? manifestPath(raw) : "outside";
+        if (path === "outside" || path === "") {
+          folder.skip(`${label}.${key}`, "Must name a file in the plugin.");
+          continue;
+        }
+        const file = yield* readIconFile(folder, path, `${label}.${key}`);
+        if (file === undefined) continue;
+        files.push(file);
+        set[key] = file.hash;
+      }
+      if (fields.background !== undefined) {
+        if (
+          typeof fields.background === "string" &&
+          /^#[0-9a-fA-F]{6}$/.test(fields.background)
+        )
+          set.background = fields.background.toLowerCase();
+        else folder.skip(`${label}.background`, "background must be #rrggbb.");
+      }
+    }
+  }
+  if (set.src === undefined && legacy !== undefined) {
+    const file = yield* Effect.promise(() => legacyIconFile(legacy));
+    files.push(file);
+    set.src = file.hash;
+  }
+  return {
+    set: Object.keys(set).length === 0 ? undefined : (set as PluginIconSet),
+    files,
+  };
+});
+
+/**
+ * Icon files the plugin carries for its items: every `.svg` and `.png`
+ * under `assets/`, so an item `icon` naming one, in the manifest or in
+ * code, resolves to its hash without reading the bundle again.
+ */
+export const readItemIconAssets = Effect.fn("readItemIconAssets")(function* (
+  folder: BundleFolder,
+) {
+  const files: Array<PluginIconFile> = [];
+  const byPath: Record<string, string> = {};
+  const candidates = folder
+    .under("assets")
+    .filter((path) => /\.(?:svg|png)$/i.test(path))
+    .sort();
+  for (const path of candidates) {
+    if (Object.keys(byPath).length >= MAX_PLUGIN_ITEM_ICONS) {
+      folder.skip(
+        path,
+        `A plugin carries at most ${MAX_PLUGIN_ITEM_ICONS} icon files; this one is not an icon.`,
+      );
+      continue;
+    }
+    // Item icons may be any square size; small PNGs are fine at 16 to 20 px.
+    const file = yield* readIconFile(folder, path, path, 16);
+    if (file === undefined) continue;
+    files.push(file);
+    byPath[path] = file.hash;
+  }
+  return { byPath, files };
+});
+
+/**
+ * An item's `icon` as stored: `lucide:<name>` as written, an asset path as
+ * its hash. Undefined, with a skip naming the item, for anything else.
+ */
+export const readItemIcon = (
+  folder: BundleFolder,
+  raw: unknown,
+  label: string,
+  assets: Readonly<Record<string, string>>,
+): PluginIconRef | undefined => {
+  if (raw === undefined) return undefined;
+  if (typeof raw === "string" && PLUGIN_LUCIDE_ICON_PATTERN.test(raw))
+    return raw;
+  const path = typeof raw === "string" ? manifestPath(raw) : "outside";
+  const hash = path === "outside" ? undefined : assets[path];
+  if (hash === undefined) {
+    folder.skip(
+      label,
+      "icon must be lucide:<name> or an .svg or .png under assets/.",
+    );
+    return undefined;
+  }
+  return hash;
+};
+
+/** Resolves an icon a plugin's code registered, by the same rules. */
+export const resolveItemIcon = (
+  raw: unknown,
+  assets: Readonly<Record<string, string>> | undefined,
+): PluginIconRef | undefined => {
+  if (typeof raw !== "string") return undefined;
+  if (PLUGIN_LUCIDE_ICON_PATTERN.test(raw)) return raw;
+  if (/^[0-9a-f]{64}$/.test(raw)) return raw;
+  const path = manifestPath(raw);
+  return path === "outside" ? undefined : assets?.[path];
 };

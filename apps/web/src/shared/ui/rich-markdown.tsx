@@ -845,12 +845,23 @@ const markdownComponents = (
       }),
   ...galleryComponents,
   ...references?.markdownComponents,
-  a: ({ children: content, href }) => {
+  a: ({ children: content, href, node }) => {
     const thread = references === undefined ? undefined : threadIdOfHref(href);
+    // A plugin's link pattern carries its plugin's icon.
+    const pluginIcon = node?.properties?.dataPluginIcon;
     return thread !== undefined && references !== undefined ? (
       references.chip(thread, content)
     ) : (
       <MarkdownLink href={href} resolveFile={resolveFile}>
+        {typeof pluginIcon === "string" && /^[0-9a-f]{64}$/.test(pluginIcon) ? (
+          <img
+            className="plugin-link-icon"
+            src={`/v1/plugins/icons/${pluginIcon}`}
+            alt=""
+            decoding="async"
+            loading="lazy"
+          />
+        ) : null}
         <InsideMarkdownLink value={true}>{content}</InsideMarkdownLink>
       </MarkdownLink>
     );

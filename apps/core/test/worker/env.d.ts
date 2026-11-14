@@ -25,6 +25,12 @@ declare module "cloudflare:test" {
     readonly GITHUB_TOKEN_COORDINATOR: DurableObjectNamespace<
       import("../../src/source-control/github/token-coordinator.js").GitHubTokenCoordinatorObject
     >;
+    readonly PLUGIN_DURABLE_HOST: DurableObjectNamespace<
+      import("../../src/plugins/hosts/durable/object.js").PluginDurableHostObject
+    >;
+    readonly PLUGIN_STREAM_RELAY: DurableObjectNamespace<
+      import("../../src/plugins/streams/relay.js").PluginStreamRelay
+    >;
     readonly DX_STORAGE: R2Bucket;
     readonly LOADER: WorkerLoader;
     readonly TEST_MIGRATIONS: D1Migration[];

@@ -71,12 +71,13 @@ const servable = (contents: PaneContents) => (tab: ThreadPaneTab) =>
   tab.kind === "file"
     ? contents.dirtyTabs.has(tabId(tab))
     : tab.kind === "plugin"
-      ? contents.plugin !== undefined
+      ? contents.plugin !== undefined && (contents.pluginShown?.(tab) ?? true)
       : tab.kind === "agent" || contents.views[tab.kind] !== undefined;
 
 /**
  * The layout an archived Thread shows. Its Orb is stopped, so the saved
- * layout keeps only the Agent, Artifacts, and files with unsaved edits.
+ * layout keeps only the Agent, Artifacts, files with unsaved edits, and the
+ * plugin panes their plugins keep in archived Threads.
  * Changes made meanwhile stay on this page and are never saved, so
  * unarchiving brings back the saved layout.
  */

@@ -21,7 +21,7 @@
  */
 
 import { SESSION_ENDED_CLOSE_CODE, SESSION_ENDED_CLOSE_REASON } from "@dx/api";
-import { sessionEnded } from "./session-revocation.js";
+import { sessionsEnded } from "./session-revocation.js";
 
 export { SESSION_ENDED_CLOSE_CODE, SESSION_ENDED_CLOSE_REASON };
 
@@ -137,9 +137,10 @@ export const checkBrowserSessions = async (
       unique.set(binding.sessionId, binding);
   }
   const states = new Map<string, BrowserSessionState>();
+  const endedIds = await sessionsEnded(db, unique.keys(), 0);
   await Promise.all(
     [...unique.values()].map(async (binding) => {
-      if (await sessionEnded(db, binding.sessionId, 0)) {
+      if (endedIds.has(binding.sessionId)) {
         states.set(binding.sessionId, { state: "ended" });
         return;
       }

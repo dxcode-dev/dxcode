@@ -13,6 +13,7 @@ import {
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { retryQuery } from "../../../shared/query/query-retry.js";
 import { closeTerminalSession } from "../../terminal/terminal-session-mutations.js";
+import { threadQueryOptions } from "../thread-queries.js";
 import {
   closedTerminalSessions,
   defaultPaneLayout,
@@ -34,6 +35,27 @@ export const paneLayoutKeys = {
 };
 
 /**
+ * The Thread as the Thread page loads it: its cached detail, or the request
+ * already in flight, which the page starts before this layout's. Never a
+ * request of its own, so opening a Thread reads its detail once.
+ */
+const loadedThread = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => {
+  const options = threadQueryOptions(userId, threadId);
+  const cached = client.getQueryData(options.queryKey);
+  if (
+    cached !== undefined ||
+    client.isFetching({ queryKey: options.queryKey, exact: true }) === 0
+  )
+    return Promise.resolve(cached);
+  // Joins the request in flight; ensureQueryData does not start another.
+  return client.ensureQueryData(options).catch(() => undefined);
+};
+
+/**
  * The person's panes and tabs on the Thread, repaired to fit, or the default
  * layout. Fetched once per session: another device's changes show on the
  * next load; this device's edits are written back debounced.
@@ -44,9 +66,17 @@ export const threadPaneLayoutQueryOptions = (
 ) =>
   queryOptions({
     queryKey: paneLayoutKeys.layout(userId, threadId),
-    queryFn: async ({ signal }) =>
+    queryFn: async ({ signal, client }) =>
       repairPaneLayout(
-        (await getThreadPaneLayout(threadId, signal)) ?? defaultPaneLayout(),
+        (await getThreadPaneLayout(threadId, signal)) ??
+          // A plugin Thread type's first layout, loaded only for one.
+          ((await loadedThread(client, userId, threadId))?.pluginThreadType ===
+          undefined
+            ? undefined
+            : await (
+                await import("./thread-type-layout.js")
+              ).firstThreadTypeLayout(client, threadId)) ??
+          defaultPaneLayout(),
       ),
     staleTime: Number.POSITIVE_INFINITY,
     gcTime: Number.POSITIVE_INFINITY,

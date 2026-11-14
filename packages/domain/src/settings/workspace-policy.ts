@@ -1,8 +1,12 @@
 import { Schema } from "effect";
 import { findOrbProvider } from "../orb-providers/index.js";
 import { FirstPartyPluginId } from "../plugins/plugin.js";
+import { PluginTier } from "./plugin-trust.js";
 import { RunnerAdapterKind, RunnerProfileId } from "./runner-profile.js";
 import { WorkspaceId } from "./workspace.js";
+
+export const MAX_TRUSTED_PLUGIN_PROJECTS = 100;
+export const MAX_TRUSTED_PLUGIN_SIGNERS = 50;
 
 export const WorkspacePolicyRestrictions = Schema.Struct({
   allowedRunnerProfileIds: Schema.NullOr(Schema.Array(RunnerProfileId)),
@@ -31,6 +35,22 @@ export const WorkspacePolicyRestrictions = Schema.Struct({
    * trust (owner, 2026-11-10); a workspace can turn them off.
    */
   allowRepositoryPlugins: Schema.Boolean,
+  // Trust tiers. Optional so clients that predate them keep sending the
+  // whole struct; an absent field keeps the stored value.
+  /** The highest plugin trust tier the workspace allows; `verified` by default. */
+  pluginTierCap: Schema.optional(PluginTier),
+  /** Projects whose repository plugins run `workspace-trusted`. */
+  trustedPluginProjectIds: Schema.optional(
+    Schema.Array(Schema.String.check(Schema.isMaxLength(128))).check(
+      Schema.isMaxLength(MAX_TRUSTED_PLUGIN_PROJECTS),
+    ),
+  ),
+  /** Signing key fingerprints (`SHA256:…`) whose workspace installs are `verified`. */
+  trustedPluginSigners: Schema.optional(
+    Schema.Array(
+      Schema.String.check(Schema.isPattern(/^SHA256:[A-Za-z0-9+/]{43}$/)),
+    ).check(Schema.isMaxLength(MAX_TRUSTED_PLUGIN_SIGNERS)),
+  ),
 });
 
 export type WorkspacePolicyRestrictions =
@@ -65,6 +85,9 @@ export const defaultWorkspacePolicy = (
     allowPersonalExecutionOverrides: false,
     allowPersonalPluginInstallOverrides: false,
     allowRepositoryPlugins: true,
+    pluginTierCap: "verified",
+    trustedPluginProjectIds: [],
+    trustedPluginSigners: [],
   },
   revision: 0,
   updatedAt: Schema.decodeUnknownSync(Schema.DateTimeUtcFromString)(

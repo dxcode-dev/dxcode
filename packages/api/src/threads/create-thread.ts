@@ -1,5 +1,6 @@
 import {
   ModelConnectionId,
+  PluginThreadTypeRef,
   ProjectId,
   RunnerProfileId,
   ThreadId,
@@ -115,6 +116,12 @@ export const CreateThreadRequestSchema = /* @__PURE__ */ Schema.Struct({
       Schema.isPattern(/^plugin:[a-z0-9][a-z0-9.-]*\/[a-z][a-z0-9-]{0,23}$/),
     ),
   ),
+  /**
+   * Starts the Thread as an installed plugin's Thread type,
+   * `<plugin name>/<type id>`: the plugin's view draws its main area, and
+   * the chat sits beside it. Set only at creation; it never changes.
+   */
+  pluginThreadType: Schema.optional(PluginThreadTypeRef),
 })
   .check(
     Schema.makeFilter((request) =>
@@ -250,6 +257,17 @@ export const CreateThreadModelRouteUnavailableResponseSchema = Schema.Struct({
  * The plugin agent mode asked for is not offered: no installed plugin
  * declares and registers it for the person, or it may no longer run agents.
  */
+/** The plugin Thread type asked for is not one the person may start. */
+export const CreateThreadPluginThreadTypeUnavailableResponseSchema =
+  Schema.Struct({
+    status: Schema.Literal("error"),
+    data: Schema.Struct({
+      code: Schema.Literal("PLUGIN_THREAD_TYPE_UNAVAILABLE"),
+      message: Schema.String,
+      requestId: Schema.String,
+    }),
+  });
+
 export const CreateThreadPluginAgentModeUnavailableResponseSchema =
   Schema.Struct({
     status: Schema.Literal("error"),
