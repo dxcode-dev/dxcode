@@ -4,6 +4,8 @@
 //   ── 302, Set-Cookie state ─────────────▶  GET /v1/portal-auth/authorize
 //                                             ?thread&port&return&state
 //                                             dx session? else /signin?next=…
+//                                             (framed: reload once from this
+//                                             origin, then a sign-in page)
 //                                             Terminal access rule, active
 //                                             store one-time code (60 s)
 //   GET /__dx_portal/callback?code ◀─────── 302
@@ -26,6 +28,7 @@ import { dxSessionActive, evaluatePortalAccess } from "./access.js";
 import { storePortalCode } from "./codes.js";
 import { RANDOM_TOKEN, randomToken } from "./crypto.js";
 import { PORTAL_CALLBACK_PATH, portalAuthorizationPage } from "./handler.js";
+import { reloadFromOwnOrigin } from "./pages.js";
 import {
   parsePortalPort,
   portalConfiguration,
@@ -81,8 +84,25 @@ export const portalAuthRoutes = new Hono<AppEnv>().get(
       ))
     ) {
       const self = new URL(context.req.url);
+      const selfPath = `${self.pathname}${self.search}`;
       const signIn = new URL("/signin", configuration.appOrigin);
-      signIn.searchParams.set("next", `${self.pathname}${self.search}`);
+      signIn.searchParams.set("next", selfPath);
+      const headers = context.req.raw.headers;
+      const destination = headers.get("sec-fetch-dest");
+      if (destination === "iframe" || destination === "frame") {
+        // The Preview pane reached here through the Portal's redirect, which
+        // Firefox treats as cross-site and so withholds the dx cookie. Load
+        // again from this origin, which sends it; once that load also has no
+        // session the member is signed out, and /signin cannot be framed.
+        if (headers.get("sec-fetch-site") !== "same-origin")
+          return reloadFromOwnOrigin(selfPath);
+        return portalAuthorizationPage(
+          401,
+          "Sign in to dx",
+          "Sign in to see this Portal, then reload the Preview.",
+          { href: signIn.href, label: "Sign in" },
+        );
+      }
       return context.redirect(signIn.href, 302);
     }
 

@@ -794,7 +794,15 @@ const relay = async (
 
 /** A complete page for a request the app origin cannot authorize. */
 export const portalAuthorizationPage = (
-  status: 400 | 403 | 404 | 409,
+  status: 400 | 401 | 403 | 404 | 409,
   title: string,
   message: string,
-) => portalPage({ status, title, message, headers: noStore });
+  link?: { readonly href: string; readonly label: string },
+) =>
+  portalPage({
+    status,
+    title,
+    message,
+    headers: noStore,
+    ...(link === undefined ? {} : { link }),
+  });

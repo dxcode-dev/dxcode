@@ -666,6 +666,108 @@ describe("Portal host routing in workerd", () => {
     expect(execution.calls).toHaveLength(0);
   });
 
+  it("signs in a Portal framed by the app when the browser withholds the dx cookie on the redirect", async () => {
+    // Firefox (and Zen) send no SameSite=Lax cookie on a framed request that
+    // arrived through a cross-site redirect, so the Preview pane's first hop
+    // to authorize comes without the dx session. Production 2026-11-14.
+    const owner = await signUp("framed-owner");
+    const threadId = await createThread(owner.userId);
+    const execution = fakeExecution();
+    const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
+    const framed = {
+      accept: "text/html",
+      "sec-fetch-mode": "navigate",
+      "sec-fetch-dest": "iframe",
+    };
+    const origin = portalOriginFor(threadId, 5180);
+
+    const start = await app.request(
+      `${origin}/app`,
+      { headers: { ...framed, "sec-fetch-site": "cross-site" } },
+      bindings,
+    );
+    expect(start.status).toBe(302);
+    const state = cookieValue(start, "__Host-dx_portal_state");
+    const authorize = new URL(start.headers.get("location") ?? "");
+
+    // The redirected hop: framed, cross-site, no dx cookie. It must not go to
+    // /signin, which no site may frame; it reloads itself from the app's own
+    // origin, a navigation the browser sends the dx cookie with.
+    const withheld = await app.request(
+      authorize.href,
+      { headers: { ...framed, "sec-fetch-site": "cross-site" } },
+      bindings,
+    );
+    expect(withheld.status).toBe(200);
+    expect(withheld.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'self'",
+    );
+    const reload = (await withheld.text()).match(
+      /<meta http-equiv="refresh" content="0;url=([^"]+)">/,
+    )?.[1];
+    expect(reload).toBeDefined();
+    const again = new URL(
+      (reload ?? "").replaceAll("&amp;", "&"),
+      authorize.href,
+    );
+    expect(again.href).toBe(authorize.href);
+
+    const granted = await app.request(
+      again.href,
+      {
+        headers: {
+          ...framed,
+          "sec-fetch-site": "same-origin",
+          cookie: owner.cookie,
+        },
+      },
+      bindings,
+    );
+    expect(granted.status).toBe(302);
+    const callback = new URL(granted.headers.get("location") ?? "");
+    expect(callback.origin).toBe(origin);
+    const completed = await app.request(
+      callback.href,
+      {
+        headers: {
+          ...framed,
+          "sec-fetch-site": "cross-site",
+          cookie: `__Host-dx_portal_state=${state}`,
+        },
+      },
+      bindings,
+    );
+    expect(completed.status).toBe(302);
+    expect(completed.headers.get("location")).toBe("/app");
+    expect(cookieValue(completed, "__Host-dx_portal_embed")).toBeDefined();
+
+    // Signed out of dx for real: the reloaded hop still has no session. A
+    // framed page offers sign-in in a new tab instead of framing /signin.
+    const signedOut = await app.request(
+      again.href,
+      { headers: { ...framed, "sec-fetch-site": "same-origin" } },
+      bindings,
+    );
+    expect(signedOut.status).toBe(401);
+    expect(signedOut.headers.get("content-security-policy")).toContain(
+      "frame-ancestors 'self'",
+    );
+    const page = await signedOut.text();
+    expect(page).toContain('target="_blank"');
+    expect(page).toContain("/signin?next=");
+
+    // A top-level visit keeps the plain sign-in redirect.
+    const topLevel = await app.request(
+      authorize.href,
+      { headers: navigation },
+      bindings,
+    );
+    expect(topLevel.status).toBe(302);
+    expect(new URL(topLevel.headers.get("location") ?? "").pathname).toBe(
+      "/signin",
+    );
+  });
+
   it("re-checks a stale session and closes the Portal once access ends", async () => {
     const owner = await signUp("revoked");
     const threadId = await createThread(owner.userId);

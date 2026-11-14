@@ -54,6 +54,8 @@ interface PageOptions {
   /** Origin allowed to frame the page, besides the page itself. */
   readonly frameAncestor?: string;
   readonly headers?: HeadersInit;
+  /** A link that opens in a new tab, out of the frame. */
+  readonly link?: { readonly href: string; readonly label: string };
 }
 
 export const portalPage = ({
@@ -64,6 +66,7 @@ export const portalPage = ({
   waking = false,
   frameAncestor,
   headers,
+  link,
 }: PageOptions) => {
   const nonce = randomToken();
   const body = `<!doctype html>
@@ -86,7 +89,7 @@ a { font-size: .85rem; color: inherit; }
 <main>
 <h1>${escapeHtml(title)}</h1>
 <p id="status">${escapeHtml(message)}</p>
-${retry || waking ? `<a id="retry" href=""${waking ? " hidden" : ""}>Retry</a>` : ""}
+${retry || waking ? `<a id="retry" href=""${waking ? " hidden" : ""}>Retry</a>` : ""}${link === undefined ? "" : `<a href="${escapeHtml(link.href)}" target="_blank" rel="noopener">${escapeHtml(link.label)}</a>`}
 </main>
 ${waking ? `<script nonce="${nonce}">${wakingScript}</script>` : ""}
 </body>
@@ -113,6 +116,44 @@ ${waking ? `<script nonce="${nonce}">${wakingScript}</script>` : ""}
   });
   return withHeaders(response, headers);
 };
+
+/**
+ * Loads `path` again from the page's own origin. Firefox sends no
+ * SameSite=Lax cookie on a framed request that a cross-site redirect led to,
+ * and no browser sends it on a navigation another site's frame starts; a
+ * navigation this app-origin page starts carries it. No script, so the app's
+ * framing rules still hold: only the app itself may frame it.
+ */
+export const reloadFromOwnOrigin = (path: string) =>
+  new Response(
+    `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta http-equiv="refresh" content="0;url=${escapeHtml(path)}">
+<title>Signing in</title>
+</head>
+<body></body>
+</html>
+`,
+    {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        "content-security-policy": [
+          "default-src 'none'",
+          "base-uri 'none'",
+          "form-action 'none'",
+          "frame-ancestors 'self'",
+        ].join("; "),
+        "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
+        "x-robots-tag": "noindex",
+      },
+    },
+  );
 
 export const PORTAL_PUBLIC_CONTINUE_PATH = "/__dx_portal/public";
 export const PORTAL_SIGN_IN_PATH = "/__dx_portal/sign-in";
