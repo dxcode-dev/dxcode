@@ -60,7 +60,7 @@ const terminalPrompt = (shell: string) =>
  * (`rich-markdown.tsx`, `markdown-view.tsx`).
  */
 const richRepliesPrompt = (shell: string) =>
-  `Your replies render as Markdown in the dx web app. To show an image, video, or audio file, store it in this Thread with \`dxd files put <path>...\` through ${shell}, which prints one URL per file, and write a Markdown image of each URL, such as \`![Login page](<printed url>)\`: images show inline, video and audio play in place, and consecutive images and videos show as a gallery. Stored files stay visible after the workspace sleeps or is gone; a Markdown image of a workspace path shows only while the workspace runs. For a chart, dashboard, explorable diagram, UI mockup, or interactive prototype, use the creating-views skill, which renders a \`\`\`dx-view block of HTML as an interactive view in the reply.`;
+  `Your replies render as Markdown in the dx web app. To show an image, video, or audio file, store it in this Thread with \`dxd files put <path>...\` through ${shell}, which prints one URL per file, and write a Markdown image of each URL, such as \`![Login page](<printed url>)\`: images show inline, video and audio play in place, and consecutive images and videos show as a gallery. Stored files stay visible after the workspace sleeps or is gone; a Markdown image of a workspace path shows only while the workspace runs. To share a file someone views or downloads, such as a video, image, PDF, archive, or data file, give its stored URL, also when the user asks for a public, shareable, or hosted link or asks you to upload it. It opens for anyone signed in to dx who can open this Thread, so a teammate needs the Thread shared with them. A web page or app opens in a browser only from a running server, since stored HTML downloads as a file, so start a server for it and share its Portal URL. Never pick a service outside dx yourself, such as a file-sharing, paste, video, or cloud storage site: upload there only to a service the user names, because that publishes the file to the internet. When someone needs a link that works without a dx account, store the file anyway, say that its link needs sign-in, then offer a public Portal link when your instructions describe one, or ask which service to publish it to. For a chart, dashboard, explorable diagram, UI mockup, or interactive prototype, use the creating-views skill, which renders a \`\`\`dx-view block of HTML as an interactive view in the reply.`;
 
 /**
  * dx's own workspace skill: how the Orb sleeps, how to run servers so they
@@ -77,10 +77,21 @@ const workspaceSkillInstructions = (shell: string) =>
 It sleeps five minutes after the last activity: your commands, the user typing in the Terminal, or the user using the Desktop. A command left running in a Terminal pane keeps it awake for at most five more minutes after the Terminal or you were last used. Thinking without running commands does not count. Sleep keeps memory on most Orbs, so processes freeze and continue on wake; on some Orbs only files survive. Never keep the workspace awake artificially (keepalive loops, sleeps, pings).
 
 Long-running processes (dev servers, watchers, databases):
-- Start them in the background from ${shell}, detached and logged, for example \`setsid nohup pnpm dev --host 127.0.0.1 --port 5173 > ~/.local/state/web.log 2>&1 < /dev/null &\`, then check that the port answers. A server in the foreground of a ${shell} call is killed when the call times out.
+- Every server you start for the user to open (a dev server, an API, a static site, Storybook, a preview build) goes in \`.dx/services.yaml\` in the repository, written before you start it. A server can stop while the user is away, such as when the workspace sleeps or restarts, and a Portal starts again only the services that file declares, so a link to an undeclared server breaks. Each service has a \`command\` that listens on \`$PORT\`, its \`port\`, and optional \`cwd\` (relative to the repository) and \`env\`, which must not set \`PORT\` because dx sets it; add to the file when it already exists:
+
+  \`\`\`yaml
+  services:
+    web:
+      command: pnpm dev --host 127.0.0.1 --port $PORT
+      port: 5173
+      cwd: web
+  \`\`\`
+
+  Write the file without asking; ask before committing it.
+- Then start it yourself in the background from ${shell}, detached and logged, with the same command and port, for example \`cd web && PORT=5173 setsid nohup pnpm dev --host 127.0.0.1 --port 5173 > ~/.local/state/web.log 2>&1 < /dev/null &\`, and check that the port answers. dx starts only services that are not already listening, so this does not conflict. A server in the foreground of a ${shell} call is killed when the call times out.
 - Start them in the user's Terminal only when the user asks.
 - Bind 127.0.0.1 or 0.0.0.0 on a free port, and stop what you started when it is no longer needed.
-- When the user will keep using a server, declare it in \`.dx/services.yaml\` (a YAML map \`services: { <name>: { command, port, cwd?, env? } }\`; the command must listen on \`$PORT\`): when Portals are on, the first Portal request that finds it stopped starts it again. Without Portals, check after a wake that your servers still answer and restart them. Ask before committing that file.
+- Without Portals, check after a wake that your servers still answer and restart them.
 
 Showing the user something running in the workspace:
 - When your instructions give a Portal URL pattern, share that URL. Never give the user a \`localhost\` URL: it points at their own machine.
