@@ -77,8 +77,10 @@ title; for a mockup it decides which state to show.
 - There is no network: every request is blocked. Inline all CSS, JS, images (as data URLs), and
   data. Chart libraries and web fonts cannot load, and the view cannot read files from the
   workspace; embed what it needs, or store the file and show it with a Markdown image instead.
-- There are no popups, storage, dialogs, or form submission, and the view cannot navigate away;
-  dx stops a view that tries. Clicks on `http(s)` links ask the reader before opening a new tab.
+- There are no browser popups (`window.open`, `alert`, `confirm`), storage, or form submission,
+  and the view cannot navigate away; dx stops a view that tries. Menus, popovers, and dialogs
+  drawn inside the view work: use the `ui-*` components below, and the frame grows while one is
+  open. Clicks on `http(s)` links ask the reader before opening a new tab.
 - There are no nested frames or WebRTC: dx removes `<iframe>`, `<object>`, and `<embed>`, and
   `RTCPeerConnection` is undefined. Draw with HTML, SVG, or a canvas instead.
   Hover, clicks, and keys work inside the frame. Nothing can draw outside it.
@@ -234,6 +236,93 @@ Components: `dx-button`, `dx-chip`, `dx-icon`, `dx-spinner`, `dx-card`, `dx-stat
 `dx-tabs` and `dx-tab`, `dx-empty`, `dx-code`. The building-plugins skill's `reference/plugin-ui.md`
 lists their attributes. Mix them with the view kit freely; use `window.ui` for charts.
 
+## Interactive components (`ui-*`)
+
+For choosing from a list, a menu of actions, a confirm step, a date, tabs, or anything that opens
+over the view, write UI SDK's `ui-*` tags: select, combobox, menu, dialog, alert dialog, popover,
+tooltip, tabs, accordion, date picker, switch, checkbox, radio, segmented control, slider, and the
+rest of UI SDK's elements. dx sees the tags and adds those components, drawn as dx draws its own:
+the same buttons, menus, dialogs, and tabs, in light and dark and at phone width. Keyboard, focus,
+and screen readers come built in. Don't style them; the markup below is all it takes.
+
+- Triggers and closes wrap a real `<button type="button">` with no class. dx draws it as its
+  outline button. Mark the main action `data-variant="primary"`, a delete
+  `data-variant="destructive"`, a quiet one `data-variant="ghost"`.
+- A dialog is a title, a description, and a `<div data-slot="row">` of its closes, the main
+  action last. dx puts the row at the end and stacks it on a phone, main action on top.
+- A field's label is its `-label` part (`<ui-select-label>`), or, for a date picker or slider, a
+  `<ui-field>` around it with a `<ui-field-label>`. Never a bare `<label>` beside it.
+- Leave a date picker's trigger empty: it draws its own icon. Mark a red menu item
+  `data-destructive`.
+- React with each root's events, which don't bubble: `valuechange` (select, tabs, date picker,
+  slider), `openchange` (dialog, popover), and `action` on a menu. The value is
+  `event.detail.value`; the root's `value` property holds it too. In a `<form>`, a field with
+  `name` is in `new FormData(form)`.
+- Each component adds code to the view: use the few it needs. For elements made only from
+  script, add `<script type="module" src="dx:ui-sdk"></script>` and wait for
+  `customElements.whenDefined("ui-dialog")`.
+
+```html
+<div class="ui-stack" style="gap: 16px">
+  <div class="ui-row" style="justify-content: space-between">
+    <div class="ui-title">Release v2.4</div>
+    <ui-menu>
+      <ui-menu-trigger><button type="button" data-variant="ghost">Actions</button></ui-menu-trigger>
+      <ui-menu-content>
+        <ui-menu-item value="notes">Edit notes</ui-menu-item>
+        <ui-menu-separator></ui-menu-separator>
+        <ui-menu-item value="cancel" data-destructive>Cancel release</ui-menu-item>
+      </ui-menu-content>
+    </ui-menu>
+  </div>
+  <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px">
+    <ui-select name="owner" placeholder="Pick an owner">
+      <ui-select-label>Owner</ui-select-label>
+      <ui-select-trigger><button type="button"><ui-select-value></ui-select-value></button></ui-select-trigger>
+      <ui-select-content>
+        <ui-select-item value="ana">Ana</ui-select-item>
+        <ui-select-item value="kofi">Kofi</ui-select-item>
+      </ui-select-content>
+    </ui-select>
+    <ui-field>
+      <ui-field-label>Due</ui-field-label>
+      <ui-date-picker name="due" default-value="2026-11-20">
+        <ui-date-picker-input><input /></ui-date-picker-input>
+        <ui-date-picker-trigger></ui-date-picker-trigger>
+        <ui-date-picker-content hidden></ui-date-picker-content>
+      </ui-date-picker>
+    </ui-field>
+  </div>
+  <ui-tabs default-value="plan">
+    <ui-tabs-list aria-label="Release">
+      <ui-tabs-tab value="plan"><button type="button">Plan</button></ui-tabs-tab>
+      <ui-tabs-tab value="risks"><button type="button">Risks</button></ui-tabs-tab>
+    </ui-tabs-list>
+    <ui-tabs-panel value="plan">Four of six tasks are done.</ui-tabs-panel>
+    <ui-tabs-panel value="risks">Two open risks.</ui-tabs-panel>
+  </ui-tabs>
+  <ui-dialog>
+    <ui-dialog-trigger><button type="button" data-variant="primary">Ship v2.4</button></ui-dialog-trigger>
+    <ui-dialog-backdrop hidden></ui-dialog-backdrop>
+    <ui-dialog-content hidden>
+      <ui-dialog-title>Ship v2.4?</ui-dialog-title>
+      <ui-dialog-description>This tags main and publishes the release notes.</ui-dialog-description>
+      <div data-slot="row">
+        <ui-dialog-close><button type="button">Cancel</button></ui-dialog-close>
+        <ui-dialog-close><button type="button" data-variant="primary" id="ship">Ship</button></ui-dialog-close>
+      </div>
+    </ui-dialog-content>
+  </ui-dialog>
+</div>
+<script>
+  {
+    document.getElementById("ship").addEventListener("click", () => {
+      document.querySelector(".ui-title").textContent = "Release v2.4 · shipped";
+    });
+  }
+</script>
+```
+
 ## Layout
 
 - Put content straight on the thread background. The outermost element has no background, border,
@@ -365,7 +454,7 @@ Add interaction when it answers a question the reader would otherwise ask: exact
 which option feels right (a clickable prototype), what happens if (a slider or toggle), where
 something is (hover-linked notes). The view must make its point before anyone touches it.
 
-- Use the kit's controls (`.ui-btn`, `.ui-seg`, `.ui-range`) so hover, press, and focus behave
+- Use the kit's controls (`.ui-btn`, `.ui-seg`, `.ui-range`) and `ui-*` components so hover, press, and focus behave
   like dx. For custom controls, use real `<button>` and `<input>` elements.
 - Gate hover styles with `@media (hover: hover)`, and make the hover state higher contrast than
   rest. Change hover colors instantly, without transitions. Anything hover reveals must also work by
@@ -419,6 +508,9 @@ polished mockup:
    ```bash
    node scripts/preview.mjs /tmp/view.html ~/.dx/work/views/<name>
    ```
+
+   The preview leaves `ui-*` components as plain, unstyled markup; only the reply runs them. Check
+   the rest of the view there, and keep `ui-*` markup to the shapes in the example above.
 
 2. Look at every screenshot. Fix errors, overflow, clipped or overlapping text, and anything
    unreadable in either theme. Then paste the same document into the `dx-view` block; the

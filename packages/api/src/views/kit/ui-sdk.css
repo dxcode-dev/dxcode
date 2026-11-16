@@ -1,0 +1,564 @@
+/*
+ * dx's theme for UI SDK's components (`ui-*`), after UI SDK's own styles.
+ * Every frame that uses UI SDK has dx's tokens under the MCP Apps names
+ * (`--color-*`, `--border-radius-*`, `--shadow-*`, `--font-*`); each value
+ * falls back to a dx-view's transcript tokens (`--background`, `--foreground`,
+ * `--border`, `--link`) in case a frame lacks them. Colors follow light and
+ * dark through `light-dark()`, as the tokens do.
+ *
+ * Each part takes its values from dx's own: buttons from `dx-button`,
+ * dialogs from dx's confirm dialog, menus and lists from dx's menu, tabs from
+ * dx's underline tabs, the segmented control from dx's segmented tabs.
+ * In its own layer, after UI SDK's, so a view's own unlayered CSS still wins.
+ */
+@layer ui-sdk, ui-sdk-dx;
+
+@layer ui-sdk-dx {
+  :where(:root, :host) {
+    --ui-background: var(--color-background-primary, var(--background));
+    --ui-foreground: var(--color-text-primary, var(--foreground));
+    --ui-muted: var(
+      --color-background-secondary,
+      color-mix(in oklab, var(--foreground) 6%, transparent)
+    );
+    --ui-muted-foreground: var(
+      --color-text-secondary,
+      var(--muted-foreground)
+    );
+    --ui-border: var(--color-border-secondary, var(--border));
+    --ui-input: var(
+      --color-border-primary,
+      color-mix(in oklab, var(--foreground) 16%, transparent)
+    );
+    --ui-primary: var(--color-background-inverse, var(--foreground));
+    --ui-primary-foreground: var(--color-text-inverse, var(--background));
+    --ui-destructive: var(--color-text-danger, var(--destructive));
+    --ui-ring-border: var(--color-ring-primary, var(--link));
+    --ui-ring: color-mix(in oklab, var(--ui-ring-border) 50%, transparent);
+    /* dx's scrim: the page dims behind a dialog, in both schemes. */
+    --ui-overlay: rgb(0 0 0 / 0.48);
+    --ui-shadow: var(
+      --shadow-lg,
+      0 16px 40px -12px light-dark(rgb(0 0 0 / 0.3), rgb(0 0 0 / 0.9)),
+      0 4px 12px -4px light-dark(rgb(0 0 0 / 0.12), rgb(0 0 0 / 0.36))
+    );
+    --ui-radius: var(--border-radius-md, 6px);
+    --ui-spacing: 4px;
+    --ui-font-size: 13px;
+    --ui-line-height: 1.5;
+    --ui-font-sans: var(--font-sans);
+    --ui-font-mono: var(--font-mono);
+
+    /* dx's own values, for the parts below. */
+    --dx-ui-hover: var(
+      --color-background-ghost,
+      color-mix(in oklab, var(--foreground) 7%, transparent)
+    );
+    /* A popup's surface: the page's in light, a step lighter in dark, as
+       dx's menus and dialogs sit above the page. */
+    --dx-ui-popup: light-dark(
+      var(--ui-background),
+      color-mix(in oklab, var(--ui-background) 95%, var(--ui-foreground))
+    );
+    --dx-ui-popup-edge: var(
+      --color-border-tertiary,
+      color-mix(in oklab, var(--foreground) 10%, transparent)
+    );
+  }
+
+  [data-slot] {
+    font-family: var(--ui-font-sans);
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* dx's focus ring: a soft 3px halo of the ring color. */
+  [data-slot]:focus-visible {
+    outline: 0;
+    box-shadow: 0 0 0 3px var(--ui-ring);
+  }
+
+  /*
+   * Buttons: every trigger and close part, a `<ui-button>`, and a plain
+   * <button> inside a dialog or popover look like `dx-button`. Outline by
+   * default; `data-variant` picks another: `primary` (or UI SDK's `solid`),
+   * `secondary`, `ghost`, `destructive`, or `danger` (red text, no fill).
+   * A class of the view's own, such as the kit's `.ui-btn`, still wins.
+   */
+  :is(
+    [data-slot="button"],
+    [data-slot="dialog-trigger"],
+    [data-slot="dialog-close"],
+    [data-slot="alert-dialog-trigger"],
+    [data-slot="alert-dialog-close"],
+    [data-slot="drawer-trigger"],
+    [data-slot="drawer-close"],
+    [data-slot="tooltip-trigger"],
+    [data-slot="popover-trigger"],
+    [data-slot="popover-close"],
+    [data-slot="hover-card-trigger"],
+    [data-slot="menu-trigger"]:not(:where([data-slot="menu-content"]) *)
+  ),
+  :where(
+      [data-slot="dialog-content"],
+      [data-slot="alert-dialog-content"],
+      [data-slot="drawer-content"],
+      [data-slot="popover-content"]
+    )
+    button:not([data-slot], [class]) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid var(--ui-input);
+    border-radius: var(--ui-radius);
+    background: transparent;
+    color: var(--ui-foreground);
+    font-family: var(--ui-font-sans);
+    font-size: 12px;
+    font-weight: var(--font-weight-medium, 500);
+    line-height: 16px;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    transition:
+      background-color 0.15s,
+      opacity 0.15s,
+      box-shadow 0.15s;
+
+    &:hover:not([data-disabled], :disabled) {
+      background: var(--dx-ui-hover);
+    }
+
+    &:is([data-disabled], :disabled) {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    &:is([data-variant="primary"], [data-variant="solid"]) {
+      border-color: transparent;
+      background: var(--ui-primary);
+      color: var(--ui-primary-foreground);
+
+      &:hover:not([data-disabled], :disabled) {
+        background: var(--ui-primary);
+        opacity: 0.9;
+      }
+    }
+
+    &[data-variant="secondary"] {
+      border-color: transparent;
+      background: var(
+        --color-background-tertiary,
+        color-mix(in oklab, var(--foreground) 6%, transparent)
+      );
+
+      &:hover:not([data-disabled], :disabled) {
+        opacity: 0.8;
+      }
+    }
+
+    &[data-variant="ghost"] {
+      border-color: transparent;
+    }
+
+    &[data-variant="destructive"] {
+      border-color: transparent;
+      background: var(--ui-destructive);
+      color: var(--ui-background);
+
+      &:hover:not([data-disabled], :disabled) {
+        background: var(--ui-destructive);
+        opacity: 0.9;
+      }
+    }
+
+    &[data-variant="danger"] {
+      border-color: transparent;
+      color: var(--ui-destructive);
+
+      &:hover:not([data-disabled], :disabled) {
+        background: color-mix(in srgb, var(--ui-destructive) 12%, transparent);
+      }
+    }
+
+    & > svg {
+      width: 14px;
+      height: 14px;
+    }
+  }
+
+  /* Text fields match `dx-input`. */
+  :is(
+    [data-slot="input"],
+    [data-slot="textarea"],
+    [data-slot="combobox-input"],
+    [data-slot="autocomplete-input"],
+    [data-slot="date-picker-input"],
+    [data-slot="number-input-control"],
+    [data-slot="password-input-control"]
+  ) {
+    border-color: var(--ui-input);
+    background: transparent;
+  }
+
+  /* Select and combobox triggers match `dx-select`. */
+  [data-slot="select-trigger"] {
+    border-color: var(--ui-input);
+    background: transparent;
+    font-weight: var(--font-weight-normal, 400);
+
+    &:hover:not([data-disabled]) {
+      background: var(--dx-ui-hover);
+    }
+  }
+
+  /* Popups: menus, lists, popovers, and the calendar sit on dx's popup
+     surface with a hairline edge and a large shadow, as dx's menu does. */
+  :is(
+    [data-slot="popover-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="autocomplete-content"],
+    [data-slot="menu-content"],
+    [data-slot="trigger-menu-content"],
+    [data-slot="date-picker-content"]
+  ) {
+    border: 1px solid var(--dx-ui-popup-edge);
+    border-radius: var(--border-radius-lg, 8px);
+    background: var(--dx-ui-popup);
+    box-shadow: var(--ui-shadow);
+    color: var(--ui-foreground);
+  }
+
+  :is(
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="autocomplete-content"],
+    [data-slot="menu-content"],
+    [data-slot="trigger-menu-content"]
+  ) {
+    padding: 5px;
+  }
+
+  [data-slot="menu-content"] {
+    min-width: min(200px, calc(100vw - 16px));
+  }
+
+  /* Items: 30px rows, 6px corners, dx's hover fill; `data-destructive` is red. */
+  :is(
+    [data-slot="menu-item"],
+    [data-slot="menu-checkbox-item"],
+    [data-slot="menu-radio-item"],
+    [data-slot="select-item"],
+    [data-slot="combobox-item"],
+    [data-slot="autocomplete-item"],
+    [data-slot="command-item"],
+    [data-slot="listbox-item"],
+    [data-slot="trigger-menu-item"]
+  ) {
+    min-height: 30px;
+    padding-inline: 8px;
+    border-radius: var(--ui-radius);
+    font-size: 13px;
+    line-height: 18px;
+
+    &[data-highlighted] {
+      background: var(--dx-ui-hover);
+    }
+  }
+
+  :is([data-slot="menu-separator"], [data-slot="command-separator"]) {
+    margin-block: 4px;
+    background: var(--dx-ui-popup-edge);
+  }
+
+  :is(
+    [data-slot="menu-group-label"],
+    [data-slot="select-group-label"],
+    [data-slot="combobox-group-label"]
+  ) {
+    padding: 6px 8px 4px;
+    color: var(--ui-muted-foreground);
+    font-size: 11px;
+    font-weight: var(--font-weight-medium, 500);
+  }
+
+  /* A popover: 16px padding, a semibold title, muted description, and its
+     buttons together at the end. */
+  [data-slot="popover-content"] {
+    gap: 8px;
+    max-width: min(20rem, calc(100vw - 16px));
+    padding: 16px;
+    font-size: 13px;
+  }
+
+  [data-slot="popover-title"] {
+    font-size: 13px;
+    font-weight: var(--font-weight-semibold, 600);
+    line-height: 18px;
+  }
+
+  [data-slot="popover-description"] {
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  /*
+   * Dialogs, as dx's confirm dialog: up to 512px, 24px padding, 16px gaps,
+   * a 16px semibold title, a 12px muted description, and the actions in a
+   * row at the end. Everything but the actions takes its own line, so
+   * buttons written straight into the dialog (as UI SDK's docs do) line up
+   * there too. On a phone the actions stack, the main one on top.
+   */
+  :is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+    flex-flow: row wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px 8px;
+    width: min(512px, calc(100% - 32px));
+    padding: 24px;
+    border: 0;
+    border-radius: var(--border-radius-lg, 8px);
+    background: var(--dx-ui-popup);
+    box-shadow:
+      0 0 0 1px var(--dx-ui-popup-edge),
+      var(--ui-shadow);
+    font-size: 13px;
+    line-height: 1.5;
+
+    & > :not(:is(ui-dialog-close, ui-alert-dialog-close)) {
+      flex: 1 0 100%;
+      min-width: 0;
+    }
+  }
+
+  :is(
+      [data-slot="dialog-content"],
+      [data-slot="alert-dialog-content"],
+      [data-slot="popover-content"]
+    )
+    > :is([data-slot="title"], h2, h3):first-child,
+  :is([data-slot="dialog-title"], [data-slot="alert-dialog-title"]) {
+    margin: 0;
+    font-size: 16px;
+    font-weight: var(--font-weight-semibold, 600);
+    line-height: 20px;
+    text-wrap: pretty;
+  }
+
+  :is(
+    [data-slot="dialog-description"],
+    [data-slot="alert-dialog-description"]
+  ) {
+    /* Tight under the title, as dx's header groups them. */
+    margin: -8px 0 0;
+    color: var(--ui-muted-foreground);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  [data-slot="dialog-backdrop"],
+  [data-slot="alert-dialog-backdrop"],
+  [data-slot="drawer-backdrop"] {
+    background: var(--ui-overlay);
+  }
+
+  /* A row of actions (UI SDK's examples use `data-slot="row"`, or a
+     <footer>): its buttons together at the end. */
+  :is(
+      [data-slot="dialog-content"],
+      [data-slot="alert-dialog-content"],
+      [data-slot="popover-content"],
+      [data-slot="drawer-content"]
+    )
+    > :is([data-slot="row"], footer) {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+
+  [data-slot="popover-content"] > :is(ui-popover-close) > [data-slot] {
+    align-self: flex-end;
+  }
+
+  @media (max-width: 480px) {
+    :is([data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+      flex-direction: column;
+      align-items: stretch;
+
+      /* The actions stack full width under the text, the last (the main
+         action) on top, as dx's confirm dialog does on a phone. */
+      & > :is(ui-dialog-close, ui-alert-dialog-close) > [data-slot] {
+        order: 2;
+        width: 100%;
+      }
+
+      & > :is(ui-dialog-close, ui-alert-dialog-close):last-of-type > [data-slot] {
+        order: 1;
+      }
+
+      & > :is([data-slot="row"], footer) {
+        flex-direction: column-reverse;
+        align-items: stretch;
+
+        & > * {
+          width: 100%;
+        }
+
+        & :is([data-slot="dialog-close"], [data-slot="alert-dialog-close"]) {
+          width: 100%;
+        }
+      }
+    }
+  }
+
+  /* A row elsewhere: its parts side by side, centered. */
+  [data-slot="row"] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* The tooltip: dx's inverse pair, 12px text. */
+  [data-slot="tooltip-content"] {
+    padding: 4px 8px;
+    background: var(--ui-primary);
+    color: var(--ui-primary-foreground);
+    font-size: 12px;
+    line-height: 16px;
+  }
+
+  /* Tabs, as dx's underline tabs: 12px medium labels. */
+  [data-slot="tabs-tab"] {
+    height: 34px;
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+
+  [data-slot="tabs-list"] {
+    border-color: var(--dx-ui-popup-edge);
+  }
+
+  /* The segmented control, as dx's segmented tabs: no edge, a raised pill. */
+  [data-slot="segmented-control"] {
+    border: 0;
+    border-radius: var(--border-radius-lg, 8px);
+  }
+
+  [data-slot="segmented-control-item"] {
+    height: 24px;
+    font-size: 12px;
+  }
+
+  /* A labelled field stacks its label over its control, as `dx-select` does. */
+  :is(
+    [data-slot="select"],
+    [data-slot="combobox"],
+    [data-slot="autocomplete"]
+  ):has(> [data-slot$="-label"]) {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  :is([data-slot$="-label"], [data-slot="label"]) {
+    font-size: 12px;
+    font-weight: var(--font-weight-medium, 500);
+    line-height: 16px;
+    color: var(--ui-foreground);
+  }
+
+  /*
+   * A date picker written as UI SDK's docs show it, with the input and its
+   * trigger straight inside the root: the trigger sits in the input's end,
+   * as it does when they share a row element, and a hint goes below.
+   */
+  [data-slot="date-picker"]:has(
+      > ui-date-picker-input
+        + :is(ui-date-picker-trigger, ui-date-picker-clear)
+    ) {
+    flex-flow: row wrap;
+    align-items: center;
+    /* No gap across: the trigger tucks into the input's end. */
+    column-gap: 0;
+
+    & > ui-date-picker-hint {
+      flex-basis: 100%;
+    }
+  }
+
+  /* In a field, a date picker is as wide as the field, as other controls are. */
+  [data-slot="field"] > [data-slot="date-picker"] {
+    width: 100%;
+  }
+
+  /*
+   * A calendar's header row: Previous, the month, and Next on one line.
+   * The header UI SDK renders wraps them in a <div>, which its own grid
+   * would stack.
+   */
+  :is([data-slot="calendar"], [data-slot="date-picker-content"])
+    > div:has([data-slot="calendar-previous"]) {
+    display: flex;
+    grid-column: 1 / -1;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  [data-slot="calendar-heading"] {
+    font-size: 13px;
+    font-weight: var(--font-weight-semibold, 600);
+  }
+
+  /* Drawn as a chevron when it has no icon; its text label is only a fallback. */
+  :is([data-slot="calendar-previous"], [data-slot="calendar-next"]):not(
+      :has(svg)
+    ) {
+    font-size: 0;
+  }
+
+  /*
+   * A list as wide as its trigger, but never wider than the frame: a
+   * full-width trigger would otherwise push its list 8px past the edge.
+   */
+  :is(
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="autocomplete-content"]
+  ) {
+    min-width: min(var(--anchor-width), calc(100vw - 16px));
+  }
+
+  /* A popup fits a phone-width pane: never wider than the frame. */
+  :is(
+    [data-slot="select-content"],
+    [data-slot="combobox-content"],
+    [data-slot="autocomplete-content"],
+    [data-slot="menu-content"],
+    [data-slot="trigger-menu-content"],
+    [data-slot="hover-card-content"],
+    [data-slot="dialog-content"],
+    [data-slot="alert-dialog-content"],
+    [data-slot="date-picker-content"]
+  ) {
+    max-width: calc(100vw - 16px);
+  }
+}
+
+/*
+ * A dx-view's kit resets every button and field to the page's type and
+ * color, outside any layer, so it would beat UI SDK's layered styles. Its
+ * parts take theirs back. Outside a layer on purpose, and only in this
+ * sheet, which only views that use UI SDK get.
+ */
+:where(button, input, select, textarea)[data-slot] {
+  font: revert-layer;
+  color: revert-layer;
+}

@@ -2,6 +2,8 @@ import icons from "@dx/api/views/kit/icons.svg?raw";
 import css from "@dx/api/views/kit/kit.css?raw";
 import js from "@dx/api/views/kit/kit.js?raw";
 import {
+  type UiSdkCode,
+  uiSdkComponents,
   usesPluginUi,
   VIEW_FRAME_CONNECTED_PATH,
   VIEW_FRAME_MESSAGE,
@@ -66,6 +68,35 @@ const loadPluginUi = () => {
 };
 const usePluginUi = (html: string) =>
   usesPluginUi(html) ? React.use(loadPluginUi()) : undefined;
+
+/**
+ * UI SDK's styles and the code of the components a view uses (`ui-*`
+ * tags), by set of components. Each chunk is a lazy module of its own that
+ * loads only with the first view that needs it. A failed load leaves the
+ * view's `ui-*` tags plain HTML; later views try again.
+ */
+const uiSdkCode = new Map<string, Promise<UiSdkCode | undefined>>();
+// Kept for the session, so a view that renders again gets the same promise
+// and never suspends twice: a session sees a few distinct sets at most.
+const loadUiSdk = (components: readonly string[]) => {
+  const key = components.join(" ");
+  let code = uiSdkCode.get(key);
+  if (code === undefined) {
+    code = import("virtual:dx-ui-sdk").then(
+      (kit) => kit.uiSdkCode(components),
+      () => {
+        setTimeout(() => uiSdkCode.delete(key), 30_000);
+        return undefined;
+      },
+    );
+    uiSdkCode.set(key, code);
+  }
+  return code;
+};
+const useUiSdk = (html: string) => {
+  const components = uiSdkComponents(html);
+  return components.length > 0 ? React.use(loadUiSdk(components)) : undefined;
+};
 
 /**
  * The last height each view reported, so a view that scrolls back into a
@@ -455,7 +486,13 @@ export function ViewFrame({ source, actions }: MarkdownViewProps) {
   // A view may ask for @dxcode/plugin-ui, as a plugin frame does.
   const pluginUi = usePluginUi(source);
   // Built once per source and palette: a theme switch only messages the view.
-  const document = viewDocument(source, { kit: viewKit, palette, pluginUi });
+  const uiSdk = useUiSdk(source);
+  const document = viewDocument(source, {
+    kit: viewKit,
+    palette,
+    pluginUi,
+    uiSdk,
+  });
   return (
     <FramedView
       document={document}
@@ -473,10 +510,11 @@ export function ViewFrame({ source, actions }: MarkdownViewProps) {
 export function McpAppFrame({ view, cardKey }: McpAppViewProps) {
   const { palette } = useTheme();
   const pluginUi = usePluginUi(view.html);
+  const uiSdk = useUiSdk(view.html);
   // The palette when the card mounts: a later change reaches it as
   // `styles.variables`, without reloading the card.
   const [initialPalette] = React.useState(palette);
-  const document = `${viewDocument(view.html, { kit: viewKit, mcpApp: true, palette: initialPalette, pluginUi })}\n<!-- ${cardKey.replaceAll("-->", "")} -->\n`;
+  const document = `${viewDocument(view.html, { kit: viewKit, mcpApp: true, palette: initialPalette, pluginUi, uiSdk })}\n<!-- ${cardKey.replaceAll("-->", "")} -->\n`;
   return (
     <FramedView
       document={document}
@@ -578,6 +616,7 @@ export function PluginPaneFrame({
   const [error, setError] = React.useState<string>();
   const [escaped, setEscaped] = React.useState(false);
   const pluginUi = usePluginUi(html);
+  const uiSdk = useUiSdk(html);
   // The palette is read when the frame attaches, as the scheme is.
   const [initialPalette] = React.useState(palette);
   const document = viewDocument(html, {
@@ -585,6 +624,7 @@ export function PluginPaneFrame({
     mcpApp: true,
     palette: initialPalette,
     pluginUi,
+    uiSdk,
     ...(liveDocument === undefined
       ? {}
       : {

@@ -459,6 +459,147 @@ const inlinePluginUi = (source, pluginUi) => {
 };
 // --- End plugin theme -----------------------------------------------------
 
+// --- UI SDK ----------------------------------------------------------------
+// UI SDK's web components (`@ui-sdk/web`, pinned in apps/web) for any view:
+// a dx-view, a plugin frame, or an MCP Apps card. A view that writes a known
+// `<ui-…>` start tag gets the code of those components inlined, with dx's
+// theme for them; `<script type="module" src="dx:ui-sdk">` asks for every
+// component, for views that create them only from script. A view opts out
+// with `<meta name="dx-ui-sdk" content="off">`, such as a plugin that brings
+// its own `ui-*` elements. The host builds the code (see apps/web's
+// `ui-sdk-kit.ts`); without it, the view stays plain HTML.
+
+/** Where a view asks for every UI SDK component. */
+export const UI_SDK_SPECIFIER = "dx:ui-sdk";
+
+/**
+ * Every UI SDK component a view can use, by the entry that defines its tags:
+ * `select` defines `<ui-select>`, `<ui-select-trigger>`, and the rest.
+ * `preferences` is left out: it keeps state in cookies and storage.
+ */
+export const UI_SDK_COMPONENTS = [
+  "accordion",
+  "alert-dialog",
+  "autocomplete",
+  "avatar",
+  "button",
+  "calendar",
+  "carousel",
+  "checkbox",
+  "collapsible",
+  "color-picker",
+  "combobox",
+  "command",
+  "date-input",
+  "date-picker",
+  "dialog",
+  "drawer",
+  "field",
+  "file-input",
+  "hover-card",
+  "image-cropper",
+  "input",
+  "label",
+  "listbox",
+  "menu",
+  "menubar",
+  "meter",
+  "navigation-menu",
+  "number-input",
+  "otp-input",
+  "overlays",
+  "pagination",
+  "password-input",
+  "popover",
+  "progress",
+  "radio",
+  "rating",
+  "resizable",
+  "scroll-area",
+  "segmented-control",
+  "select",
+  "separator",
+  "slider",
+  "switch",
+  "tabs",
+  "textarea",
+  "time-input",
+  "timeline",
+  "toast",
+  "toggle",
+  "token-input",
+  "toolbar",
+  "tooltip",
+  "tree",
+  "trigger-menu",
+  "waterfall",
+];
+
+/**
+ * The component that defines `tag` (lowercase, such as `ui-select-item`):
+ * the longest one named like it, as UI SDK's own loader picks, so
+ * `ui-menubar-menu` is `menubar` and `ui-overlay-host` is `overlays`.
+ */
+export const uiSdkComponentOf = (tag) => {
+  let match;
+  for (const component of UI_SDK_COMPONENTS)
+    if (
+      [component, component.replace(/s$/, "")].some(
+        (stem) => tag === `ui-${stem}` || tag.startsWith(`ui-${stem}-`),
+      ) &&
+      component.length > (match?.length ?? 0)
+    )
+      match = component;
+  return match;
+};
+
+// A real start tag: `<ui-name` followed by space, `/`, or `>`.
+const uiSdkStartTag = /<(ui-[a-z][a-z0-9]*(?:-[a-z0-9]+)*)(?=[\s/>])/gi;
+const uiSdkAllTag =
+  /<script\b[^>]*?\bsrc\s*=\s*(["']?)dx:ui-sdk\1(?=[\s>/])[^>]*>(?:\s*<\/script\s*>)?/gi;
+const uiSdkOff =
+  /<meta\b(?=[^>]*\bname\s*=\s*["']?dx-ui-sdk\b)(?=[^>]*\bcontent\s*=\s*["']?off\b)[^>]*>/i;
+
+/**
+ * The UI SDK components `source` uses, sorted: those whose tags it writes,
+ * or all of them when it asks for `dx:ui-sdk`. Empty when it uses none or
+ * opts out. Unknown `ui-*` tags are the view's own and are left alone.
+ *
+ * @param {string} source
+ * @returns {string[]}
+ */
+export const uiSdkComponents = (source) => {
+  if (!/<ui-|dx:ui-sdk/i.test(source) || uiSdkOff.test(source)) return [];
+  if (new RegExp(uiSdkAllTag.source, "i").test(source))
+    return UI_SDK_COMPONENTS.toSorted();
+  const used = new Set();
+  for (const [, tag] of source.matchAll(uiSdkStartTag)) {
+    const component = uiSdkComponentOf(tag.toLowerCase());
+    if (component !== undefined) used.add(component);
+  }
+  return Array.from(used).toSorted();
+};
+
+/**
+ * The head markup that brings UI SDK into a view: its styles with dx's
+ * theme, and its components' code. Neither may end its element early. The
+ * code is a module script, as UI SDK expects, so it defines its elements
+ * after the page is parsed: an element defined before its children are
+ * parsed would render its default parts and then get the page's as well.
+ *
+ * @param {{ css: string; js: string } | undefined} uiSdk
+ */
+const uiSdkHead = (uiSdk) =>
+  uiSdk === undefined
+    ? ""
+    : `<style>${uiSdk.css.replace(/<\/(style)/gi, "<\\/$1")}</style>` +
+      `<script type="module">${uiSdk.js.replace(/<\/(script)/gi, "<\\/$1")}</script>`;
+
+/** `source` without its `dx:ui-sdk` tags; the head brings the code. */
+const withoutUiSdkTags = (source) =>
+  source.includes(UI_SDK_SPECIFIER) ? source.replace(uiSdkAllTag, "") : source;
+// --- End UI SDK ------------------------------------------------------------
+
 /**
  * No request leaves the view: every fetch, image, font, and frame outside
  * the document itself is blocked. Inline data URLs still load. The shell's
@@ -857,11 +998,38 @@ const bridge = `(() => {
     if (!message.startsWith("ResizeObserver loop")) post({ type: "error", message });
   });
   let height = -1;
+  // An open popover or dialog sits in the top layer, outside the page's
+  // height, so the frame also makes room for all of it: its top edge plus
+  // its whole height, and that height plus 2rem, which UI SDK keeps around a
+  // centered dialog. A popup exactly as tall as the frame (a backdrop, a
+  // full-height sheet) follows the frame and never counts, or each report
+  // would grow the frame again. Only popovers and dialogs count: <details>
+  // fires toggle too.
+  const open = new Set();
+  const forget = (popup) => { open.delete(popup); sizes.unobserve(popup); };
   const report = () => {
-    const next = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    let next = document.documentElement.getBoundingClientRect().height;
+    for (const popup of open) {
+      if (!popup.isConnected) { forget(popup); continue; }
+      const box = popup.getBoundingClientRect();
+      if (Math.abs(box.height - innerHeight) <= 1) continue;
+      // Its whole height, not the box UI SDK shrinks to fit a short frame.
+      const whole = box.height + Math.max(0, popup.scrollHeight - popup.clientHeight);
+      next = Math.max(next, box.top + scrollY + whole + 8, whole + 32);
+    }
+    next = Math.ceil(next);
     if (next !== height) post({ type: "size", height: (height = next) });
   };
-  new ResizeObserver(report).observe(document.documentElement);
+  const sizes = new ResizeObserver(report);
+  sizes.observe(document.documentElement);
+  addEventListener("toggle", (event) => {
+    const popup = event.target;
+    if (!(popup instanceof Element) || !(popup.hasAttribute("popover") || popup.localName === "dialog")) return;
+    if (/(?:^|-)backdrop$/.test(popup.getAttribute("data-slot") ?? "")) return;
+    if (event.newState === "open") { open.add(popup); sizes.observe(popup); }
+    else forget(popup);
+    report();
+  }, true);
   addEventListener("load", report);
 })();`;
 
@@ -1159,7 +1327,11 @@ const escapeAttribute = (value) =>
  * A trusted pane (`trusted` with `pane`) also gets `window.dx` and may reach
  * `pane.hosts`; it must load under `VIEW_FRAME_CONNECTED_PATH` to use them.
  *
- * @param {{ kit: { css: string; js: string; icons: string }; palette?: string; scheme?: "light" | "dark"; mcpApp?: boolean; pluginUi?: string; trusted?: boolean; webrtc?: boolean; pane?: { id: string; hosts: readonly string[] } }} options
+ * Any view that uses UI SDK (`uiSdkComponents`) gets `uiSdk`, the code and
+ * styles of the components it uses, in its head; without it the view stays
+ * plain HTML.
+ *
+ * @param {{ kit: { css: string; js: string; icons: string }; palette?: string; scheme?: "light" | "dark"; mcpApp?: boolean; pluginUi?: string; uiSdk?: { css: string; js: string }; trusted?: boolean; webrtc?: boolean; pane?: { id: string; hosts: readonly string[] } }} options
  */
 export const viewDocument = (
   source,
@@ -1169,6 +1341,7 @@ export const viewDocument = (
     scheme,
     mcpApp = false,
     pluginUi,
+    uiSdk,
     trusted = false,
     webrtc = false,
     pane,
@@ -1177,13 +1350,15 @@ export const viewDocument = (
   const guarded = !(trusted && webrtc);
   if (mcpApp)
     return withHead(
-      usesPluginUi(source) ? inlinePluginUi(source, pluginUi) : source,
+      withoutUiSdkTags(
+        usesPluginUi(source) ? inlinePluginUi(source, pluginUi) : source,
+      ),
       // Only a trusted pane gets window.dx and its connect hosts.
       mcpAppHead(
         guarded,
         palette,
         trusted && pane !== undefined ? pane : undefined,
-      ),
+      ) + uiSdkHead(uiSdk),
     );
   const icons = kit.icons.replace(/<!--[\s\S]*?-->/g, "");
   const kitScript = kit.js.replace("'__DX_VIEW_ICONS__'", () =>
@@ -1196,19 +1371,22 @@ export const viewDocument = (
       ? "html{background:transparent}"
       : `:root{color-scheme:only ${scheme}}`;
   // A view that asks for `@dxcode/plugin-ui` gets it, and the plugin theme
-  // under the MCP Apps names, as a plugin frame does.
+  // under the MCP Apps names, as a plugin frame does. So does a view that
+  // uses UI SDK, whose theme reads the same names (accent, input, ring, …).
   const withPluginUi = usesPluginUi(source);
-  const pluginTheme = withPluginUi
-    ? `:root{${pluginThemeCss(palette)}}${pluginContrastCss}`
-    : "";
+  const pluginTheme =
+    withPluginUi || uiSdk !== undefined
+      ? `:root{${pluginThemeCss(palette)}}${pluginContrastCss}`
+      : "";
   const head =
     `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${viewPolicy(guarded)}">` +
     guardScript(guarded) +
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     `<style>:root{${tokens(palette)}}${viewContrastCss}${pluginTheme}${kit.css}${fixedScheme}</style>` +
-    `<script>${bridge}</script><script>${kitScript}</script>`;
+    `<script>${bridge}</script><script>${kitScript}</script>` +
+    uiSdkHead(uiSdk);
   return withHead(
-    withPluginUi ? inlinePluginUi(source, pluginUi) : source,
+    withoutUiSdkTags(withPluginUi ? inlinePluginUi(source, pluginUi) : source),
     head,
   );
 };

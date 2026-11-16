@@ -595,6 +595,12 @@ importers:
       '@types/react-dom':
         specifier: 19.2.3
         version: 19.2.3(@types/react@19.2.14)
+      '@ui-sdk/core':
+        specifier: 0.1.0-beta.1
+        version: 0.1.0-beta.1
+      '@ui-sdk/web':
+        specifier: 0.1.0-beta.1
+        version: 0.1.0-beta.1(@ui-sdk/core@0.1.0-beta.1)
       '@vitejs/plugin-react':
         specifier: 6.1.2
         version: 6.1.2(@rolldown/plugin-babel@0.2.3(@babel/core@8.0.1)(@babel/runtime@7.29.7)(rolldown@1.2.5)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)))(oxc-transform-react@0.152.0)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
@@ -619,6 +625,9 @@ importers:
       react-scan:
         specifier: 0.5.7
         version: 0.5.7(@opentelemetry/core@2.10.0(@opentelemetry/api@1.9.0))(esbuild@0.28.2)(eslint@10.9.0(jiti@2.7.0)(supports-color@10.2.2))(preact-render-to-string@6.6.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(rolldown@1.2.5)(supports-color@10.2.2)(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      rolldown:
+        specifier: 1.2.5
+        version: 1.2.5
       storybook:
         specifier: 10.6.5
         version: 10.6.5(@types/react@19.2.14)(react@19.2.8)
@@ -5395,6 +5404,14 @@ packages:
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
+
+  '@ui-sdk/core@0.1.0-beta.1':
+    resolution: {integrity: sha512-sWsZW8RN6Gviir7REQYuDIafm9hierHQE31OJ+2g+1Pp3lDVKp/dk0+0dxFvqOQRmBveRvlE9FiARgNlQ9dMFw==}
+
+  '@ui-sdk/web@0.1.0-beta.1':
+    resolution: {integrity: sha512-PnlZD27q90B+vNbGcOYhpFjdCaguYqZoYnslgDL+KLYNTqzKgE64eUKp9IfawMpcosKOnk8aGPiaw3uaOTHMpQ==}
+    peerDependencies:
+      '@ui-sdk/core': ^0.1.0-beta.1
 
   '@ungap/structured-clone@1.3.3':
     resolution: {integrity: sha512-60YRaenCQcVjYEKOcG824+DRGGIQ3VKErcBoAEDJZz5bKIs2ZG+X/H9Nk+Q6EVkwJk5QNApxbrc5QtBSwtrXAg==}
@@ -13736,6 +13753,12 @@ snapshots:
 
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
+
+  '@ui-sdk/core@0.1.0-beta.1': {}
+
+  '@ui-sdk/web@0.1.0-beta.1(@ui-sdk/core@0.1.0-beta.1)':
+    dependencies:
+      '@ui-sdk/core': 0.1.0-beta.1
 
   '@ungap/structured-clone@1.3.3': {}
 

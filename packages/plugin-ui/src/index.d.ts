@@ -54,6 +54,62 @@ export interface DxPluginUi {
   readonly icons: readonly string[];
 }
 
+/**
+ * A UI SDK component's root (`<ui-select>`, `<ui-tabs>`, …), which dx
+ * inlines into any frame that writes its tag. `value` is live; setting it
+ * fires `valuechange`. Popup roots also have a live `open`. UI SDK's docs
+ * list every part: https://github.com/vercel-labs/ui
+ */
+export interface UiSdkElement<T = unknown> extends HTMLElement {
+  value: T;
+  open?: boolean;
+  addEventListener<K extends keyof UiSdkEventMap>(
+    type: K,
+    listener: (this: UiSdkElement<T>, event: UiSdkEventMap[K]) => unknown,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+}
+
+/** What UI SDK's events carry in `event.detail`; they don't bubble. */
+export interface UiSdkChangeDetail<T = unknown> {
+  readonly value: T;
+  readonly reason: string;
+}
+
+/** The events a UI SDK root fires, beside every element's own. */
+export interface UiSdkEventMap extends HTMLElementEventMap {
+  valuechange: CustomEvent<UiSdkChangeDetail>;
+  openchange: CustomEvent<UiSdkChangeDetail<boolean>>;
+  /** A `<ui-menu>` item was chosen; `detail.value` is its `value`. */
+  action: CustomEvent<{ readonly value: string }>;
+}
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "ui-select": UiSdkElement<string | string[] | null>;
+    "ui-combobox": UiSdkElement<string | string[] | null>;
+    "ui-autocomplete": UiSdkElement<string>;
+    "ui-tabs": UiSdkElement<string | null>;
+    "ui-accordion": UiSdkElement<string[]>;
+    "ui-date-picker": UiSdkElement<string | null>;
+    "ui-slider": UiSdkElement<number | number[]>;
+    "ui-switch": UiSdkElement<boolean>;
+    "ui-checkbox": UiSdkElement<boolean>;
+    "ui-radio-group": UiSdkElement<string | null>;
+    "ui-segmented-control": UiSdkElement<string | null>;
+    "ui-dialog": UiSdkElement<boolean>;
+    "ui-alert-dialog": UiSdkElement<boolean>;
+    "ui-popover": UiSdkElement<boolean>;
+    "ui-menu": UiSdkElement<boolean>;
+    "ui-tooltip": UiSdkElement<boolean>;
+  }
+}
+
 declare global {
   interface HTMLElementTagNameMap {
     "dx-button": DxButtonElement;

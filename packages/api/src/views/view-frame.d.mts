@@ -21,6 +21,25 @@ export declare const DESIGN_SYSTEM: {
   readonly tokens: Readonly<Record<string, string>>;
 };
 
+/** UI SDK's styles, with dx's theme, and its components' code. */
+export interface UiSdkCode {
+  readonly css: string;
+  readonly js: string;
+}
+
+/** Where a view asks for every UI SDK component. */
+export declare const UI_SDK_SPECIFIER: "dx:ui-sdk";
+/** Every UI SDK component a view can use, by the entry that defines it. */
+export declare const UI_SDK_COMPONENTS: readonly string[];
+/** The component that defines a lowercase `ui-*` tag, if UI SDK has one. */
+export declare const uiSdkComponentOf: (tag: string) => string | undefined;
+/**
+ * The UI SDK components a view uses, sorted: those whose start tags it
+ * writes, or all with `dx:ui-sdk`. Empty when none, or with
+ * `<meta name="dx-ui-sdk" content="off">`.
+ */
+export declare const uiSdkComponents: (source: string) => string[];
+
 export interface ViewKit {
   readonly css: string;
   readonly js: string;
@@ -44,6 +63,12 @@ export declare const viewDocument: (
      * plugin theme. Without it such tags are dropped.
      */
     readonly pluginUi?: string;
+    /**
+     * UI SDK for a view that uses it (`uiSdkComponents`): the styles, with
+     * dx's theme, and the code of the components it uses. Without it the
+     * view's `ui-*` tags stay plain HTML and `dx:ui-sdk` tags are dropped.
+     */
+    readonly uiSdk?: UiSdkCode;
     /** A trusted-tier pane; with `webrtc`, it runs without the WebRTC guard. */
     readonly trusted?: boolean;
     /** The pane declared `connect.webrtc` (honored only when `trusted`). */
@@ -59,6 +84,7 @@ export declare const frameView: (
     readonly kit: ViewKit;
     readonly palette?: string;
     readonly pluginUi?: string;
+    readonly uiSdk?: UiSdkCode;
   },
 ) => string;
 

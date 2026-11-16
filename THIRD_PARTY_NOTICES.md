@@ -93,6 +93,19 @@ OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
 TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.
 
+## UI SDK (view and plugin frame components)
+
+dx-views, plugin frames, and MCP Apps cards that use `ui-*` tags get UI SDK's
+web components (`@ui-sdk/web` and `@ui-sdk/core` 0.1.0-beta.1, unmodified)
+and its stylesheet, inlined into the frame by `apps/web/ui-sdk-kit.ts` with
+dx's theme (`packages/api/src/views/kit/ui-sdk.css`). The build leaves out
+the stylesheet's rules for page elements outside UI SDK's own (`a`, `hr`,
+`code`, `kbd`) and its `color-scheme`.
+
+- Source: <https://github.com/vercel-labs/ui>
+- License: Apache-2.0, Copyright Vercel, Inc.
+- License text: <https://github.com/vercel-labs/ui/blob/main/LICENSE>
+
 ## Pi coding agent
 
 The baseline dx agent prompt in

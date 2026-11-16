@@ -795,6 +795,10 @@ export const PANE_MESSAGES_KEPT = 20;
  * inlines `@dxcode/plugin-ui`: web components in dx's look, such as
  * `<dx-button>`, `<dx-table>`, `<dx-tabs>`, `<dx-input>`, `<dx-chip>`,
  * `<dx-empty>`, `<dx-code>` and `<dx-player>`. Its README lists them all.
+ * For a select with search, a menu, a dialog, a popover, a tooltip or a date
+ * picker, write UI SDK's `ui-*` tags (`<ui-select>`, `<ui-menu>`,
+ * `<ui-dialog>`, `<ui-date-picker>`, …): dx inlines the components the page
+ * uses, styled like the kit, with no extra tag.
  */
 export interface PluginPaneDefinition {
   /** 1 to 48 lowercase letters, digits, and hyphens, starting with a letter. */

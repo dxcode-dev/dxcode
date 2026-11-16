@@ -13,6 +13,7 @@ import {
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, loadEnv, minify, type Plugin } from "vite";
+import { uiSdkKit } from "./ui-sdk-kit.js";
 import { localAllowedHosts, localTranscriptCapture } from "./vite-local.js";
 
 /**
@@ -153,6 +154,7 @@ export const appPlugins = () => [
   react({ compiler: true }),
   viewFrame,
   pluginUiKit,
+  uiSdkKit(),
 ];
 
 /**

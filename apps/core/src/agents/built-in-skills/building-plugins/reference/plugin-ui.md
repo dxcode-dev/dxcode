@@ -88,6 +88,72 @@ A link in a frame, including an `href` on a list item, asks the person
 before opening, and opens in a new tab. `window.dx.ui.openLink(url)` does the
 same from script.
 
+## Interactive components (`ui-*`)
+
+For a widget the kit has no element for, write [UI SDK](https://github.com/vercel-labs/ui)'s
+`ui-*` tags in the same page: `ui-select` and `ui-combobox` (searchable or rich options),
+`ui-menu`, `ui-dialog`, `ui-alert-dialog`, `ui-popover`, `ui-tooltip`, `ui-date-picker`,
+`ui-slider`, `ui-accordion`, `ui-tree` and the rest. dx sees the tags and inlines those
+components into the frame, drawn as dx draws its own: a `ui-select` beside a `dx-select`
+looks like its sibling, a `ui-dialog` like dx's confirm dialog, a `ui-menu` like dx's menu.
+The kit tag isn't needed for them. Keep using `dx-*` for buttons, cards, stats, lists,
+tables, chips and native fields.
+
+```html
+<script type="module" src="dx:plugin-ui"></script>
+<dx-card heading="Triage" description="Pick a priority and a due date.">
+  <form id="triage" style="display: grid; gap: 12px">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px">
+      <dx-select label="Area" name="area"><option value="web">Web</option></dx-select>
+      <ui-select name="priority" placeholder="Pick a priority">
+        <ui-select-label>Priority</ui-select-label>
+        <ui-select-trigger><button type="button"><ui-select-value></ui-select-value></button></ui-select-trigger>
+        <ui-select-content>
+          <ui-select-item value="p0">P0, now</ui-select-item>
+          <ui-select-item value="p1">P1, this week</ui-select-item>
+        </ui-select-content>
+      </ui-select>
+    </div>
+    <ui-field>
+      <ui-field-label>Due</ui-field-label>
+      <ui-date-picker name="due">
+        <ui-date-picker-input><input placeholder="Pick a date" /></ui-date-picker-input>
+        <ui-date-picker-trigger></ui-date-picker-trigger>
+        <ui-date-picker-content hidden></ui-date-picker-content>
+      </ui-date-picker>
+    </ui-field>
+  </form>
+  <ui-alert-dialog slot="actions">
+    <ui-alert-dialog-trigger><button type="button" data-variant="danger">Close issue</button></ui-alert-dialog-trigger>
+    <ui-alert-dialog-backdrop hidden></ui-alert-dialog-backdrop>
+    <ui-alert-dialog-content hidden>
+      <ui-alert-dialog-title>Close this issue?</ui-alert-dialog-title>
+      <ui-alert-dialog-description>It leaves the triage queue.</ui-alert-dialog-description>
+      <div data-slot="row">
+        <ui-alert-dialog-close><button type="button">Cancel</button></ui-alert-dialog-close>
+        <ui-alert-dialog-close value="close"><button type="button" data-variant="destructive">Close issue</button></ui-alert-dialog-close>
+      </div>
+    </ui-alert-dialog-content>
+  </ui-alert-dialog>
+</dx-card>
+```
+
+- Triggers and closes wrap a real `<button type="button">` with no class; dx draws it as
+  `dx-button`'s outline variant. `data-variant` picks another: `primary`, `secondary`,
+  `ghost`, `destructive` (a red fill) or `danger` (red text).
+- A dialog is a title, a description, and a `<div data-slot="row">` of its closes, the main
+  action last. dx puts the row at the end and, in a phone-width pane, stacks it with the main
+  action on top. Mark a red menu item `data-destructive`.
+- Label a select or combobox with its `-label` part, and a date picker or slider with a
+  `<ui-field>` and `<ui-field-label>` around it. Leave a date picker's trigger empty.
+- A `ui-*` field with a `name` is form-associated, so `new FormData(form)` reads it with the
+  kit's fields. Each root has a `value` property and fires `valuechange` (or `openchange`, or
+  `action` on a menu) with `event.detail.value`; these events don't bubble.
+- Popups and dialogs open inside the frame and fit a phone-width pane.
+- A page that creates `ui-*` elements only from script adds
+  `<script type="module" src="dx:ui-sdk"></script>` to get every component. A page that
+  defines its own `ui-*` elements opts out with `<meta name="dx-ui-sdk" content="off">`.
+
 ## Example
 
 [`examples/release-dashboard`](examples/release-dashboard) is a plugin whose
