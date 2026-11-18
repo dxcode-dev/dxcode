@@ -317,7 +317,7 @@
   padding: var(--space-2-5);
   overflow-x: auto;
   white-space: pre;
-  font: inherit;
+  font: var(--text-code) / var(--leading-code) var(--font-code);
 }
 
 .changes-diff-fallback[data-overflow="wrap"] pre {
@@ -327,9 +327,6 @@
 
 .changes-pierre-diff {
   display: block;
-  --diffs-font-family: var(--font-mono);
-  --diffs-font-size: var(--code-font-size, 11px);
-  --diffs-line-height: var(--code-line-height, 18px);
   --diffs-dark-bg: color-mix(
     in srgb,
     var(--surface) 90%,

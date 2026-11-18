@@ -94,7 +94,7 @@ export function ComposerSettings({ onDirtyChange }: SettingsSectionProps) {
       <DictationSettingsCard />
       <DictationVocabularyCard
         target={{ scope: "personal" }}
-        description="Names, technical terms, and other words that dictation should recognize. Enter one term per line, or separate terms with commas. Your workspace's terms are used after yours."
+        description="Names and technical terms dictation should recognize. Enter one per line or separate them with commas. Your workspace's terms are used after yours."
         onDirtyChange={onDirtyChange}
       />
       {defaults.data === undefined ? null : (
@@ -139,7 +139,7 @@ export function WorkspaceComposerSettings({
       />
       <DictationVocabularyCard
         target={{ scope: "workspace", workspaceSlug }}
-        description="Names, technical terms, and other words that dictation should recognize for every member. Enter one term per line, or separate terms with commas. A member's own terms are used first."
+        description="Names and technical terms dictation should recognize for every member. Enter one per line or separate them with commas. A member's own terms are used first."
         onDirtyChange={onDirtyChange}
       />
     </div>

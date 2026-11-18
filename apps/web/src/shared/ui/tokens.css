@@ -29,22 +29,20 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  /* Type. --font-mono reads --font-mono-family, which Personal Settings →
-     Code sets on the root; transcript code reads --font-code, which the same
-     setting overrides through --code-font-family. */
+  /* Type. --font-mono (monospace UI text such as paths and ids) reads
+     --font-mono-family. Code (--font-code, --text-code, --leading-code) is
+     what every code surface reads: reply code blocks, tool output, diffs,
+     Changes, Files, and the file editor. Personal Settings → Appearance →
+     Code Font sets --code-font-family, --code-font-size, and
+     --code-line-height on the root, so one change reaches all of them. */
   /* The system UI font on every platform; Linux takes system-ui. */
   --font-ui:
     -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --font-mono: var(--font-mono-family);
-  --font-code: var(
-    --code-font-family,
-    "IBM Plex Mono",
-    "SFMono-Regular",
-    Consolas,
-    "Liberation Mono",
-    monospace
-  );
+  --font-code-default:
+    "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --font-code: var(--code-font-family, var(--font-code-default));
   --text-4xs: 8px;
   --text-3xs: 9px;
   --text-2xs: 10px;
@@ -56,8 +54,8 @@
   --text-heading: 18px;
   --text-2xl: 20px;
   --text-3xl: 24px;
-  /* Transcript and editor code; Personal Settings → Code can change it. */
-  --text-code: var(--code-font-size, 12.5px);
+  --text-code-default: 12.5px;
+  --text-code: var(--code-font-size, var(--text-code-default));
   /* A text field on a touch screen: iOS zooms into anything smaller. */
   --text-input-touch: 16px;
   /* Initials inside the smallest avatars. */
@@ -68,6 +66,8 @@
   --leading-snug: 1.4;
   --leading-normal: 1.45;
   --leading-relaxed: 1.5;
+  --leading-code-default: 1.6;
+  --leading-code: var(--code-line-height, var(--leading-code-default));
   /* Fixed line boxes, for rows whose height the text sets. */
   --leading-3: 12px;
   --leading-3-5: 14px;
@@ -190,8 +190,11 @@
   --mode-medium: light-dark(var(--thread-color-green), var(--mode-medium-glow));
   --mode-high: light-dark(var(--thread-color-cyan), var(--mode-high-glow));
   --mode-ultra: light-dark(var(--thread-color-purple), var(--mode-ultra-glow));
-  /* Code, diffs, and the file editor. */
+  /* Code colors: every highlighter maps its tokens onto these (see
+     shared/ui/code.css and shared/ui/code-theme.ts), so a keyword is one
+     color in a reply, a diff, Changes, Files, and the editor. */
   --code-surface: color-mix(in srgb, var(--foreground) 4%, var(--card));
+  --code-foreground: var(--foreground);
   --code-keyword: var(--thread-color-pink);
   --code-string: color-mix(
     in srgb,
@@ -200,6 +203,11 @@
   );
   --code-number: var(--thread-color-purple);
   --code-title: var(--thread-color-cyan);
+  --code-property: var(--thread-color-blue);
+  --code-comment: var(--muted-foreground);
+  --code-addition: var(--thread-color-green);
+  --code-deletion: var(--thread-color-red);
+  --code-modified: var(--thread-color-blue);
   --editor-background: color-mix(in srgb, var(--foreground) 3%, var(--card));
   --diff-dark-base: color-mix(
     in srgb,

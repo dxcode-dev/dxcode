@@ -76,7 +76,8 @@
   margin: 1.1em 0;
 }
 .markdown.transcript-markdown pre {
-  font: var(--text-code) / 1.375 var(--font-code);
+  font: var(--text-code) / var(--leading-code) var(--font-code);
+  color: var(--code-foreground);
   padding: var(--space-2) 36px var(--space-2) var(--space-3);
   background: color-mix(in oklab, var(--chat-foreground) 5%, transparent);
   outline: 1px solid
@@ -90,7 +91,6 @@
   min-width: 100%;
   font: inherit;
   background: transparent;
-  line-height: var(--code-line-height, 1);
   font-variant-ligatures: none;
   letter-spacing: 0;
 }
@@ -220,25 +220,6 @@
 .markdown.transcript-markdown .markdown-mermaid-source:hover button,
 .markdown.transcript-markdown .markdown-mermaid-source:focus-within button {
   opacity: 1;
-}
-.markdown.transcript-markdown .hljs-keyword,
-.markdown.transcript-markdown .hljs-selector-tag {
-  color: var(--markdown-keyword);
-}
-.markdown.transcript-markdown .hljs-string,
-.markdown.transcript-markdown .hljs-attr {
-  color: var(--code-string);
-}
-.markdown.transcript-markdown .hljs-number,
-.markdown.transcript-markdown .hljs-literal {
-  color: var(--code-number);
-}
-.markdown.transcript-markdown .hljs-comment {
-  color: var(--muted-foreground);
-}
-.markdown.transcript-markdown .hljs-title,
-.markdown.transcript-markdown .hljs-built_in {
-  color: var(--code-title);
 }
 .markdown.transcript-markdown > :first-child {
   margin-top: 0;

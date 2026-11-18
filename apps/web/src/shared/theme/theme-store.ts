@@ -6,6 +6,7 @@ import type {
   PersonalTextSize,
   PersonalThreadWidth,
 } from "@dx/domain";
+import { codeFontSizePixels } from "@dx/domain";
 import { Schema } from "effect";
 
 export type Appearance = PersonalAppearance;
@@ -161,6 +162,69 @@ export const codeFontFamilyCss = (family: string | null) => {
 /** A Code Font size as CSS: a bare number means pixels. */
 export const codeFontSizeCss = (size: string) =>
   /^[\d.]+$/.test(size) ? `${size}px` : size;
+
+/**
+ * The style of a `.code-font-scope` (code.css) that tries Code Font values
+ * other than the saved ones. A value left undefined keeps the saved one; a
+ * blank one shows the default.
+ */
+export const codeFontScopeStyle = ({
+  family,
+  size,
+  lineHeight,
+}: {
+  readonly family?: string | undefined;
+  readonly size?: string | undefined;
+  readonly lineHeight?: string | undefined;
+}) =>
+  ({
+    "--code-font-family":
+      family === undefined
+        ? undefined
+        : family === ""
+          ? "initial"
+          : codeFontFamilyCss(family),
+    "--code-font-size":
+      size === undefined
+        ? undefined
+        : size === ""
+          ? "initial"
+          : codeFontSizeCss(size),
+    "--code-line-height":
+      lineHeight === undefined ? undefined : lineHeight || "initial",
+  }) as Readonly<Record<string, string | undefined>>;
+
+// tokens.css: --text-code-default and --leading-code-default.
+const defaultCodeFontPixels = 12.5;
+const defaultCodeLineHeight = 1.6;
+
+/**
+ * The height of one code line in pixels, for layouts that place lines
+ * before they render (the Changes virtualizer). Follows the Code Font size
+ * and line height the person chose, as the code tokens do.
+ */
+export const codeLinePixels = ({
+  codeFontSize,
+  codeLineHeight,
+}: Pick<AppearancePreferences, "codeFontSize" | "codeLineHeight">) => {
+  const font =
+    (codeFontSize === null ? undefined : codeFontSizePixels(codeFontSize)) ??
+    defaultCodeFontPixels;
+  const match =
+    codeLineHeight === null
+      ? null
+      : /^(\d*\.?\d+)(px|rem|em|%)?$/.exec(codeLineHeight);
+  if (match === null) return font * defaultCodeLineHeight;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  return unit === "px"
+    ? amount
+    : unit === "rem"
+      ? amount * 16
+      : unit === "%"
+        ? (font * amount) / 100
+        : font * amount;
+};
 
 export interface ThemePreferences extends AppearancePreferences {
   readonly resolvedAppearance: ResolvedAppearance;

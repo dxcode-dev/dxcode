@@ -290,14 +290,14 @@
   padding: 1px var(--space-1);
   border-radius: var(--radius-xs);
   background: var(--secondary);
-  font: 0.9em var(--font-mono);
+  font: 0.9em var(--font-code);
 }
 .artifact-prose pre {
   padding: var(--space-2-5) var(--space-3);
   overflow-x: auto;
   border-radius: var(--radius-sm);
   background: var(--secondary);
-  font: var(--text-code) / var(--leading-relaxed) var(--font-mono);
+  font: var(--text-code) / var(--leading-code) var(--font-code);
   white-space: pre;
 }
 .artifact-prose pre code {

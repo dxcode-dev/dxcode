@@ -12,13 +12,6 @@ export const stripToolLineNumbers = (contents: string) => {
   return lines.map((line) => line.replace(numberedLine, "")).join("\n");
 };
 
-export const stableTranscriptPreviewVersion = (value: string) => {
-  let hash = 0;
-  for (const character of value)
-    hash = (hash * 31 + character.charCodeAt(0)) | 0;
-  return hash >>> 0;
-};
-
 export const isPatchOutput = (output: string) =>
   /^(?:diff --git|--- |\+\+\+ |@@ )/m.test(output);
 

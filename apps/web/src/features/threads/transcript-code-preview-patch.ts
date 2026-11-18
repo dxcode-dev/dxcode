@@ -1,5 +1,5 @@
 import { parsePatchFiles } from "@pierre/diffs";
-import { stableTranscriptPreviewVersion } from "./transcript-code-preview-model.js";
+import { textVersion } from "../../shared/text-version.js";
 
 // Apart from the model so the transcript does not load the diff library.
 export const parseTranscriptPatch = (patch: string, path: string) => {
@@ -11,7 +11,7 @@ export const parseTranscriptPatch = (patch: string, path: string) => {
   try {
     return parsePatchFiles(
       normalized,
-      `transcript-${encodeURIComponent(path)}-${stableTranscriptPreviewVersion(patch)}`,
+      `transcript-${encodeURIComponent(path)}-${textVersion(patch)}`,
       true,
     ).flatMap((parsed) => parsed.files);
   } catch {

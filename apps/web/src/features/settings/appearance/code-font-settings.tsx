@@ -6,17 +6,11 @@ import {
 import { Option, Schema } from "effect";
 import * as React from "react";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
-import {
-  codeFontFamilyCss,
-  codeFontSizeCss,
-} from "../../../shared/theme/theme-store.js";
+import { codeFontScopeStyle } from "../../../shared/theme/theme-store.js";
 import { Button } from "../../../shared/ui/button.js";
+import { CodeSamples } from "../../../shared/ui/code-samples.js";
 import { Input } from "../../../shared/ui/input.js";
 import { SettingsCard, SettingsRow } from "../settings-primitives.js";
-
-const sample = `export function pluralize(count: number, noun: string): string {
-  return count === 1 ? noun : \`\${noun}s\` // 0O 1lI {}[]()
-}`;
 
 const fields = [
   {
@@ -95,19 +89,14 @@ function CodeFontForm({
   };
   const invalid = fields.filter((field) => !isValid(field, trimmed[field.key]));
   const dirty = fields.some(({ key }) => (trimmed[key] || null) !== saved[key]);
-  const preview = {
-    fontFamily: codeFontFamilyCss(
-      invalid.some(({ key }) => key === "codeFontFamily")
-        ? saved.codeFontFamily
-        : trimmed.codeFontFamily || null,
-    ),
-    fontSize: invalid.some(({ key }) => key === "codeFontSize")
-      ? undefined
-      : codeFontSizeCss(trimmed.codeFontSize || "12.5"),
-    lineHeight: invalid.some(({ key }) => key === "codeLineHeight")
-      ? undefined
-      : trimmed.codeLineHeight || "1.375",
-  };
+  // A field being typed applies to the preview at once; blank shows the
+  // default, and an invalid entry keeps the saved value.
+  const draft = (key: CodeFontField) =>
+    invalid.some((field) => field.key === key) ? undefined : trimmed[key];
+  const family = draft("codeFontFamily");
+  const size = draft("codeFontSize");
+  const lineHeight = draft("codeLineHeight");
+  const preview = codeFontScopeStyle({ family, size, lineHeight });
 
   return (
     <SettingsCard
@@ -141,13 +130,11 @@ function CodeFontForm({
         );
       })}
       <figure
-        className="code-font-preview"
+        className="code-font-preview code-font-scope"
         aria-label="Code Font preview"
         style={preview}
       >
-        <pre>
-          <code>{sample}</code>
-        </pre>
+        <CodeSamples />
       </figure>
       <footer className="settings-form-actions" aria-live="polite">
         {invalid.length === 0 ? null : (

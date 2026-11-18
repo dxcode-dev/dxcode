@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./shared/ui/tokens.css";
 @import "./shared/ui/rich-markdown.css";
+@import "./shared/ui/code.css";
 
 @theme inline {
   --font-sans: var(--font-ui);
@@ -1418,7 +1419,7 @@
   padding: 1px var(--space-0-5);
   border-radius: 2px;
   background: color-mix(in srgb, var(--muted-foreground) 10%, transparent);
-  font: 1em / var(--leading-5) var(--font-mono);
+  font: 1em / var(--leading-5) var(--font-code);
 }
 .transcript-code-block {
   position: relative;
@@ -1456,7 +1457,7 @@
 .markdown pre code {
   padding: 0;
   background: transparent;
-  font: var(--text-code) / var(--code-line-height, 1.375) var(--font-mono);
+  font: var(--text-code) / var(--leading-code) var(--font-code);
 }
 .transcript-table {
   max-width: 100%;
@@ -2007,7 +2008,7 @@
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border);
   color: var(--chat-foreground);
-  font: var(--text-code) / var(--code-line-height, 20px) var(--font-mono);
+  font: var(--text-code) / var(--leading-code) var(--font-code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2016,7 +2017,7 @@
 .transcript-edit-output {
   margin: 0;
   color: color-mix(in srgb, var(--foreground) 75%, transparent);
-  font: var(--text-code) / var(--code-line-height, 20px) var(--font-mono);
+  font: var(--text-code) / var(--leading-code) var(--font-code);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -2087,9 +2088,6 @@
 .transcript-pierre-file {
   display: block;
   min-width: 100%;
-  --diffs-font-family: var(--font-mono);
-  --diffs-font-size: var(--code-font-size, 12px);
-  --diffs-line-height: var(--code-line-height, 19px);
 }
 .transcript-reasoning-prose {
   color: var(--chat-foreground);
@@ -3435,7 +3433,8 @@
     0 1px 3px 0 color-mix(in srgb, var(--shadow-ink) 10%, transparent),
     0 1px 2px -1px color-mix(in srgb, var(--shadow-ink) 10%, transparent);
 }
-.appearance-settings .settings-card + .settings-card {
+/* Settings pages that stack several cards keep 20px between them. */
+:is(.appearance-settings, .composer-settings) .settings-card + .settings-card {
   margin-top: var(--space-5);
 }
 .code-font-settings .settings-row-control input {
@@ -3447,12 +3446,7 @@
 .code-font-preview {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  overflow-x: auto;
   border-bottom: 1px solid var(--divider);
-}
-.code-font-preview :is(pre, code) {
-  margin: 0;
-  font: inherit;
 }
 .code-font-settings .settings-form-actions {
   margin: 0;
@@ -4349,7 +4343,8 @@
     0 1px 3px 0 color-mix(in srgb, var(--shadow-ink) 10%, transparent),
     0 1px 2px -1px color-mix(in srgb, var(--shadow-ink) 10%, transparent);
 }
-.appearance-settings .settings-card + .settings-card {
+/* Settings pages that stack several cards keep 20px between them. */
+:is(.appearance-settings, .composer-settings) .settings-card + .settings-card {
   margin-top: var(--space-5);
 }
 .code-font-settings .settings-row-control input {
@@ -4361,12 +4356,7 @@
 .code-font-preview {
   margin: 0;
   padding: var(--space-3) var(--space-4);
-  overflow-x: auto;
   border-bottom: 1px solid var(--divider);
-}
-.code-font-preview :is(pre, code) {
-  margin: 0;
-  font: inherit;
 }
 .code-font-settings .settings-form-actions {
   margin: 0;

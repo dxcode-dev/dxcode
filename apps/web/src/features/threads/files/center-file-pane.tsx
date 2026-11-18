@@ -5,7 +5,6 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { AudioLines, Copy, Download, EllipsisVertical } from "lucide-react";
 import * as React from "react";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
-import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
 import {
@@ -42,7 +41,10 @@ import {
 // The code viewer and the Markdown preview (with their highlighters) load
 // when a sandbox file first shows, not with the Thread page.
 // `lazyRouteComponent` reloads the page once if a deploy removed the chunk.
-const File = lazyRouteComponent(() => import("@pierre/diffs/react"), "File");
+const CodeFile = lazyRouteComponent(
+  () => import("../../../shared/ui/code-view.js"),
+  "CodeFile",
+);
 const FilePreview = lazyRouteComponent(
   () => import("./file-preview.js"),
   "FilePreview",
@@ -327,7 +329,6 @@ function SandboxTextView({
   readonly reveal?: FileReveal;
   readonly revealSequence?: number;
 }) {
-  const { resolvedAppearance } = useTheme();
   const host = React.useRef<HTMLDivElement>(null);
   const preview = useQuery(sandboxFilePreviewOptions(threadId, path, active));
   const previewKind = filePreviewKind(path);
@@ -382,7 +383,7 @@ function SandboxTextView({
     const lines = resolveReveal(content, reveal);
     body = (
       <div className="thread-file-source" ref={host}>
-        <File
+        <CodeFile
           file={file}
           disableWorkerPool
           selectedLines={
@@ -390,9 +391,6 @@ function SandboxTextView({
           }
           options={{
             disableFileHeader: true,
-            theme:
-              resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
-            themeType: resolvedAppearance,
             overflow: "scroll",
           }}
         />

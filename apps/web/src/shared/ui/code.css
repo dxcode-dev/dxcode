@@ -1,0 +1,93 @@
+/* Code, the same everywhere. Every code surface takes its font, size, and
+   line height from the code tokens (tokens.css), which Personal Settings →
+   Appearance → Code Font sets, and its colors from the palette's code
+   tokens. The diff library's views (tool calls, edit diffs, Changes, Files,
+   the file editor) read them here and through shared/ui/code-theme.ts;
+   highlight.js in reply code blocks reads the classes below, and code shown
+   as plain text (tool output, artifact code blocks) sets
+   font: var(--text-code) / var(--leading-code) var(--font-code). */
+
+/* A subtree that tries Code Font values other than the saved ones (the Code
+   Font preview, Storybook): set --code-font-family, --code-font-size, and
+   --code-line-height on it, or `initial` for the default. */
+.code-font-scope {
+  --font-code: var(--code-font-family, var(--font-code-default));
+  --text-code: var(--code-font-size, var(--text-code-default));
+  --leading-code: var(--code-line-height, var(--leading-code-default));
+}
+
+diffs-container {
+  --diffs-font-family: var(--font-code);
+  --diffs-font-size: var(--text-code);
+  --diffs-line-height: var(--leading-code);
+}
+
+/* highlight.js classes, grouped as code-theme.ts groups TextMate scopes. */
+.hljs-comment,
+.hljs-quote,
+.hljs-meta,
+.hljs-doctag {
+  color: var(--code-comment);
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-name,
+.hljs-section,
+.hljs-meta .hljs-keyword {
+  color: var(--code-keyword);
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-meta .hljs-string {
+  color: var(--code-string);
+}
+.hljs-subst {
+  color: var(--code-foreground);
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-variable.language_,
+.hljs-variable.constant_ {
+  color: var(--code-number);
+}
+.hljs-title,
+.hljs-built_in,
+.hljs-type,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: var(--code-title);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-selector-pseudo,
+.hljs-link {
+  color: var(--code-property);
+}
+/* A parameter's name is not a property, as code-theme.ts reads it. */
+.hljs-params .hljs-attr {
+  color: var(--code-foreground);
+}
+.hljs-addition {
+  color: var(--code-addition);
+}
+.hljs-deletion {
+  color: var(--code-deletion);
+}
+.hljs-strong {
+  font-weight: 700;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.code-samples {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+}
+.code-samples .transcript-code-block,
+.code-samples .transcript-code-preview {
+  margin: 0;
+}

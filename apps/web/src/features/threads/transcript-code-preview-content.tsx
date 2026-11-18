@@ -1,12 +1,14 @@
-import { parseDiffFromFile } from "@pierre/diffs";
-import { File, FileDiff } from "@pierre/diffs/react";
-import { useTheme } from "../../shared/theme/theme-provider.js";
-import {
-  stableTranscriptPreviewVersion,
-  stripToolLineNumbers,
-  type TranscriptEditSource,
-} from "./transcript-code-preview-model.js";
+import { textVersion } from "../../shared/text-version.js";
+import { codeDiffOptions } from "../../shared/ui/code-theme.js";
+import { CodeDiff, CodeFile } from "../../shared/ui/code-view.js";
+import { stripToolLineNumbers } from "./transcript-code-preview-model.js";
 import { parseTranscriptPatch } from "./transcript-code-preview-patch.js";
+
+const codeOptions = {
+  overflow: "wrap",
+  disableFileHeader: true,
+  stickyHeader: false,
+} as const;
 
 export function TranscriptCodePreview({
   path,
@@ -20,64 +22,6 @@ export function TranscriptCodePreview({
   return <CodePreview path={path} contents={contents} kind={kind} />;
 }
 
-const diffOptions = {
-  diffStyle: "unified",
-  lineDiffType: "word-alt",
-  hunkSeparators: "line-info-basic",
-} as const;
-
-const parseEditDiff = (source: TranscriptEditSource) => {
-  const version = stableTranscriptPreviewVersion(
-    `${source.before}\u0000${source.after}`,
-  );
-  try {
-    return parseDiffFromFile(
-      {
-        name: source.path,
-        contents: source.before,
-        cacheKey: `transcript-edit:${source.path}:${version}:before`,
-      },
-      {
-        name: source.path,
-        contents: source.after,
-        cacheKey: `transcript-edit:${source.path}:${version}:after`,
-      },
-    );
-  } catch {
-    return undefined;
-  }
-};
-
-/** Render an edit tool call as a diff of the replaced region. */
-export function TranscriptEditDiff({
-  source,
-}: {
-  readonly source: TranscriptEditSource;
-}) {
-  const { resolvedAppearance } = useTheme();
-  const fileDiff = parseEditDiff(source);
-  if (fileDiff === undefined)
-    return <pre className="transcript-edit-output">{source.after}</pre>;
-  return (
-    <div className="transcript-code-preview" data-preview-kind="edit">
-      <FileDiff
-        fileDiff={fileDiff}
-        className="transcript-pierre-file"
-        disableWorkerPool
-        options={{
-          theme:
-            resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
-          themeType: resolvedAppearance,
-          overflow: "wrap",
-          disableFileHeader: true,
-          stickyHeader: false,
-          ...diffOptions,
-        }}
-      />
-    </div>
-  );
-}
-
 function CodePreview({
   path,
   contents,
@@ -87,23 +31,13 @@ function CodePreview({
   readonly contents: string;
   readonly kind: "file" | "patch";
 }) {
-  const { resolvedAppearance } = useTheme();
   const file = {
     name: path,
     contents: stripToolLineNumbers(contents),
-    cacheKey: `transcript:${path}:${stableTranscriptPreviewVersion(contents)}`,
+    cacheKey: `transcript:${path}:${textVersion(contents)}`,
   };
   const fileDiffs =
     kind === "patch" ? parseTranscriptPatch(contents, path) : [];
-  const theme = resolvedAppearance === "light" ? "pierre-light" : "pierre-dark";
-  const codeOptions = {
-    theme,
-    themeType: resolvedAppearance,
-    overflow: "wrap" as const,
-    disableFileHeader: true,
-    stickyHeader: false,
-  };
-
   if (kind === "patch" && fileDiffs.length === 0) {
     return <pre className="transcript-edit-output">{contents}</pre>;
   }
@@ -111,7 +45,7 @@ function CodePreview({
   return (
     <div className="transcript-code-preview" data-preview-kind={kind}>
       {kind === "file" ? (
-        <File
+        <CodeFile
           file={file}
           className="transcript-pierre-file"
           disableWorkerPool
@@ -119,12 +53,16 @@ function CodePreview({
         />
       ) : (
         fileDiffs.map((fileDiff) => (
-          <FileDiff
+          <CodeDiff
             key={fileDiff.name}
             fileDiff={fileDiff}
             className="transcript-pierre-file"
             disableWorkerPool
-            options={{ ...codeOptions, ...diffOptions }}
+            options={{
+              ...codeOptions,
+              ...codeDiffOptions,
+              diffStyle: "unified",
+            }}
           />
         ))
       )}

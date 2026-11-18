@@ -3,6 +3,7 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ThemeProvider } from "../../../shared/theme/theme-provider.js";
+import { codeThemeNames } from "../../../shared/ui/code-theme.js";
 import type { Appearance } from "../../../shared/theme/theme-store.js";
 
 let props: FileProps<undefined, undefined>;
@@ -57,7 +58,7 @@ it("keeps Pierre's external file stable while updating theme, wrap, and change c
     });
     expect(props.file).toBe(initial);
     expect(props.options).toMatchObject({
-      theme: "pierre-light",
+      theme: codeThemeNames.light,
       themeType: "light",
       overflow: "wrap",
     });

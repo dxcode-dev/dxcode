@@ -32,8 +32,11 @@ import {
 import * as React from "react";
 import { toast } from "sonner";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
-import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
+import {
+  codeDiffOptions,
+  codeThemeNames,
+} from "../../../shared/ui/code-theme.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { PaneTabAccessory } from "../panes/pane-toolbar-slot.js";
 import {
@@ -71,7 +74,8 @@ const highlightWorkers = {
     workerFactory: () => new Worker(highlightWorkerUrl, { type: "module" }),
     poolSize: 2,
   },
-  highlighterOptions: {},
+  // Workers highlight with the pool's theme, not the view's.
+  highlighterOptions: { theme: codeThemeNames },
 };
 
 const PRIMARY_WORKTREE_ID = "primary" as ThreadChangesWorktreeId;
@@ -1070,7 +1074,6 @@ function ChangedFileDiff({
   readonly diffStyle: "unified" | "split";
   readonly overflow: "scroll" | "wrap";
 }) {
-  const { resolvedAppearance } = useTheme();
   const query = useQuery(
     changesDiffQueryOptions(
       transport,
@@ -1082,9 +1085,7 @@ function ChangedFileDiff({
       useQueryClient(),
     ),
   );
-  const highlight = useQuery(
-    changesHighlightQueryOptions(path, resolvedAppearance),
-  );
+  const highlight = useQuery(changesHighlightQueryOptions(path));
   const patch = query.data && shownPatch(query.data.patch, query.data.file);
   // Keyed by content, not capture: a capture that leaves this file unchanged
   // keeps the same parsed diff, so it neither remounts nor re-highlights.
@@ -1096,12 +1097,9 @@ function ChangedFileDiff({
   // FileDiff compares options by content, so this saves the comparison, not a
   // highlight; one object serves every file in the patch.
   const diffOptions = {
-    theme: resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
-    themeType: resolvedAppearance,
+    ...codeDiffOptions,
     diffStyle,
     overflow,
-    lineDiffType: "word-alt",
-    hunkSeparators: "line-info-basic",
     disableFileHeader: true,
     stickyHeader: false,
   } as const;

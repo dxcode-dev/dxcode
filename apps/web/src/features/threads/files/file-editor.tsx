@@ -1,7 +1,7 @@
 import { Editor } from "@pierre/diffs/edit";
-import { type EditorFactory, EditProvider, File } from "@pierre/diffs/react";
+import { type EditorFactory, EditProvider } from "@pierre/diffs/react";
 import * as React from "react";
-import { useTheme } from "../../../shared/theme/theme-provider.js";
+import { CodeFile } from "../../../shared/ui/code-view.js";
 import type { FileLineRange } from "../transcript-file-link.js";
 import { RevealLine } from "./reveal-line.js";
 
@@ -173,7 +173,6 @@ export const ThreadFileEditor = React.forwardRef<
   },
   forwardedRef,
 ) {
-  const { resolvedAppearance } = useTheme();
   const host = React.useRef<HTMLDivElement>(null);
   const editor = React.useRef<Editor | null>(null);
   const [createEditor] = React.useState(
@@ -220,7 +219,7 @@ export const ThreadFileEditor = React.forwardRef<
   return (
     <div className="thread-file-editor" ref={attach}>
       <EditProvider createEditor={createEditor}>
-        <File
+        <CodeFile
           file={file}
           edit
           selectedLines={
@@ -230,9 +229,6 @@ export const ThreadFileEditor = React.forwardRef<
           }
           options={{
             disableFileHeader: true,
-            theme:
-              resolvedAppearance === "light" ? "pierre-light" : "pierre-dark",
-            themeType: resolvedAppearance,
             overflow: wrap ? "wrap" : "scroll",
             onPostRender: (node) =>
               onReadyChange?.(

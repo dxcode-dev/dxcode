@@ -11,26 +11,25 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import type { ResolvedAppearance } from "../../../shared/theme/theme-store.js";
 import { threadKeys } from "../thread-queries.js";
 import type { ChangesTransport } from "./changes-api.js";
 
 // FileDiff must mount after its bundled language and theme are ready. The
 // diff library loads here, not at import: realtime code that every page loads
 // imports these query keys.
-export const changesHighlightQueryOptions = (
-  path: ThreadChangesPath,
-  appearance: ResolvedAppearance,
-) => {
-  const theme = appearance === "light" ? "pierre-light" : "pierre-dark";
-  return queryOptions({
-    queryKey: ["changes-highlighter", theme, path],
+export const changesHighlightQueryOptions = (path: ThreadChangesPath) =>
+  queryOptions({
+    queryKey: ["changes-highlighter", path],
     queryFn: async () => {
-      const { getFiletypeFromFileName, preloadHighlighter } = await import(
-        "@pierre/diffs"
-      );
+      const [
+        { getFiletypeFromFileName, preloadHighlighter },
+        { codeThemeNames },
+      ] = await Promise.all([
+        import("@pierre/diffs"),
+        import("../../../shared/ui/code-theme.js"),
+      ]);
       await preloadHighlighter({
-        themes: [theme],
+        themes: [codeThemeNames.light, codeThemeNames.dark],
         langs: [getFiletypeFromFileName(path)],
       });
       return true;
@@ -38,7 +37,6 @@ export const changesHighlightQueryOptions = (
     staleTime: Infinity,
     retry: false,
   });
-};
 
 export const changesKeys = {
   all: (threadId: ThreadId) => ["thread-changes", threadId] as const,

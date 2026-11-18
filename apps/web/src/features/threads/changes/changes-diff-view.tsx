@@ -1,11 +1,10 @@
 import { type FileDiffMetadata, Virtualizer } from "@pierre/diffs";
-import {
-  FileDiff,
-  type FileDiffOptions,
-  VirtualizerContext,
-} from "@pierre/diffs/react";
+import { type FileDiffOptions, VirtualizerContext } from "@pierre/diffs/react";
 import type * as React from "react";
 import { useState, useSyncExternalStore } from "react";
+import { useTheme } from "../../../shared/theme/theme-provider.js";
+import { codeLinePixels } from "../../../shared/theme/theme-store.js";
+import { CodeDiff } from "../../../shared/ui/code-view.js";
 import { type ChunkPosition, chunkPositions } from "./changes-diff-chunks.js";
 
 /**
@@ -17,15 +16,15 @@ import { type ChunkPosition, chunkPositions } from "./changes-diff-chunks.js";
 const FULL_DIFF_ROW_LIMIT = 200;
 
 /**
- * Row geometry of `.changes-pierre-diff` (changes.css): the virtualizer places
- * unrendered rows by these numbers, so they must match the stylesheet.
+ * Row geometry of `.changes-pierre-diff`: the virtualizer places unrendered
+ * rows by these numbers, so a line is as tall as the code tokens make it.
  */
-const diffMetrics = {
+const diffMetrics = (lineHeight: number) => ({
   hunkLineCount: 50,
-  lineHeight: 18,
+  lineHeight,
   diffHeaderHeight: 0,
   spacing: 8,
-};
+});
 
 /**
  * The Changes scroll container. Large diffs inside it render only the rows
@@ -76,6 +75,7 @@ export function ChangesFileDiffs({
   readonly files: ReadonlyArray<FileDiffMetadata>;
   readonly options: FileDiffOptions<undefined, undefined>;
 }) {
+  const metrics = diffMetrics(codeLinePixels(useTheme()));
   return (
     <>
       {files.map((fileDiff) => {
@@ -89,20 +89,21 @@ export function ChangesFileDiffs({
               fileDiff={fileDiff}
               options={options}
               chunk={chunk}
+              metrics={metrics}
             />
           );
         return rowCount(fileDiff, options) > FULL_DIFF_ROW_LIMIT ? (
-          <FileDiff
+          <CodeDiff
             key={key}
             fileDiff={fileDiff}
             className="changes-pierre-diff"
             options={options}
-            metrics={diffMetrics}
+            metrics={metrics}
           />
         ) : (
           // Outside the virtualizer, the library renders every row.
           <VirtualizerContext.Provider key={key} value={undefined}>
-            <FileDiff
+            <CodeDiff
               fileDiff={fileDiff}
               className="changes-pierre-diff"
               options={options}
@@ -131,23 +132,27 @@ const rowCount = (
 /** How far outside the scroll viewport a chunk mounts. */
 const CHUNK_MOUNT_MARGIN = "1500px 0px";
 
+type DiffMetrics = ReturnType<typeof diffMetrics>;
+
 function ChangesDiffChunk({
   fileDiff,
   options,
   chunk,
+  metrics: fileMetrics,
 }: {
   readonly fileDiff: FileDiffMetadata;
   readonly options: FileDiffOptions<undefined, undefined>;
   readonly chunk: ChunkPosition;
+  readonly metrics: DiffMetrics;
 }) {
   const [{ observe, subscribe, getSnapshot }] = useState(
     createNearViewportLatch,
   );
   const near = useSyncExternalStore(subscribe, getSnapshot);
   const metrics = {
-    ...diffMetrics,
-    paddingTop: chunk.first ? diffMetrics.spacing : 0,
-    paddingBottom: chunk.last ? diffMetrics.spacing : 0,
+    ...fileMetrics,
+    paddingTop: chunk.first ? fileMetrics.spacing : 0,
+    paddingBottom: chunk.last ? fileMetrics.spacing : 0,
   };
   return (
     <div
@@ -159,7 +164,7 @@ function ChangesDiffChunk({
       style={{ minHeight: estimatedHeight(fileDiff, options, metrics) }}
     >
       {near ? (
-        <FileDiff
+        <CodeDiff
           fileDiff={fileDiff}
           className="changes-pierre-diff"
           options={{ ...options, unsafeCSS: chunkCSS(chunk) }}
@@ -178,7 +183,7 @@ const chunkCSS = ({ first, last }: ChunkPosition) =>
 const estimatedHeight = (
   fileDiff: FileDiffMetadata,
   options: FileDiffOptions<undefined, undefined>,
-  metrics: typeof diffMetrics & {
+  metrics: DiffMetrics & {
     readonly paddingTop: number;
     readonly paddingBottom: number;
   },

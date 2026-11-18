@@ -22,6 +22,8 @@ import {
 } from "./dictation-vocabulary-queries.js";
 
 const textOf = (terms: ReadonlyArray<string>) => terms.join("\n");
+/** Example terms, so an empty list shows what belongs in it. */
+const PLACEHOLDER = "Sarvam\nKubernetes\nPriya Raman";
 
 /**
  * Dictation Vocabulary: names and technical terms dictation should
@@ -134,6 +136,7 @@ function DictationVocabularyForm({
         name="terms"
         aria-label="Dictation vocabulary"
         value={draft}
+        placeholder={saved.canUpdate ? PLACEHOLDER : undefined}
         rows={6}
         spellCheck={false}
         readOnly={!saved.canUpdate}
