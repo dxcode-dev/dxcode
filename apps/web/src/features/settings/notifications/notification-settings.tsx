@@ -2,6 +2,7 @@ import type { NotificationSubscriptionData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useId } from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
   browserPushStateQueryOptions,
@@ -181,6 +182,12 @@ export function NotificationSettings() {
   const preferences = useQuery(
     notificationPreferencesQueryOptions(identity.id),
   );
+  // The device card reads these too. Wait for all three so the cards appear
+  // together: the device card alone first, then pushed down by the
+  // preferences card, makes the screen jump.
+  const push = useQuery(pushStateQueryOptions(identity.id));
+  const browser = useQuery(browserPushStateQueryOptions(identity.id));
+  const loading = preferences.isPending || push.isPending || browser.isPending;
   const update = useMutation(
     updateNotificationPreferenceMutationOptions(queryClient, identity.id),
   );
@@ -190,6 +197,14 @@ export function NotificationSettings() {
           sameRow(subscription, update.variables),
         )
       : undefined;
+  if (loading) {
+    return (
+      <div className="notification-settings">
+        <SettingsHeading title="Notifications" />
+        <DxLoading label="Loading notification settings…" />
+      </div>
+    );
+  }
   return (
     <div className="notification-settings">
       <SettingsHeading title="Notifications" />
