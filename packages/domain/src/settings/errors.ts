@@ -48,6 +48,18 @@ export class PersonalAccountUsernameUnavailable extends Schema.TaggedError<Perso
   {},
 ) {}
 
+/** The person already used their one username change. */
+export class PersonalAccountUsernameChangeLocked extends Schema.TaggedError<PersonalAccountUsernameChangeLocked>()(
+  "PersonalAccountUsernameChangeLocked",
+  {},
+) {}
+
+/** A reserved or placeholder-shaped username; the message says which. */
+export class PersonalAccountUsernameReserved extends Schema.TaggedError<PersonalAccountUsernameReserved>()(
+  "PersonalAccountUsernameReserved",
+  { message: Schema.String },
+) {}
+
 export class PersonalAgentInstructionsNotFound extends Schema.TaggedError<PersonalAgentInstructionsNotFound>()(
   "PersonalAgentInstructionsNotFound",
   {},

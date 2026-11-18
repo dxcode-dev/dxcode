@@ -28,7 +28,6 @@ import { dxSessionActive, evaluatePortalAccess } from "./access.js";
 import { storePortalCode } from "./codes.js";
 import { RANDOM_TOKEN, randomToken } from "./crypto.js";
 import { PORTAL_CALLBACK_PATH, portalAuthorizationPage } from "./handler.js";
-import { reloadFromOwnOrigin } from "./pages.js";
 import {
   parsePortalPort,
   portalConfiguration,
@@ -36,6 +35,7 @@ import {
   portalOrigin,
   portalReturnPath,
 } from "./host.js";
+import { reloadFromOwnOrigin } from "./pages.js";
 import { portalIdentityText } from "./session.js";
 
 const invalidRequest = () =>

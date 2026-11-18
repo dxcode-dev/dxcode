@@ -5,6 +5,8 @@ import {
 import { Schema } from "effect";
 import { Hono, type MiddlewareHandler } from "hono";
 import type { AppEnv, Bindings } from "../http/types.js";
+import { deploymentAdminMailRoutes } from "../mail/routes.js";
+import { deploymentAdminAccountRoutes } from "../settings/account/admin-routes.js";
 
 /**
  * Deployment administrators: signed-in people whose verified primary email
@@ -68,8 +70,10 @@ export const requireDeploymentAdmin: MiddlewareHandler<AppEnv> = async (
 };
 
 /**
- * `GET /` says whether the signed-in person is an administrator; every other
- * route is the deployment's own (`registered`), behind the admin check.
+ * `GET /` says whether the signed-in person is an administrator. Behind the
+ * admin check, `/users` holds every deployment's account routes (such as
+ * resetting a username change); every other route is the deployment's own
+ * (`registered`).
  */
 export const makeDeploymentAdminRoutes = (registered: Hono<AppEnv>) => {
   const router = new Hono<AppEnv>();
@@ -87,6 +91,8 @@ export const makeDeploymentAdminRoutes = (registered: Hono<AppEnv>) => {
     );
   });
   router.use("/*", requireDeploymentAdmin);
+  router.route("/users", deploymentAdminAccountRoutes);
+  router.route("/users", deploymentAdminMailRoutes);
   router.route("/", registered);
   return router;
 };

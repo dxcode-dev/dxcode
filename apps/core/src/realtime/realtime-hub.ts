@@ -599,7 +599,8 @@ export class RealtimeHub extends DurableObject<Bindings> {
       body === null ||
       !("type" in body) ||
       (body.type !== "notifications.invalidated" &&
-        body.type !== "sidebar.invalidated") ||
+        body.type !== "sidebar.invalidated" &&
+        body.type !== "mailbox.invalidated") ||
       Object.keys(body).length !== 2
     )
       return new Response(null, { status: 400 });

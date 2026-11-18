@@ -1,0 +1,23 @@
+.people-admin-settings {
+  display: grid;
+  gap: var(--space-4);
+}
+.people-admin-find {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+}
+.people-admin-find > input {
+  flex: 1;
+}
+.people-admin-person {
+  padding: var(--space-2-5) var(--space-4);
+  border-top: 1px solid var(--divider);
+}
+.people-admin-message {
+  margin: 0;
+  padding: var(--space-2-5) var(--space-4);
+  border-top: 1px solid var(--divider);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}

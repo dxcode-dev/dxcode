@@ -1,5 +1,5 @@
 import type { ModeId, ThinkingLevel } from "@dx/domain";
-import { MODE_LABELS, MODES } from "./mode-dial-values.js";
+import { MODE_LABELS, MODES } from "../../../shared/mode-labels.js";
 
 export interface ModeSlot {
   readonly model: string;

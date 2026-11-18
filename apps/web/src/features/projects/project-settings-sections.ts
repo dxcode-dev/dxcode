@@ -4,6 +4,7 @@ export const projectSettingsSectionIds = [
   "orb",
   "secrets",
   "feedback-widget",
+  "email",
 ] as const;
 
 export type ProjectSettingsSection = (typeof projectSettingsSectionIds)[number];

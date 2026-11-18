@@ -1,4 +1,5 @@
-import type { ThreadId } from "@dx/domain";
+import { ThreadId } from "@dx/domain";
+import { Option, Schema } from "effect";
 import type { Node } from "prosemirror-model";
 import type { EditorState } from "prosemirror-state";
 import { Decoration } from "prosemirror-view";
@@ -30,11 +31,15 @@ export const artifactLink = (href: string): ArtifactLink | undefined => {
     if (url.origin !== window.location.origin) return undefined;
     const library = /^\/artifacts\/(art_[0-9a-f]{32})\/?$/.exec(url.pathname);
     if (library !== null) return { artifactId: library[1] as string };
-    const thread = /^\/threads\/(thr_[0-9a-f-]{36})\/?$/.exec(url.pathname);
+    const threadId = Option.getOrUndefined(
+      Schema.decodeUnknownOption(ThreadId)(
+        /^\/threads\/([^/]+)\/?$/.exec(url.pathname)?.[1],
+      ),
+    );
     const artifactId = url.searchParams.get("artifact");
-    if (thread === null || artifactId === null) return undefined;
+    if (threadId === undefined || artifactId === null) return undefined;
     if (!ARTIFACT_ID.test(artifactId)) return undefined;
-    return { threadId: thread[1] as ThreadId, artifactId };
+    return { threadId, artifactId };
   } catch {
     return undefined;
   }

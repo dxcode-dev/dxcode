@@ -1,4 +1,4 @@
-import { ThreadId, UserId } from "@dx/domain";
+import { StoredThreadId, ThreadId, UserId } from "@dx/domain";
 import { Schema } from "effect";
 
 const Revision = Schema.Number.check(
@@ -12,7 +12,7 @@ const ClientId = Schema.String.check(
 );
 /** A Thread, or a standalone artifact, someone has open. */
 const PresenceTopic = Schema.Union([
-  Schema.TemplateLiteral(["thread:", ThreadId]),
+  Schema.TemplateLiteral(["thread:", StoredThreadId]),
   Schema.TemplateLiteral(["artifact:", Schema.String]).check(
     Schema.isPattern(/^artifact:art_[0-9a-f]{32}$/),
   ),
@@ -134,6 +134,12 @@ export const RealtimeNotificationsEvent = Schema.Struct({
   revision: Revision,
 });
 
+/** Mail reached or changed in the user's Mailbox; refetch it. */
+export const RealtimeMailboxEvent = Schema.Struct({
+  type: Schema.Literal("mailbox.invalidated"),
+  revision: Revision,
+});
+
 /** The user's sidebar layout changed on another device; refetch it. */
 export const RealtimeSidebarLayoutEvent = Schema.Struct({
   type: Schema.Literal("sidebar.invalidated"),
@@ -214,6 +220,7 @@ export const RealtimeServerEvent = Schema.Union([
   RealtimeWorkspaceStatusEvent,
   RealtimeNotificationsEvent,
   RealtimeSidebarLayoutEvent,
+  RealtimeMailboxEvent,
   RealtimePresenceSnapshotEvent,
   RealtimeTypingEvent,
   RealtimeBoardEvent,

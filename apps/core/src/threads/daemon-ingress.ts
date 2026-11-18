@@ -6,8 +6,17 @@ import { readBoundedBody } from "../http/bounded-body.js";
 // ingress Worker, whose isolate starts in milliseconds where the full Core
 // bundle takes about a second after a guest resumes.
 
+// `@dx/domain`'s ThreadId, kept local so this bundle stays dependency-free:
+// the stored `thr_<uuid>` or the public `t-<uuid>`.
 const THREAD_ID =
-  /^thr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  /^(?:thr_|t-)([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$/;
+
+/** A Thread ID in either form as its stored `thr_<uuid>`, else undefined. */
+const storedThreadId = (threadId: string | undefined) => {
+  const uuid =
+    threadId === undefined ? undefined : THREAD_ID.exec(threadId)?.[1];
+  return uuid === undefined ? undefined : `thr_${uuid}`;
+};
 const DAEMON_KEY = /^Bearer dxd_[A-Za-z0-9._~-]{16,1016}$/;
 const FORWARDED_HEADERS = [
   "authorization",
@@ -31,13 +40,13 @@ export const DAEMON_ATTACHMENT_PATH =
 export const forwardDaemonAttachment = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
-  threadId: string | undefined,
+  threadIdInput: string | undefined,
   attachmentId: string | undefined,
 ): Promise<Response> => {
+  const threadId = storedThreadId(threadIdInput);
   if (
     (request.method !== "GET" && request.method !== "HEAD") ||
     threadId === undefined ||
-    !THREAD_ID.test(threadId) ||
     attachmentId === undefined ||
     namespace === undefined
   )
@@ -76,9 +85,10 @@ const MAX_STORAGE_BODY_BYTES = 64 * 1024;
 export const forwardDaemonStorage = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
-  threadId: string | undefined,
+  threadIdInput: string | undefined,
   path: string,
 ): Promise<Response> => {
+  const threadId = storedThreadId(threadIdInput);
   const [, id, complete] = STORAGE_ROUTE.exec(path) ?? [];
   const write = request.method === "POST";
   const create = write && path === "";
@@ -90,7 +100,6 @@ export const forwardDaemonStorage = async (
   if (
     !(create || finish || describe) ||
     threadId === undefined ||
-    !THREAD_ID.test(threadId) ||
     namespace === undefined
   )
     return new Response(null, { status: 404 });
@@ -128,12 +137,12 @@ const MAX_PLUGIN_DEV_BODY_BYTES = 12 * 1024 * 1024;
 export const forwardDaemonPluginDev = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
-  threadId: string | undefined,
+  threadIdInput: string | undefined,
 ): Promise<Response> => {
+  const threadId = storedThreadId(threadIdInput);
   if (
     request.method !== "POST" ||
     threadId === undefined ||
-    !THREAD_ID.test(threadId) ||
     namespace === undefined
   )
     return new Response(null, { status: 404 });
@@ -158,13 +167,13 @@ export const forwardDaemonPluginDev = async (
 export const forwardDaemonUpgrade = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
-  threadId: string | undefined,
+  threadIdInput: string | undefined,
 ): Promise<Response> => {
+  const threadId = storedThreadId(threadIdInput);
   if (
     request.method !== "GET" ||
     request.headers.get("upgrade")?.toLowerCase() !== "websocket" ||
     threadId === undefined ||
-    !THREAD_ID.test(threadId) ||
     namespace === undefined
   )
     return new Response(null, { status: 404 });

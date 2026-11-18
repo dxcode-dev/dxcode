@@ -8,6 +8,7 @@ import {
 import { isDefaultPersonalAccountUsername, type UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
+import { conciseAge } from "../../../shared/concise-age.js";
 import { Avatar } from "../../../shared/ui/avatar.js";
 import {
   MarkdownMentionContext,
@@ -18,7 +19,6 @@ import {
   PopoverRoot,
   PopoverTrigger,
 } from "../../../shared/ui/popover.js";
-import { conciseAge } from "./sharing-format.js";
 import { mentionLabel } from "./thread-chat.js";
 import { threadMembersQueryOptions } from "./thread-chat-queries.js";
 import "./thread-sharing.css";

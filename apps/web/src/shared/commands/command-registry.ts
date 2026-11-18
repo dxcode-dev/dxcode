@@ -8,9 +8,14 @@ import {
   parseHotkey,
   validateHotkey,
 } from "@tanstack/react-hotkeys";
+import type { MailboxCommand } from "./mailbox-command-event.js";
 
 export type CommandPlatform = ReturnType<typeof detectPlatform>;
-export type CommandContext = "app" | "thread" | "keyboard-shortcuts";
+export type CommandContext =
+  | "app"
+  | "thread"
+  | "mailbox"
+  | "keyboard-shortcuts";
 export type CommandScope = "global" | Exclude<CommandContext, "app">;
 
 /**
@@ -72,13 +77,19 @@ export interface CommandRuntime {
   readonly openThreadView: (
     view: "files" | "changes" | "portal" | "terminal" | "desktop" | "artifacts",
   ) => void;
+  /** Asks the open Mailbox page to act on its conversation or list. */
+  readonly mailboxCommand: (action: MailboxCommand) => void;
 }
 
 export interface CommandDefinition<Id extends string = string> {
   readonly id: Id;
   readonly label: string;
   readonly description: string;
-  readonly category: "Navigation" | "Threads" | "Keyboard shortcuts";
+  readonly category:
+    | "Navigation"
+    | "Threads"
+    | "Mailbox"
+    | "Keyboard shortcuts";
   readonly scope: CommandScope;
   readonly defaults: Readonly<Record<CommandPlatform, Hotkey | null>>;
   readonly alternativeDefaults?: Readonly<
@@ -92,6 +103,7 @@ export type KeymapCategory =
   | "Global"
   | "Sidebar"
   | "Thread"
+  | "Mailbox"
   | "Keyboard shortcuts";
 
 const everyPlatform = (
@@ -415,6 +427,112 @@ const commandDefinitions = Object.freeze([
     execute: (runtime) => runtime.openThreadView("artifacts"),
   },
   {
+    id: "mailbox.next",
+    label: "Next email",
+    description: "Open the next, older conversation in the Mailbox list.",
+    category: "Mailbox",
+    scope: "mailbox",
+    // J and K move the sidebar selection everywhere; N and P are free.
+    defaults: everyPlatform("N"),
+    execute: (runtime) => runtime.mailboxCommand("next"),
+  },
+  {
+    id: "mailbox.previous",
+    label: "Previous email",
+    description: "Open the previous, newer conversation in the Mailbox list.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("P"),
+    execute: (runtime) => runtime.mailboxCommand("previous"),
+  },
+  {
+    id: "mailbox.close",
+    label: "Back to the list",
+    description: "Close the open conversation and return to the list.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("Escape"),
+    execute: (runtime) => runtime.mailboxCommand("close"),
+  },
+  {
+    id: "mailbox.archive",
+    label: "Archive",
+    description: "Archive the open conversation, or move it back to the Inbox.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("E"),
+    execute: (runtime) => runtime.mailboxCommand("archive"),
+  },
+  {
+    id: "mailbox.spam",
+    label: "Report spam",
+    description: "Move the open conversation to Spam, or out of it.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("Shift+3" as Hotkey),
+    alternativeDefaults: {
+      mac: ["Shift+1" as Hotkey],
+      windows: ["Shift+1" as Hotkey],
+      linux: ["Shift+1" as Hotkey],
+    },
+    execute: (runtime) => runtime.mailboxCommand("spam"),
+  },
+  {
+    id: "mailbox.unread",
+    label: "Mark unread",
+    description: "Mark the open conversation unread, or read.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("U"),
+    execute: (runtime) => runtime.mailboxCommand("unread"),
+  },
+  {
+    id: "mailbox.reply",
+    label: "Reply",
+    description: "Reply to the newest email in the open conversation.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("R"),
+    execute: (runtime) => runtime.mailboxCommand("reply"),
+  },
+  {
+    id: "mailbox.reply-all",
+    label: "Reply all",
+    description: "Reply to everyone on the newest email in the conversation.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("A"),
+    execute: (runtime) => runtime.mailboxCommand("reply-all"),
+  },
+  {
+    id: "mailbox.forward",
+    label: "Forward",
+    description: "Forward the newest email in the open conversation.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("F"),
+    execute: (runtime) => runtime.mailboxCommand("forward"),
+  },
+  {
+    id: "mailbox.compose",
+    label: "New email",
+    description: "Write a new email.",
+    category: "Mailbox",
+    scope: "mailbox",
+    defaults: everyPlatform("C"),
+    execute: (runtime) => runtime.mailboxCommand("compose"),
+  },
+  {
+    id: "mailbox.search",
+    label: "Search email",
+    description: "Move focus to the Mailbox search.",
+    category: "Mailbox",
+    scope: "mailbox",
+    // `/` already focuses the Keyboard Shortcuts search; one key, one command.
+    defaults: everyPlatform("S"),
+    execute: (runtime) => runtime.mailboxCommand("search"),
+  },
+  {
     id: "shortcuts.focus-search",
     label: "Focus shortcut search",
     description: "Move focus to search on the Keyboard Shortcuts screen.",
@@ -444,6 +562,7 @@ export const keymapCategoryFor = ({
   if (scope === "keyboard-shortcuts") return "Keyboard shortcuts";
   if (id.startsWith("sidebar.")) return "Sidebar";
   if (id.startsWith("thread.")) return "Thread";
+  if (id.startsWith("mailbox.")) return "Mailbox";
   return "Global";
 };
 
@@ -451,6 +570,7 @@ export const keymapCategories: ReadonlyArray<KeymapCategory> = Object.freeze([
   "Global",
   "Sidebar",
   "Thread",
+  "Mailbox",
   "Keyboard shortcuts",
 ]);
 
@@ -460,6 +580,8 @@ export const commandContextLabel = (scope: CommandScope) => {
       return "Everywhere";
     case "thread":
       return "Threads";
+    case "mailbox":
+      return "Mailbox";
     case "keyboard-shortcuts":
       return "Keyboard Shortcuts";
   }
@@ -468,6 +590,8 @@ export const commandContextLabel = (scope: CommandScope) => {
 export const commandContextFromPath = (pathname: string): CommandContext => {
   if (pathname === "/settings/keyboard-shortcuts") return "keyboard-shortcuts";
   if (pathname.startsWith("/threads/")) return "thread";
+  if (pathname === "/mailbox" || pathname.startsWith("/mailbox/"))
+    return "mailbox";
   return "app";
 };
 

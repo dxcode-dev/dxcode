@@ -30,6 +30,7 @@ import {
   previewPublicOrbImage,
   selfhostProviders,
 } from "./deploy/selfhost/alchemy-resources.ts";
+import { mailDomainProblem } from "./deploy/selfhost/mail.mjs";
 import CLOUDFLARE_ORB_PROFILES from "./packages/domain/cloudflare-orb-profiles.json" with {
   type: "json",
 };
@@ -437,6 +438,20 @@ export default Alchemy.Stack(
       portalWorkerName: Config.option(
         Config.NonEmptyString("DX_DEPLOYMENT_PORTAL_WORKER_NAME"),
       ),
+      // Agent mailboxes (wiki/agent-mail.md): a zone dedicated to dx mail,
+      // whose every address Email Routing hands to Core. Both, or mail is
+      // off: Core then rejects all mail, and no inbox appears anywhere.
+      mailDomain: Config.option(
+        Config.NonEmptyString("DX_DEPLOYMENT_MAIL_DOMAIN"),
+      ),
+      mailZoneId: Config.option(
+        Config.NonEmptyString("DX_DEPLOYMENT_MAIL_ZONE_ID"),
+      ),
+      // Read only to check the mail zone's name before Email Routing is
+      // enabled on it; deployments that sign in with OAuth have none.
+      cloudflareApiToken: Config.option(
+        Config.Redacted("CLOUDFLARE_API_TOKEN"),
+      ),
     });
 
     const hostedAuthentication = Option.isSome(configuration.authEmailFrom);
@@ -713,6 +728,93 @@ export default Alchemy.Stack(
             );
           return { domain, zoneId: configuration.portalZoneId.value };
         });
+    const mail = yield* Option.isNone(configuration.mailDomain) &&
+    Option.isNone(configuration.mailZoneId)
+      ? Effect.succeed(undefined)
+      : Effect.gen(function* () {
+          if (
+            Option.isNone(configuration.mailDomain) ||
+            Option.isNone(configuration.mailZoneId)
+          )
+            return yield* Effect.die(
+              "DX_DEPLOYMENT_MAIL_DOMAIN and DX_DEPLOYMENT_MAIL_ZONE_ID are set together.",
+            );
+          const domain = configuration.mailDomain.value.toLowerCase();
+          // Any zone apex works, the app's own domain or one it lives under
+          // included: the deploy summary lists what giving dx a domain's
+          // mail means (deploy/selfhost/mail.mjs), rather than refusing.
+          const problem = mailDomainProblem(domain);
+          if (problem !== undefined)
+            return yield* Effect.die(`DX_DEPLOYMENT_MAIL_DOMAIN ${problem}.`);
+          if (!/^[a-f0-9]{32}$/.test(configuration.mailZoneId.value))
+            return yield* Effect.die(
+              "DX_DEPLOYMENT_MAIL_ZONE_ID must be a Cloudflare zone ID.",
+            );
+          return { domain, zoneId: configuration.mailZoneId.value };
+        });
+    // Email Routing on the mail zone. The mail domain is the zone's own name
+    // as Cloudflare reports it, never taken on trust: the catch-all below
+    // takes every address on the zone, so a domain under some other zone
+    // (`mail.example.com` with `example.com`'s ID) is refused.
+    // Before Email Routing touches the zone: with an API token, read the
+    // zone's name and refuse a domain under some other zone. Without one
+    // (OAuth), the check below still keeps the catch-all off a wrong zone.
+    if (mail !== undefined && Option.isSome(configuration.cloudflareApiToken)) {
+      const token = Redacted.value(configuration.cloudflareApiToken.value);
+      const zoneName = yield* Effect.tryPromise(async () => {
+        const response = await fetch(
+          `https://api.cloudflare.com/client/v4/zones/${mail.zoneId}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        const body = (await response.json()) as {
+          readonly result?: { readonly name?: string };
+        };
+        return body.result?.name?.toLowerCase();
+      }).pipe(Effect.orDie);
+      if (zoneName !== mail.domain)
+        return yield* Effect.die(
+          `DX_DEPLOYMENT_MAIL_DOMAIN (${mail.domain}) must be the name of the zone DX_DEPLOYMENT_MAIL_ZONE_ID (${zoneName ?? "unreadable"}): Cloudflare's catch-all, which gives dx every address, works only on a zone's own domain, not a subdomain.`,
+        );
+    }
+    const mailRouting =
+      mail === undefined
+        ? undefined
+        : yield* Cloudflare.Email.Routing("MailRouting", { zone: mail.zoneId });
+    // People send from their Mailbox, and dx sends its "Started" notice,
+    // from the mail domain: the zone is onboarded to Email Sending (its
+    // records live on `cf-bounce.<domain>`, apart from Routing's), and
+    // `MAIL_SEND` may send from any address on it.
+    if (mail !== undefined)
+      yield* Cloudflare.Email.SendingSubdomain("MailSending", {
+        zoneId: mail.zoneId,
+        name: mail.domain,
+      });
+    // Only dx sends as the mail domain: a strict DMARC policy makes receivers
+    // reject mail that forges a dx address (wiki/agent-mail.md). The zone is
+    // dx's alone, so a record already there (onboarding may add `p=none`) is
+    // taken over rather than failing the deploy.
+    if (mail !== undefined)
+      yield* Cloudflare.DNS.Record("MailDmarc", {
+        zoneId: mail.zoneId,
+        name: `_dmarc.${mail.domain}`,
+        type: "TXT",
+        content: '"v=DMARC1; p=reject; sp=reject; adkim=r; aspf=r"',
+        comment: "dx Mailbox: only dx sends as this domain",
+      }).pipe(Alchemy.AdoptPolicy.adopt(true));
+    const mailSend =
+      mail === undefined
+        ? undefined
+        : yield* Cloudflare.Email.SendEmail("MailSend", {});
+    const mailDomain =
+      mail === undefined || mailRouting === undefined
+        ? undefined
+        : Output.map(mailRouting.name, (zoneName) => {
+            if (zoneName.toLowerCase() !== mail.domain)
+              throw new Error(
+                `DX_DEPLOYMENT_MAIL_DOMAIN (${mail.domain}) must be the name of the zone DX_DEPLOYMENT_MAIL_ZONE_ID (${zoneName}): Cloudflare's catch-all, which gives dx every address, works only on a zone's own domain, not a subdomain.`,
+              );
+            return mail.domain;
+          });
     // A resumed guest's daemon reconnects through a dependency-free Worker on
     // the account's workers.dev subdomain. Its isolate starts in milliseconds,
     // where the Core bundle's cold start (about a second) otherwise sits on
@@ -929,6 +1031,7 @@ export default Alchemy.Stack(
         DX_AUTH_URL: configuration.origin,
         DX_AUTH_TRUSTED_ORIGINS: configuration.origin,
         ...(portals === undefined ? {} : { DX_PORTAL_DOMAIN: portals.domain }),
+        ...(mailDomain === undefined ? {} : { DX_MAIL_DOMAIN: mailDomain }),
         // A branch preview's Docker and Cloudflare connections boot the
         // branch's Orb image, which the preview workflow copies to Docker
         // Hub (scripts/mirror-preview-orb-image.mjs).
@@ -1129,9 +1232,12 @@ export default Alchemy.Stack(
       },
       d1: { [d1Binding.name]: database },
       r2: { [r2Binding.name]: bucket },
-      "send-email": hostedAuthentication
-        ? { EMAIL: requiredHostedAuthenticationValue(email) }
-        : {},
+      "send-email": {
+        ...(hostedAuthentication
+          ? { EMAIL: requiredHostedAuthenticationValue(email) }
+          : {}),
+        ...(mailSend === undefined ? {} : { MAIL_SEND: mailSend }),
+      },
       "workers-ai": {
         [aiBinding.name]: Cloudflare.Workers.AI(aiBinding.name),
       },
@@ -1275,6 +1381,21 @@ export default Alchemy.Stack(
           logs: { enabled: true, invocationLogs: true },
         },
       });
+
+    // Mail: Email Routing on the dedicated mail zone, every address handed
+    // to Core's email handler (apps/core/src/mail/worker-handler.ts).
+    if (mailRouting !== undefined) {
+      yield* Cloudflare.Email.CatchAll("MailCatchAll", {
+        // Only once the zone's name is the mail domain (`mailDomain` throws
+        // otherwise), so a wrong zone never gets the catch-all.
+        zone: Output.map(
+          Output.all(mailRouting.zoneId, mailDomain as Output.Output<string>),
+          ([zoneId]) => zoneId,
+        ),
+        name: "dx mailboxes",
+        actions: [{ type: "worker", value: [worker.workerName] }],
+      });
+    }
 
     // Portals run in their own Worker: Core's static assets answer before its
     // code, so a Portal path would get the dx app. Workers Custom Domains do

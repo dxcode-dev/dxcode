@@ -88,14 +88,16 @@ export interface MessagePlugin {
 /** Senders that wake a Thread on the owner's behalf. */
 /**
  * `external`: text from outside dx started the Thread, such as a website's
- * feedback widget or a plugin's webhook trigger.
+ * feedback widget or a plugin's webhook trigger. `email`: an email to the
+ * Thread's or its Project's address.
  */
 export type MessageAutomation =
   | "schedule"
   | "github"
   | "artifact"
   | "settings"
-  | "external";
+  | "external"
+  | "email";
 
 /** Tagging the agent sends a message to it, even beside member tags. */
 export const AGENT_MENTION = "dx";
@@ -255,7 +257,8 @@ export const parseMessageAuthor = (
     fields.get("automation") === "github" ||
     fields.get("automation") === "artifact" ||
     fields.get("automation") === "settings" ||
-    fields.get("automation") === "external"
+    fields.get("automation") === "external" ||
+    fields.get("automation") === "email"
       ? { automation: fields.get("automation") as MessageAutomation }
       : {}),
     ...(fields.get("comment_on")

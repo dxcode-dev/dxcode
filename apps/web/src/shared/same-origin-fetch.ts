@@ -5,7 +5,8 @@ import {
   type ShellPart,
   ShellResponseSchema,
 } from "@dx/api";
-import { Schema } from "effect";
+import { ThreadId } from "@dx/domain";
+import { Option, Schema } from "effect";
 import { noticeUnauthenticated } from "./auth/session-ended.js";
 import { observeRequest } from "./diagnostics/client-diagnostics.js";
 
@@ -90,7 +91,11 @@ const threadHistoryPath = (threadId: string) =>
 
 /** A Thread page's reads, from its URL; none elsewhere. */
 const threadBootReads = (pathname: string) => {
-  const threadId = /^\/threads\/(thr_[0-9a-f-]{36})\/?$/.exec(pathname)?.[1];
+  const threadId = Option.getOrUndefined(
+    Schema.decodeUnknownOption(ThreadId)(
+      /^\/threads\/([^/]+)\/?$/.exec(pathname)?.[1],
+    ),
+  );
   if (threadId === undefined) return [];
   const thread = `/v1/threads/${encodeURIComponent(threadId)}`;
   return [thread, `${thread}/layout`, threadHistoryPath(threadId)];

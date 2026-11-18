@@ -1895,6 +1895,18 @@
   width: 12px;
   height: 12px;
 }
+/* A mail tool's link to the email in the Mailbox. */
+.transcript-mail-open {
+  flex: none;
+  margin-left: var(--space-2);
+  color: var(--link);
+  font-size: var(--text-xs);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.transcript-mail-open:hover {
+  text-decoration: underline;
+}
 .transcript-activity-row:hover .transcript-activity-open,
 .transcript-activity-open:focus-visible {
   opacity: 1;
@@ -7957,6 +7969,7 @@ img.orb-provider-logo {
     width: 100%;
     grid-template-columns: 1fr;
   }
+  .account-profile-edit-form,
   .workspace-profile-form {
     width: 100%;
   }
@@ -10493,6 +10506,28 @@ body:has(.dx-app-shell) {
 .dock-link:disabled {
   cursor: not-allowed;
   opacity: 0.62;
+}
+/* Mailbox's unread count, on the corner of its icon. */
+.dock-link-icon {
+  position: relative;
+  display: inline-flex;
+}
+.dock-link-count {
+  position: absolute;
+  top: -5px;
+  left: 13px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 var(--space-1);
+  color: var(--on-accent);
+  border-radius: var(--radius-full);
+  background: var(--unread);
+  box-shadow: 0 0 0 2px var(--sidebar-surface);
+  font-size: var(--text-3xs);
+  font-weight: var(--weight-semibold);
+  line-height: 16px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .sidebar-account-shell {
   flex: 0 0 44px;

@@ -277,7 +277,8 @@ export const publishArtifactInvalidation = async (
 /** An event for one user's open apps only. */
 export type UserInvalidationType =
   | "notifications.invalidated"
-  | "sidebar.invalidated";
+  | "sidebar.invalidated"
+  | "mailbox.invalidated";
 
 /**
  * Tells a user's open apps that their notification inbox or sidebar layout

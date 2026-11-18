@@ -6,8 +6,8 @@ import {
   GitPullRequest,
 } from "lucide-react";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
-import { preloadAutomationViews } from "./automation-views-loader.js";
 import { MenuItem } from "../../../shared/ui/menu.js";
+import { preloadAutomationViews } from "./automation-views-loader.js";
 import {
   type AutomationView,
   automationViews,

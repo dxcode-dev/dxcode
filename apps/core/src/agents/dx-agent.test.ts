@@ -30,6 +30,7 @@ const pluginHost = vi.hoisted(() => ({
   }),
   resolveAgentPluginTools: vi.fn(),
   resolveAgentBugReportReader: vi.fn(async () => false),
+  resolveAgentMailbox: vi.fn(async () => undefined),
   resolveAgentWorkspaceInstructions: vi.fn(async () => ""),
   resolveAgentSpace: vi.fn(async () => undefined),
   resolveAgentStartingSpace: vi.fn(async () => undefined),

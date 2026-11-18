@@ -1,3 +1,5 @@
+import { ThreadId } from "@dx/domain";
+import { Option, Schema } from "effect";
 import { createContext, type ReactNode } from "react";
 import type { Components } from "react-markdown";
 
@@ -25,20 +27,25 @@ export const ThreadReferenceContext = createContext<
   ThreadReferences | undefined
 >(undefined);
 
-const THREAD_PATH =
-  /^\/threads\/(thr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?(?:[?#].*)?$/;
+const THREAD_PATH = /^\/threads\/([^/?#]+)\/?(?:[?#].*)?$/;
+
+const threadIdOfPath = (path: string): ThreadId | undefined =>
+  Option.getOrUndefined(
+    Schema.decodeUnknownOption(ThreadId)(THREAD_PATH.exec(path)?.[1]),
+  );
 
 /**
- * The Thread a link opens: `/threads/thr_…`, on this origin or any dx
- * origin the agent wrote. Undefined for every other link.
+ * The Thread a link opens: `/threads/thr_…` or `/threads/t-…`, on this
+ * origin or any dx origin the agent wrote, as its stored `thr_` ID.
+ * Undefined for every other link.
  */
 export const threadIdOfHref = (href: string | undefined) => {
   if (href === undefined || href === "") return undefined;
-  if (href.startsWith("/")) return THREAD_PATH.exec(href)?.[1];
+  if (href.startsWith("/")) return threadIdOfPath(href);
   try {
     const url = new URL(href);
     if (url.protocol !== "https:" && url.protocol !== "http:") return undefined;
-    return THREAD_PATH.exec(`${url.pathname}${url.search}${url.hash}`)?.[1];
+    return threadIdOfPath(`${url.pathname}${url.search}${url.hash}`);
   } catch {
     return undefined;
   }

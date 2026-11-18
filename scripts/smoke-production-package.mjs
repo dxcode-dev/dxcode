@@ -277,6 +277,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     DX_TERMS_URL: "",
     DX_PRIVACY_URL: "",
     DX_PORTAL_DOMAIN: "",
+    DX_MAIL_DOMAIN: "",
     DX_PREVIEW_ORB_IMAGE: "",
     DX_PUSH_VAPID_PUBLIC_KEY: "",
     DX_PUSH_VAPID_PRIVATE_KEY: "",
@@ -343,7 +344,14 @@ export const smokeProductionPackage = async (packageRoot) => {
   const d1 = exactlyOne("d1");
   const r2 = exactlyOne("r2");
   const ai = exactlyOne("workers-ai");
-  const email = exactlyOne("send-email");
+  // The sign-in sender (EMAIL), and the Mailbox's sender (MAIL_SEND), which
+  // the smoke binds unused: it runs without a mail domain.
+  const emails = manifest.bindings.filter(
+    (binding) => binding.type === "send-email",
+  );
+  const email = emails.find(({ name }) => name === "EMAIL");
+  if (email === undefined)
+    throw new Error("Package smoke requires the EMAIL send-email binding.");
   const loader = exactlyOne("worker-loader");
   const durableObjects = deriveDurableObjectBindings({
     authoredConfig: JSON.parse(
@@ -357,7 +365,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     d1.name,
     r2.name,
     ai.name,
-    email.name,
+    ...emails.map(({ name }) => name),
     loader.name,
     ...durableObjects.map(({ name }) => name),
     // Another Worker's namespace (the Orb Worker's), bound only when that
@@ -399,12 +407,14 @@ export const smokeProductionPackage = async (packageRoot) => {
     ],
     r2_buckets: [{ binding: r2.name, bucket_name: "dx-package-smoke" }],
     worker_loaders: [{ binding: loader.name }],
-    send_email: [
-      {
-        name: email.name,
-        allowed_sender_addresses: [scalarValues.DX_AUTH_EMAIL_FROM],
-      },
-    ],
+    send_email: emails.map(({ name }) =>
+      name === email.name
+        ? {
+            name,
+            allowed_sender_addresses: [scalarValues.DX_AUTH_EMAIL_FROM],
+          }
+        : { name },
+    ),
     durable_objects: {
       bindings: durableObjects.map(({ name, className }) => ({
         name,

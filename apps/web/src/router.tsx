@@ -100,6 +100,10 @@ const page = {
     () => import("./artifact-library-route.js"),
     "LibraryArtifactRoute",
   ),
+  mailbox: lazyRouteComponent(
+    () => import("./mailbox-route.js"),
+    "MailboxRoute",
+  ),
   bugReports: lazyRouteComponent(
     () => import("./features/threads/bug-reports/bug-report-page.js"),
     "BugReportsRoute",
@@ -296,6 +300,57 @@ const libraryArtifactRoute = createRoute({
   component: page.libraryArtifact,
 });
 
+const MailFolderSearch = Schema.Literals(["inbox", "sent", "archive", "spam"]);
+
+/**
+ * `/mailbox`: the person's Mailbox. `folder`, `label` (a label's ID), or
+ * `tag` (a project's `+tag`) picks the list, `q` searches it, and
+ * `conversation` opens one conversation by its key, as the agents' mail
+ * tools link to it.
+ */
+export const mailboxRoute = createRoute({
+  getParentRoute: () => productRoute,
+  path: "/mailbox",
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    readonly folder?: "inbox" | "sent" | "archive" | "spam";
+    readonly label?: string;
+    readonly tag?: string;
+    readonly q?: string;
+    readonly conversation?: string;
+  } => {
+    const folder = Option.getOrUndefined(
+      Schema.decodeUnknownOption(MailFolderSearch)(search.folder),
+    );
+    return {
+      ...(folder === undefined || folder === "inbox" ? {} : { folder }),
+      ...(typeof search.label === "string" &&
+      /^mlb_[0-9a-f]{32}$/.test(search.label)
+        ? { label: search.label }
+        : {}),
+      ...(typeof search.tag === "string" && /^[a-z0-9-]{1,31}$/.test(search.tag)
+        ? { tag: search.tag }
+        : {}),
+      ...(typeof search.q === "string" &&
+      search.q.trim() !== "" &&
+      search.q.length <= 200
+        ? { q: search.q }
+        : {}),
+      ...(typeof search.conversation === "string" &&
+      search.conversation !== "" &&
+      search.conversation.length <= 512
+        ? { conversation: search.conversation }
+        : {}),
+    };
+  },
+  loader: ({ context }) =>
+    context.queryClient.prefetchQuery(
+      settingsContextQueryOptions(context.userId),
+    ),
+  component: page.mailbox,
+});
+
 const bugReportsRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/bug-reports",
@@ -394,6 +449,22 @@ const seeOpenedThread = ({
 const threadRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/threads/$threadId",
+  // A Thread's public ID, `t-<uuid>` (its email address), opens the page at
+  // its stored `thr_<uuid>`, so everything reading the URL (the sidebar's
+  // active row, a Space's selection, caches) sees the one form. Anything
+  // that is not a Thread ID stays as written for the usual not-found state.
+  beforeLoad: ({ location, params }) => {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(params.threadId);
+    if (Option.isNone(threadId) || threadId.value === params.threadId) return;
+    throw redirect({
+      to: "/threads/$threadId",
+      params: { threadId: threadId.value },
+      search: location.search,
+      hash: location.hash,
+      state: location.state,
+      replace: true,
+    });
+  },
   // `message` opens the Thread at a message, for example a mention or a
   // copied message link;
   // `artifact` is the artifact its Artifacts view shows; `sheet=artifact`
@@ -422,10 +493,10 @@ const threadRoute = createRoute({
     /^[\w.-]{1,160}$/.test(search.comments)
       ? { comments: search.comments }
       : {}),
-    ...(typeof search.thread === "string" &&
-    /^thr_[0-9a-f-]{36}$/.test(search.thread)
-      ? { thread: search.thread }
-      : {}),
+    ...Option.match(Schema.decodeUnknownOption(ThreadId)(search.thread), {
+      onNone: () => ({}),
+      onSome: (thread) => ({ thread }),
+    }),
     // The comment an open Comments panel brings into view.
     ...(typeof search.comment === "string" &&
     /^mcm_[0-9a-f]{32}$/.test(search.comment)
@@ -437,10 +508,6 @@ const threadRoute = createRoute({
       : {}),
     ...(search.sheet === "artifact" || search.sheet === "space-artifact"
       ? { sheet: search.sheet }
-      : {}),
-    ...(typeof search.thread === "string" &&
-    /^thr_[0-9a-f-]{36}$/.test(search.thread)
-      ? { thread: search.thread }
       : {}),
   }),
   // Opening a Thread is seeing it: entering the route, or moving within it
@@ -715,6 +782,7 @@ const routeTree = rootRoute.addChildren([
     huddleLinkRoute,
     artifactLibraryRoute,
     libraryArtifactRoute,
+    mailboxRoute,
     bugReportsRoute,
     bugReportRoute,
     allBugReportsRoute,

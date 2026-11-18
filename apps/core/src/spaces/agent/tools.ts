@@ -4,6 +4,7 @@ import {
   type SpaceThreadState,
 } from "@dx/api";
 import {
+  parseThreadReference,
   THREAD_COLORS,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
   type ThreadId,
@@ -14,6 +15,7 @@ import { DateTime } from "effect";
 import * as v from "valibot";
 import { ownerTimeZone } from "../../automations/schedules.js";
 import { userImageSql } from "../../avatars/storage.js";
+import { countFamilyMailReadsBeyondSharedScope } from "../../mail/store.js";
 import { publishRealtimeInvalidation } from "../../realtime/publication.js";
 import { searchThreadsItem } from "../../thread-search/routes.js";
 import { searchThreads } from "../../thread-search/service.js";
@@ -83,9 +85,6 @@ const reactionInput = (tool: SpaceToolName) =>
   );
 
 const iso = (value: number | string) => new Date(value).toISOString();
-
-const THREAD_ID =
-  /thr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/;
 
 type ListedState = (typeof SPACE_THREAD_STATES)[number];
 
@@ -554,7 +553,7 @@ export const createSpaceTools = (
       run: async ({ data }) => {
         const context = getContext();
         const owner = await space(context);
-        const threadId = THREAD_ID.exec(data.thread)?.[0];
+        const threadId = parseThreadReference(data.thread);
         if (threadId === undefined)
           throw new Error("Give a thread URL or ID, such as thr_….");
         if (threadId === spaceThreadId)
@@ -562,7 +561,7 @@ export const createSpaceTools = (
         const thread = await context.db
           .prepare(
             `SELECT thread.id, thread.kind, thread.parent_thread_id,
-                    parent.kind AS parent_kind
+                    thread.workspace_access, parent.kind AS parent_kind
                FROM threads AS thread
                LEFT JOIN threads AS parent ON parent.id = thread.parent_thread_id
               WHERE thread.id = ?1 AND thread.owner_user_id = ?2
@@ -573,6 +572,7 @@ export const createSpaceTools = (
             id: string;
             kind: string;
             parent_thread_id: string | null;
+            workspace_access: string | null;
             parent_kind: string | null;
           }>();
         if (thread === null)
@@ -587,6 +587,21 @@ export const createSpaceTools = (
           };
         if (thread.parent_kind === "space")
           throw new Error("That thread already belongs to another Space.");
+        // Joining a shared Space shares the thread's family, and with it
+        // every mail its agents read while private. Only the owner may
+        // agree to that, by sharing the thread themselves first.
+        if (
+          owner.workspace_access !== "none" &&
+          (thread.workspace_access ?? "none") === "none" &&
+          (await countFamilyMailReadsBeyondSharedScope(
+            context.db,
+            thread.id,
+            owner.owner_user_id,
+          )) > 0
+        )
+          throw new Error(
+            "That thread's agent read email from the owner's Mailbox, and Space members would see it. Ask the owner to share that thread with the workspace themselves (Share in the thread), then add it.",
+          );
         const { results } = await context.db
           .prepare(
             `UPDATE threads

@@ -1,6 +1,7 @@
 import type { ThreadId, UserId } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { threadDeletionLogger } from "../logging.js";
+import { deleteThreadMail } from "../mail/store.js";
 import { purgeDurableThread } from "../plugins/hosts/durable/objects.js";
 import { deleteThreadArtifacts } from "../thread-artifacts/store.js";
 import { ownerSearchIndex } from "../thread-search/index-client.js";
@@ -17,7 +18,8 @@ export type ThreadCleanupStep =
   | "attachments"
   | "storage"
   | "artifacts"
-  | "plugin-objects";
+  | "plugin-objects"
+  | "mail";
 
 /**
  * How each piece outside D1 is removed. Every step is idempotent: a retry
@@ -124,6 +126,9 @@ export const purgeDeletedThread = async (
     ["artifacts", () => deleteThreadArtifacts(bindings, threadId)],
     // Plugins' Durable Objects for the Thread: their SQLite and blobs.
     ["plugin-objects", () => purgeDurableThread(bindings, threadId)],
+    // The Thread's Inbox: its messages' rows and bodies. The retired alias
+    // row stays, so the address is never given out again.
+    ["mail", () => deleteThreadMail(bindings, threadId)],
   ];
   const failedSteps: ThreadCleanupStep[] = [];
   for (const [step, run] of steps) {

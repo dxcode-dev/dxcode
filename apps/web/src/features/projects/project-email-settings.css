@@ -1,0 +1,17 @@
+/* Project Settings → Email: the viewer's address and the defaults for
+   Threads that email starts. */
+.project-email-settings {
+  gap: var(--space-4);
+}
+.project-email-address {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+.settings-card > .project-email-error {
+  margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
+  color: var(--destructive);
+  font-size: var(--text-sm);
+}

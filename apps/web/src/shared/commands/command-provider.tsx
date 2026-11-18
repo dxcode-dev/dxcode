@@ -12,6 +12,7 @@ import {
   getBrowserCommandRegistry,
 } from "./command-registry.js";
 import { KeymapDialog } from "./keymap-dialog.js";
+import { requestMailboxCommand } from "./mailbox-command-event.js";
 import { THREAD_OPEN_VIEW_EVENT } from "./thread-open-view-event.js";
 
 /** Dispatched on `document` with `{ view }`; the open Thread page listens. */
@@ -255,6 +256,7 @@ const useCommandRuntime = ({
       document.dispatchEvent(
         new CustomEvent(THREAD_OPEN_VIEW_EVENT, { detail: { view } }),
       ),
+    mailboxCommand: requestMailboxCommand,
   };
 };
 

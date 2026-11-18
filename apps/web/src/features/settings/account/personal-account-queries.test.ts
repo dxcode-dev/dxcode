@@ -27,6 +27,8 @@ const account = {
   codeLineHeight: null,
   logoAnimation: true,
   uiSounds: false,
+  usernameChangeAvailable: true,
+  usernameNeedsPick: false,
 } as const;
 
 afterEach(() => vi.unstubAllGlobals());

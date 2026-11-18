@@ -68,6 +68,7 @@ const runtime = () =>
     openFocusedThreadMenu: vi.fn(),
     addThreadImages: vi.fn(),
     openThreadView: vi.fn(),
+    mailboxCommand: vi.fn(),
   }) satisfies CommandRuntime;
 
 describe("keyboard shortcut command registry", () => {

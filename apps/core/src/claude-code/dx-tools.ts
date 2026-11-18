@@ -177,6 +177,11 @@ const RERUNNABLE: ReadonlySet<string> = new Set([
   "list_agent_modes",
   "list_bug_reports",
   "read_bug_report",
+  // The inbox tools only read (list_emails may make the Thread's alias,
+  // which a second run finds made).
+  "list_emails",
+  "read_email",
+  "wait_for_email",
 ]);
 
 /**

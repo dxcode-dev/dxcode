@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { MODE_LABELS, MODES } from "../../../shared/mode-labels.js";
 import { settle } from "../../../shared/settle.js";
 import { DisclosureTrigger } from "../../../shared/ui/disclosure.js";
 import {
@@ -27,7 +28,6 @@ import {
 } from "./mode-dial-drafts.js";
 import { modeDialMutationOptions } from "./mode-dial-mutations.js";
 import { MainAgentRole, SettingsSectionLink } from "./mode-dial-role.js";
-import { MODE_LABELS, MODES } from "./mode-dial-values.js";
 import { SpaceAgentRole } from "./space-agent-role.js";
 
 const message = (error: unknown) =>

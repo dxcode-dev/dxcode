@@ -143,6 +143,12 @@ export const UpdateSpaceRequestSchema = Schema.Struct({
   goal: Schema.optional(Schema.NullOr(SpaceGoalSchema)),
   color: Schema.optional(ThreadColor),
   sharing: Schema.optional(SpaceSharingSchema),
+  /**
+   * The owner saw that the Space's agents read Mailbox mail a shared Thread
+   * could not, which members will see. Without it, sharing a private Space
+   * whose agents did is refused with `SPACE_SHARING_MAIL_READS`.
+   */
+  acknowledgeMailReads: Schema.optional(Schema.Boolean),
 });
 
 export type UpdateSpaceRequest = typeof UpdateSpaceRequestSchema.Type;
@@ -187,6 +193,7 @@ export const SpaceErrorCodeSchema = Schema.Literals([
   "SPACE_NOT_FOUND",
   "SPACE_OWNER_ONLY",
   "SPACE_SHARING_UNAVAILABLE",
+  "SPACE_SHARING_MAIL_READS",
   "PROJECT_NOT_FOUND",
   "SPACE_CREATION_FAILED",
   "PERSISTENCE_UNAVAILABLE",

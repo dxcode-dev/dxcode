@@ -38,6 +38,16 @@ export const PersonalAccountDataSchema = Schema.Struct({
   uiSounds: Schema.Boolean,
   /** The uploaded picture; absent shows initials. */
   avatarUrl: Schema.optional(Schema.String.check(Schema.isMaxLength(2_048))),
+  /**
+   * Whether `PATCH /v1/settings/personal/account` may change the username
+   * now: the one change is unused, or `usernameNeedsPick` makes it free.
+   */
+  usernameChangeAvailable: Schema.Boolean,
+  /**
+   * The person holds a `user-<hex>` placeholder or a reserved name and must
+   * pick a username before their Mailbox opens. That pick is free.
+   */
+  usernameNeedsPick: Schema.Boolean,
 });
 
 export const GetPersonalAccountResponseSchema = successResponse(
@@ -118,6 +128,17 @@ export const PersonalAccountUsernameUnavailableResponseSchema = Schema.Struct({
   }),
 });
 
+/** The person already used their one username change. */
+export const PersonalAccountUsernameChangeLockedResponseSchema = Schema.Struct({
+  status: Schema.Literal("error"),
+  data: Schema.Struct({
+    code: Schema.Literal("USERNAME_CHANGE_LOCKED"),
+    message: Schema.Literal("You already changed your username once."),
+    requestId: Schema.String,
+    fieldErrors: Schema.Array(SettingsFieldErrorSchema),
+  }),
+});
+
 export const PersonalAccountForbiddenResponseSchema = errorResponse(
   "SETTINGS_SCOPE_FORBIDDEN",
   "The settings scope is unavailable for this user.",
@@ -137,6 +158,7 @@ export const PersonalAccountPersistenceUnavailableResponseSchema =
 export const PersonalAccountErrorResponseSchema = Schema.Union([
   PersonalAccountInvalidRequestResponseSchema,
   PersonalAccountUsernameUnavailableResponseSchema,
+  PersonalAccountUsernameChangeLockedResponseSchema,
   PersonalAccountForbiddenResponseSchema,
   PersonalAccountNotFoundResponseSchema,
   PersonalAccountPersistenceUnavailableResponseSchema,

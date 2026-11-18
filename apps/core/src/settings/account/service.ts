@@ -3,13 +3,18 @@ import {
   type PersonalAccount,
   type PersonalAccountNotFound,
   PersonalAccountRepository,
+  PersonalAccountUsernameChangeLocked,
+  PersonalAccountUsernameReserved,
   type PersonalAccountUsernameUnavailable,
   type PersonalComposerDefaults,
   type Principal,
+  personalAccountUsernameChoiceProblem,
+  personalAccountUsernameNeedsPick,
   personalAppearanceFields,
   type UpdatePersonalAccountInput,
   type UpdatePersonalAppearanceInput,
   type UpdatePersonalComposerDefaultsInput,
+  type UserId,
 } from "@dx/domain";
 import { Context, Effect, Layer, type Schema } from "effect";
 import { SettingsAudit } from "../audit.js";
@@ -21,6 +26,8 @@ type PersonalAccountReadError =
 
 type PersonalAccountUpdateError =
   | PersonalAccountReadError
+  | PersonalAccountUsernameChangeLocked
+  | PersonalAccountUsernameReserved
   | PersonalAccountUsernameUnavailable;
 
 interface PersonalAccountServiceShape {
@@ -32,6 +39,15 @@ interface PersonalAccountServiceShape {
     input: UpdatePersonalAccountInput,
     requestId: string,
   ) => Effect.Effect<PersonalAccount, PersonalAccountUpdateError>;
+  /**
+   * A deployment admin gives a person their one username change back. The
+   * caller has checked the admin; this records who did it.
+   */
+  readonly resetUsernameChange: (
+    admin: Principal,
+    userId: UserId,
+    requestId: string,
+  ) => Effect.Effect<PersonalAccount, PersonalAccountReadError>;
   readonly updateAppearance: (
     principal: Principal,
     input: UpdatePersonalAppearanceInput,
@@ -81,39 +97,90 @@ export class PersonalAccountService extends Context.Service<
         update: Effect.fn("PersonalAccountService.update")(
           function* (principal, input, requestId) {
             const current = yield* accounts.findOwnedByUser(principal.userId);
+            const usernameChanges = current.username !== input.username;
             const changedFields = [
               ...(current.displayName === input.displayName
                 ? []
                 : (["displayName"] as const)),
-              ...(current.username === input.username
-                ? []
-                : (["username"] as const)),
+              ...(usernameChanges ? (["username"] as const) : []),
             ];
-            return yield* accounts
-              .updateOwnedByUser(principal.userId, input)
-              .pipe(
-                Effect.tap(() =>
-                  audit.record({
-                    action: "personal_account.update",
-                    scope: "personal",
-                    outcome: "success",
-                    requestId,
-                    userId: principal.userId,
-                    fields: changedFields,
-                  }),
-                ),
-                Effect.tapError(() =>
-                  audit.record({
-                    action: "personal_account.update",
-                    scope: "personal",
-                    outcome: "rejected",
-                    requestId,
-                    userId: principal.userId,
-                    fields: changedFields,
-                  }),
-                ),
+            // A pick away from a placeholder or reserved name is free; any
+            // other new username spends the one change.
+            const freePick = personalAccountUsernameNeedsPick(current.username);
+            const choiceProblem = usernameChanges
+              ? personalAccountUsernameChoiceProblem(input.username)
+              : undefined;
+            const write = Effect.gen(function* () {
+              if (choiceProblem !== undefined)
+                return yield* new PersonalAccountUsernameReserved({
+                  message: choiceProblem,
+                });
+              if (
+                usernameChanges &&
+                !freePick &&
+                current.usernameChangedAt !== null
+              )
+                return yield* new PersonalAccountUsernameChangeLocked();
+              return yield* accounts.updateOwnedByUser(
+                principal.userId,
+                input,
+                {
+                  expected: current.username,
+                  usesChange: usernameChanges && !freePick,
+                },
               );
+            });
+            return yield* write.pipe(
+              Effect.tap(() =>
+                audit.record({
+                  action: "personal_account.update",
+                  scope: "personal",
+                  outcome: "success",
+                  requestId,
+                  userId: principal.userId,
+                  fields: changedFields,
+                }),
+              ),
+              Effect.tapError(() =>
+                audit.record({
+                  action: "personal_account.update",
+                  scope: "personal",
+                  outcome: "rejected",
+                  requestId,
+                  userId: principal.userId,
+                  fields: changedFields,
+                }),
+              ),
+            );
           },
+        ),
+        resetUsernameChange: Effect.fn(
+          "PersonalAccountService.resetUsernameChange",
+        )((admin, userId, requestId) =>
+          accounts.resetUsernameChange(userId).pipe(
+            Effect.tap(() =>
+              audit.record({
+                action: "personal_account.username_change_reset",
+                scope: "personal",
+                outcome: "success",
+                requestId,
+                userId: admin.userId,
+                targetUserId: userId,
+                fields: ["username"],
+              }),
+            ),
+            Effect.tapError(() =>
+              audit.record({
+                action: "personal_account.username_change_reset",
+                scope: "personal",
+                outcome: "rejected",
+                requestId,
+                userId: admin.userId,
+                targetUserId: userId,
+                fields: ["username"],
+              }),
+            ),
+          ),
         ),
         updateAppearance: Effect.fn("PersonalAccountService.updateAppearance")(
           function* (principal, input, requestId) {

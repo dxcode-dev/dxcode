@@ -17,6 +17,7 @@ import { feedbackWidgetEmbedRoutes } from "../feedback-widget/embed-routes.js";
 import type { AppEnv } from "../http/types.js";
 import { realtimeKitAccess } from "../huddles/realtimekit.js";
 import { authorizationLogger, dictationLogger } from "../logging.js";
+import { mailboxFor } from "../mail/config.js";
 import { notificationPreferenceRoutes } from "../notifications/routes.js";
 import { personalOrbUsageRoutes } from "../orb-usage/routes.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
@@ -81,6 +82,7 @@ const responseData = (
   portalDomain: string | undefined,
   composerQuickActions: boolean,
   huddle: boolean,
+  mailDomain: string | undefined,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
@@ -89,6 +91,7 @@ const responseData = (
   ...(huddle ? { huddle } : {}),
   ...(dictation === undefined ? {} : { dictation }),
   ...(portalDomain === undefined ? {} : { portalDomain }),
+  ...(mailDomain === undefined ? {} : { mailDomain }),
   workspace:
     access.workspace === undefined
       ? undefined
@@ -150,6 +153,12 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         portalConfiguration(context.env)?.domain,
         composerQuickActions,
         huddle,
+        // Shown only to people who turned the Mailbox on.
+        (yield* Effect.promise(() =>
+          mailboxFor(context.env, context.get("principal").userId).catch(
+            () => undefined,
+          ),
+        ))?.domain,
       ),
     });
   });

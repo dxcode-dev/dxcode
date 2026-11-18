@@ -12,6 +12,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
+  ApiError,
   setThreadFollowing,
   updateThreadSharing,
 } from "../../../shared/api/client.js";
@@ -36,6 +37,14 @@ const applySharing = (
       };
     },
   );
+
+/**
+ * The server held a share back because the family's agents read Mailbox
+ * mail its viewers would see; the owner confirms, then shares again with
+ * `acknowledgeMailReads`.
+ */
+export const isMailReadsRefusal = (error: unknown): error is ApiError =>
+  error instanceof ApiError && error.code === "THREAD_SHARING_MAIL_READS";
 
 /** The owner changes who in the workspace can see or use a Thread. */
 export const useUpdateThreadSharing = (userId: UserId, threadId: ThreadId) => {

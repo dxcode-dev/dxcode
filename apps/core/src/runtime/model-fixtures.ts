@@ -46,6 +46,14 @@ export const LOCAL_MODEL_FIXTURE_PROMPTS = {
     "Use the create_thread tool to start a child thread titled Synthetic reporting child that runs the synthetic check and reports back. After the tool result, reply with one short sentence and end your turn.",
   reportToParent: LOCAL_MODEL_FIXTURE_PROMPTS_REPORT_TO_PARENT,
   childReport: LOCAL_MODEL_FIXTURE_PROMPTS_CHILD_REPORT,
+  listEmails:
+    "Use the list_emails tool to list the emails you can read in your owner's mailbox. After the tool result, reply with their subjects.",
+  claimEmail:
+    "Use the wait_for_email tool with from acme-saas.test to wait for the shared sign-up code email. After the tool result, reply with the code it contains.",
+  claimPersonalEmail:
+    "Use the wait_for_email tool with from gmail.com to wait for a personal email. After the tool result, say whether it was refused.",
+  verificationEmail:
+    "Use the wait_for_email tool to wait for the Acme sign-up verification email in this Thread's inbox. After the tool result, reply with the verification code it contains.",
 } as const;
 
 /** The tool call each tool fixture makes before its confirmation. */
@@ -85,6 +93,77 @@ const LOCAL_MODEL_FIXTURE_TOOL_CALLS = {
       "The synthetic reporting child started; its report will arrive here.",
   },
 } as const;
+
+/**
+ * Mailbox tool fixtures: one real tool call, then a reply computed from the
+ * tool's result, so a local run shows exactly what the tool returned.
+ */
+const MAILBOX_TOOL_CALLS = {
+  listEmails: {
+    id: "dx-local-fixture-list-emails",
+    name: "list_emails",
+    arguments: { limit: 50 },
+    reply: (result: string) => {
+      const subjects = [
+        ...result.matchAll(/"subject":"((?:[^"\\]|\\.)*)"/g),
+      ].map((match) => match[1] ?? "");
+      return subjects.length === 0
+        ? "I can read no emails."
+        : `I can read ${subjects.length} emails: ${subjects.join("; ")}.`;
+    },
+  },
+  claimEmail: {
+    id: "dx-local-fixture-claim-email",
+    name: "wait_for_email",
+    arguments: { from: "acme-saas.test", match: "shared", timeout_seconds: 60 },
+    reply: (result: string) => {
+      const code = /\b(\d{6})\b/.exec(result)?.[1];
+      return code === undefined
+        ? "No code arrived."
+        : `The shared sign-up code is ${code}.`;
+    },
+  },
+  claimPersonalEmail: {
+    id: "dx-local-fixture-claim-personal-email",
+    name: "wait_for_email",
+    arguments: { from: "gmail.com", timeout_seconds: 5 },
+    reply: (result: string) =>
+      result.includes("personal email provider")
+        ? "Claiming mail from gmail.com was refused."
+        : "Claiming mail from gmail.com was not refused.",
+  },
+} as const;
+
+const VERIFICATION_EMAIL_CALL = {
+  id: "dx-local-fixture-wait-for-email",
+  name: "wait_for_email",
+  arguments: { match: "verification code", timeout_seconds: 60 },
+} as const;
+
+/** The text of the latest result of a fixture's tool call, if any. */
+const fixtureToolResultText = (
+  context: Context,
+  toolCallId: string,
+  { withErrors = false }: { readonly withErrors?: boolean } = {},
+) => {
+  const result = context.messages.findLast(
+    (message) =>
+      message.role === "toolResult" && message.toolCallId === toolCallId,
+  );
+  if (result?.role !== "toolResult" || (result.isError && !withErrors))
+    return undefined;
+  return result.content
+    .map((block) => (block.type === "text" ? block.text : ""))
+    .join("\n");
+};
+
+/**
+ * Mail a Project's address turned into a Thread's message: the fixture
+ * answers with what the author typed, so a local run shows the request
+ * reached the agent (wiki/agent-mail.md).
+ */
+const EMAIL_REQUEST =
+  /^(?:Follow-up email|Email|The owner started this Thread from an email in their dx Mailbox,) from [^\n]+\nSubject: ([^\n]*)\n\n([^\n]*)/;
 
 /**
  * The report a child sends the Thread that started it, which only its
@@ -232,7 +311,24 @@ export const createLocalModelFixtureProvider = () => {
     maxTokens: 262_144,
   };
   const fixtureCore = (context: Context) => {
-    const fixture = localModelFixtureForPrompt(promptFromContext(context));
+    const prompt = promptFromContext(context);
+    const email = EMAIL_REQUEST.exec(prompt ?? "");
+    if (email !== null) {
+      const core = createFauxCore({
+        api: LOCAL_MODEL_FIXTURE_AUDIT_MARKER,
+        provider: LOCAL_MODEL_FIXTURE_PROVIDER,
+        models: [{ id: LOCAL_MODEL_FIXTURE_MODEL, reasoning: true }],
+        tokenSize: { min: 2, max: 2 },
+      });
+      core.setResponses([
+        fauxAssistantMessage(
+          `I got your email "${email[1]}". You asked: ${email[2]}`,
+          { timestamp: 0 },
+        ),
+      ]);
+      return core;
+    }
+    const fixture = localModelFixtureForPrompt(prompt);
     const core = createFauxCore({
       api: LOCAL_MODEL_FIXTURE_AUDIT_MARKER,
       provider: LOCAL_MODEL_FIXTURE_PROVIDER,
@@ -269,6 +365,51 @@ export const createLocalModelFixtureProvider = () => {
           }),
         ]);
         break;
+      case "listEmails":
+      case "claimEmail":
+      case "claimPersonalEmail": {
+        const call = MAILBOX_TOOL_CALLS[fixture.kind];
+        // A refused mailbox call is an answer too.
+        const result = fixtureToolResultText(context, call.id, {
+          withErrors: true,
+        });
+        core.setResponses([
+          result === undefined
+            ? fauxAssistantMessage(
+                [fauxToolCall(call.name, call.arguments, { id: call.id })],
+                { stopReason: "toolUse", timestamp: 0 },
+              )
+            : fauxAssistantMessage(call.reply(result), { timestamp: 0 }),
+        ]);
+        break;
+      }
+      case "verificationEmail": {
+        const result = fixtureToolResultText(
+          context,
+          VERIFICATION_EMAIL_CALL.id,
+        );
+        const code = /\b(\d{6})\b/.exec(result ?? "")?.[1];
+        core.setResponses([
+          result === undefined
+            ? fauxAssistantMessage(
+                [
+                  fauxToolCall(
+                    VERIFICATION_EMAIL_CALL.name,
+                    VERIFICATION_EMAIL_CALL.arguments,
+                    { id: VERIFICATION_EMAIL_CALL.id },
+                  ),
+                ],
+                { stopReason: "toolUse", timestamp: 0 },
+              )
+            : fauxAssistantMessage(
+                code === undefined
+                  ? "The email arrived, but it has no six-digit code."
+                  : `The Acme verification code is ${code}.`,
+                { timestamp: 0 },
+              ),
+        ]);
+        break;
+      }
       case "toolContinuation":
       case "childThread":
       case "threadColor":

@@ -161,6 +161,10 @@ const generatedBindings = {
   // Portals: guest port N of a Thread at http://t-<uuid>-pN.localhost:<core>/.
   // Browsers and curl resolve *.localhost to loopback, where Core listens.
   DX_PORTAL_DOMAIN: `localhost:${ports.core}`,
+  // Agent mailboxes: every Thread has an inbox on this domain. Nothing
+  // delivers mail locally; POST /dev/mail/inbound feeds a raw .eml to the
+  // same handler Cloudflare Email Routing calls (wiki/agent-mail.md).
+  DX_MAIL_DOMAIN: "mail.localhost",
   // Every first-party plugin is installed locally; local runtime substitutes
   // fixtures for external providers; built-in providers need no credit.
   DX_INSTALLED_PLUGINS: "search,speech",

@@ -32,6 +32,7 @@ const runtime = () =>
     openFocusedThreadMenu: vi.fn(),
     addThreadImages: vi.fn(),
     openThreadView: vi.fn(),
+    mailboxCommand: vi.fn(),
   }) satisfies CommandRuntime;
 
 const key = (value: string, init: KeyboardEventInit = {}) =>

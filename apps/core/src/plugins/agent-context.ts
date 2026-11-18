@@ -6,6 +6,7 @@ import { Effect } from "effect";
 import { readOrbThreadState } from "../agents/orb-free.js";
 import { mayUseBugReportTools } from "../bug-reports/agent-tools.js";
 import type { Bindings } from "../http/types.js";
+import { resolveAgentMailbox as resolveMailboxScope } from "../mail/agent-tools.js";
 import { markRunFailure } from "../runtime/run-failure.js";
 import {
   type McpAgentConnectionData,
@@ -99,6 +100,23 @@ export const resolveAgentBugReportReader = async (threadId: string) => {
     return await mayUseBugReportTools(agentPluginHostContext(), threadId);
   } catch {
     return false;
+  }
+};
+
+/**
+ * What the Thread's agent may read of its owner's dx Mailbox, read from
+ * current settings for each submission; undefined when mail is off, the
+ * owner turned agent reading off or has no Mailbox yet, or the read fails
+ * (no mailbox tools are mounted then).
+ */
+export const resolveAgentMailbox = async (threadId: string) => {
+  try {
+    return await resolveMailboxScope(
+      agentPluginHostContext().bindings,
+      threadId,
+    );
+  } catch {
+    return undefined;
   }
 };
 

@@ -1,19 +1,26 @@
 import type { MessageAutomation, MessagePlugin } from "@dx/api";
-import { Clock, FileText, Globe, MessagesSquare, Settings } from "lucide-react";
+import {
+  Clock,
+  FileText,
+  Globe,
+  Mail,
+  MessagesSquare,
+  Settings,
+} from "lucide-react";
 import * as React from "react";
+import { conciseAge } from "../../shared/concise-age.js";
 import { DisclosureTrigger } from "../../shared/ui/disclosure.js";
 import { PluginIcon } from "../../shared/ui/plugin-icon.js";
 import { TimeText } from "../../shared/ui/time-text.js";
 import { GitHubEventRows } from "./automations/github-event-rows.js";
-import { conciseAge } from "./sharing/sharing-format.js";
 import { TranscriptMarkdown } from "./transcript-markdown.js";
 
 /**
  * A message the Thread's schedule, a GitHub subscription, a person's tick
- * or answer in an artifact, or a decision on a Settings page delivered after
- * a turn ended. A schedule wake-up
- * or an artifact wake is one collapsed line opening to its text; GitHub
- * events show one row each.
+ * or answer in an artifact, a decision on a Settings page, or an email
+ * delivered after a turn ended. A schedule wake-up, an artifact wake, or an
+ * email is one collapsed line opening to its text; GitHub events show one
+ * row each.
  */
 export function AutomationMessage({
   automation,
@@ -30,6 +37,7 @@ export function AutomationMessage({
   const artifact = automation === "artifact";
   const external = automation === "external";
   const settings = automation === "settings";
+  const email = automation === "email";
   return (
     <div className="thread-source-message" data-open={open ? "" : undefined}>
       <DisclosureTrigger
@@ -41,6 +49,8 @@ export function AutomationMessage({
           <FileText strokeWidth={2} />
         ) : external ? (
           <Globe strokeWidth={2} />
+        ) : email ? (
+          <Mail strokeWidth={2} />
         ) : settings ? (
           <Settings strokeWidth={2} />
         ) : (
@@ -51,9 +61,11 @@ export function AutomationMessage({
             ? "From an artifact"
             : external
               ? "Sent from outside dx"
-              : settings
-                ? "From Settings"
-                : "Scheduled wake-up"}
+              : email
+                ? "Sent by email"
+                : settings
+                  ? "From Settings"
+                  : "Scheduled wake-up"}
         </span>
         {pending ? <small>Steering</small> : null}
       </DisclosureTrigger>

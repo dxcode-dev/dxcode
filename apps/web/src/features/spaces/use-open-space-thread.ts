@@ -1,5 +1,6 @@
-import type { ThreadId } from "@dx/domain";
+import { ThreadId } from "@dx/domain";
 import { useNavigate } from "@tanstack/react-router";
+import { Option, Schema } from "effect";
 import * as React from "react";
 
 /** The Space a page shows, and the threads it started. */
@@ -18,9 +19,11 @@ export const SpaceThreadsContext = React.createContext<
 export const threadIdOfHref = (href: string): ThreadId | undefined => {
   const url = new URL(href, window.location.href);
   if (url.origin !== window.location.origin) return undefined;
-  return /^\/threads\/(thr_[0-9a-f-]{36})\/?$/u.exec(url.pathname)?.[1] as
-    | ThreadId
-    | undefined;
+  return Option.getOrUndefined(
+    Schema.decodeUnknownOption(ThreadId)(
+      /^\/threads\/([^/]+)\/?$/u.exec(url.pathname)?.[1],
+    ),
+  );
 };
 
 /**

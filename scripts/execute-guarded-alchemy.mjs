@@ -13,6 +13,7 @@ import {
   abortBranchPreviewUploads,
   applyValidatedAlchemyPlan,
   configureHostedDeploymentPolicy,
+  deploymentMail,
   deploymentPortals,
   deploymentSelection,
   emptyBranchPreviewBucket,
@@ -57,6 +58,10 @@ const selection = {
     domain: process.env.DX_DEPLOYMENT_PORTAL_DOMAIN,
     zoneId: process.env.DX_DEPLOYMENT_PORTAL_ZONE_ID,
     appDomain: targetSelection.domain,
+  }),
+  mail: deploymentMail({
+    domain: process.env.DX_DEPLOYMENT_MAIL_DOMAIN,
+    zoneId: process.env.DX_DEPLOYMENT_MAIL_ZONE_ID,
   }),
   ...(target === "selfhost"
     ? {

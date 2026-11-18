@@ -73,6 +73,12 @@ export const UpdateThreadSharingRequestSchema = Schema.Struct({
   contributeFor: Schema.optional(ThreadContributeDurationSchema),
   /** Remember "Don't ask me again" for the multiplayer confirmation. */
   skipMultiplayerConfirmation: Schema.optional(Schema.Boolean),
+  /**
+   * The owner saw that the family's agents read Mailbox mail a shared
+   * Thread could not, which its viewers will see in the transcript.
+   * Without it, such a share is refused with `THREAD_SHARING_MAIL_READS`.
+   */
+  acknowledgeMailReads: Schema.optional(Schema.Boolean),
 });
 
 export type UpdateThreadSharingRequest =
@@ -95,6 +101,7 @@ export const ThreadSharingErrorCode = Schema.Literals([
   "THREAD_SHARING_OWNER_ONLY",
   "THREAD_SHARING_UNAVAILABLE",
   "THREAD_READ_ONLY",
+  "THREAD_SHARING_MAIL_READS",
   "PERSISTENCE_UNAVAILABLE",
 ]);
 

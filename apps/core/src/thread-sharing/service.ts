@@ -8,6 +8,7 @@ import {
 import type { ThreadId, UserId } from "@dx/domain";
 import { DateTime } from "effect";
 import { userImageSql } from "../avatars/storage.js";
+import { countMailReadsBeyondSharedScope } from "../mail/store.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { threadUnreadSql } from "../threads/attention-d1.js";
 import { pruneUnreadableThreadDrafts } from "../threads/thread-draft-store.js";
@@ -300,7 +301,8 @@ export const updateThreadSharing = async (
   const now = input.now ?? new Date();
   const owned = await db
     .prepare(
-      `SELECT COALESCE(thread.parent_thread_id, thread.id) AS root_id
+      `SELECT COALESCE(thread.parent_thread_id, thread.id) AS root_id,
+              thread.workspace_access
          FROM threads AS thread
          JOIN projects AS project ON project.id = thread.project_id
         WHERE thread.id = ?1 AND thread.owner_user_id = ?2
@@ -308,7 +310,7 @@ export const updateThreadSharing = async (
           AND ${threadProjectReachableSql("project", "?2")}`,
     )
     .bind(input.threadId, input.ownerUserId)
-    .first<{ root_id: string }>();
+    .first<{ root_id: string; workspace_access: string | null }>();
   if (owned === null) {
     const shared = await db
       .prepare(
@@ -357,6 +359,25 @@ export const updateThreadSharing = async (
       .bind(owned.root_id, input.ownerUserId)
       .all<{ id: ThreadId }>()
   ).results.map(({ id }) => id);
+  // Sharing shows every earlier tool result, including the mail the agents
+  // read while the family was private (wiki/agent-mail.md): the owner says
+  // they saw that first. A shared family's agents already read only what a
+  // shared Thread may, so changing its access asks nothing.
+  const sharedAlready =
+    owned.workspace_access !== null && owned.workspace_access !== "none";
+  if (
+    workspaceAccess !== "none" &&
+    !sharedAlready &&
+    input.request.acknowledgeMailReads !== true
+  ) {
+    const reads = await countMailReadsBeyondSharedScope(db, family);
+    if (reads > 0)
+      throw new ThreadSharingError(
+        "THREAD_SHARING_MAIL_READS",
+        409,
+        `The agent read ${reads === 1 ? "1 email" : `${reads} emails`} from your Mailbox in this thread${family.length > 1 ? " or its family" : ""}. People you share with will see ${reads === 1 ? "it" : "them"} in the transcript.`,
+      );
+  }
   const statements = [
     db
       .prepare(

@@ -2330,6 +2330,7 @@ getLogger(["dx", "attachments"]);
 getLogger(["dx", "thread-storage"]);
 getLogger(["dx", "portals"]);
 getLogger(["dx", "feedback-widget"]);
+getLogger(["dx", "mail"]);
 getLogger([
 	"dx",
 	"source-control",

@@ -6,6 +6,7 @@ import {
   PersonalAccountInvalidRequestResponseSchema,
   PersonalAccountNotFoundResponseSchema,
   PersonalAccountPersistenceUnavailableResponseSchema,
+  PersonalAccountUsernameChangeLockedResponseSchema,
   PersonalAccountUsernameUnavailableResponseSchema,
   type SettingsFieldError,
   UpdatePersonalAccountRequestSchema,
@@ -28,6 +29,8 @@ import {
   type PersonalTextSize,
   type PersonalThreadWidth,
   personalAccountDisplayNameProblem,
+  personalAccountUsernameChangeAvailable,
+  personalAccountUsernameNeedsPick,
   personalAccountUsernameProblem,
   personalAppearanceFields,
   type UpdatePersonalAccountInput,
@@ -110,6 +113,7 @@ const responseData = (account: {
   readonly logoAnimation: boolean;
   readonly uiSounds: boolean;
   readonly avatarKey?: string;
+  readonly usernameChangedAt: string | null;
 }) => ({
   displayName: account.displayName,
   username: account.username,
@@ -130,6 +134,8 @@ const responseData = (account: {
   ...(account.avatarKey === undefined
     ? {}
     : { avatarUrl: avatarUrl(account.avatarKey) }),
+  usernameChangeAvailable: personalAccountUsernameChangeAvailable(account),
+  usernameNeedsPick: personalAccountUsernameNeedsPick(account.username),
 });
 
 const validateUpdate = (
@@ -483,6 +489,41 @@ personalAccountRoutes.patch("/", async (context) => {
             },
           }),
           409,
+        ),
+      PersonalAccountUsernameChangeLocked: () =>
+        context.json(
+          Schema.encodeUnknownSync(
+            PersonalAccountUsernameChangeLockedResponseSchema,
+          )({
+            status: "error",
+            data: {
+              code: "USERNAME_CHANGE_LOCKED",
+              message: "You already changed your username once.",
+              requestId,
+              fieldErrors: [
+                {
+                  field: "username",
+                  message: "You already changed your username once.",
+                },
+              ],
+            },
+          }),
+          409,
+        ),
+      PersonalAccountUsernameReserved: (error) =>
+        context.json(
+          Schema.encodeUnknownSync(PersonalAccountInvalidRequestResponseSchema)(
+            {
+              status: "error",
+              data: {
+                code: "INVALID_ACCOUNT_PROFILE",
+                message: "Account profile validation failed.",
+                requestId,
+                fieldErrors: [{ field: "username", message: error.message }],
+              },
+            },
+          ),
+          400,
         ),
       SettingsScopeForbidden: () => forbidden(context),
       PersonalAccountNotFound: () => notFound(context),

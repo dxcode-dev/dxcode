@@ -1,14 +1,14 @@
 import type * as React from "react";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import {
-  preloadAutomationViews,
-  preloadAutomationViewsWhenIdle,
-} from "./automation-views-loader.js";
-import {
   PopoverContent,
   PopoverRoot,
   PopoverTrigger,
 } from "../../../shared/ui/popover.js";
+import {
+  preloadAutomationViews,
+  preloadAutomationViewsWhenIdle,
+} from "./automation-views-loader.js";
 
 export function AutomationsPopover({
   trigger,

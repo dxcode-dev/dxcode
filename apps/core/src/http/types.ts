@@ -44,6 +44,12 @@ export interface Bindings {
    */
   readonly DX_PORTAL_DOMAIN?: string;
   /**
+   * The mail domain (wiki/agent-mail.md): every Thread's inbox and every
+   * Project's address live on it. Absent turns mail off: the email handler
+   * rejects everything, and no inbox, tool, or prompt line appears.
+   */
+  readonly DX_MAIL_DOMAIN?: string;
+  /**
    * Branch previews only: the branch's Orb image on Docker Hub, which the
    * preview's Docker Cloud Sandboxes and Cloudflare connections boot instead
    * of the released one (deploy/orb/containers.mjs previewPublicOrbImage).
@@ -210,6 +216,12 @@ export interface Bindings {
   readonly DX_PLUGIN_HOST?: string;
   readonly DB?: D1Database;
   readonly EMAIL?: SendEmail;
+  /**
+   * Sends from any address on the mail domain (`DX_MAIL_DOMAIN`), which the
+   * deployment onboards to Cloudflare Email Sending: the mail people send
+   * from their Mailbox, and the "Started" notice (wiki/agent-mail.md).
+   */
+  readonly MAIL_SEND?: SendEmail;
   readonly DX_STORAGE?: R2Bucket;
   /**
    * The web app and docs files a deployed Worker serves. Present only where

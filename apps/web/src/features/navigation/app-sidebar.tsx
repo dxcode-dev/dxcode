@@ -6,8 +6,9 @@ import type {
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { useDebouncer } from "@tanstack/react-pacer";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
-import { Files, Search, SquarePen } from "lucide-react";
+import { Files, Mail, Search, SquarePen } from "lucide-react";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { AppUpdateRow } from "../../shared/app-update/app-update-row.js";
@@ -19,6 +20,7 @@ import {
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
+import { mailboxQueryOptions } from "../mailbox/mailbox-queries.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
 import { SidebarAccountMenuSlot } from "./sidebar-account-menu-slot.js";
@@ -234,6 +236,41 @@ export interface AppSidebarProps {
     ThreadData["id"],
     ReadonlyArray<ThreadListClientItem>
   >;
+}
+
+/**
+ * Mailbox, beside Projects and Artifacts where the deployment has a mail
+ * domain, with the Inbox's unread count.
+ */
+function MailboxDockLink({
+  userId,
+  selected,
+  onNavigate,
+}: {
+  readonly userId: UserId;
+  readonly selected: boolean;
+  readonly onNavigate: () => void;
+}) {
+  const mailbox = useQuery(mailboxQueryOptions(userId));
+  const unread = mailbox.data?.enabled === true ? mailbox.data.unread.inbox : 0;
+  return (
+    <Link
+      to="/mailbox"
+      className={`dock-link ${selected ? "selected" : ""}`}
+      aria-label={unread > 0 ? `Mailbox, ${unread} unread` : undefined}
+      onClick={onNavigate}
+    >
+      <span className="dock-link-icon">
+        <Mail aria-hidden="true" />
+        {unread > 0 ? (
+          <span className="dock-link-count" aria-hidden="true">
+            {unread > 99 ? "99+" : unread}
+          </span>
+        ) : null}
+      </span>
+      <span>Mailbox</span>
+    </Link>
+  );
 }
 
 /** The sidebar, with the person's synced layout when signed in. */
@@ -456,6 +493,14 @@ function AppSidebarContent({
           <Files aria-hidden="true" />
           <span>Artifacts</span>
         </Link>
+        {userId === undefined ||
+        settingsContext?.mailDomain === undefined ? null : (
+          <MailboxDockLink
+            userId={userId}
+            selected={pathname === "/mailbox"}
+            onNavigate={onNavigate}
+          />
+        )}
       </nav>
 
       <AppUpdateRow />

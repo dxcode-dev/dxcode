@@ -30,6 +30,11 @@ export const PersonalSettingsContextDataSchema = Schema.Struct({
   /** The deployment's Portal domain; absent when Portals are off. */
   portalDomain: Schema.optional(Schema.String),
   /**
+   * The deployment's mail domain; absent when mail is off, so no Inbox or
+   * Project email settings appear (wiki/agent-mail.md).
+   */
+  mailDomain: Schema.optional(Schema.String),
+  /**
    * The deployment has Workers AI's Clef Flash, so the composer may show
    * its quick actions row.
    */
@@ -46,6 +51,7 @@ export const WorkspaceSettingsContextDataSchema = Schema.Struct({
   workspace: SettingsWorkspaceDataSchema,
   dictationAvailable: Schema.optional(Schema.Boolean),
   portalDomain: Schema.optional(Schema.String),
+  mailDomain: Schema.optional(Schema.String),
   composerQuickActions: Schema.optional(Schema.Boolean),
   huddle: Schema.optional(Schema.Boolean),
 });

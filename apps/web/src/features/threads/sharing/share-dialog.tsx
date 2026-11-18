@@ -24,7 +24,10 @@ import {
 } from "../../../shared/ui/dialog.js";
 import { settingsContextQueryOptions } from "../../settings/settings-context-queries.js";
 import { formatUntil } from "./sharing-format.js";
-import { useUpdateThreadSharing } from "./sharing-mutations.js";
+import {
+  isMailReadsRefusal,
+  useUpdateThreadSharing,
+} from "./sharing-mutations.js";
 import "./thread-sharing.css";
 import {
   MenuPopup,
@@ -201,6 +204,14 @@ export function ShareDialog({
   const workspace = settings.data?.workspace;
   const mutation = useUpdateThreadSharing(identity.id, thread.id);
   const [confirming, setConfirming] = React.useState(false);
+  // A share the server held back because the agent read Mailbox mail that
+  // viewers would see (THREAD_SHARING_MAIL_READS): what to send once the
+  // owner agrees, and the server's count of what they'd see.
+  const [mailReads, setMailReads] = React.useState<{
+    readonly access: Access;
+    readonly skipMultiplayerConfirmation?: boolean;
+    readonly message: string;
+  }>();
   const [copied, setCopied] = React.useState(false);
   const url = absoluteThreadUrl(thread.id, window.location.href);
   const current: Access = thread.sharing?.workspaceAccess ?? "none";
@@ -208,6 +219,7 @@ export function ShareDialog({
   const apply = (
     workspaceAccess: Access,
     skipMultiplayerConfirmation?: boolean,
+    acknowledgeMailReads?: boolean,
   ) =>
     mutation.mutate(
       {
@@ -215,14 +227,29 @@ export function ShareDialog({
         ...(skipMultiplayerConfirmation === undefined
           ? {}
           : { skipMultiplayerConfirmation }),
+        ...(acknowledgeMailReads === true ? { acknowledgeMailReads } : {}),
       },
       {
         onSuccess: () => {
           setConfirming(false);
+          setMailReads(undefined);
           toast.success("Sharing updated", {
             id: "thread-sharing",
             duration: 2_500,
           });
+        },
+        onError: (error) => {
+          if (isMailReadsRefusal(error)) {
+            setConfirming(false);
+            mutation.reset();
+            setMailReads({
+              access: workspaceAccess,
+              ...(skipMultiplayerConfirmation === undefined
+                ? {}
+                : { skipMultiplayerConfirmation }),
+              message: error.message,
+            });
+          }
         },
       },
     );
@@ -246,7 +273,10 @@ export function ShareDialog({
 
   return (
     <>
-      <DialogRoot open={open && !confirming} onOpenChange={onOpenChange}>
+      <DialogRoot
+        open={open && !confirming && mailReads === undefined}
+        onOpenChange={onOpenChange}
+      >
         <DialogContent className="thread-share-dialog">
           <DialogTitle>Share</DialogTitle>
           <DialogDescription className="sr-only">
@@ -371,6 +401,27 @@ export function ShareDialog({
         pending={mutation.isPending}
         onCancel={() => setConfirming(false)}
         onConfirm={(skip) => apply("contribute", skip ? true : undefined)}
+      />
+      <ConfirmDialog
+        open={open && mailReads !== undefined}
+        onOpenChange={(next) => {
+          if (!next) setMailReads(undefined);
+        }}
+        title="Share mail the agent read?"
+        description={`${mailReads?.message ?? ""} Mail it reads after you share is limited to this Project's address and mail it waits for.`}
+        confirmLabel="Share anyway"
+        pending={mutation.isPending}
+        {...(mailReads !== undefined && mutation.error instanceof Error
+          ? { error: mutation.error.message }
+          : {})}
+        onConfirm={() => {
+          if (mailReads !== undefined)
+            apply(
+              mailReads.access,
+              mailReads.skipMultiplayerConfirmation,
+              true,
+            );
+        }}
       />
     </>
   );

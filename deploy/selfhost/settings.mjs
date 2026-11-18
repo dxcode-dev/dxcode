@@ -523,6 +523,13 @@ export const DERIVED_BINDINGS = Object.freeze([
   "DX_E2B_TEMPLATE",
   "DX_E2B_TEMPLATE_BUILD_ID",
   "DX_E2B_TIMEOUT_MS",
+  // The dx Mailbox: an operator sets the deploy variables
+  // DX_DEPLOYMENT_MAIL_DOMAIN and DX_DEPLOYMENT_MAIL_ZONE_ID (a zone apex;
+  // the deploy summary lists the trade-offs, deploy/selfhost/mail.mjs); the
+  // installer does not ask for them yet.
+  "DX_MAIL_DOMAIN",
+  // The mail zone's Email Sending binding, made with the mail zone above.
+  "MAIL_SEND",
   "DX_MANAGED_SSH_SIGNING_ENABLED",
   "DX_MIGRATION_MANIFEST_VERSION",
   "DX_PLUGIN_CONTAINER_DAILY_MS",

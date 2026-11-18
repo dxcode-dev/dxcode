@@ -38,6 +38,7 @@ export {
   type NotFoundResponse,
   NotFoundResponseSchema,
 } from "./http/not-found-response.js";
+export * from "./mail/mail.js";
 export * from "./navigation/app-routes.js";
 export * from "./navigation/shell.js";
 export * from "./navigation/sidebar-layout.js";

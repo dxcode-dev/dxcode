@@ -1,7 +1,7 @@
 {
   "name": "@dx/domain",
   "private": true,
-  "version": "0.2.125",
+  "version": "0.2.126",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "sideEffects": false,

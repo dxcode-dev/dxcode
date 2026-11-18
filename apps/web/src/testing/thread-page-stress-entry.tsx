@@ -912,6 +912,8 @@ queryClient.setQueryData(personalAccountQueryOptions(userId).queryKey, {
   codeLineHeight: null,
   logoAnimation: true,
   uiSounds: false,
+  usernameChangeAvailable: true,
+  usernameNeedsPick: false,
 } as never);
 
 const registry = new PerfRegistry(queryClient, userId);

@@ -103,6 +103,7 @@ export const attachmentLogger = getLogger(["dx", "attachments"]);
 export const threadStorageLogger = getLogger(["dx", "thread-storage"]);
 export const portalLogger = getLogger(["dx", "portals"]);
 export const feedbackWidgetLogger = getLogger(["dx", "feedback-widget"]);
+export const mailLogger = getLogger(["dx", "mail"]);
 export const sourceControlAuditLogger = getLogger([
   "dx",
   "source-control",

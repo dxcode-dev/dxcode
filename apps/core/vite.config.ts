@@ -25,6 +25,7 @@ const checkoutLocalVariableNames = [
 // and Portals, which `pnpm dev` serves under `localhost:<core port>`.
 const checkoutLocalOptionalVariableNames = [
   "DX_PORTAL_DOMAIN",
+  "DX_MAIL_DOMAIN",
   "DX_SIGN_IN_PROVIDERS",
   "DX_SIGN_IN_ADMISSION",
   "DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS",
@@ -37,6 +38,8 @@ const checkoutLocalOptionalVariableNames = [
   "DX_GOOGLE_CLIENT_SECRET",
   "DX_TERMS_URL",
   "DX_PRIVACY_URL",
+  // A local deployment admin, for Settings → People.
+  "DX_DEPLOYMENT_ADMIN_EMAILS",
 ] as const;
 
 const localCallbackHost = (() => {

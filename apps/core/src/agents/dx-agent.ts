@@ -55,6 +55,11 @@ import {
   executorSandbox,
   runClaudeCodeOnExecutor,
 } from "../executor/sandbox.js";
+import {
+  type AgentMailbox,
+  createMailTools,
+  mailPrompt,
+} from "../mail/agent-tools.js";
 import { traceSpan } from "../observability/tracing.js";
 import {
   takeWorkspaceDisk,
@@ -82,6 +87,7 @@ import {
   type ResolvedThreadAgent,
   resolveAgentBugReportReader,
   resolveAgentCodePlugins,
+  resolveAgentMailbox,
   resolveAgentOrbThreadState,
   resolveAgentPluginTools,
   resolveAgentRepositoryPlugins,
@@ -171,6 +177,12 @@ interface DxAgentPromptData {
   };
   /** The owner is a report reader, so the bug report tools mount. */
   readonly bugReportReader?: true;
+  /**
+   * What the Thread's agent may read of its owner's dx Mailbox, when it may:
+   * the mailbox tools mount and the prompt names the address
+   * (wiki/agent-mail.md).
+   */
+  readonly mailbox?: AgentMailbox;
   /** The AGENTS.md of the owner's workspace, as of this submission. */
   readonly workspaceInstructions?: string;
   /**
@@ -271,6 +283,15 @@ const withToolFailureMessage = <T extends ToolDefinition>(tool: T): T =>
     },
   }) as T;
 
+/** What the prompt says about this deployment's workspace: Portals and mail. */
+const workspaceNotes = (
+  threadId: string,
+  promptData: DxAgentPromptData | undefined,
+) =>
+  [threadPortalPrompt(threadId), mailPrompt(promptData?.mailbox)]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+
 /**
  * dx's own tools for one submission: the thread tools,
  * first-party plugin tools (MCP servers reach the model only as Code's
@@ -328,6 +349,11 @@ const dxTools = (
   // readers, resolved per submission.
   if (promptData?.bugReportReader === true)
     for (const tool of createBugReportTools(threadId, agentThreadToolsContext))
+      tools.push(withToolFailureMessage(tool));
+  // list_emails, read_email, wait_for_email: the Thread's own inbox, only
+  // where the deployment offers mail. No tool sends mail.
+  if (promptData?.mailbox !== undefined)
+    for (const tool of createMailTools(threadId, agentThreadToolsContext))
       tools.push(withToolFailureMessage(tool));
   // manage_dx: the owner's dx settings, changed only after they apply each
   // change on a card above the composer.
@@ -964,7 +990,7 @@ export function DxAgent(props: AgentProps) {
       });
       const prompt = withAgentPrompt(
         composeClaudeCodePrompt(
-          threadPortalPrompt(props.id),
+          workspaceNotes(props.id, promptData),
           initialData?.startedByThreadId,
           promptData?.startingSpace,
         ),
@@ -1024,7 +1050,7 @@ export function DxAgent(props: AgentProps) {
     composeDxAgentPrompt(
       initialData?.personalInstructions ?? "",
       agentRuntimeComposition.capabilities === "workspace"
-        ? threadPortalPrompt(props.id)
+        ? workspaceNotes(props.id, promptData)
         : "",
       initialData?.startedByThreadId,
       promptData?.workspaceInstructions,
@@ -1069,6 +1095,7 @@ DxAgent.resolvePromptData = async (
     route,
     plugins,
     bugReportReader,
+    mailbox,
     workspaceInstructions,
     space,
     startingSpace,
@@ -1094,6 +1121,9 @@ DxAgent.resolvePromptData = async (
         scope?.kind === "prompt"
           ? resolveAgentBugReportReader(context.instanceId)
           : Promise.resolve(false),
+        agentRuntimeComposition.capabilities === "workspace"
+          ? resolveAgentMailbox(context.instanceId)
+          : Promise.resolve(undefined),
         agentRuntimeComposition.capabilities === "workspace"
           ? resolveAgentWorkspaceInstructions(context.instanceId)
           : Promise.resolve(""),
@@ -1192,6 +1222,7 @@ DxAgent.resolvePromptData = async (
     route === undefined &&
     plugins === undefined &&
     !bugReportReader &&
+    mailbox === undefined &&
     workspaceInstructions.length === 0 &&
     space === undefined &&
     startingSpace === undefined &&
@@ -1204,6 +1235,7 @@ DxAgent.resolvePromptData = async (
     ...(route === undefined ? {} : { route }),
     ...(pluginTools === undefined ? {} : { plugins: pluginTools }),
     ...(bugReportReader ? { bugReportReader: true as const } : {}),
+    ...(mailbox === undefined ? {} : { mailbox }),
     ...(workspaceInstructions.length === 0 ? {} : { workspaceInstructions }),
     ...(space === undefined ? {} : { space }),
     ...(startingSpace === undefined ? {} : { startingSpace }),

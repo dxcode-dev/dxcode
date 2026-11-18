@@ -12,6 +12,7 @@ import { ExecutionWorkspaces } from "./execution/execution-workspaces.js";
 import { bindThreadExecutors } from "./executor/sandbox.js";
 import type { Bindings } from "./http/types.js";
 import { settingsPersistenceLogger } from "./logging.js";
+import { email } from "./mail/worker-handler.js";
 import { installContentFreeFlueTracing } from "./observability/flue-tracing.js";
 import { createDxCloudflareModelProvider } from "./runtime/cloudflare-model-provider.js";
 import { dxContextAttachments } from "./runtime/context-attachments.js";
@@ -41,7 +42,7 @@ export { ThreadExecutionObject } from "./threads/terminal-object.js";
  * app.ts and spreads this default export beside it; a handler attached
  * anywhere else never runs.
  */
-export default { scheduled } satisfies ExportedHandler<Bindings>;
+export default { scheduled, email } satisfies ExportedHandler<Bindings>;
 
 declare const __DX_CORE_DEV_FIXTURES__: boolean;
 

@@ -191,6 +191,12 @@
       "provenance": "alchemy"
     },
     {
+      "name": "DX_MAIL_DOMAIN",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_MANAGED_SSH_SIGNING_ENABLED",
       "type": "text",
       "provenance": "alchemy"
@@ -398,6 +404,12 @@
       "name": "LOADER",
       "type": "worker-loader",
       "provenance": "authored-wrangler"
+    },
+    {
+      "name": "MAIL_SEND",
+      "type": "send-email",
+      "provenance": "alchemy",
+      "optional": true
     },
     {
       "name": "ORB_CONTAINER",

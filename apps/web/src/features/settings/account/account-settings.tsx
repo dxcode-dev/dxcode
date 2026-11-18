@@ -1,6 +1,8 @@
 import type { PersonalAccountData, SettingsFieldError } from "@dx/api";
 import {
+  normalizePersonalAccountUsername,
   personalAccountDisplayNameProblem,
+  personalAccountUsernameChoiceProblem,
   personalAccountUsernameProblem,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,16 +10,17 @@ import { AlertTriangle } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
+import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { Input } from "../../../shared/ui/input.js";
 import { registeredDeploymentAccountCards } from "../deployment-settings-registration.js";
 import { ProfilePicture, ProfilePictureEditor } from "../profile-picture.js";
-import {
-  initialSettingsFormState,
-  reduceSettingsFormState,
-} from "../settings-form-state.js";
 import { SettingsBackgroundError } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import {
+  initialAccountProfileDraft,
+  reduceAccountProfileDraft,
+} from "./account-profile-draft.js";
 import { AccountUsageSummary } from "./account-usage-summary.js";
 import {
   personalAccountMutationError,
@@ -31,6 +34,203 @@ const fieldError = (
   errors: ReadonlyArray<SettingsFieldError>,
   field: "displayName" | "username",
 ) => errors.find((error) => error.field === field)?.message;
+
+/** The saved profile, shown while the person is not editing it. */
+function AccountProfileSummary({
+  picture,
+  account,
+  threadCount,
+}: {
+  readonly picture: React.ReactNode;
+  readonly account: PersonalAccountData;
+  readonly threadCount: number | undefined;
+}) {
+  return (
+    <div className="account-profile-summary">
+      {picture}
+      <dl className="account-profile-details">
+        <div>
+          <dt>Name</dt>
+          <dd>{account.displayName}</dd>
+        </div>
+        <div>
+          <dt>Email</dt>
+          <dd>{account.email}</dd>
+        </div>
+        <div>
+          <dt>Username</dt>
+          <dd>@{account.username}</dd>
+        </div>
+        {threadCount === undefined ? null : (
+          <div>
+            <dt>Threads</dt>
+            <dd className="account-thread-count">{threadCount}</dd>
+          </div>
+        )}
+      </dl>
+    </div>
+  );
+}
+
+/** The username, its rules, and its error; read-only once it is fixed. */
+function UsernameField({
+  id,
+  inputRef,
+  account,
+  value,
+  error,
+  disabled,
+  onChange,
+}: {
+  readonly id: string;
+  readonly inputRef: React.Ref<HTMLInputElement>;
+  readonly account: PersonalAccountData;
+  readonly value: string;
+  readonly error: string | undefined;
+  readonly disabled: boolean;
+  readonly onChange: (value: string) => void;
+}) {
+  const fixed = !account.usernameChangeAvailable;
+  return (
+    <div className="account-field account-username-field">
+      <label htmlFor={id}>Username</label>
+      <Input
+        ref={inputRef}
+        id={id}
+        name="username"
+        autoComplete="username"
+        value={value}
+        disabled={disabled}
+        readOnly={fixed}
+        aria-readonly={fixed ? "true" : undefined}
+        aria-invalid={error === undefined ? undefined : true}
+        aria-describedby={`${id}-help${error === undefined ? "" : ` ${id}-error`}`}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <small id={`${id}-help`}>
+        {fixed
+          ? "Your username is fixed."
+          : account.usernameNeedsPick
+            ? "Pick a username: 3–32 lowercase letters, numbers, or hyphens. This doesn't use up your one change."
+            : "You can change your username once. Use 3–32 lowercase letters, numbers, or hyphens."}
+      </small>
+      {error === undefined ? null : (
+        <small id={`${id}-error`} className="account-field-error">
+          {error}
+        </small>
+      )}
+    </div>
+  );
+}
+
+/** The display name, the read-only email, the username, Cancel, and Save. */
+function AccountProfileEditForm({
+  account,
+  displayName,
+  username,
+  displayNameError,
+  usernameError,
+  displayNameRef,
+  usernameRef,
+  saving,
+  canSave,
+  errorMessage,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  readonly account: PersonalAccountData;
+  readonly displayName: string;
+  readonly username: string;
+  readonly displayNameError: string | undefined;
+  readonly usernameError: string | undefined;
+  readonly displayNameRef: React.Ref<HTMLInputElement>;
+  readonly usernameRef: React.Ref<HTMLInputElement>;
+  readonly saving: boolean;
+  readonly canSave: boolean;
+  /** Why the last save failed, when it did. */
+  readonly errorMessage: string | undefined;
+  readonly onChange: (displayName: string, username: string) => void;
+  readonly onSave: () => void;
+  readonly onCancel: () => void;
+}) {
+  const formId = React.useId();
+  return (
+    <form
+      id={formId}
+      className="account-profile-edit-form"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave();
+      }}
+    >
+      <div className="account-edit-grid">
+        <div className="account-field">
+          <label htmlFor={`${formId}-display-name`}>Display name</label>
+          <Input
+            ref={displayNameRef}
+            id={`${formId}-display-name`}
+            name="displayName"
+            autoComplete="name"
+            value={displayName}
+            disabled={saving}
+            aria-invalid={displayNameError === undefined ? undefined : true}
+            aria-describedby={
+              displayNameError === undefined
+                ? undefined
+                : `${formId}-display-name-error`
+            }
+            onChange={(event) => onChange(event.target.value, username)}
+          />
+          {displayNameError === undefined ? null : (
+            <small
+              id={`${formId}-display-name-error`}
+              className="account-field-error"
+            >
+              {displayNameError}
+            </small>
+          )}
+        </div>
+
+        <div className="account-field">
+          <label htmlFor={`${formId}-email`}>Email</label>
+          <Input
+            id={`${formId}-email`}
+            value={account.email}
+            readOnly
+            aria-readonly="true"
+          />
+        </div>
+      </div>
+
+      <UsernameField
+        id={`${formId}-username`}
+        inputRef={usernameRef}
+        account={account}
+        value={username}
+        error={usernameError}
+        disabled={saving}
+        onChange={(next) => onChange(displayName, next)}
+      />
+
+      <footer className="account-profile-edit-actions">
+        <span aria-live="polite">{errorMessage ?? null}</span>
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={saving}
+          onClick={onCancel}
+        >
+          Cancel
+        </Button>
+        <Button size="xs" type="submit" disabled={!canSave}>
+          {saving ? "Saving…" : "Save"}
+        </Button>
+      </footer>
+    </form>
+  );
+}
 
 export function PersonalAccountForm({
   initialAccount,
@@ -52,43 +252,47 @@ export function PersonalAccountForm({
   readonly changeAvatar?: (file: File | null) => Promise<PersonalAccountData>;
   readonly avatarSaving?: boolean;
 }) {
-  const [baseline, setBaseline] = React.useState(initialAccount);
-  const [displayName, setDisplayName] = React.useState<string>(
-    initialAccount.displayName,
+  const [draft, dispatch] = React.useReducer(
+    reduceAccountProfileDraft,
+    initialAccount,
+    initialAccountProfileDraft,
   );
-  const [username, setUsername] = React.useState<string>(
-    initialAccount.username,
-  );
-  const [state, dispatch] = React.useReducer(
-    reduceSettingsFormState,
-    initialSettingsFormState,
-  );
-  const [editing, setEditing] = React.useState(false);
+  const { baseline, displayName, username, editing, form } = draft;
+  // The one-time username change waits in the draft for the person to confirm it.
+  const { confirmingUsername, confirmError } = draft;
   const [avatarError, setAvatarError] = React.useState<string>();
   const displayNameInput = React.useRef<HTMLInputElement>(null);
   const usernameInput = React.useRef<HTMLInputElement>(null);
-  const formId = React.useId();
   // The server's rules, checked as the person types; the server's own field
   // errors (such as a taken username) show only when these pass.
   const displayNameProblem = personalAccountDisplayNameProblem(displayName);
-  const usernameProblem = personalAccountUsernameProblem(username);
+  const usernameChanges =
+    normalizePersonalAccountUsername(username) !== baseline.username;
+  const usernameProblem =
+    personalAccountUsernameProblem(username) ??
+    (usernameChanges
+      ? personalAccountUsernameChoiceProblem(username)
+      : undefined);
   const displayNameError =
-    displayNameProblem ?? fieldError(state.fieldErrors, "displayName");
+    displayNameProblem ?? fieldError(form.fieldErrors, "displayName");
   const usernameError =
-    usernameProblem ?? fieldError(state.fieldErrors, "username");
+    usernameProblem ?? fieldError(form.fieldErrors, "username");
   const canSave =
-    state.dirty &&
+    form.dirty &&
     !saving &&
     displayNameProblem === undefined &&
     usernameProblem === undefined;
 
   const change = (nextDisplayName: string, nextUsername: string) => {
-    setDisplayName(nextDisplayName);
-    setUsername(nextUsername);
     const dirty =
       nextDisplayName !== baseline.displayName ||
       nextUsername !== baseline.username;
-    dispatch({ type: dirty ? "changed" : "reset" });
+    dispatch({
+      type: "changed",
+      displayName: nextDisplayName,
+      username: nextUsername,
+      dirty,
+    });
     onDirtyChange(dirty);
   };
 
@@ -121,26 +325,26 @@ export function PersonalAccountForm({
   );
 
   const reset = () => {
-    setDisplayName(baseline.displayName);
-    setUsername(baseline.username);
-    dispatch({ type: "reset" });
+    dispatch({ type: "cancel" });
     onDirtyChange(false);
-    setEditing(false);
   };
 
   const save = async () => {
     if (!canSave) return;
+    // A free pick (away from a placeholder or reserved name) needs no
+    // confirmation; the one real change does.
+    if (usernameChanges && !baseline.usernameNeedsPick && !confirmingUsername) {
+      dispatch({ type: "confirmUsername" });
+      return;
+    }
     try {
       const account = await saveAccount({ displayName, username });
-      setBaseline(account);
-      setDisplayName(account.displayName);
-      setUsername(account.username);
       dispatch({
-        type: "saveSucceeded",
+        type: "saved",
+        account,
         message: "Account settings saved.",
       });
       onDirtyChange(false);
-      setEditing(false);
     } catch (cause) {
       const error = personalAccountMutationError(
         cause,
@@ -150,7 +354,9 @@ export function PersonalAccountForm({
         type: "saveFailed",
         message: error.message,
         fieldErrors: error.fieldErrors,
+        confirming: confirmingUsername,
       });
+      if (confirmingUsername) return;
       const firstField = error.fieldErrors?.[0]?.field;
       if (firstField === "displayName") displayNameInput.current?.focus();
       if (firstField === "username") usernameInput.current?.focus();
@@ -166,7 +372,7 @@ export function PersonalAccountForm({
             <Button
               size="xs"
               variant="outline"
-              onClick={() => setEditing(true)}
+              onClick={() => dispatch({ type: "edit" })}
             >
               Edit
             </Button>
@@ -189,128 +395,40 @@ export function PersonalAccountForm({
                 {picture}
               </ProfilePictureEditor>
             )}
-            <form
-              id={formId}
-              className="account-profile-edit-form"
-              noValidate
-              onSubmit={(event) => {
-                event.preventDefault();
-                void save();
-              }}
-            >
-              <div className="account-edit-grid">
-                <div className="account-field">
-                  <label htmlFor={`${formId}-display-name`}>Display name</label>
-                  <Input
-                    ref={displayNameInput}
-                    id={`${formId}-display-name`}
-                    name="displayName"
-                    autoComplete="name"
-                    value={displayName}
-                    disabled={saving}
-                    aria-invalid={
-                      displayNameError === undefined ? undefined : true
-                    }
-                    aria-describedby={
-                      displayNameError === undefined
-                        ? undefined
-                        : `${formId}-display-name-error`
-                    }
-                    onChange={(event) => change(event.target.value, username)}
-                  />
-                  {displayNameError === undefined ? null : (
-                    <small
-                      id={`${formId}-display-name-error`}
-                      className="account-field-error"
-                    >
-                      {displayNameError}
-                    </small>
-                  )}
-                </div>
-
-                <div className="account-field">
-                  <label htmlFor={`${formId}-email`}>Email</label>
-                  <Input
-                    id={`${formId}-email`}
-                    value={baseline.email}
-                    readOnly
-                    aria-readonly="true"
-                  />
-                </div>
-              </div>
-
-              <div className="account-field account-username-field">
-                <label htmlFor={`${formId}-username`}>Username</label>
-                <Input
-                  ref={usernameInput}
-                  id={`${formId}-username`}
-                  name="username"
-                  autoComplete="username"
-                  value={username}
-                  disabled={saving}
-                  aria-invalid={usernameError === undefined ? undefined : true}
-                  aria-describedby={`${formId}-username-help${
-                    usernameError === undefined
-                      ? ""
-                      : ` ${formId}-username-error`
-                  }`}
-                  onChange={(event) => change(displayName, event.target.value)}
-                />
-                <small id={`${formId}-username-help`}>
-                  Use 3–32 lowercase letters, numbers, or hyphens.
-                </small>
-                {usernameError === undefined ? null : (
-                  <small
-                    id={`${formId}-username-error`}
-                    className="account-field-error"
-                  >
-                    {usernameError}
-                  </small>
-                )}
-              </div>
-
-              <footer className="account-profile-edit-actions">
-                <span aria-live="polite">
-                  {state.status === "error" ? state.message : null}
-                </span>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={saving}
-                  onClick={reset}
-                >
-                  Cancel
-                </Button>
-                <Button size="xs" type="submit" disabled={!canSave}>
-                  {saving ? "Saving…" : "Save"}
-                </Button>
-              </footer>
-            </form>
+            <AccountProfileEditForm
+              account={baseline}
+              displayName={displayName}
+              username={username}
+              displayNameError={displayNameError}
+              usernameError={usernameError}
+              displayNameRef={displayNameInput}
+              usernameRef={usernameInput}
+              saving={saving}
+              canSave={canSave}
+              errorMessage={form.status === "error" ? form.message : undefined}
+              onChange={change}
+              onSave={() => void save()}
+              onCancel={reset}
+            />
+            <ConfirmDialog
+              open={confirmingUsername}
+              onOpenChange={(open) =>
+                dispatch({ type: "confirmOpenChange", open })
+              }
+              title={`Change your username to @${normalizePersonalAccountUsername(username)}?`}
+              description="You can change your username only once. Your old username keeps delivering to you and can't be used by anyone else."
+              confirmLabel="Change username"
+              pending={saving}
+              error={confirmError}
+              onConfirm={() => void save()}
+            />
           </div>
         ) : (
-          <div className="account-profile-summary">
-            {picture}
-            <dl className="account-profile-details">
-              <div>
-                <dt>Name</dt>
-                <dd>{baseline.displayName}</dd>
-              </div>
-              <div>
-                <dt>Email</dt>
-                <dd>{baseline.email}</dd>
-              </div>
-              <div>
-                <dt>Username</dt>
-                <dd>@{baseline.username}</dd>
-              </div>
-              {threadCount === undefined ? null : (
-                <div>
-                  <dt>Threads</dt>
-                  <dd className="account-thread-count">{threadCount}</dd>
-                </div>
-              )}
-            </dl>
-          </div>
+          <AccountProfileSummary
+            picture={picture}
+            account={baseline}
+            threadCount={threadCount}
+          />
         )}
       </section>
     </div>

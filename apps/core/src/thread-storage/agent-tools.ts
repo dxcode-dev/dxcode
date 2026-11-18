@@ -2,7 +2,7 @@ import {
   MAX_THREAD_STORAGE_FILE_BYTES,
   THREAD_STORAGE_TEMPORARY_TTL_MS,
 } from "@dx/api";
-import { ThreadId } from "@dx/domain";
+import { parseThreadReference, ThreadId } from "@dx/domain";
 import { defineTool, type ToolDefinition } from "@flue/runtime";
 import { Effect, Schema } from "effect";
 import * as v from "valibot";
@@ -55,17 +55,14 @@ type Staged =
 
 const description = (lines: ReadonlyArray<string>) => lines.join("\n\n");
 
-/** The Thread an ID or a dx Thread URL names. */
+/** The Thread an ID (`thr_…` or `t-…`) or a dx Thread URL names. */
 const threadIdFrom = (value: string) => {
-  const id =
-    /thr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/.exec(
-      value,
-    )?.[0];
+  const id = parseThreadReference(value);
   if (id === undefined)
     throw new Error(
-      `${value} is not a thread ID (thr_...) or a dx Thread URL.`,
+      `${value} is not a thread ID (thr_... or t-...) or a dx Thread URL.`,
     );
-  return Schema.decodeUnknownSync(ThreadId)(id);
+  return id;
 };
 
 const baseName = (path: string) =>

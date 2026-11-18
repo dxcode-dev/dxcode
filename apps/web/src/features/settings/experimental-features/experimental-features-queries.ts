@@ -8,6 +8,7 @@ import {
   getPersonalExperimentalFeatures,
   updatePersonalExperimentalFeature,
 } from "../../../shared/api/client.js";
+import { mailboxKeys } from "../../mailbox/mailbox-cache-queries.js";
 import { orbProviderKeys } from "../orb-providers/orb-providers-queries.js";
 import { settingsKeys } from "../settings-context-queries.js";
 
@@ -53,6 +54,11 @@ export const updatePersonalExperimentalFeatureMutationOptions = (
       // Spaces and composer quick actions.
       await queryClient.invalidateQueries({
         queryKey: settingsKeys.contexts(userId),
+      });
+      // The dx Mailbox flag turns the Mailbox, and each Project's email
+      // card, on or off.
+      await queryClient.invalidateQueries({
+        queryKey: mailboxKeys.all(userId),
       });
     },
   });

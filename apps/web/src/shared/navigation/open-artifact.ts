@@ -1,4 +1,6 @@
+import { ThreadId } from "@dx/domain";
 import { type NavigateOptions, useNavigate } from "@tanstack/react-router";
+import { Option, Schema } from "effect";
 import {
   requestThreadView,
   THREAD_OPEN_VIEW_EVENT,
@@ -79,7 +81,13 @@ export const useShowArtifact = () => {
  * so this asks the Thread's page for that view and drops the sheet.
  */
 export const artifactLinkHere = (url: URL): URL => {
-  const threadId = /^\/threads\/([^/]+)\/?$/.exec(url.pathname)?.[1];
+  // As its stored `thr_` ID: a `t-` link redirects to that page, which
+  // takes the request by it.
+  const threadId = Option.getOrUndefined(
+    Schema.decodeUnknownOption(ThreadId)(
+      /^\/threads\/([^/]+)\/?$/.exec(url.pathname)?.[1],
+    ),
+  );
   if (
     threadId === undefined ||
     url.searchParams.get("sheet") !== "artifact" ||

@@ -1,4 +1,5 @@
-import { Schema } from "effect";
+import { ThreadId } from "@dx/domain";
+import { Option, Schema } from "effect";
 import {
   ATTACHMENT_PART_BYTES,
   AttachmentPartResponseSchema,
@@ -100,7 +101,7 @@ export const threadStoragePath = (threadId: string, id: string, name: string) =>
   `/v1/threads/${encodeURIComponent(threadId)}/storage/${id}/${encodeURIComponent(name)}`;
 
 const STORAGE_PATH =
-  /^\/v1\/threads\/(thr_[0-9a-f-]{36})\/storage\/(tsf_[0-9a-f]{32})(?:\/([^/?#]*))?$/;
+  /^\/v1\/threads\/([^/]+)\/storage\/(tsf_[0-9a-f]{32})(?:\/([^/?#]*))?$/;
 
 export interface ThreadStorageLocation {
   readonly threadId: string;
@@ -130,7 +131,12 @@ export const parseThreadStorageUrl = (
     return undefined;
   const match = STORAGE_PATH.exec(url.pathname);
   if (match === null) return undefined;
-  const [, threadId = "", id = "", encoded = ""] = match;
+  const [, rawThreadId, id = "", encoded = ""] = match;
+  // Either form of the Thread's ID, `thr_<uuid>` or `t-<uuid>`.
+  const threadId = Option.getOrUndefined(
+    Schema.decodeUnknownOption(ThreadId)(rawThreadId),
+  );
+  if (threadId === undefined) return undefined;
   let name: string;
   try {
     name = decodeURIComponent(encoded);

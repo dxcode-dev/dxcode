@@ -1,3 +1,5 @@
+import { parseThreadReference } from "@dx/domain";
+import { MAIL_TOOL_NAMES } from "./mail-tool-part.js";
 import { shellCommandOperations } from "./shell-command-operation.js";
 import {
   categoryForPart,
@@ -72,6 +74,7 @@ type SummaryKind =
   | "page"
   | "tools"
   | "code"
+  | "email"
   | "command"
   | "edit"
   | "read"
@@ -110,9 +113,7 @@ export const threadsFor = (part: ToolPart): ReadonlyArray<string> => {
   const thread = stringField(part.input, "thread");
   if (thread !== undefined) return [thread];
   // read_thread names its Thread by ID or URL.
-  const read = /thr_[0-9a-f-]{36}/.exec(
-    stringField(part.input, "threadID") ?? "",
-  )?.[0];
+  const read = parseThreadReference(stringField(part.input, "threadID") ?? "");
   if (read !== undefined) return [read];
   // Only a created Thread is named by the result alone.
   if (part.toolName !== "create_thread") return [];
@@ -129,6 +130,7 @@ const summaryKind = (category: ToolCategory, part: ToolPart): SummaryKind => {
   if (part.toolName === "read_web_page") return "page";
   if (part.toolName === "tool_search") return "tools";
   if (part.toolName === "code_exec") return "code";
+  if (MAIL_TOOL_NAMES.has(part.toolName)) return "email";
   if (category === "thread") return "generic";
   if (category !== "explore") return category;
   if (isSearch(part)) return "search";
@@ -175,6 +177,8 @@ const summaryPhrase = (kind: SummaryKind, count: number) => {
       return `searched tools ${plural(count, "time")}`;
     case "code":
       return `executed code ${plural(count, "time")}`;
+    case "email":
+      return `read ${plural(count, "email")}`;
     case "command":
       return `ran ${plural(count, "command")}`;
     case "edit":

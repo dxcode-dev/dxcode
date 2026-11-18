@@ -8,6 +8,8 @@ import {
   ARTIFACT_TOOL_NAME,
   isArtifactCardPart,
 } from "./artifact-tool-part.js";
+import { MailToolLabel, MailToolOpener } from "./mail-tool-label.js";
+import { isMailToolPart } from "./mail-tool-part.js";
 import { isMcpAppPart, mcpAppCardSet } from "./mcp-app-part.js";
 import { PluginToolIcon } from "./plugin-ui/lazy-plugin-ui-icons.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
@@ -229,6 +231,7 @@ function ToolLabelText({
     (parseShellResult(textualOutputFor(part) ?? "").exitCode ?? 0) !== 0;
   if (part.toolName === ARTIFACT_TOOL_NAME)
     return <ArtifactToolLabel part={part} />;
+  if (isMailToolPart(part)) return <MailToolLabel part={part} />;
   if (category === "explore") return <ExploreOperationLabel part={part} />;
   if (category === "thread") return <ThreadToolLabel part={part} />;
   if (category === "command") {
@@ -605,6 +608,8 @@ function GenericToolPartRow({
   const opener =
     category === "edit" && part.state === "output-available" ? (
       <EditedFileOpener part={part} />
+    ) : isMailToolPart(part) ? (
+      <MailToolOpener part={part} />
     ) : null;
   if (!expandable) {
     return (

@@ -28,6 +28,10 @@ import {
   loadDxdRelease,
   verifyDxdBytes,
 } from "../deploy/selfhost/dxd-release.mjs";
+import {
+  mailDomainProblem,
+  mailDomainTradeoffs,
+} from "../deploy/selfhost/mail.mjs";
 import { preflightPortalZone } from "../deploy/selfhost/portals.mjs";
 import { assertToolchain } from "../deploy/selfhost/toolchain.mjs";
 import {
@@ -738,6 +742,19 @@ console.log(
 console.log(
   `Attachments: direct to R2 (${attachmentSigning === "token" ? "bucket-scoped signing token" : "operator's R2 API token"})`,
 );
+// The dx Mailbox: any zone apex works; the operator sees what giving dx a
+// domain's mail means instead of being refused (wiki/agent-mail.md).
+const mailDomain = process.env.DX_DEPLOYMENT_MAIL_DOMAIN?.trim().toLowerCase();
+if (mailDomain) {
+  const problem = mailDomainProblem(mailDomain);
+  if (problem !== undefined)
+    throw new Error(`DX_DEPLOYMENT_MAIL_DOMAIN ${problem}.`);
+  for (const line of mailDomainTradeoffs({
+    domain: mailDomain,
+    appHostname: selection.domain,
+  }))
+    console.log(line);
+} else console.log("dx Mailbox: off");
 
 const authHome =
   target === "selfhost" && selfhostCloudflareAuth.method === "alchemy-oauth"

@@ -250,9 +250,13 @@ const deploymentResourceTypes = ({
   orbProviders = ["e2b"],
   attachmentSigning = "token",
   portals = undefined,
+  mail = undefined,
   huddle = false,
 }) =>
   new Map([
+    // The dx Mailbox: Email Routing and its catch-all, Email Sending, and the
+    // DMARC record on the mail zone (deploy/selfhost/mail.mjs).
+    ...(mail === undefined ? [] : [...mailResourceTypes]),
     // Portals: their own Worker on a zone route plus a proxied wildcard record.
     ...(portals === undefined
       ? []
@@ -361,6 +365,16 @@ const cloudflareResourceIds = new Set([
   "Worker",
 ]);
 const portalResourceIds = new Set(["PortalDns", "PortalWorker"]);
+/** The dx Mailbox's resources on its mail zone, by logical ID. */
+const mailResourceTypes = new Map([
+  ["MailRouting", "Cloudflare.Email.Routing"],
+  ["MailCatchAll", "Cloudflare.Email.CatchAll"],
+  ["MailSending", "Cloudflare.Email.SendingSubdomain"],
+  ["MailDmarc", "Cloudflare.DNS.Record"],
+]);
+/** The DMARC record the Mailbox publishes; alchemy.run.ts writes the same. */
+export const MAIL_DMARC_RECORD =
+  '"v=DMARC1; p=reject; sp=reject; adkim=r; aspf=r"';
 const dictationMigrationAlias = Object.freeze({
   legacyName: "0079_dictation_jobs.sql",
   currentName: "0045_dictation_jobs.sql",
@@ -1896,6 +1910,105 @@ export const deploymentPortals = ({
   return { domain: portalDomain, zoneId: portalZoneId };
 };
 
+/**
+ * The dx Mailbox's mail zone, or undefined when mail is off: the domain (a
+ * zone apex) and its zone ID, set together.
+ */
+export const deploymentMail = ({ domain, zoneId }) => {
+  const mailDomain = domain?.trim().toLowerCase() || undefined;
+  const mailZoneId = zoneId?.trim() || undefined;
+  if (mailDomain === undefined && mailZoneId === undefined) return undefined;
+  if (mailDomain === undefined || mailZoneId === undefined)
+    throw new Error(
+      "DX_DEPLOYMENT_MAIL_DOMAIN and DX_DEPLOYMENT_MAIL_ZONE_ID must be set together.",
+    );
+  if (!/^[a-f0-9]{32}$/.test(mailZoneId))
+    throw new Error("DX_DEPLOYMENT_MAIL_ZONE_ID must be a Cloudflare zone ID.");
+  return { domain: mailDomain, zoneId: mailZoneId };
+};
+
+/**
+ * A Mailbox resource's props must name only the configured mail zone and
+ * domain. A value still to be resolved (an Output) is checked once evaluated.
+ */
+const validateMailProps = (id, props, selection, representation) => {
+  if (props === undefined) return;
+  const { domain, zoneId } = selection.mail;
+  const resolved = (value) => typeof value === "string";
+  const same = (value, expected) => !resolved(value) || value === expected;
+  const ok =
+    id === "MailRouting"
+      ? same(props.zone, zoneId)
+      : id === "MailSending"
+        ? same(props.zoneId, zoneId) && same(props.name, domain)
+        : id === "MailDmarc"
+          ? same(props.zoneId, zoneId) &&
+            props.name === `_dmarc.${domain}` &&
+            props.type === "TXT" &&
+            props.content === MAIL_DMARC_RECORD
+          : id === "MailCatchAll"
+            ? same(props.zone, zoneId) &&
+              (props.actions === undefined ||
+                (Array.isArray(props.actions) &&
+                  props.actions.length === 1 &&
+                  props.actions[0]?.type === "worker"))
+            : false;
+  if (!ok)
+    throw new Error(
+      `${id} ${representation} plan identity is outside the mail zone allowlist.`,
+    );
+};
+
+/**
+ * The Worker's Mailbox bindings: `MAIL_SEND` only as the Mailbox's own Email
+ * Sending binding, and `DX_MAIL_DOMAIN` only as the configured mail domain
+ * (a resolving Output is checked evaluated).
+ */
+const assertWorkerMailBindings = (node, operation, selection) => {
+  const check = (props, representation) => {
+    const env = props?.env;
+    if (env === null || typeof env !== "object") return;
+    const send = env.MAIL_SEND;
+    const domain = env.DX_MAIL_DOMAIN;
+    const current =
+      representation === "desired" || representation === "evaluated";
+    const sendOk =
+      send === undefined ||
+      (send !== null &&
+        typeof send === "object" &&
+        send.kind === "Cloudflare.Email.SendEmail" &&
+        send.name === "MailSend" &&
+        send.allowedSenderAddresses === undefined &&
+        send.allowedDestinationAddresses === undefined &&
+        send.destinationAddress === undefined);
+    const domainOk =
+      domain === undefined ||
+      typeof domain !== "string" ||
+      !current ||
+      domain === selection.mail?.domain;
+    if (!sendOk || !domainOk)
+      throw new Error(
+        `Worker ${representation} mail bindings are outside the mail zone allowlist.`,
+      );
+  };
+  // Without mail the binding contract alone admits them, as before.
+  if (operation === "deploy" && selection.mail !== undefined) {
+    check(node.resource?.Props, "desired");
+    check(node.props, "evaluated");
+  }
+};
+
+const assertExactMailIdentity = (node, operation, selection, id) => {
+  // Removing the Mailbox deletes what the stage recorded; nothing to match.
+  if (selection.mail === undefined) return;
+  if (operation === "deploy") {
+    validateMailProps(id, node.resource?.Props, selection, "desired");
+    validateMailProps(id, node.props, selection, "evaluated");
+  }
+  validateMailProps(id, node.state?.props, selection, "persisted");
+  validateMailProps(id, node.state?.old?.props, selection, "prior");
+};
+
 // The Portal Worker: the Portal handler only, bound to the app's D1, auth
 // secret, and the Core Worker's Thread execution namespace, reachable only
 // through its zone route.
@@ -2876,11 +2989,18 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   const id = node.resource?.LogicalId ?? node.state?.logicalId;
   const type = node.resource?.Type ?? node.state?.resourceType;
   const nodeFqn = node.resource?.FQN ?? node.state?.fqn;
+  // Turning the Mailbox off deletes its resources, on a deploy or a destroy.
+  const mailRemoval =
+    selection.mail === undefined &&
+    mailResourceTypes.has(id) &&
+    node.action === "delete";
   if (
     !id ||
     fqn !== id ||
     nodeFqn !== id ||
-    deploymentResourceTypes(selection).get(id) !== type
+    (mailRemoval
+      ? mailResourceTypes.get(id)
+      : deploymentResourceTypes(selection).get(id)) !== type
   )
     throw new Error(`Alchemy plan selected an unapproved resource: ${id}.`);
   if (cloudflareResourceIds.has(id) && node.mode !== "live")
@@ -2898,7 +3018,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     );
 
   const allowedActions =
-    operation === "deploy"
+    operation === "deploy" && !mailRemoval
       ? new Set(["create", "update", "noop"])
       : new Set(["delete", "noop"]);
   if (!allowedActions.has(node.action))
@@ -2918,7 +3038,12 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     throw new Error(`${operation} rejects a binding action for ${id}.`);
   assertCompletePropRepresentations(node, operation, id);
 
-  if (id === "Worker") assertExactWorkerIdentity(node, operation, selection);
+  if (mailResourceTypes.has(id))
+    assertExactMailIdentity(node, operation, selection, id);
+  if (id === "Worker") {
+    assertExactWorkerIdentity(node, operation, selection);
+    assertWorkerMailBindings(node, operation, selection);
+  }
   if (id === "DaemonIngress")
     assertExactDaemonIngressIdentity(node, operation, selection);
   if (id === "PortalWorker")
@@ -2987,8 +3112,10 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
         ? "This stage serves Portals; deploy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with (turning Portals off needs a destroy)."
         : "This stage serves Portals; destroy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with.",
     );
-  const onlyRetiredRandomDeletions = deletionIds.every((id) =>
-    retiredRandomResourceIds.has(id),
+  const onlyRetiredRandomDeletions = deletionIds.every(
+    (id) =>
+      retiredRandomResourceIds.has(id) ||
+      (selection.mail === undefined && mailResourceTypes.has(id)),
   );
   if (
     plan.defaultMode !== "live" ||

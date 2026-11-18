@@ -6,6 +6,8 @@
  * stays a keyword.
  */
 
+import { parseThreadReference } from "./thread-id.js";
+
 export const THREAD_SEARCH_QUERY_MAX_LENGTH = 1_000;
 
 export const THREAD_SEARCH_FILTER_KEYS = [
@@ -65,8 +67,6 @@ export class ThreadSearchQueryError extends Error {
   override readonly name = "ThreadSearchQueryError";
 }
 
-const THREAD_ID =
-  /thr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/;
 const DAY_MS = 86_400_000;
 
 const isFilterKey = (key: string): key is ThreadSearchFilterKey =>
@@ -87,10 +87,10 @@ const chunks = (input: string) => {
 };
 
 const threadIdValue = (key: string, value: string) => {
-  const id = THREAD_ID.exec(value)?.[0];
+  const id = parseThreadReference(value);
   if (id === undefined)
     throw new ThreadSearchQueryError(
-      `${key}: takes a Thread ID (thr_…) or a dx Thread URL.`,
+      `${key}: takes a Thread ID (thr_… or t-…) or a dx Thread URL.`,
     );
   return id;
 };

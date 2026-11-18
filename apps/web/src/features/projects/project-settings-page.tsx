@@ -32,14 +32,15 @@ import {
   Copy,
   FolderCog,
   KeyRound,
+  Mail,
   MessageSquareText,
   Plus,
   Upload,
   X,
 } from "lucide-react";
 import * as React from "react";
-import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { copyText } from "../../shared/copy-text.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useCloseSettingsOnEscape } from "../../shared/navigation/close-settings-on-escape.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
@@ -84,6 +85,7 @@ import { ChangeOwnerCard } from "./change-owner-card.js";
 import { DeleteProjectCard } from "./delete-project-card.js";
 import { FeedbackWidgetProjectSettings } from "./feedback-widget-settings.js";
 import { AdditionalRepositoriesPicker } from "./new-project-dialog.js";
+import { ProjectEmailSettings } from "./project-email-settings.js";
 import { buildProjectMetadataChanges } from "./project-metadata.js";
 import {
   rebindProjectSourceMutationOptions,
@@ -114,6 +116,8 @@ const sections = [
   },
   { id: "secrets", label: "Secrets & Env Vars", icon: KeyRound },
   { id: "feedback-widget", label: "Feedback Widget", icon: MessageSquareText },
+  // Listed only where the deployment has a mail domain.
+  { id: "email", label: "Email", icon: Mail },
 ] as const;
 
 export function ProjectSettingsPage({
@@ -142,12 +146,20 @@ export function ProjectSettingsPage({
       }),
   );
   const settingsQuery = useQuery(settingsContextQueryOptions(identity.id));
+  // Email exists only where the deployment has a mail domain, which the
+  // settings context says with no request of its own; elsewhere its URL
+  // shows General.
+  const mailEnabled = settingsQuery.data?.mailDomain !== undefined;
   const project = projectQuery.data;
-  const section: ProjectSettingsSection = isProjectSettingsSection(
+  const requested: ProjectSettingsSection = isProjectSettingsSection(
     params.section,
   )
     ? params.section
     : "general";
+  const section =
+    requested === "email" && !mailEnabled && !settingsQuery.isPending
+      ? "general"
+      : requested;
   const ownerName =
     project?.workspaceId === undefined
       ? identity.name
@@ -178,17 +190,19 @@ export function ProjectSettingsPage({
         </header>
         <div className="project-settings-layout">
           <nav aria-label="Project settings sections">
-            {sections.map((item) => (
-              <Link
-                key={item.id}
-                className={section === item.id ? "active" : ""}
-                to="/projects/$projectId/settings/$section"
-                params={{ projectId: project.id, section: item.id }}
-              >
-                <item.icon />
-                {item.label}
-              </Link>
-            ))}
+            {sections
+              .filter((item) => item.id !== "email" || mailEnabled)
+              .map((item) => (
+                <Link
+                  key={item.id}
+                  className={section === item.id ? "active" : ""}
+                  to="/projects/$projectId/settings/$section"
+                  params={{ projectId: project.id, section: item.id }}
+                >
+                  <item.icon />
+                  {item.label}
+                </Link>
+              ))}
           </nav>
           <main>
             {canManage ? null : (
@@ -224,6 +238,19 @@ export function ProjectSettingsPage({
                 projectId={project.id}
                 userId={identity.id}
               />
+            ) : null}
+            {/* Read-only for people who do not manage the Project. */}
+            {section === "email" ? (
+              mailEnabled ? (
+                <ProjectEmailSettings
+                  projectId={project.id}
+                  userId={identity.id}
+                />
+              ) : (
+                <p className="project-settings-state" role="status">
+                  Loading…
+                </p>
+              )
             ) : null}
             {canManage && section === "secrets" ? (
               <ProjectSecretsSettings
@@ -1016,19 +1043,8 @@ function GitRepositoryRow({
   );
 }
 
-const copyCloneCommand = (cloneUrl: string) => {
-  const command = `git clone ${cloneUrl}`;
-  if (navigator.clipboard === undefined) {
-    toast(command, { description: "Copy this command to clone." });
-    return;
-  }
-  void navigator.clipboard
-    .writeText(command)
-    .then(() => toast.success("Copied git clone command"))
-    .catch(() =>
-      toast(command, { description: "Copy this command to clone." }),
-    );
-};
+const copyCloneCommand = (cloneUrl: string) =>
+  copyText(`git clone ${cloneUrl}`, "Clone command");
 
 /**
  * Other URLs of the same repository, such as a mirror or an SSH remote. dx

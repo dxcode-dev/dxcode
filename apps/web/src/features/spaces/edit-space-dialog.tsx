@@ -26,7 +26,7 @@ import {
   SpaceGoalField,
   SpaceSharingSelect,
 } from "./space-form-fields.js";
-import { useUpdateSpace } from "./space-queries.js";
+import { isSpaceMailReadsRefusal, useUpdateSpace } from "./space-queries.js";
 import "./spaces.css";
 
 /** The Space's color: a swatch that opens the thread colors as radios. */
@@ -117,11 +117,20 @@ export function EditSpaceDialog({
   };
   const changed = Object.keys(changes).length > 0;
   const canSave = changed && name.trim() !== "" && !update.isPending;
+  // Sharing was held back because the Space's agents read Mailbox mail that
+  // members would see; saving again says the owner agrees.
+  const mailReads =
+    isSpaceMailReadsRefusal(update.error) && sharing === "workspace";
   const onSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canSave) return;
     update.mutate(
-      { threadId: space.threadId, update: changes },
+      {
+        threadId: space.threadId,
+        update: mailReads
+          ? { ...changes, acknowledgeMailReads: true }
+          : changes,
+      },
       { onSuccess: onClose },
     );
   };
@@ -188,7 +197,11 @@ export function EditSpaceDialog({
               className="space-primary-button"
               disabled={!canSave}
             >
-              {update.isPending ? "Saving…" : "Save"}
+              {update.isPending
+                ? "Saving…"
+                : mailReads
+                  ? "Share anyway"
+                  : "Save"}
               <EnterKeycap />
             </Button>
           </footer>

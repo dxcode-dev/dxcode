@@ -19,6 +19,7 @@ export const APP_ROUTE_PATHS = [
   "/threads/$threadId",
   "/threads/$threadId/tree",
   "/artifacts",
+  "/mailbox",
   "/artifacts/$artifactId",
   "/bug-reports",
   "/bug-reports/$reportId",

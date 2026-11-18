@@ -19,6 +19,7 @@ import {
   SkillName,
   SkillResourcePath,
   SkillVersion,
+  StoredThreadId,
   ThreadActivityStatus,
   ThreadColor,
   type ThreadId,
@@ -40,7 +41,7 @@ import {
 
 const ThreadAgentUrlSchema = Schema.TemplateLiteral([
   "/v1/agents/dx/",
-  ThreadIdSchema,
+  StoredThreadId,
 ]);
 
 export type ThreadAgentUrl = typeof ThreadAgentUrlSchema.Type;

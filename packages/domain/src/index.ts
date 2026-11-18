@@ -32,6 +32,7 @@ export {
   SignInProviderId,
   SignInRejection,
 } from "./auth/sign-in.js";
+export * from "./mail/index.js";
 export {
   AGENT37_ORB_SIZES,
   Agent37OrbSize,
@@ -170,7 +171,11 @@ export {
   ProjectRepositoryIdentity,
   projectAdditionalRepositoryFromUrl,
 } from "./projects/project.js";
-export { ProjectId } from "./projects/project-id.js";
+export {
+  ProjectId,
+  publicProjectId,
+  StoredProjectId,
+} from "./projects/project-id.js";
 export {
   MAX_PROJECT_ORB_SCRIPT_BYTES,
   PROJECT_ORB_SCRIPT_KINDS,
@@ -276,6 +281,8 @@ export {
 } from "./settings/environment-variable-repository.js";
 export {
   PersonalAccountNotFound,
+  PersonalAccountUsernameChangeLocked,
+  PersonalAccountUsernameReserved,
   PersonalAccountUsernameUnavailable,
   PersonalAgentInstructionsNotFound,
   PersonalAgentInstructionsRevisionConflict,
@@ -300,6 +307,7 @@ export {
   ExperimentalFeatureRegistration,
   ExperimentalFeatureRegistry,
   ExperimentalFeatureRisk,
+  MAILBOX_FEATURE_ID,
   type NormalizedExperimentalFeaturePreferences,
   normalizeExperimentalFeaturePreferences,
   productionExperimentalFeatureRegistry,
@@ -480,6 +488,7 @@ export {
   codeFontSizePixels,
   isCodeLineHeight,
   isDefaultPersonalAccountUsername,
+  isReservedUsername,
   normalizePersonalAccountDisplayName,
   normalizePersonalAccountUsername,
   PersonalAccount,
@@ -500,8 +509,12 @@ export {
   PersonalTextSize,
   PersonalThreadWidth,
   personalAccountDisplayNameProblem,
+  personalAccountUsernameChangeAvailable,
+  personalAccountUsernameChoiceProblem,
+  personalAccountUsernameNeedsPick,
   personalAccountUsernameProblem,
   personalAppearanceFields,
+  RESERVED_USERNAMES,
   UpdatePersonalAccountInput,
   UpdatePersonalAppearanceInput,
   UpdatePersonalComposerDefaultsInput,
@@ -1045,7 +1058,13 @@ export {
   ThreadLifecycleState,
   ThreadVisibility,
 } from "./threads/thread.js";
-export { newThreadId, ThreadId } from "./threads/thread-id.js";
+export {
+  newThreadId,
+  parseThreadReference,
+  publicThreadId,
+  StoredThreadId,
+  ThreadId,
+} from "./threads/thread-id.js";
 export {
   parseThreadSearchQuery,
   THREAD_SEARCH_FILTER_KEYS,

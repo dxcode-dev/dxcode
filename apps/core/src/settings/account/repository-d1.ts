@@ -3,6 +3,7 @@ import {
   PersonalAccount,
   PersonalAccountNotFound,
   PersonalAccountRepository,
+  PersonalAccountUsernameChangeLocked,
   PersonalAccountUsernameUnavailable,
   PersonalComposerDefaults,
   type UserId,
@@ -30,6 +31,7 @@ const PersonalAccountRow = Schema.Struct({
   logo_animation: Schema.Literals([0, 1]),
   ui_sounds: Schema.Literals([0, 1]),
   avatar_key: Schema.NullOr(Schema.String),
+  username_changed_at: Schema.NullOr(Schema.String),
 });
 
 const UpdatedRow = Schema.Struct({ user_id: Schema.String });
@@ -75,6 +77,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
             profile.logo_animation,
             profile.ui_sounds,
             profile.avatar_key,
+            profile.username_changed_at,
             identity.email,
             identity.emailVerified AS email_verified,
             CASE
@@ -124,6 +127,7 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
           logoAnimation: row.logo_animation === 1,
           uiSounds: row.ui_sounds === 1,
           ...(row.avatar_key === null ? {} : { avatarKey: row.avatar_key }),
+          usernameChangedAt: row.username_changed_at,
         });
       },
     );
@@ -230,55 +234,90 @@ export const PersonalAccountRepositoryD1 = Layer.effect(
       }),
       updateOwnedByUser: Effect.fn(
         "PersonalAccountRepository.updateOwnedByUser",
-      )(function* (userId, input) {
+      )(function* (userId, input, username) {
+        const failed = (cause: unknown) =>
+          unavailable("settings.personalAccount.updateOwnedByUser")(cause);
+        const usesChange = username.usesChange ? 1 : 0;
         const rows = yield* sql`
           UPDATE personal_account
           SET
             display_name = ${input.displayName},
             username = ${input.username},
+            username_changed_at = CASE
+              WHEN ${usesChange} = 1 THEN datetime('now')
+              ELSE username_changed_at
+            END,
             updated_at = datetime('now')
           WHERE user_id = ${userId}
+            AND username = ${username.expected}
+            AND (${usesChange} = 0 OR username_changed_at IS NULL)
             AND NOT EXISTS (
               SELECT 1
               FROM personal_account AS claimed
               WHERE claimed.username = ${input.username} COLLATE NOCASE
                 AND claimed.user_id <> ${userId}
             )
+            AND (
+              ${input.username} = ${username.expected}
+              OR NOT EXISTS (
+                SELECT 1
+                FROM retired_username AS retired
+                WHERE retired.username = ${input.username}
+                  AND retired.user_id <> ${userId}
+              )
+            )
           RETURNING user_id
         `.pipe(
-          Effect.catchTag("SqlError", (cause) =>
-            Effect.fail(
-              unavailable("settings.personalAccount.updateOwnedByUser")(cause),
-            ),
-          ),
+          Effect.catchTag("SqlError", (cause) => Effect.fail(failed(cause))),
         );
         const updated = yield* Schema.decodeUnknownEffect(
           Schema.Array(UpdatedRow),
         )(rows);
         if (updated.length === 0) {
-          const owners = yield* sql`
-            SELECT user_id FROM personal_account WHERE user_id = ${userId}
+          const current = yield* sql<{
+            readonly username: string;
+            readonly username_changed_at: string | null;
+          }>`
+            SELECT username, username_changed_at
+            FROM personal_account
+            WHERE user_id = ${userId}
           `.pipe(
-            Effect.catchTag("SqlError", (cause) =>
-              Effect.fail(
-                unavailable("settings.personalAccount.updateOwnedByUser")(
-                  cause,
-                ),
-              ),
-            ),
+            Effect.catchTag("SqlError", (cause) => Effect.fail(failed(cause))),
           );
-          const decodedOwners = yield* Schema.decodeUnknownEffect(
-            Schema.Array(UpdatedRow),
-          )(owners);
-          if (decodedOwners.length === 0) {
-            return yield* new PersonalAccountNotFound();
-          }
+          const row = current[0];
+          if (row === undefined) return yield* new PersonalAccountNotFound();
+          // Another save changed the username first, or spent the change.
+          if (
+            row.username !== username.expected ||
+            (username.usesChange && row.username_changed_at !== null)
+          )
+            return yield* new PersonalAccountUsernameChangeLocked();
           return yield* new PersonalAccountUsernameUnavailable();
         }
         settingsPersistenceLogger.info("Personal account update succeeded.", {
           event: "personal_account_persistence_updated",
           userId,
         });
+        return yield* find(userId);
+      }),
+      resetUsernameChange: Effect.fn(
+        "PersonalAccountRepository.resetUsernameChange",
+      )(function* (userId) {
+        const rows = yield* sql`
+          UPDATE personal_account
+          SET username_changed_at = NULL, updated_at = datetime('now')
+          WHERE user_id = ${userId}
+          RETURNING user_id
+        `.pipe(
+          Effect.catchTag("SqlError", (cause) =>
+            Effect.fail(
+              unavailable("settings.personalAccount.resetUsernameChange")(
+                cause,
+              ),
+            ),
+          ),
+        );
+        if (rows.length === 0) return yield* new PersonalAccountNotFound();
         return yield* find(userId);
       }),
       updateAppearanceOwnedByUser: Effect.fn(

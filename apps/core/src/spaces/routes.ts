@@ -23,6 +23,7 @@ import { isTimeZone } from "../automations/recurrence.js";
 import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
+import { countFamilyMailReadsBeyondSharedScope } from "../mail/store.js";
 import {
   scheduleRealtimeInvalidation,
   scheduleUserInvalidation,
@@ -464,6 +465,25 @@ export const createSpaceRoutes = (
               409,
               "Join or create a workspace to share a Space.",
             );
+          // As when sharing a Thread: members will see every earlier tool
+          // result, including mail the agents read while it was private.
+          if (
+            body.sharing === "workspace" &&
+            space.workspace_access === "none" &&
+            body.acknowledgeMailReads !== true
+          ) {
+            const reads = await countFamilyMailReadsBeyondSharedScope(
+              db,
+              threadId,
+              space.owner_user_id,
+            );
+            if (reads > 0)
+              throw new SpaceError(
+                "SPACE_SHARING_MAIL_READS",
+                409,
+                `Agents in this Space read ${reads === 1 ? "1 email" : `${reads} emails`} from your Mailbox. Members will see ${reads === 1 ? "it" : "them"} in the transcripts.`,
+              );
+          }
           await updateSpaceRow(db, {
             threadId,
             ownerUserId: space.owner_user_id,

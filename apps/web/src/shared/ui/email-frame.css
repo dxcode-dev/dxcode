@@ -1,0 +1,15 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* EmailFrame: an email's own HTML on the printed-page color. */
+@layer components {
+  .dx-email-frame {
+    display: block;
+    width: 100%;
+    /* Half the window, and never less than a readable 16rem on a phone. */
+    min-height: max(16rem, 50dvh);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--page-canvas);
+  }
+}

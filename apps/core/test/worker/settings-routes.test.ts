@@ -129,6 +129,8 @@ describe("settings routes in workerd with real D1", () => {
         codeLineHeight: null,
         logoAnimation: true,
         uiSounds: false,
+        usernameChangeAvailable: true,
+        usernameNeedsPick: false,
       },
     });
 

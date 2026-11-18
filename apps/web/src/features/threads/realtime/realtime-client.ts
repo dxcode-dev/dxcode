@@ -20,6 +20,7 @@ import {
   invalidateArtifactLibrary,
   invalidateArtifacts,
 } from "../../artifacts/artifacts-queries.js";
+import { invalidateMailbox } from "../../mailbox/mailbox-cache-queries.js";
 import { invalidateSidebarLayout } from "../../navigation/sidebar-layout-queries.js";
 import { invalidateNotifications } from "../../notifications/notifications-queries.js";
 import {
@@ -89,6 +90,7 @@ const invalidateAllRealtimeState = (
   void invalidateAllOrbDisk(queryClient);
   void invalidateAllThreadAutomations(queryClient);
   void invalidateAllArtifacts(queryClient);
+  void invalidateMailbox(queryClient, userId);
   void invalidateNotifications(queryClient, userId);
   void invalidateSidebarLayout(queryClient, userId);
   void invalidateSpaceQueries(queryClient, userId);
@@ -563,6 +565,8 @@ export class RealtimeClient {
       void invalidateOrbDisk(this.#queryClient, event.threadId);
     } else if (event.type === "notifications.invalidated") {
       void invalidateNotifications(this.#queryClient, this.#userId);
+    } else if (event.type === "mailbox.invalidated") {
+      void invalidateMailbox(this.#queryClient, this.#userId);
     } else if (event.type === "sidebar.invalidated") {
       void invalidateSidebarLayout(this.#queryClient, this.#userId);
       void invalidateSpaceQueries(this.#queryClient, this.#userId);

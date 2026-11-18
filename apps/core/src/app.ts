@@ -30,11 +30,17 @@ import { threadOrbFaultRoutes } from "./execution/cloudflare/orb-fault-route.js"
 import { feedbackWidgetPublicRoutes } from "./feedback-widget/public-routes.js";
 import { healthHandler } from "./health/handler.js";
 import { errorHandler, notFoundHandler } from "./http/http-errors.js";
+import { withStoredIds } from "./http/public-ids.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
 import type { AppEnv } from "./http/types.js";
 import { huddleLinkRoutes } from "./huddles/links.js";
 import { threadHuddleRoutes } from "./huddles/routes.js";
+import {
+  devMailRoutes,
+  mailboxRoutes,
+  projectMailRoutes,
+} from "./mail/routes.js";
 import {
   notificationRoutes,
   notificationUnsubscribeRoutes,
@@ -122,6 +128,8 @@ app.get("/healthz", healthHandler);
 app.get("/readyz", readinessHandler);
 // Local development only: its emulation of R2's S3 API for attachments.
 app.route(`/${LOCAL_R2_BUCKET}`, localR2Routes);
+// Local development only: feeds a raw .eml to the email handler's code.
+app.route("/dev/mail", devMailRoutes);
 
 app.route("/api/auth", authRoutes);
 app.route("/api/csp-reports", cspReportRoutes);
@@ -173,6 +181,9 @@ app.route("/v1/plugin-agents", pluginAgentRoutes);
 app.route("/v1/plugins/views", pluginViewRoutes);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/projects", projectRepositoryBrowseRoutes);
+app.route("/v1/projects", projectMailRoutes);
+// The person's dx Mailbox: theirs alone, never an API key's or an app's.
+app.route("/v1/mailbox", mailboxRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);
@@ -277,5 +288,7 @@ app.notFound(pageNotFound(notFoundHandler));
 app.onError(errorHandler);
 // A read a D1 replica answered "not found" is answered again at the primary.
 app.fetch = confirmMissesAtPrimary(app.fetch) as typeof app.fetch;
+// `t-`/`p-` IDs in a path reach every route as `thr_`/`prj_`.
+app.fetch = withStoredIds(app.fetch);
 
 export default app;

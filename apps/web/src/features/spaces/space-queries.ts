@@ -18,7 +18,7 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { ApiError, request } from "../../shared/api/client.js";
 import {
   invalidateThreadQueries,
   THREAD_FRESHNESS_SLO_MS,
@@ -74,6 +74,13 @@ const getSpace = async (
       { signal },
     )
   ).data.space;
+
+/**
+ * Sharing a private Space was held back because its agents read Mailbox mail
+ * members would see; saving again with `acknowledgeMailReads` agrees.
+ */
+export const isSpaceMailReadsRefusal = (error: unknown) =>
+  error instanceof ApiError && error.code === "SPACE_SHARING_MAIL_READS";
 
 /** The owner edits a Space's name, goal, color, or sharing. */
 const updateSpace = async (

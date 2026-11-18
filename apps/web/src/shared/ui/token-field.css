@@ -1,0 +1,98 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* TokenField: a field of removable tokens, such as an email's recipients. */
+@layer components {
+  .dx-token-field {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+    min-height: var(--control-md);
+    padding: var(--space-0-5) var(--space-1);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-sm);
+    cursor: text;
+    transition:
+      border-color var(--duration-fast),
+      box-shadow var(--duration-fast);
+  }
+  .dx-token-field:focus-within {
+    border-color: var(--ring);
+    box-shadow: var(--focus-ring);
+  }
+  /* Disabled: the tokens stay readable; only adding and removing stop. */
+  .dx-token-field[data-disabled] {
+    background: var(--muted);
+    cursor: default;
+  }
+  .dx-token-field[data-disabled] .dx-token-remove {
+    display: none;
+  }
+  .dx-token-field[data-disabled] .dx-token {
+    padding-right: var(--space-2);
+  }
+  .dx-token {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-0-5);
+    max-width: 100%;
+    height: 22px;
+    padding: 0 var(--space-0-5) 0 var(--space-2);
+    color: var(--foreground);
+    border-radius: var(--radius-full);
+    background: var(--muted);
+    font-size: var(--text-sm);
+  }
+  .dx-token[data-invalid] {
+    color: color-mix(in srgb, var(--destructive) 80%, var(--foreground));
+    background: color-mix(in srgb, var(--destructive) 14%, transparent);
+  }
+  .dx-token-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-token-remove {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    color: var(--muted-foreground);
+    border: 0;
+    border-radius: var(--radius-full);
+    background: transparent;
+    cursor: pointer;
+  }
+  .dx-token-remove:hover {
+    color: var(--foreground);
+    background: var(--accent);
+  }
+  .dx-token-remove:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+  .dx-token-remove svg {
+    width: 12px;
+    height: 12px;
+  }
+  .dx-token-input {
+    flex: 1 0 6rem;
+    min-width: 0;
+    height: var(--control-xs);
+    padding: 0 var(--space-1);
+    color: var(--foreground);
+    border: 0;
+    outline: none;
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-md);
+  }
+  .dx-token-input::placeholder {
+    color: var(--muted-foreground);
+  }
+}

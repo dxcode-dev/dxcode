@@ -169,6 +169,8 @@ export const PersonalAccount = Schema.Struct({
   /** Short sounds for dictation, the mode dial, and other interactions. */
   uiSounds: Schema.Boolean,
   avatarKey: Schema.optional(AvatarKey),
+  /** When the person used their one username change; `null` while unused. */
+  usernameChangedAt: Schema.NullOr(Schema.String),
 });
 
 export type PersonalAccount = typeof PersonalAccount.Type;
@@ -300,3 +302,66 @@ export const personalAccountUsernameProblem = (
  */
 export const isDefaultPersonalAccountUsername = (username: string): boolean =>
   /^user-[0-9a-f]{24}$/i.test(username);
+
+/**
+ * Names no one may hold, because mail standards or people expect them to
+ * reach the operator. Sign-up never derives them (migration 0202 lists the
+ * same names) and a username change refuses them.
+ */
+export const RESERVED_USERNAMES: ReadonlyArray<string> = [
+  "postmaster",
+  "abuse",
+  "hostmaster",
+  "webmaster",
+  "mailer-daemon",
+  "root",
+  "admin",
+  "noreply",
+  "no-reply",
+  "support",
+  "security",
+  "billing",
+  "dx",
+  // Certificate authorities validate a domain by mailing these five.
+  "administrator",
+];
+
+const reservedUsernames = new Set(RESERVED_USERNAMES);
+
+export const isReservedUsername = (username: string): boolean =>
+  reservedUsernames.has(username.trim().toLowerCase());
+
+/**
+ * Whether the person must pick a username before their Mailbox opens: they
+ * hold a placeholder or a reserved name. That pick is free; it does not use
+ * up their one change.
+ */
+export const personalAccountUsernameNeedsPick = (username: string): boolean =>
+  isDefaultPersonalAccountUsername(username) || isReservedUsername(username);
+
+/**
+ * Whether the person may change their username now: a free pick, or the one
+ * change they have not used yet.
+ */
+export const personalAccountUsernameChangeAvailable = (account: {
+  readonly username: string;
+  readonly usernameChangedAt: string | null;
+}): boolean =>
+  account.usernameChangedAt === null ||
+  personalAccountUsernameNeedsPick(account.username);
+
+/**
+ * Why no one may take a name that is otherwise well formed: reserved names,
+ * and the placeholder shape, which would make the pick free forever. Checked
+ * only when the username changes, so a person who holds such a name can
+ * still edit the rest of their profile.
+ */
+export const personalAccountUsernameChoiceProblem = (
+  value: string,
+): string | undefined => {
+  const username = normalizePersonalAccountUsername(value);
+  if (isReservedUsername(username)) return "That username is reserved.";
+  if (isDefaultPersonalAccountUsername(username))
+    return "Choose a username that is not a placeholder.";
+  return undefined;
+};
