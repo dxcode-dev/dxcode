@@ -19,7 +19,7 @@ import { type LizardApi, LizardApiError, lizardApi } from "./api.js";
 import { lizardBuildGuest } from "./guest.js";
 
 /**
- * Lizard on the deployment's own account (a hosted offer). Lizard sandboxes boot
+ * Lizard in a person's or workspace's own Lizard project. Lizard sandboxes boot
  * its Debian 12 `claude` template, and a snapshot restores at the size it
  * was taken at. So preparing the account builds one dx Orb snapshot per
  * size in `LIZARD_SIZE_CATALOG`, side by side: a sandbox of that size runs
@@ -81,7 +81,7 @@ export const lizardSnapshotName = (recipe: string, size: string) =>
 
 const REJECTED = "Lizard rejected this API key.";
 const NO_PROJECT =
-  "Set LIZARD_PROJECT_ID to the Lizard project dx's Orbs run in.";
+  "Lizard found no such project for this key. Enter the ID of a project the key belongs to.";
 
 const credentialsOf = (credentials: OrbProviderCredentials) => {
   const { apiKey, projectId, region } = credentials;
@@ -339,9 +339,21 @@ export const makeLizardConnector = (
   return {
     providerId: "lizard",
     description:
-      "Runs Orbs as Lizard sandboxes on this deployment's own account.",
-    // Deployment-only: people never fill in a form for it.
-    fields: [],
+      "Runs Orbs as Lizard sandboxes in your own Lizard project. dx builds and checks its Orb there first, in every size your plan allows, which takes about ten minutes.",
+    fields: [
+      {
+        id: "apiKey",
+        label: "Lizard API key",
+        secret: true,
+        help: "Create one in the Lizard dashboard (lizard.build) under API keys.",
+      },
+      {
+        id: "projectId",
+        label: "Lizard project ID",
+        secret: false,
+        help: "The project dx's Orbs run in, from the Lizard dashboard's project settings.",
+      },
+    ],
     recipe: () => {
       recipe ??= vmOrbRecipe(
         `lizard\0${TEMPLATE}\0${JSON.stringify(LIZARD_SIZE_CATALOG.map(({ id, size }) => [id, size]))}`,

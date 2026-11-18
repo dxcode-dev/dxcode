@@ -8,7 +8,8 @@
 // ~/workspace inside the archive:
 //   .dx-recovered/status.txt         `git status --porcelain`
 //   .dx-recovered/uncommitted.patch  `git diff HEAD --binary`
-//   .dx-recovered/unpushed.patch     commits on no remote (`git am`)
+//   .dx-recovered/unpushed.patch     commits on no remote (`git am`), from
+//                                    the root commit in a repository with none
 //   its untracked files              (left out when the archive is too big)
 // Gitignored files (caches, build output, most secrets) are never copied.
 // Prints `none`, or `archive <dir> <bytes> <changes> <commits> <checkouts>
@@ -37,7 +38,7 @@ build() {
     mkdir -p "$out"
     git -C "$d" -c core.quotepath=off status --porcelain=v1 > "$out/status.txt" 2>/dev/null
     git -C "$d" diff HEAD --binary > "$out/uncommitted.patch" 2>/dev/null || git -C "$d" diff --binary > "$out/uncommitted.patch" 2>/dev/null
-    git -C "$d" format-patch --stdout --branches --not --remotes > "$out/unpushed.patch" 2>/dev/null || :
+    git -C "$d" format-patch --stdout --root --branches --not --remotes > "$out/unpushed.patch" 2>/dev/null || :
     c=$(wc -l < "$out/status.txt")
     k=$(grep -c '^From [0-9a-f]\\{40\\} ' "$out/unpushed.patch" 2>/dev/null) || k=0
     if [ "$c" -eq 0 ] && [ "$k" -eq 0 ]; then rm -rf "$t/tree/$rel"; continue; fi

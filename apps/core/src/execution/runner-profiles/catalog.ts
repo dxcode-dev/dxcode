@@ -6,6 +6,7 @@ import {
   type RunnerProfileCatalog,
   RunnerProfileCatalogConfiguration,
   RunnerProfileId,
+  RunnerProfileLabel,
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
@@ -52,6 +53,7 @@ const publicProfile = (
   availability: profile.availability,
   ...(profile.costLabel === undefined ? {} : { costLabel: profile.costLabel }),
   capabilities: profile.capabilities,
+  ...(profile.runsAs === undefined ? {} : { runsAs: profile.runsAs }),
 });
 
 type CatalogConfiguration = typeof RunnerProfileCatalogConfiguration.Type;
@@ -163,8 +165,14 @@ export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
         return yield* new RunnerProfileConfigurationUnavailable();
       return catalogFrom(configured);
     }
-    return withDeploymentNames(
-      catalogFrom(withProviderProfiles(configured)),
+    return withDeploymentPrices(
+      catalogFrom(
+        withNamedSizes(
+          withProviderProfiles(configured),
+          bindings,
+          deploymentOrbs,
+        ),
+      ),
       bindings,
       deploymentOrbs,
     );
@@ -172,10 +180,44 @@ export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
 );
 
 /**
- * The deployment's name for its own account of a provider, which the Orb
- * picker groups that provider's sizes under, and its price for each size.
+ * The deployment's own named sizes for its account of a provider it
+ * installs (`DeploymentOrbSettings.sizes`): each is the provider size it
+ * runs as, under its own ID and label, marked `runsAs`.
  */
-const withDeploymentNames = (
+const withNamedSizes = (
+  configuration: CatalogConfiguration,
+  bindings: Bindings,
+  deploymentOrbs: DeploymentOrbs,
+): CatalogConfiguration => {
+  const named = configuration.profiles.flatMap((profile) =>
+    (
+      deploymentOrbSettings(bindings, profile.adapter, deploymentOrbs)?.sizes ??
+      []
+    ).flatMap((size) =>
+      size.runsAs === profile.id
+        ? [
+            {
+              ...profile,
+              id: Schema.decodeUnknownSync(RunnerProfileId)(size.id),
+              label: Schema.decodeUnknownSync(RunnerProfileLabel)(size.label),
+              runsAs: profile.id,
+            },
+          ]
+        : [],
+    ),
+  );
+  return named.length === 0
+    ? configuration
+    : { ...configuration, profiles: [...configuration.profiles, ...named] };
+};
+
+/**
+ * The deployment's price for each size of its own account of a provider.
+ * The provider keeps its own name here: a person's own key for it is not
+ * the deployment's offer, and the deployment's name for its account reaches
+ * the picker on that account alone (the resolved provider's `displayName`).
+ */
+const withDeploymentPrices = (
   catalog: LoadedRunnerProfileCatalog,
   bindings: Bindings,
   deploymentOrbs: DeploymentOrbs,
@@ -190,20 +232,6 @@ const withDeploymentNames = (
           ?.costLabels?.[profile.id];
       return costLabel === undefined ? profile : { ...profile, costLabel };
     }),
-    ...(catalog.publicCatalog.providers === undefined
-      ? {}
-      : {
-          providers: catalog.publicCatalog.providers.map((provider) => {
-            const displayName = deploymentOrbSettings(
-              bindings,
-              provider.adapter,
-              deploymentOrbs,
-            )?.displayName;
-            return displayName === undefined
-              ? provider
-              : { ...provider, displayName, shortName: displayName };
-          }),
-        }),
   },
 });
 

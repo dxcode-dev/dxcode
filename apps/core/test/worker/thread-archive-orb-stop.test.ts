@@ -33,9 +33,11 @@ import { runRepositories } from "./runtime.js";
  *   container has not been started". Was a 503; now 200 and stopped, with no
  *   snapshot, since nothing ran.
  * - F3: a started container that was never saved and can't be snapshotted
- *   is never stopped (#1642); archive answers 200 `orbStopping`, nothing
- *   wakes it while archived, and the object retries the stop, snapshot
- *   first, and logs `orb_stop_abandoned` after three tries.
+ *   is not stopped at once (#1642); archive answers 200 `orbStopping`,
+ *   nothing wakes it while archived, and the object retries the stop,
+ *   snapshot first, and logs `orb_stop_abandoned` after three tries. Was
+ *   left running, and billing, for good; now its git work is copied out
+ *   and it is stopped after an hour of failed snapshots (#1687).
  * - F4, #1740: archived while the first activation still starts the Orb
  *   (record `provisioning`). Was a 503; now 200 `orbStopping`, and the
  *   object stops it, snapshot first, once every open queued before the
@@ -189,6 +191,7 @@ const orbWorld = () => {
     advance: (ms: number) => {
       clock += ms;
     },
+    now: () => clock,
     /** The object's alarm, as Cloudflare fires it. */
     fireAlarm: () => controller.alarm(),
   };
@@ -392,7 +395,7 @@ describe("archive's Orb stop through the real route and Orb object", () => {
     await expect(lifecycleState(threadId)).resolves.toBe("archived");
   });
 
-  it("never stops a started, never-saved Orb it can't snapshot; answers orbStopping, nothing wakes it, and the stop is retried then logged abandoned", async () => {
+  it("stops a started, never-saved Orb it can't snapshot only after an hour; answers orbStopping, nothing wakes it, and the stop is retried, logged abandoned, then made after the copy (#1687)", async () => {
     captureLogs();
     const { cookie, threadId, world } = await ownThread();
     await openOrb(threadId);
@@ -462,6 +465,30 @@ describe("archive's Orb stop through the real route and Orb object", () => {
         threadId,
         sandboxId: "orb-object-id",
         tries: 3,
+      }),
+    ]);
+    await expect(lifecycleState(threadId)).resolves.toBe("archived");
+
+    // The idle pause keeps trying; after an hour of failures the object
+    // copies the git work out and stops it rather than bill for good.
+    const archivedAt = world.now();
+    while (
+      world.container.running &&
+      world.now() < archivedAt + 4 * 3_600_000
+    ) {
+      world.advance(10_000);
+      await world.fireAlarm();
+    }
+    expect(world.container.running).toBe(false);
+    expect(world.now() - archivedAt).toBeLessThan(75 * 60_000);
+    expect(world.container.destroy).toHaveBeenCalledOnce();
+    expect(
+      logged.filter((line) => line.event === "orb_container_stopped_unsaved"),
+    ).toEqual([
+      expect.objectContaining({
+        level: "error",
+        neverSaved: true,
+        failures: 8,
       }),
     ]);
     await expect(lifecycleState(threadId)).resolves.toBe("archived");

@@ -209,19 +209,12 @@ const boatApiKey =
   target !== "selfhost" || selfhostConfig.integrations.includes("boat")
     ? operatorEnvironment.BOAT_API_KEY?.trim()
     : undefined;
-// Lizard on the deployment's own account (a hosted offer's Orbs): hosted
-// targets only, with its project and optional region; a self-host never.
-const lizardSettings =
+// Agent37 on the deployment's own account (a hosted offer's Orbs): hosted
+// targets only; a self-host never.
+const agent37ApiKey =
   target === "selfhost"
-    ? {}
-    : Object.fromEntries(
-        ["LIZARD_API_KEY", "LIZARD_PROJECT_ID", "LIZARD_REGION"].flatMap(
-          (name) => {
-            const value = operatorEnvironment[name]?.trim();
-            return value ? [[name, value]] : [];
-          },
-        ),
-      );
+    ? undefined
+    : operatorEnvironment.AGENT37_API_KEY?.trim();
 // Bug report forwarding (#1661). Hosted targets read the environment: the
 // central deployment and its intake key, and the intake secret that makes
 // this one central. A self-host opts in with the `bugReportForwarding` and
@@ -779,10 +772,10 @@ const environment = {
   ...(sarvamApiKey ? { SARVAM_API_KEY: sarvamApiKey } : {}),
   ...(exaApiKey ? { EXA_API_KEY: exaApiKey } : {}),
   ...(boatApiKey ? { BOAT_API_KEY: boatApiKey } : {}),
+  ...(agent37ApiKey ? { AGENT37_API_KEY: agent37ApiKey } : {}),
   ...(realtimeKitApiToken
     ? { DX_REALTIMEKIT_API_TOKEN: realtimeKitApiToken }
     : {}),
-  ...lizardSettings,
   ...(deploymentAdminEmails
     ? { DX_DEPLOYMENT_ADMIN_EMAILS: deploymentAdminEmails }
     : {}),

@@ -85,17 +85,9 @@ export interface OrbProviderDescriptor<
      * connection (its connector saves the Orb image there), once for every
      * person's Threads.
      */
-    | { readonly secret: "BOAT_API_KEY"; readonly prepared: true }
     | {
-        readonly secret: "LIZARD_API_KEY";
+        readonly secret: "BOAT_API_KEY" | "AGENT37_API_KEY";
         readonly prepared: true;
-        /**
-         * Credential fields the deployment sets beside its key, each from
-         * a binding: the account's project, and where it runs.
-         */
-        readonly settings: Readonly<
-          Record<string, "LIZARD_PROJECT_ID" | "LIZARD_REGION">
-        >;
       }
     | { readonly binding: "ORB_CONTAINER" };
   /** The runner-profile configuration for this adapter. */

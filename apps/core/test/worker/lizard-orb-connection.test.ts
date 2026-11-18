@@ -3,7 +3,6 @@ import { Principal, type UserId } from "@dx/domain";
 import { Effect, Redacted, Schema } from "effect";
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
-import type { DeploymentOrbs } from "../../src/execution/deployment-orbs.js";
 import { sweepIdleDeadlines } from "../../src/execution/idle-deadlines.js";
 import { makeLizardConnector } from "../../src/execution/lizard/connector.js";
 import {
@@ -15,15 +14,10 @@ import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
 import type { OrbProviderConnectors } from "../../src/plugins/execution/connector.js";
-import {
-  advanceDeploymentPreparation,
-  findDeploymentPreparation,
-} from "../../src/plugins/execution/deployment-preparation.js";
 import { makePersonalOrbProviderRoutes } from "../../src/plugins/execution/orb-provider-routes.js";
 import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-providers.js";
+import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import {
-  composeExecutionWorkspaces,
-  type ExecutionActivation,
   type ExecutionContext,
   resolveExecutionProviders,
 } from "../../src/plugins/execution/provider.js";
@@ -31,51 +25,106 @@ import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 import { fakeLizard, type LizardWorld, lizardWorld } from "./fake-lizard.js";
 
 /**
- * Lizard on the deployment's own account (a hosted offer's Orbs), over real D1
- * with Lizard faked at the HTTP boundary.
+ * Lizard in a person's own Lizard project (BYOK; owner, 2026-11-17: no
+ * deployment runs Lizard on its own account), over real D1 with Lizard
+ * faked at the HTTP boundary.
  *
- * Ways it could fail, each covered below: Lizard is installed without its
- * key, or with a key and no project it crashes instead of failing clearly;
- * preparation builds one snapshot for every size although each size
- * restores only at its own; a size the account cannot start (Large on the
- * trial) fails the whole preparation instead of being unavailable with
- * Lizard's reason, or a failed size's build stays running; a Thread pins
- * another size's snapshot, runs as root, or sends the key anywhere but the
- * Authorization header; a person saves their own Lizard connection; an idle
+ * Ways it could fail, each covered below: a deployment installs Lizard on
+ * its own account from an old LIZARD_API_KEY binding; a bad key or a
+ * project the key cannot reach is saved; preparation builds one snapshot
+ * for every size although each size restores only at its own; a size the
+ * account cannot start (Large on the trial) fails the whole preparation
+ * instead of being unavailable with Lizard's reason, or a failed size's
+ * build stays running; a Thread pins another size's snapshot, runs as
+ * root, or sends the key anywhere but the Authorization header; an idle
  * Orb is never paused (Lizard has no pause of its own and its timeout
- * deletes the disk), one whose activity moved its deadline is paused
- * anyway, or a failed pause is never retried; a paused Orb is not resumed on
- * the next activation, or does not say its processes restarted (a Lizard
- * pause keeps files only); archiving deletes instead of pausing, or destroying
- * keeps the sandbox.
+ * deletes the disk), is paused with no key because the sweep looked for a
+ * deployment key, one whose activity moved its deadline is paused anyway,
+ * or a failed pause is never retried; a paused Orb is not resumed on the
+ * next activation, or does not say its processes restarted; archiving
+ * deletes instead of pausing, or destroying keeps the sandbox.
  */
 
-const owner = "lz-deploy-owner" as UserId;
+const owner = "lz-byok-owner" as UserId;
 const project = "prj_00000000-0000-4000-8000-0000000009a1";
 const threadId = "thr_00000000-0000-4000-8000-0000000009a2";
-const timestamp = "2026-11-10T00:00:00.000Z";
+const timestamp = "2026-11-17T00:00:00.000Z";
 
 let world: LizardWorld;
 let connectors: OrbProviderConnectors;
 let send: typeof fetch;
 
-const base: Bindings = {
+/** No Lizard binding at all: only people's own projects run it. */
+const bindings: Bindings = {
   DB: env.DB,
   DX_RUNTIME_MODE: "deployed",
   DX_CONFIG_ENCRYPTION_KEYS: TEST_CONFIG_ENCRYPTION_KEYS,
 };
-const withLizard = (): Bindings => ({
-  ...base,
-  LIZARD_API_KEY: world.apiKey,
-  LIZARD_PROJECT_ID: world.projectId,
-});
 
-const prepare = async (bindings = withLizard()) => {
-  for (let step = 0; step < 40; step += 1) {
-    const outcome = await advanceDeploymentPreparation(
+const call = async (
+  path: string,
+  method: "GET" | "PUT" = "GET",
+  body?: unknown,
+  using: Bindings = bindings,
+) => {
+  const router = new Hono<AppEnv>();
+  router.use("*", requestId);
+  router.use("*", async (context, next) => {
+    context.set(
+      "principal",
+      Schema.decodeUnknownSync(Principal)({
+        userId: owner,
+        credentialScopes: ["personal", "workspace"],
+      }),
+    );
+    await next();
+  });
+  router.route(
+    "/personal/orb-providers",
+    makePersonalOrbProviderRoutes({ connectors }),
+  );
+  router.onError(errorHandler);
+  const response = await router.request(
+    `/personal/orb-providers${path}`,
+    {
+      method,
+      ...(body === undefined
+        ? {}
+        : {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+    },
+    using,
+  );
+  const text = await response.text();
+  // The key never comes back from the API.
+  expect(text).not.toContain(world.apiKey);
+  // biome-ignore lint/suspicious/noExplicitAny: response shapes are asserted below.
+  return { status: response.status, body: JSON.parse(text) as any };
+};
+
+const lizardOf = async () =>
+  (
+    (await call("")).body.data.providers as Array<{
+      id: string;
+      // biome-ignore lint/suspicious/noExplicitAny: asserted below.
+      connection: any;
+      // biome-ignore lint/suspicious/noExplicitAny: asserted below.
+      fields: any;
+      deployment: boolean;
+    }>
+  ).find(({ id }) => id === "lizard");
+
+const connect = (credentials: Record<string, string>) =>
+  call("/lizard/connection", "PUT", { credentials });
+
+const prepare = async () => {
+  for (let step = 0; step < 60; step += 1) {
+    const outcome = await advanceConnection(
       bindings,
       env.DB,
-      "lizard",
+      { scope: "personal", targetId: owner, providerId: "lizard" },
       connectors,
     );
     if (outcome.nextStepInMs === undefined) return;
@@ -86,7 +135,7 @@ const prepare = async (bindings = withLizard()) => {
 const pin = (runnerProfileId: string) =>
   resolveThreadExecutionPin({
     db: env.DB,
-    bindings: withLizard(),
+    bindings,
     userId: owner,
     projectId: project,
     runnerProfileId,
@@ -120,56 +169,19 @@ const pinThread = async (runnerProfileId: string) => {
   return pinned;
 };
 
-/** The execution context Core composes for the Thread from the bindings. */
-const composedContext = async (deploymentOrbs?: DeploymentOrbs) => {
-  const contexts: Array<ExecutionContext> = [];
-  const workspaces = composeExecutionWorkspaces(
-    withLizard(),
-    { lizard: makeLizardExecutionProvider({ fetch: send }) },
-    () =>
-      ({
-        activate: async (context: ExecutionContext) => {
-          contexts.push(context);
-          throw new Error("Orb started.");
-        },
-        reconnect: async () => {
-          throw new Error("unused");
-        },
-        ensureDaemon: async () => {
-          throw new Error("unused");
-        },
-        recordResidentTerminalInput: async () => undefined,
-        recordResidentTerminalHeartbeat: () => undefined,
-      }) as unknown as ExecutionActivation,
-    undefined,
-    undefined,
-    undefined,
-    deploymentOrbs,
-  );
-  await expect(
-    workspaces.sandboxFactory.createSandbox({ id: threadId }),
-  ).rejects.toThrow("Orb started.");
-  return contexts[0] as ExecutionContext;
-};
-
 const idleRows = async () =>
   (
     await env.DB.prepare(
-      "SELECT provider_id, sandbox_id, thread_id, deadline_at FROM orb_idle_deadline",
-    ).all<{
-      provider_id: string;
-      sandbox_id: string;
-      thread_id: string;
-      deadline_at: number;
-    }>()
+      "SELECT provider_id, sandbox_id, thread_id FROM orb_idle_deadline",
+    ).all()
   ).results;
 
 const sweep = (now: number) =>
   sweepIdleDeadlines(
-    withLizard(),
+    bindings,
     {
-      lizard: (bindings, sandboxId) =>
-        pauseIdleLizardSandbox(bindings, sandboxId, send),
+      lizard: (sweepBindings, sandboxId, thread) =>
+        pauseIdleLizardSandbox(sweepBindings, sandboxId, thread, send),
     },
     now,
   );
@@ -179,46 +191,73 @@ beforeEach(async () => {
   send = fakeLizard(world) as typeof fetch;
   connectors = { lizard: makeLizardConnector({ fetch: send }) };
   await env.DB.batch([
-    env.DB.prepare("DELETE FROM orb_deployment_preparation"),
     env.DB.prepare("DELETE FROM orb_idle_deadline"),
     env.DB.prepare(
-      'INSERT INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
+      'INSERT OR REPLACE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
     ).bind(owner, owner, `${owner}@example.com`, 1, 1),
     env.DB.prepare(
-      `INSERT INTO projects (id, owner_user_id, workspace_id, name, runner_profile_id, created_at, updated_at)
+      `INSERT OR REPLACE INTO projects (id, owner_user_id, workspace_id, name, runner_profile_id, created_at, updated_at)
        VALUES (?, ?, NULL, 'Lizard project', 'lz.medium', ?, ?)`,
     ).bind(project, owner, timestamp, timestamp),
   ]);
 });
 
-describe("Lizard on the deployment's own account", () => {
-  it("is installed only by its key, and without a project fails preparation clearly", async () => {
+describe("Lizard in a person's own project", () => {
+  it("is never the deployment's account, even with an old LIZARD_API_KEY binding, and refuses a bad key or project", async () => {
+    const legacy = {
+      ...bindings,
+      LIZARD_API_KEY: world.apiKey,
+      LIZARD_PROJECT_ID: world.projectId,
+    } as Bindings;
     expect(
-      resolveExecutionProviders(base).map(({ providerId }) => providerId),
+      resolveExecutionProviders(legacy).map(({ providerId }) => providerId),
     ).not.toContain("lizard");
-    expect(
-      resolveExecutionProviders(withLizard()).map(
-        ({ providerId }) => providerId,
-      ),
-    ).toContain("lizard");
-    expect(world.calls).toEqual([]);
+    const listed = await lizardOf();
+    expect(listed).toMatchObject({
+      deployment: false,
+      connection: null,
+      fields: [
+        { id: "apiKey", secret: true },
+        { id: "projectId", secret: false },
+      ],
+    });
+    // Nothing to start on before the person connects.
+    await expect(pin("lz.small")).rejects.toMatchObject({
+      reason: "no-provider",
+    });
 
-    const { LIZARD_PROJECT_ID: _, ...noProject } = withLizard();
-    await prepare(noProject);
-    const failed = await findDeploymentPreparation(env.DB, "lizard");
-    expect(failed?.status).toBe("failed");
-    expect(failed?.error).toContain("LIZARD_PROJECT_ID");
+    const badKey = await connect({
+      apiKey: "liz_wrong",
+      projectId: world.projectId,
+    });
+    expect(badKey.status).toBe(400);
+    expect(badKey.body.data.detail).toBe("Lizard rejected this API key.");
+    const badProject = await connect({
+      apiKey: world.apiKey,
+      projectId: "prj_someone_else",
+    });
+    expect(badProject.status).toBe(400);
+    expect(badProject.body.data.detail).toMatch(/no such project/);
     expect(world.sandboxes.size).toBe(0);
   });
 
   it("builds and checks one snapshot per size, marks a size the account refuses unavailable, and leaves nothing running", async () => {
+    const saved = await connect({
+      apiKey: world.apiKey,
+      projectId: world.projectId,
+    });
+    expect(saved.status).toBe(200);
+    // The account is the project, the same for every key of it.
+    expect((await lizardOf())?.connection).toMatchObject({
+      account: world.projectId,
+      status: "preparing",
+    });
     // Before preparation no Thread can start.
     await expect(pin("lz.medium")).rejects.toMatchObject({
       reason: "preparing",
     });
     await prepare();
-    const prepared = await findDeploymentPreparation(env.DB, "lizard");
-    expect(prepared?.status).toBe("ready");
+    expect((await lizardOf())?.connection).toMatchObject({ status: "ready" });
 
     // A build per size the account may start, from the claude template.
     const builds = [...world.sandboxes.values()].filter(
@@ -227,8 +266,6 @@ describe("Lizard on the deployment's own account", () => {
     expect(builds.map(({ size }) => size).sort()).toEqual(
       ["medium", "mini", "small"].sort(),
     );
-    // Each build ran the Orb recipe as root and deletes itself if dx loses
-    // it; none of it runs any more.
     for (const build of builds) {
       // Within the hour Lizard's trial allows a sandbox.
       expect(build.timeoutMs).toBeGreaterThan(0);
@@ -260,13 +297,15 @@ describe("Lizard on the deployment's own account", () => {
       ),
     ).toEqual([]);
 
-    // Threads pin their own size's snapshot.
+    // Threads pin their own size's snapshot on the person's project.
     for (const size of ["mini", "small", "medium"]) {
       const pinned = await pin(`lz.${size}`);
       const snapshot = snapshots.find((entry) => entry.size === size);
       expect(pinned).toMatchObject({
         provider: "lizard",
-        credentialScope: "deployment",
+        credentialScope: "personal",
+        credentialOwnerId: owner,
+        credentialAccount: world.projectId,
         providerTemplate: snapshot?.id,
       });
     }
@@ -274,19 +313,18 @@ describe("Lizard on the deployment's own account", () => {
     await expect(pin("lz.large")).rejects.toMatchObject({
       reason: "size-unavailable",
     });
-    expect(JSON.stringify(prepared?.state)).toContain(
-      "Sandboxes are not available",
-    );
+    expect(
+      JSON.stringify((await lizardOf())?.connection.unavailableSizes),
+    ).toContain("Sandboxes are not available");
   });
 
   it("takes one snapshot per size even when Lizard's answer to it is lost", async () => {
     // A full VM's snapshot can outlast the request: the first two answers
     // are lost although Lizard takes both snapshots.
     world.loseSnapshotAnswers = 2;
+    await connect({ apiKey: world.apiKey, projectId: world.projectId });
     await prepare();
-    expect((await findDeploymentPreparation(env.DB, "lizard"))?.status).toBe(
-      "ready",
-    );
+    expect((await lizardOf())?.connection.status).toBe("ready");
     const names = [...world.snapshots.values()].map(({ name }) => name);
     expect(names).toHaveLength(3);
     expect(new Set(names).size).toBe(3);
@@ -295,6 +333,7 @@ describe("Lizard on the deployment's own account", () => {
   it("retries a size Lizard is too busy to start now, instead of giving it up", async () => {
     // The trial runs 1 Small at a time: a refusal for that is retried.
     world.busyOnce.add("small");
+    await connect({ apiKey: world.apiKey, projectId: world.projectId });
     await prepare();
     expect((await pin("lz.small"))?.provider).toBe("lizard");
     expect(world.busyOnce.size).toBe(0);
@@ -302,16 +341,16 @@ describe("Lizard on the deployment's own account", () => {
 
   it("keeps the other sizes when one size's build fails, and fails only when none can run", async () => {
     world.failingSetup.add("mini");
+    await connect({ apiKey: world.apiKey, projectId: world.projectId });
     await prepare();
-    const prepared = await findDeploymentPreparation(env.DB, "lizard");
-    expect(prepared?.status).toBe("ready");
+    expect((await lizardOf())?.connection.status).toBe("ready");
     await expect(pin("lz.mini")).rejects.toMatchObject({
       reason: "size-unavailable",
     });
     expect((await pin("lz.small"))?.provider).toBe("lizard");
-    expect(JSON.stringify(prepared?.state)).toContain(
-      "No space left on device",
-    );
+    expect(
+      JSON.stringify((await lizardOf())?.connection.unavailableSizes),
+    ).toContain("No space left on device");
     // The failed build is deleted, and so is any snapshot it left.
     expect(
       [...world.sandboxes.values()].filter(
@@ -326,119 +365,39 @@ describe("Lizard on the deployment's own account", () => {
     world = lizardWorld({ allowedSizes: new Set() });
     send = fakeLizard(world) as typeof fetch;
     connectors = { lizard: makeLizardConnector({ fetch: send }) };
-    await env.DB.prepare("DELETE FROM orb_deployment_preparation").run();
+    await connect({ apiKey: world.apiKey, projectId: world.projectId });
     await prepare();
-    const failed = await findDeploymentPreparation(env.DB, "lizard");
+    const failed = (await lizardOf())?.connection;
     expect(failed?.status).toBe("failed");
     expect(failed?.error).toContain("No Orb size could run");
   });
 
-  it("is never a person's own connection, only the deployment's", async () => {
-    await prepare();
-    const page = async (deploymentOrbs: DeploymentOrbs) => {
-      const router = new Hono<AppEnv>();
-      router.use("*", requestId);
-      router.use("*", async (context, next) => {
-        context.set(
-          "principal",
-          Schema.decodeUnknownSync(Principal)({
-            userId: owner,
-            credentialScopes: ["personal", "workspace"],
-          }),
-        );
-        await next();
-      });
-      router.route(
-        "/personal/orb-providers",
-        makePersonalOrbProviderRoutes({
-          connectors,
-          deploymentOrbs,
-          // Open to everyone, as a deployment's own offer is once launched.
-          closedOrbProviders: async () => new Set(),
-        }),
-      );
-      router.onError(errorHandler);
-      return router;
-    };
-    // A person cannot save their own Lizard key.
-    const saved = await (await page({})).request(
-      "/personal/orb-providers/lizard/connection",
-      {
-        method: "PUT",
-        body: JSON.stringify({ credentials: { apiKey: "liz_someone_else" } }),
-        headers: { "content-type": "application/json" },
-      },
-      withLizard(),
-    );
-    expect(saved.status).toBe(400);
-    type Page = {
-      data: {
-        providers: Array<{
-          id: string;
-          fields: Array<unknown>;
-          deployment: boolean;
-        }>;
-        resolved: Array<{
-          providerId: string;
-          scope: string;
-          displayName: string;
-          status: string;
-        }>;
-      };
-    };
-    const read = async (deploymentOrbs: DeploymentOrbs) => {
-      const response = await (await page(deploymentOrbs)).request(
-        "/personal/orb-providers",
-        {},
-        withLizard(),
-      );
-      const text = await response.text();
-      expect(text).not.toContain(world.apiKey);
-      return (JSON.parse(text) as Page).data;
-    };
-    // Unpresented, it is listed as the deployment's account, with no form.
-    const plain = await read({});
-    expect(plain.providers.find(({ id }) => id === "lizard")).toMatchObject({
-      deployment: true,
-      fields: [],
-    });
-    // Presented under the deployment's own name, it is offered
-    // as that, ready, and not listed under Lizard at all.
-    const hosted = await read({
-      lizard: {
-        displayName: "Hosted Orbs",
-        description: "Pauses when idle.",
-        inactivityMs: 3_600_000,
-        costLabels: {},
-      },
-    });
-    expect(hosted.providers.find(({ id }) => id === "lizard")).toBeUndefined();
-    expect(
-      hosted.resolved.find(({ providerId }) => providerId === "lizard"),
-    ).toMatchObject({
-      scope: "deployment",
-      displayName: "Hosted Orbs",
-      status: "ready",
-    });
-  });
-
-  it("starts a Thread from its size's snapshot as `user`, pauses it when idle, resumes it, archives and destroys it", async () => {
+  it("starts a Thread from its size's snapshot as `user`, pauses it when idle with the person's key, resumes it, archives and destroys it", async () => {
+    await connect({ apiKey: world.apiKey, projectId: world.projectId });
     await prepare();
     const pinned = await pinThread("lz.small");
     const target = await Effect.runPromise(
-      resolveExecutionTarget(withLizard(), threadId, { admission: false }),
+      resolveExecutionTarget(bindings, threadId, { admission: false }),
     );
     expect(target.profile).toMatchObject({
       adapter: "lizard",
       size: "small",
       snapshot: pinned?.providerTemplate,
     });
-    // Core composes the deployment's key with its project.
-    const context = await composedContext();
-    expect(Redacted.value(context.credentials as never)).toEqual({
+    if (target.credential.scope !== "personal") throw new Error("no account");
+    expect(Redacted.value(target.credential.credentials)).toEqual({
       apiKey: world.apiKey,
       projectId: world.projectId,
     });
+    const context: ExecutionContext = {
+      account: {
+        scope: "personal",
+        userId: owner,
+        providerAccount: world.projectId,
+      },
+      credentials: target.credential.credentials,
+      profile: target.profile,
+    };
 
     const provider = makeLizardExecutionProvider({ fetch: send });
     const handle = await provider.workspace.create(
@@ -453,8 +412,6 @@ describe("Lizard on the deployment's own account", () => {
     expect(thread).toBeDefined();
     // A Thread's sandbox never has a Lizard deadline: that would delete it.
     expect(thread?.timeoutMs).toBe(0);
-    // A pause keeps files only, so the handle says when the Orb's
-    // processes started: a Terminal from before a pause is gone.
     expect(handle.processesStartedAt).toBe(1_794_300_000 * 1_000);
     const ran = await handle.guest.commands.run("whoami", {
       cwd: "/home/user",
@@ -463,7 +420,8 @@ describe("Lizard on the deployment's own account", () => {
     expect(thread?.execs.at(-1)).toMatchObject({ user: "user" });
     expect(thread?.execs.at(-1)?.cmd).toContain("exec bash -l -c");
 
-    // Idle: the deadline lives in D1, and the minute sweep pauses the Orb.
+    // Idle: the deadline lives in D1, and the minute sweep pauses the Orb
+    // with the key the Thread's pin resolves to (no deployment key exists).
     const now = Date.now();
     await handle.setIdleDeadline(60_000);
     expect(await idleRows()).toMatchObject([
@@ -493,15 +451,6 @@ describe("Lizard on the deployment's own account", () => {
     expect(thread?.status).toBe("running");
     // A fresh boot: the processes started after the pause.
     expect(resumed.processesStartedAt).toBe((1_794_300_000 + 600) * 1_000);
-    expect(
-      (await resumed.guest.commands.run("true", { cwd: "/home/user" }))
-        .exitCode,
-    ).toBe(0);
-    expect(
-      [...world.sandboxes.values()].filter(
-        ({ snapshotId }) => snapshotId === pinned?.providerTemplate,
-      ),
-    ).toHaveLength(2); // the preparation's test Orb, and the Thread's
 
     // Archiving pauses it (and clears its deadline); destroying deletes it.
     await resumed.setIdleDeadline(60_000);

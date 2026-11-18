@@ -15,7 +15,11 @@ import {
   type DaemonGuestHandle,
   guestResidentDaemon,
 } from "../guest/resident-daemon.js";
-import { clearIdleDeadline, setIdleDeadline } from "../idle-deadlines.js";
+import {
+  clearIdleDeadline,
+  idleOrbCredentials,
+  setIdleDeadline,
+} from "../idle-deadlines.js";
 import {
   type ExecutionWorkspaceRecord,
   executionWorkspaceRecords,
@@ -77,9 +81,8 @@ const lizardProfile = (
 };
 
 /**
- * Lizard runs only on the deployment's own account (LIZARD_API_KEY, its
- * LIZARD_PROJECT_ID, and LIZARD_REGION), which the key composition passes
- * in the context and which never leaves the Worker.
+ * Lizard runs on a person's or workspace's own Lizard project: its key and
+ * project ID, from the connection the composition passes in the context.
  */
 const apiFor = (context: ExecutionContext, send?: typeof fetch) => {
   const credentials =
@@ -94,18 +97,6 @@ const apiFor = (context: ExecutionContext, send?: typeof fetch) => {
     send,
     credentials.region,
   );
-};
-
-/** The deployment's Lizard account, for the idle sweep (no context). */
-export const deploymentLizardApi = (
-  bindings: Bindings,
-  send?: typeof fetch,
-): LizardApi | undefined => {
-  const apiKey = (bindings.LIZARD_API_KEY ?? "").trim();
-  const projectId = (bindings.LIZARD_PROJECT_ID ?? "").trim();
-  if (apiKey === "" || projectId === "") return undefined;
-  const region = (bindings.LIZARD_REGION ?? "").trim();
-  return lizardApi(apiKey, projectId, send, region === "" ? undefined : region);
 };
 
 /** Polls until the sandbox runs commands. */
@@ -296,19 +287,27 @@ const untilPaused = async (api: LizardApi, id: string) => {
 export const pauseIdleLizardSandbox = async (
   bindings: Bindings,
   sandboxId: string,
+  threadId: string,
   send?: typeof fetch,
 ) => {
-  const api = deploymentLizardApi(bindings, send);
-  if (api === undefined) throw unavailable("no Lizard account");
+  const credentials = await idleOrbCredentials(bindings, threadId);
+  if (credentials?.apiKey === undefined || credentials.projectId === undefined)
+    throw unavailable("no Lizard account");
+  const api = lizardApi(
+    credentials.apiKey,
+    credentials.projectId,
+    send,
+    credentials.region,
+  );
   const sandbox = await api.getSandbox(sandboxId);
   if (sandbox === undefined || sandbox.status !== "running") return;
   await api.pause(sandboxId);
 };
 
 /**
- * Lizard sandboxes (https://lizard.build), one per Thread, on the
- * deployment's own Lizard account (a hosted offer). Every size starts from the dx
- * Orb snapshot the deployment's preparation made for it (connector.ts).
+ * Lizard sandboxes (https://lizard.build), one per Thread, in a person's or
+ * workspace's own Lizard project. Every size starts from the dx Orb
+ * snapshot that project's preparation made for it (connector.ts).
  * A pause keeps memory, so processes resume in place
  * (`execution.pause-resume`, `processes`). Lizard has no idle pause, so
  * the handle's idle deadline lives in D1 and the Worker's cron pauses the

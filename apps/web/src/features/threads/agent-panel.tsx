@@ -413,11 +413,21 @@ const isModelRoutingError = (error: unknown) => {
  * The Orb's disk filled up and even dx's reserve could not make room
  * (`(dx_failure:…:WORKSPACE_DISK_FULL)`). Its first sentence names the
  * limit; the disk notice above the card offers the ways to free space.
+ * Or Claude Code could not start on a disk that turned read-only or returns
+ * I/O errors (`WORKSPACE_READ_ONLY`, #1843): the next turn's activation
+ * restarts the Orb, so Retry repairs it.
  */
 const diskFullPresentation = (
   id: string,
   text: string,
 ): ThreadErrorPresentation | undefined => {
+  if (/:WORKSPACE_READ_ONLY\)/.test(text))
+    return {
+      id,
+      title: "The Orb's disk is failing",
+      message: "Retry copies your unsaved work out and restarts the Orb.",
+      action: "resume",
+    };
   if (!/\(dx_failure:[a-z]+:WORKSPACE_DISK_FULL\)/.test(text)) return undefined;
   // "(20 GB limit)" and the like, when Core's text names the limit.
   const limit = /Workspace disk is full( \([^)]*\))?/.exec(text)?.[1] ?? "";
@@ -474,14 +484,15 @@ const pluginAgentFailurePresentation = (
 /**
  * Core refused the run at Orb start: its source grant changed, or the
  * deployment's Orb billing policy refused it with a reason. Or the Orb's
- * disk became read-only, and the details say what dx did about it.
+ * disk is failing (read-only or I/O errors), and the details say what dx
+ * did about it.
  */
 const orbStartDenial = (error: unknown) => {
   if (typeof error !== "object" || error === null) return undefined;
   const { type, message, details } = error as Record<string, unknown>;
   if (type === "workspace_read_only")
     return {
-      title: "The Orb's disk became read-only",
+      title: "The Orb's disk is failing",
       message: typeof details === "string" ? details : "",
     };
   if (type === "workspace_unresponsive")
@@ -493,6 +504,12 @@ const orbStartDenial = (error: unknown) => {
   if (type === "orb_start_timed_out")
     return {
       title: typeof message === "string" ? message : "The Orb is slow to start",
+      message: typeof details === "string" ? details : "",
+    };
+  // The provider account has no Orb template for the size (#1936).
+  if (type === "orb_template_missing")
+    return {
+      title: typeof message === "string" ? message : "Orb template missing",
       message: typeof details === "string" ? details : "",
     };
   if (type === "orb_start_refused") {

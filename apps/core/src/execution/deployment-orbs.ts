@@ -24,6 +24,18 @@ export interface DeploymentOrbSettings {
    * size cards show it. A size the deployment's catalog labels keeps that.
    */
   readonly costLabels?: Readonly<Record<string, string>>;
+  /**
+   * The deployment's own named sizes for its account, each running as one
+   * of the provider's sizes (`runsAs`). With them, the deployment's account
+   * runs only these sizes, under `displayName`, and the provider's own sizes
+   * run only on people's and workspaces' own keys, so choosing one never
+   * means the other.
+   */
+  readonly sizes?: ReadonlyArray<{
+    readonly id: string;
+    readonly label: string;
+    readonly runsAs: string;
+  }>;
 }
 
 export type DeploymentOrbs = Readonly<
@@ -61,5 +73,20 @@ export const presentedDeploymentProviders = (
   new Set(
     resolveExecutionProviders(bindings).flatMap(({ providerId }) =>
       registered[providerId]?.displayName === undefined ? [] : [providerId],
+    ),
+  );
+
+/**
+ * The providers whose deployment account runs only the deployment's own
+ * named sizes (`DeploymentOrbSettings.sizes`): their own sizes never fall
+ * back to the deployment's account.
+ */
+export const namedSizeDeploymentProviders = (
+  bindings: Bindings,
+  registered: DeploymentOrbs = registeredDeploymentOrbs,
+): ReadonlySet<string> =>
+  new Set(
+    resolveExecutionProviders(bindings).flatMap(({ providerId }) =>
+      (registered[providerId]?.sizes?.length ?? 0) > 0 ? [providerId] : [],
     ),
   );

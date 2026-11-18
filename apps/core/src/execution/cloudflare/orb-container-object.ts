@@ -118,6 +118,8 @@ export class OrbContainerObject extends DurableObject {
     readonly instance: CloudflareContainerInstance;
     readonly idleMs: number;
     readonly allowReset?: boolean;
+    readonly startOver?: boolean;
+    readonly firstTry?: boolean;
   }) {
     return this.#controller.open(input);
   }

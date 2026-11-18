@@ -544,7 +544,12 @@ const openCloudflareWorkspaceTimed = async (
   // and Cloudflare's instance list (named by Thread), it places a slow start.
   // Only activation sets a workspace up, so only it may start one that lost
   // its files over from the image.
-  const open = async (create: boolean, startOver = false) => {
+  const open = async (
+    create: boolean,
+    startOver = false,
+    /** The wake's first try: a shorter stall budget (#1993). */
+    firstTry = false,
+  ) => {
     const startedAt = Date.now();
     const details = {
       event: "orb_container_open",
@@ -579,6 +584,7 @@ const openCloudflareWorkspaceTimed = async (
             idleMs,
             allowReset: !options.existingOnly,
             ...(startOver ? { startOver } : {}),
+            ...(startOver && firstTry ? { firstTry } : {}),
           }),
           CLOUDFLARE_OPEN_TIMEOUT_MS,
           () => orbStartTimedOut(),
@@ -613,6 +619,7 @@ const openCloudflareWorkspaceTimed = async (
           event: "orb_container_unsaved_stop_told",
           stoppedAt: result.unsavedStop.stoppedAt,
           savedAt: result.unsavedStop.savedAt,
+          neverSaved: result.unsavedStop.neverSaved === true,
           rescue:
             restored !== undefined
               ? "restored"
@@ -716,7 +723,7 @@ const openCloudflareWorkspaceTimed = async (
       }
       await options.observeResidency(observed.running ? "running" : "paused");
     }
-    let result = await open(false, true);
+    let result = await open(false, true, true);
     if (result.kind === "missing" && sandboxId !== rootSandboxId) {
       // Followed a move the first object announced before Core adopted it
       // in the next object (thr_edc0a58e): the first object hands it over,
@@ -727,7 +734,7 @@ const openCloudflareWorkspaceTimed = async (
         to: sandboxId,
       });
       bind();
-      result = await open(false, true);
+      result = await open(false, true, true);
     }
     // A stalled wake moves to the Thread's next container object with the
     // same snapshot, at most `MAX_START_OVERS` times per open; the last one

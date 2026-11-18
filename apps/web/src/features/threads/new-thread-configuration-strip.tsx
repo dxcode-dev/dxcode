@@ -8,7 +8,9 @@ import type {
 } from "@dx/api";
 import {
   isClaudeCodeModel,
+  orbAccountForProfile,
   orbProviderBetaFeature,
+  orbSizeGroupKey,
   type ProjectId,
   type RunnerProfile,
   type RunnerProfileId,
@@ -312,17 +314,27 @@ const runnerProfileGroups = (
   providers: ReadonlyArray<RunnerProviderPresentation>,
   orbs: ReadonlyArray<OrbResolvedProvider>,
 ) =>
-  [...new Set(profiles.map(({ adapter }) => adapter))].flatMap((adapter) => {
-    const orb = orbs.find(({ providerId }) => providerId === adapter);
+  // A deployment's named sizes (a hosted offer's) are a group of their
+  // own, apart from the provider they run on and any key for it.
+  [...new Set(profiles.map(orbSizeGroupKey))].flatMap((key) => {
+    const members = profiles.filter(
+      (profile) => orbSizeGroupKey(profile) === key,
+    );
+    const first = members[0];
+    if (first === undefined) return [];
+    const orb = orbAccountForProfile(first, orbs);
     if (orb === undefined) return [];
     return [
       {
-        adapter,
+        key,
+        adapter: first.adapter,
+        named: first.runsAs !== undefined,
         orb,
-        provider: providers.find((provider) => provider.adapter === adapter),
-        profiles: profiles.filter(
+        provider: providers.find(
+          (provider) => provider.adapter === first.adapter,
+        ),
+        profiles: members.filter(
           (profile) =>
-            profile.adapter === adapter &&
             !orb.unavailableSizes.some(({ id }) => id === profile.id),
         ),
       },
@@ -399,7 +411,11 @@ function OrbPicker({
         ) : (
           // The provider shows as its logo; the menu and label name it.
           <OrbProviderLogo
-            providerId={selectedProfile.adapter}
+            providerId={
+              selectedProfile.runsAs === undefined
+                ? selectedProfile.adapter
+                : ""
+            }
             className="orb-provider-logo"
           />
         )}
@@ -417,7 +433,7 @@ function OrbPicker({
         {groups?.map((group) => {
           const hint = orbProviderHint(group.orb);
           return (
-            <MenuSubmenuRoot key={group.adapter}>
+            <MenuSubmenuRoot key={group.key}>
               <MenuSubmenuTrigger
                 className="orb-picker-provider"
                 title={
@@ -425,8 +441,9 @@ function OrbPicker({
                   pauseResumeNote(group.provider?.pauseResume ?? null)
                 }
               >
+                {/* A named offer shows the Orb, not the provider beneath it. */}
                 <OrbProviderLogo
-                  providerId={group.adapter}
+                  providerId={group.named ? "" : group.adapter}
                   className="orb-provider-logo"
                 />
                 <span className="orb-picker-provider-name">
@@ -533,9 +550,10 @@ function NewThreadOrbSlot({
     runnerOrbs === undefined
       ? undefined
       : runnerProfileGroups(runnerProfiles, runnerProviders, runnerOrbs);
-  const selectedOrb = runnerOrbs?.find(
-    ({ providerId }) => providerId === selectedRunnerProfile?.adapter,
-  );
+  const selectedOrb =
+    selectedRunnerProfile === undefined || runnerOrbs === undefined
+      ? undefined
+      : orbAccountForProfile(selectedRunnerProfile, runnerOrbs);
   const selectedOrbOwner =
     selectedOrb === undefined ? undefined : orbKeyOwner(selectedOrb.scope);
   // The deployment's own name for its account wins, as in the menu, over

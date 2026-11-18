@@ -524,13 +524,13 @@ const asOrbStartRunError = (cause: unknown): never => {
 };
 
 /**
- * The Orb's disk became read-only, as the run's error: the Thread names the
+ * The Orb's disk turned read-only or returns I/O errors, as the run's error: the Thread names the
  * cause and what dx did, instead of a generic internal error.
  */
 const readOnlyRunError = (details: string) =>
   new FlueError({
     type: "workspace_read_only",
-    message: "The Orb's disk became read-only.",
+    message: "The Orb's disk is failing: writes fail.",
     details,
     dev: "",
     meta: { code: WORKSPACE_READ_ONLY_CODE },
@@ -543,7 +543,7 @@ const stillReadOnly = (recovery: ExecutionWorkspaceRecovery) =>
       : recovery.files === "earlier"
         ? `dx restarted the Orb from its last save${savedAtText(recovery.savedAt)}`
         : "dx started the Orb over from a fresh image"
-  }, but its disk is still read-only. Retry to restart it again.`;
+  }, but its disk still fails writes. Retry to restart it again.`;
 
 /**
  * Restarts a read-only Orb through its provider, or fails the run saying

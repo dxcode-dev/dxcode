@@ -3,6 +3,7 @@ import type { Sandbox } from "@flue/runtime";
 import { Redacted, Schema } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import type { Bindings } from "../../http/types.js";
+import { TEST_RUNNER_PROFILE_CATALOG } from "../../testing/bindings.js";
 import {
   composeExecutionWorkspaces,
   type ExecutionActivation,
@@ -21,6 +22,8 @@ const threadId = Schema.decodeUnknownSync(ThreadId)(
 const deployed = {
   DX_RUNTIME_MODE: "deployed",
   E2B_API_KEY: "deployment-key",
+  // The deployment built E2B sizes; a key alone offers no E2B (#1936).
+  DX_RUNNER_PROFILE_CATALOG: TEST_RUNNER_PROFILE_CATALOG,
 } satisfies Bindings;
 const sandbox = {} as Sandbox;
 const workspaceToolNames = [

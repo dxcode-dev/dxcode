@@ -135,6 +135,8 @@ export interface OrbWorkspaceState {
   readonly snapshotFailures?: {
     readonly count: number;
     readonly retryAt: number;
+    /** When the first of them failed; unset before #1687. */
+    readonly since?: number;
   };
   /**
    * The container was stopped without a snapshot of its latest files,
@@ -207,6 +209,11 @@ export interface UnsavedStop {
   readonly stoppedAt: number;
   /** When the files it restores to were saved; unset before 2026-11. */
   readonly savedAt?: number;
+  /**
+   * It had no save at all (#1687): the next activation starts it from the
+   * image, and only the rescue copy of its git work is kept.
+   */
+  readonly neverSaved?: boolean;
   /** Snapshots that failed in a row before it stopped. */
   readonly failures: number;
   /**
@@ -313,6 +320,13 @@ export const ORB_SNAPSHOT_RETRY_MAX_MS = 3_600_000;
  * otherwise run, and bill, until someone notices (#1620).
  */
 export const ORB_SNAPSHOT_GIVE_UP_FAILURES = 8;
+/**
+ * A container with no save at all is stopped only once its snapshots have
+ * also failed for this long (#1687): the stop keeps nothing but the rescue
+ * copy of its git work, so one bad snapshot or a short Cloudflare incident
+ * must never trigger it.
+ */
+export const ORB_NEVER_SAVED_GIVE_UP_MS = 60 * 60_000;
 /** An archive's stop that failed is tried again this often (#1740). */
 export const ORB_STOP_RETRY_MS = 5 * 60_000;
 /** Stops tried, the archive's own included, before one is abandoned. */
@@ -384,6 +398,15 @@ export const ORB_START_LIMIT_MS = 300_000;
  * healthy wakes answer within 5 s.
  */
 export const ORB_START_STALL_MS = 45_000;
+/**
+ * The budget of a wake's first try (Core's `firstTry`, #1993). On
+ * production from 11 to 12 Nov, 152 of 155 first tries answered within 6 s,
+ * and the other 19 never answered in 45 s: Cloudflare's restore of a
+ * snapshot that slept for hours hangs about half the time, and only a new
+ * container gets past it. A start-over answers more slowly (often 25 to
+ * 45 s), so it keeps `ORB_START_STALL_MS`.
+ */
+export const ORB_FIRST_TRY_STALL_MS = 20_000;
 /** A retired object asks Cloudflare to stop its stalled container this often. */
 const RETIRED_STOP_RETRY_MS = 60_000;
 /**
@@ -1080,6 +1103,12 @@ export class OrbContainerController {
      * as from a Core before it, waits up to `ORB_START_LIMIT_MS`.
      */
     readonly startOver?: boolean;
+    /**
+     * With `startOver`: this is the wake's first try, not a start-over
+     * Core already made, so it starts over after `ORB_FIRST_TRY_STALL_MS`
+     * instead (#1993).
+     */
+    readonly firstTry?: boolean;
   }): Promise<OrbOpenResult> {
     const requestedAt = this.#now();
     return this.#exclusive(async () => {
@@ -1142,7 +1171,9 @@ export class OrbContainerController {
       // Only a wake (a snapshot to restore) is started over elsewhere.
       const stallMs =
         input.startOver === true && !fresh && state.snapshot !== undefined
-          ? ORB_START_STALL_MS
+          ? input.firstTry === true
+            ? ORB_FIRST_TRY_STALL_MS
+            : ORB_START_STALL_MS
           : undefined;
       let residency: "paused" | "created";
       try {
@@ -1408,16 +1439,25 @@ export class OrbContainerController {
 
   /**
    * Stops the container without a snapshot of its latest files, keeping its
-   * last good save, once snapshots keep failing. Never without a save: that
-   * would lose every file. Under the lifecycle lock.
+   * last good save, once snapshots keep failing. One with no save at all
+   * loses every file but the rescue copy, so it is stopped only after
+   * `ORB_SNAPSHOT_GIVE_UP_FAILURES` failures over `ORB_NEVER_SAVED_GIVE_UP_MS`
+   * (#1687), whoever asks. Under the lifecycle lock.
    */
   async #stopUnsaved(
     state: OrbWorkspaceState,
     failures: number,
+    since: number,
     cause: unknown,
   ) {
     const snapshot = state.snapshot;
-    if (snapshot === undefined) return false;
+    const spanMs = this.#now() - since;
+    if (
+      snapshot === undefined &&
+      (failures < ORB_SNAPSHOT_GIVE_UP_FAILURES ||
+        spanMs < ORB_NEVER_SAVED_GIVE_UP_MS)
+    )
+      return false;
     // The person's latest work goes first, while the container still runs.
     const rescued = await this.#rescueUnsavedWork();
     await this.#destroyContainer();
@@ -1427,7 +1467,11 @@ export class OrbContainerController {
     const unsavedStop: UnsavedStop = {
       stoppedAt: this.#now(),
       failures,
-      ...(snapshot.takenAt === undefined ? {} : { savedAt: snapshot.takenAt }),
+      ...(snapshot === undefined
+        ? { neverSaved: true }
+        : snapshot.takenAt === undefined
+          ? {}
+          : { savedAt: snapshot.takenAt }),
       ...(rescued.kind === "archive"
         ? { rescue: rescued.rescue }
         : rescued.kind === "failed"
@@ -1441,7 +1485,9 @@ export class OrbContainerController {
         event: "orb_container_stopped_unsaved",
         sandboxId: this.#sandboxId,
         failures,
-        savedAt: snapshot.takenAt,
+        spanMs,
+        neverSaved: snapshot === undefined,
+        savedAt: snapshot?.takenAt,
         rescue: rescued.kind,
         ...(rescued.kind === "archive"
           ? {
@@ -1454,12 +1500,14 @@ export class OrbContainerController {
         error: cause instanceof Error ? cause.message : String(cause),
       },
     );
-    await this.#schedule(
-      Math.max(
-        this.#now() + ORB_HEARTBEAT_MS,
-        snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS,
-      ),
-    );
+    // Nothing to refresh without a save: the next activation starts it over.
+    if (snapshot !== undefined)
+      await this.#schedule(
+        Math.max(
+          this.#now() + ORB_HEARTBEAT_MS,
+          snapshot.refreshedAt + ORB_SNAPSHOT_REFRESH_MS,
+        ),
+      );
     return true;
   }
 
@@ -1918,31 +1966,57 @@ export class OrbContainerController {
         await this.#stopUnstarted(state, cause);
         return "paused";
       }
-      const count = (failures?.count ?? 0) + 1;
-      const delayMs = Math.min(
-        ORB_SNAPSHOT_RETRY_MS * 2 ** (count - 1),
-        ORB_SNAPSHOT_RETRY_MAX_MS,
-      );
       const current = (await this.#load()) ?? state;
+      const count = (current.snapshotFailures?.count ?? 0) + 1;
+      const since = current.snapshotFailures?.since ?? this.#now();
       if (
         count >= ORB_SNAPSHOT_GIVE_UP_FAILURES &&
-        (await this.#stopUnsaved(current, count, cause))
+        (await this.#stopUnsaved(current, count, since, cause))
       )
         return "paused";
-      await this.#save({
-        ...current,
-        snapshotFailures: { count, retryAt: this.#now() + delayMs },
-      });
+      const retryAt = await this.#recordSnapshotFailure(current, count, since);
       orbContainerLogger.error("Orb container idle snapshot failed.", {
         event: "orb_container_snapshot_failed",
         sandboxId: this.#sandboxId,
         failures: count,
-        retryInMs: delayMs,
+        retryInMs: retryAt - this.#now(),
         hadSnapshot: current.snapshot !== undefined,
         error: cause instanceof Error ? cause.message : String(cause),
       });
       return "failed";
     }
+  }
+
+  /**
+   * Records a failed snapshot, idle pause's or archive's, and when the idle
+   * pause may try again: backing off, but for a container with no save,
+   * never past the hour that lets it stop (#1687). Returns that time.
+   */
+  async #recordSnapshotFailure(
+    current: OrbWorkspaceState,
+    count: number,
+    since: number,
+  ) {
+    const now = this.#now();
+    let retryAt =
+      now +
+      Math.min(
+        ORB_SNAPSHOT_RETRY_MS * 2 ** (count - 1),
+        ORB_SNAPSHOT_RETRY_MAX_MS,
+      );
+    if (
+      current.snapshot === undefined &&
+      count >= ORB_SNAPSHOT_GIVE_UP_FAILURES - 1
+    )
+      retryAt = Math.min(
+        retryAt,
+        Math.max(since + ORB_NEVER_SAVED_GIVE_UP_MS, now + ORB_HEARTBEAT_MS),
+      );
+    await this.#save({
+      ...current,
+      snapshotFailures: { count, retryAt, since },
+    });
+    return retryAt;
   }
 
   /**
@@ -1999,11 +2073,14 @@ export class OrbContainerController {
       }
       try {
         // Archive stops the container even when it cannot be saved now,
-        // on its last good save, and the restore says so (#1620).
+        // on its last good save, and the restore says so (#1620). One with
+        // no save waits for the hour of failures it counts towards (#1687).
         const current = (await this.#load()) ?? state;
         const failures = (current.snapshotFailures?.count ?? 0) + 1;
-        if (await this.#stopUnsaved(current, failures, cause))
+        const since = current.snapshotFailures?.since ?? this.#now();
+        if (await this.#stopUnsaved(current, failures, since, cause))
           return { kind: "stopped" };
+        await this.#recordSnapshotFailure(current, failures, since);
       } catch (stopCause) {
         return { kind: "failed", cause: stopCause };
       }

@@ -595,6 +595,40 @@ describe("Claude Code mode in a workspace", { timeout: 30_000 }, () => {
     ]);
   });
 
+  // #1843: thr_242ddea4's Orb disk returned I/O errors, so the launch could
+  // not create its run directory, and the turn failed with that raw error.
+  it("fails a launch on a disk that returns I/O errors as a failing Orb disk, not a raw error (#1843)", async () => {
+    const guest = await createGuest();
+    await guest.tool(
+      "mkdir",
+      `#!/bin/bash
+for arg in "$@"; do
+  case "$arg" in
+    */.local/state/*) echo "mkdir: cannot create directory '$arg': Input/output error" >&2; exit 1 ;;
+  esac
+done
+exec /bin/mkdir "$@"
+`,
+    );
+    await guest.script([init(), result("unreachable")]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const failed = await claude.answer({
+      systemPrompt: "Answer briefly.",
+      messages: [user("Say hello", 1)],
+    });
+    expect(failed.type).toBe("error");
+    expect(
+      classifyRunFailure({
+        message:
+          failed.type === "error" ? (failed.error.errorMessage ?? "") : "",
+      }),
+    ).toMatchObject({
+      code: "WORKSPACE_READ_ONLY",
+      retryable: false,
+      message: expect.stringMatching(/^The Orb's disk is failing/),
+    });
+  });
+
   // #1303: Claude Code must not credit itself in a commit or a pull request.
   // Its attribution defaults add a Co-Authored-By: Claude trailer and a
   // "Generated with Claude Code" line; the settings dx passes on the command

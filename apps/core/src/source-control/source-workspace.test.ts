@@ -1120,7 +1120,7 @@ describe("SourceWorkspaceService", () => {
     ).toMatchObject({
       code: "WORKSPACE_READ_ONLY",
       retryable: false,
-      message: expect.stringMatching(/^The Orb's disk became read-only/),
+      message: expect.stringMatching(/^The Orb's disk is failing/),
     });
   });
 

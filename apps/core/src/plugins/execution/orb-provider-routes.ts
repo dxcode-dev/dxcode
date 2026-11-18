@@ -22,6 +22,7 @@ import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import {
   type DeploymentOrbs,
+  namedSizeDeploymentProviders,
   presentedDeploymentProviders,
 } from "../../execution/deployment-orbs.js";
 import {
@@ -233,11 +234,17 @@ const listData = async (
     (provider) => {
       const id = provider.id as ExecutionProviderId;
       // A beta provider the person has not turned on is not listed, nor a
-      // deployment account closed to them.
-      if (hiddenProviders.has(id) || closedProviders.has(id)) return [];
+      // deployment account closed to them unless they can connect their own.
+      if (
+        hiddenProviders.has(id) ||
+        (closedProviders.has(id) &&
+          (isDeploymentOnlyOrbProvider(id) || connectors[id] === undefined))
+      )
+        return [];
       // A deployment account the deployment presents under its own name
       // is offered in the Orb picker, not listed under the provider here.
       const deployment =
+        !closedProviders.has(id) &&
         deploymentProviders.some(({ providerId }) => providerId === id) &&
         deploymentOrbs[id]?.displayName === undefined;
       // A deployment-only provider takes no one's own account: its connector
@@ -246,7 +253,8 @@ const listData = async (
         ? undefined
         : connectors[id];
       const sizeIds = profiles
-        .filter(({ adapter }) => adapter === id)
+        // A deployment's named sizes never run on a person's key.
+        .filter(({ adapter, runsAs }) => adapter === id && runsAs === undefined)
         .map(({ id: sizeId }) => sizeId);
       // A provider is listed when it can run a Thread here: the deployment
       // provides it, or a connection could (its sizes are in the catalog).
@@ -266,7 +274,10 @@ const listData = async (
             "Runs Orbs on this deployment's own account.",
           fields: connector?.fields ?? [],
           sizes: profiles
-            .filter(({ adapter }) => adapter === id)
+            // A deployment's named sizes never run on a person's key.
+            .filter(
+              ({ adapter, runsAs }) => adapter === id && runsAs === undefined,
+            )
             .map(({ id: sizeId, label, resources }) => ({
               id: sizeId,
               label,
@@ -310,6 +321,7 @@ const listData = async (
     recipes,
     hiddenProviders,
     presentedDeployment: presentedDeploymentProviders(bindings, deploymentOrbs),
+    namedSizeProviders: namedSizeDeploymentProviders(bindings, deploymentOrbs),
   });
   return {
     scope: target.scope,
@@ -338,6 +350,7 @@ const listData = async (
         scope: member.scope,
         account: member.account,
         status: member.status,
+        ...(member.namedSizes === true ? { namedSizes: true as const } : {}),
         ...(presented?.displayName === undefined
           ? {}
           : { displayName: presented.displayName }),
@@ -347,7 +360,12 @@ const listData = async (
         unavailableSizes: unavailableSizes(
           member,
           profiles
-            .filter(({ adapter }) => adapter === member.providerId)
+            // Each account counts only the sizes it runs.
+            .filter(
+              ({ adapter, runsAs }) =>
+                adapter === member.providerId &&
+                (runsAs !== undefined) === (member.namedSizes === true),
+            )
             .map(({ id }) => id),
         ),
       };
@@ -499,7 +517,7 @@ const connectableProvider = async (
     : connectors[params.value.providerId];
   if (
     connector === undefined ||
-    // Only the deployment's own account runs it (Lizard).
+    // Only the deployment's own account runs it (`deploymentOnly`).
     isDeploymentOnlyOrbProvider(connector.providerId) ||
     (!isLocalRuntime(c.env) &&
       !(await loadCatalog(c.env)).configuration.profiles.some(

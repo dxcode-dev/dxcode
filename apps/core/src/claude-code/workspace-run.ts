@@ -8,6 +8,10 @@ import {
   workspaceDiskFullFailure,
   workspaceDiskGuard,
 } from "../orb-disk/guard.js";
+import {
+  isDiskFailingText,
+  workspaceReadOnlyFailure,
+} from "../orb-disk/read-only.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import { environmentMaskerOf } from "../settings/environment-variables/sandbox.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
@@ -1082,6 +1086,10 @@ export class ClaudeCodeRun {
       // Retrying frees nothing: the person or the agent must.
       if (isDiskFullText(`${stderr}\n${result.stdout}`))
         throw new Error(workspaceDiskFullFailure(disk?.totalBytes));
+      // A disk returning I/O errors or read-only: the next activation's disk
+      // guard finds it and restarts the Orb, so Retry repairs it (#1843).
+      if (isDiskFailingText(`${result.stderr}\n${result.stdout}`))
+        throw new Error(workspaceReadOnlyFailure());
       throw new Error(
         stderr || result.stdout.trim() || "Claude Code could not start.",
       );

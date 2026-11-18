@@ -1,6 +1,8 @@
 import type { OrbResolvedProvider } from "@dx/api";
 import {
+  orbAccountForProfile,
   orbProviderBetaFeature,
+  orbSizeGroupKey,
   type RunnerProfile,
   type RunnerProfileCatalog,
   type RunnerProfileId,
@@ -22,7 +24,8 @@ const orbBillingNote = (
       } account, paused when inactive`;
 
 export type SetUpOrbSizeGroup = {
-  readonly key: RunnerProfile["adapter"];
+  /** The provider, or `<provider>:named` for a deployment's named sizes. */
+  readonly key: string;
   /** The provider heading; absent when one set-up provider needs none. */
   readonly name?: string;
   readonly hint?: string;
@@ -49,51 +52,58 @@ export const setUpOrbSizeGroups = (
   savedProfileId: RunnerProfileId,
   label: (providerName: string | undefined) => string,
 ): ReadonlyArray<SetUpOrbSizeGroup> => {
-  const groups = [
-    ...new Set(catalog.profiles.map(({ adapter }) => adapter)),
-  ].flatMap((adapter) => {
-    const provider = catalog.providers?.find(
-      (provider) => provider.adapter === adapter,
-    );
-    const name = provider?.displayName ?? adapter;
-    const profiles = catalog.profiles.filter(
-      (profile) => profile.adapter === adapter,
-    );
-    const account = resolved.find(({ providerId }) => providerId === adapter);
-    if (account !== undefined) {
-      const billing = orbBillingNote(
-        account.scope,
-        provider?.shortName ?? name,
+  const groups = [...new Set(catalog.profiles.map(orbSizeGroupKey))].flatMap(
+    (key) => {
+      // A deployment's named sizes (a hosted offer's) are a group of their
+      // own, on the deployment's account, apart from any key for the provider.
+      const profiles = catalog.profiles.filter(
+        (profile) => orbSizeGroupKey(profile) === key,
       );
-      return [
-        {
-          key: adapter,
-          name,
-          beta:
-            orbProviderBetaFeature(adapter) !== undefined &&
-            account.displayName === undefined,
-          ...(billing === undefined ? {} : { billing }),
-          deploymentProvided: account.scope === "deployment",
-          available: true,
-          profiles,
-        },
-      ];
-    }
-    const saved = profiles.filter(({ id }) => id === savedProfileId);
-    return saved.length === 0
-      ? []
-      : [
+      const first = profiles[0];
+      if (first === undefined) return [];
+      const adapter = first.adapter;
+      const provider = catalog.providers?.find(
+        (provider) => provider.adapter === adapter,
+      );
+      const account = orbAccountForProfile(first, resolved);
+      // The deployment's own name for its account (a hosted offer), else the
+      // provider's.
+      const name = account?.displayName ?? provider?.displayName ?? adapter;
+      if (account !== undefined) {
+        const billing = orbBillingNote(
+          account.scope,
+          provider?.shortName ?? name,
+        );
+        return [
           {
-            key: adapter,
+            key,
             name,
-            hint: "Not available",
-            beta: false,
-            deploymentProvided: false,
-            available: false,
-            profiles: saved,
+            beta:
+              orbProviderBetaFeature(adapter) !== undefined &&
+              account.displayName === undefined,
+            ...(billing === undefined ? {} : { billing }),
+            deploymentProvided: account.scope === "deployment",
+            available: true,
+            profiles,
           },
         ];
-  });
+      }
+      const saved = profiles.filter(({ id }) => id === savedProfileId);
+      return saved.length === 0
+        ? []
+        : [
+            {
+              key,
+              name,
+              hint: "Not available",
+              beta: false,
+              deploymentProvided: false,
+              available: false,
+              profiles: saved,
+            },
+          ];
+    },
+  );
   const labelled =
     groups.length > 1 || groups.some((group) => !group.available);
   return groups.map(({ name, ...group }) => ({

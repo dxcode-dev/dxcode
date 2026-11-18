@@ -1,9 +1,13 @@
+import type { OrbProviderCredentials } from "@dx/domain";
+import { Effect, Redacted } from "effect";
 import type { Bindings } from "../http/types.js";
 import { orbProvidersLogger } from "../logging.js";
+import { resolveExecutionTarget } from "./runner-profiles/execution.js";
 
 /**
  * Core-side idle pause, for a provider without a pause deadline of its own
- * (Lizard: a sandbox's timeout deletes it). The Orb's handle stores when it
+ * (Lizard: a sandbox's timeout deletes it; Agent37: its auto-sleep cannot
+ * see dxd). The Orb's handle stores when it
  * goes idle (`orb_idle_deadline`, migration 0165); every activity moves
  * that, and the Worker's minute cron pauses each Orb past its deadline.
  * Each provider names how it pauses one sandbox (`IdlePausers`).
@@ -50,6 +54,29 @@ export const clearIdleDeadline = async (
     )
     .bind(providerId, sandboxId)
     .run();
+};
+
+/**
+ * The credentials an idle Orb runs on, for a pauser that knows only the
+ * Thread: its pin's person's or workspace's connection, or the deployment's
+ * key in `deploymentSecret`. Undefined when the pin has none.
+ */
+export const idleOrbCredentials = async (
+  bindings: Bindings,
+  threadId: string,
+  deploymentSecret?: "AGENT37_API_KEY",
+): Promise<OrbProviderCredentials | undefined> => {
+  const { credential } = await Effect.runPromise(
+    resolveExecutionTarget(bindings, threadId, { admission: false }),
+  );
+  if (credential.scope === "unavailable") return undefined;
+  if (credential.scope !== "deployment")
+    return Redacted.value(credential.credentials);
+  const apiKey =
+    deploymentSecret === undefined
+      ? ""
+      : (bindings[deploymentSecret] ?? "").trim();
+  return apiKey === "" ? undefined : { apiKey };
 };
 
 /** Pauses one idle sandbox of its provider. */

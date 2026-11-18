@@ -1184,7 +1184,7 @@ describe("thread composer ownership", () => {
     await React.act(() => panel.root.unmount());
   });
 
-  it("says the Orb's disk became read-only and what dx did, not a provider error", async () => {
+  it("says the Orb's disk is failing and what dx did, not a provider error", async () => {
     const resume = vi.fn().mockResolvedValue(undefined);
     const panel = await mountPanel({
       resume,
@@ -1205,10 +1205,42 @@ describe("thread composer ownership", () => {
     });
 
     const card = panel.container.querySelector(".thread-error-card");
-    expect(card?.textContent).toContain("The Orb's disk became read-only");
+    expect(card?.textContent).toContain("The Orb's disk is failing");
     expect(card?.textContent).toContain(
       "dx restarted the Orb, but its disk is still read-only.",
     );
+    expect(card?.textContent).not.toContain("Provider error");
+    const retry = Array.from(card?.querySelectorAll("button") ?? []).find(
+      (button) => button.textContent?.includes("Retry"),
+    );
+    await React.act(async () => {
+      retry?.click();
+      await Promise.resolve();
+    });
+    expect(resume).toHaveBeenCalledOnce();
+    await React.act(() => panel.root.unmount());
+  });
+
+  // #1843: Claude Code could not write its run on a disk returning I/O
+  // errors, and the Thread said only "Provider error".
+  it("says the Orb's disk is failing when Claude Code could not start on it, and Retry resumes", async () => {
+    const resume = vi.fn().mockResolvedValue(undefined);
+    const panel = await mountPanel({
+      resume,
+      settlements: [
+        {
+          submissionId: "failing-disk-launch",
+          outcome: "failed",
+          error: new Error(
+            "The Orb's disk is failing: writes fail. (dx_failure:internal:WORKSPACE_READ_ONLY)",
+          ),
+        },
+      ],
+    });
+
+    const card = panel.container.querySelector(".thread-error-card");
+    expect(card?.textContent).toContain("The Orb's disk is failing");
+    expect(card?.textContent).toContain("restarts the Orb");
     expect(card?.textContent).not.toContain("Provider error");
     const retry = Array.from(card?.querySelectorAll("button") ?? []).find(
       (button) => button.textContent?.includes("Retry"),

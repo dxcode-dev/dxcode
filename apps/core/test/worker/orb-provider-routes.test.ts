@@ -364,6 +364,50 @@ describe("Orb provider connections in workerd with real D1", () => {
     );
   });
 
+  it("does not offer a deployment's E2B key that has no Orb templates (#1936)", async () => {
+    // The key is bound, but the deployment built no E2B sizes: its catalog
+    // lists none, so its account has no template to start an Orb from.
+    const keyOnly: Bindings = { ...providerless, E2B_API_KEY: "stray-key" };
+    const listed = await call(solo, personal, "GET", undefined, keyOnly);
+    expect(listed.status).toBe(200);
+    expect(listed.body.data.resolved).toEqual([]);
+    expect(e2bOf(listed.body.data)).toMatchObject({ deployment: false });
+    await expect(
+      pin(
+        await thread(
+          "thr_00000000-0000-4000-8000-0000000004a9",
+          personalProject,
+          solo,
+        ),
+        solo,
+        personalProject,
+        keyOnly,
+      ),
+    ).rejects.toMatchObject({ _tag: "OrbUnavailable", reason: "no-provider" });
+
+    // A person's own E2B team still runs E2B there.
+    await connect(solo, personal, "key-a-1", keyOnly);
+    await prepare(
+      { scope: "personal", targetId: solo, providerId: "e2b" },
+      keyOnly,
+    );
+    expect(
+      await pin(
+        await thread(
+          "thr_00000000-0000-4000-8000-0000000004aa",
+          personalProject,
+          solo,
+        ),
+        solo,
+        personalProject,
+        keyOnly,
+      ),
+    ).toMatchObject({
+      credentialScope: "personal",
+      credentialAccount: "team-a",
+    });
+  });
+
   it("stops reading an oversized settings body at the 128 KB cap", async () => {
     const send = (body: BodyInit, headers: Record<string, string> = {}) =>
       app(solo).request(

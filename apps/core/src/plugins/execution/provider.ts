@@ -38,9 +38,9 @@ import {
   deploymentProviders,
   findPlugin,
   findProvider,
+  isLocalRuntime,
   providerCapabilities,
 } from "../registry.js";
-import { deploymentSettings } from "./deployment-preparation.js";
 import { executionWorkspaceTools } from "./tools.js";
 
 /**
@@ -457,18 +457,69 @@ export interface ResolvedExecutionProvider {
 }
 
 /**
+ * The adapters the deployment's own catalog lists sizes for; none when it
+ * has no catalog or it cannot be read (readiness reports a bad catalog).
+ */
+const catalogAdapters = (bindings: Bindings): ReadonlySet<string> => {
+  const input = bindings.DX_RUNNER_PROFILE_CATALOG;
+  if (input === undefined || input === "") return new Set();
+  try {
+    const profiles = (JSON.parse(input) as { profiles?: unknown }).profiles;
+    return new Set(
+      Array.isArray(profiles)
+        ? profiles.flatMap((profile) =>
+            typeof profile?.adapter === "string" ? [profile.adapter] : [],
+          )
+        : [],
+    );
+  } catch {
+    return new Set();
+  }
+};
+
+/**
+ * Whether the deployment built its account's Orb targets at deploy time
+ * for a provider that needs them. E2B keeps a size's CPU and memory in its
+ * template, which the deploy builds into the deployment's team and lists
+ * in its catalog; a bound `E2B_API_KEY` alone has no template to start an
+ * Orb from (#1936), so the deployment does not offer that account. A
+ * provider prepared at runtime, or installed by a binding, needs none.
+ */
+const deploymentBuiltTargets = (
+  providerId: ExecutionProviderId,
+  adapters: () => ReadonlySet<string>,
+) => {
+  const deployment = findOrbProvider(providerId)?.deployment;
+  if (
+    deployment === undefined ||
+    !("secret" in deployment) ||
+    "prepared" in deployment
+  )
+    return true;
+  return adapters().has(providerId);
+};
+
+/**
  * The deployment's Execution providers, from bindings: E2B when
- * `E2B_API_KEY` is set and Cloudflare Containers when the `ORB_CONTAINER`
- * namespace is bound (both may be), or the local runtime in development.
- * Empty when none resolves; readiness then fails closed.
+ * `E2B_API_KEY` is set and the deployment built E2B sizes, and Cloudflare
+ * Containers when the `ORB_CONTAINER` namespace is bound (both may be), or
+ * the local runtime in development. Empty when none resolves; readiness
+ * then fails closed.
  */
 export const resolveExecutionProviders = (
   bindings: Bindings,
 ): ReadonlyArray<ResolvedExecutionProvider> => {
   const plugin = findPlugin("execution");
   if (plugin === undefined) return [];
+  let adapters: ReadonlySet<string> | undefined;
+  const listed = () => {
+    adapters ??= catalogAdapters(bindings);
+    return adapters;
+  };
+  const localRuntime = isLocalRuntime(bindings);
   return deploymentProviders(plugin, bindings).flatMap((providerId) => {
     if (!isExecutionProviderId(providerId)) return [];
+    if (!localRuntime && !deploymentBuiltTargets(providerId, listed)) return [];
     const capabilities = providerCapabilities(plugin, providerId).filter(
       (capability): capability is ExecutionCapabilityId =>
         capability.startsWith("execution."),
@@ -808,13 +859,7 @@ export const composeExecutionWorkspaces = (
         deploymentOrbs[entry.provider.providerId]?.inactivityMs;
       return {
         account: { scope: "deployment" },
-        credentials:
-          key === ""
-            ? undefined
-            : Redacted.make({
-                ...deploymentSettings(bindings, entry.provider.providerId),
-                apiKey: key,
-              }),
+        credentials: key === "" ? undefined : Redacted.make({ apiKey: key }),
         profile,
         ...(inactivityMs === undefined ? {} : { inactivityMs }),
       };

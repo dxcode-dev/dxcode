@@ -123,16 +123,8 @@ export const lizardOrbProvider = defineOrbProvider({
   // again, and the handle reports when (`processesStartedAt`).
   pauseResumePreserves: "filesystem",
   remote: true,
-  // Only a deployment's own Lizard account runs it (a hosted offer): people and
-  // workspaces never connect their own.
-  deploymentOnly: true,
-  deployment: {
-    secret: "LIZARD_API_KEY",
-    prepared: true,
-    // The key's project (an API key reaches every project of its
-    // workspace), and optionally the region new sandboxes run in.
-    settings: { projectId: "LIZARD_PROJECT_ID", region: "LIZARD_REGION" },
-  },
+  // A person's or workspace's own Lizard project only (owner, 2026-11-17):
+  // no deployment runs Lizard on its own account.
   profile: LizardRunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,

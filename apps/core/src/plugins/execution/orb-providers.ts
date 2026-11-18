@@ -6,6 +6,7 @@ import {
 import { Effect, Schema } from "effect";
 import {
   type DeploymentOrbs,
+  namedSizeDeploymentProviders,
   presentedDeploymentProviders,
 } from "../../execution/deployment-orbs.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
@@ -63,6 +64,12 @@ export interface OrbProviderMember {
    * the last ready one.
    */
   readonly updating?: true;
+  /**
+   * The deployment's account of a provider it runs only under its own
+   * named sizes (`DeploymentOrbSettings.sizes`): it serves those sizes and
+   * no other, beside any person's or workspace's own key for the provider.
+   */
+  readonly namedSizes?: true;
 }
 
 export interface OrbProviderSetInput {
@@ -96,6 +103,11 @@ export interface OrbProviderSetInput {
   readonly closedProviders?: ReadonlySet<string>;
   /** Providers whose deployment account is presented as the deployment's own Orb. */
   readonly presentedDeployment?: ReadonlySet<string>;
+  /**
+   * Providers whose deployment account runs only the deployment's named
+   * sizes (`namedSizeDeploymentProviders`).
+   */
+  readonly namedSizeProviders?: ReadonlySet<string>;
 }
 
 /**
@@ -169,6 +181,18 @@ export const unavailableSizes = <Id extends string>(
   );
 };
 
+const deploymentMember = (
+  providerId: ExecutionProviderId,
+  namedSizes: boolean,
+): OrbProviderMember => ({
+  providerId,
+  scope: "deployment",
+  ownerId: null,
+  account: null,
+  status: "ready",
+  ...(namedSizes ? { namedSizes: true as const } : {}),
+});
+
 /** The providers a person can start a Thread on, in registry order. */
 export const orbProviderSet = (
   input: OrbProviderSetInput,
@@ -179,9 +203,13 @@ export const orbProviderSet = (
   return plugin.providers.flatMap((provider): Array<OrbProviderMember> => {
     const providerId = provider.id as ExecutionProviderId;
     if (!input.profileAdapters.has(providerId)) return [];
-    if (input.closedProviders?.has(providerId) === true) return [];
+    // A closed deployment account is not offered; a person's or
+    // workspace's own key for the same provider still is.
+    const closed = input.closedProviders?.has(providerId) === true;
+    const named = input.namedSizeProviders?.has(providerId) === true;
     const hidden = input.hiddenProviders?.has(providerId) === true;
     const deployment =
+      !closed &&
       input.deploymentProviders.some(
         (candidate) => candidate.providerId === providerId,
       ) &&
@@ -201,20 +229,16 @@ export const orbProviderSet = (
       // A hidden beta provider's own key is not offered, and its Threads
       // never fall back to the deployment's account: that would bill
       // someone else's account for a Thread meant for their own.
-      if (own !== undefined)
-        return hidden ? [] : [connectionMember(own, input)];
+      if (own !== undefined) {
+        if (hidden) return [];
+        // The deployment's named sizes stay offered beside the person's
+        // own key: they are a different choice, on a different account.
+        return named && deployment
+          ? [connectionMember(own, input), deploymentMember(providerId, true)]
+          : [connectionMember(own, input)];
+      }
     }
-    return deployment
-      ? [
-          {
-            providerId,
-            scope: "deployment",
-            ownerId: null,
-            account: null,
-            status: "ready",
-          },
-        ]
-      : [];
+    return deployment ? [deploymentMember(providerId, named)] : [];
   });
 };
 
@@ -385,7 +409,7 @@ export const resolveThreadExecutionPin = async (input: {
 }): Promise<ThreadExecutionPin | undefined> => {
   const connectors = input.connectors;
   const catalog = await Effect.runPromise(
-    loadRunnerProfileCatalog(input.bindings).pipe(
+    loadRunnerProfileCatalog(input.bindings, input.deploymentOrbs).pipe(
       Effect.orElseSucceed(() => undefined),
     ),
   );
@@ -407,9 +431,12 @@ export const resolveThreadExecutionPin = async (input: {
     orbProviderBetaFeature(profile.adapter) === undefined
       ? undefined
       : await input.hiddenProviders();
+  // A named size pins the provider size it runs as, so a Thread keeps its
+  // Orb whatever the deployment later names its sizes after.
+  const providerSize = profile.runsAs ?? profile.id;
   const deploymentPin: ThreadExecutionPin = {
     provider: profile.adapter,
-    runnerProfileId: profile.id,
+    runnerProfileId: providerSize,
     credentialScope: "deployment",
     credentialOwnerId: null,
     credentialAccount: null,
@@ -446,7 +473,17 @@ export const resolveThreadExecutionPin = async (input: {
             input.deploymentOrbs,
           ),
         }),
-  }).find(({ providerId }) => providerId === profile.adapter);
+    namedSizeProviders: namedSizeDeploymentProviders(
+      input.bindings,
+      input.deploymentOrbs,
+    ),
+    // A named size runs only on the deployment's account that names it;
+    // a provider's own size never does.
+  }).find(
+    (candidate) =>
+      candidate.providerId === profile.adapter &&
+      (candidate.namedSizes === true) === (profile.runsAs !== undefined),
+  );
   if (member === undefined)
     throw new OrbUnavailable({
       reason:
@@ -476,10 +513,10 @@ export const resolveThreadExecutionPin = async (input: {
       );
       throw new OrbUnavailable({ reason: served.status });
     }
-    const target = served.targets[profile.id];
+    const target = served.targets[providerSize];
     if (target === undefined)
       throw new OrbUnavailable({
-        reason: served.unavailable.has(profile.id)
+        reason: served.unavailable.has(providerSize)
           ? "size-unavailable"
           : "preparing",
       });

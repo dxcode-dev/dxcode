@@ -9,6 +9,8 @@ import type {
   ExecutionProvider,
   ExecutionProviderId,
 } from "../plugins/execution/provider.js";
+import { makeAgent37Connector } from "./agent37/connector.js";
+import { agent37ExecutionProvider } from "./agent37/provider.js";
 import { makeBoatConnector } from "./boat/connector.js";
 import { boatExecutionProvider } from "./boat/provider.js";
 import { makeCloudflareConnector } from "./cloudflare/connector.js";
@@ -55,6 +57,10 @@ const cloudflareConnector = makeCloudflareConnector(
         },
       },
 );
+/** Agent37 connections register the published public Orb image. */
+const agent37Connector = makeAgent37Connector(
+  previewImage === null ? {} : { image: previewImage[0] },
+);
 /** Docker Sandboxes connections boot the published public Orb image. */
 const dockerConnector = makeDockerConnector(
   previewImage === null ? {} : { image: previewImage[0] },
@@ -95,6 +101,10 @@ export const ORB_PROVIDER_MODULES: Readonly<
   lizard: {
     execution: lizardExecutionProvider as ExecutionProvider,
     connector: makeLizardConnector(),
+  },
+  agent37: {
+    execution: agent37ExecutionProvider as ExecutionProvider,
+    ...(agent37Connector === undefined ? {} : { connector: agent37Connector }),
   },
   local: { execution: localExecutionProvider },
 });

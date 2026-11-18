@@ -135,3 +135,30 @@ export const RunnerProfileCatalog = Schema.Struct({
 });
 
 export type RunnerProfileCatalog = typeof RunnerProfileCatalog.Type;
+
+/**
+ * Which resolved Orb account runs a size: a deployment's named size (one
+ * with `runsAs`) runs only on that deployment account (`namedSizes`), and a
+ * provider's own size only on the provider's other account, so a person's
+ * own key and the deployment's offer are separate choices.
+ */
+export const orbAccountForProfile = <
+  Account extends {
+    readonly providerId: string;
+    readonly namedSizes?: true | undefined;
+  },
+>(
+  profile: Pick<RunnerProfile, "adapter" | "runsAs">,
+  accounts: ReadonlyArray<Account>,
+): Account | undefined =>
+  accounts.find(
+    (account) =>
+      account.providerId === profile.adapter &&
+      (account.namedSizes === true) === (profile.runsAs !== undefined),
+  );
+
+/** The group a size is offered in: its provider, or its named offer. */
+export const orbSizeGroupKey = (
+  profile: Pick<RunnerProfile, "adapter" | "runsAs">,
+) =>
+  profile.runsAs === undefined ? profile.adapter : `${profile.adapter}:named`;

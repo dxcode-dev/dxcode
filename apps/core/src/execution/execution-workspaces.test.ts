@@ -94,11 +94,6 @@ const mocks = vi.hoisted(() => {
       ),
     ),
   } as unknown as D1Database;
-  const workerEnv = {
-    DB: db,
-    DX_RUNTIME_MODE: "deployed",
-    E2B_API_KEY: "test-e2b-key",
-  };
   const profile = {
     id: "e2b-test",
     label: "Test workspace",
@@ -114,6 +109,17 @@ const mocks = vi.hoisted(() => {
       "persistent-workspace",
       "pause-resume",
     ] as const,
+  };
+  const workerEnv = {
+    DB: db,
+    DX_RUNTIME_MODE: "deployed",
+    E2B_API_KEY: "test-e2b-key",
+    // The deployment built its E2B size; a key alone offers no E2B (#1936).
+    DX_RUNNER_PROFILE_CATALOG: JSON.stringify({
+      version: 1,
+      defaultProfileId: profile.id,
+      profiles: [profile],
+    }),
   };
   return {
     db,
@@ -514,7 +520,13 @@ describe("read-only Orb recovery", () => {
   // `rescue` answers dx's copy of the unsaved work: an archive of "hello",
   // 2 changed paths and 1 unpushed commit, which a read-only disk still
   // lets it read; without it every command fails as a write would.
-  const guest = (readOnly: boolean, rescue = false) => ({
+  const READ_ONLY = {
+    stdout: "",
+    stderr:
+      "mkdir: cannot create directory '/home/user/workspace/repo': Read-only file system",
+    exitCode: 1,
+  };
+  const guest = (readOnly: boolean, rescue = false, failure = READ_ONLY) => ({
     commands: {
       run: vi.fn(async (command: string) => {
         if (rescue && command.includes("/dev/shm/dx-rescue.XXXXXX"))
@@ -527,14 +539,7 @@ describe("read-only Orb recovery", () => {
           return { stdout: "aGVsbG8=", stderr: "", exitCode: 0 };
         if (rescue && command.startsWith("rm -rf"))
           return { stdout: "", stderr: "", exitCode: 0 };
-        return readOnly
-          ? {
-              stdout: "",
-              stderr:
-                "mkdir: cannot create directory '/home/user/workspace/repo': Read-only file system",
-              exitCode: 1,
-            }
-          : { stdout: "", stderr: "", exitCode: 0 };
+        return readOnly ? failure : { stdout: "", stderr: "", exitCode: 0 };
       }),
     },
     files: { write: vi.fn(async () => undefined) },
@@ -542,8 +547,9 @@ describe("read-only Orb recovery", () => {
   const handle = (
     readOnly: boolean,
     rescue = false,
+    failure = READ_ONLY,
   ): ExecutionWorkspaceHandle & { guest: ReturnType<typeof guest> } => ({
-    guest: guest(readOnly, rescue),
+    guest: guest(readOnly, rescue, failure),
     sandbox: async (cwd) =>
       ({
         cwd,
@@ -596,6 +602,53 @@ describe("read-only Orb recovery", () => {
     // The turn this activation starts tells the agent what happened.
     expect(takeWorkspaceRecovery(threadId)).toEqual({ files: "kept" });
     expect(takeWorkspaceRecovery(threadId)).toBeUndefined();
+  });
+
+  // #1843: thr_242ddea4's Orb returned I/O errors on writes, and every turn
+  // failed at dispatch with a raw `mkdir … Input/output error`.
+  it("restarts an Orb whose disk fails writes with I/O errors (#1843)", async () => {
+    const cases = [
+      {
+        id: "thr_00000000-0000-4000-8000-000000001843",
+        // A command that fails writing.
+        failure: {
+          stdout: "",
+          stderr:
+            "mkdir: cannot create directory '/home/user/workspace/repo/.git': Input/output error",
+          exitCode: 1,
+        },
+      },
+      {
+        id: "thr_00000000-0000-4000-8000-000000001844",
+        // Reads still work, so the command succeeds; only the disk guard's
+        // write check in dx's state directory finds the failing disk.
+        failure: {
+          stdout: "",
+          stderr:
+            "dx-disk-write mkdir: cannot create directory '/home/user/.local/state/dx-write-check.4242': Input/output error\n",
+          exitCode: 0,
+        },
+      },
+    ];
+    for (const { id, failure } of cases) {
+      const threadId = thread(id);
+      const recover = vi.fn(async () => ({ files: "kept" as const }));
+      const fake = provider(
+        [handle(true, false, failure), handle(false)],
+        recover,
+      );
+
+      await expect(
+        makeExecutionActivation()({ workspace: fake.workspace }).activate(
+          context,
+          { id: threadId },
+        ),
+      ).resolves.toBeDefined();
+
+      expect(recover).toHaveBeenCalledOnce();
+      expect(fake.create).toHaveBeenCalledTimes(2);
+      expect(takeWorkspaceRecovery(threadId)).toEqual({ files: "kept" });
+    }
   });
 
   it("copies the unsaved work out before a restart that drops the Orb's files, and puts it in the new Orb", async () => {
@@ -667,9 +720,9 @@ describe("read-only Orb recovery", () => {
     expect(cause).toBeInstanceOf(FlueError);
     expect(cause).toMatchObject({
       type: "workspace_read_only",
-      message: "The Orb's disk became read-only.",
+      message: "The Orb's disk is failing: writes fail.",
       details: expect.stringMatching(
-        /^dx restarted the Orb from its last save .*, but its disk is still read-only\./,
+        /^dx restarted the Orb from its last save .*, but its disk still fails writes\./,
       ),
       meta: { code: "WORKSPACE_READ_ONLY" },
     });

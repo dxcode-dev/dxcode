@@ -1,10 +1,12 @@
-// An Orb whose filesystem turned read-only fails every write, so every
-// activation fails until the Orb restarts. Cloudflare Orbs run on a btrfs
-// root in a Firecracker VM; btrfs forces itself read-only when a transaction
-// aborts (memory exhaustion in the VM is one cause), and stays so until it
-// is mounted again, which only a restart does.
+// An Orb whose filesystem turned read-only, or returns I/O errors (#1843),
+// fails every write, so every activation fails until the Orb restarts.
+// Cloudflare Orbs run on a btrfs root in a Firecracker VM; btrfs forces
+// itself read-only when a transaction aborts (memory exhaustion in the VM is
+// one cause), or answers EIO once its device fails, and stays so until it is
+// mounted again, which only a restart does. Reads often still work, so the
+// disk guard's write check (guard.ts) finds it before anything else writes.
 //
-// Activation names the failure WORKSPACE_READ_ONLY, restarts the Orb once
+// Activation names either failure WORKSPACE_READ_ONLY, restarts the Orb once
 // through its provider (`recover`), and runs the turn on the restarted Orb.
 // The turn starts with a note saying what the restart kept; when the restart
 // is impossible or does not help, the run settles as `workspace_read_only`
@@ -16,9 +18,9 @@ import { markRunFailure } from "../runtime/run-failure.js";
 
 export const WORKSPACE_READ_ONLY_CODE = "WORKSPACE_READ_ONLY";
 
-/** A write failed because the filesystem is read-only. */
-export const isReadOnlyText = (text: string) =>
-  /Read-only file system|\bEROFS\b/.test(text);
+/** A write failed because the filesystem is read-only or failing. */
+export const isDiskFailingText = (text: string) =>
+  /Read-only file system|\bEROFS\b|Input\/output error|\bEIO\b/.test(text);
 
 /**
  * WORKSPACE_READ_ONLY: not retried as it stands, since every retry writes
@@ -28,7 +30,7 @@ export const workspaceReadOnlyFailure = () =>
   markRunFailure({
     class: "internal",
     code: WORKSPACE_READ_ONLY_CODE,
-    message: "The Orb's disk became read-only.",
+    message: "The Orb's disk is failing: writes fail.",
     retryable: false,
   });
 
@@ -84,7 +86,7 @@ export const WORKSPACE_RECOVERY_SIGNAL = "workspace_recovered";
 export const workspaceRecoveryNote = (restart: WorkspaceRestart) =>
   restart.cause === "unresponsive"
     ? `This Orb stopped responding (every command hung, most likely from heavy processes overloading it), so dx restarted it before this turn. ${workspaceRecoveryFiles(restart)} Processes that were running in it, such as dev servers, test runs, and other background jobs, were stopped. Begin your final reply, the text after any tool calls, with this sentence: "The Orb stopped responding, so dx restarted it. Files are kept; running processes were stopped." Then continue with the request below, and avoid running several heavy jobs at once.`
-    : `This Orb's disk became read-only, so every write failed. dx restarted the Orb before this turn. ${workspaceRecoveryFiles(restart)}${
+    : `This Orb's disk started failing (it turned read-only or returned I/O errors), so every write failed. dx restarted the Orb before this turn. ${workspaceRecoveryFiles(restart)}${
         restart.restored === undefined
           ? ""
           : ` ${restoredText(restart.restored)}`

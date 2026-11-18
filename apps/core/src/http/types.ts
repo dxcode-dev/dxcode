@@ -135,12 +135,10 @@ export interface Bindings {
   /** The deployment's own Boat account; Boat is installed only with it. */
   readonly BOAT_API_KEY?: string;
   /**
-   * The deployment's own Lizard account (a hosted offer's Orbs): its API key, the
-   * project its sandboxes run in, and optionally their region.
+   * The deployment's own Agent37 account (a hosted offer's Orbs);
+   * Agent37 is installed on the deployment only with it.
    */
-  readonly LIZARD_API_KEY?: string;
-  readonly LIZARD_PROJECT_ID?: string;
-  readonly LIZARD_REGION?: string;
+  readonly AGENT37_API_KEY?: string;
   /**
    * Secret JSON for the modules a deployment registers itself; only they
    * read it. Public dx registers none, so it is absent.

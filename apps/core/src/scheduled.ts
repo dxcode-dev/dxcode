@@ -225,16 +225,21 @@ export const scheduled = (
       }),
     ),
   );
-  // An idle Orb whose provider cannot pause it by itself (Lizard) pauses
-  // within a minute of its deadline.
+  // An idle Orb whose provider cannot pause it by itself (Lizard, Agent37)
+  // pauses within a minute of its deadline.
   context.waitUntil(
-    import("./execution/lizard/provider.js")
-      .then(({ pauseIdleLizardSandbox }) =>
+    Promise.all([
+      import("./execution/lizard/provider.js"),
+      import("./execution/agent37/provider.js"),
+    ])
+      .then(([{ pauseIdleLizardSandbox }, { pauseIdleAgent37Instance }]) =>
         sweepIdleDeadlines(
           bindings,
           {
-            lizard: (sweepBindings, sandboxId) =>
-              pauseIdleLizardSandbox(sweepBindings, sandboxId),
+            lizard: (sweepBindings, sandboxId, threadId) =>
+              pauseIdleLizardSandbox(sweepBindings, sandboxId, threadId),
+            agent37: (sweepBindings, instanceId, threadId) =>
+              pauseIdleAgent37Instance(sweepBindings, instanceId, threadId),
           },
           controller.scheduledTime,
         ),

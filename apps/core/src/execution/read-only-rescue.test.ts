@@ -128,8 +128,9 @@ it("finds nothing to copy in a workspace with no unsaved work (#1658)", async ()
   const clean = await mkdtemp(join(tmpdir(), "dx-rescue-clean-"));
   try {
     await mkdir(join(clean, "repo"));
+    // Every commit is on its remote: nothing exists only in the Orb.
     await sh(
-      "git init -q -b main && echo x > x.txt && git add x.txt && git commit -qm init",
+      "git init -q -b main && echo x > x.txt && git add x.txt && git commit -qm init && git clone -q --bare . ../origin.git && git remote add origin ../origin.git && git fetch -q origin",
       join(clean, "repo"),
     );
     await expect(rescueUnsavedWork(guestIn(clean), clean)).resolves.toEqual({
@@ -137,5 +138,38 @@ it("finds nothing to copy in a workspace with no unsaved work (#1658)", async ()
     });
   } finally {
     await rm(clean, { recursive: true, force: true });
+  }
+});
+
+it("copies the commits of a repository with no remote, which exist nowhere else (#1687)", async () => {
+  // A never-saved Orb's `git init` repository: format-patch without --root
+  // dropped every commit in a history that starts at its root commit.
+  const bare = await mkdtemp(join(tmpdir(), "dx-rescue-no-remote-"));
+  try {
+    await mkdir(join(bare, "demo"));
+    await sh(
+      "git init -q -b main && echo one > work.txt && git add . && git commit -qm 'first commit, never pushed' && echo two >> work.txt && git commit -qam 'second commit, never pushed'",
+      join(bare, "demo"),
+    );
+    const rescue = await rescueUnsavedWork(guestIn(bare), bare);
+    expect(rescue.kind).toBe("archive");
+    if (rescue.kind !== "archive") return;
+    expect(rescue.commits).toBe(2);
+    const archive = join(bare, "rescue.tar.gz");
+    await writeFile(archive, rescue.bytes);
+    const unpushed = await sh(
+      `tar xzf ${archive} -O ./demo/.dx-recovered/unpushed.patch`,
+      bare,
+    );
+    // Both commits, and they rebuild the history in an empty repository.
+    expect(unpushed).toContain("first commit, never pushed");
+    expect(unpushed).toContain("second commit, never pushed");
+    await sh(
+      `mkdir rebuilt && cd rebuilt && git init -q -b main && tar xzf ${archive} -O ./demo/.dx-recovered/unpushed.patch | git am -q`,
+      bare,
+    );
+    expect(await sh("cat rebuilt/work.txt", bare)).toBe("one\ntwo\n");
+  } finally {
+    await rm(bare, { recursive: true, force: true });
   }
 });

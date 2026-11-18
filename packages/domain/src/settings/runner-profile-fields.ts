@@ -78,6 +78,12 @@ export const RunnerProfileFields = {
   availability: RunnerProfileAvailability,
   costLabel: Schema.optional(RunnerCostLabel),
   capabilities: Schema.Array(RunnerCapability),
+  /**
+   * A deployment's own named size (a hosted offer's Small, say) runs as
+   * this size of its provider, always on the deployment's own account and
+   * never on a person's or workspace's key. Absent on a provider's own size.
+   */
+  runsAs: Schema.optional(RunnerProfileId),
 } as const;
 
 /**

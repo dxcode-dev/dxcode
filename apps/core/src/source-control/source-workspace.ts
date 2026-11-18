@@ -21,9 +21,10 @@ import {
   workspaceDiskBlocksStart,
   workspaceDiskFullFailure,
   workspaceDiskGuard,
+  workspaceDiskWriteFailure,
 } from "../orb-disk/guard.js";
 import {
-  isReadOnlyText,
+  isDiskFailingText,
   workspaceReadOnlyFailure,
 } from "../orb-disk/read-only.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
@@ -125,7 +126,7 @@ const commandFailed = (result: {
   readonly exitCode?: number;
   readonly stderr?: string;
 }) =>
-  result.stderr !== undefined && isReadOnlyText(result.stderr)
+  result.stderr !== undefined && isDiskFailingText(result.stderr)
     ? readOnly(result.stderr)
     : new SourceWorkspaceInitializationFailed({
         ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode }),
@@ -142,7 +143,7 @@ const commandFailed = (result: {
  */
 const asInfrastructureFailure = (error: SourceWorkspaceInitializationFailed) =>
   /^invalid-input\b/.test(error.stderrTail ?? "") ||
-  isReadOnlyText(error.stderrTail ?? "")
+  isDiskFailingText(error.stderrTail ?? "")
     ? error
     : new SourceWorkspaceInitializationFailed({
         ...(error.exitCode === undefined ? {} : { exitCode: error.exitCode }),
@@ -344,6 +345,10 @@ export const verifySourceWorkspaceAssets = Effect.fn(
     [0, ASSET_STALE_EXIT, 43],
     "verify-assets",
   );
+  // Reads work on a failing disk, so the verdict may be fine; the guard's
+  // write check is what finds it.
+  const failing = workspaceDiskWriteFailure(verdictResult.stderr);
+  if (failing !== undefined) return yield* readOnly(failing);
   const reading = parseWorkspaceDiskReading(verdictResult.stderr);
   if (reading !== undefined) {
     disk?.onReading?.(reading);
@@ -355,7 +360,7 @@ export const verifySourceWorkspaceAssets = Effect.fn(
     verdictResult.exitCode !== ASSET_STALE_EXIT &&
     verdictResult.exitCode !== 43
   )
-    return yield* isReadOnlyText(verdictResult.stderr)
+    return yield* isDiskFailingText(verdictResult.stderr)
       ? readOnly(verdictResult.stderr)
       : commandFailed(verdictResult);
   const verdict = yield* Effect.try({
@@ -409,7 +414,7 @@ const bounded = (value: unknown) =>
 const guestExecLost = (cause: unknown) => {
   const message = cause instanceof Error ? cause.message : String(cause);
   // A file write the provider reports as failed, on a read-only disk.
-  if (isReadOnlyText(message)) return readOnly(message);
+  if (isDiskFailingText(message)) return readOnly(message);
   const failed = commandFailed({ stderr: message });
   return new SourceWorkspaceInitializationFailed({
     ...(failed.stderrTail === undefined
@@ -534,7 +539,7 @@ const requireSuccess = (
     return Effect.fail(new SourceWorkspaceHistoryUnavailable());
   if (result.exitCode === 60 || isDiskFullText(result.stderr))
     return Effect.fail(diskFull());
-  if (isReadOnlyText(result.stderr))
+  if (isDiskFailingText(result.stderr))
     return Effect.fail(readOnly(result.stderr));
   return Effect.fail(commandFailed(result));
 };
@@ -938,6 +943,8 @@ const makeSourceWorkspaceService = (
             ),
           catch: guestExecLost,
         });
+        const failing = workspaceDiskWriteFailure(prepared.stderr ?? "");
+        if (failing !== undefined) return yield* readOnly(failing);
         const reading = parseWorkspaceDiskReading(prepared.stderr ?? "");
         if (reading !== undefined) {
           disk?.onReading?.(reading);
@@ -1149,7 +1156,7 @@ const makeSourceWorkspaceService = (
         return yield* new SourceWorkspaceConflict();
       if (checkout.status === "disk-full") return yield* diskFull();
       if (checkout.status !== "ready")
-        return yield* isReadOnlyText(checkoutOutput.stderr)
+        return yield* isDiskFailingText(checkoutOutput.stderr)
           ? readOnly(checkoutOutput.stderr)
           : commandFailed(checkoutOutput);
       // dx initializes only the private submodules the Project selected, and

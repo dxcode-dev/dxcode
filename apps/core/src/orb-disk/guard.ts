@@ -16,6 +16,12 @@
 // What dx clears is only what any package manager rebuilds on demand, plus
 // temporary files: never the user's checkout or anything else under home.
 //
+// Last, it creates and removes a directory in dx's state directory, where
+// the agent's runs write, and prints `dx-disk-write <error>` when that
+// fails. A disk that returns I/O errors or turned read-only still answers
+// reads and `df`, so this is how activation finds it and restarts the Orb
+// (#1843, read-only.ts) before anything else writes.
+//
 // The guard prints one `dx-disk <total KiB> <available KiB> <full>` line to
 // stderr; `full` says it had to free space. Core reads it to tell the agent
 // (see note.ts). When a write still fails, Core runs the cleanup once more
@@ -27,6 +33,7 @@ import {
   diskShellFunctions,
 } from "../execution/disk-cleanup-script.js";
 import { markRunFailure } from "../runtime/run-failure.js";
+import { isDiskFailingText } from "./read-only.js";
 
 export const WORKSPACE_DISK_RESERVE_PATH =
   "/home/user/.local/state/dx-disk-reserve";
@@ -65,6 +72,13 @@ export const WORKSPACE_DISK_CACHES = diskCaches("/home/user");
 
 const diskFunctions = diskShellFunctions("/home/user", START_BYTES / KIB);
 
+const STATE_DIRECTORY = "/home/user/.local/state";
+
+/** Creates and removes a directory where dx writes; reports a failure. */
+const writeCheck = `dx_disk_write="$( { mkdir -p ${STATE_DIRECTORY} && mkdir ${STATE_DIRECTORY}/dx-write-check.$$ && rmdir ${STATE_DIRECTORY}/dx-write-check.$$; } 2>&1 >/dev/null | head -n 1 )" || true
+if [ -n "$dx_disk_write" ]; then printf 'dx-disk-write %s\\n' "$dx_disk_write" >&2; fi
+`;
+
 const reading = (full: string) =>
   `df -Pk /home/user 2>/dev/null | awk -v full="${full}" -v avail="$(dx_disk_kib)" 'NR==2 {print "dx-disk", $2, avail, full}' >&2
 `;
@@ -92,7 +106,7 @@ ${
 `
     : ""
 }fi
-${reading("$dx_disk_full")}`;
+${writeCheck}${reading("$dx_disk_full")}`;
 
 /**
  * Core's cleanup after a write failed for lack of space, whatever the guard
@@ -125,9 +139,21 @@ export const parseWorkspaceDiskReading = (
   };
 };
 
-/** The guard's line removed, for logs and failure text. */
+/**
+ * The guard's write check failed because the disk is failing (I/O errors,
+ * read-only): that error, else undefined. A full disk's failure is left to
+ * the reading.
+ */
+export const workspaceDiskWriteFailure = (stderr: string) => {
+  const error = /^dx-disk-write (.*)$/m.exec(stderr)?.[1];
+  return error !== undefined && isDiskFailingText(error) ? error : undefined;
+};
+
+/** The guard's lines removed, for logs and failure text. */
 export const withoutWorkspaceDiskReading = (stderr: string) =>
-  stderr.replace(/^dx-disk \d+ \d+ [01]\n?/m, "");
+  stderr
+    .replace(/^dx-disk \d+ \d+ [01]\n?/m, "")
+    .replace(/^dx-disk-write .*\n?/m, "");
 
 /** Even after the guard freed what it could, a turn cannot start. */
 export const workspaceDiskBlocksStart = (reading: WorkspaceDiskReading) =>

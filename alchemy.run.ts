@@ -345,13 +345,9 @@ export default Alchemy.Stack(
       // Optional: Boat on the deployment's own account. Self-host opts in
       // with the `boat` integration.
       boatApiKey: Config.option(Config.Redacted("BOAT_API_KEY")),
-      // Optional: Lizard on the deployment's own account (a hosted offer's Orbs):
-      // its key, the project its sandboxes run in, and their region.
-      lizardApiKey: Config.option(Config.Redacted("LIZARD_API_KEY")),
-      lizardProjectId: Config.option(
-        Config.NonEmptyString("LIZARD_PROJECT_ID"),
-      ),
-      lizardRegion: Config.option(Config.NonEmptyString("LIZARD_REGION")),
+      // Optional: Agent37 on the deployment's own account (a hosted offer's
+      // Orbs).
+      agent37ApiKey: Config.option(Config.Redacted("AGENT37_API_KEY")),
       // Optional: secret configuration for the modules a deployment registers
       // itself (the registration files the public export replaces), as one
       // opaque JSON object. Public dx registers none, so it is never set.
@@ -560,10 +556,10 @@ export default Alchemy.Stack(
           })).value
         : undefined
       : Option.getOrUndefined(configuration.boatApiKey);
-    // Lizard on the deployment's own account: hosted targets only.
-    const lizardApiKey = selfhost
+    // Agent37 on the deployment's own account: hosted targets only.
+    const agent37ApiKey = selfhost
       ? undefined
-      : Option.getOrUndefined(configuration.lizardApiKey);
+      : Option.getOrUndefined(configuration.agent37ApiKey);
     // Bug report forwarding (#1661). Hosted targets take both settings from
     // the deploy environment on every deploy. A self-host's
     // `bugReportForwarding` and `bugReportIntake` integrations hold them across
@@ -1014,16 +1010,6 @@ export default Alchemy.Stack(
           ? {}
           : { DX_INSTALLED_PLUGINS: installedPlugins }),
         ...(configuration.signupEnabled ? { DX_SIGNUP_ENABLED: "true" } : {}),
-        ...(lizardApiKey === undefined
-          ? {}
-          : {
-              ...(Option.isSome(configuration.lizardProjectId)
-                ? { LIZARD_PROJECT_ID: configuration.lizardProjectId.value }
-                : {}),
-              ...(Option.isSome(configuration.lizardRegion)
-                ? { LIZARD_REGION: configuration.lizardRegion.value }
-                : {}),
-            }),
         ...(Option.isSome(configuration.deploymentAdminEmails) &&
         configuration.deploymentAdminEmails.value.trim() !== ""
           ? {
@@ -1123,7 +1109,9 @@ export default Alchemy.Stack(
           ? { DX_BUG_REPORT_INTAKE_SECRET: bugReportIntakeSecret }
           : {}),
         ...(boatApiKey !== undefined ? { BOAT_API_KEY: boatApiKey } : {}),
-        ...(lizardApiKey !== undefined ? { LIZARD_API_KEY: lizardApiKey } : {}),
+        ...(agent37ApiKey !== undefined
+          ? { AGENT37_API_KEY: agent37ApiKey }
+          : {}),
         ...(Option.isSome(configuration.deploymentPrivateConfig)
           ? {
               DX_DEPLOYMENT_PRIVATE_CONFIG:

@@ -2,7 +2,7 @@
  * The part of Lizard's sandbox API (https://lizard.build/docs/sandboxes,
  * and @lizard-build/sdk 1.0.10 for the file and snapshot calls the docs do
  * not list) dx uses, over `fetch` so it runs in a Worker. Every call names
- * the deployment's Lizard project.
+ * the connection's Lizard project.
  */
 
 const API = "https://lizard.build";

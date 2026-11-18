@@ -346,6 +346,11 @@ const retiredWorkerBindings = new Map([
   ["DX_MODEL_INVOCATION_HMAC_KEYS", "secret_text"],
   ["DX_MODEL_REPLAY_SEAL_KEYS", "secret_text"],
   ["DX_WEB_PROVIDER", "plain_text"],
+  // A hosted deployment's own Lizard account; Lizard is BYOK
+  // only now, on a person's or workspace's own key (#2218).
+  ["LIZARD_API_KEY", "secret_text"],
+  ["LIZARD_PROJECT_ID", "plain_text"],
+  ["LIZARD_REGION", "plain_text"],
   ["MODEL_EGRESS_COORDINATOR", "durable_object_namespace"],
 ]);
 const cloudflareResourceIds = new Set([
@@ -3120,9 +3125,7 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "SARVAM_API_KEY",
           "EXA_API_KEY",
           "BOAT_API_KEY",
-          "LIZARD_API_KEY",
-          "LIZARD_PROJECT_ID",
-          "LIZARD_REGION",
+          "AGENT37_API_KEY",
           "DX_DEPLOYMENT_ADMIN_EMAILS",
           "DX_DEPLOYMENT_PRIVATE_CONFIG",
           // The runner forwards the validated reader list itself.

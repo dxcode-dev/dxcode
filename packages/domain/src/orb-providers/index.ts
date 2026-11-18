@@ -1,5 +1,6 @@
 import { Schema } from "effect";
 import type { RunnerResources } from "../settings/runner-profile-fields.js";
+import { agent37OrbProvider } from "./agent37.js";
 import { boatOrbProvider } from "./boat.js";
 import { cloudflareOrbProvider } from "./cloudflare.js";
 import type { OrbProviderPricing } from "./descriptor.js";
@@ -21,6 +22,7 @@ export const ORB_PROVIDERS = [
   dockerOrbProvider,
   boatOrbProvider,
   lizardOrbProvider,
+  agent37OrbProvider,
   localOrbProvider,
 ] as const;
 

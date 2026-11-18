@@ -30,7 +30,14 @@ const RESOLUTION_LOCK_RETRY_DELAYS_MS = [25, 50, 100, 250, 500, 1_000] as const;
 
 export class ExecutionWorkspaceUnavailable extends Schema.TaggedError<ExecutionWorkspaceUnavailable>()(
   "ExecutionWorkspaceUnavailable",
-  {},
+  {
+    /**
+     * The E2B account has no template by the name the create asked for
+     * (`404: template '…' not found`), so no create can succeed until the
+     * template is built there (#1936).
+     */
+    missingTemplate: Schema.optional(Schema.String),
+  },
 ) {}
 
 export class ExecutionWorkspaceConflict extends Schema.TaggedError<ExecutionWorkspaceConflict>()(
@@ -40,8 +47,16 @@ export class ExecutionWorkspaceConflict extends Schema.TaggedError<ExecutionWork
 
 const providerCauses = new WeakMap<object, unknown>();
 
+const MISSING_TEMPLATE = /^404\b.*\btemplate '([^']+)' not found/i;
+
 const unavailable = (cause?: unknown) => {
-  const error = new ExecutionWorkspaceUnavailable();
+  const missingTemplate =
+    cause instanceof SandboxError
+      ? MISSING_TEMPLATE.exec(cause.message)?.[1]
+      : undefined;
+  const error = new ExecutionWorkspaceUnavailable(
+    missingTemplate === undefined ? {} : { missingTemplate },
+  );
   if (cause !== undefined) providerCauses.set(error, cause);
   return error;
 };

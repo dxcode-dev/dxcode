@@ -261,18 +261,16 @@ describe("Orb container object", () => {
       );
     });
     const startedAt = orb.now();
-    // Sixteen hours of heartbeats: a failed snapshot never fails the alarm.
-    while (orb.now() < startedAt + 16 * 3_600_000) {
+    // 35 minutes of heartbeats: a failed snapshot never fails the alarm.
+    while (orb.now() < startedAt + 35 * 60_000) {
       orb.advance(ORB_HEARTBEAT_MS);
       await expect(orb.controller.alarm()).resolves.toBeUndefined();
     }
     const gaps = attemptsAt
       .slice(1)
       .map((at, index) => at - (attemptsAt[index] ?? 0));
-    expect(gaps.slice(0, 4)).toEqual([30_000, 60_000, 120_000, 240_000]);
-    expect(Math.max(...gaps)).toBe(3_600_000);
-    expect(attemptsAt.length).toBeLessThan(30);
-    // The container keeps running: its files are never dropped.
+    expect(gaps).toEqual([30_000, 60_000, 120_000, 240_000, 480_000, 960_000]);
+    // The container keeps running meanwhile: its files are never dropped.
     expect(orb.container.running).toBe(true);
     expect(orb.container.destroy).not.toHaveBeenCalled();
 
@@ -281,7 +279,7 @@ describe("Orb container object", () => {
       id: "snapshot-late",
       size: 1,
     }));
-    orb.advance(3_600_000);
+    orb.advance(1_920_000);
     await orb.controller.alarm();
     expect(orb.container.running).toBe(false);
     await expect(orb.controller.status()).resolves.toEqual({
@@ -451,7 +449,7 @@ describe("Orb container object", () => {
     expect(opened).not.toHaveProperty("unsavedStop.rescue");
   });
 
-  it("still never stops a container that was never saved, since that would lose every file (#1620)", async () => {
+  it("never stops a never-saved container at once, since that would lose every file (#1620, #1687)", async () => {
     const orb = setup();
     await orb.controller.open(create);
     orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
@@ -459,6 +457,172 @@ describe("Orb container object", () => {
     await expect(orb.controller.pause()).resolves.toBe("stopping");
     expect(orb.container.running).toBe(true);
     expect(orb.container.destroy).not.toHaveBeenCalled();
+  });
+
+  describe("a never-saved Orb whose snapshots keep failing (#1687)", () => {
+    // thr_242ddea4 on production: started from the image, never saved, its
+    // disk failing; every snapshot failed, so it ran (and billed) for good.
+    const archive = new Uint8Array([31, 139, 8, 0, 9, 8, 7]);
+    const rescuing = (onRescue?: () => void) => {
+      let binary = "";
+      for (const byte of archive) binary += String.fromCharCode(byte);
+      return ({ argv }: { readonly argv: ReadonlyArray<string> }) => {
+        const script = argv.join(" ");
+        if (script.includes("mktemp -d /dev/shm/dx-rescue")) {
+          onRescue?.();
+          return {
+            stdout: `archive /dev/shm/dx-rescue.Zz99 ${String(archive.length)} 4 2 1 1 ${String(archive.length)}\n`,
+          };
+        }
+        if (script.includes("/dev/shm/dx-rescue.Zz99/archive.tar.gz"))
+          return { stdout: btoa(binary) };
+        return {};
+      };
+    };
+    const failing = () =>
+      new Error(
+        "The container snapshot could not be completed due to an internal error; try again (reference ID: 64ef9ffc)",
+      );
+
+    it("copies its git work out, then stops it after 8 failures over at least an hour, and the next activation starts it from the image and says what was lost", async () => {
+      const logged = captureLogs();
+      let rescuedWhileRunning: boolean | undefined;
+      const orb = setup(
+        rescuing(() => {
+          rescuedWhileRunning = orb.container.running;
+        }),
+      );
+      await orb.controller.open(create);
+      await orb.controller.setIdleDeadline(60_000);
+      const attemptsAt: number[] = [];
+      orb.container.snapshotContainer.mockImplementation(async () => {
+        attemptsAt.push(orb.now());
+        throw failing();
+      });
+      const startedAt = orb.now();
+      let stoppedAt: number | undefined;
+      while (orb.now() < startedAt + 4 * 3_600_000) {
+        orb.advance(ORB_HEARTBEAT_MS);
+        await expect(orb.controller.alarm()).resolves.toBeUndefined();
+        if (stoppedAt === undefined && !orb.container.running)
+          stoppedAt = orb.now();
+      }
+      expect(stoppedAt).toBeDefined();
+      const firstFailure = attemptsAt[0] ?? 0;
+      const span = (stoppedAt ?? 0) - firstFailure;
+      // Not before an hour of failures, and not much after.
+      expect(span).toBeGreaterThanOrEqual(3_600_000);
+      expect(span).toBeLessThan(75 * 60_000);
+      expect(attemptsAt.length).toBe(8);
+      expect(rescuedWhileRunning).toBe(true);
+      expect(orb.container.destroy).toHaveBeenCalledOnce();
+      await expect(orb.controller.status()).resolves.toEqual({
+        running: false,
+        status: "paused",
+      });
+      const stopped = logged.filter(
+        (line) => line.event === "orb_container_stopped_unsaved",
+      );
+      expect(stopped).toHaveLength(1);
+      expect(stopped[0]).toMatchObject({
+        level: "error",
+        neverSaved: true,
+        failures: 8,
+        rescue: "archive",
+      });
+
+      // A Terminal reconnect cannot start it over from the image.
+      await expect(
+        orb.controller.open({ ...create, create: false, allowReset: false }),
+      ).rejects.toThrow(ORB_WORKSPACE_RESET_DETAIL);
+      // The next activation starts it from the image, with the copy and
+      // the news that it was never saved.
+      const opened = await orb.controller.open({ ...create, allowReset: true });
+      expect(opened).toMatchObject({
+        kind: "ready",
+        residency: "created",
+        unsavedStop: {
+          neverSaved: true,
+          failures: 8,
+          rescue: { size: archive.length, checkouts: 1, commits: 2 },
+        },
+      });
+      expect(opened).not.toHaveProperty("unsavedStop.savedAt");
+      expect(orb.starts.at(-1)).not.toHaveProperty("containerSnapshot");
+      await expect(orb.controller.readRescue(0)).resolves.toEqual(archive);
+    });
+
+    it("keeps it running, and every file, when a snapshot works again within the hour", async () => {
+      const orb = setup(rescuing());
+      await orb.controller.open(create);
+      await orb.controller.setIdleDeadline(60_000);
+      orb.container.snapshotContainer.mockRejectedValue(failing());
+      const startedAt = orb.now();
+      while (orb.now() < startedAt + 55 * 60_000) {
+        orb.advance(ORB_HEARTBEAT_MS);
+        await orb.controller.alarm();
+      }
+      expect(orb.container.running).toBe(true);
+      expect(orb.container.destroy).not.toHaveBeenCalled();
+      orb.container.snapshotContainer.mockResolvedValue({
+        id: "snapshot-late",
+        size: 1,
+      });
+      while (orb.container.running) {
+        orb.advance(ORB_HEARTBEAT_MS);
+        await orb.controller.alarm();
+      }
+      // Paused on a snapshot: the next open restores it, and nothing is told.
+      const opened = await orb.controller.open({ ...create, allowReset: true });
+      expect(opened).toMatchObject({ residency: "paused" });
+      expect(opened).not.toHaveProperty("unsavedStop");
+      expect(orb.starts.at(-1)).toMatchObject({
+        containerSnapshot: { id: "snapshot-late" },
+      });
+    });
+
+    it("stops an archived one within about an hour of the archive, though archive answers that it is still stopping", async () => {
+      const orb = setup(rescuing());
+      await orb.controller.open(create);
+      orb.container.snapshotContainer.mockRejectedValue(failing());
+      const archivedAt = orb.now();
+      await expect(
+        orb.controller.pause({ threadId: "thr_archived" }),
+      ).resolves.toBe("stopping");
+      let stoppedAt: number | undefined;
+      while (orb.now() < archivedAt + 4 * 3_600_000) {
+        orb.advance(ORB_HEARTBEAT_MS);
+        await orb.controller.alarm();
+        if (stoppedAt === undefined && !orb.container.running)
+          stoppedAt = orb.now();
+      }
+      expect(stoppedAt).toBeDefined();
+      expect((stoppedAt ?? 0) - archivedAt).toBeGreaterThanOrEqual(3_600_000);
+      expect((stoppedAt ?? 0) - archivedAt).toBeLessThan(75 * 60_000);
+      expect(orb.container.destroy).toHaveBeenCalledOnce();
+    });
+
+    it("still stops it when the copy fails, and says the git work is lost too", async () => {
+      const orb = setup(({ argv }) =>
+        argv.join(" ").includes("dx-rescue")
+          ? { stdout: "", stderr: "Input/output error", exitCode: 1 }
+          : {},
+      );
+      await orb.controller.open(create);
+      await orb.controller.setIdleDeadline(60_000);
+      orb.container.snapshotContainer.mockRejectedValue(failing());
+      const startedAt = orb.now();
+      while (orb.container.running && orb.now() < startedAt + 4 * 3_600_000) {
+        orb.advance(ORB_HEARTBEAT_MS);
+        await orb.controller.alarm();
+      }
+      expect(orb.container.running).toBe(false);
+      const opened = await orb.controller.open({ ...create, allowReset: true });
+      expect(opened).toMatchObject({
+        unsavedStop: { neverSaved: true, rescueFailed: expect.any(String) },
+      });
+      expect(opened).not.toHaveProperty("unsavedStop.rescue");
+    });
   });
 
   it("archives a container whose start never finished as already stopped, without a snapshot (#1777)", async () => {
@@ -1475,6 +1639,56 @@ describe("Orb container object", () => {
         status: "paused",
         movedTo: 1,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a wake's first try hands over after 20 s; a start-over keeps 45 s (#1993)", async () => {
+    vi.useFakeTimers();
+    try {
+      const first = await stalledWake();
+      let opened: unknown;
+      void first.controller
+        .open({ ...wake, startOver: true, firstTry: true })
+        .then((value) => {
+          opened = value;
+        });
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(opened).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(opened).toMatchObject({ kind: "stalled" });
+      const stored = (await first.storage.get("workspace")) as {
+        retired?: { waitedMs: number };
+      };
+      expect(stored.retired?.waitedMs).toBeGreaterThanOrEqual(20_000);
+      expect(stored.retired?.waitedMs).toBeLessThan(45_000);
+
+      // A healthy first try answers well within it and is never handed over.
+      const quick = await pausedOrb();
+      slowProbes(quick.container, () => Date.now() + 5_000);
+      const woken = quick.controller.open({
+        ...wake,
+        startOver: true,
+        firstTry: true,
+      });
+      await vi.advanceTimersByTimeAsync(8_000);
+      await expect(woken).resolves.toMatchObject({
+        kind: "ready",
+        residency: "paused",
+      });
+
+      // `firstTry` alone, without `startOver`, changes nothing.
+      const old = await stalledWake();
+      const waiting = old.controller
+        .open({ ...wake, firstTry: true })
+        .catch((cause: unknown) => cause);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(
+        ((await old.storage.get("workspace")) as { retired?: unknown }).retired,
+      ).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(250_000);
+      expect(await waiting).toBeInstanceOf(Error);
     } finally {
       vi.useRealTimers();
     }

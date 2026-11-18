@@ -33,6 +33,11 @@ export {
   SignInRejection,
 } from "./auth/sign-in.js";
 export {
+  AGENT37_ORB_SIZES,
+  Agent37OrbSize,
+  Agent37RunnerProfileConfiguration,
+} from "./orb-providers/agent37.js";
+export {
   BOAT_ORB_SIZES,
   BoatMachineType,
   BoatOrbSize,
@@ -804,6 +809,8 @@ export {
   FreestyleOrbSize,
   FreestyleRunnerProfileConfiguration,
   LocalRunnerProfileConfiguration,
+  orbAccountForProfile,
+  orbSizeGroupKey,
   RunnerAdapterCapabilityState,
   RunnerAdapterKind,
   RunnerCapability,
@@ -819,6 +826,7 @@ export {
 export {
   ORB_RUNNER_CAPABILITIES,
   RunnerProfileFields,
+  RunnerProfileLabel,
 } from "./settings/runner-profile-fields.js";
 export {
   SettingsScope,

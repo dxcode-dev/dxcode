@@ -2,6 +2,12 @@
   "version": 1,
   "bindings": [
     {
+      "name": "AGENT37_API_KEY",
+      "type": "secret",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "AI",
       "type": "workers-ai",
       "provenance": "authored-wrangler"
@@ -387,24 +393,6 @@
       "name": "GITHUB_TOKEN_COORDINATOR",
       "type": "durable-object",
       "provenance": "authored-wrangler"
-    },
-    {
-      "name": "LIZARD_API_KEY",
-      "type": "secret",
-      "provenance": "alchemy",
-      "optional": true
-    },
-    {
-      "name": "LIZARD_PROJECT_ID",
-      "type": "text",
-      "provenance": "alchemy",
-      "optional": true
-    },
-    {
-      "name": "LIZARD_REGION",
-      "type": "text",
-      "provenance": "alchemy",
-      "optional": true
     },
     {
       "name": "LOADER",

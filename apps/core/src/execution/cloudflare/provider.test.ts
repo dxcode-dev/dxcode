@@ -407,6 +407,175 @@ describe("Cloudflare Containers Orb provider", () => {
     await expect(controller.readRescue(0)).resolves.toBeUndefined();
   });
 
+  it("stops an archived Orb that was never saved once its snapshots have failed for an hour, starts it over from the image, and the turn restores the copy and says what was lost, through the real container object (#1687)", async () => {
+    // thr_242ddea4 on production: a fresh Orb whose disk failed before its
+    // first save, archived; every snapshot failed, so it ran on and billed.
+    const startedAt = Date.parse("2026-11-05T09:18:00Z");
+    let now = startedAt;
+    const written: string[] = [];
+    const empty = () => new Response("").body;
+    const container = {
+      running: false,
+      start: vi.fn((_options: Record<string, unknown>) => {
+        container.running = true;
+      }),
+      exec: vi.fn(async (argv: string[]) => {
+        const script = argv.join(" ");
+        const stdout = script.includes("mktemp -d /dev/shm/dx-rescue")
+          ? "archive /dev/shm/dx-rescue.Nv1 4 3 2 1 1 4\n"
+          : script.includes("/dev/shm/dx-rescue.Nv1/archive.tar.gz")
+            ? btoa("\x1f\x8b\x08\x00")
+            : "";
+        if (script.includes("cat >")) written.push(argv.at(-1) ?? "");
+        return {
+          stdout: new Response(stdout).body,
+          stderr: empty(),
+          exitCode: Promise.resolve(0),
+          kill: () => undefined,
+        };
+      }),
+      snapshotContainer: vi.fn(async () => {
+        throw new Error(
+          "The container snapshot could not be completed due to an internal error; try again (reference ID: 64ef9ffc)",
+        );
+      }),
+      destroy: vi.fn(async () => {
+        container.running = false;
+      }),
+      setInactivityTimeout: vi.fn(async () => undefined),
+      interceptOutboundHttp: vi.fn(async () => undefined),
+      interceptOutboundHttps: vi.fn(async () => undefined),
+      interceptAllOutboundHttp: vi.fn(async () => undefined),
+    };
+    const values = new Map<string, unknown>();
+    let alarm: number | null = null;
+    const controller = new OrbContainerController({
+      container: container as never,
+      storage: {
+        get: async <T>(key: string) => structuredClone(values.get(key)) as T,
+        put: async (key: string, value: unknown) => {
+          values.set(key, structuredClone(value));
+        },
+        delete: async (key: string) => values.delete(key),
+        setAlarm: async (time: number) => {
+          alarm = time;
+        },
+        getAlarm: async () => alarm,
+        deleteAlarm: async () => {
+          alarm = null;
+        },
+      },
+      image: () => "registry.cloudflare.com/account/dx-orb@sha256:abc",
+      sandboxId: "orb-object-id",
+      stopNotice: () => ({ fetch: vi.fn() }) as unknown as Fetcher,
+      now: () => now,
+    });
+    const stub = new Proxy(controller, {
+      get: (target, key) =>
+        key === "id"
+          ? { toString: () => "orb-object-id" }
+          : typeof Reflect.get(target, key) === "function"
+            ? (
+                Reflect.get(target, key) as (...args: unknown[]) => unknown
+              ).bind(target)
+            : Reflect.get(target, key),
+    });
+    const row: Row = {
+      provider: "cloudflare",
+      state: "initialized",
+      provider_sandbox_id: "orb-object-id",
+      initialization_attempt_id: null,
+    };
+    const threadStorage = { put: vi.fn(async () => undefined) };
+    const as = (lifecycle: string) => {
+      for (const key of Object.keys(mocks.workerEnv))
+        delete mocks.workerEnv[key];
+      Object.assign(mocks.workerEnv, {
+        DB: fakeDatabase(row, lifecycle),
+        ORB_CONTAINER: {
+          idFromName: (name: string) => name,
+          idFromString: (id: string) => id,
+          get: () => stub,
+        },
+        DX_STORAGE: threadStorage,
+        DX_WORKSPACE_INACTIVITY_MS: "120000",
+      });
+    };
+    // Started from the image and never saved.
+    await controller.open({ create: true, instance: "standard-4", idleMs: 1 });
+
+    // Archive cannot stop it at once without losing every file.
+    now = Date.parse("2026-11-05T11:01:42Z");
+    as("archived");
+    await expect(
+      cloudflareExecutionProvider.workspace.release(
+        context,
+        { threadId },
+        "archive",
+      ),
+    ).resolves.toBe("stopping");
+    expect(container.running).toBe(true);
+
+    // The alarm keeps trying, and stops it after an hour of failures.
+    const archivedAt = now;
+    while (container.running && now < archivedAt + 4 * 3_600_000) {
+      now += 10_000;
+      await controller.alarm();
+    }
+    expect(container.running).toBe(false);
+    expect(now - archivedAt).toBeGreaterThanOrEqual(3_600_000);
+    expect(now - archivedAt).toBeLessThan(75 * 60_000);
+    const stoppedAt = now;
+
+    // Restored: the activation starts it from the image, and its turn
+    // restores the copy and starts with what dx did.
+    as("active");
+    await cloudflareExecutionProvider.workspace.create(
+      context,
+      { threadId },
+      { authorize: async () => undefined },
+    );
+    expect(container.start.mock.lastCall?.[0]).not.toHaveProperty(
+      "containerSnapshot",
+    );
+    const stop = takeUnsavedStop(threadId);
+    expect(stop).toMatchObject({
+      neverSaved: true,
+      stoppedAt,
+      failures: 8,
+      rescue: { size: 4, changes: 3, commits: 2, checkouts: 1 },
+      restored: {
+        orbPath: expect.stringMatching(
+          /^\/home\/user\/dx-recovered\/dx-recovered-.+\.tar\.gz$/,
+        ),
+      },
+    });
+    expect(written).toContainEqual(stop?.restored?.orbPath);
+    expect(threadStorage.put).not.toHaveBeenCalled();
+    const note = unsavedStopNote(stop as NonNullable<typeof stop>);
+    // Never claims a save it did not have.
+    expect(note).not.toContain("last save");
+    expect(note).toContain("had never been saved");
+    expect(note).toContain(".env");
+    expect(note).toContain("git am");
+    expect(note).toContain(
+      `Begin your final reply to the people in the Thread, the text after any tool calls, with this sentence: "dx couldn't save this Orb, so it stopped it at ${new Date(stoppedAt).toISOString().slice(0, 16).replace("T", " ")} UTC and started it over;`,
+    );
+    await expect(controller.readRescue(0)).resolves.toBeUndefined();
+  });
+
+  it("says a never-saved Orb's git work is lost too when the copy failed (#1687)", () => {
+    const note = unsavedStopNote({
+      stoppedAt: Date.parse("2026-11-05T12:05:00Z"),
+      failures: 8,
+      neverSaved: true,
+      rescueFailed: "copying it failed (Input/output error)",
+    });
+    expect(note).not.toContain("last save");
+    expect(note).toContain("copying it failed (Input/output error)");
+    expect(note).toContain("uncommitted");
+  });
+
   it("says how large the copy was when its untracked files did not fit (#1620)", () => {
     const note = unsavedStopNote({
       stoppedAt: Date.parse("2026-11-03T13:01:00Z"),
@@ -844,9 +1013,23 @@ describe("Cloudflare Containers Orb provider", () => {
       { threadId },
       { authorize: async () => undefined },
     );
+    // Only the wake's first try gets the shorter stall budget (#1993); the
+    // first start-over keeps the full one.
+    expect(world.object(threadId).open).toHaveBeenCalledWith(
+      expect.objectContaining({ startOver: true, firstTry: true }),
+    );
+    expect(world.object(`${threadId}~1`).open).toHaveBeenCalledWith(
+      expect.objectContaining({ startOver: true }),
+    );
+    expect(world.object(`${threadId}~1`).open).toHaveBeenCalledWith(
+      expect.not.objectContaining({ firstTry: true }),
+    );
     // The second move's open is the last: it waits its start out.
     expect(last.open).toHaveBeenCalledWith(
       expect.not.objectContaining({ startOver: true }),
+    );
+    expect(last.open).toHaveBeenCalledWith(
+      expect.not.objectContaining({ firstTry: true }),
     );
     expect(world.object(`${threadId}~3`).adopt).not.toHaveBeenCalled();
     expect(row.provider_sandbox_id).toBe(threadId);

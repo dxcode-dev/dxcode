@@ -1,5 +1,6 @@
 import { env, waitUntil } from "cloudflare:workers";
 import type { E2BRunnerProfileConfiguration } from "@dx/domain";
+import { FlueError } from "@flue/runtime";
 import type { Sandbox as E2BSandbox } from "e2b";
 import { Effect, Redacted } from "effect";
 import type { Bindings } from "../../http/types.js";
@@ -36,6 +37,7 @@ import {
   destroyExecutionWorkspace,
   type E2BResolverApi,
   type ExecutionWorkspaceResolution,
+  ExecutionWorkspaceUnavailable,
   makeConnectExistingExecutionWorkspace,
   makeD1ExecutionWorkspaceCoordinator,
   makeD1ExecutionWorkspaceStateStore,
@@ -120,6 +122,37 @@ const observeE2BResolution =
         1,
       ),
     });
+
+/**
+ * The account has no template for the Thread's size, as the run's error:
+ * Flue would settle it as a generic internal error, and nobody could tell
+ * which provider is missing what, or how to fix it (#1936).
+ */
+const missingTemplateRunError = (
+  cause: unknown,
+  scope: ExecutionContext["account"]["scope"],
+) => {
+  if (
+    !(cause instanceof ExecutionWorkspaceUnavailable) ||
+    cause.missingTemplate === undefined
+  )
+    return undefined;
+  executionWorkspaceLogger.error("The E2B account has no Orb template.", {
+    event: "e2b_template_missing",
+    template: cause.missingTemplate,
+    credentialScope: scope,
+  });
+  return new FlueError({
+    type: "orb_template_missing",
+    message: "E2B has no Orb template for this size.",
+    details:
+      scope === "deployment"
+        ? `This deployment's E2B account has no template named ${cause.missingTemplate}. Start the Thread on another Orb provider, or ask the deployment's admin to redeploy dx with E2B enabled, which builds the templates.`
+        : `${scope === "workspace" ? "The workspace's" : "Your"} E2B team has no template named ${cause.missingTemplate}. ${scope === "workspace" ? "A workspace admin can reconnect" : "Reconnect"} E2B in Settings so dx builds its templates there, or start the Thread on another Orb provider.`,
+    dev: "",
+    meta: { code: "ORB_TEMPLATE_MISSING", template: cause.missingTemplate },
+  });
+};
 
 /**
  * Creates (or, after the first activation, reconnects to) the Thread's
@@ -243,7 +276,7 @@ const openE2BWorkspace = async (
     },
     (cause: unknown) => {
       timing.log("error");
-      throw cause;
+      throw missingTemplateRunError(cause, context.account.scope) ?? cause;
     },
   );
   // A sandbox paused under a running Thread (E2B's session limit, or a

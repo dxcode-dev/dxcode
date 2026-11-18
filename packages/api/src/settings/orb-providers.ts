@@ -95,6 +95,12 @@ export const OrbResolvedProviderSchema = Schema.Struct({
   displayName: Schema.optional(Schema.String),
   /** One sentence about that account, such as its limits. */
   description: Schema.optional(Schema.String),
+  /**
+   * The deployment's account that runs only its own named sizes (sizes
+   * with `runsAs`), listed beside any own key for the same provider, which
+   * runs the provider's own sizes. Only on scope `deployment`.
+   */
+  namedSizes: Schema.optional(Schema.Literal(true)),
   /** Sizes this account cannot run; the Orb picker leaves them out. */
   unavailableSizes: Schema.Array(OrbUnavailableSizeSchema),
 });

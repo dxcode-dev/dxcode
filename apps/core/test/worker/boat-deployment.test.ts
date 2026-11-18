@@ -265,13 +265,14 @@ describe("Boat on the deployment's own account", () => {
       (
         await Effect.runPromise(loadRunnerProfileCatalog(bindings, hosted))
       ).publicCatalog.providers?.find(({ adapter }) => adapter === "boat");
-    // Without the key the deployment has no Boat account to present.
+    // The catalog keeps the provider's own name with or without the key: a
+    // person's own Boat key is not the deployment's offer. The deployment's
+    // name reaches the picker on its own account alone (below).
     expect(await providerNames(withoutBoat)).toMatchObject({
       displayName: "Boat",
     });
     expect(await providerNames(withBoat)).toMatchObject({
-      displayName: "Hosted Orb",
-      shortName: "Hosted Orb",
+      displayName: "Boat",
     });
 
     await prepare();
