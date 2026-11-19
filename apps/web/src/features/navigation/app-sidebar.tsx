@@ -239,7 +239,7 @@ export interface AppSidebarProps {
 }
 
 /**
- * Mailbox, beside Projects and Artifacts where the deployment has a mail
+ * Mail, beside Projects and Artifacts where the deployment has a mail
  * domain, with the Inbox's unread count.
  */
 function MailboxDockLink({
@@ -257,7 +257,7 @@ function MailboxDockLink({
     <Link
       to="/mailbox"
       className={`dock-link ${selected ? "selected" : ""}`}
-      aria-label={unread > 0 ? `Mailbox, ${unread} unread` : undefined}
+      aria-label={unread > 0 ? `Mail, ${unread} unread` : undefined}
       onClick={onNavigate}
     >
       <span className="dock-link-icon">
@@ -268,7 +268,7 @@ function MailboxDockLink({
           </span>
         ) : null}
       </span>
-      <span>Mailbox</span>
+      <span>Mail</span>
     </Link>
   );
 }

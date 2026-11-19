@@ -11,6 +11,7 @@ import {
   decodeWorkspaceContextSnapshot,
   WORKSPACE_CONTEXT_TIMEOUT_MS,
   workspaceContextCommand,
+  workspaceContextEnvironment,
 } from "../workspace-context.js";
 export interface OrbExecOptions {
   readonly cwd?: string;
@@ -95,7 +96,7 @@ class OrbGuestSandboxDriver implements SandboxDriver {
         }),
       );
     const result = await this.client.exec(workspaceContextCommand, {
-      env: { FLUE_WORKSPACE_CONTEXT_ROOT: root },
+      env: workspaceContextEnvironment(root),
       timeoutMs: WORKSPACE_CONTEXT_TIMEOUT_MS,
     });
     if (result.timedOut)

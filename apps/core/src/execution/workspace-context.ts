@@ -12,6 +12,14 @@ import { parse } from "yaml";
  */
 
 export const WORKSPACE_CONTEXT_TIMEOUT_MS = 30_000;
+
+/**
+ * The Orb's user-level skills: dx writes its built-in skills and the
+ * Thread's settings skills here, outside the repository, and Flue discovers
+ * them after the repository's `.agents/skills` (a sandbox skill directory).
+ * Skills the person puts here are discovered too.
+ */
+export const AGENT_SKILLS_DIRECTORY = "/home/user/.agents/skills";
 const WORKSPACE_CONTEXT_FILE_LIMIT_BYTES = 64 * 1024;
 // Keep one provider command bounded while allowing hundreds of ordinary skills.
 const WORKSPACE_CONTEXT_MANIFEST_LIMIT_BYTES = 4 * 1024 * 1024;
@@ -34,11 +42,20 @@ const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
  *   I <filename> <size>   AGENTS.md or CLAUDE.md with content
  *   S <directory> <size>  a skill's SKILL.md with content
  *   R <directory>         a skill's SKILL.md that could not be read
+ *   G <directory> <size>  a ~/.agents/skills skill's SKILL.md frontmatter
+ *   Q <directory>         a ~/.agents/skills SKILL.md that could not be read
  *   E                     end of records; the contents of every I and S
  *                         record follow in record order
  *
  * Core decodes UTF-8 strictly and declines when the contents' total length
  * does not match the sizes (a file changed between `stat` and `cat`).
+ *
+ * `~/.agents/skills` sends each SKILL.md's frontmatter only: Flue reads the
+ * catalog line from it and rereads SKILL.md on activation, so a large skill
+ * neither fills the snapshot nor declines it. A symbolic link there is
+ * skipped, not read. When the root is the home directory, its
+ * `.agents/skills` is that directory and is read that way. The command's
+ * environment names both directories (`workspaceContextEnvironment`).
  */
 const workspaceContextGuestScript = `
 shopt -s nullglob dotglob
@@ -61,7 +78,10 @@ for name in AGENTS.md CLAUDE.md; do
   [[ -f $name && -r $name ]] || decline
   tags+=(I); names+=("$name"); files+=("$name")
 done
+global=\${FLUE_WORKSPACE_CONTEXT_SKILLS-}
+case $global in ""|/*) ;; *) decline ;; esac
 for directory in .agents .agents/skills; do
+  [[ -n $global && \${root%/}/.agents/skills == "$global" ]] && break
   [[ -L $directory ]] && decline
   [[ -e $directory ]] || break
   [[ -d $directory && -r $directory && -x $directory ]] || decline
@@ -80,6 +100,37 @@ for directory in .agents .agents/skills; do
     if [[ -r $file ]]; then tags+=(S); files+=("$file"); else tags+=(R); fi
   done
 done
+if [[ -n $global && -d $global && ! -L $global && -r $global && -x $global ]]; then
+  frontmatter=$(mktemp -d) || decline
+  trap "rm -rf -- $frontmatter" EXIT
+  cr=$(printf "\\r")
+  globals=("$global"/*)
+  (( \${#globals[@]} <= ${WORKSPACE_CONTEXT_SKILL_LIMIT} )) || decline
+  index=0
+  for skill in "\${globals[@]}"; do
+    name=\${skill##*/}
+    [[ $name == .* || -L $skill || ! -d $skill ]] && continue
+    file=$skill/SKILL.md
+    [[ -f $file && ! -L $file ]] || continue
+    names+=("$name")
+    if [[ -r $file && -r $skill && -x $skill ]]; then
+      index=$((index + 1))
+      {
+        IFS= read -r line || line=
+        if [[ $line == --- || $line == ---$cr ]]; then
+          printf "%s\\n" "$line"
+          while IFS= read -r line; do
+            printf "%s\\n" "$line"
+            [[ $line == --- || $line == ---$cr ]] && break
+          done
+        fi
+      } < "$file" 2>/dev/null | head -c ${WORKSPACE_CONTEXT_FILE_LIMIT_BYTES} > "$frontmatter/$index"
+      tags+=(G); files+=("$frontmatter/$index")
+    else
+      tags+=(Q)
+    fi
+  done
+fi
 listing=()
 if [[ -r . ]]; then
   listing=(*)
@@ -100,7 +151,7 @@ done
   for name in "\${listing[@]}"; do printf "L\\0%s\\0" "$name"; done
   next=0
   for index in "\${!tags[@]}"; do
-    if [[ \${tags[index]} == R ]]; then
+    if [[ \${tags[index]} == R || \${tags[index]} == Q ]]; then
       printf "R\\0%s\\0" "\${names[index]}"
     else
       printf "%s\\0%s\\0%s\\0" "\${tags[index]}" "\${names[index]}" "\${sizes[next]}"
@@ -115,6 +166,12 @@ done
 if (workspaceContextGuestScript.includes("'"))
   throw new Error("The workspace-context script must not contain quotes.");
 export const workspaceContextCommand = `bash -c '${workspaceContextGuestScript}'`;
+
+/** The workspace-context command's environment for `root`. */
+export const workspaceContextEnvironment = (root: string) => ({
+  FLUE_WORKSPACE_CONTEXT_ROOT: root,
+  FLUE_WORKSPACE_CONTEXT_SKILLS: AGENT_SKILLS_DIRECTORY,
+});
 
 const validDirectoryName = (value: string) =>
   value.length > 0 &&
@@ -165,14 +222,14 @@ export const decodeWorkspaceContextSnapshot = (
     } catch {
       return declined;
     }
-    if (tag === "L" || tag === "R") {
+    if (tag === "L" || tag === "R" || tag === "Q") {
       if (!validDirectoryName(name))
         throw protocolError("returned an invalid name");
       if (tag === "L") directoryListing.push(name);
       else records.push({ tag, name });
       continue;
     }
-    if (tag !== "I" && tag !== "S")
+    if (tag !== "I" && tag !== "S" && tag !== "G")
       throw protocolError("returned an unknown record");
     const size = Number(text(field()));
     if (
@@ -197,11 +254,16 @@ export const decodeWorkspaceContextSnapshot = (
   const instructionFiles: { "AGENTS.md"?: string; "CLAUDE.md"?: string } = {};
   const skillFiles: WorkspaceContextSnapshot["skillFiles"][number][] = [];
   for (const record of records) {
-    if (record.tag === "R") {
+    const where =
+      record.tag === "G" || record.tag === "Q"
+        ? { skillsDirectory: AGENT_SKILLS_DIRECTORY }
+        : {};
+    if (record.tag === "R" || record.tag === "Q") {
       skillFiles.push({
         kind: "read-error",
         directoryName: record.name,
         errorMessage: "workspace SKILL.md could not be read",
+        ...where,
       });
       continue;
     }
@@ -215,7 +277,13 @@ export const decodeWorkspaceContextSnapshot = (
     offset += size;
     if (record.tag === "I")
       instructionFiles[record.name as "AGENTS.md" | "CLAUDE.md"] = content;
-    else skillFiles.push({ kind: "file", directoryName: record.name, content });
+    else
+      skillFiles.push({
+        kind: "file",
+        directoryName: record.name,
+        content,
+        ...where,
+      });
   }
   const snapshot = { instructionFiles, skillFiles, directoryListing };
   if (
@@ -239,7 +307,8 @@ const frontmatterName = (content: string) => {
 
 /**
  * The snapshot without repository skills whose directory or declared name is
- * reserved, so a repository can never shadow a skill dx mounts itself.
+ * reserved, so a repository can never shadow a skill dx provides itself.
+ * Skills in `~/.agents/skills` are dx's own or the person's, and stay.
  */
 const withoutReservedSkills = (
   snapshot: WorkspaceContextSnapshot,
@@ -247,6 +316,7 @@ const withoutReservedSkills = (
 ): WorkspaceContextSnapshot => ({
   ...snapshot,
   skillFiles: snapshot.skillFiles.filter((file) => {
+    if (file.skillsDirectory !== undefined) return true;
     if (reserved.has(file.directoryName)) return false;
     const name =
       file.kind === "file" ? frontmatterName(file.content) : undefined;
@@ -274,6 +344,8 @@ export const withoutRepositorySkills = <Sandbox extends SkillDiscoverySandbox>(
   reserved: ReadonlySet<string>,
 ): Sandbox => {
   const skillsDirectory = `${sandbox.cwd.replace(/\/$/, "")}/.agents/skills`;
+  // At the home directory the workspace's skills are dx's and the person's.
+  if (skillsDirectory === AGENT_SKILLS_DIRECTORY) return sandbox;
   const readdir = async (path: string) => {
     const entries = await sandbox.readdir(path);
     return sandbox.resolvePath(path) === skillsDirectory

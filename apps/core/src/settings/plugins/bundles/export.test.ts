@@ -2,13 +2,12 @@ import {
   isStdioMcpServer,
   type PluginBundleRemoteMcpServer,
   type PluginId,
-  type SkillWithVersion,
   type StoredMcpServer,
   type StoredPluginBundle,
 } from "@dx/domain";
 import { Effect, Result } from "effect";
 import { describe, expect, it } from "vitest";
-import { exportPluginBundle } from "./export.js";
+import { exportPluginBundle, type SkillWithFiles } from "./export.js";
 import { readPluginPackage } from "./plugin-package.js";
 import { readPluginBundle } from "./read-bundle.js";
 import { readZipArchive } from "./zip.js";
@@ -118,7 +117,8 @@ const installed = (parsed: Awaited<ReturnType<typeof read>>["bundle"]) => {
           instructions: preview.instructions,
           resources: preview.resources,
         },
-      }) as unknown as SkillWithVersion,
+        files: preview.resources,
+      }) as unknown as SkillWithFiles,
   );
   const mcpServers = parsed.manifest.mcpServers
     .filter(
@@ -199,7 +199,7 @@ describe("exportPluginBundle", () => {
     const edited = {
       ...first,
       active: { ...first?.active, instructions: "Edited after import." },
-    } as unknown as SkillWithVersion;
+    } as unknown as SkillWithFiles;
     const exported = await exportPluginBundle({
       ...state,
       skills: [edited, ...rest],

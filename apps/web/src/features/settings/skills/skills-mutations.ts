@@ -5,12 +5,14 @@ import {
   approveSkillProposal,
   exportSkill,
   importSkill,
+  installSkill,
   type listSkills,
   previewSkill,
   publishSkillVersion,
   rejectSkillProposal,
   removeSkill,
   type SkillData,
+  type SkillInstallSource,
   type SkillsTarget,
   skillKeys,
   updateSkillState,
@@ -223,18 +225,6 @@ export const skillPreviewMutationOptions = (
     onSuccess: () => undefined,
   });
 
-export const skillExportMutationOptions = (
-  userId: UserId,
-  target: SkillsTarget,
-) =>
-  mutationOptions({
-    mutationKey: [...skillKeys.list(userId, target), "export"],
-    mutationFn: (skillId: Parameters<typeof exportSkill>[1]) =>
-      exportSkill(target, skillId),
-    gcTime: 0,
-    onSuccess: () => undefined,
-  });
-
 /** What the New Skill and Edit forms write. */
 export interface SkillDraft {
   readonly name: string;
@@ -369,3 +359,119 @@ const editedSkill = (skill: SkillData, draft: SkillDraft): SkillData => {
         }),
   };
 };
+
+/** A dx-layout bundle of a skill: its manifest, instructions, and files. */
+const dxLayoutBundle = (
+  label: string,
+  manifest: {
+    readonly name: string;
+    readonly description: string;
+    readonly mcpServerIds: ReadonlyArray<string>;
+  },
+  instructions: string,
+  resources: SkillImportBundle["files"],
+) =>
+  ({
+    source: { type: "browser-files", label },
+    files: [
+      textFile(
+        "skill.json",
+        "application/json",
+        `${JSON.stringify({ schemaVersion: 1, ...manifest }, null, 2)}\n`,
+      ),
+      textFile("instructions.md", "text/markdown", `${instructions.trim()}\n`),
+      ...resources,
+    ],
+  }) as SkillImportBundle;
+
+/**
+ * Publishes one edited file as the skill's next version, active unless the
+ * skill is pinned. SKILL.md carries the description and instructions; its
+ * name must stay the skill's own.
+ */
+const saveSkillFile = async (
+  target: SkillsTarget,
+  skill: SkillData,
+  path: string,
+  content: string,
+) => {
+  const exported = await exportSkill(target, skill.id);
+  const files = exported.files.filter(
+    (file) => file.path !== "skill.json" && file.path !== "instructions.md",
+  );
+  let manifest = {
+    name: skill.name,
+    description: skill.active.manifest.description,
+    mcpServerIds: skill.active.manifest.mcpServerIds,
+  };
+  let instructions = skill.active.instructions;
+  if (path === "SKILL.md") {
+    // The server reads SKILL.md front matter as it does on import.
+    const read = await previewSkill(target, {
+      source: { type: "browser-files", label: "Edited in settings" },
+      files: [textFile("SKILL.md", "text/markdown", content)],
+    } as SkillImportBundle);
+    if (read.manifest.name !== skill.name)
+      throw new Error(`Keep the name ${skill.name} in SKILL.md.`);
+    manifest = { ...manifest, description: read.manifest.description };
+    instructions = read.instructions;
+  }
+  const bundle = dxLayoutBundle(
+    "Edited in settings",
+    manifest,
+    instructions,
+    path === "SKILL.md"
+      ? files
+      : files.map((file) => (file.path === path ? { ...file, content } : file)),
+  );
+  const { integrity } = await previewSkill(target, bundle);
+  return await publishSkillVersion(
+    target,
+    skill.id,
+    bundle,
+    integrity,
+    !skill.pinned,
+  );
+};
+
+export const skillFileSaveMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+  target: SkillsTarget,
+) =>
+  mutationOptions({
+    mutationKey: [...skillKeys.list(userId, target), "file"],
+    gcTime: 0,
+    mutationFn: (input: {
+      readonly skill: SkillData;
+      readonly path: string;
+      readonly content: string;
+    }) => saveSkillFile(target, input.skill, input.path, input.content),
+    onSuccess: (saved) => {
+      replaceSkill(queryClient, userId, target, saved);
+      return queryClient.invalidateQueries({
+        queryKey: skillKeys.list(userId, target),
+        exact: true,
+      });
+    },
+  });
+
+/**
+ * Installs a reviewed skill from skills.sh or GitHub into `target`, then
+ * rereads that scope's list so Installed shows it.
+ */
+export const skillInstallMutationOptions = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  mutationOptions({
+    mutationFn: (input: {
+      readonly target: SkillsTarget;
+      readonly source: SkillInstallSource;
+      readonly integrity: Parameters<typeof installSkill>[2];
+    }) => installSkill(input.target, input.source, input.integrity),
+    onSuccess: (_skill, input) =>
+      queryClient.invalidateQueries({
+        queryKey: skillKeys.list(userId, input.target),
+      }),
+  });

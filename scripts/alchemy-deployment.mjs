@@ -254,7 +254,7 @@ const deploymentResourceTypes = ({
   huddle = false,
 }) =>
   new Map([
-    // The dx Mailbox: Email Routing and its catch-all, Email Sending, and the
+    // The dx Mail: Email Routing and its catch-all, Email Sending, and the
     // DMARC record on the mail zone (deploy/selfhost/mail.mjs).
     ...(mail === undefined ? [] : [...mailResourceTypes]),
     // Portals: their own Worker on a zone route plus a proxied wildcard record.
@@ -365,14 +365,14 @@ const cloudflareResourceIds = new Set([
   "Worker",
 ]);
 const portalResourceIds = new Set(["PortalDns", "PortalWorker"]);
-/** The dx Mailbox's resources on its mail zone, by logical ID. */
+/** The dx Mail's resources on its mail zone, by logical ID. */
 const mailResourceTypes = new Map([
   ["MailRouting", "Cloudflare.Email.Routing"],
   ["MailCatchAll", "Cloudflare.Email.CatchAll"],
   ["MailSending", "Cloudflare.Email.SendingSubdomain"],
   ["MailDmarc", "Cloudflare.DNS.Record"],
 ]);
-/** The DMARC record the Mailbox publishes; alchemy.run.ts writes the same. */
+/** The DMARC record the Mail publishes; alchemy.run.ts writes the same. */
 export const MAIL_DMARC_RECORD =
   '"v=DMARC1; p=reject; sp=reject; adkim=r; aspf=r"';
 const dictationMigrationAlias = Object.freeze({
@@ -1911,7 +1911,7 @@ export const deploymentPortals = ({
 };
 
 /**
- * The dx Mailbox's mail zone, or undefined when mail is off: the domain (a
+ * The dx Mail's mail zone, or undefined when mail is off: the domain (a
  * zone apex) and its zone ID, set together.
  */
 export const deploymentMail = ({ domain, zoneId }) => {
@@ -1928,7 +1928,7 @@ export const deploymentMail = ({ domain, zoneId }) => {
 };
 
 /**
- * A Mailbox resource's props must name only the configured mail zone and
+ * A Mail resource's props must name only the configured mail zone and
  * domain. A value still to be resolved (an Output) is checked once evaluated.
  */
 const validateMailProps = (id, props, selection, representation) => {
@@ -1960,7 +1960,7 @@ const validateMailProps = (id, props, selection, representation) => {
 };
 
 /**
- * The Worker's Mailbox bindings: `MAIL_SEND` only as the Mailbox's own Email
+ * The Worker's Mail bindings: `MAIL_SEND` only as the Mail's own Email
  * Sending binding, and `DX_MAIL_DOMAIN` only as the configured mail domain
  * (a resolving Output is checked evaluated).
  */
@@ -1999,7 +1999,7 @@ const assertWorkerMailBindings = (node, operation, selection) => {
 };
 
 const assertExactMailIdentity = (node, operation, selection, id) => {
-  // Removing the Mailbox deletes what the stage recorded; nothing to match.
+  // Removing the Mail deletes what the stage recorded; nothing to match.
   if (selection.mail === undefined) return;
   if (operation === "deploy") {
     validateMailProps(id, node.resource?.Props, selection, "desired");
@@ -2989,7 +2989,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
   const id = node.resource?.LogicalId ?? node.state?.logicalId;
   const type = node.resource?.Type ?? node.state?.resourceType;
   const nodeFqn = node.resource?.FQN ?? node.state?.fqn;
-  // Turning the Mailbox off deletes its resources, on a deploy or a destroy.
+  // Turning the Mail off deletes its resources, on a deploy or a destroy.
   const mailRemoval =
     selection.mail === undefined &&
     mailResourceTypes.has(id) &&
@@ -3112,7 +3112,7 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
         ? "This stage serves Portals; deploy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with (turning Portals off needs a destroy)."
         : "This stage serves Portals; destroy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with.",
     );
-  // A deploy without a mail domain would delete a stage's Mailbox setup:
+  // A deploy without a mail domain would delete a stage's Mail setup:
   // only when the operator turned mail off on purpose.
   if (
     operation === "deploy" &&
@@ -3121,7 +3121,7 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
     deletionIds.some((id) => mailResourceTypes.has(id))
   )
     throw new Error(
-      "This stage runs the dx Mailbox; deploy it with its mail domain, or turn mail off on purpose: pnpm dx:deploy -- --mail for a self-host, or DX_DEPLOYMENT_MAIL_OFF=1.",
+      "This stage runs the dx Mail; deploy it with its mail domain, or turn mail off on purpose: pnpm dx:deploy -- --mail for a self-host, or DX_DEPLOYMENT_MAIL_OFF=1.",
     );
   const onlyRetiredRandomDeletions = deletionIds.every(
     (id) =>

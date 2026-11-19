@@ -2,7 +2,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { MailboxPage } from "./features/mailbox/mailbox-page.js";
 import { useAuthenticatedIdentity } from "./shared/auth/auth-context.js";
 
-/** `/mailbox`: the Mailbox, its list and conversation named by the URL. */
+/** `/mailbox`: the Mail, its list and conversation named by the URL. */
 export function MailboxRoute() {
   const search = useSearch({ from: "/_product/mailbox" });
   const navigate = useNavigate();

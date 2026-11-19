@@ -27,6 +27,7 @@ import {
   decodeWorkspaceContextSnapshot,
   WORKSPACE_CONTEXT_TIMEOUT_MS,
   workspaceContextCommand,
+  workspaceContextEnvironment,
 } from "../workspace-context.js";
 
 /**
@@ -78,7 +79,7 @@ class E2BSandboxDriver implements SandboxDriver {
   ): Promise<WorkspaceContextSnapshotResult> {
     const result = await this.#run("command", () =>
       this.sandbox.commands.run(workspaceContextCommand, {
-        envs: { FLUE_WORKSPACE_CONTEXT_ROOT: root },
+        envs: workspaceContextEnvironment(root),
         timeoutMs: WORKSPACE_CONTEXT_TIMEOUT_MS,
       }),
     );

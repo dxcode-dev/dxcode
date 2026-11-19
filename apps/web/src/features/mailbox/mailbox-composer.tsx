@@ -204,7 +204,7 @@ const startingDraft = (intent: ComposeIntent, mailbox: EnabledMailbox) => {
 
 /**
  * Writes an email: a new one, a reply, a reply to all, or a forward. Docked
- * at the bottom right of the Mailbox on a wide screen, full screen on a
+ * at the bottom right of the Mail on a wide screen, full screen on a
  * phone. Send with ⌘/Ctrl+Enter; Send is off, with the reason, while the
  * person may not send.
  */
@@ -567,7 +567,7 @@ function ComposerForm({
   });
   const blockedReason = mailbox.canSend
     ? undefined
-    : (mailbox.sendingBlockedReason ?? "Sending is off for your Mailbox.");
+    : (mailbox.sendingBlockedReason ?? "Sending is off for you.");
   const busy = send.isPending || reading;
   const ready =
     blockedReason === undefined &&

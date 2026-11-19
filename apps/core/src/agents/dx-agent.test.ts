@@ -43,8 +43,17 @@ const mcp = vi.hoisted(() => ({
   authorizeMcpCall: vi.fn(),
 }));
 const skills = vi.hoisted(() => ({
-  readThreadSkillResource: vi.fn(
-    async (): Promise<string | undefined> => undefined,
+  readThreadSkillResources: vi.fn(
+    async (
+      _thread: string,
+      _skill: string,
+    ): Promise<
+      | {
+          readonly instructions: string;
+          readonly files: ReadonlyMap<string, string>;
+        }
+      | undefined
+    > => undefined,
   ),
 }));
 const threadTools = vi.hoisted(() => ({
@@ -133,7 +142,7 @@ describe("DxAgent", () => {
     hooks.useResponseStart.mockReset();
     hooks.useSandbox.mockClear();
     hooks.useTool.mockReset();
-    skills.readThreadSkillResource.mockClear();
+    skills.readThreadSkillResources.mockClear();
     runtime.execution.createSandbox.mockReset().mockResolvedValue({});
     runtime.selectModel.mockReset().mockImplementation(() => ({
       model: "cloudflare/@cf/zai-org/glm-5.3-flash",
@@ -213,13 +222,13 @@ describe("DxAgent", () => {
     expect(disabledPrompt).not.toMatch(/web_search|read_web_page|web search/i);
   });
 
-  it("mounts dx's workspace and built-in skills through Flue in a workspace Thread only", () => {
+  it("mounts only dx-workspace through Flue; the other skills are discovered on disk", () => {
     const prompt = DxAgent({ id: "thr_workspace" });
     expect(
       hooks.useSkill.mock.calls.map(
         ([skill]) => (skill as { name: string }).name,
       ),
-    ).toEqual(["dx-workspace", ...BUILT_IN_SKILL_NAMES]);
+    ).toEqual(["dx-workspace"]);
     expect(prompt).toContain("activate the dx-workspace skill");
 
     hooks.useSkill.mockReset();
@@ -432,9 +441,13 @@ describe("DxAgent", () => {
       await resolving;
 
       const factory = renderedSandbox("thr_overlap");
-      await expect(factory.createSandbox({ id: "thr_overlap" })).resolves.toBe(
-        sandbox,
-      );
+      // The started sandbox, with dx's skill directory for Flue's discovery.
+      await expect(
+        factory.createSandbox({ id: "thr_overlap" }),
+      ).resolves.toEqual({
+        ...sandbox,
+        skillDirectories: ["/home/user/.agents/skills"],
+      });
       expect(runtime.execution.createSandbox).toHaveBeenCalledOnce();
       // A later createSandbox in the same attempt activates on its own.
       await factory.createSandbox({ id: "thr_overlap" });
@@ -469,7 +482,7 @@ describe("DxAgent", () => {
       runtime.execution.createSandbox.mockResolvedValueOnce(fresh);
       await expect(
         renderedSandbox("thr_route").createSandbox({ id: "thr_route" }),
-      ).resolves.toBe(fresh);
+      ).resolves.toMatchObject(fresh);
       expect(runtime.execution.createSandbox).toHaveBeenCalledTimes(2);
     });
 
@@ -551,7 +564,7 @@ describe("DxAgent", () => {
     expect(mcp.authorizeMcpCall).not.toHaveBeenCalled();
   });
 
-  it("offers settings skills as skill directories like dx's own, written into the workspace at agent start", async () => {
+  it("writes dx's and the Thread's settings skills to ~/.agents/skills before Flue discovers skills", async () => {
     const instruction = "EXACTLY-ONCE-SKILL-INSTRUCTION";
     const settingsSkill = (name: string, index: number) => ({
       id: `skl_00000000-0000-4000-8000-00000000004${index}`,
@@ -560,7 +573,6 @@ describe("DxAgent", () => {
       scope: "workspace" as const,
       integrity: "a".repeat(64),
       description: `${name} guidance.`,
-      instructions: `${instruction} ${name}`,
       resources:
         index === 4
           ? [
@@ -585,47 +597,26 @@ describe("DxAgent", () => {
       settingsVersion: 1,
       skills: [
         settingsSkill("review-guidelines", 4),
+        // dx's built-in skill of this name wins.
         settingsSkill("reviewing-code", 5),
       ],
     });
-    skills.readThreadSkillResource.mockResolvedValue("PRIVATE-RESOURCE-BODY");
+    // Skill bodies come from storage when the sandbox opens, not with the turn.
+    skills.readThreadSkillResources.mockImplementation(
+      async (_thread: string, skillId: string) =>
+        skillId.endsWith("44")
+          ? {
+              instructions: `${instruction} review-guidelines`,
+              files: new Map([
+                ["resources/private.md", "PRIVATE-RESOURCE-BODY"],
+              ]),
+            }
+          : { instructions: `${instruction} reviewing-code`, files: new Map() },
+    );
+    const written = new Map<string, string>();
     runtime.execution.createSandbox.mockResolvedValue({
       cwd: "/home/user/workspace/repo",
       resolvePath: (path: string) => path,
-      readdir: async () => ["review-guidelines", "repo-only"],
-    });
-    const threadId = "thr_00000000-0000-4000-8000-000000000044";
-
-    const prompt = DxAgent({ id: threadId });
-
-    const mounted = hooks.useSkill.mock.calls.map(
-      ([skill]) =>
-        skill as { name: string; description: string; instructions: string },
-    );
-    // Each name is mounted once: the settings skill replaces dx's own.
-    expect(mounted.map(({ name }) => name)).toEqual([
-      "dx-workspace",
-      ...BUILT_IN_SKILL_NAMES.filter((name) => name !== "reviewing-code"),
-      "review-guidelines",
-      "reviewing-code",
-    ]);
-    const review = mounted.find(({ name }) => name === "review-guidelines");
-    expect(review?.description).toBe("review-guidelines guidance.");
-    expect(review?.instructions).toBe(
-      `This skill's directory is \`/home/user/.local/share/dx/settings-skills/review-guidelines/\`; resolve relative paths in these instructions from there.\n\n${instruction} review-guidelines`,
-    );
-    expect(
-      mounted.find(({ name }) => name === "reviewing-code")?.instructions,
-    ).toContain(`${instruction} reviewing-code`);
-    expect(prompt).not.toContain(instruction);
-    expect(hooks.useTool).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "read_dx_skill_resource" }),
-    );
-
-    // Agent start writes each skill's SKILL.md and resources into the
-    // workspace, where activated instructions and Claude Code read them.
-    const written = new Map<string, string>();
-    const workspace = {
       readFile: async () => {
         throw new Error("missing");
       },
@@ -633,55 +624,62 @@ describe("DxAgent", () => {
         written.set(path, content);
       },
       exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
-    };
-    await hooks.useAgentStart.mock.calls[0]?.[0]({
-      harness: { sandbox: workspace },
-      log: { error: vi.fn() },
-      append: vi.fn(),
     });
-    const script =
-      written.get("/home/user/.local/share/dx/settings-skills.install.sh") ??
-      "";
-    const files = Object.fromEntries(
-      [
-        ...script.matchAll(
-          /base64 -d > "\$stage\/(.+?)" <<'DX_FILE'\n([\s\S]*?)\nDX_FILE/g,
-        ),
-      ].map(([, path, encoded]) => [
-        path,
-        Buffer.from(encoded ?? "", "base64").toString("utf8"),
-      ]),
-    );
-    expect(files).toEqual({
-      "review-guidelines/SKILL.md": `---\nname: "review-guidelines"\ndescription: "review-guidelines guidance."\n---\n\n${instruction} review-guidelines\n`,
-      "review-guidelines/resources/private.md": "PRIVATE-RESOURCE-BODY",
-      "reviewing-code/SKILL.md": `---\nname: "reviewing-code"\ndescription: "reviewing-code guidance."\n---\n\n${instruction} reviewing-code\n`,
-    });
-    expect(skills.readThreadSkillResource).toHaveBeenCalledOnce();
-    expect(skills.readThreadSkillResource).toHaveBeenCalledWith(
-      threadId,
-      "skl_00000000-0000-4000-8000-000000000044",
-      3,
-      "resources/private.md",
-    );
+    const threadId = "thr_00000000-0000-4000-8000-000000000044";
 
-    // A repository skill with a settings skill's name would fail the Thread
-    // in Flue, so discovery no longer sees it.
+    const prompt = DxAgent({ id: threadId });
+
+    // No settings skill is mounted, and no body reaches the prompt.
+    expect(
+      hooks.useSkill.mock.calls.map(
+        ([skill]) => (skill as { name: string }).name,
+      ),
+    ).toEqual(["dx-workspace"]);
+    expect(prompt).not.toContain(instruction);
+    expect(skills.readThreadSkillResources).not.toHaveBeenCalled();
+
     const [factory] = hooks.useSandbox.mock.calls.at(-1) as [
       {
         createSandbox(request: { id: string }): Promise<{
-          readdir(path: string): Promise<string[]>;
+          readonly skillDirectories?: readonly string[];
         }>;
       },
     ];
     const sandbox = await factory.createSandbox({ id: threadId });
+
+    expect(sandbox.skillDirectories).toEqual(["/home/user/.agents/skills"]);
+    const filesOf = (script: string) =>
+      Object.fromEntries(
+        [
+          ...script.matchAll(
+            /base64 -d > "\$stage\/(.+?)" <<'DX_FILE'\n([\s\S]*?)\nDX_FILE/g,
+          ),
+        ].map(([, path, encoded]) => [
+          path,
+          Buffer.from(encoded ?? "", "base64").toString("utf8"),
+        ]),
+      );
+    const builtIn = filesOf(
+      written.get("/home/user/.agents/skills/.dx-install.built-in.sh") ?? "",
+    );
+    expect(Object.keys(builtIn)).toContain("reviewing-code/SKILL.md");
     expect(
-      await sandbox.readdir("/home/user/workspace/repo/.agents/skills"),
-    ).toEqual(["repo-only"]);
-    expect(await sandbox.readdir("/home/user/workspace/repo")).toEqual([
-      "review-guidelines",
-      "repo-only",
-    ]);
+      filesOf(
+        written.get("/home/user/.agents/skills/.dx-install.settings.sh") ?? "",
+      ),
+    ).toEqual({
+      "review-guidelines/SKILL.md": `---\nname: "review-guidelines"\ndescription: "review-guidelines guidance."\n---\n\n${instruction} review-guidelines\n`,
+      "review-guidelines/resources/private.md": "PRIVATE-RESOURCE-BODY",
+    });
+    expect(skills.readThreadSkillResources).toHaveBeenCalledExactlyOnceWith(
+      threadId,
+      "skl_00000000-0000-4000-8000-000000000044",
+      3,
+    );
+
+    // Precedence over repository skills: execution/activation.ts hides a
+    // repository skill named like dx's own, and Flue reads the repository's
+    // skills before ~/.agents/skills.
   });
 
   // A Space's main Thread has no Orb, so it lacks only what needs one:
@@ -705,6 +703,10 @@ describe("DxAgent", () => {
       settingsVersion: 1,
       skills: [settingsSkill],
     });
+    skills.readThreadSkillResources.mockResolvedValue({
+      instructions: "Write like the team.",
+      files: new Map(),
+    });
     const space = {
       spaceName: "Parity",
       goal: null,
@@ -722,8 +724,8 @@ describe("DxAgent", () => {
       thinking: "medium",
     };
 
-    // What the agent can load: the skills the dx agent mounts, or the
-    // skill directories written for Claude Code at agent start, which
+    // What the agent can load: the skills the dx agent mounts and the skill
+    // directories written for it, or those written for Claude Code, which
     // reach Claude only while it keeps its Skill tool.
     const offered = async (
       threadId: string,
@@ -750,6 +752,20 @@ describe("DxAgent", () => {
         },
         exec: async () => ({ exitCode: 0, stdout: "", stderr: "" }),
       };
+      // A Thread with an Orb writes them when its sandbox opens; a Space's
+      // Claude Code at agent start, on its executor.
+      if (promptData.orbFree !== true) {
+        runtime.execution.createSandbox.mockResolvedValueOnce({
+          ...sandbox,
+          cwd: "/home/user/workspace/repo",
+          resolvePath: (path: string) => path,
+          readdir: async () => [],
+        });
+        const [factory] = hooks.useSandbox.mock.calls.at(-1) as [
+          { createSandbox(request: { id: string }): Promise<unknown> },
+        ];
+        await factory.createSandbox({ id: threadId });
+      }
       for (const [start] of hooks.useAgentStart.mock.calls)
         await start({
           harness: { sandbox },
@@ -767,7 +783,7 @@ describe("DxAgent", () => {
         ? skillTool
           ? [...new Set(installed)].sort()
           : []
-        : mounted.sort();
+        : [...new Set([...mounted, ...installed])].sort();
     };
 
     const thread = (route: unknown) => ({ route });

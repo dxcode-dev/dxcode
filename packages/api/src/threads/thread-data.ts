@@ -1,5 +1,7 @@
 import {
   MAX_MCP_SERVERS_PER_THREAD,
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_RESOURCE_FILES,
   McpServerEndpoint,
   McpServerId,
   McpServerTimeoutMs,
@@ -172,7 +174,7 @@ export const ThreadSkillResourceDataSchema = Schema.Struct({
     Schema.isMaxLength(128),
   ),
   sizeBytes: Schema.Int.check(
-    Schema.isBetween({ minimum: 0, maximum: 65_536 }),
+    Schema.isBetween({ minimum: 0, maximum: MAX_SKILL_FILE_BYTES }),
   ),
   integrity: SkillIntegrity,
 });
@@ -187,12 +189,8 @@ export const ThreadSkillDataSchema = Schema.Struct({
     Schema.isMinLength(1),
     Schema.isMaxLength(1_024),
   ),
-  instructions: Schema.String.check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(32_768),
-  ),
   resources: Schema.Array(ThreadSkillResourceDataSchema).check(
-    Schema.isMaxLength(30),
+    Schema.isMaxLength(MAX_SKILL_RESOURCE_FILES),
   ),
 });
 

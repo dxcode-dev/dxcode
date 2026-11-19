@@ -375,7 +375,7 @@ export const updateThreadSharing = async (
       throw new ThreadSharingError(
         "THREAD_SHARING_MAIL_READS",
         409,
-        `The agent read ${reads === 1 ? "1 email" : `${reads} emails`} from your Mailbox in this thread${family.length > 1 ? " or its family" : ""}. People you share with will see ${reads === 1 ? "it" : "them"} in the transcript.`,
+        `The agent read ${reads === 1 ? "1 email" : `${reads} emails`} from your Mail in this thread${family.length > 1 ? " or its family" : ""}. People you share with will see ${reads === 1 ? "it" : "them"} in the transcript.`,
       );
   }
   const statements = [

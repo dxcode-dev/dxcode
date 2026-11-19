@@ -22,7 +22,7 @@ import "./people-admin.css";
 /**
  * Settings → People, for deployment administrators: find one person by
  * their exact sign-in email or username, then give back their one username
- * change or pause their Mailbox sending. Both are support actions the
+ * change or pause their Mail sending. Both are support actions the
  * server logs with the admin's id.
  */
 export function PeopleAdminSettings() {
@@ -118,15 +118,15 @@ function PersonActions({
         }
       />
       <SettingsRow
-        title="Mailbox sending"
+        title="Mail sending"
         description={
           person.mailSendingSuspended
             ? "Paused: they can read mail but not send it."
-            : "On: they can send from their Mailbox."
+            : "On: they can send from their Mail."
         }
         control={
           <SettingsToggle
-            label="Mailbox sending"
+            label="Mail sending"
             checked={!person.mailSendingSuspended}
             pending={sending.isPending}
             disabled={sending.isPending}

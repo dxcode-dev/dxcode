@@ -15,12 +15,12 @@ import {
   SkillName,
 } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
-import YAML from "yaml";
 import {
   previewSkillContent,
   type SkillImportRejected,
   type SkillPreview,
 } from "../../skills/import.js";
+import { frontMatter, skillFileMediaType } from "../../skills/skill-files.js";
 import type { PluginCodeModule, ReadPluginCode } from "./dx-extension.js";
 import { PluginBundleRejected } from "./errors.js";
 import {
@@ -50,25 +50,6 @@ export interface ParsedBundle {
 }
 
 const encoder = new TextEncoder();
-
-const resourceMediaTypes = new Map([
-  [".md", "text/markdown"],
-  [".txt", "text/plain"],
-  [".json", "application/json"],
-  [".csv", "text/csv"],
-  [".yaml", "application/yaml"],
-  [".yml", "application/yaml"],
-  [".toml", "application/toml"],
-  [".py", "text/x-python"],
-  [".sh", "text/x-shellscript"],
-  [".js", "text/javascript"],
-  [".mjs", "text/javascript"],
-  [".ts", "text/typescript"],
-  [".html", "text/html"],
-  [".css", "text/css"],
-  [".xml", "application/xml"],
-  [".sql", "application/sql"],
-]);
 
 export const reject = (reason: string) =>
   Effect.fail(new PluginBundleRejected({ reason }));
@@ -102,12 +83,6 @@ export const join = (directory: string, name: string) =>
 
 export const basename = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 
-const extension = (path: string) => {
-  const name = basename(path);
-  const dot = name.lastIndexOf(".");
-  return dot <= 0 ? "" : name.slice(dot).toLowerCase();
-};
-
 const sha256 = async (value: string) => {
   const digest = await crypto.subtle.digest("SHA-256", encoder.encode(value));
   return Array.from(new Uint8Array(digest), (byte) =>
@@ -125,25 +100,6 @@ export const manifestPath = (raw: string): string | "outside" => {
   path = path.replace(/\/+$/, "");
   if (path === "." || path === "") return "";
   return path.split("/").some((segment) => segment === "..") ? "outside" : path;
-};
-
-/** Splits Markdown into its YAML front matter and body. */
-const frontMatter = (
-  text: string,
-): { readonly data: Record<string, unknown>; readonly body: string } => {
-  const source = text.replace(/^\uFEFF/, "");
-  const match = /^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(source);
-  if (match === null) return { data: {}, body: source };
-  let data: unknown;
-  try {
-    data = YAML.parse(match[1] ?? "", { maxAliasCount: 10 });
-  } catch {
-    data = undefined;
-  }
-  return {
-    data: isRecord(data) ? data : {},
-    body: source.slice(match[0].length),
-  };
 };
 
 const semverCore =
@@ -376,7 +332,7 @@ export const readSkillFolders = Effect.fn("readSkillFolders")(function* (
       ) {
         continue;
       }
-      const mediaType = resourceMediaTypes.get(extension(path));
+      const mediaType = skillFileMediaType(path);
       if (mediaType === undefined) {
         folder.skip(path, "The file is not a text resource.");
         continue;

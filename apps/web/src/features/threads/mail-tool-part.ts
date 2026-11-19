@@ -1,6 +1,6 @@
 import type { ToolPart } from "./transcript-activity-projection.js";
 
-/** The agent's mail tools, which read the owner's Mailbox. */
+/** The agent's mail tools, which read the owner's Mail. */
 export const MAIL_TOOL_NAMES: ReadonlySet<string> = new Set([
   "list_emails",
   "read_email",
@@ -37,8 +37,8 @@ export const emailOf = (part: ToolPart) => {
 };
 
 /**
- * Where "Open in Mailbox" goes: the result's `mailbox_url`, only when it is
- * this app's Mailbox page.
+ * Where "Open in Mail" goes: the result's `mailbox_url`, only when it is
+ * this app's Mail page.
  */
 export const mailboxUrlOf = (part: ToolPart): string | undefined => {
   const url =

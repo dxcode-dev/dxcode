@@ -250,7 +250,7 @@ export const createExperimentalFeatureRegistry = (
   return registry;
 };
 
-/** The personal flag that turns the dx Mailbox on (wiki/agent-mail.md). */
+/** The personal flag that turns the dx Mail on (wiki/agent-mail.md). */
 export const MAILBOX_FEATURE_ID = "mailbox";
 
 export const productionExperimentalFeatureRegistry =
@@ -334,9 +334,9 @@ export const productionExperimentalFeatureRegistry =
       },
       {
         id: MAILBOX_FEATURE_ID,
-        title: "dx Mailbox",
+        title: "dx Mail",
         description:
-          "Beta: your own mailbox at your username on this deployment's mail domain, which your agents read to sign up for services, and username+project addresses that file mail per Project. Needs the deployment to set a mail domain. Off, mail to your address is dropped and agents can't read it; mail you already have is kept.",
+          "Beta: your own email address at your username on this deployment's mail domain, in Mail, which your agents read to sign up for services, and username+project addresses that file mail per Project. Needs the deployment to set a mail domain. Off, mail to your address is dropped and agents can't read it; mail you already have is kept.",
         // Tracked in the private repository, so no public issue yet.
         owner: { team: "dx/mail" },
         status: "experimental",
@@ -352,9 +352,9 @@ export const productionExperimentalFeatureRegistry =
           migration:
             "Mail stays stored while the flag is off; turning it back on shows it again.",
           graduation:
-            "Once the Mailbox has run on staging and production without incident, retire this flag as graduated: a deployment's mail domain alone turns it on.",
+            "Once the Mail has run on staging and production without incident, retire this flag as graduated: a deployment's mail domain alone turns it on.",
           removal:
-            "Retire the flag as removed and drop the mail tables, routes, tools, and the Mailbox page.",
+            "Retire the flag as removed and drop the mail tables, routes, tools, and the Mail page.",
         },
       },
     ],

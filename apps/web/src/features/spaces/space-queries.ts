@@ -76,7 +76,7 @@ const getSpace = async (
   ).data.space;
 
 /**
- * Sharing a private Space was held back because its agents read Mailbox mail
+ * Sharing a private Space was held back because its agents read Mail mail
  * members would see; saving again with `acknowledgeMailReads` agrees.
  */
 export const isSpaceMailReadsRefusal = (error: unknown) =>

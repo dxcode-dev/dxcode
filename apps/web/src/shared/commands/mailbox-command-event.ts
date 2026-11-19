@@ -1,6 +1,6 @@
 /**
- * The Mailbox's keyboard actions. The command registry dispatches them as a
- * document event, with `{ action }` as its detail, and the open Mailbox page
+ * The Mail's keyboard actions. The command registry dispatches them as a
+ * document event, with `{ action }` as its detail, and the open Mail page
  * acts on them. Its own module, so the page does not load the command
  * provider with it.
  */
@@ -24,7 +24,7 @@ export const requestMailboxCommand = (action: MailboxCommand) =>
     new CustomEvent(MAILBOX_COMMAND_EVENT, { detail: { action } }),
   );
 
-/** Runs `run` for each Mailbox action until the returned cleanup. */
+/** Runs `run` for each Mail action until the returned cleanup. */
 export const onMailboxCommand = (run: (action: MailboxCommand) => void) => {
   const listener = (event: Event) => {
     const action = (event as CustomEvent<{ action?: MailboxCommand }>).detail

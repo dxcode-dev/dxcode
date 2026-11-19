@@ -128,8 +128,9 @@ const harness = async (
       const found = id === skill.id ? versions.get(version) : undefined;
       return found ? Effect.succeed(found) : Effect.fail(new SkillNotFound());
     },
+    readFiles: () => Effect.succeed([]),
     insert: () => Effect.die("not used"),
-    insertVersion: (_target, version, activate, updatedAt) => {
+    insertVersion: (_target, version, _files, activate, updatedAt) => {
       if (skill.pinned && activate) {
         return Effect.fail(new SkillIntegrityConflict());
       }

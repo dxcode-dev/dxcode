@@ -1,6 +1,11 @@
 import { defineSkill } from "@flue/runtime";
 import { builtInSkillsLogger } from "../logging.js";
-import { readThreadSkillResource } from "../settings/skills/execution.js";
+import { readThreadSkillResources } from "../settings/skills/execution.js";
+import {
+  SKILL_FILE_TOOL,
+  spaceSkillFilesNote,
+} from "../settings/skills/skill-file-tool.js";
+import { RESERVED_SKILL_NAMES } from "./built-in-skill-names.js";
 import {
   installSkillFiles,
   type SkillFile,
@@ -9,14 +14,15 @@ import {
 } from "./built-in-skills.js";
 
 /**
- * A Thread's personal and workspace skills, from its skill snapshot. They are
- * installed and offered exactly like dx's built-in skills: each is a skill
- * directory in the workspace, the dx agent mounts it with Flue's `useSkill`,
- * and Claude Code mode links it into `~/.claude/skills`. A settings skill
- * replaces a built-in or repository skill of the same name.
+ * A Thread's personal and workspace skills, from its skill snapshot. In a
+ * Thread with an Orb each is a skill directory in `~/.agents/skills`,
+ * written from storage before Flue discovers skills, SKILL.md included:
+ * the dx agent's catalog lists its name and description, and activating it
+ * reads its SKILL.md then; Claude Code mode links it into `~/.claude/skills`.
+ * So a skill's size costs nothing until it is used. dx's own skills and the
+ * repository's win a shared name. A Space has no Orb: its dx agent mounts
+ * each with `useSkill`, pointing at `read_skill_file`.
  */
-export const SETTINGS_SKILLS_DIRECTORY =
-  "/home/user/.local/share/dx/settings-skills";
 
 interface SettingsSkill {
   readonly id: string;
@@ -24,7 +30,6 @@ interface SettingsSkill {
   readonly name: string;
   readonly integrity: string;
   readonly description: string;
-  readonly instructions: string;
   readonly resources: ReadonlyArray<{ readonly path: string }>;
 }
 
@@ -43,50 +48,70 @@ const installable = (skills: ReadonlyArray<SettingsSkill>) =>
 const descriptionOf = (skill: SettingsSkill) =>
   skill.description.trim() || skill.name;
 
-/** Flue definitions for the dx agent, shaped like `builtInSkillDefinitions`. */
-export const settingsSkillDefinitions = (
-  skills: ReadonlyArray<SettingsSkill>,
-) =>
-  installable(skills).map((skill) =>
-    defineSkill({
-      name: skill.name,
-      description: descriptionOf(skill),
-      instructions: `This skill's directory is \`${SETTINGS_SKILLS_DIRECTORY}/${skill.name}/\`; resolve relative paths in these instructions from there.\n\n${skill.instructions}`,
-    }),
-  );
+/**
+ * Flue definitions for a Space's dx agent, which has no Orb: each says to
+ * read the skill's SKILL.md with `read_skill_file`. Skills named like one of
+ * dx's own are left out.
+ */
+export const spaceSkillDefinitions = (skills: ReadonlyArray<SettingsSkill>) =>
+  installable(skills)
+    .filter(({ name }) => !RESERVED_SKILL_NAMES.has(name))
+    .map((skill) =>
+      defineSkill({
+        name: skill.name,
+        description: descriptionOf(skill),
+        instructions: `${spaceSkillFilesNote(skill)}Read this skill's instructions now: call ${SKILL_FILE_TOOL} with skill "${skill.name}" and path "SKILL.md", then follow them.`,
+      }),
+    );
 
-const skillMarkdown = (skill: SettingsSkill) =>
-  `---\nname: ${JSON.stringify(skill.name)}\ndescription: ${JSON.stringify(descriptionOf(skill))}\n---\n\n${skill.instructions}\n`;
+const skillMarkdown = (
+  skill: SettingsSkill,
+  instructions: string,
+  where: "orb" | "space",
+) =>
+  `---\nname: ${JSON.stringify(skill.name)}\ndescription: ${JSON.stringify(descriptionOf(skill))}\n---\n\n${where === "space" ? spaceSkillFilesNote(skill) : ""}${instructions}\n`;
 
 const skillFiles = async (
   threadId: string,
   skills: ReadonlyArray<SettingsSkill>,
+  where: "orb" | "space",
 ) => {
   let complete = true;
   const files: ReadonlyArray<SkillFile> = (
     await Promise.all(
       skills.map(async (skill) => {
-        const resources = await Promise.all(
-          skill.resources.map(async ({ path }) => {
-            if (!safeResourcePath.test(path)) return [];
-            const content = await readThreadSkillResource(
-              threadId,
-              skill.id,
-              skill.version,
-              path,
-            );
-            if (content !== undefined)
-              return [{ path: `${skill.name}/${path}`, content }];
-            complete = false;
-            builtInSkillsLogger.error(
-              "A settings skill resource could not be read.",
-              { skillId: skill.id, version: skill.version, path },
-            );
-            return [];
-          }),
+        const stored = await readThreadSkillResources(
+          threadId,
+          skill.id,
+          skill.version,
         );
+        if (stored === undefined) {
+          // Without its SKILL.md the skill cannot be used; the next turn
+          // tries again.
+          complete = false;
+          builtInSkillsLogger.error("A settings skill could not be read.", {
+            skillId: skill.id,
+            version: skill.version,
+          });
+          return [];
+        }
+        const resources = skill.resources.map(({ path }) => {
+          if (!safeResourcePath.test(path)) return [];
+          const content = stored.files.get(path);
+          if (content !== undefined)
+            return [{ path: `${skill.name}/${path}`, content }];
+          complete = false;
+          builtInSkillsLogger.error(
+            "A settings skill resource could not be read.",
+            { skillId: skill.id, version: skill.version, path },
+          );
+          return [];
+        });
         return [
-          { path: `${skill.name}/SKILL.md`, content: skillMarkdown(skill) },
+          {
+            path: `${skill.name}/SKILL.md`,
+            content: skillMarkdown(skill, stored.instructions, where),
+          },
           ...resources.flat(),
         ];
       }),
@@ -96,32 +121,40 @@ const skillFiles = async (
 };
 
 /**
- * Writes the Thread's settings skills into the workspace unless the copy
- * there is already these versions. A failure is logged, not thrown, as for
- * the built-in skills: the instructions still load, only their resource
- * files are missing.
+ * Writes the Thread's settings skills into `~/.agents/skills` unless the copy
+ * there is already these versions, leaving out any named like one of dx's
+ * own skills or one in `taken` (such as a repository plugin's), which win.
+ * A failure is logged, not thrown: the Thread runs without those skills.
  */
 export const installSettingsSkills = async (
   target: SkillInstallTarget,
   threadId: string,
   skills: ReadonlyArray<SettingsSkill>,
+  /** A Space's Claude Code reads files with `read_skill_file`, not from disk. */
+  where: "orb" | "space" = "orb",
+  taken: ReadonlySet<string> = new Set(),
 ) => {
-  const included = installable(skills);
+  const included = installable(skills).filter(
+    ({ name }) => !RESERVED_SKILL_NAMES.has(name) && !taken.has(name),
+  );
   try {
     await installSkillFiles(
       target,
-      "settings-skills",
+      "settings",
       await sha256(
-        JSON.stringify(
-          included.map(({ name, id, version, integrity }) => [
+        JSON.stringify([
+          where,
+          ...included.map(({ name, id, version, integrity }) => [
             name,
             id,
             version,
             integrity,
           ]),
-        ),
+        ]),
       ),
-      () => skillFiles(threadId, included),
+      () => skillFiles(threadId, included, where),
+      // A built-in skill may take a name a settings skill had.
+      [...RESERVED_SKILL_NAMES],
     );
   } catch (error) {
     builtInSkillsLogger.error("Settings skills could not be installed.", {

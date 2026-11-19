@@ -17,7 +17,7 @@ import type { Bindings } from "../http/types.js";
 
 type MailBindings = Pick<Bindings, "DB" | "DX_STORAGE">;
 
-/** The person must pick a username before their Mailbox opens. */
+/** The person must pick a username before Mail opens. */
 export const usernameNeedsPick = personalAccountUsernameNeedsPick;
 
 export interface MailboxOwner {
@@ -297,59 +297,6 @@ export const listReachableProjects = async (db: D1Database, userId: string) => {
 // ── Project mail settings ────────────────────────────────────────────────
 
 export type MailAgentMode = "low" | "medium" | "high" | "ultra";
-
-export interface ProjectMailSettingRow {
-  readonly agent_mode: MailAgentMode | null;
-  readonly visibility: "private" | "workspace";
-  /** 1: a member's own `+tag` email starts or continues Threads. */
-  readonly start_threads: number;
-}
-
-export const readProjectMailSetting = async (
-  db: D1Database,
-  projectId: string,
-): Promise<ProjectMailSettingRow> =>
-  (await db
-    .prepare(
-      "SELECT agent_mode, visibility, start_threads FROM project_mail_setting WHERE project_id = ?",
-    )
-    .bind(projectId)
-    .first<ProjectMailSettingRow>()) ?? {
-    agent_mode: null,
-    visibility: "private",
-    start_threads: 1,
-  };
-
-export const updateProjectMailSetting = async (
-  db: D1Database,
-  projectId: string,
-  change: {
-    readonly agentMode?: MailAgentMode | null;
-    readonly visibility?: "private" | "workspace";
-    readonly startThreads?: boolean;
-  },
-) => {
-  const current = await readProjectMailSetting(db, projectId);
-  await db
-    .prepare(
-      `INSERT INTO project_mail_setting (project_id, agent_mode, visibility, start_threads, updated_at)
-       VALUES (?1, ?2, ?3, ?4, ?5)
-       ON CONFLICT (project_id) DO UPDATE
-         SET agent_mode = ?2, visibility = ?3, start_threads = ?4, updated_at = ?5`,
-    )
-    .bind(
-      projectId,
-      change.agentMode === undefined ? current.agent_mode : change.agentMode,
-      change.visibility ?? current.visibility,
-      change.startThreads === undefined
-        ? current.start_threads
-        : change.startThreads
-          ? 1
-          : 0,
-      new Date().toISOString(),
-    )
-    .run();
-};
 
 // ── Mail items ───────────────────────────────────────────────────────────
 
@@ -1098,27 +1045,6 @@ export const deleteThreadMail = async (
       .bind(threadId),
   ]);
 };
-
-/** How many of a person's (or a Project's) emails had these outcomes lately. */
-export const countMailSince = async (
-  db: D1Database,
-  scope: { readonly ownerUserId: string } | { readonly projectId: string },
-  dispositions: ReadonlyArray<string>,
-  sinceMs: number,
-) =>
-  (await db
-    .prepare(
-      `SELECT count(*) AS count FROM mail_item
-        WHERE ${"projectId" in scope ? "project_id = ?1" : "owner_user_id = ?1"}
-          AND disposition IN (SELECT value FROM json_each(?2))
-          AND received_at > ?3`,
-    )
-    .bind(
-      "projectId" in scope ? scope.projectId : scope.ownerUserId,
-      JSON.stringify(dispositions),
-      new Date(Date.now() - sinceMs).toISOString(),
-    )
-    .first<number>("count")) ?? 0;
 
 /**
  * How many trusted (or untrusted) emails one sender, or anyone, put in a

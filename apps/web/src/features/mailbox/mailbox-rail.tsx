@@ -87,9 +87,9 @@ function RailLink({
 }
 
 /**
- * The Mailbox's left rail: Compose, the folders, one row per project
+ * The Mail's left rail: Compose, the folders, one row per project
  * address, and the labels, which the person creates, renames, and deletes
- * here. The address and Mailbox settings sit at its foot.
+ * here. The address and Mail settings sit at its foot.
  */
 export function MailboxRail({
   userId,
@@ -114,7 +114,7 @@ export function MailboxRail({
       ? (search.folder ?? "inbox")
       : undefined;
   return (
-    <nav className="mailbox-rail" aria-label="Mailbox folders">
+    <nav className="mailbox-rail" aria-label="Mail folders">
       <div className="mailbox-rail-compose">
         <Button block onClick={onCompose}>
           <PenSquare aria-hidden="true" />
@@ -239,8 +239,8 @@ export function MailboxRail({
         <Button
           variant="subtle"
           size="icon-xs"
-          aria-label="Mailbox settings"
-          title="Mailbox settings"
+          aria-label="Mail settings"
+          title="Mail settings"
           onClick={onOpenSettings}
         >
           <Settings aria-hidden="true" />

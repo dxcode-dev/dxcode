@@ -219,7 +219,7 @@ export interface Bindings {
   /**
    * Sends from any address on the mail domain (`DX_MAIL_DOMAIN`), which the
    * deployment onboards to Cloudflare Email Sending: the mail people send
-   * from their Mailbox, and the "Started" notice (wiki/agent-mail.md).
+   * from their Mail (wiki/agent-mail.md).
    */
   readonly MAIL_SEND?: SendEmail;
   readonly DX_STORAGE?: R2Bucket;

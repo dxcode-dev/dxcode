@@ -74,7 +74,7 @@ export const UpdateThreadSharingRequestSchema = Schema.Struct({
   /** Remember "Don't ask me again" for the multiplayer confirmation. */
   skipMultiplayerConfirmation: Schema.optional(Schema.Boolean),
   /**
-   * The owner saw that the family's agents read Mailbox mail a shared
+   * The owner saw that the family's agents read Mail mail a shared
    * Thread could not, which its viewers will see in the transcript.
    * Without it, such a share is refused with `THREAD_SHARING_MAIL_READS`.
    */

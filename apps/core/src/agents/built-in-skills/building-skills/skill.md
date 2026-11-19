@@ -14,7 +14,7 @@ dx has three kinds of skills:
 | Kind | Where it lives | Who sees it | Format |
 |------|----------------|-------------|--------|
 | Repository skill | `.agents/skills/<name>/SKILL.md` in the Project's repository | Every Thread started from a commit that contains it | `SKILL.md` with frontmatter, plus any files |
-| Settings skill | Settings → Skills, personal or workspace scope | New Threads of that person, or of everyone in the workspace | A folder with `skill.json`, `instructions.md`, and optional `resources/` |
+| Settings skill | Settings → Skills, personal or workspace scope | New Threads of that person, or of everyone in the workspace | A `SKILL.md` folder with any text files, as in a repository |
 | Built-in skill | Shipped with dx | Every Thread | Read-only; this skill is one |
 
 - A repository skill appears in the agent's skill catalog when dx next reads the workspace's
@@ -23,10 +23,11 @@ dx has three kinds of skills:
   `~/.claude/skills/` before every run.
 - Settings skills are reviewed, versioned imports. A Thread snapshots the effective versions when
   it is created, so a new or changed settings skill reaches new Threads, not running ones.
-  Workspace skills take precedence over personal skills with the same name, and a workspace can
-  disallow personal skills.
-- Built-in skill names are reserved. dx skips a repository skill with a built-in name, so choose
-  another name rather than shadowing one.
+  A personal skill replaces a workspace skill with the same name, and a workspace can disallow
+  personal skills.
+- A name is used once: dx's built-in skills win, then repository skills, then settings skills.
+  dx skips a repository skill with a built-in skill's name and a settings skill with a built-in
+  or repository skill's name, so choose a name no other skill has.
 
 Choose the kind:
 - Repository- or app-specific skills belong in `.agents/skills/`, committed with the project's
@@ -153,60 +154,54 @@ relative to the skill's directory, which the agent receives when it activates th
 
 ## Settings skills
 
-A settings skill is a folder the user imports in Settings → Skills with **Import folder**:
+A settings skill is a skill folder like a repository skill: a `SKILL.md` with `name` and
+`description` frontmatter, and any text files beside it at their paths, such as `scripts/` and
+`references/`. People add one in Settings → Skills:
 
-```
-release-notes/
-├── skill.json          # manifest
-├── instructions.md     # the skill body, up to 32 KiB
-└── resources/          # optional supporting text files
-    └── template.md
-```
+- **Discover** lists skills.sh, searchable. Opening a skill shows its files; **Install** adds it,
+  with every file, to Personal or Workspace, switched on.
+- **From a GitHub URL** installs the skill in a public repository folder, read at one commit.
+- **Upload a folder** imports a `SKILL.md` folder from the computer. dx's older layout, `skill.json`
+  with `instructions.md`, still imports too.
 
-`skill.json`:
+Rules dx applies to every settings skill:
 
-```json
-{
-  "schemaVersion": 1,
-  "name": "release-notes",
-  "description": "Writes release notes from merged pull requests. Use when asked for release notes or a changelog entry.",
-  "mcpServerIds": []
-}
-```
-
-- `name` and `description` follow the same rules as `SKILL.md` frontmatter.
-- `mcpServerIds` lists MCP servers (by ID from Settings → MCP & Integrations) the skill needs. A
-  Thread receives the skill only when every listed server is connected with at least one approved
-  tool.
-- Supporting files must be under `resources/`, at most 30 files, each a text file (`.md`, `.txt`,
-  `.json`, `.csv`, `.yaml`, `.yml`, `.toml`) of at most 64 KiB, and 256 KiB for the whole skill. The
-  agent reads them on demand; they are not files in the workspace, so a settings skill cannot ship
-  executable scripts. Put scripts in a repository skill instead.
-- Each scope holds at most 20 skills, and a Thread receives at most 20 settings skills with 64 KiB
-  of instructions in total.
+- `name` and `description` follow the same rules as `SKILL.md` frontmatter. The body, the
+  instructions, is at most 1 MiB, like any other file.
+- A skill holds at most 200 other files, each a text file of at most 1 MiB, and 5 MiB in all.
+  Scripts are fine; binary files (images, archives, PDFs) and hidden files are not.
+- A Thread's prompt carries only each skill's name and description. The agent reads `SKILL.md`
+  when it uses the skill, so a long body costs nothing until then.
+- In a Thread with an Orb, the files are written to `~/.agents/skills/<name>/` before the
+  agent starts, beside dx's built-in skills, and files under `scripts/` are executable. In Claude
+  Code mode that folder is linked into `~/.claude/skills/<name>`. In a Space, which has no Orb,
+  the agent reads a file with `read_skill_file`; scripts cannot run there.
+- A skill created through `manage_dx` may list `mcpServerIds`: MCP servers (by ID from Settings →
+  MCP & Integrations) the skill needs. A Thread receives the skill only when every listed server is
+  connected with at least one approved tool.
+- Each scope holds at most 20 skills.
 
 To create, update, or install one, use the `manage_dx` tool with `topic: "skills"`:
 
 1. `list` shows the owner's personal and workspace skills (`workspace` changes need the owner to
    be a workspace admin).
 2. To update a skill, `read` it first and change its active version.
-3. `create` (or `update`) sends the name, description, instructions, and any `resources/` files,
-   with a one-sentence `reason`. The tool applies the rules above. A personal skill saves at once
-   and the result shows what changed; don't ask the user to confirm first. A workspace skill
-   shows the owner a card above the composer with the full text, or the diff for an update, and
-   waits until they apply or cancel it. `enable` and `disable` work the same way; `delete` always
-   asks on a card.
+3. `create` (or `update`) sends the name, description, instructions, and the other files as
+   `resources` at their paths, with a one-sentence `reason`. The tool applies the rules above. A
+   personal skill saves at once and the result shows what changed; don't ask the user to confirm
+   first. A workspace skill shows the owner a card above the composer with the full text, or the
+   diff for an update, and waits until they apply or cancel it. `enable` and `disable` work the
+   same way; `delete` always asks on a card.
 4. Tell the user in one line what changed. A saved skill loads in new Threads, not this one.
 
 When the user would rather review it later in Settings → Skills, use `operation: "propose"`
 instead: it files the skill for review and returns a review link to give the user in your
 reply. Their decision wakes this Thread.
 
-To install a repository or internet skill as a settings skill, create it from its `SKILL.md`
-frontmatter's `name` and `description`, its body as the instructions, and its text reference
-files under `resources/`. When the user would rather import it themselves, write the folder
-outside the repository (for example under `~/skills/<name>/`) and tell them to use Settings →
-Skills → Import.
+To install a skill from skills.sh or a public GitHub repository, point the user to Settings →
+Skills → Discover (or **From a GitHub URL**): one click installs every file. To install one you
+have on disk, create it from its `SKILL.md` frontmatter's `name` and `description`, its body as
+the instructions, and every other text file as a resource at its path.
 
 ## Importing or moving skills
 
@@ -214,7 +209,8 @@ When importing a skill (from another repo, a teammate, or the internet) or movin
 locations:
 
 - A skill that ships `scripts/` or `reference/` must keep its directory layout; move the whole
-  directory intact. Into a settings skill, only text resources move, under `resources/`.
+  directory intact, into a repository or a settings skill alike. Only binary files stay behind
+  in a settings skill.
 - Rename the frontmatter `name` and its parent directory to match your conventions, and avoid the
   names of dx's built-in skills.
 - Drop frontmatter keys dx does not use, such as inline MCP server definitions; connect the server

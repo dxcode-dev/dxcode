@@ -523,11 +523,12 @@ if [ -f "$D/user-instructions.md" ]; then
   if [ -s "$D/user-instructions.md" ]; then cp "$D/user-instructions.md" "$HOME/.claude/CLAUDE.md"
   else rm -f "$HOME/.claude/CLAUDE.md"; fi
 fi
-# Claude Code reads skills from ~/.claude/skills, not the repository's .agents.
-# dx's built-in skills come first; a repository skill with a built-in name is
-# skipped, as for the dx agent. The Thread's personal and workspace skills
-# come last and replace a skill of the same name, as for the dx agent. Links
-# are relative, so they resolve inside the local runtime's namespace too.
+# Claude Code reads skills from ~/.claude/skills, not the repository's .agents
+# or ~/.agents/skills, where dx writes its built-in skills and the Thread's
+# settings skills. As for the dx agent, dx's built-in skills win, then the
+# repository's skills and its plugins', then ~/.agents/skills: the settings
+# skills and the person's own. Links are relative, so they resolve inside the
+# local runtime's namespace too.
 mkdir -p "$HOME/.claude/skills"
 find "$HOME/.claude/skills" -maxdepth 1 -xtype l -delete
 # Repository plugin skills the last launch linked go first, so a plugin the
@@ -539,9 +540,8 @@ if [ -f "$D/repository-skills.tsv" ] && [ -f "$REPO_SKILLS" ]; then
   done < "$REPO_SKILLS"
   rm -f "$REPO_SKILLS"
 fi
-for skill in "$HOME/.local/share/dx/skills"/*/; do
-  name=$(basename "$skill")
-  [ -f "$skill/SKILL.md" ] && ln -sfn "../../.local/share/dx/skills/$name" "$HOME/.claude/skills/$name"
+for name in ${[...BUILT_IN_SKILL_NAMES].join(" ")}; do
+  [ -f "$HOME/.agents/skills/$name/SKILL.md" ] && ln -sfn "../../.agents/skills/$name" "$HOME/.claude/skills/$name"
 done
 if [ -d ${quote(`${WORKSPACE}/.agents/skills`)} ]; then
   for skill in ${quote(`${WORKSPACE}/.agents/skills`)}/*/; do
@@ -557,15 +557,28 @@ if [ -f "$D/repository-skills.tsv" ]; then
   : > "$REPO_SKILLS"
   while IFS=$'\t' read -r name target || [ -n "$name" ]; do
     [ -n "$name" ] && [ -n "$target" ] || continue
-    [ -e "$HOME/.claude/skills/$name" ] && continue
+    # A settings skill linked by an earlier launch gives way.
+    case "$(readlink "$HOME/.claude/skills/$name" 2>/dev/null)" in
+      ../../.agents/skills/*) case " ${[...BUILT_IN_SKILL_NAMES].join(" ")} " in *" $name "*) continue ;; esac ;;
+      *) [ -e "$HOME/.claude/skills/$name" ] && continue ;;
+    esac
     [ -f "$HOME/.claude/skills/$target/SKILL.md" ] || continue
     ln -sfn "$target" "$HOME/.claude/skills/$name"
     echo "$name" >> "$REPO_SKILLS"
   done < "$D/repository-skills.tsv"
 fi
-for skill in "$HOME/.local/share/dx/settings-skills"/*/; do
+# A name a built-in or repository skill took stays theirs; a link dx made
+# to ~/.agents/skills (or its old copy under ~/.local/share/dx) is renewed.
+for skill in "$HOME/.agents/skills"/*/; do
   name=$(basename "$skill")
-  [ -f "$skill/SKILL.md" ] && ln -sfn "../../.local/share/dx/settings-skills/$name" "$HOME/.claude/skills/$name"
+  case " ${[...BUILT_IN_SKILL_NAMES].join(" ")} " in *" $name "*) continue ;; esac
+  link="$HOME/.claude/skills/$name"
+  if [ -L "$link" ]; then
+    case "$(readlink "$link")" in ../../.agents/skills/*|../../.local/share/dx/*) ;; *) continue ;; esac
+  elif [ -e "$link" ]; then
+    continue
+  fi
+  [ -f "$skill/SKILL.md" ] && ln -sfn "../../.agents/skills/$name" "$link"
 done
 ${SCRUB_CREDENTIALS}
 cd ${quote(WORKSPACE)}

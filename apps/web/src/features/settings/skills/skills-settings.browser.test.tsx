@@ -9,6 +9,24 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
+
+// The Files pane's editor, as a plain text box: the page owns what Save does.
+vi.mock("../../../shared/ui/file-view-editor.js", () => ({
+  FileViewEditor: ({
+    content,
+    onChange,
+  }: {
+    readonly content: string;
+    readonly onChange: (content: string) => void;
+  }) => (
+    <textarea
+      aria-label="File editor"
+      defaultValue={content}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  ),
+}));
+
 import { FrontendNetworkHarness } from "../../../testing/frontend-network-harness.js";
 import { skillsQueryOptions } from "./skills-queries.js";
 import { SkillsSettings } from "./skills-settings.js";
@@ -115,6 +133,8 @@ const skillsImportEndpoint = "/v1/settings/personal/skills";
 const skillsPreviewEndpoint = "/v1/settings/personal/skills/preview";
 const skillVersionEndpoint = (id: string) =>
   `/v1/settings/personal/skills/${id}/versions`;
+const skillExportEndpoint = (id: string) =>
+  `/v1/settings/personal/skills/${id}/export`;
 
 const respondSkills =
   (preview: { readonly name: string; readonly description: string }) =>
@@ -126,6 +146,28 @@ const respondSkills =
     if (method === "POST" && url === skillsImportEndpoint)
       return Response.json(
         { status: "success", data: writingHelper },
+        { status: 201 },
+      );
+    if (method === "GET" && url === skillExportEndpoint(codeReviewer.id))
+      return Response.json({
+        status: "success",
+        data: {
+          source: { type: "browser-files", label: "Exported skill" },
+          integrity,
+          files: [],
+        },
+      });
+    if (method === "POST" && url === skillVersionEndpoint(codeReviewer.id))
+      return Response.json(
+        {
+          status: "success",
+          data: {
+            ...codeReviewer,
+            activeVersion: 2,
+            versions: [2, 1],
+            active: { ...codeReviewer.active, version: 2 },
+          },
+        },
         { status: 201 },
       );
     return Response.json(
@@ -194,13 +236,6 @@ const findButtonByText = (scope: ParentNode, text: string) => {
   return button;
 };
 
-const folderInputOf = (container: HTMLElement) => {
-  const input = container.querySelector<HTMLInputElement>(
-    'input[aria-label="Select skill folder"]',
-  );
-  if (!input) throw new Error("Folder input not found.");
-  return input;
-};
 const exportInputOf = (container: HTMLElement) => {
   const input = container.querySelector<HTMLInputElement>(
     'input[aria-label="Select exported skill"]',
@@ -221,12 +256,21 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-const openSettingsFor = async (container: HTMLElement, name: string) => {
-  const gear = container.querySelector<HTMLButtonElement>(
-    `button[aria-label="${name} settings"]`,
-  );
-  if (!gear) throw new Error(`Settings button for ${name} not found.`);
-  await act(() => gear.click());
+const clickMenuItem = async (text: string) => {
+  const item = await vi.waitFor(() => {
+    const found = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    ).find((candidate) => candidate.textContent?.trim() === text);
+    if (!found) throw new Error(`Menu item "${text}" not found.`);
+    return found;
+  });
+  await act(() => item.click());
+};
+
+/** Opens Add skill → Upload a folder. */
+const openImport = async (container: HTMLElement) => {
+  await act(() => findButtonByText(container, "Add skill").click());
+  await clickMenuItem("Upload a folder");
 };
 
 describe("SkillsSettings import routing", () => {
@@ -248,7 +292,7 @@ describe("SkillsSettings import routing", () => {
     await act(() => root.unmount());
   });
 
-  it("imports an export as a fresh skill after a dismissed version upload instead of switching to an unrelated skill", async () => {
+  it("imports an export as a new skill, not a version of the open one", async () => {
     const network = new FrontendNetworkHarness(
       respondSkills({
         name: "writing-helper",
@@ -258,13 +302,7 @@ describe("SkillsSettings import routing", () => {
     vi.stubGlobal("fetch", network.fetch);
     const { container, root } = await mountSkills();
 
-    await openSettingsFor(container, "code-reviewer");
-    await act(() => findButtonByText(document, "Upload version").click());
-    expect(document.querySelector(".skill-import-review")).toBeNull();
-    await act(() => setInputFiles(folderInputOf(container), []));
-    expect(document.querySelector(".skill-import-review")).toBeNull();
-
-    await act(() => findButtonByText(container, "Import").click());
+    await openImport(container);
     await act(() => findButtonByText(document, "Choose .skill.json").click());
     await act(() =>
       setInputFiles(exportInputOf(container), [
@@ -274,9 +312,6 @@ describe("SkillsSettings import routing", () => {
 
     const dialog = await waitForDialog();
     expect(dialog.textContent).toContain("Review skill import");
-    expect(dialog.textContent).not.toContain("code-reviewer update");
-    expect(findButtonByText(dialog, "Import reviewed skill")).toBeDefined();
-
     await act(() => findButtonByText(dialog, "Import reviewed skill").click());
     await vi.waitFor(() => {
       expect(
@@ -297,35 +332,63 @@ describe("SkillsSettings import routing", () => {
     await act(() => root.unmount());
   });
 
-  it("publishes an activated new version when a version upload is made from a skill's settings (regression guard for the legitimate publish path)", async () => {
+  it("publishes an edited SKILL.md as the skill's next active version", async () => {
     const network = new FrontendNetworkHarness(
-      respondSkills({ name: "code-reviewer", description: "Reviews code." }),
+      respondSkills({ name: "code-reviewer", description: "Reviews diffs." }),
     );
     vi.stubGlobal("fetch", network.fetch);
     const { container, root } = await mountSkills();
 
-    await openSettingsFor(container, "code-reviewer");
-    await act(() => findButtonByText(document, "Upload version").click());
-    await act(() =>
-      setInputFiles(folderInputOf(container), [
-        exportedPayload("code-reviewer", "Reviews code."),
-      ]),
+    expect(container.querySelector(".skill-browser h2")?.textContent).toBe(
+      "code-reviewer",
     );
-
-    const dialog = await waitForDialog();
-    expect(dialog.textContent).toContain("Review code-reviewer update");
-    expect(findButtonByText(dialog, "Publish and activate")).toBeDefined();
-
-    await act(() => findButtonByText(dialog, "Publish and activate").click());
-    await vi.waitFor(() => {
-      expect(
-        network.requests.filter(
-          (request) =>
-            request.method === "POST" &&
-            request.url === skillVersionEndpoint(codeReviewer.id),
-        ).length,
-      ).toBeGreaterThan(0);
+    await act(() => findButtonByText(container, "Edit").click());
+    const editor = await vi.waitFor(() => {
+      const found = container.querySelector<HTMLTextAreaElement>(
+        'textarea[aria-label="File editor"]',
+      );
+      expect(found).not.toBeNull();
+      return found as HTMLTextAreaElement;
     });
+    const edited =
+      "---\nname: code-reviewer\ndescription: Reviews diffs.\n---\n\nReview the diff.\n";
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(
+        HTMLTextAreaElement.prototype,
+        "value",
+      )?.set;
+      setValue?.call(editor, edited);
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(() => findButtonByText(container, "Save").click());
+
+    const published = await vi.waitFor(() => {
+      const request = network.requests.find(
+        ({ method, url }) =>
+          method === "POST" && url === skillVersionEndpoint(codeReviewer.id),
+      );
+      expect(request).toBeDefined();
+      return request;
+    });
+    const body = JSON.parse(String(published && network.bodyOf(published))) as {
+      readonly bundle: {
+        readonly files: ReadonlyArray<{
+          readonly path: string;
+          readonly content: string;
+        }>;
+      };
+      readonly activate: boolean;
+    };
+    expect(body.activate).toBe(true);
+    const files = new Map(body.bundle.files.map((f) => [f.path, f.content]));
+    expect(JSON.parse(files.get("skill.json") ?? "{}")).toMatchObject({
+      name: "code-reviewer",
+      description: "Reviews diffs.",
+    });
+    expect(files.get("instructions.md")).toBe("code-reviewer instructions.\n");
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain("code-reviewer version 2 saved."),
+    );
 
     await act(() => root.unmount());
   });

@@ -119,7 +119,7 @@ export const createSkillTools = (
       "Create, update, or install the owner's settings skills: reusable instructions dx loads in every new Thread the owner starts (personal), or that every member of their workspace starts (workspace). A person reviews each change before it takes effect.",
       "list: the scopes you can propose in, the skills each holds, and your proposals from this Thread with their status. read: a skill's active version, to base an update on. propose: a new skill, or a new version of the skill with the same name in that scope. It saves nothing: it files the full skill for review on the Skills settings page and returns the review link; give the owner that link in your reply. When they approve, the skill loads in new Threads, not this one; approving or rejecting wakes this Thread with the outcome.",
       "Plugins: list also shows the installed plugins in each scope. propose_plugin proposes installing a plugin from a public GitHub URL (url), such as https://github.com/owner/repo/tree/main/plugins/name, or updating an installed plugin to its source's latest commit (name). It installs nothing: it reads the plugin, pinned to that commit, files it for review on the Plugins settings page, and returns the review link to give the owner in your reply; their decision wakes this Thread. The review lists the permissions its code asks for, and what an update adds. Approval installs or updates it for new Threads. Plugins from a ZIP cannot be proposed; ask the person to upload them.",
-      "To install a skill from a repository or the web, read its SKILL.md and text files and propose them: the SKILL.md frontmatter's name and description, its body as instructions, and its text files as resources under resources/. Scripts and binary files cannot be settings skills; leave those in the repository's .agents/skills. Proposing again for the same skill from this Thread replaces your earlier pending proposal. After proposing, tell the person what you proposed and that it waits for their review.",
+      "To install a skill from a repository or the web, read its SKILL.md and text files and propose them: the SKILL.md frontmatter's name and description, its body as instructions, and every other text file (scripts included) as resources at its path in the skill's folder. Binary files cannot be settings skills. A person can also install any skills.sh or GitHub skill in one click from Settings → Skills → Discover. Proposing again for the same skill from this Thread replaces your earlier pending proposal. After proposing, tell the person what you proposed and that it waits for their review.",
     ]),
     input: v.object({
       action: v.pipe(
@@ -159,7 +159,7 @@ export const createSkillTools = (
         v.pipe(
           v.string(),
           v.description(
-            "propose: the skill's Markdown body, at most 32 KiB. Refer to resources by their path, such as resources/template.md.",
+            "propose: the skill's Markdown body, at most 1 MiB. Refer to its files by their path, such as scripts/fill.py.",
           ),
         ),
       ),
@@ -170,7 +170,7 @@ export const createSkillTools = (
               path: v.pipe(
                 v.string(),
                 v.description(
-                  "Under resources/, ending in .md, .txt, .json, .csv, .yaml, .yml, or .toml.",
+                  "The file's path in the skill's folder, such as scripts/fill.py or references/api.md. Any text file; no binary files.",
                 ),
               ),
               content: v.string(),
@@ -178,7 +178,7 @@ export const createSkillTools = (
           ),
           v.maxLength(MAX_SKILL_RESOURCE_FILES),
           v.description(
-            "propose: supporting text files, at most 30, each at most 64 KiB, and 256 KiB for the whole skill.",
+            "propose: the skill's other text files, at most 200, each at most 1 MiB, and 5 MiB for the whole skill.",
           ),
         ),
       ),
@@ -204,9 +204,12 @@ export const createSkillTools = (
     run: async ({ data }) => {
       const context = getContext();
       const { db } = context;
+      const storage = context.bindings.DX_STORAGE;
       const owner = await ownerOf(db, callingThreadId);
       const scopes = await run(
-        proposalScopes(owner.userId).pipe(Effect.provide(skillLayers(db))),
+        proposalScopes(owner.userId).pipe(
+          Effect.provide(skillLayers(db, storage)),
+        ),
       );
 
       if (data.action === "list") {
@@ -220,7 +223,7 @@ export const createSkillTools = (
                 : yield* repository.list(scopes.workspace.target);
             const proposals = yield* threadProposals(db, callingThreadId);
             return { personal, workspace, proposals };
-          }).pipe(Effect.provide(skillLayers(db))),
+          }).pipe(Effect.provide(skillLayers(db, storage))),
         );
         const plugins = await run(
           Effect.gen(function* () {
@@ -386,10 +389,19 @@ export const createSkillTools = (
         const found = await run(
           Effect.gen(function* () {
             const repository = yield* SkillRepository;
-            return (yield* repository.list(target)).find(
-              ({ skill }) => skill.name === name,
+            const skill = (yield* repository.list(target)).find(
+              (item) => item.skill.name === name,
             );
-          }).pipe(Effect.provide(skillLayers(db))),
+            return skill === undefined
+              ? undefined
+              : {
+                  ...skill,
+                  files: yield* repository.readFiles(
+                    skill.skill.id,
+                    skill.active.version,
+                  ),
+                };
+          }).pipe(Effect.provide(skillLayers(db, storage))),
         );
         if (found === undefined)
           throw new Error(
@@ -403,7 +415,7 @@ export const createSkillTools = (
             enabled: found.skill.enabled,
             description: found.active.manifest.description,
             instructions: found.active.instructions,
-            resources: found.active.resources.map(({ path, content }) => ({
+            resources: found.files.map(({ path, content }) => ({
               path,
               content,
             })),
@@ -432,7 +444,7 @@ export const createSkillTools = (
             mcpServerIds: data.mcp_server_ids ?? [],
             label: `Proposed by dx in Thread ${owner.title}`.slice(0, 128),
           }),
-        }).pipe(Effect.provide(skillLayers(db))),
+        }).pipe(Effect.provide(skillLayers(db, storage))),
       );
       // The replaced proposal's ask would otherwise stay open.
       await Promise.all(

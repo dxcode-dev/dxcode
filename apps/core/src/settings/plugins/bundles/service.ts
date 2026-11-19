@@ -45,7 +45,7 @@ import {
   PluginBundleRejected,
   PluginBundleSourceUnavailable,
 } from "./errors.js";
-import { exportPluginBundle } from "./export.js";
+import { exportPluginBundle, withSkillFiles } from "./export.js";
 import {
   fetchGitHubArchive,
   fetchGitHubPlugin,
@@ -503,9 +503,12 @@ export class PluginBundleService extends Context.Service<
               );
         }
         const shared = yield* bundles.find(link.target, link.pluginId);
-        const sharedSkills = (yield* skillRepository.list(
-          shared.target,
-        )).filter(({ skill }) => skill.pluginId === shared.id);
+        const sharedSkills = yield* withSkillFiles(
+          skillRepository,
+          (yield* skillRepository.list(shared.target)).filter(
+            ({ skill }) => skill.pluginId === shared.id,
+          ),
+        );
         const sharedServers = (yield* mcpRepository.list(
           shared.target as McpServerTarget,
         ))

@@ -6,11 +6,18 @@ import { PluginId } from "./plugin-id.js";
 import { WorkspaceId } from "./workspace.js";
 
 export const MAX_SKILLS_PER_SCOPE = 20;
-export const MAX_SKILL_FILES = 32;
-export const MAX_SKILL_RESOURCE_FILES = 30;
-export const MAX_SKILL_FILE_BYTES = 65_536;
-export const MAX_SKILL_TOTAL_BYTES = 262_144;
-export const MAX_SKILL_INSTRUCTIONS_BYTES = 32_768;
+/** Files a skill holds besides its instructions: scripts, references, assets. */
+export const MAX_SKILL_RESOURCE_FILES = 200;
+/** An import bundle's files: the resources plus the instructions and manifest. */
+export const MAX_SKILL_FILES = MAX_SKILL_RESOURCE_FILES + 2;
+export const MAX_SKILL_FILE_BYTES = 1_048_576;
+export const MAX_SKILL_TOTAL_BYTES = 5_242_880;
+/**
+ * A SKILL.md body, held to the same limit as any other file of a skill. The
+ * agent reads it only when it uses the skill, so its size costs no context
+ * until then.
+ */
+export const MAX_SKILL_INSTRUCTIONS_BYTES = 1_048_576;
 export const MAX_SKILL_MANIFEST_BYTES = 16_384;
 export const MAX_SKILL_MCP_REFERENCES = 10;
 
@@ -81,10 +88,50 @@ export const SkillManifest = Schema.Struct({
 
 export type SkillManifest = typeof SkillManifest.Type;
 
-export const SkillSource = Schema.Struct({
+const SkillSourceLabel = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(128),
+);
+
+/** Files a person chose in the browser, or that another importer read. */
+export const BrowserFilesSkillSource = Schema.Struct({
   type: Schema.Literal("browser-files"),
-  label: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(128)),
+  label: SkillSourceLabel,
 });
+
+/**
+ * A skill folder of a public GitHub repository. A skill installed from a
+ * GitHub URL records the folder and the commit it was read at. One
+ * installed from a directory such as skills.sh records that directory's ID
+ * and content hash; the directory read the folder, so its path and commit
+ * are not known.
+ */
+export const GitHubSkillSource = Schema.Struct({
+  type: Schema.Literal("github"),
+  label: SkillSourceLabel,
+  repository: Schema.String.check(
+    Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/),
+  ),
+  /** The skill's folder inside the repository; empty for the root. */
+  path: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  commit: Schema.optional(
+    Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+  ),
+  registry: Schema.optional(
+    Schema.Struct({
+      name: Schema.Literal("skills.sh"),
+      id: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+      hash: Schema.optional(
+        Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+      ),
+    }),
+  ),
+});
+
+export const SkillSource = Schema.Union([
+  BrowserFilesSkillSource,
+  GitHubSkillSource,
+]);
 
 export type SkillSource = typeof SkillSource.Type;
 
@@ -105,17 +152,24 @@ export const SkillTarget = Schema.Union([
 
 export type SkillTarget = typeof SkillTarget.Type;
 
-export const SkillResource = Schema.Struct({
+/** A file of a skill version without its content, which loads on demand. */
+export const SkillResourceInfo = Schema.Struct({
   path: SkillResourcePath,
   mediaType: Schema.String.check(
     Schema.isMinLength(1),
     Schema.isMaxLength(128),
   ),
-  content: Schema.String.check(Schema.isMaxLength(MAX_SKILL_FILE_BYTES)),
   sizeBytes: Schema.Int.check(
     Schema.isBetween({ minimum: 0, maximum: MAX_SKILL_FILE_BYTES }),
   ),
   integrity: SkillIntegrity,
+});
+
+export type SkillResourceInfo = typeof SkillResourceInfo.Type;
+
+export const SkillResource = Schema.Struct({
+  ...SkillResourceInfo.fields,
+  content: Schema.String.check(Schema.isMaxLength(MAX_SKILL_FILE_BYTES)),
 });
 
 export type SkillResource = typeof SkillResource.Type;
@@ -125,7 +179,8 @@ export const StoredSkillVersion = Schema.Struct({
   version: SkillVersion,
   manifest: SkillManifest,
   instructions: SkillInstructions,
-  resources: Schema.Array(SkillResource).check(
+  /** The version's files; their content loads through the repository. */
+  resources: Schema.Array(SkillResourceInfo).check(
     Schema.isMaxLength(MAX_SKILL_RESOURCE_FILES),
   ),
   source: SkillSource,
@@ -184,10 +239,14 @@ export const SkillImportFile = Schema.Struct({
 
 export type SkillImportFile = typeof SkillImportFile.Type;
 
+/**
+ * Files a person chose in the browser: a SKILL.md folder, or dx's layout
+ * (skill.json and instructions.md), with the skill's other files.
+ */
 export const SkillImportBundle = Schema.Struct({
-  source: SkillSource,
+  source: BrowserFilesSkillSource,
   files: Schema.Array(SkillImportFile).check(
-    Schema.isMinLength(2),
+    Schema.isMinLength(1),
     Schema.isMaxLength(MAX_SKILL_FILES),
   ),
 });

@@ -14,7 +14,7 @@ const DOMAIN =
 
 /**
  * The deployment's mail configuration, or undefined when mail is off for
- * everyone. Each person also turns the Mailbox on for themselves with the
+ * everyone. Each person also turns the Mail on for themselves with the
  * `mailbox` experimental feature (`mailboxFor`).
  */
 export const mailConfiguration = (
@@ -30,7 +30,7 @@ const mailboxDefault =
   )?.defaultEnabled ?? false;
 
 /**
- * Whether the person turned the dx Mailbox on: their `mailbox` experimental
+ * Whether the person turned the dx Mail on: their `mailbox` experimental
  * feature, else its default. Read straight from their stored preferences,
  * since inbound mail and agents act without the person's session.
  */
@@ -54,8 +54,8 @@ export const mailboxFeatureOn = async (db: D1Database, userId: string) => {
 
 /**
  * The person's mail configuration: the deployment's, when it sets a mail
- * domain and the person turned the Mailbox on; otherwise undefined, and
- * they have no Mailbox, tools, prompt line, or address.
+ * domain and the person turned the Mail on; otherwise undefined, and
+ * they have no Mail, tools, prompt line, or address.
  */
 export const mailboxFor = async (
   bindings: Pick<Bindings, "DX_MAIL_DOMAIN" | "DB">,

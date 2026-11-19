@@ -110,7 +110,7 @@ export const categoryForTool = (
   if (THREAD_TOOL_NAMES.has(name)) return "thread";
   if (name === "code_exec") return "generic";
   if (name === ARTIFACT_TOOL_NAME) return "explore";
-  // The mail tools read the owner's Mailbox; waiting for one is reading too.
+  // The mail tools read the owner's Mail; waiting for one is reading too.
   if (
     name === "list_emails" ||
     name === "read_email" ||

@@ -1,0 +1,71 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's file view: see file-view.tsx. */
+@layer components {
+  .dx-file-view {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .dx-file-view-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-lg);
+    padding: var(--space-1) var(--space-3);
+    border-bottom: 1px solid var(--divider);
+  }
+  .dx-file-view-header > svg {
+    flex: none;
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+    color: var(--muted-foreground);
+  }
+  .dx-file-view-path {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted-foreground);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-file-view-detail {
+    flex: none;
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+  }
+  .dx-file-view-actions {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: auto;
+  }
+  .dx-file-view-body {
+    min-height: 0;
+    flex: 1;
+    overflow: auto;
+    padding: var(--space-4) var(--space-5);
+  }
+  .dx-file-view-body:is([data-mode="source"], [data-mode="edit"]) {
+    padding: 0;
+  }
+  .dx-file-view-editor {
+    display: block;
+    min-height: 100%;
+  }
+  .dx-file-view-code {
+    display: block;
+    min-width: 100%;
+  }
+  .dx-file-view-plain {
+    margin: 0;
+    padding: var(--space-3) var(--space-4);
+    font: var(--text-code) / var(--leading-code) var(--font-code);
+    white-space: pre;
+  }
+}

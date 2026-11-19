@@ -104,9 +104,9 @@ export const resolveAgentBugReportReader = async (threadId: string) => {
 };
 
 /**
- * What the Thread's agent may read of its owner's dx Mailbox, read from
+ * What the Thread's agent may read of its owner's dx Mail, read from
  * current settings for each submission; undefined when mail is off, the
- * owner turned agent reading off or has no Mailbox yet, or the read fails
+ * owner turned agent reading off or has no Mail yet, or the read fails
  * (no mailbox tools are mounted then).
  */
 export const resolveAgentMailbox = async (threadId: string) => {

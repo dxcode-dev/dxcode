@@ -45,7 +45,7 @@ export const PersonalAccountDataSchema = Schema.Struct({
   usernameChangeAvailable: Schema.Boolean,
   /**
    * The person holds a `user-<hex>` placeholder or a reserved name and must
-   * pick a username before their Mailbox opens. That pick is free.
+   * pick a username before Mail opens. That pick is free.
    */
   usernameNeedsPick: Schema.Boolean,
 });

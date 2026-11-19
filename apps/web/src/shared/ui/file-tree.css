@@ -1,0 +1,63 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/*
+ * dx's file tree: see file-tree.tsx. The rows are the trees library's, in a
+ * shadow root that sets `color-scheme: light dark`, where the theme's
+ * light-dark() colors would follow the device rather than dx's appearance.
+ * Registered color properties compute here, on the host, with dx's
+ * appearance; the tree reads the computed colors.
+ */
+@property --dx-tree-fg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+@property --dx-tree-fg-muted {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+@property --dx-tree-hover {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+@property --dx-tree-selected {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+@property --dx-tree-ring {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
+@layer components {
+  .dx-file-tree {
+    --dx-tree-fg: var(--foreground);
+    --dx-tree-fg-muted: var(--muted-foreground);
+    --dx-tree-hover: var(--accent);
+    --dx-tree-selected: var(--secondary);
+    --dx-tree-ring: var(--ring);
+    --trees-bg-override: transparent;
+    --trees-border-color-override: transparent;
+    --trees-fg-override: var(--dx-tree-fg);
+    --trees-fg-muted-override: var(--dx-tree-fg-muted);
+    --trees-bg-muted-override: var(--dx-tree-hover);
+    --trees-selected-bg-override: var(--dx-tree-selected);
+    --trees-selected-fg-override: var(--dx-tree-fg);
+    --trees-focus-ring-color-override: var(--dx-tree-ring);
+    min-width: 0;
+    height: var(--file-tree-height);
+  }
+  .dx-file-tree[data-fill] {
+    height: 100%;
+    min-height: 0;
+  }
+  .dx-file-tree > file-tree {
+    display: block;
+    height: 100%;
+  }
+}

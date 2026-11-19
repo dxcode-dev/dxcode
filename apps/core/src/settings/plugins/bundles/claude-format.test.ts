@@ -338,7 +338,7 @@ describe("readClaudeBundle", () => {
       },
       {
         name: "skills/huge/SKILL.md",
-        content: `${skill("huge")}${"x".repeat(40_000)}`,
+        content: `${skill("huge")}${"x".repeat(1_100_000)}`,
       },
       { name: "commands/run.md", content: "Run." },
       { name: "commands/RUN.md", content: "Run again." },
@@ -356,7 +356,7 @@ describe("readClaudeBundle", () => {
         },
         {
           path: "skills/huge/SKILL.md",
-          reason: "The instructions are longer than 32,768 bytes.",
+          reason: "The instructions are longer than 1,048,576 bytes.",
         },
       ]),
     );

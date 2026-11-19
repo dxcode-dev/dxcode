@@ -56,7 +56,7 @@ import "./mailbox.css";
 export type { MailboxSearch } from "./mailbox-search.js";
 
 /**
- * The Mailbox page: the person's one mailbox at `username@<mail domain>`,
+ * The Mail page: the person's one mailbox at `username@<mail domain>`,
  * which they and their agents share. A person whose username is a
  * placeholder or reserved picks one first.
  */
@@ -78,7 +78,7 @@ export function MailboxPage({
             className="mailbox-state"
             tone="error"
             role="alert"
-            title="Your Mailbox could not be loaded."
+            title="Your Mail could not be loaded."
             action={
               <Button
                 size="xs"
@@ -91,7 +91,7 @@ export function MailboxPage({
           />
         ) : (
           <div className="mailbox-page-loading">
-            <DxLoading label="Loading your Mailbox" />
+            <DxLoading label="Loading your Mail" />
           </div>
         )}
       </div>
@@ -102,7 +102,7 @@ export function MailboxPage({
         <EmptyState
           className="mailbox-state"
           icon={<Mail />}
-          title="dx Mailbox is off for you."
+          title="dx Mail is off for you."
           description="Turn it on in Settings → Experimental Features, where this dx offers it."
         />
       </div>

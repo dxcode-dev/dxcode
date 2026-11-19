@@ -16,7 +16,6 @@ import {
   UpdateMailboxSettingsRequestSchema,
   UpdateMailConversationRequestSchema,
   UpdateMailLabelRequestSchema,
-  UpdateProjectMailRequestSchema,
 } from "@dx/api";
 import {
   mailboxAddress,
@@ -33,7 +32,6 @@ import {
   appOrigin,
   reachableProject,
 } from "../feedback-widget/settings-routes.js";
-import { canManageProject } from "../feedback-widget/store.js";
 import { readBoundedBody, readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { mailLogger } from "../logging.js";
@@ -45,7 +43,6 @@ import {
   mailConfiguration,
 } from "./config.js";
 import { handleInboundMail, MAX_INBOUND_MAIL_BYTES } from "./inbound.js";
-import { emailRequestBody, startMailThread } from "./plus-inbound.js";
 import {
   MailSendRefused,
   SEND_LIMITS,
@@ -53,6 +50,7 @@ import {
   sendMail,
   sentToday,
 } from "./send.js";
+import { emailRequestBody, startMailThread } from "./start-thread.js";
 import {
   conversationItems,
   createLabel,
@@ -71,7 +69,6 @@ import {
   readMailItem,
   readMailParts,
   readMailRaw,
-  readProjectMailSetting,
   renameLabel,
   setMailSendingSuspended,
   setPrivateSender,
@@ -80,12 +77,11 @@ import {
   unreadCounts,
   updateConversation,
   updateMailboxSetting,
-  updateProjectMailSetting,
   usernameNeedsPick,
 } from "./store.js";
 
 /**
- * The dx Mailbox API (wiki/agent-mail.md), under `/v1/mailbox`, for the
+ * The dx Mail API (wiki/agent-mail.md), under `/v1/mailbox`, for the
  * signed-in person only: API keys and External API Apps never reach a
  * person's mail. Project Settings → Email is under `/v1/projects`.
  */
@@ -128,7 +124,7 @@ const mailboxOf = async (context: Context<AppEnv>) => {
   if (configuration === undefined || db === undefined)
     return { failure: "disabled" as const };
   if (principal === undefined) return { failure: "forbidden" as const };
-  // The person turns the Mailbox on for themselves (a beta flag).
+  // The person turns the Mail on for themselves (a beta flag).
   if ((await mailboxFor(context.env, principal.userId)) === undefined)
     return { failure: "disabled" as const };
   const owner = await readMailboxOwner(db, principal.userId);
@@ -141,7 +137,7 @@ type Mailbox = Exclude<
   { failure: unknown }
 >;
 
-/** Runs a route for the person's open Mailbox. */
+/** Runs a route for the person's open Mail. */
 const withMailbox =
   (
     handle: (context: Context<AppEnv>, mailbox: Mailbox) => Promise<Response>,
@@ -156,7 +152,7 @@ const withMailbox =
             context,
             403,
             "MAIL_FORBIDDEN",
-            "Only you, signed in to dx, can use your Mailbox.",
+            "Only you, signed in to dx, can use your Mail.",
           );
     if (
       options.requirePick !== false &&
@@ -166,7 +162,7 @@ const withMailbox =
         context,
         409,
         "MAIL_USERNAME_REQUIRED",
-        "Pick your username before your Mailbox opens.",
+        "Pick your username before Mail opens.",
       );
     return handle(context, mailbox);
   };
@@ -196,9 +192,12 @@ const addressOf = (header: string | null, fallback: string | null) => {
 
 const SPAM_REASONS: Record<string, string> = {
   spam_unauthenticated:
-    "Its sender's domain did not pass DMARC with a matching DKIM signature, so it may be forged.",
+    "Nothing ties it to its sender's domain: no SPF pass or signature from that domain, which forged mail often lacks.",
+  spam_dmarc_fail:
+    "Its sender's domain says mail like this is forged: it failed that domain's DMARC check.",
   spam_header:
     "Its headers are malformed or repeated, which forged mail often has.",
+  // From before email could start Threads only through Start thread.
   spam_automated: "It was sent by a machine, so it could not start work.",
   spam_not_addressed:
     "It was sent from your address, but its signature does not cover the +project address, so it could have been copied from another email.",
@@ -285,7 +284,7 @@ export const mailboxRoutes = new Hono<AppEnv>()
             context,
             403,
             "MAIL_FORBIDDEN",
-            "Only you, signed in to dx, can use your Mailbox.",
+            "Only you, signed in to dx, can use your Mail.",
           );
     const { db, owner, configuration } = mailbox;
     const [
@@ -457,8 +456,8 @@ export const mailboxRoutes = new Hono<AppEnv>()
           private: item.private === 1,
           read: item.direction === "out" || item.read_at !== null,
           readBy: (readers.get(item.id) ?? []) as never,
-          // The Thread this email started (by mail or Start thread) or
-          // continued; the "Started" notice names the Thread it announced.
+          // The Thread this email started with Start thread (older mail may
+          // also name one it started or continued by itself).
           ...(title === undefined || item.thread_id === null
             ? {}
             : {
@@ -471,18 +470,17 @@ export const mailboxRoutes = new Hono<AppEnv>()
                       : ("started" as const),
                 },
               }),
+          ...(item.direction !== "in" || item.authenticated === 1
+            ? {}
+            : {
+                trust: item.disposition.startsWith("spam_")
+                  ? ("untrusted" as const)
+                  : ("unverified" as const),
+              }),
           ...(SPAM_REASONS[item.disposition] === undefined ||
           item.folder !== "spam"
             ? {}
             : { spamReason: SPAM_REASONS[item.disposition] }),
-          // In the Inbox unauthenticated and still `stored`: a reply dx took
-          // on SPF because it answers the person's email (inbound.ts).
-          ...(item.direction === "in" &&
-          item.folder !== "spam" &&
-          item.authenticated !== 1 &&
-          item.disposition === "stored"
-            ? { replyToSent: true as const }
-            : {}),
         });
       }
       return context.json(
@@ -771,19 +769,14 @@ export const mailboxRoutes = new Hono<AppEnv>()
         threadId,
         title: item.subject || "Email",
         body: emailRequestBody({
-          senderName: undefined,
           senderEmail:
             item.from_address ?? item.envelope_from ?? "unknown sender",
-          to: item.rcpt_to,
           subject: item.subject ?? "",
           text: parts.text,
           attachments: parts.attachments,
-          followUp: false,
           instruction: body.value.instruction,
         }),
         waitUntil: (promise) => context.executionCtx.waitUntil(promise),
-        automation: "email",
-        keepPrivate: item.private === 1 || item.folder === "spam",
       });
       if (started === undefined)
         return fail(
@@ -818,7 +811,7 @@ const projectIdOf = (context: Context<AppEnv>) =>
     Schema.decodeUnknownOption(ProjectId)(context.req.param("projectId") ?? ""),
   );
 
-/** Project Settings → Email: the viewer's address and the Project's defaults. */
+/** Project Settings → Email: the viewer's own address for the Project. */
 const projectMail = async (
   context: Context<AppEnv>,
   projectId: ProjectId,
@@ -857,20 +850,12 @@ const projectMail = async (
       noStore,
     );
   const tag = await ensureProjectTag(db, owner.userId, projectId, row.name);
-  const setting = await readProjectMailSetting(db, projectId);
   return context.json(
     {
       status: "success",
       data: {
         enabled: true,
         address: mailboxAddress(owner.username, configuration.domain, tag),
-        ...(setting.agent_mode === null
-          ? {}
-          : { agentMode: setting.agent_mode }),
-        visibility: setting.visibility,
-        startThreads: setting.start_threads === 1,
-        workspace: row.workspace_id !== null,
-        canManage: await canManageProject(db, projectId, principal.userId),
       },
     } satisfies GetProjectMailResponse,
     200,
@@ -878,8 +863,9 @@ const projectMail = async (
   );
 };
 
-export const projectMailRoutes = new Hono<AppEnv>()
-  .get("/:projectId/mail", async (context) => {
+export const projectMailRoutes = new Hono<AppEnv>().get(
+  "/:projectId/mail",
+  async (context) => {
     const projectId = projectIdOf(context);
     if (projectId === undefined)
       return fail(
@@ -889,41 +875,8 @@ export const projectMailRoutes = new Hono<AppEnv>()
         "Request validation failed.",
       );
     return projectMail(context, projectId);
-  })
-  .patch("/:projectId/mail", async (context) => {
-    const projectId = projectIdOf(context);
-    const body = Schema.decodeUnknownOption(UpdateProjectMailRequestSchema)(
-      await readBoundedJson(context.req.raw).catch(() => undefined),
-    );
-    if (projectId === undefined || Option.isNone(body))
-      return fail(
-        context,
-        400,
-        "MAIL_INVALID_REQUEST",
-        "Request validation failed.",
-      );
-    const db = context.env.DB as D1Database;
-    const principal = context.get("principal") as Principal;
-    if (
-      (await mailboxFor(context.env, principal.userId)) === undefined ||
-      (await reachableProject(db, principal, projectId)) === undefined
-    )
-      return fail(
-        context,
-        404,
-        "MAIL_NOT_FOUND",
-        "That project was not found.",
-      );
-    if (!(await canManageProject(db, projectId, principal.userId)))
-      return fail(
-        context,
-        403,
-        "MAIL_FORBIDDEN",
-        "Only people who manage this project can change its email settings.",
-      );
-    await updateProjectMailSetting(db, projectId, body.value);
-    return projectMail(context, projectId);
-  });
+  },
+);
 
 /**
  * Local development only: `POST /dev/mail/inbound?from=…&to=…` with a raw

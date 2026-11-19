@@ -9,12 +9,12 @@ import { SkillService } from "./service.js";
 
 /**
  * Everything skill routes and the agent's `manage_skills` tool run on, over
- * one D1 database.
+ * one D1 database, with large skill files in `bucket`.
  */
-export const skillLayers = (db: D1Database) => {
+export const skillLayers = (db: D1Database, bucket: R2Bucket | undefined) => {
   const d1 = D1Client.layer({ db });
   const workspace = WorkspaceRepositoryD1(db).pipe(Layer.provide(d1));
-  const skills = SkillRepositoryD1(db);
+  const skills = SkillRepositoryD1(db, bucket);
   const mcp = McpServerRepositoryD1(db);
   const settings = SettingsService.layer.pipe(Layer.provide(workspace));
   const audit = SettingsAudit.layer;

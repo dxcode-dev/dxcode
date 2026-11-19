@@ -39,7 +39,7 @@ import { runRepositories } from "./runtime.js";
  * - the agent proposes where the person could not save a skill themselves:
  *   a workspace skill while they are a plain member;
  * - content the import would refuse becomes a proposal (bad name, a file
- *   outside resources/, a skill a plugin owns);
+ *   that is binary, a skill a plugin owns);
  * - someone who could not save the skill approves it: a workspace member,
  *   or another person through their own personal page;
  * - approval saves different content than was reviewed, leaves a new skill
@@ -432,9 +432,9 @@ describe("manage_skills proposals", () => {
     await expect(
       manage({
         ...releaseNotes(),
-        resources: [{ path: "scripts/run.sh", content: "echo hi" }],
+        resources: [{ path: "assets/logo.png", content: "PNG" }],
       }),
-    ).rejects.toThrow(/resources\//);
+    ).rejects.toThrow(/binary/i);
     expect(
       (
         await env.DB.prepare("SELECT COUNT(*) AS n FROM agent_proposal").first<{

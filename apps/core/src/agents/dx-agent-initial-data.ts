@@ -1,6 +1,8 @@
 import {
   MAX_MCP_SERVERS_PER_THREAD,
   MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH,
+  MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_RESOURCE_FILES,
 } from "@dx/domain";
 import * as v from "valibot";
 
@@ -121,7 +123,6 @@ export const DxAgentInitialDataSchema = v.object({
           scope: v.picklist(["personal", "workspace"]),
           integrity: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/)),
           description: v.pipe(v.string(), v.minLength(1), v.maxLength(1_024)),
-          instructions: v.pipe(v.string(), v.minLength(1), v.maxLength(32_768)),
           resources: v.pipe(
             v.array(
               v.object({
@@ -131,12 +132,12 @@ export const DxAgentInitialDataSchema = v.object({
                   v.number(),
                   v.integer(),
                   v.minValue(0),
-                  v.maxValue(65_536),
+                  v.maxValue(MAX_SKILL_FILE_BYTES),
                 ),
                 integrity: v.pipe(v.string(), v.regex(/^[a-f0-9]{64}$/)),
               }),
             ),
-            v.maxLength(30),
+            v.maxLength(MAX_SKILL_RESOURCE_FILES),
           ),
         }),
       ),

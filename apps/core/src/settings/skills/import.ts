@@ -1,5 +1,6 @@
 import {
   MAX_SKILL_FILE_BYTES,
+  MAX_SKILL_FILES,
   MAX_SKILL_INSTRUCTIONS_BYTES,
   MAX_SKILL_MANIFEST_BYTES,
   MAX_SKILL_RESOURCE_FILES,
@@ -14,31 +15,13 @@ import {
   type StoredSkillVersion,
 } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
+import {
+  binaryBrowserMediaType,
+  frontMatter,
+  skillFileMediaType,
+} from "./skill-files.js";
 
 const textEncoder = new TextEncoder();
-
-const mediaTypes = new Map([
-  [".md", "text/markdown"],
-  [".txt", "text/plain"],
-  [".json", "application/json"],
-  [".csv", "text/csv"],
-  [".yaml", "application/yaml"],
-  [".yml", "application/yaml"],
-  [".toml", "application/toml"],
-]);
-
-const acceptedBrowserMediaTypes = new Set([
-  "",
-  "text/markdown",
-  "text/plain",
-  "application/json",
-  "text/csv",
-  "application/csv",
-  "application/yaml",
-  "text/yaml",
-  "application/x-yaml",
-  "application/toml",
-]);
 
 export class SkillImportRejected extends Schema.TaggedError<SkillImportRejected>()(
   "SkillImportRejected",
@@ -99,11 +82,6 @@ const safePath = (path: string) => {
   );
 };
 
-const mediaTypeFor = (path: string): string | undefined => {
-  const dot = path.lastIndexOf(".");
-  return dot === -1 ? undefined : mediaTypes.get(path.slice(dot).toLowerCase());
-};
-
 const canonicalPayload = (preview: {
   readonly manifest: typeof SkillManifest.Type;
   readonly instructions: string;
@@ -126,63 +104,53 @@ const canonicalPayload = (preview: {
       .map(({ path, mediaType, content }) => ({ path, mediaType, content })),
   });
 
-export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
-  unknownBundle: unknown,
-) {
-  const bundle = yield* Schema.decodeUnknownEffect(SkillImportBundle)(
-    unknownBundle,
-    { onExcessProperty: "error" },
-  ).pipe(
-    Effect.mapError(
-      () =>
-        new SkillImportRejected({
-          field: "files",
-          reason: "Use a bounded browser-file bundle with UTF-8 text files.",
-        }),
-    ),
-  );
-  const paths = new Set<string>();
-  let totalBytes = 0;
-  for (const file of bundle.files) {
-    if (!safePath(file.path)) {
-      return yield* reject(
-        file.path,
-        "Paths must be safe relative paths without traversal or hidden segments.",
-      );
-    }
-    if (paths.has(file.path)) {
-      return yield* reject(file.path, "Duplicate paths are not allowed.");
-    }
-    paths.add(file.path);
-    if (file.kind !== "file") {
-      return yield* reject(file.path, "Symlinks are not allowed.");
-    }
-    if (!acceptedBrowserMediaTypes.has(file.mediaType.toLowerCase())) {
-      return yield* reject(
-        file.path,
-        "Binary and unsafe media types are not allowed.",
-      );
-    }
-    const bytes = yield* checkedText(
-      file.content,
-      file.path,
-      MAX_SKILL_FILE_BYTES,
-    );
-    totalBytes += bytes;
-    if (totalBytes > MAX_SKILL_TOTAL_BYTES) {
-      return yield* reject(
-        "files",
-        `Bundle exceeds the ${MAX_SKILL_TOTAL_BYTES.toLocaleString()} byte limit.`,
-      );
-    }
-  }
+/** A skill's files as an importer read them, before any checks. */
+export interface SkillFileInput {
+  readonly path: string;
+  readonly content: string;
+}
 
-  const manifestFile = bundle.files.find(({ path }) => path === "skill.json");
-  const instructionsFile = bundle.files.find(
-    ({ path }) => path === "instructions.md",
-  );
+/**
+ * The manifest and instructions of a skill's files, in either layout: a
+ * standard Agent Skills folder (`SKILL.md` with `name` and `description`
+ * front matter), or dx's own (`skill.json` and `instructions.md`).
+ */
+const readSkillDocument = Effect.fn("readSkillDocument")(function* (
+  files: ReadonlyArray<SkillFileInput>,
+) {
+  const skillMd = files.find(({ path }) => path === "SKILL.md");
+  const manifestFile = files.find(({ path }) => path === "skill.json");
+  const instructionsFile = files.find(({ path }) => path === "instructions.md");
+  if (manifestFile === undefined && skillMd !== undefined) {
+    yield* checkedText(
+      skillMd.content,
+      "SKILL.md",
+      MAX_SKILL_INSTRUCTIONS_BYTES * 2,
+    );
+    const { data, body } = frontMatter(skillMd.content);
+    const manifest = yield* Schema.decodeUnknownEffect(SkillManifest)({
+      schemaVersion: 1,
+      name: typeof data.name === "string" ? data.name.trim().toLowerCase() : "",
+      description:
+        typeof data.description === "string" ? data.description.trim() : "",
+    }).pipe(
+      Effect.mapError(
+        () =>
+          new SkillImportRejected({
+            field: "SKILL.md",
+            reason:
+              "SKILL.md front matter needs a kebab-case name and a description of up to 1,024 characters.",
+          }),
+      ),
+    );
+    const instructions = yield* decodeInstructions(body.trim(), "SKILL.md");
+    return { manifest, instructions, documents: ["SKILL.md"] };
+  }
   if (manifestFile === undefined) {
-    return yield* reject("skill.json", "The declarative manifest is required.");
+    return yield* reject(
+      "SKILL.md",
+      "Add a SKILL.md with name and description front matter.",
+    );
   }
   if (instructionsFile === undefined) {
     return yield* reject(
@@ -200,7 +168,6 @@ export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
     "instructions.md",
     MAX_SKILL_INSTRUCTIONS_BYTES,
   );
-
   const rawManifest = yield* Effect.try({
     try: () => JSON.parse(manifestFile.content) as unknown,
     catch: () =>
@@ -222,47 +189,82 @@ export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
         }),
     ),
   );
-  const instructions = yield* Schema.decodeUnknownEffect(SkillInstructions)(
+  const instructions = yield* decodeInstructions(
     instructionsFile.content.trim(),
-  ).pipe(
+    "instructions.md",
+  );
+  return {
+    manifest,
+    instructions,
+    documents: ["skill.json", "instructions.md"],
+  };
+});
+
+const decodeInstructions = (value: string, field: string) =>
+  Schema.decodeUnknownEffect(SkillInstructions)(value).pipe(
     Effect.mapError(
       () =>
         new SkillImportRejected({
-          field: "instructions.md",
-          reason: "Instructions must contain 1–32,768 characters.",
+          field,
+          reason: `Instructions must contain 1–${MAX_SKILL_INSTRUCTIONS_BYTES.toLocaleString("en-US")} characters.`,
         }),
     ),
   );
-  const resourceFiles = bundle.files.filter(
-    ({ path }) => path !== "skill.json" && path !== "instructions.md",
-  );
+
+/**
+ * Checks a skill's files and builds its preview. Every file besides the
+ * skill's documents is a resource at its path in the folder, so a skill's
+ * scripts/, references/, and assets/ stay where its instructions expect
+ * them. Any UTF-8 text file is allowed; binary files are not.
+ */
+export const previewSkillFiles = Effect.fn("previewSkillFiles")(function* (
+  files: ReadonlyArray<SkillFileInput>,
+  source: SkillSource,
+) {
+  const paths = new Set<string>();
+  let totalBytes = 0;
+  for (const file of files) {
+    if (!safePath(file.path)) {
+      return yield* reject(
+        file.path,
+        "Paths must be safe relative paths without traversal or hidden segments.",
+      );
+    }
+    if (paths.has(file.path)) {
+      return yield* reject(file.path, "Duplicate paths are not allowed.");
+    }
+    paths.add(file.path);
+    totalBytes += yield* checkedText(
+      file.content,
+      file.path,
+      MAX_SKILL_FILE_BYTES,
+    );
+    if (totalBytes > MAX_SKILL_TOTAL_BYTES) {
+      return yield* reject(
+        "files",
+        `The skill exceeds the ${MAX_SKILL_TOTAL_BYTES.toLocaleString("en-US")} byte limit.`,
+      );
+    }
+  }
+  const { manifest, instructions, documents } = yield* readSkillDocument(files);
+  const resourceFiles = files.filter(({ path }) => !documents.includes(path));
   if (resourceFiles.length > MAX_SKILL_RESOURCE_FILES) {
     return yield* reject(
       "resources",
-      `Use at most ${MAX_SKILL_RESOURCE_FILES} resource files.`,
+      `Use at most ${MAX_SKILL_RESOURCE_FILES} files besides the instructions.`,
     );
   }
   const resources = yield* Effect.all(
     resourceFiles.map((file) =>
       Effect.gen(function* () {
-        if (!file.path.startsWith("resources/")) {
-          return yield* reject(
-            file.path,
-            "Supporting files must be inside resources/.",
-          );
-        }
-        const mediaType = mediaTypeFor(file.path);
+        const mediaType = skillFileMediaType(file.path);
         if (mediaType === undefined) {
-          return yield* reject(
-            file.path,
-            "Only Markdown, text, JSON, CSV, YAML, and TOML resources are allowed.",
-          );
+          return yield* reject(file.path, "Binary files are not allowed.");
         }
         const path = Schema.decodeOption(SkillResourcePath)(file.path);
         if (Option.isNone(path)) {
           return yield* reject(file.path, "Resource path is too long.");
         }
-        const sizeBytes = textEncoder.encode(file.content).byteLength;
         const integrity = yield* Effect.promise(() =>
           sha256(file.content),
         ).pipe(Effect.flatMap(Schema.decodeUnknownEffect(SkillIntegrity)));
@@ -270,7 +272,7 @@ export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
           path: path.value,
           mediaType,
           content: file.content,
-          sizeBytes,
+          sizeBytes: textEncoder.encode(file.content).byteLength,
           integrity,
         });
       }),
@@ -284,10 +286,37 @@ export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
     manifest,
     instructions,
     resources,
-    source: bundle.source,
+    source,
     integrity,
     totalBytes,
   } satisfies SkillPreview;
+});
+
+/** Checks a bundle of files a person chose in the browser. */
+export const previewSkillImport = Effect.fn("previewSkillImport")(function* (
+  unknownBundle: unknown,
+) {
+  const bundle = yield* Schema.decodeUnknownEffect(SkillImportBundle)(
+    unknownBundle,
+    { onExcessProperty: "error" },
+  ).pipe(
+    Effect.mapError(
+      () =>
+        new SkillImportRejected({
+          field: "files",
+          reason: `Use at most ${MAX_SKILL_FILES} UTF-8 text files of up to ${MAX_SKILL_FILE_BYTES.toLocaleString("en-US")} bytes each.`,
+        }),
+    ),
+  );
+  for (const file of bundle.files) {
+    if (file.kind !== "file") {
+      return yield* reject(file.path, "Symlinks are not allowed.");
+    }
+    if (binaryBrowserMediaType(file.mediaType)) {
+      return yield* reject(file.path, "Binary files are not allowed.");
+    }
+  }
+  return yield* previewSkillFiles(bundle.files, bundle.source);
 });
 
 /**
@@ -327,7 +356,7 @@ export const previewSkillContent = Effect.fn("previewSkillContent")(
         () =>
           new SkillImportRejected({
             field: "SKILL.md",
-            reason: "Instructions must contain 1–32,768 characters.",
+            reason: `Instructions must contain 1–${MAX_SKILL_INSTRUCTIONS_BYTES.toLocaleString("en-US")} characters.`,
           }),
       ),
     );
@@ -384,10 +413,25 @@ export const previewSkillContent = Effect.fn("previewSkillContent")(
   },
 );
 
+/**
+ * A version as a bundle the browser can import again: dx's layout, which
+ * also carries MCP server IDs. Its source becomes browser files, since a
+ * re-import is one; the label keeps where it first came from.
+ */
 export const exportSkillVersion = (
   version: StoredSkillVersion,
+  files: ReadonlyArray<typeof SkillResource.Type>,
 ): SkillImportBundle => ({
-  source: version.source,
+  source: {
+    type: "browser-files",
+    label:
+      version.source.type === "github"
+        ? `github.com/${version.source.repository}${version.source.path ? `/${version.source.path}` : ""}`.slice(
+            0,
+            128,
+          )
+        : version.source.label,
+  },
   files: [
     {
       path: "skill.json",
@@ -403,7 +447,7 @@ export const exportSkillVersion = (
       encoding: "utf-8",
       content: `${version.instructions}\n`,
     },
-    ...version.resources.map((resource) => ({
+    ...files.map((resource) => ({
       path: resource.path,
       kind: "file" as const,
       mediaType: resource.mediaType,

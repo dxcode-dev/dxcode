@@ -181,6 +181,93 @@ export const ExportSkillResponseSchema = successResponse(
   }),
 );
 
+/** A skill in the skills.sh directory. */
+export const DirectorySkillDataSchema = Schema.Struct({
+  /** skills.sh's ID: `owner/repo/slug`. */
+  id: Schema.String,
+  name: Schema.String,
+  repository: Schema.String,
+  installs: Schema.Finite,
+  description: Schema.optional(Schema.String),
+});
+
+export type DirectorySkillData = typeof DirectorySkillDataSchema.Type;
+
+export const DiscoverSkillsResponseSchema = successResponse(
+  Schema.Struct({
+    /** skills.sh's most installed skills without a query, else matches. */
+    items: Schema.Array(DirectorySkillDataSchema),
+  }),
+);
+
+/** Where an install reads a skill from. */
+export const SkillInstallSourceSchema = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("skills.sh"),
+    id: Schema.String.check(Schema.isMaxLength(256)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("github"),
+    /** A public repository or folder URL. */
+    url: Schema.String.check(Schema.isMaxLength(2048)),
+    /** Which skill, when the folder holds several. */
+    skill: Schema.optional(Schema.String.check(Schema.isMaxLength(64))),
+    /** The commit the preview read, so install reads the same files. */
+    commit: Schema.optional(
+      Schema.String.check(Schema.isPattern(/^[0-9a-f]{40}$/)),
+    ),
+  }),
+]);
+
+export type SkillInstallSource = typeof SkillInstallSourceSchema.Type;
+
+export const PreviewSkillSourceRequestSchema = Schema.Struct({
+  source: SkillInstallSourceSchema,
+});
+
+export const SkillFileDataSchema = Schema.Struct({
+  ...SkillResourceDataSchema.fields,
+  content: Schema.String,
+});
+
+export type SkillFileData = typeof SkillFileDataSchema.Type;
+
+export const PreviewSkillSourceResponseSchema = successResponse(
+  Schema.Struct({
+    manifest: SkillManifest,
+    instructions: Schema.String,
+    /** Every file besides SKILL.md, whose text is `instructions`. */
+    files: Schema.Array(SkillFileDataSchema),
+    source: SkillSource,
+    integrity: SkillIntegrity,
+    totalBytes: Schema.Int,
+    /** Files the folder holds that a skill cannot: hidden or binary. */
+    skipped: Schema.Array(
+      Schema.Struct({ path: Schema.String, reason: Schema.String }),
+    ),
+    /** The commit a GitHub preview read. */
+    commit: Schema.optional(Schema.String),
+    /** This scope's skill of the same name, which install updates. */
+    installed: Schema.optional(
+      Schema.Struct({
+        id: SkillId,
+        version: SkillVersion,
+        integrity: SkillIntegrity,
+      }),
+    ),
+  }),
+);
+
+export const InstallSkillRequestSchema = Schema.Struct({
+  source: SkillInstallSourceSchema,
+  /** The integrity the person reviewed; install fails if the files changed. */
+  reviewedIntegrity: SkillIntegrity,
+});
+
+export const InstallSkillResponseSchema = successResponse(SkillDataSchema);
+
+export const SkillFileResponseSchema = successResponse(SkillFileDataSchema);
+
 export const UpdateSkillWorkspacePolicyRequestSchema = Schema.Struct({
   allowPersonalSkills: Schema.Boolean,
 });
@@ -239,7 +326,13 @@ export const SkillsUnavailableResponseSchema = errorResponse(
   "Skills are temporarily unavailable.",
 );
 
+export const SkillSourceUnavailableResponseSchema = errorResponse(
+  "SKILL_SOURCE_UNAVAILABLE",
+  "The skill's source could not be reached.",
+);
+
 export const SkillsErrorResponseSchema = Schema.Union([
+  SkillSourceUnavailableResponseSchema,
   SkillsInvalidRequestResponseSchema,
   SkillsForbiddenResponseSchema,
   SkillNotFoundResponseSchema,

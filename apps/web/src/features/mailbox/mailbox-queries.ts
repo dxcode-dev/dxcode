@@ -61,7 +61,7 @@ export const isMissingMail = (error: unknown) =>
   error instanceof ApiError && error.status === 404;
 
 /**
- * The person's Mailbox: their address, unread counts, labels, `+tag`
+ * The person's Mail: their address, unread counts, labels, `+tag`
  * addresses, and limits; `enabled: false` where the deployment has no mail
  * domain. The sidebar's unread count reads it too.
  */

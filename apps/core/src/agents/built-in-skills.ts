@@ -6,6 +6,7 @@ import pluginUi from "@dxcode/plugin-ui/plugin-ui.js?raw";
 import { defineSkill, type Sandbox, type SkillDefinition } from "@flue/runtime";
 import { parse } from "yaml";
 import { encodeBase64 } from "../encoding/base64.js";
+import { AGENT_SKILLS_DIRECTORY } from "../execution/workspace-context.js";
 import { builtInSkillsLogger } from "../logging.js";
 import {
   BUILT_IN_SKILL_NAMES,
@@ -47,19 +48,17 @@ import writingPrompts from "./built-in-skills/writing-prompts/skill.md?raw";
 
 /**
  * dx's built-in skills: skill directories under `built-in-skills/`, bundled
- * into the Worker and offered in every workspace Thread. The dx agent mounts
- * each with Flue's `useSkill`; Claude Code mode links the same directories
- * into `~/.claude/skills`. Both read supporting files and run scripts from
- * the copy `installBuiltInSkills` writes into the workspace, so the two modes
- * see identical files. See wiki/runtime-architecture.md#built-in-skills.
+ * into the Worker. In a Thread with an Orb they are written, with the
+ * Thread's settings skills, to `~/.agents/skills`, where Flue discovers them
+ * like the repository's `.agents/skills` (a sandbox skill directory) and
+ * Claude Code mode links them into `~/.claude/skills`. A Space has no Orb, so
+ * its dx agent mounts them with Flue's `useSkill`. See
+ * wiki/runtime-architecture.md#built-in-skills.
  *
  * Each skill's `SKILL.md` is stored as `skill.md` here: Flue's Vite plugin
  * packages every import of a file named `SKILL.md` and rejects one with
  * `?raw`. The workspace copy is named `SKILL.md`.
  */
-const DX_SHARE = "/home/user/.local/share/dx";
-export const BUILT_IN_SKILLS_DIRECTORY = `${DX_SHARE}/skills`;
-const DIGEST_FILE = ".dx-digest";
 
 /** Every file of every built-in skill, keyed by its path in the skill. */
 const sources: ReadonlyArray<{
@@ -160,8 +159,8 @@ if (sources.map(({ name }) => name).join() !== BUILT_IN_SKILL_NAMES.join())
   throw new Error("Built-in skill sources and names disagree.");
 
 /**
- * Flue definitions for the dx agent. The body names the skill's directory in
- * the workspace, where its relative paths and scripts resolve.
+ * Flue definitions for a Space's dx agent, which has no Orb to discover
+ * skills in.
  */
 export const builtInSkillDefinitions: ReadonlyArray<SkillDefinition> =
   sources.map(({ name, files }) => {
@@ -169,7 +168,7 @@ export const builtInSkillDefinitions: ReadonlyArray<SkillDefinition> =
     return defineSkill({
       name: skill.name,
       description: skill.description,
-      instructions: `This skill's directory is \`${BUILT_IN_SKILLS_DIRECTORY}/${name}/\`; resolve relative paths in these instructions from there.\n\n${skill.body}`,
+      instructions: skill.body,
     });
   });
 
@@ -205,16 +204,37 @@ const contentDigest = () => {
 };
 
 /**
- * Shell that writes every file into a fresh directory and swaps it in, so a
- * reader never sees half an install. Base64, so no content is read as shell
- * or rewritten by the local runtime's command-text path mapping.
+ * Which installer wrote a skill: dx's built-in skills or the Thread's
+ * settings skills. Each keeps a manifest in `~/.agents/skills`, so it removes
+ * only skills it wrote itself; a skill the person put there stays.
+ */
+export type SkillGroup = "built-in" | "settings";
+
+const manifestOf = (group: SkillGroup) => `.dx-${group}`;
+
+/** Skill names are kebab-case, so the install script can use them bare. */
+const skillName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * Shell that writes each skill into a staging directory and swaps it in on
+ * its own, so a reader never sees half a skill, then removes the skills this
+ * group wrote before and no longer has (never one in `keep`), and records
+ * the group's manifest: its version, then its skill names. Base64, so no
+ * content is read as shell or rewritten by the local runtime's command-text
+ * path mapping.
  */
 const installScript = (
-  directory: string,
+  group: SkillGroup,
   files: ReadonlyArray<SkillFile>,
   version: string,
+  keep: ReadonlyArray<string>,
   uncoordinated: boolean,
 ) => {
+  const names = [
+    ...new Set(files.map(({ path }) => path.slice(0, path.indexOf("/")))),
+  ];
+  if (!names.every((name) => skillName.test(name)))
+    throw new Error("A skill name is not kebab-case.");
   const writes = files
     .map(({ path, content }) => {
       const directory = path.slice(0, path.lastIndexOf("/"));
@@ -226,36 +246,50 @@ const installScript = (
     })
     .join("\n");
   // An uncoordinated install may write only where Changes never looks: it
-  // refuses when ~/.local/share/dx resolves anywhere else, such as through a
+  // refuses when ~/.agents/skills resolves anywhere else, such as through a
   // symbolic link into the repository, before writing anything.
   const guard = uncoordinated
-    ? `share="$HOME/.local/share/dx"
-if [ "$(realpath -m -- "$share")" != "$share" ]; then
-  echo "~/.local/share/dx resolves elsewhere." >&2
-  exit ${SHARE_REDIRECTED_EXIT}
+    ? `if [ "$(realpath -m -- "$root")" != "$root" ]; then
+  echo "~/.agents/skills resolves elsewhere." >&2
+  exit ${SKILLS_REDIRECTED_EXIT}
 fi
 `
     : "";
+  const manifest = manifestOf(group);
   return `set -eu
-${guard}root="$HOME/.local/share/dx/${directory}"
-stage="$root.stage.$$"
-old="$root.old.$$"
+root="$HOME/.agents/skills"
+${guard}stage="$root/.dx-stage.${group}.$$"
 rm -rf "$stage"
-mkdir -p "$stage" "$(dirname "$root")"
+mkdir -p "$stage"
 ${writes}
-printf '%s' '${version}' > "$stage/${DIGEST_FILE}"
-if [ -e "$root" ]; then mv -T "$root" "$old"; fi
-mv -T "$stage" "$root"
-rm -rf "$old"
+for name in ${names.join(" ")}; do
+  old="$root/.dx-old.$name.$$"
+  if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then mv -T "$root/$name" "$old"; fi
+  mv -T "$stage/$name" "$root/$name"
+  rm -rf "$old"
+done
+rmdir "$stage"
+if [ -f "$root/${manifest}" ]; then
+  tail -n +2 "$root/${manifest}" | while IFS= read -r name; do
+    case "$name" in ""|.*|*/*) continue ;; esac
+    case " ${[...names, ...keep].join(" ")} " in *" $name "*) continue ;; esac
+    rm -rf "$root/$name"
+  done
+fi
+printf '%s\\n' '${version}' ${names.join(" ")} > "$root/${manifest}.$$"
+mv -T "$root/${manifest}.$$" "$root/${manifest}"
+# Skills lived under ~/.local/share/dx before ~/.agents/skills.
+share="$HOME/.local/share/dx"
+if [ "$(realpath -m -- "$share")" = "$share" ]; then rm -rf "$share/skills" "$share/settings-skills"; fi
 `;
 };
 
-/** The install script's exit when ~/.local/share/dx resolves elsewhere. */
-const SHARE_REDIRECTED_EXIT = 3;
+/** The install script's exit when ~/.agents/skills resolves elsewhere. */
+const SKILLS_REDIRECTED_EXIT = 3;
 
 /**
  * Where skills install. `outside` skips Changes coordination, so it is used
- * only while ~/.local/share/dx resolves to itself; otherwise the install runs
+ * only while ~/.agents/skills resolves to itself; otherwise the install runs
  * through `coordinated`, the agent's own sandbox.
  */
 export interface SkillInstallTarget {
@@ -264,32 +298,35 @@ export interface SkillInstallTarget {
 }
 
 /**
- * Replaces `~/.local/share/dx/<directory>` with the loaded files unless the
- * copy there is already `version`; `load` runs only when it is not. An
- * incomplete load is installed under another version, so the next turn
- * tries again.
+ * Writes the group's skills into `~/.agents/skills`, one directory each,
+ * unless that group's copy there is already `version`; `load` runs only when
+ * it is not. An incomplete load is installed under another version, so the
+ * next turn tries again. Skills the group wrote before and no longer has are
+ * removed, except those named in `keep`.
  */
 export const installSkillFiles = async (
   target: SkillInstallTarget,
-  directory: string,
+  group: SkillGroup,
   version: string,
   load: () => Promise<{
     readonly files: ReadonlyArray<SkillFile>;
     readonly complete: boolean;
   }>,
+  keep: ReadonlyArray<string> = [],
 ) => {
-  const root = `${DX_SHARE}/${directory}`;
+  const manifest = `${AGENT_SKILLS_DIRECTORY}/${manifestOf(group)}`;
   const installed = await (target.outside ?? target.coordinated)
-    .readFile(`${root}/${DIGEST_FILE}`)
+    .readFile(manifest)
+    .then((content) => content.slice(0, content.indexOf("\n")))
     .catch(() => undefined);
   if (installed === version) return;
-  const script = `${root}.install.sh`;
+  const script = `${AGENT_SKILLS_DIRECTORY}/.dx-install.${group}.sh`;
   const { files, complete } = await load();
   const installedVersion = complete ? version : `${version}.partial`;
   const run = async (sandbox: Sandbox, uncoordinated: boolean) => {
     await sandbox.writeFile(
       script,
-      installScript(directory, files, installedVersion, uncoordinated),
+      installScript(group, files, installedVersion, keep, uncoordinated),
     );
     return sandbox.exec(
       `bash ${script}; status=$?; rm -f ${script}; exit $status`,
@@ -298,7 +335,7 @@ export const installSkillFiles = async (
   };
   let result =
     target.outside === undefined ? undefined : await run(target.outside, true);
-  if (result === undefined || result.exitCode === SHARE_REDIRECTED_EXIT)
+  if (result === undefined || result.exitCode === SKILLS_REDIRECTED_EXIT)
     result = await run(target.coordinated, false);
   if (result.exitCode !== 0)
     throw new Error(result.stderr.trim() || "install script failed");
@@ -313,7 +350,7 @@ export const installBuiltInSkills = async (target: SkillInstallTarget) => {
   try {
     await installSkillFiles(
       target,
-      "skills",
+      "built-in",
       await contentDigest(),
       async () => ({ files, complete: true }),
     );

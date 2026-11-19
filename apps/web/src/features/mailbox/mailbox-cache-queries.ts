@@ -14,8 +14,8 @@ export interface MailListView {
 }
 
 /**
- * Mailbox query keys and their invalidation, apart from the requests
- * (mailbox-queries.ts), so the realtime client refreshes the Mailbox without
+ * Mail query keys and their invalidation, apart from the requests
+ * (mailbox-queries.ts), so the realtime client refreshes the Mail without
  * loading the mail schemas.
  */
 export const mailboxKeys = {

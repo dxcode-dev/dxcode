@@ -600,7 +600,7 @@ export const createSpaceTools = (
           )) > 0
         )
           throw new Error(
-            "That thread's agent read email from the owner's Mailbox, and Space members would see it. Ask the owner to share that thread with the workspace themselves (Share in the thread), then add it.",
+            "That thread's agent read email from the owner's Mail, and Space members would see it. Ask the owner to share that thread with the workspace themselves (Share in the thread), then add it.",
           );
         const { results } = await context.db
           .prepare(

@@ -473,7 +473,7 @@ export const SELFHOST_SETTINGS = Object.freeze([
     group: "Network",
     kind: "flow",
     command: "pnpm dx:deploy -- --mail",
-    label: "dx Mailbox",
+    label: "dx Mail",
     description:
       "Give each person an address at username@<domain> that they and their agents share. dx takes over all mail on that domain: only dx receives there, its sending reputation is shared, and its DMARC becomes strict.",
     example: "example-mail.dev",

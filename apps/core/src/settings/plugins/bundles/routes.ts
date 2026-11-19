@@ -101,6 +101,7 @@ import {
   type ExportIconFile,
   exportIconHashes,
   exportPluginBundle,
+  withSkillFiles,
 } from "./export.js";
 import { gitHubFolderChanged } from "./github.js";
 import { pluginBundleLayers as layers } from "./layers.js";
@@ -1133,9 +1134,13 @@ const registerRoutes = (
               const id = yield* parseId(context);
               const repository = yield* PluginBundleRepository;
               const bundle = yield* repository.find(access.target, id);
-              const skills = (yield* (yield* SkillRepository).list(
-                bundle.target,
-              )).filter(({ skill }) => skill.pluginId === bundle.id);
+              const skillRepository = yield* SkillRepository;
+              const skills = yield* withSkillFiles(
+                skillRepository,
+                (yield* skillRepository.list(bundle.target)).filter(
+                  ({ skill }) => skill.pluginId === bundle.id,
+                ),
+              );
               const servers = (yield* (yield* McpServerRepository).list(
                 bundle.target as McpServerTarget,
               ))

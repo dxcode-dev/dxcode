@@ -162,7 +162,7 @@ export const UpdateSpaceRequestSchema = Schema.Struct({
   /** The model the Space's threads run on; `null`: the Space's own. */
   threadModel: Schema.optional(Schema.NullOr(SpaceAgentModel)),
   /**
-   * The owner saw that the Space's agents read Mailbox mail a shared Thread
+   * The owner saw that the Space's agents read Mail mail a shared Thread
    * could not, which members will see. Without it, sharing a private Space
    * whose agents did is refused with `SPACE_SHARING_MAIL_READS`.
    */

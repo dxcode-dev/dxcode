@@ -1,5 +1,6 @@
 import type { DxChangeItem } from "@dx/api";
 import {
+  MAX_SKILL_RESOURCE_FILES,
   PROJECTLESS_PROJECT_NAME,
   type UserId,
   type WorkspaceRole,
@@ -18,6 +19,7 @@ import { readZipArchive } from "../plugins/bundles/zip.js";
 import { writeZip } from "../plugins/bundles/zip-writer.js";
 import { createSkillTools } from "../skills/agent-tools.js";
 import { proposalBundle } from "../skills/proposals.js";
+import { frontMatter } from "../skills/skill-files.js";
 import type { DxChangePlan, DxOutcome, DxRequest } from "./apply.js";
 import { askOwner, type DxPrompt } from "./ask.js";
 import { unifiedDiff } from "./diff.js";
@@ -163,16 +165,16 @@ const Input = v.object({
     v.pipe(
       v.string(),
       v.description(
-        "skills create/update: the skill's Markdown body, at most 32 KiB. instructions set: the full new instructions text, replacing the old.",
+        "skills create/update: the skill's Markdown body, at most 1 MiB. instructions set: the full new instructions text, replacing the old.",
       ),
     ),
   ),
   resources: v.optional(
     v.pipe(
       v.array(v.object({ path: v.string(), content: v.string() })),
-      v.maxLength(30),
+      v.maxLength(MAX_SKILL_RESOURCE_FILES),
       v.description(
-        "skills create/update: text files under resources/ (.md, .txt, .json, .csv, .yaml, .yml, .toml).",
+        "skills create/update: the skill's other text files at their paths in its folder, such as scripts/fill.py or references/api.md. At most 200 files of 1 MiB each, 5 MiB in all; no binary files.",
       ),
     ),
   ),
@@ -189,7 +191,7 @@ const Input = v.object({
       v.array(v.object({ path: v.string(), content: v.string() })),
       v.maxLength(MAX_PLUGIN_FILES),
       v.description(
-        "plugins create/update: every text file of the plugin, each path relative to its root: plugin.json, dev.dxcode/index.js, skills/<name>/SKILL.md, mcp.json. update replaces all files, so start from read's files.",
+        "plugins create/update: every text file of the plugin, each path relative to its root: plugin.json, dev.dxcode/index.js, skills/<name>/SKILL.md, mcp.json. update replaces all files, so start from read's files. skills create/update: may hold the skill's folder instead of instructions and resources: SKILL.md (its front matter's description and its body) and every other file at its path.",
       ),
     ),
   ),
@@ -260,6 +262,40 @@ const Input = v.object({
 });
 
 type InputData = v.InferOutput<typeof Input>;
+
+/**
+ * A skill's input with a folder in `files` read as the skill: SKILL.md gives
+ * the description and instructions the input leaves out, and every other
+ * file becomes a resource at its path (an explicit resource of the same path
+ * wins). Agents often send a skill folder the way they send a plugin's.
+ */
+const withSkillFolder = (input: InputData): InputData => {
+  if (input.topic !== "skills" || input.files === undefined) return input;
+  const skillMd = input.files.find(({ path }) =>
+    /^(\.\/)?SKILL\.md$/i.test(path),
+  );
+  const parsed =
+    skillMd === undefined ? undefined : frontMatter(skillMd.content);
+  const folderResources = input.files
+    .filter((file) => file !== skillMd)
+    .map(({ path, content }) => ({ path: path.replace(/^\.\//, ""), content }))
+    .filter(
+      ({ path }) => !(input.resources ?? []).some((next) => next.path === path),
+    );
+  const description =
+    input.description ??
+    (typeof parsed?.data.description === "string"
+      ? parsed.data.description.trim()
+      : undefined);
+  const instructions = input.instructions ?? (parsed?.body.trim() || undefined);
+  return {
+    ...input,
+    ...(description === undefined ? {} : { description }),
+    ...(instructions === undefined ? {} : { instructions }),
+    resources: [...(input.resources ?? []), ...folderResources],
+    files: undefined,
+  };
+};
 
 const DESCRIPTION = [
   "Manage the owner's dx settings for them: skills, plugins, secrets, environment variables, agent instructions, and MCP servers. Use it when the owner asks you to add, change, or remove one, or to build them a skill or plugin.",
@@ -692,7 +728,8 @@ const findByName = <T extends { readonly name: string }>(
     `No ${what} named ${name} here. Its ${what}s: ${items.map((item) => item.name).join(", ") || "none"}.`,
   );
 
-const skills = async (run: RunContext, input: InputData) => {
+const skills = async (run: RunContext, given: InputData) => {
+  const input = withSkillFolder(given);
   const op = input.operation;
   if (op === "list") {
     const scopes = [
@@ -1639,9 +1676,10 @@ const refusal = (requesterUserId: UserId | undefined) =>
  */
 const propose = async (
   legacy: ToolDefinition | undefined,
-  input: InputData,
+  given: InputData,
   signal: AbortSignal | undefined,
 ) => {
+  const input = withSkillFolder(given);
   if (legacy === undefined) fail("Proposals are unavailable here.");
   const data =
     input.topic === "skills"

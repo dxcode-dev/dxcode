@@ -303,7 +303,7 @@ const libraryArtifactRoute = createRoute({
 const MailFolderSearch = Schema.Literals(["inbox", "sent", "archive", "spam"]);
 
 /**
- * `/mailbox`: the person's Mailbox. `folder`, `label` (a label's ID), or
+ * `/mailbox`: the person's Mail. `folder`, `label` (a label's ID), or
  * `tag` (a project's `+tag`) picks the list, `q` searches it, and
  * `conversation` opens one conversation by its key, as the agents' mail
  * tools link to it.

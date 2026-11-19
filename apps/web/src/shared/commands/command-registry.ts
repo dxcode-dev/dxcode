@@ -78,7 +78,7 @@ export interface CommandRuntime {
   readonly openThreadView: (
     view: "files" | "changes" | "portal" | "terminal" | "desktop" | "artifacts",
   ) => void;
-  /** Asks the open Mailbox page to act on its conversation or list. */
+  /** Asks the open Mail page to act on its conversation or list. */
   readonly mailboxCommand: (action: MailboxCommand) => void;
 }
 
@@ -86,11 +86,7 @@ export interface CommandDefinition<Id extends string = string> {
   readonly id: Id;
   readonly label: string;
   readonly description: string;
-  readonly category:
-    | "Navigation"
-    | "Threads"
-    | "Mailbox"
-    | "Keyboard shortcuts";
+  readonly category: "Navigation" | "Threads" | "Mail" | "Keyboard shortcuts";
   readonly scope: CommandScope;
   readonly defaults: Readonly<Record<CommandPlatform, Hotkey | null>>;
   readonly alternativeDefaults?: Readonly<
@@ -110,7 +106,7 @@ export type KeymapCategory =
   | "Global"
   | "Sidebar"
   | "Thread"
-  | "Mailbox"
+  | "Mail"
   | "Keyboard shortcuts";
 
 const everyPlatform = (
@@ -453,8 +449,8 @@ const commandDefinitions = Object.freeze([
   {
     id: "mailbox.next",
     label: "Next email",
-    description: "Open the next, older conversation in the Mailbox list.",
-    category: "Mailbox",
+    description: "Open the next, older conversation in the Mail list.",
+    category: "Mail",
     scope: "mailbox",
     // J and K move the sidebar selection everywhere; N and P are free.
     defaults: everyPlatform("N"),
@@ -463,8 +459,8 @@ const commandDefinitions = Object.freeze([
   {
     id: "mailbox.previous",
     label: "Previous email",
-    description: "Open the previous, newer conversation in the Mailbox list.",
-    category: "Mailbox",
+    description: "Open the previous, newer conversation in the Mail list.",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("P"),
     execute: (runtime) => runtime.mailboxCommand("previous"),
@@ -473,7 +469,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.close",
     label: "Back to the list",
     description: "Close the open conversation and return to the list.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("Escape"),
     execute: (runtime) => runtime.mailboxCommand("close"),
@@ -482,7 +478,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.archive",
     label: "Archive",
     description: "Archive the open conversation, or move it back to the Inbox.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("E"),
     execute: (runtime) => runtime.mailboxCommand("archive"),
@@ -491,7 +487,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.spam",
     label: "Report spam",
     description: "Move the open conversation to Spam, or out of it.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("Shift+3" as Hotkey),
     alternativeDefaults: {
@@ -505,7 +501,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.unread",
     label: "Mark unread",
     description: "Mark the open conversation unread, or read.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("U"),
     execute: (runtime) => runtime.mailboxCommand("unread"),
@@ -514,7 +510,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.reply",
     label: "Reply",
     description: "Reply to the newest email in the open conversation.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("R"),
     execute: (runtime) => runtime.mailboxCommand("reply"),
@@ -523,7 +519,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.reply-all",
     label: "Reply all",
     description: "Reply to everyone on the newest email in the conversation.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("A"),
     execute: (runtime) => runtime.mailboxCommand("reply-all"),
@@ -532,7 +528,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.forward",
     label: "Forward",
     description: "Forward the newest email in the open conversation.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("F"),
     execute: (runtime) => runtime.mailboxCommand("forward"),
@@ -541,7 +537,7 @@ const commandDefinitions = Object.freeze([
     id: "mailbox.compose",
     label: "New email",
     description: "Write a new email.",
-    category: "Mailbox",
+    category: "Mail",
     scope: "mailbox",
     defaults: everyPlatform("C"),
     execute: (runtime) => runtime.mailboxCommand("compose"),
@@ -549,8 +545,8 @@ const commandDefinitions = Object.freeze([
   {
     id: "mailbox.search",
     label: "Search email",
-    description: "Move focus to the Mailbox search.",
-    category: "Mailbox",
+    description: "Move focus to the Mail search.",
+    category: "Mail",
     scope: "mailbox",
     // `/` already focuses the Keyboard Shortcuts search; one key, one command.
     defaults: everyPlatform("S"),
@@ -586,7 +582,7 @@ export const keymapCategoryFor = ({
   if (scope === "keyboard-shortcuts") return "Keyboard shortcuts";
   if (id.startsWith("sidebar.")) return "Sidebar";
   if (id.startsWith("thread.")) return "Thread";
-  if (id.startsWith("mailbox.")) return "Mailbox";
+  if (id.startsWith("mailbox.")) return "Mail";
   return "Global";
 };
 
@@ -594,7 +590,7 @@ export const keymapCategories: ReadonlyArray<KeymapCategory> = Object.freeze([
   "Global",
   "Sidebar",
   "Thread",
-  "Mailbox",
+  "Mail",
   "Keyboard shortcuts",
 ]);
 
@@ -605,7 +601,7 @@ export const commandContextLabel = (scope: CommandScope) => {
     case "thread":
       return "Threads";
     case "mailbox":
-      return "Mailbox";
+      return "Mail";
     case "keyboard-shortcuts":
       return "Keyboard Shortcuts";
   }

@@ -18,7 +18,7 @@ import { ApiError, request } from "../../../shared/api/client.js";
 
 /**
  * A deployment administrator's tools for one person: give back their one
- * username change, or pause their Mailbox sending (wiki/agent-mail.md).
+ * username change, or pause their Mail sending (wiki/agent-mail.md).
  */
 export const peopleAdminKeys = {
   person: (adminUserId: UserId, query: string) =>

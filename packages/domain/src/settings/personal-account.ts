@@ -332,7 +332,7 @@ export const isReservedUsername = (username: string): boolean =>
   reservedUsernames.has(username.trim().toLowerCase());
 
 /**
- * Whether the person must pick a username before their Mailbox opens: they
+ * Whether the person must pick a username before Mail opens: they
  * hold a placeholder or a reserved name. That pick is free; it does not use
  * up their one change.
  */

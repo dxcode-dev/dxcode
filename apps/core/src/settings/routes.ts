@@ -153,7 +153,7 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
         portalConfiguration(context.env)?.domain,
         composerQuickActions,
         huddle,
-        // Shown only to people who turned the Mailbox on.
+        // Shown only to people who turned the Mail on.
         (yield* Effect.promise(() =>
           mailboxFor(context.env, context.get("principal").userId).catch(
             () => undefined,

@@ -236,7 +236,11 @@ const skillsOf = async (who: Owner) =>
           name: string;
           enabled: boolean;
           activeVersion: number;
-          active: { instructions: string };
+          active: {
+            instructions: string;
+            manifest: { description: string };
+            resources: ReadonlyArray<{ path: string }>;
+          };
         }>;
       };
     }
@@ -285,6 +289,38 @@ const pluginFiles = (version: string, reply: string) => [
 ];
 
 describe("manage_dx", () => {
+  it("creates a skill from a folder sent as files, keeping its script at its path", async () => {
+    const who = await owner();
+    const tool = toolFor(who.threadId, who.userId);
+    // As agents send a plugin's files: SKILL.md and the rest of the folder.
+    const created = await tool({
+      topic: "skills",
+      operation: "create",
+      name: "team-greeting",
+      files: [
+        {
+          path: "SKILL.md",
+          content:
+            "---\nname: team-greeting\ndescription: Greets the team. Use when asked for the team greeting.\n---\n\nRun scripts/greet.sh and reply with what it prints.\n",
+        },
+        { path: "scripts/greet.sh", content: "#!/bin/sh\necho hello\n" },
+      ],
+      reason: "You asked for a team greeting.",
+    });
+    expect(created).toContain("Created the personal skill team-greeting");
+    const [skill] = await skillsOf(who);
+    expect(skill).toMatchObject({
+      name: "team-greeting",
+      active: {
+        instructions: "Run scripts/greet.sh and reply with what it prints.",
+        manifest: {
+          description: "Greets the team. Use when asked for the team greeting.",
+        },
+        resources: [expect.objectContaining({ path: "scripts/greet.sh" })],
+      },
+    });
+  });
+
   it("creates, updates, and turns off a personal skill at once with no card, and keeps a cancelled delete from running", async () => {
     const who = await owner();
     const tool = toolFor(who.threadId, who.userId);

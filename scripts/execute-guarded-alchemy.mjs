@@ -63,7 +63,7 @@ const selection = {
     domain: process.env.DX_DEPLOYMENT_MAIL_DOMAIN,
     zoneId: process.env.DX_DEPLOYMENT_MAIL_ZONE_ID,
   }),
-  // The operator turned the dx Mailbox off: its resources may be deleted.
+  // The operator turned the dx Mail off: its resources may be deleted.
   mailRemoval: process.env.DX_DEPLOYMENT_MAIL_OFF === "1",
   ...(target === "selfhost"
     ? {

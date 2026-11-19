@@ -13,6 +13,7 @@ import {
   SkillLimitExceeded,
   SkillMcpReferenceInvalid,
   SkillRepository,
+  type SkillResource,
   type SkillTarget,
   SkillVersion,
   type SkillWithVersion,
@@ -103,11 +104,18 @@ interface SkillServiceShape {
     id: typeof SkillId.Type,
     audit: AuditContext,
   ) => Effect.Effect<void, unknown>;
+  /** A version with its files' content. */
   readonly exportVersion: (
     target: SkillTarget,
     id: typeof SkillId.Type,
     version?: typeof SkillVersion.Type,
-  ) => Effect.Effect<StoredSkillVersion, unknown>;
+  ) => Effect.Effect<
+    {
+      readonly version: StoredSkillVersion;
+      readonly files: ReadonlyArray<SkillResource>;
+    },
+    unknown
+  >;
   readonly resolveForThread: (
     principal: Principal,
     projectId: ProjectId,
@@ -264,7 +272,7 @@ export class SkillService extends Context.Service<
             createdAt: now,
             updatedAt: now,
           });
-          yield* repository.insert(skill, version);
+          yield* repository.insert(skill, version, preview.resources);
           yield* audit("skill.import", target, auditContext, id, versionNumber);
           if (enabled) {
             yield* audit(
@@ -311,6 +319,7 @@ export class SkillService extends Context.Service<
           yield* repository.insertVersion(
             target,
             version,
+            preview.resources,
             activate,
             version.createdAt,
           );
@@ -451,9 +460,12 @@ export class SkillService extends Context.Service<
         exportVersion: Effect.fn("SkillService.exportVersion")(
           function* (target, id, version) {
             const current = yield* repository.find(target, id);
-            return version === undefined
-              ? current.active
-              : yield* repository.findVersion(id, version);
+            const found =
+              version === undefined
+                ? current.active
+                : yield* repository.findVersion(id, version);
+            const files = yield* repository.readFiles(id, found.version);
+            return { version: found, files };
           },
         ),
         resolveForThread: Effect.fn("SkillService.resolveForThread")(

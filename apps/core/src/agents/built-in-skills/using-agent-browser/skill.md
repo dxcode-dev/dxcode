@@ -177,7 +177,7 @@ a session that reports `(hover: none)`. Start from a settled state and route eve
 `stop` through the recorder:
 
 ```bash
-REC="node ~/.local/share/dx/skills/using-agent-browser/scripts/action-video.mjs"
+REC="node ~/.agents/skills/using-agent-browser/scripts/action-video.mjs"
 export AGENT_BROWSER_CDP=9333 ACTION_VIDEO_SESSION=app
 mkdir -p ~/.dx/work/comment-flow
 $REC start "$HOME/artifacts/comment-flow/flow-raw.mp4"

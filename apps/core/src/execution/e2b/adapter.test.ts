@@ -139,7 +139,10 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
     ).resolves.toEqual(snapshot);
     expect(fake.commands.run).toHaveBeenCalledOnce();
     expect(fake.commands.run).toHaveBeenCalledWith(expect.any(String), {
-      envs: { FLUE_WORKSPACE_CONTEXT_ROOT: "/home/user/workspace/repo" },
+      envs: {
+        FLUE_WORKSPACE_CONTEXT_ROOT: "/home/user/workspace/repo",
+        FLUE_WORKSPACE_CONTEXT_SKILLS: "/home/user/.agents/skills",
+      },
       timeoutMs: 30_000,
     });
     const command = fake.commands.run.mock.calls[0]?.[0];
@@ -298,6 +301,92 @@ describe("Flue E2B 2.0.7 blueprint adapter", () => {
       expect(fake.commands.run).toHaveBeenCalledOnce();
       expect(fake.files.read).not.toHaveBeenCalled();
       expect(fake.files.list).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("lists ~/.agents/skills by frontmatter, so a large skill neither fills nor declines the snapshot", async () => {
+    const root = await realpath(
+      await mkdtemp(join(tmpdir(), "dx-context-agent-skills-")),
+    );
+    const home = join(root, "home");
+    const repository = join(home, "workspace", "repo");
+    const skills = join(home, ".agents", "skills");
+    // The guest reads ~/.agents/skills from the directory its environment
+    // names; here that is this test's home, not the host's.
+    const runAtHome = (command: string, options?: CommandOptions) =>
+      runGuestCommand(command, {
+        ...options,
+        envs: { ...options?.envs, FLUE_WORKSPACE_CONTEXT_SKILLS: skills },
+      });
+    try {
+      await mkdir(join(repository, ".agents", "skills", "lint"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(repository, ".agents", "skills", "lint", "SKILL.md"),
+        "---\nname: lint\ndescription: Repository lint\n---\nBody\n",
+      );
+      await mkdir(join(skills, "pdf"), { recursive: true });
+      // Over the 64 KiB a snapshot file may hold, as a 1 MiB settings skill.
+      await writeFile(
+        join(skills, "pdf", "SKILL.md"),
+        `---\r\nname: pdf\r\ndescription: Read PDFs\r\n---\r\n${"x".repeat(1_048_576)}\n`,
+      );
+      await mkdir(join(skills, "no-frontmatter"));
+      await writeFile(join(skills, "no-frontmatter", "SKILL.md"), "Body\n");
+      // A symbolic link, dx's manifests, and staging directories are skipped.
+      await symlink(join(skills, "pdf"), join(skills, "linked"));
+      await writeFile(join(skills, ".dx-settings"), "v1\npdf\n");
+      await mkdir(join(skills, ".dx-stage.settings.1", "pdf"), {
+        recursive: true,
+      });
+      await writeFile(
+        join(skills, ".dx-stage.settings.1", "pdf", "SKILL.md"),
+        "---\nname: pdf\ndescription: Staged\n---\n",
+      );
+      const fake = makeE2B();
+      fake.commands.run.mockImplementation(runAtHome);
+      const sandbox = await e2b(fake.value, repository).createSandbox({
+        id: "test",
+      });
+
+      const snapshot = await sandbox.snapshotWorkspaceContext?.(repository);
+      if (snapshot === undefined || "kind" in snapshot)
+        throw new Error("Expected a workspace context snapshot.");
+      expect(
+        [...snapshot.skillFiles].sort((a, b) =>
+          a.directoryName.localeCompare(b.directoryName),
+        ),
+      ).toEqual([
+        {
+          kind: "file",
+          directoryName: "lint",
+          content: "---\nname: lint\ndescription: Repository lint\n---\nBody\n",
+        },
+        {
+          kind: "file",
+          directoryName: "no-frontmatter",
+          content: "",
+          skillsDirectory: "/home/user/.agents/skills",
+        },
+        {
+          kind: "file",
+          directoryName: "pdf",
+          content: "---\r\nname: pdf\r\ndescription: Read PDFs\r\n---\r\n",
+          skillsDirectory: "/home/user/.agents/skills",
+        },
+      ]);
+
+      // At the home directory its .agents/skills is ~/.agents/skills, read
+      // once, by frontmatter.
+      const atHome = await sandbox.snapshotWorkspaceContext?.(home);
+      if (atHome === undefined || "kind" in atHome)
+        throw new Error("Expected a workspace context snapshot.");
+      expect(
+        atHome.skillFiles.map(({ directoryName }) => directoryName).sort(),
+      ).toEqual(["no-frontmatter", "pdf"]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

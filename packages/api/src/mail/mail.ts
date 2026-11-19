@@ -3,7 +3,7 @@ import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 
 /**
- * dx Mailbox (wiki/agent-mail.md): one mailbox per person at
+ * dx Mail (wiki/agent-mail.md): one mailbox per person at
  * `username@<mail domain>`. Everything here exists only when the deployment
  * sets a mail domain; otherwise `GET /v1/mailbox` answers `enabled: false`.
  */
@@ -73,7 +73,7 @@ export const MailboxDataSchema = Schema.Union([
     /** `username@<domain>`. */
     address: Schema.String,
     /**
-     * The person must pick a username before the Mailbox opens: theirs is
+     * The person must pick a username before Mail opens: theirs is
      * a placeholder (`user-<hex>`) or a reserved name. That pick does not
      * use up their one change.
      */
@@ -180,10 +180,11 @@ export const MailMessageSchema = Schema.Struct({
   /** Why it is in Spam, in words, when dx put it there. */
   spamReason: Schema.optional(Schema.String),
   /**
-   * Not signed by its own domain, but in the Inbox: it answers an email the
-   * person sent, from a server its domain allows (SPF).
+   * For mail that isn't authenticated: `unverified` when its domain's own
+   * servers sent it (SPF or an aligned signature, no DMARC verdict),
+   * `untrusted` when dx filed it as Spam, wherever it is now.
    */
-  replyToSent: Schema.optional(Schema.Literal(true)),
+  trust: Schema.optional(Schema.Literals(["unverified", "untrusted"])),
 });
 export type MailMessage = typeof MailMessageSchema.Type;
 
@@ -300,15 +301,6 @@ export const ProjectMailDataSchema = Schema.Union([
     enabled: Schema.Literal(true),
     /** The viewer's own `username+tag@` for this Project. */
     address: Schema.String,
-    /** The mode new email Threads run in; absent uses the sender's default. */
-    agentMode: Schema.optional(
-      Schema.Literals(["low", "medium", "high", "ultra"]),
-    ),
-    visibility: Schema.Literals(["private", "workspace"]),
-    /** Whether a member's own email to their `+tag` starts Threads. */
-    startThreads: Schema.Boolean,
-    workspace: Schema.Boolean,
-    canManage: Schema.Boolean,
   }),
 ]);
 export type ProjectMailData = typeof ProjectMailDataSchema.Type;
@@ -316,14 +308,6 @@ export const GetProjectMailResponseSchema = successResponse(
   ProjectMailDataSchema,
 );
 export type GetProjectMailResponse = typeof GetProjectMailResponseSchema.Type;
-export const UpdateProjectMailRequestSchema = Schema.Struct({
-  agentMode: Schema.optional(
-    Schema.NullOr(Schema.Literals(["low", "medium", "high", "ultra"])),
-  ),
-  visibility: Schema.optional(Schema.Literals(["private", "workspace"])),
-  startThreads: Schema.optional(Schema.Boolean),
-});
-
 export const MailErrorCodeSchema = Schema.Literals([
   "MAIL_DISABLED",
   "MAIL_NOT_FOUND",

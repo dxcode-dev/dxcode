@@ -185,7 +185,7 @@ app.route("/v1/plugins/views", pluginViewRoutes);
 app.route("/v1/projects", projectRoutes);
 app.route("/v1/projects", projectRepositoryBrowseRoutes);
 app.route("/v1/projects", projectMailRoutes);
-// The person's dx Mailbox: theirs alone, never an API key's or an app's.
+// The person's dx Mail: theirs alone, never an API key's or an app's.
 app.route("/v1/mailbox", mailboxRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);

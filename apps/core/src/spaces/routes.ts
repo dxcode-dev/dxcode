@@ -483,7 +483,7 @@ export const createSpaceRoutes = (
               throw new SpaceError(
                 "SPACE_SHARING_MAIL_READS",
                 409,
-                `Agents in this Space read ${reads === 1 ? "1 email" : `${reads} emails`} from your Mailbox. Members will see ${reads === 1 ? "it" : "them"} in the transcripts.`,
+                `Agents in this Space read ${reads === 1 ? "1 email" : `${reads} emails`} from your Mail. Members will see ${reads === 1 ? "it" : "them"} in the transcripts.`,
               );
           }
           await updateSpaceRow(db, {

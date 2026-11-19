@@ -53,7 +53,7 @@ resource and prints only the access token. With `OIDC_AZURE_TENANT_ID`, `OIDC_AZ
 `OIDC_AZURE_AUDIENCE` recorded, `--tenant`, `--client-id`, and `--audience` are optional.
 
 ```sh
-TOKEN_SCRIPT=/home/user/.local/share/dx/skills/using-workload-identity/scripts/azure-access-token.mjs
+TOKEN_SCRIPT=/home/user/.agents/skills/using-workload-identity/scripts/azure-access-token.mjs
 curl -sS -H "Authorization: Bearer $(node "$TOKEN_SCRIPT" --tenant '<tenant-id>' --client-id '<client-id>' --scope 'https://api.loganalytics.io/.default')" \
   -H 'Content-Type: application/json' \
   'https://api.loganalytics.io/v1/workspaces/<workspace-customer-id>/query' \

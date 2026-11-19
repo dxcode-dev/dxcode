@@ -344,7 +344,7 @@ export const smokeProductionPackage = async (packageRoot) => {
   const d1 = exactlyOne("d1");
   const r2 = exactlyOne("r2");
   const ai = exactlyOne("workers-ai");
-  // The sign-in sender (EMAIL), and the Mailbox's sender (MAIL_SEND), which
+  // The sign-in sender (EMAIL), and the Mail's sender (MAIL_SEND), which
   // the smoke binds unused: it runs without a mail domain.
   const emails = manifest.bindings.filter(
     (binding) => binding.type === "send-email",

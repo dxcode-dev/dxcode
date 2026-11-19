@@ -3,6 +3,7 @@ import type { PersistenceUnavailable } from "../persistence/errors.js";
 import type { UserId } from "../users/user-id.js";
 import type {
   SkillId,
+  SkillResource,
   SkillTarget,
   SkillVersion,
   SkillWithVersion,
@@ -48,13 +49,25 @@ export interface SkillRepositoryShape {
     StoredSkillVersion,
     SkillRepositoryFailure | SkillNotFound
   >;
+  /**
+   * A version's files with their content, in path order. Files the version
+   * does not hold are left out; `paths` limits the read to those files.
+   */
+  readonly readFiles: (
+    id: SkillId,
+    version: SkillVersion,
+    paths?: ReadonlyArray<string>,
+  ) => Effect.Effect<ReadonlyArray<SkillResource>, SkillRepositoryFailure>;
+  /** `files` are `version.resources` with their content. */
   readonly insert: (
     skill: StoredSkill,
     version: StoredSkillVersion,
+    files: ReadonlyArray<SkillResource>,
   ) => Effect.Effect<void, SkillRepositoryFailure | SkillIntegrityConflict>;
   readonly insertVersion: (
     target: SkillTarget,
     version: StoredSkillVersion,
+    files: ReadonlyArray<SkillResource>,
     activate: boolean,
     updatedAt: StoredSkill["updatedAt"],
   ) => Effect.Effect<

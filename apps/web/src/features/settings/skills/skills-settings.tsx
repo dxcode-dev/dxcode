@@ -6,32 +6,45 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
-import { Plus, Settings } from "lucide-react";
+import { Plus } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { settingsNavigationState } from "../../../shared/navigation/settings-return.js";
 import { settle } from "../../../shared/settle.js";
+import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import {
+  MenuItem,
+  MenuPopup,
+  MenuRoot,
+  MenuTrigger,
+} from "../../../shared/ui/menu.js";
+import { Tab, Tabs, TabsList, TabsPanel } from "../../../shared/ui/tabs.js";
 import { AskDxPrompt } from "../ask-dx-prompt.js";
 import { MemberPolicyToggle } from "../member-policy-toggle.js";
 import {
   SettingsCard,
   SettingsHeading,
   SettingsRow,
-  SettingsToggle,
 } from "../settings-primitives.js";
 import {
   type SettingsSectionProps,
   settingsPath,
 } from "../settings-registration.js";
+import { SkillBrowser } from "./skill-browser.js";
 import {
-  SkillDetailsDialog,
   SkillFormDialog,
   SkillImportDialog,
   SkillProposalDialog,
   SkillReviewDialog,
 } from "./skill-dialogs.js";
+import {
+  GitHubSkillDialog,
+  type InstallTarget,
+  SkillDiscover,
+} from "./skill-discover.js";
+import "./skills.css";
 import {
   skillErrorMessage as errorMessage,
   type SkillDraft,
@@ -41,7 +54,7 @@ import {
   type SkillToggle,
   skillAuthorMutationOptions,
   skillErrorField,
-  skillExportMutationOptions,
+  skillFileSaveMutationOptions,
   skillPreviewMutationOptions,
   skillsMutationOptions,
   skillToggleMutationKey,
@@ -49,20 +62,11 @@ import {
 } from "./skills-mutations.js";
 import {
   type SkillData,
+  type SkillInstallSource,
   type SkillProposalData,
   type SkillsTarget,
   skillsQueryOptions,
 } from "./skills-queries.js";
-
-/** Shown after the name only when the skill is on but cannot load. */
-const stateHint = (state: SkillData["effectiveState"]) =>
-  state === "replaced-by-personal"
-    ? "Replaced by your personal skill"
-    : state === "blocked-by-policy"
-      ? "Blocked by workspace policy"
-      : state === "plugin-disabled"
-        ? "Its plugin is off"
-        : undefined;
 
 const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
   if (selected.length === 1) {
@@ -77,8 +81,15 @@ const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
       }
     }
   }
+  // Hidden files, such as .DS_Store or .gitignore, are never skill files.
+  const visible = Array.from(selected).filter(
+    (file) =>
+      !(file.webkitRelativePath || file.name)
+        .split("/")
+        .some((segment) => segment.startsWith(".")),
+  );
   const files = await Promise.all(
-    Array.from(selected).map(async (file) => {
+    visible.map(async (file) => {
       const relative = file.webkitRelativePath || file.name;
       const segments = relative.split("/");
       const suppliedPath =
@@ -100,86 +111,19 @@ const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
   } as SkillImportBundle;
 };
 
-const download = (exported: unknown, filename: string) => {
-  const url = URL.createObjectURL(
-    new Blob([`${JSON.stringify(exported, null, 2)}\n`], {
-      type: "application/json",
-    }),
-  );
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.click();
-  URL.revokeObjectURL(url);
-};
-
 /** Pending keys, so only the control that is saving shows it. */
 const POLICY_KEY = "policy";
 
 type OpenDialog =
   | { readonly kind: "new" }
   | { readonly kind: "import" }
-  | { readonly kind: "details"; readonly skillId: SkillData["id"] }
-  | {
-      readonly kind: "edit";
-      readonly skillId: SkillData["id"];
-      /** A draft whose save failed, with why, shown again to fix. */
-      readonly retry?: {
-        readonly draft: SkillDraft;
-        readonly failure: SkillSaveFailure;
-      };
-    }
+  | { readonly kind: "github" }
   | { readonly kind: "proposal"; readonly proposalId: string }
   | {
       readonly kind: "review";
       readonly preview: SkillPreview;
       readonly bundle: SkillImportBundle;
-      readonly updating?: SkillData;
     };
-
-function SkillRow({
-  skill,
-  canMutate,
-  pending,
-  onToggle,
-  onOpenSettings,
-}: {
-  readonly skill: SkillData;
-  readonly canMutate: boolean;
-  /** This row's switch is saving. */
-  readonly pending: boolean;
-  readonly onToggle: (enabled: boolean) => void;
-  readonly onOpenSettings: (trigger: HTMLButtonElement) => void;
-}) {
-  const hint = skill.enabled ? stateHint(skill.effectiveState) : undefined;
-  return (
-    <div className="skill-row">
-      <div className="skill-row-copy">
-        <div className="skill-row-title">
-          <strong>{skill.name}</strong>
-          <span>v{skill.activeVersion}</span>
-          {hint === undefined ? null : <span>{hint}</span>}
-        </div>
-        <p>{skill.active.manifest.description}</p>
-      </div>
-      <SettingsToggle
-        checked={skill.enabled}
-        disabled={!canMutate}
-        pending={pending}
-        label={`${skill.name} ${skill.enabled ? "on" : "off"}`}
-        onCheckedChange={onToggle}
-      />
-      <Button
-        size="icon-xs"
-        variant="ghost"
-        aria-label={`${skill.name} settings`}
-        onClick={(event) => onOpenSettings(event.currentTarget)}
-      >
-        <Settings />
-      </Button>
-    </div>
-  );
-}
 
 const otherScopeLink = (
   scope: SkillsTarget["scope"],
@@ -208,8 +152,10 @@ function SkillsHeading({
   status,
   otherScope,
   settingsReturnTo,
+  onBrowse,
+  onFromGitHub,
+  onUpload,
   onNew,
-  onImport,
 }: {
   readonly scope: SkillsTarget["scope"];
   readonly canMutate: boolean;
@@ -217,113 +163,63 @@ function SkillsHeading({
   readonly status?: string;
   readonly otherScope?: { readonly label: string; readonly to: string };
   readonly settingsReturnTo?: string;
+  readonly onBrowse: () => void;
+  readonly onFromGitHub: () => void;
+  readonly onUpload: () => void;
   readonly onNew: () => void;
-  readonly onImport: () => void;
 }) {
   return (
     <SettingsHeading
-      title={scope === "workspace" ? "Workspace Skills" : "Personal Skills"}
+      title="Skills"
+      detail={scope === "workspace" ? "Workspace" : "Personal"}
       actions={
         <div className="skills-heading-actions">
           <span aria-live="polite">{status}</span>
-          {canMutate ? (
-            <>
-              <Button size="xs" variant="ghost" disabled={busy} onClick={onNew}>
-                <Plus aria-hidden="true" />
-                New Skill
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={busy}
-                onClick={onImport}
-              >
-                Import
-              </Button>
-            </>
-          ) : null}
           {otherScope === undefined ? null : (
             <Link
               to={otherScope.to}
               replace
               state={settingsNavigationState(settingsReturnTo)}
-              className={buttonVariants({ size: "xs", variant: "ghost" })}
+              className={buttonVariants({ size: "sm", variant: "ghost" })}
             >
               {otherScope.label}
             </Link>
           )}
+          {canMutate ? (
+            <MenuRoot>
+              <MenuTrigger render={<Button size="sm" disabled={busy} />}>
+                <Plus aria-hidden="true" /> Add skill
+              </MenuTrigger>
+              <MenuPopup align="end">
+                <MenuItem onClick={onBrowse}>Browse skills.sh</MenuItem>
+                <MenuItem onClick={onFromGitHub}>From a GitHub URL</MenuItem>
+                <MenuItem onClick={onUpload}>Upload a folder</MenuItem>
+                <MenuItem onClick={onNew}>Write a new skill</MenuItem>
+              </MenuPopup>
+            </MenuRoot>
+          ) : null}
         </div>
       }
       description={
         scope === "workspace" ? (
           <>
-            Skills teach dx reusable workflows and knowledge in every Thread
-            that members of this workspace start. A member's personal skill with
-            the same name replaces a workspace skill.{" "}
+            Skills teach dx a workflow in every Thread that members of this
+            workspace start, in dx and Claude Code mode. A member's personal
+            skill with the same name replaces a workspace skill.{" "}
             {canMutate
-              ? "New Threads load the active version of each enabled skill; running Threads keep theirs."
+              ? "New Threads load the active version of each skill that is on; running Threads keep theirs."
               : "Only workspace admins can change them."}
           </>
         ) : (
           <>
-            Skills teach dx reusable workflows and knowledge in every Thread you
-            start. New Threads load the active version of each enabled skill;
-            running Threads keep theirs. Your skill replaces a workspace skill
-            with the same name.
+            Skills teach dx a workflow in every Thread you start, in dx and
+            Claude Code mode. New Threads load the ones that are on; running
+            Threads keep theirs. Ask dx in any Thread to write, import, or
+            update one.
           </>
         )
       }
     />
-  );
-}
-
-function SkillList({
-  skills,
-  canMutate,
-  toggling,
-  scopeLabel,
-  onToggle,
-  onOpenSettings,
-}: {
-  readonly skills: ReadonlyArray<SkillData>;
-  readonly canMutate: boolean;
-  /** Skills whose switch is saving. */
-  readonly toggling: ReadonlySet<SkillData["id"]>;
-  readonly scopeLabel: SkillsTarget["scope"];
-  readonly onToggle: (skill: SkillData, enabled: boolean) => void;
-  readonly onOpenSettings: (
-    skill: SkillData,
-    trigger: HTMLButtonElement,
-  ) => void;
-}) {
-  return (
-    <SettingsCard>
-      {skills.length === 0 ? (
-        <div className="settings-card-empty ask-dx-empty">
-          <p>
-            {canMutate
-              ? `No ${scopeLabel} skills yet. Create one with New Skill, import a skill folder, or ask dx in any Thread:`
-              : `No ${scopeLabel} skills yet.`}
-          </p>
-          {canMutate ? (
-            <AskDxPrompt
-              text={`Create a ${scopeLabel} skill for writing our release notes`}
-            />
-          ) : null}
-        </div>
-      ) : (
-        skills.map((skill) => (
-          <SkillRow
-            key={skill.id}
-            skill={skill}
-            canMutate={canMutate}
-            pending={toggling.has(skill.id)}
-            onToggle={(enabled) => onToggle(skill, enabled)}
-            onOpenSettings={(trigger) => onOpenSettings(skill, trigger)}
-          />
-        ))
-      )}
-    </SettingsCard>
   );
 }
 
@@ -408,6 +304,38 @@ function PersonalSkillsPolicy({
 }
 
 /**
+ * The page's saving actions: one runs at a time, under the key `pending`
+ * names, and each reports its outcome through `report`.
+ */
+function useSkillActions(
+  target: SkillsTarget,
+  report: (message: string | undefined) => void,
+) {
+  const { identity } = useAuthenticatedIdentity();
+  const queryClient = useQueryClient();
+  const mutation = useMutation(
+    skillsMutationOptions(queryClient, identity.id, target),
+  );
+  const [pending, setPending] = React.useState<string>();
+  const busy = pending !== undefined;
+  const run = async (
+    action: SkillsMutationAction,
+    success: string,
+    key?: string,
+  ) => {
+    if (busy) return false;
+    setPending(key ?? action.type);
+    report(undefined);
+    const outcome = await settle(() => mutation.mutateAsync(action));
+    report(outcome.ok ? success : errorMessage(outcome.error));
+    setPending(undefined);
+    mutation.reset();
+    return outcome.ok;
+  };
+  return { run, pending, setPending, busy };
+}
+
+/**
  * Skill switches. Each saves on its own, so several can be in flight at
  * once, and each reports its outcome through `report`.
  */
@@ -444,27 +372,28 @@ function useSkillToggles(
   return { toggling, toggle };
 }
 
-/** Exports a skill's active version as a download, reporting the outcome. */
-function useSkillExport(
+/** Saves an edited skill file as the skill's next version. */
+function useSkillFileSave(
   target: SkillsTarget,
   report: (message: string | undefined) => void,
 ) {
   const { identity } = useAuthenticatedIdentity();
-  const exportMutation = useMutation(
-    skillExportMutationOptions(identity.id, target),
+  const queryClient = useQueryClient();
+  const mutation = useMutation(
+    skillFileSaveMutationOptions(queryClient, identity.id, target),
   );
-  return async (skill: SkillData) => {
-    const outcome = await settle(() => exportMutation.mutateAsync(skill.id));
-    exportMutation.reset();
-    if (outcome.ok) {
-      download(
-        outcome.value,
-        `${skill.name}-v${skill.activeVersion}.skill.json`,
-      );
-      report(`${skill.name} exported.`);
-    } else {
-      report(errorMessage(outcome.error));
+  return async (skill: SkillData, path: string, content: string) => {
+    report(undefined);
+    const outcome = await settle(() =>
+      mutation.mutateAsync({ skill, path, content }),
+    );
+    mutation.reset();
+    if (!outcome.ok) {
+      report(`Could not save ${path}: ${errorMessage(outcome.error)}`);
+      // The view keeps the draft open.
+      throw outcome.error;
     }
+    report(`${skill.name} version ${outcome.value.activeVersion} saved.`);
   };
 }
 
@@ -572,6 +501,178 @@ function SkillProposalReview({
   );
 }
 
+/** The hidden pickers behind Upload a folder and a version upload. */
+function SkillFileInputs({
+  folderRef,
+  exportInput,
+  onSelect,
+}: {
+  readonly folderRef: React.RefCallback<HTMLInputElement>;
+  readonly exportInput: React.RefObject<HTMLInputElement | null>;
+  readonly onSelect: (event: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <>
+      <input
+        ref={folderRef}
+        className="skill-file-input"
+        type="file"
+        aria-label="Select skill folder"
+        multiple
+        {...({ webkitdirectory: "" } as Record<string, string>)}
+        onChange={onSelect}
+      />
+      <input
+        ref={exportInput}
+        className="skill-file-input"
+        type="file"
+        aria-label="Select exported skill"
+        accept=".skill.json,application/json"
+        onChange={onSelect}
+      />
+    </>
+  );
+}
+
+/** Installed (the skill browser) and Discover (skills.sh), as two tabs. */
+function SkillsTabs({
+  tab,
+  onTabChange,
+  target,
+  skills,
+  canMutate,
+  toggling,
+  targets,
+  opened,
+  onOpen,
+  onToggle,
+  onRemove,
+  onSaveFile,
+  onFromGitHub,
+}: {
+  readonly tab: "installed" | "discover";
+  readonly onTabChange: (tab: "installed" | "discover") => void;
+  readonly target: SkillsTarget;
+  /** Undefined until the list loads. */
+  readonly skills: ReadonlyArray<SkillData> | undefined;
+  readonly canMutate: boolean;
+  readonly toggling: ReadonlySet<SkillData["id"]>;
+  readonly targets: ReadonlyArray<InstallTarget>;
+  readonly opened: SkillInstallSource | undefined;
+  readonly onOpen: (source: SkillInstallSource | undefined) => void;
+  readonly onToggle: (skill: SkillData, enabled: boolean) => void;
+  readonly onRemove: (skill: SkillData) => Promise<boolean>;
+  readonly onSaveFile: (
+    skill: SkillData,
+    path: string,
+    content: string,
+  ) => Promise<unknown>;
+  readonly onFromGitHub: () => void;
+}) {
+  const [discoverVisited, setDiscoverVisited] = React.useState(
+    tab === "discover",
+  );
+  if (tab === "discover" && !discoverVisited) setDiscoverVisited(true);
+  return (
+    <Tabs
+      className="skills-tabs"
+      value={tab}
+      onValueChange={(value) => onTabChange(value as typeof tab)}
+    >
+      <TabsList>
+        <Tab value="installed">
+          Installed{" "}
+          {skills === undefined ? null : <Badge>{skills.length}</Badge>}
+        </Tab>
+        <Tab value="discover">Discover</Tab>
+      </TabsList>
+      <TabsPanel value="installed">
+        {skills === undefined ? null : (
+          <SkillBrowser
+            target={target}
+            skills={skills}
+            canMutate={canMutate}
+            toggling={toggling}
+            empty={
+              <div className="settings-card-empty ask-dx-empty">
+                <p>
+                  {canMutate
+                    ? `No ${target.scope} skills yet. Install one from skills.sh, upload a skill folder, or ask dx in any Thread:`
+                    : `No ${target.scope} skills yet.`}
+                </p>
+                {canMutate ? (
+                  <>
+                    <AskDxPrompt
+                      text={`Create a ${target.scope} skill for writing our release notes`}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => onTabChange("discover")}
+                    >
+                      Browse skills.sh
+                    </Button>
+                  </>
+                ) : null}
+              </div>
+            }
+            onToggle={onToggle}
+            onRemove={onRemove}
+            onSaveFile={onSaveFile}
+          />
+        )}
+      </TabsPanel>
+      <TabsPanel value="discover" keepMounted>
+        {/* Mounted from the first visit on, so coming back keeps the search and the open skill without reading skills.sh again. */}
+        {discoverVisited ? (
+          <SkillDiscover
+            target={target}
+            installed={skills ?? []}
+            targets={targets}
+            opened={opened}
+            onOpen={onOpen}
+            onFromGitHub={onFromGitHub}
+          />
+        ) : null}
+      </TabsPanel>
+    </Tabs>
+  );
+}
+
+/**
+ * Where Discover can install: this page's scope first, then the other one
+ * the person has. Installing to a scope they cannot change fails there.
+ */
+const installTargets = (
+  target: SkillsTarget,
+  workspace: SettingsSectionProps["workspace"],
+  canMutate: boolean,
+): ReadonlyArray<InstallTarget> => {
+  const workspaceTarget =
+    target.scope === "workspace"
+      ? target
+      : workspace === undefined
+        ? undefined
+        : {
+            scope: "workspace" as const,
+            workspaceSlug: workspace.shortName as WorkspaceSlug,
+          };
+  const personal = {
+    target: { scope: "personal" as const },
+    label: "Personal",
+  };
+  const shared =
+    workspaceTarget === undefined
+      ? undefined
+      : {
+          target: workspaceTarget,
+          label: `Workspace · ${workspace?.displayName ?? workspaceTarget.workspaceSlug}`,
+        };
+  if (target.scope === "workspace")
+    return [...(canMutate && shared !== undefined ? [shared] : []), personal];
+  return shared === undefined ? [personal] : [personal, shared];
+};
+
 export function SkillsSettings({
   workspace,
   workspaceSlug,
@@ -585,9 +686,6 @@ export function SkillsSettings({
       ? { scope: "personal" }
       : { scope: "workspace", workspaceSlug };
   const state = useQuery(skillsQueryOptions(identity.id, target));
-  const mutation = useMutation(
-    skillsMutationOptions(queryClient, identity.id, target),
-  );
   const authorMutation = useMutation(
     skillAuthorMutationOptions(queryClient, identity.id, target),
   );
@@ -595,66 +693,38 @@ export function SkillsSettings({
     skillPreviewMutationOptions(identity.id, target),
   );
   const [dialog, setDialog] = React.useState<OpenDialog>();
-  /** The skill a folder selection becomes a new version of. */
-  const uploadFor = React.useRef<SkillData | undefined>(undefined);
-  /** The key of the action that is saving; one action runs at a time. */
-  const [pending, setPending] = React.useState<string>();
-  const busy = pending !== undefined;
+  const [tab, setTab] = React.useState<"installed" | "discover">("installed");
+  /** The skills.sh or GitHub skill Discover shows, if any. */
+  const [opened, setOpened] = React.useState<SkillInstallSource>();
   const [message, setMessage] = React.useState<string>();
+  const { run, pending, setPending, busy } = useSkillActions(
+    target,
+    setMessage,
+  );
   const folderInput = React.useRef<HTMLInputElement>(null);
   const exportInput = React.useRef<HTMLInputElement>(null);
   const finalFocus = React.useRef<HTMLElement | null>(null);
 
-  const run = async (
-    action: SkillsMutationAction,
-    success: string,
-    key?: string,
-  ) => {
-    if (busy) return false;
-    setPending(key ?? action.type);
-    setMessage(undefined);
-    const outcome = await settle(() => mutation.mutateAsync(action));
-    setMessage(outcome.ok ? success : errorMessage(outcome.error));
-    setPending(undefined);
-    mutation.reset();
-    return outcome.ok;
-  };
   const { toggling, toggle } = useSkillToggles(target, setMessage);
-  const exportSkill = useSkillExport(target, setMessage);
+  const saveFile = useSkillFileSave(target, setMessage);
   const closeDialog = () => {
     setDialog(undefined);
     onDirtyChange(false);
   };
-  const save = async (
+  const create = async (
     draft: SkillDraft,
-    skill?: SkillData,
   ): Promise<SkillSaveFailure | undefined> => {
     setPending("save");
     setMessage(undefined);
-    // An edit shows its new version at once, so its dialog closes now and
-    // opens again with the draft if the save fails.
-    if (skill !== undefined) closeDialog();
-    const outcome = await settle(() =>
-      authorMutation.mutateAsync({ draft, skill }),
-    );
+    const outcome = await settle(() => authorMutation.mutateAsync({ draft }));
     setPending(undefined);
     authorMutation.reset();
-    if (!outcome.ok) {
-      const failure = {
+    if (!outcome.ok)
+      return {
         message: errorMessage(outcome.error),
         field: skillErrorField(outcome.error),
       };
-      if (skill === undefined) return failure;
-      setMessage(`Could not save ${skill.name}: ${failure.message}`);
-      setDialog({ kind: "edit", skillId: skill.id, retry: { draft, failure } });
-      onDirtyChange(true);
-      return undefined;
-    }
-    setMessage(
-      skill === undefined
-        ? `${draft.name} published.`
-        : `${skill.name} version ${Math.max(...outcome.value.versions)} published.`,
-    );
+    setMessage(`${draft.name} published.`);
     closeDialog();
     return undefined;
   };
@@ -665,12 +735,7 @@ export function SkillsSettings({
     const outcome = await settle(async () => {
       const bundle = await filesBundle(files);
       const preview = await previewMutation.mutateAsync(bundle);
-      setDialog({
-        kind: "review",
-        preview,
-        bundle,
-        updating: uploadFor.current,
-      });
+      setDialog({ kind: "review", preview, bundle });
     });
     if (!outcome.ok) setMessage(errorMessage(outcome.error));
     previewMutation.reset();
@@ -680,36 +745,19 @@ export function SkillsSettings({
     review: Extract<OpenDialog, { kind: "review" }>,
   ) => {
     const done = await run(
-      review.updating === undefined
-        ? {
-            type: "import",
-            bundle: review.bundle,
-            reviewedIntegrity: review.preview.integrity,
-          }
-        : {
-            type: "publishVersion",
-            skillId: review.updating.id,
-            bundle: review.bundle,
-            reviewedIntegrity: review.preview.integrity,
-            activate: !review.updating.pinned,
-          },
-      review.updating === undefined
-        ? `${review.preview.manifest.name} imported. Switch it on to use it.`
-        : `${review.updating.name} version published.`,
+      {
+        type: "import",
+        bundle: review.bundle,
+        reviewedIntegrity: review.preview.integrity,
+      },
+      `${review.preview.manifest.name} imported. Switch it on to use it.`,
     );
-    if (done) {
-      setDialog(undefined);
-      uploadFor.current = undefined;
-    }
+    if (done) setDialog(undefined);
   };
 
   const data = state.data;
   const skills = data?.items ?? [];
   const canMutate = data?.canMutate ?? false;
-  const selected =
-    dialog?.kind === "details" || dialog?.kind === "edit"
-      ? skills.find(({ id }) => id === dialog.skillId)
-      : undefined;
 
   return (
     <div className="skills-page">
@@ -726,8 +774,13 @@ export function SkillsSettings({
         }
         otherScope={otherScopeLink(target.scope, workspace)}
         settingsReturnTo={settingsReturnTo}
+        onBrowse={() => {
+          setOpened(undefined);
+          setTab("discover");
+        }}
+        onFromGitHub={() => setDialog({ kind: "github" })}
+        onUpload={() => setDialog({ kind: "import" })}
         onNew={() => setDialog({ kind: "new" })}
-        onImport={() => setDialog({ kind: "import" })}
       />
       <SkillProposalReview
         proposals={data?.proposals ?? []}
@@ -742,19 +795,27 @@ export function SkillsSettings({
         onDialogChange={setDialog}
         onAction={run}
       />
-      {data === undefined ? null : (
-        <SkillList
-          skills={skills}
-          canMutate={canMutate}
-          toggling={toggling}
-          scopeLabel={target.scope}
-          onToggle={(skill, enabled) => void toggle(skill, enabled)}
-          onOpenSettings={(skill, trigger) => {
-            finalFocus.current = trigger;
-            setDialog({ kind: "details", skillId: skill.id });
-          }}
-        />
-      )}
+      <SkillsTabs
+        tab={tab}
+        onTabChange={setTab}
+        target={target}
+        skills={data === undefined ? undefined : skills}
+        canMutate={canMutate}
+        toggling={toggling}
+        targets={installTargets(target, workspace, canMutate)}
+        opened={opened}
+        onOpen={setOpened}
+        onToggle={(skill, enabled) => void toggle(skill, enabled)}
+        onRemove={(skill) =>
+          run(
+            { type: "remove", skillId: skill.id },
+            `${skill.name} removed.`,
+            `remove:${skill.id}`,
+          )
+        }
+        onSaveFile={saveFile}
+        onFromGitHub={() => setDialog({ kind: "github" })}
+      />
       {target.scope === "workspace" &&
       data?.allowPersonalSkills !== undefined ? (
         <PersonalSkillsPolicy
@@ -772,83 +833,40 @@ export function SkillsSettings({
           }
         />
       ) : null}
-      <input
-        ref={(node) => {
+      <SkillFileInputs
+        folderRef={(node) => {
           folderInput.current = node;
-          if (node === null) return;
-          // A cancelled version upload returns focus to the skill's gear.
-          const cancelled = () => {
-            if (uploadFor.current === undefined) return;
-            uploadFor.current = undefined;
-            finalFocus.current?.focus();
-          };
-          node.addEventListener("cancel", cancelled);
-          return () => node.removeEventListener("cancel", cancelled);
         }}
-        className="skill-file-input"
-        type="file"
-        aria-label="Select skill folder"
-        multiple
-        {...({ webkitdirectory: "" } as Record<string, string>)}
-        accept=".json,.md,.txt,.csv,.yaml,.yml,.toml,text/*,application/json"
-        onChange={(event) => void selectFiles(event)}
-      />
-      <input
-        ref={exportInput}
-        className="skill-file-input"
-        type="file"
-        aria-label="Select exported skill"
-        accept=".skill.json,application/json"
-        onChange={(event) => void selectFiles(event)}
+        exportInput={exportInput}
+        onSelect={(event) => void selectFiles(event)}
       />
       {dialog?.kind === "new" ? (
         <SkillFormDialog
           busy={busy}
           onDirtyChange={onDirtyChange}
-          onSave={(draft) => save(draft)}
-          onClose={closeDialog}
-        />
-      ) : null}
-      {dialog?.kind === "edit" && selected !== undefined ? (
-        <SkillFormDialog
-          skill={selected}
-          retry={dialog.retry}
-          busy={busy}
-          finalFocus={finalFocus}
-          onDirtyChange={onDirtyChange}
-          onSave={(draft) => save(draft, selected)}
-          onClose={closeDialog}
-        />
-      ) : null}
-      {dialog?.kind === "details" && selected !== undefined ? (
-        <SkillDetailsDialog
-          skill={selected}
-          canMutate={canMutate}
-          busy={busy}
-          pending={pending}
-          finalFocus={finalFocus}
-          onAction={run}
-          onEdit={() => setDialog({ kind: "edit", skillId: selected.id })}
-          onUploadVersion={() => {
-            uploadFor.current = selected;
-            setDialog(undefined);
-            folderInput.current?.click();
-          }}
-          onExport={() => void exportSkill(selected)}
+          onSave={create}
           onClose={closeDialog}
         />
       ) : null}
       {dialog?.kind === "import" ? (
         <SkillImportDialog
           onChooseFolder={() => {
-            uploadFor.current = undefined;
             setDialog(undefined);
             folderInput.current?.click();
           }}
           onChooseExport={() => {
-            uploadFor.current = undefined;
             setDialog(undefined);
             exportInput.current?.click();
+          }}
+          onClose={closeDialog}
+        />
+      ) : null}
+      {dialog?.kind === "github" ? (
+        <GitHubSkillDialog
+          onOpen={(source) => {
+            setDialog(undefined);
+            setOpened(source);
+            setTab("discover");
           }}
           onClose={closeDialog}
         />
@@ -857,12 +875,7 @@ export function SkillsSettings({
         <SkillReviewDialog
           preview={dialog.preview}
           busy={busy}
-          updating={dialog.updating}
-          finalFocus={dialog.updating === undefined ? undefined : finalFocus}
-          onCancel={() => {
-            setDialog(undefined);
-            uploadFor.current = undefined;
-          }}
+          onCancel={() => setDialog(undefined)}
           onConfirm={() => void confirmReview(dialog)}
         />
       ) : null}

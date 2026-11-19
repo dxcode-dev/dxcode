@@ -11,7 +11,7 @@ export const personalPeopleAdminSettingsSection = {
   label: "People",
   title: "People",
   description:
-    "Give back a person's username change or pause their Mailbox sending.",
+    "Give back a person's username change or pause their Mail sending.",
   icon: UserCog,
   component: PeopleAdminSettings,
   deploymentAdminOnly: true,

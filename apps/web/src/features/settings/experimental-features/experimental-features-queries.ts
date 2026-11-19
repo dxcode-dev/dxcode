@@ -55,7 +55,7 @@ export const updatePersonalExperimentalFeatureMutationOptions = (
       await queryClient.invalidateQueries({
         queryKey: settingsKeys.contexts(userId),
       });
-      // The dx Mailbox flag turns the Mailbox, and each Project's email
+      // The dx Mail flag turns the Mail, and each Project's email
       // card, on or off.
       await queryClient.invalidateQueries({
         queryKey: mailboxKeys.all(userId),

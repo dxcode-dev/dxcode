@@ -79,7 +79,7 @@ disk. Add a profile to `~/.aws/config`:
 ```ini
 [profile dx-logs]
 region = <region>
-credential_process = node /home/user/.local/share/dx/skills/using-workload-identity/scripts/aws-credentials.mjs --role-arn <role-arn> --audience <audience> --region <region>
+credential_process = node /home/user/.agents/skills/using-workload-identity/scripts/aws-credentials.mjs --role-arn <role-arn> --audience <audience> --region <region>
 ```
 
 When the connection is recorded as `OIDC_AWS_ROLE_ARN`, `OIDC_AWS_AUDIENCE`, and `OIDC_AWS_REGION`,

@@ -1,7 +1,7 @@
 import type { MailFolder } from "@dx/api";
 import type { MailListView } from "./mailbox-cache-queries.js";
 
-/** The Mailbox's place, as its URL names it. */
+/** The Mail's place, as its URL names it. */
 export interface MailboxSearch {
   readonly folder?: MailFolder;
   readonly label?: string;

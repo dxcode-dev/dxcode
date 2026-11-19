@@ -258,7 +258,7 @@ export const validateSelfhostConfig = (input) => {
       : portalDomainProblem(portalDomain, domain?.toLowerCase());
   if (portalProblem !== undefined)
     throw new Error(`portalDomain ${portalProblem}.`);
-  // The dx Mailbox: a zone's own domain in the same account, whose mail dx
+  // The dx Mail: a zone's own domain in the same account, whose mail dx
   // takes over (deploy/selfhost/mail.mjs lists the trade-offs).
   const mailDomain = optionalString(
     input.mailDomain,

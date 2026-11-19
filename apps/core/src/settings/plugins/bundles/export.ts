@@ -2,10 +2,13 @@ import {
   isStdioMcpServer,
   type PluginBundleManifest,
   type PluginCodeModuleContent,
+  type SkillRepositoryShape,
+  type SkillResource,
   type SkillWithVersion,
   type StoredMcpServer,
   type StoredPluginBundle,
 } from "@dx/domain";
+import { Effect } from "effect";
 import YAML from "yaml";
 import { iconBytes, PNG_ICON_PATH, SVG_ICON_PATH } from "./plugin-icon.js";
 import { writeZip, type ZipFile } from "./zip-writer.js";
@@ -66,9 +69,29 @@ const exportPanes = (
   return [...declared, ...connectOnly];
 };
 
+/** A skill with its active version's files and their content. */
+export type SkillWithFiles = SkillWithVersion & {
+  readonly files: ReadonlyArray<SkillResource>;
+};
+
+/** Reads each skill's active files, for an export. */
+export const withSkillFiles = (
+  repository: SkillRepositoryShape,
+  skills: ReadonlyArray<SkillWithVersion>,
+) =>
+  Effect.forEach(
+    skills,
+    (skill) =>
+      repository
+        .readFiles(skill.skill.id, skill.active.version)
+        .pipe(Effect.map((files) => ({ ...skill, files }))),
+    { concurrency: 4 },
+  );
+
 export const pluginExportFiles = (input: {
   readonly bundle: StoredPluginBundle;
-  readonly skills: ReadonlyArray<SkillWithVersion>;
+  /** Each skill with its active version's files, from `withSkillFiles`. */
+  readonly skills: ReadonlyArray<SkillWithFiles>;
   readonly mcpServers: ReadonlyArray<StoredMcpServer>;
   /** The code layer's modules, when the plugin has code. */
   readonly codeModules?: ReadonlyArray<PluginCodeModuleContent>;
@@ -156,7 +179,7 @@ export const pluginExportFiles = (input: {
   for (const skill of skills) {
     const folder = `skills/${skill.skill.name}`;
     files.push({ path: `${folder}/SKILL.md`, content: skillMarkdown(skill) });
-    for (const resource of skill.active.resources) {
+    for (const resource of skill.files) {
       files.push({
         path: `${folder}/${resource.path}`,
         content: resource.content,

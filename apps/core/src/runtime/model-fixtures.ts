@@ -97,7 +97,7 @@ const LOCAL_MODEL_FIXTURE_TOOL_CALLS = {
 } as const;
 
 /**
- * Mailbox tool fixtures: one real tool call, then a reply computed from the
+ * Mail tool fixtures: one real tool call, then a reply computed from the
  * tool's result, so a local run shows exactly what the tool returned.
  */
 const MAILBOX_TOOL_CALLS = {
@@ -165,7 +165,7 @@ const fixtureToolResultText = (
  * reached the agent (wiki/agent-mail.md).
  */
 const EMAIL_REQUEST =
-  /^(?:Follow-up email|Email|The owner started this Thread from an email in their dx Mailbox,) from [^\n]+\nSubject: ([^\n]*)\n\n([^\n]*)/;
+  /^(?:Follow-up email|Email|The owner started this Thread from an email in their dx Mail,) from [^\n]+\nSubject: ([^\n]*)\n\n([^\n]*)/;
 
 /**
  * An image on a board: the agent calls the real `artifact` tool with a board

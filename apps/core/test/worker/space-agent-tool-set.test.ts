@@ -177,6 +177,7 @@ const SPACE_TOOLS = [
   "post",
   "react",
   "read_posts",
+  "read_skill_file",
   "search_dx_documentation",
   "set_thread_status",
   "unreact",

@@ -49,7 +49,7 @@ import {
   takeAdditionalRepositoryNote,
 } from "../execution/additional-repository-note.js";
 import { takeDxFilesSandbox } from "../execution/dx-files-sandbox.js";
-import { withoutRepositorySkills } from "../execution/workspace-context.js";
+import { AGENT_SKILLS_DIRECTORY } from "../execution/workspace-context.js";
 import {
   executorAvailable,
   executorSandbox,
@@ -128,6 +128,7 @@ import {
 } from "../settings/environment-variables/sandbox.js";
 import { createManageDxTool } from "../settings/manage-dx/tool.js";
 import type { McpAgentConnectionData } from "../settings/mcp-servers/execution.js";
+import { createSkillFileTool } from "../settings/skills/skill-file-tool.js";
 import {
   SPACE_CLAUDE_CODE_PREFACE,
   spaceAgentProfile,
@@ -144,6 +145,7 @@ import {
 import { createThreadStorageTools } from "../thread-storage/agent-tools.js";
 import { createThreadTools } from "../threads/agent-tools.js";
 import { readCallingThread } from "../threads/calling-thread.js";
+import { RESERVED_SKILL_NAMES } from "./built-in-skill-names.js";
 import {
   builtInSkillDefinitions,
   installBuiltInSkills,
@@ -163,7 +165,7 @@ import {
 import { runsWithoutOrb } from "./orb-free.js";
 import {
   installSettingsSkills,
-  settingsSkillDefinitions,
+  spaceSkillDefinitions,
 } from "./settings-skills.js";
 
 /** Per-submission data from `resolvePromptData`. */
@@ -178,7 +180,7 @@ interface DxAgentPromptData {
   /** The owner is a report reader, so the bug report tools mount. */
   readonly bugReportReader?: true;
   /**
-   * What the Thread's agent may read of its owner's dx Mailbox, when it may:
+   * What the Thread's agent may read of its owner's dx Mail, when it may:
    * the mailbox tools mount and the prompt names the address
    * (wiki/agent-mail.md).
    */
@@ -705,56 +707,53 @@ const agentSandbox: SandboxFactory | undefined =
       };
 
 /**
- * The Thread's sandbox without repository skills named like one of its
- * settings skills: Flue fails a Thread whose repository skill shares a
- * mounted skill's name, so the settings skill wins.
+ * The Thread's sandbox with dx's built-in skills and its settings skills
+ * written to `~/.agents/skills`, which Flue discovers after the repository's
+ * `.agents/skills`, so a repository skill wins a name it shares with a
+ * settings skill. It writes them when Flue creates the sandbox, before skill
+ * discovery, so the first turn's catalog already lists them. Settings
+ * skills named like one in `taken` (dx's own, a repository plugin's) are
+ * left out. A failed install is logged and the Thread runs without them.
  */
-const withSettingsSkills = (
+const withAgentSkills = (
   factory: SandboxFactory,
-  names: ReadonlySet<string>,
-): SandboxFactory =>
-  names.size === 0
-    ? factory
-    : {
-        ...factory,
-        createSandbox: async (request) =>
-          withoutRepositorySkills(await factory.createSandbox(request), names),
-      };
-
-/**
- * The agent-start hook: it writes dx's built-in skills and the Thread's
- * settings skills into the workspace, for the dx agent and Claude Code
- * alike, then tells the agent when its disk is nearly or completely full;
- * Flue runs separate start hooks concurrently, so all stay in one.
- * Installed plugins' code has its own hooks (plugins/worker-host/agent.ts).
- */
-const useWorkspaceStart = (
   threadId: string,
   skills: NonNullable<DxAgentInitialData["skills"]>,
-) => {
-  useAgentStart(async (context) => {
-    // Opening the sandbox runs this turn's activation and its disk guard.
+  taken: ReadonlySet<string>,
+): SandboxFactory => ({
+  ...factory,
+  createSandbox: async (request) => {
+    const sandbox = await factory.createSandbox(request);
     // Skills live outside the repository, so their writes skip Changes
-    // coordination while that stays true; the two sets are separate
-    // directories.
+    // coordination while that stays true.
+    const outside = takeDxFilesSandbox(threadId);
+    const target = {
+      coordinated: sandbox,
+      ...(outside === undefined ? {} : { outside }),
+    };
+    // In order: a settings skill may take a name a built-in skill dropped.
+    await installBuiltInSkills(target);
+    await installSettingsSkills(target, threadId, skills, "orb", taken);
+    return { ...sandbox, skillDirectories: [AGENT_SKILLS_DIRECTORY] };
+  },
+});
+
+/**
+ * The agent-start hook: it tells the agent when its disk is nearly or
+ * completely full, and which artifacts people edited; Flue runs separate
+ * start hooks concurrently, so all stay in one. dx's skills are written
+ * when the sandbox opens (withAgentSkills). Installed plugins' code has its
+ * own hooks (plugins/worker-host/agent.ts).
+ */
+const useWorkspaceStart = (threadId: string) => {
+  useAgentStart(async (context) => {
     // People's artifact edits since the agent's last save, so it reads them
-    // before writing. Read beside the skill installs: it waits on D1 alone,
-    // and it was the last step before every model request (#1793). Best
-    // effort: a failed read never fails the turn.
+    // before writing. Best effort: a failed read never fails the turn.
     const editedNote = (async () =>
       artifactsEditedByPeopleNote(
         agentThreadToolsContext().db,
         threadId,
       ))().catch(() => undefined);
-    const outside = takeDxFilesSandbox(threadId);
-    const target = {
-      coordinated: context.harness.sandbox,
-      ...(outside === undefined ? {} : { outside }),
-    };
-    await Promise.all([
-      installBuiltInSkills(target),
-      installSettingsSkills(target, threadId, skills),
-    ]);
     const disk = takeWorkspaceDisk(threadId);
     const note = disk === undefined ? undefined : workspaceDiskNote(disk);
     if (note !== undefined)
@@ -867,7 +866,6 @@ export function DxAgent(props: AgentProps) {
   }));
   const requesterUserId = currentRequester();
   const skills = initialData?.skills ?? [];
-  const settingsSkillNames = new Set(skills.map(({ name }) => name));
   const space = promptData?.space;
   if (
     agentRuntimeComposition.capabilities === "workspace" &&
@@ -886,6 +884,10 @@ export function DxAgent(props: AgentProps) {
       ),
       tools: dxTools(props.id, promptData, [], requesterUserId),
     });
+    // Skill files have no disk in a Space; this reads them for both modes.
+    const skillFileTool = withToolFailureMessage(
+      createSkillFileTool(props.id, agentThreadToolsContext, skills),
+    );
     if (
       promptData.route !== undefined &&
       isClaudeCodeModel(promptData.route.model)
@@ -900,7 +902,10 @@ export function DxAgent(props: AgentProps) {
       runClaudeCodeOnExecutor(props.id, profile.claudeCodeBuiltInTools);
       useSandbox({ createSandbox: async ({ id }) => executorSandbox(id) });
       for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
-      for (const tool of claudeCodeDxTools(props.id, profile.tools))
+      for (const tool of claudeCodeDxTools(props.id, [
+        ...profile.tools,
+        skillFileTool,
+      ]))
         useTool(tool);
       // The same skills as the dx agent's Space: written to the executor,
       // where the launch script links them into ~/.claude/skills.
@@ -908,10 +913,9 @@ export function DxAgent(props: AgentProps) {
         resetClaudeCodeThreadState(props.id);
         rememberClaudeCodeSandbox(props.id, harness.sandbox);
         const target = { coordinated: harness.sandbox };
-        await Promise.all([
-          installBuiltInSkills(target),
-          installSettingsSkills(target, props.id, skills),
-        ]);
+        // In order: a settings skill may take a name a built-in skill dropped.
+        await installBuiltInSkills(target);
+        await installSettingsSkills(target, props.id, skills, "space");
       });
       // Appended to Claude Code's own prompt, as for every Claude Code
       // Thread; the profile already carries the workspace's and the
@@ -924,10 +928,12 @@ export function DxAgent(props: AgentProps) {
       return profile.prompt;
     }
     for (const tool of profile.tools) useTool(tool);
-    // Declared skills load on demand without a workspace.
-    for (const skill of builtInSkillDefinitions)
-      if (!settingsSkillNames.has(skill.name)) useSkill(skill);
-    for (const skill of settingsSkillDefinitions(skills)) useSkill(skill);
+    useTool(skillFileTool);
+    // Declared skills load on demand without a workspace: dx's built-in
+    // skills whole, settings skills through read_skill_file. A built-in
+    // skill wins a shared name.
+    for (const skill of builtInSkillDefinitions) useSkill(skill);
+    for (const skill of spaceSkillDefinitions(skills)) useSkill(skill);
     return profile.prompt;
   }
   if (agentRuntimeComposition.capabilities === "workspace") {
@@ -935,9 +941,18 @@ export function DxAgent(props: AgentProps) {
       promptData?.route !== undefined &&
       isClaudeCodeModel(promptData.route.model);
     // A workspace composition always has an execution factory.
-    const sandbox = withSettingsSkills(
+    // dx's own skills and the repository plugins' win a name a settings
+    // skill shares; the repository's .agents/skills wins through Flue.
+    const pluginSkillNames = new Set(
+      (promptData?.repositoryPlugins?.plugins ?? []).flatMap((plugin) =>
+        plugin.skills.map(({ name }) => name),
+      ),
+    );
+    const sandbox = withAgentSkills(
       agentSandbox as SandboxFactory,
-      settingsSkillNames,
+      props.id,
+      skills,
+      pluginSkillNames,
     );
     const claudeViewMedia = claudeCode
       ? claudeCodeViewMedia(props.id, promptData)
@@ -956,7 +971,7 @@ export function DxAgent(props: AgentProps) {
         agent,
       ),
     );
-    useWorkspaceStart(props.id, skills);
+    useWorkspaceStart(props.id);
     usePluginCodeLifecycle(codePlugins, deliveredText());
     // Claude Code mode: the CLI in the workspace runs the loop and its own
     // tools; Flue records each call through a mirror of the same name. dx's
@@ -1009,12 +1024,7 @@ export function DxAgent(props: AgentProps) {
         // The repository plugins' skills, as the dx agent mounts them below.
         (promptData?.repositoryPlugins?.plugins ?? []).flatMap((plugin) =>
           plugin.skills
-            .filter(
-              ({ name }) =>
-                !settingsSkillNames.has(name) &&
-                name !== dxWorkspaceSkill.name &&
-                !builtInSkillDefinitions.some((skill) => skill.name === name),
-            )
+            .filter(({ name }) => !RESERVED_SKILL_NAMES.has(name))
             .map(({ name, directory }) => ({ name, directory })),
         ),
         // A plugin agent's tool list also decides Claude's own tools.
@@ -1028,19 +1038,15 @@ export function DxAgent(props: AgentProps) {
     }
     for (const tool of keep(dxTools(props.id, promptData, [], requesterUserId)))
       useTool(tool);
-    // Flue lists them in the Available Skills catalog and loads each on
-    // demand through activate_skill, like a repository's .agents/skills. A
-    // settings skill replaces dx's own skill of the same name.
-    for (const skill of [dxWorkspaceSkill, ...builtInSkillDefinitions])
-      if (!settingsSkillNames.has(skill.name)) useSkill(skill);
-    for (const skill of settingsSkillDefinitions(skills)) useSkill(skill);
+    // Flue lists every skill in the Available Skills catalog and loads each
+    // on demand through activate_skill. dx's built-in and the Thread's
+    // settings skills it discovers in ~/.agents/skills (withAgentSkills);
+    // dx-workspace and the repository plugins' skills are mounted here, and
+    // a discovered skill of the same name gives way to them.
+    useSkill(dxWorkspaceSkill);
     for (const skill of repositoryPluginSkills(
       promptData,
-      new Set([
-        ...settingsSkillNames,
-        dxWorkspaceSkill.name,
-        ...builtInSkillDefinitions.map(({ name }) => name),
-      ]),
+      RESERVED_SKILL_NAMES,
     ))
       useSkill(skill);
   }

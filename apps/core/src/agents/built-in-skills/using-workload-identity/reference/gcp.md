@@ -105,7 +105,7 @@ Without gcloud, call REST APIs with plain HTTP. `scripts/gcp-access-token.mjs --
 `OIDC_GCP_PROVIDER` and `OIDC_GCP_AUDIENCE` recorded, it needs no arguments:
 
 ```sh
-curl -sS -H "Authorization: Bearer $(node /home/user/.local/share/dx/skills/using-workload-identity/scripts/gcp-access-token.mjs --provider '<provider>' --audience '<audience>')" \
+curl -sS -H "Authorization: Bearer $(node /home/user/.agents/skills/using-workload-identity/scripts/gcp-access-token.mjs --provider '<provider>' --audience '<audience>')" \
   -H 'Content-Type: application/json' https://logging.googleapis.com/v2/entries:list \
   -d '{"resourceNames":["projects/<resource-project>"],"filter":"severity>=ERROR","orderBy":"timestamp desc","pageSize":20}'
 ```

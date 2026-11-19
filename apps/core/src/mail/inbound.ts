@@ -1,7 +1,7 @@
 import {
+  dkimAligned,
   mailAuthenticated,
   mailHeaderAddresses,
-  mailHeaderDisplayName,
   mailHtmlToText,
   mailMessageIds,
   mailRecipientOn,
@@ -16,12 +16,7 @@ import type { Bindings } from "../http/types.js";
 import { mailLogger } from "../logging.js";
 import { publishUserInvalidation } from "../realtime/publication.js";
 import { autoLabelMail } from "./auto-labels.js";
-import {
-  type MailConfiguration,
-  mailboxFeatureOn,
-  mailConfiguration,
-} from "./config.js";
-import { handlePlusMail } from "./plus-inbound.js";
+import { mailboxFeatureOn, mailConfiguration } from "./config.js";
 import {
   conversationKeyFor,
   findMailboxByUsername,
@@ -43,14 +38,16 @@ import {
  *   postmaster@ / abuse@                 → the deployment admins' mailboxes
  *   username@ (current or retired name)  → that person's mailbox
  *   username+tag@                        → the same, labelled with the
- *                                          Project the tag names; from the
- *                                          owner, it may start or continue
- *                                          a Thread (plus-inbound.ts)
+ *                                          Project the tag names
  *   anything else                        → drop
  *
- * Mail that fails authentication is kept in Spam, which agents never read.
- * Nothing is ever sent back but the one "Started" notice, so silence never
- * tells a sender which addresses or people exist.
+ * Mail never starts or continues work by itself (Start thread in Mail
+ * does, start-thread.ts), so filing only decides what the person and their
+ * agents see (`mailTrust`): verified mail and mail its domain vouches for
+ * reach the Inbox, the second marked unverified; Spam, which agents never
+ * read, gets suspicious headers, mail its domain's DMARC fails, and mail
+ * nothing ties to the domain it claims. Nothing is ever sent back, so
+ * silence never tells a sender which addresses or people exist.
  */
 
 const HOUR_MS = 60 * 60 * 1_000;
@@ -191,10 +188,27 @@ const sha256Hex = async (bytes: Uint8Array) =>
   ).join("");
 
 /**
- * Why a message cannot be trusted as its `From:` says, or undefined when it
- * can: one clean sender and Cloudflare's DMARC pass with aligned DKIM.
+ * How much an email can be trusted, from its headers and Cloudflare's own
+ * first `Authentication-Results` (RFC 8601):
+ *
+ *   verified     DMARC passed with a DKIM signature aligned with `From:`
+ *   unverified   no DMARC verdict, but SPF passed for an envelope aligned
+ *                with the `From:` domain, or an aligned DKIM signature
+ *                passed: the domain's own servers sent it, it just doesn't
+ *                publish DMARC (common for company domains)
+ *   spam         repeated or malformed headers (`header`); DMARC failed,
+ *                so the domain itself says it is forged (`dmarc_fail`); or
+ *                nothing ties it to the domain it claims (`unauthenticated`)
  */
-export const mailDistrust = (parsed: ParsedMail, envelopeFrom: string) => {
+export const mailTrust = (
+  parsed: ParsedMail,
+  envelopeFrom: string,
+):
+  | { readonly trust: "verified" | "unverified" }
+  | {
+      readonly trust: "spam";
+      readonly reason: "header" | "dmarc_fail" | "unauthenticated";
+    } => {
   const repeated = ["from", "sender", "to", "cc", "subject", "message-id"].some(
     (name) =>
       parsed.headers.filter((header) => header.name === name).length > 1,
@@ -210,23 +224,34 @@ export const mailDistrust = (parsed: ParsedMail, envelopeFrom: string) => {
     // and can't start a result there: those split on `;` and spaces.
     /["();\\\s]/.test(envelopeFrom)
   )
-    return "header";
+    return { trust: "spam", reason: "header" };
   const sender = parsed.header("sender");
   if (
     sender !== undefined &&
     (mailHeaderAddresses(sender).length !== 1 ||
       mailHeaderAddresses(sender)[0] !== from[0])
   )
-    return "header";
-  if (!mailAuthenticated(readMailAuthentication(parsed.headers), from[0] ?? ""))
-    return "unauthenticated";
-  return undefined;
+    return { trust: "spam", reason: "header" };
+  const address = from[0] ?? "";
+  const authentication = readMailAuthentication(parsed.headers);
+  if (mailAuthenticated(authentication, address)) return { trust: "verified" };
+  if (authentication.trusted && authentication.dmarc === "fail")
+    return { trust: "spam", reason: "dmarc_fail" };
+  const domain = address.slice(address.lastIndexOf("@") + 1).toLowerCase();
+  if (
+    mailSpfAligned(authentication, address) ||
+    (authentication.trusted &&
+      authentication.dkimPassDomains.some((signer) =>
+        dkimAligned(domain, signer),
+      ))
+  )
+    return { trust: "unverified" };
+  return { trust: "spam", reason: "unauthenticated" };
 };
 
 /** Files one message in one person's mailbox. */
 const deliver = async (
   bindings: Bindings,
-  configuration: MailConfiguration,
   mail: InboundMail,
   parsed: ParsedMail,
   owner: MailboxOwner,
@@ -234,8 +259,10 @@ const deliver = async (
   waitUntil: (promise: Promise<unknown>) => void,
 ): Promise<InboundOutcome> => {
   const db = bindings.DB as D1Database;
-  const distrust = mailDistrust(parsed, mail.from);
-  const trusted = distrust === undefined;
+  const filing = mailTrust(parsed, mail.from);
+  // Verified mail counts apart from the rest for flood caps and duplicates.
+  const trusted = filing.trust === "verified";
+  const inbox = filing.trust !== "spam";
   // Trusted and untrusted mail have separate hourly caps, so a flood of
   // spam can never crowd out real mail such as a password reset.
   const fromHeader = mailHeaderAddresses(parsed.from);
@@ -285,25 +312,6 @@ const deliver = async (
     ...mailMessageIds(parsed.references),
     ...mailMessageIds(parsed.inReplyTo),
   ].flatMap((reference) => safeMessageId(reference) ?? []);
-  // A reply to an email the person sent from dx, whose From domain doesn't
-  // sign its mail (no DMARC with aligned DKIM) but whose server passed SPF
-  // for that domain, goes to the Inbox. A forger would also need the
-  // Message-ID of the person's email, which only its recipients saw. It
-  // stays unauthenticated: agents and the `+tag` gate still see that.
-  const answersSent =
-    distrust === "unauthenticated" &&
-    fromAddress !== undefined &&
-    references.length > 0 &&
-    mailSpfAligned(readMailAuthentication(parsed.headers), fromAddress) &&
-    (await db
-      .prepare(
-        `SELECT 1 AS found FROM mail_item
-          WHERE owner_user_id = ? AND direction = 'out'
-            AND message_id IN (SELECT value FROM json_each(?)) LIMIT 1`,
-      )
-      .bind(owner.userId, JSON.stringify(references))
-      .first<number>("found")) !== null;
-  const inbox = trusted || answersSent;
   // Spam is its own conversation: its Message-ID and References are the
   // sender's to forge.
   const conversationKey = inbox
@@ -348,9 +356,7 @@ const deliver = async (
       size: mail.raw.byteLength,
       has_attachments: parsed.parts.attachments.length > 0 ? 1 : 0,
       preview: parsed.preview,
-      // A reply the Inbox took on SPF is the only unauthenticated mail stored
-      // as `stored` (a person's "Not spam" keeps its `spam_*` reason).
-      disposition: inbox ? "stored" : `spam_${distrust}`,
+      disposition: filing.trust === "spam" ? `spam_${filing.reason}` : "stored",
       thread_id: null,
     },
     { raw: mail.raw, parts: parsed.parts },
@@ -360,34 +366,19 @@ const deliver = async (
     ownerUserId: owner.userId,
     mailId: id,
     tagged: project !== undefined,
-    spam: !inbox,
-    replyTrust: answersSent,
+    trust: filing.trust,
     size: mail.raw.byteLength,
   });
-  let outcome: InboundOutcome = {
+  const outcome: InboundOutcome = {
     kind: inbox ? "stored" : "spam",
     mailId: id,
     ownerUserId: owner.userId,
-    ...(trusted ? {} : { reason: answersSent ? "reply" : distrust }),
+    ...(filing.trust === "spam"
+      ? { reason: filing.reason }
+      : filing.trust === "unverified"
+        ? { reason: "unverified" }
+        : {}),
   };
-  // Only the owner's own email to their `+tag` can start work.
-  if (
-    project !== undefined &&
-    fromAddress !== undefined &&
-    owner.emailVerified &&
-    fromAddress === owner.email.toLowerCase()
-  )
-    outcome = await handlePlusMail(bindings, configuration, {
-      mail,
-      parsed,
-      owner,
-      mailId: id,
-      messageId,
-      projectId: project.projectId,
-      tag: project.tag,
-      senderName: mailHeaderDisplayName(parsed.from) ?? owner.name,
-      waitUntil,
-    });
   await publishUserInvalidation(
     bindings,
     owner.userId as never,
@@ -419,7 +410,7 @@ export const handleInboundMail = async (
   if (mail.raw.byteLength > MAX_INBOUND_MAIL_BYTES) return drop("too_large");
   const recipient = mailRecipientOn(mail.to, configuration.domain);
   if (recipient === undefined) return drop("unknown_recipient");
-  // Only people who turned the Mailbox on (a beta flag) receive mail.
+  // Only people who turned the Mail on (a beta flag) receive mail.
   const db = bindings.DB;
   const withMailbox = async <T extends { readonly userId: string }>(
     person: T | undefined,
@@ -445,20 +436,11 @@ export const handleInboundMail = async (
     return drop("unparseable", { cause });
   }
   if (owner !== undefined)
-    return deliver(
-      bindings,
-      configuration,
-      mail,
-      parsed,
-      owner,
-      recipient.tag,
-      waitUntil,
-    );
+    return deliver(bindings, mail, parsed, owner, recipient.tag, waitUntil);
   let last: InboundOutcome = { kind: "dropped", reason: "unknown_recipient" };
   for (const operator of operators)
     last = await deliver(
       bindings,
-      configuration,
       mail,
       parsed,
       operator,

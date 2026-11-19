@@ -17,6 +17,7 @@ const semanticUrl = (input: RequestInfo | URL) => {
 
 export class FrontendNetworkHarness {
   readonly requests: RecordedRequest[] = [];
+  private readonly bodies = new WeakMap<RecordedRequest, string>();
 
   constructor(
     private readonly respond: (
@@ -31,9 +32,15 @@ export class FrontendNetworkHarness {
         (input instanceof Request ? input.method.toUpperCase() : "GET"),
       url: semanticUrl(input),
     };
+    if (typeof init?.body === "string") this.bodies.set(request, init.body);
     this.requests.push(request);
     return this.respond(request);
   };
+
+  /** A recorded request's string body, as sent. */
+  bodyOf(request: RecordedRequest) {
+    return this.bodies.get(request);
+  }
 
   getCount(url: string) {
     const expected = semanticUrl(url);

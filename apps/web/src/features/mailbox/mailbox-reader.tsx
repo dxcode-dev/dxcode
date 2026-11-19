@@ -677,14 +677,14 @@ function MessageDetails({ message }: { readonly message: MailMessage }) {
   return (
     <div className="mailbox-message-body">
       {message.authenticated ||
-      message.direction === "out" ? null : message.replyToSent ? (
+      message.direction === "out" ? null : message.trust === "unverified" ? (
         <p className="mailbox-notice" role="note">
           <ShieldAlert aria-hidden="true" />
           <span>
-            A reply to your email from{" "}
-            <strong>{addressLine(message.from)}</strong>. Its domain doesn't
-            sign its mail, so dx kept it because it answers an email you sent
-            and came from a server its domain allows.
+            Unverified sender: <strong>{addressLine(message.from)}</strong>. Its
+            domain doesn't sign its mail with DMARC, so dx only knows it came
+            from a server that domain allows. Take care with its links and
+            requests.
           </span>
         </p>
       ) : (

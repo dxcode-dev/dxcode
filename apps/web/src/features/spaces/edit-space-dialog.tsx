@@ -130,7 +130,7 @@ export function EditSpaceDialog({
   };
   const changed = Object.keys(changes).length > 0;
   const canSave = changed && name.trim() !== "" && !update.isPending;
-  // Sharing was held back because the Space's agents read Mailbox mail that
+  // Sharing was held back because the Space's agents read Mail mail that
   // members would see; saving again says the owner agrees.
   const mailReads =
     isSpaceMailReadsRefusal(update.error) && sharing === "workspace";

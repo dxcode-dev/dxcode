@@ -42,7 +42,7 @@ const ACCESS_OPTIONS: ReadonlyArray<readonly [MailAgentAccess, string]> = [
 ];
 
 /**
- * Mailbox settings: the address, what the person's agents may read, the
+ * Mail settings: the address, what the person's agents may read, the
  * senders whose mail is always private, and today's sending.
  */
 export function MailboxSettingsDialog({
@@ -80,7 +80,7 @@ export function MailboxSettingsDialog({
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogContent size="lg" className="mailbox-dialog mailbox-settings">
         <DialogTitle className="mailbox-dialog-title">
-          Mailbox settings
+          Mail settings
         </DialogTitle>
         <SettingsCard>
           <SettingsRow

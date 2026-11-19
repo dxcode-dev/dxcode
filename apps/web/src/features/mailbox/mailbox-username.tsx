@@ -130,7 +130,7 @@ function UsernameForm({
 }
 
 /**
- * Before the Mailbox opens, a person with a placeholder or reserved
+ * Before Mail opens, a person with a placeholder or reserved
  * username picks one. That pick does not use up their one change.
  */
 export function MailboxUsernamePick({
@@ -146,13 +146,13 @@ export function MailboxUsernamePick({
         <Mail className="mailbox-address-icon" aria-hidden="true" />
         <h1 className="mailbox-welcome-title">Pick your dx address</h1>
         <p className="mailbox-welcome-copy">
-          Your Mailbox needs a username first. You and your agents share this
+          Your Mail needs a username first. You and your agents share this
           address. Picking it now doesn't use up your one username change.
         </p>
         <UsernameForm
           userId={userId}
           mailbox={mailbox}
-          submitLabel="Open my Mailbox"
+          submitLabel="Open Mail"
         />
       </Card>
     </div>

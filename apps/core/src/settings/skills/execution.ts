@@ -13,6 +13,7 @@ import {
 import { Effect, Result, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
+import { readSkillFileContent } from "./file-store.js";
 
 export class SkillResourceForbidden extends Schema.TaggedError<SkillResourceForbidden>()(
   "SkillResourceForbidden",
@@ -37,7 +38,8 @@ const VersionRow = Schema.Struct({
 const ResourceRow = Schema.Struct({
   path: Schema.String,
   media_type: Schema.String,
-  content: Schema.String,
+  /** NULL while the content is in R2 (file-store.ts). */
+  content: Schema.NullOr(Schema.String),
   size_bytes: Schema.Finite,
   integrity: Schema.String,
 });
@@ -71,11 +73,11 @@ const parseJson = <A>(
     catch: () => new SkillExecutionUnavailable(),
   });
 
-const decodeResource = (resource: typeof ResourceRow.Type) =>
+const decodeResource = (resource: typeof ResourceRow.Type, content: string) =>
   Schema.decodeUnknownEffect(SkillResource)({
     path: resource.path,
     mediaType: resource.media_type,
-    content: resource.content,
+    content,
     sizeBytes: resource.size_bytes,
     integrity: resource.integrity,
   }).pipe(Effect.mapError(() => new SkillExecutionUnavailable()));
@@ -154,7 +156,6 @@ export const resolveSkillAgentData = Effect.fn("resolveSkillAgentData")(
               typeof manifest.description === "string"
                 ? manifest.description
                 : version.description,
-            instructions: version.instructions,
             resources,
           };
         }),
@@ -164,12 +165,19 @@ export const resolveSkillAgentData = Effect.fn("resolveSkillAgentData")(
   },
 );
 
-export const readSkillResource = Effect.fn("readSkillResource")(function* (
+/**
+ * A skill version for a Thread whose snapshot holds that version: its
+ * SKILL.md body and description, and its files, each checked against its
+ * integrity (every file, or those at `paths`). One snapshot read, one
+ * version read, and one file query however many files; content R2 holds is
+ * read from there.
+ */
+export const readSkillResources = Effect.fn("readSkillResources")(function* (
   bindings: Bindings,
   rawThreadId: string,
   rawSkillId: string,
   rawVersion: number,
-  rawPath: string,
+  rawPaths?: ReadonlyArray<string>,
 ) {
   const db = yield* decodeD1Binding(bindings.DB).pipe(
     Effect.mapError(() => new SkillExecutionUnavailable()),
@@ -183,18 +191,45 @@ export const readSkillResource = Effect.fn("readSkillResource")(function* (
   const version = yield* Schema.decodeEffect(SkillVersion)(rawVersion).pipe(
     Effect.mapError(() => new SkillResourceForbidden()),
   );
-  const path = yield* Schema.decodeEffect(SkillResourcePath)(rawPath).pipe(
-    Effect.mapError(() => new SkillResourceForbidden()),
-  );
-  const threadRow = yield* Effect.tryPromise({
+  const paths =
+    rawPaths === undefined
+      ? undefined
+      : yield* Effect.forEach(rawPaths, (path) =>
+          Schema.decodeEffect(SkillResourcePath)(path).pipe(
+            Effect.mapError(() => new SkillResourceForbidden()),
+          ),
+        );
+  const [threadRows, versionRows, resourceRows] = yield* Effect.tryPromise({
     try: () =>
-      db
-        .prepare("SELECT skill_snapshot_json FROM threads WHERE id = ? LIMIT 1")
-        .bind(threadId)
-        .first(),
+      db.batch([
+        db
+          .prepare(
+            "SELECT skill_snapshot_json FROM threads WHERE id = ? LIMIT 1",
+          )
+          .bind(threadId),
+        db
+          .prepare(
+            "SELECT integrity, instructions, description FROM skill_version WHERE skill_id = ? AND version = ? LIMIT 1",
+          )
+          .bind(skillId, version),
+        db
+          .prepare(
+            `SELECT path, media_type, content, size_bytes, integrity
+               FROM skill_resource
+              WHERE skill_id = ? AND version = ?
+                ${paths === undefined ? "" : "AND path IN (SELECT value FROM json_each(?))"}
+              ORDER BY path`,
+          )
+          .bind(
+            skillId,
+            version,
+            ...(paths === undefined ? [] : [JSON.stringify(paths)]),
+          ),
+      ]),
     catch: () => new SkillExecutionUnavailable(),
   });
-  if (threadRow === null) return yield* new SkillResourceForbidden();
+  const threadRow = threadRows?.results[0];
+  if (threadRow === undefined) return yield* new SkillResourceForbidden();
   const decodedThread = yield* Schema.decodeUnknownEffect(ThreadSnapshotRow)(
     threadRow,
   ).pipe(Effect.mapError(() => new SkillExecutionUnavailable()));
@@ -208,76 +243,108 @@ export const readSkillResource = Effect.fn("readSkillResource")(function* (
     (snapshot) => snapshot.id === skillId && snapshot.version === version,
   );
   if (authorized === undefined) return yield* new SkillResourceForbidden();
-  const row = yield* Effect.tryPromise({
-    try: () =>
-      db
-        .prepare(
-          `SELECT path, media_type, content, size_bytes, integrity
-             FROM skill_resource
-            WHERE skill_id = ? AND version = ? AND path = ? LIMIT 1`,
-        )
-        .bind(skillId, version, path)
-        .first(),
-    catch: () => new SkillExecutionUnavailable(),
-  });
-  if (row === null) return yield* new SkillResourceForbidden();
-  const resourceRow = yield* Schema.decodeUnknownEffect(ResourceRow)(row).pipe(
-    Effect.mapError(() => new SkillExecutionUnavailable()),
-  );
-  const resource = yield* decodeResource(resourceRow);
-  const versionRow = yield* Effect.tryPromise({
-    try: () =>
-      db
-        .prepare(
-          "SELECT integrity FROM skill_version WHERE skill_id = ? AND version = ? LIMIT 1",
-        )
-        .bind(skillId, version)
-        .first<{ integrity: string }>(),
-    catch: () => new SkillExecutionUnavailable(),
-  });
+  const versionRow = versionRows?.results[0] as
+    | {
+        readonly integrity?: unknown;
+        readonly instructions?: unknown;
+        readonly description?: unknown;
+      }
+    | undefined;
   if (versionRow?.integrity !== authorized.integrity) {
     return yield* new SkillExecutionUnavailable();
   }
-  const digest = yield* Effect.promise(async () => {
-    const hash = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(resource.content),
-    );
-    return Array.from(new Uint8Array(hash), (byte) =>
-      byte.toString(16).padStart(2, "0"),
-    ).join("");
-  }).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(SkillIntegrity)),
-    Effect.mapError(() => new SkillExecutionUnavailable()),
+  const instructions = String(versionRow.instructions ?? "");
+  const description = String(versionRow.description ?? "");
+  const rows = yield* Schema.decodeUnknownEffect(Schema.Array(ResourceRow))(
+    resourceRows?.results ?? [],
+  ).pipe(Effect.mapError(() => new SkillExecutionUnavailable()));
+  const files = yield* Effect.forEach(
+    rows,
+    (row) =>
+      Effect.gen(function* () {
+        const content = yield* Effect.tryPromise({
+          try: () => readSkillFileContent(bindings.DX_STORAGE, row),
+          catch: () => new SkillExecutionUnavailable(),
+        });
+        if (content === undefined) {
+          return yield* new SkillExecutionUnavailable();
+        }
+        const resource = yield* decodeResource(row, content);
+        const digest = yield* Effect.promise(() => sha256Hex(content)).pipe(
+          Effect.flatMap(Schema.decodeUnknownEffect(SkillIntegrity)),
+          Effect.mapError(() => new SkillExecutionUnavailable()),
+        );
+        if (digest !== resource.integrity) {
+          return yield* new SkillExecutionUnavailable();
+        }
+        return {
+          skillId,
+          version,
+          path: resource.path,
+          mediaType: resource.mediaType,
+          content: resource.content,
+          sizeBytes: resource.sizeBytes,
+          integrity: resource.integrity,
+        };
+      }),
+    { concurrency: 8 },
   );
-  if (digest !== resource.integrity) {
-    return yield* new SkillExecutionUnavailable();
-  }
-  return {
-    skillId,
-    version,
-    path: resource.path,
-    mediaType: resource.mediaType,
-    content: resource.content,
-    sizeBytes: resource.sizeBytes,
-    integrity: resource.integrity,
-  };
+  return { instructions, description, files };
+});
+
+const sha256Hex = async (content: string) => {
+  const hash = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(content),
+  );
+  return Array.from(new Uint8Array(hash), (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
+};
+
+/** One file of a skill version in the Thread's snapshot. */
+export const readSkillResource = Effect.fn("readSkillResource")(function* (
+  bindings: Bindings,
+  rawThreadId: string,
+  rawSkillId: string,
+  rawVersion: number,
+  rawPath: string,
+) {
+  const {
+    files: [resource],
+  } = yield* readSkillResources(bindings, rawThreadId, rawSkillId, rawVersion, [
+    rawPath,
+  ]);
+  if (resource === undefined) return yield* new SkillResourceForbidden();
+  return resource;
 });
 
 /**
- * A resource's text for a skill in the Thread's snapshot, or undefined when
- * the read is refused or fails.
+ * A skill version in the Thread's snapshot: its SKILL.md body and every
+ * file by path, or undefined when the read is refused or fails.
  */
-export const readThreadSkillResource = async (
+export const readThreadSkillResources = async (
   threadId: string,
   skillId: string,
   version: number,
-  path: string,
-) => {
+): Promise<
+  | {
+      readonly instructions: string;
+      readonly files: ReadonlyMap<string, string>;
+    }
+  | undefined
+> => {
   const result = await Effect.runPromise(
     Effect.result(
-      readSkillResource(env as Bindings, threadId, skillId, version, path),
+      readSkillResources(env as Bindings, threadId, skillId, version),
     ),
   );
-  return Result.isSuccess(result) ? result.success.content : undefined;
+  return Result.isSuccess(result)
+    ? {
+        instructions: result.success.instructions,
+        files: new Map(
+          result.success.files.map(({ path, content }) => [path, content]),
+        ),
+      }
+    : undefined;
 };

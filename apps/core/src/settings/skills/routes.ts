@@ -1,17 +1,24 @@
 import {
   ApproveSkillProposalRequestSchema,
   DecideSkillProposalResponseSchema,
+  DiscoverSkillsResponseSchema,
   ExportSkillResponseSchema,
   ImportSkillRequestSchema,
   ImportSkillResponseSchema,
+  InstallSkillRequestSchema,
+  InstallSkillResponseSchema,
   ListSkillsResponseSchema,
   PreviewSkillRequestSchema,
   PreviewSkillResponseSchema,
+  PreviewSkillSourceRequestSchema,
+  PreviewSkillSourceResponseSchema,
   PublishSkillVersionRequestSchema,
   PublishSkillVersionResponseSchema,
   RemoveSkillResponseSchema,
   type SettingsFieldError,
   type SkillData,
+  SkillFileResponseSchema,
+  type SkillInstallSource,
   SkillIntegrityConflictResponseSchema,
   SkillLimitResponseSchema,
   SkillMcpReferenceInvalidResponseSchema,
@@ -20,6 +27,7 @@ import {
   SkillProposalDecidedResponseSchema,
   SkillProposalNotFoundResponseSchema,
   SkillProposalParamsSchema,
+  SkillSourceUnavailableResponseSchema,
   SkillsForbiddenResponseSchema,
   SkillsInvalidRequestResponseSchema,
   SkillsUnavailableResponseSchema,
@@ -53,6 +61,10 @@ import type { AppEnv } from "../../http/types.js";
 import { authorizationLogger } from "../../logging.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import { settleOwnerAsk } from "../../thread-artifacts/owner-ask.js";
+import {
+  PluginBundleRejected,
+  PluginBundleSourceUnavailable,
+} from "../plugins/bundles/errors.js";
 import { wakeOnProposalDecided } from "../proposal-decided.js";
 import { SettingsService } from "../service.js";
 import { exportSkillVersion, SkillImportRejected } from "./import.js";
@@ -67,6 +79,11 @@ import {
   SkillProposalNotFound,
 } from "./proposals.js";
 import { SkillService } from "./service.js";
+import {
+  discoverDirectory,
+  previewDirectorySkill,
+  previewGitHubSkill,
+} from "./sources.js";
 
 class InvalidSkillRequest extends Schema.TaggedError<InvalidSkillRequest>()(
   "InvalidSkillRequest",
@@ -239,14 +256,25 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
       }),
       status,
     );
+  if (failure instanceof PluginBundleSourceUnavailable) {
+    return response(
+      SkillSourceUnavailableResponseSchema,
+      503,
+      "SKILL_SOURCE_UNAVAILABLE",
+      "The skill's source could not be reached.",
+    );
+  }
   if (
     failure instanceof InvalidSkillRequest ||
-    failure instanceof SkillImportRejected
+    failure instanceof SkillImportRejected ||
+    failure instanceof PluginBundleRejected
   ) {
     const fieldErrors =
       failure instanceof SkillImportRejected
         ? [fieldError(failure.field, failure.reason)]
-        : failure.fieldErrors;
+        : failure instanceof PluginBundleRejected
+          ? [fieldError("source", failure.reason)]
+          : failure.fieldErrors;
     return context.json(
       Schema.encodeUnknownSync(SkillsInvalidRequestResponseSchema)({
         status: "error",
@@ -346,6 +374,32 @@ const run = async <A, E>(
     : failureResponse(context, result.failure);
 };
 
+/** Reads a skill from skills.sh or GitHub and checks it as an upload. */
+const previewSource = (source: SkillInstallSource) =>
+  source.kind === "skills.sh"
+    ? previewDirectorySkill(source.id).pipe(
+        Effect.map((read) => ({ ...read, commit: undefined })),
+      )
+    : previewGitHubSkill(
+        source.commit === undefined
+          ? source.url
+          : pinnedGitHubUrl(source.url, source.commit),
+        source.skill,
+      );
+
+/**
+ * The URL at `commit`: GitHub reads a commit SHA as a ref, so the install
+ * reads the files the preview showed even after the branch moves.
+ */
+const pinnedGitHubUrl = (url: string, commit: string) => {
+  const match =
+    /^https:\/\/(?:www\.)?github\.com\/([^/]+\/[^/]+?)(?:\.git)?(?:\/tree\/[^/]+(\/.*)?)?\/?$/.exec(
+      url.trim(),
+    );
+  if (match === null) return url;
+  return `https://github.com/${match[1]}/tree/${commit}${match[2] ?? ""}`;
+};
+
 const registerRoutes = (
   router: Hono<AppEnv>,
   routeFor: (context: Context<AppEnv>) => RouteScope,
@@ -359,11 +413,12 @@ const registerRoutes = (
   ) =>
     Effect.gen(function* () {
       const db = yield* decodeD1Binding(context.env.DB);
+      const storage = context.env.DX_STORAGE;
       const access = yield* authorize(
         routeFor(context),
         context.get("principal"),
-      ).pipe(Effect.provide(layers(db)));
-      return yield* use(db, access).pipe(Effect.provide(layers(db)));
+      ).pipe(Effect.provide(layers(db, storage)));
+      return yield* use(db, access).pipe(Effect.provide(layers(db, storage)));
     });
   const mutate = (access: SkillAccess) =>
     access.canMutate
@@ -406,6 +461,131 @@ const registerRoutes = (
           });
         }),
       ),
+    ),
+  );
+
+  // skills.sh's directory: its most installed skills, or a search.
+  router.get("/discover", (context) =>
+    run(
+      context,
+      operation(context, () =>
+        Effect.gen(function* () {
+          const items = yield* discoverDirectory(context.req.query("q") ?? "");
+          return yield* Schema.encodeUnknownEffect(
+            DiscoverSkillsResponseSchema,
+          )({ status: "success", data: { items: [...items] } });
+        }),
+      ),
+    ),
+  );
+
+  // A skill from skills.sh or GitHub with every file, to review before
+  // installing it here.
+  router.post("/sources/preview", (context) =>
+    run(
+      context,
+      operation(context, (_db, access) =>
+        Effect.gen(function* () {
+          const body = yield* decodeJsonBody(
+            context.req,
+            PreviewSkillSourceRequestSchema,
+            () => invalid("source", "Use a skills.sh ID or a GitHub URL."),
+          );
+          const read = yield* previewSource(body.source);
+          const repository = yield* SkillRepository;
+          const installed = (yield* repository.list(access.target)).find(
+            ({ skill }) => skill.name === read.preview.manifest.name,
+          );
+          return yield* Schema.encodeUnknownEffect(
+            PreviewSkillSourceResponseSchema,
+          )({
+            status: "success",
+            data: {
+              manifest: read.preview.manifest,
+              instructions: read.preview.instructions,
+              files: read.preview.resources,
+              source: read.preview.source,
+              integrity: read.preview.integrity,
+              totalBytes: read.preview.totalBytes,
+              skipped: read.skipped,
+              ...(read.commit === undefined ? {} : { commit: read.commit }),
+              ...(installed === undefined
+                ? {}
+                : {
+                    installed: {
+                      id: installed.skill.id,
+                      version: installed.skill.activeVersion,
+                      integrity: installed.active.integrity,
+                    },
+                  }),
+            },
+          });
+        }),
+      ),
+    ),
+  );
+
+  // Installs a reviewed skill from skills.sh or GitHub, switched on: a new
+  // skill, or a new active version of this scope's skill of that name.
+  router.post("/install", (context) =>
+    run(
+      context,
+      operation(context, (_db, access) =>
+        Effect.gen(function* () {
+          const body = yield* decodeJsonBody(
+            context.req,
+            InstallSkillRequestSchema,
+            () => invalid("request", "Use source and reviewedIntegrity."),
+          );
+          yield* mutate(access);
+          const read = yield* previewSource(body.source);
+          if (read.preview.integrity !== body.reviewedIntegrity) {
+            return yield* new SkillIntegrityConflict();
+          }
+          const service = yield* SkillService;
+          const repository = yield* SkillRepository;
+          const existing = yield* repository.list(access.target);
+          const current = existing.find(
+            ({ skill }) => skill.name === read.preview.manifest.name,
+          );
+          const saved =
+            current === undefined
+              ? yield* service.createFromPreview(
+                  access.target,
+                  read.preview,
+                  audit(context),
+                  { enabled: true, existing },
+                )
+              : current.active.integrity === read.preview.integrity
+                ? current
+                : yield* service.publishFromPreview(
+                    access.target,
+                    current.skill.id,
+                    read.preview,
+                    true,
+                    audit(context),
+                    { current },
+                  );
+          if (!saved.skill.enabled) {
+            yield* service.changeState(
+              access.target,
+              saved.skill.id,
+              { enabled: true },
+              audit(context),
+            );
+          }
+          const listed = yield* listData(access, context.get("principal"));
+          const installed = listed.items.find(
+            (item) => item.id === saved.skill.id,
+          );
+          if (installed === undefined) return yield* new SkillNotFound();
+          return yield* Schema.encodeUnknownEffect(InstallSkillResponseSchema)({
+            status: "success",
+            data: installed,
+          });
+        }),
+      ),
+      201,
     ),
   );
 
@@ -678,6 +858,31 @@ const registerRoutes = (
     ),
   );
 
+  // One file of a skill's active version, for the skill browser.
+  router.get("/:skillId/files", (context) =>
+    run(
+      context,
+      operation(context, (_db, access) =>
+        Effect.gen(function* () {
+          const id = yield* parseSkillId(context);
+          const path = context.req.query("path") ?? "";
+          const repository = yield* SkillRepository;
+          const current = yield* repository.find(access.target, id);
+          const [file] = yield* repository.readFiles(
+            id,
+            current.active.version,
+            [path],
+          );
+          if (file === undefined) return yield* new SkillNotFound();
+          return yield* Schema.encodeUnknownEffect(SkillFileResponseSchema)({
+            status: "success",
+            data: file,
+          });
+        }),
+      ),
+    ),
+  );
+
   router.get("/:skillId/export", (context) =>
     run(
       context,
@@ -685,8 +890,11 @@ const registerRoutes = (
         Effect.gen(function* () {
           const id = yield* parseSkillId(context);
           const service = yield* SkillService;
-          const version = yield* service.exportVersion(access.target, id);
-          const exported = exportSkillVersion(version);
+          const { version, files } = yield* service.exportVersion(
+            access.target,
+            id,
+          );
+          const exported = exportSkillVersion(version, files);
           return yield* Schema.encodeUnknownEffect(ExportSkillResponseSchema)({
             status: "success",
             data: {

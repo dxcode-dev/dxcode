@@ -2361,7 +2361,7 @@ var dxLeftovers = (home) => `rm -f ${home}/.local/state/dx-disk-reserve ${home}/
   for dx_disk_run in ${home}/.local/state/dx-claude-code/runs/*/; do
     if [ -f "$dx_disk_run/exit" ]; then rm -rf "$dx_disk_run" 2>/dev/null || true; fi
   done
-  rm -rf ${home}/.local/share/dx/skills.stage.* ${home}/.local/share/dx/skills.old.* ${home}/.local/state/dxd/trash 2>/dev/null || true`;
+  rm -rf ${home}/.agents/skills/.dx-stage.* ${home}/.agents/skills/.dx-old.* ${home}/.local/state/dxd/trash 2>/dev/null || true`;
 /**
 * Shell functions. `dx_disk_kib` is the free space in KiB: `df`'s, or less on
 * btrfs when metadata is nearly out (its unused allocation plus unallocated

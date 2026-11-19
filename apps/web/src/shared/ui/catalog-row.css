@@ -1,0 +1,90 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's catalog row: see catalog-row.tsx. */
+@layer components {
+  .dx-catalog-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-width: 0;
+    padding: var(--space-2-5) var(--space-3);
+    color: var(--foreground);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .dx-catalog-row:hover {
+    background: var(--accent);
+  }
+  .dx-catalog-row:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+  .dx-catalog-row-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: var(--control-lg);
+    height: var(--control-lg);
+    overflow: hidden;
+    color: var(--muted-foreground);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-md);
+    background: var(--muted);
+  }
+  .dx-catalog-row-icon > img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .dx-catalog-row-icon svg {
+    width: var(--icon-lg);
+    height: var(--icon-lg);
+  }
+  .dx-catalog-row-copy {
+    display: grid;
+    flex: 1;
+    gap: var(--space-0-5);
+    min-width: 0;
+  }
+  .dx-catalog-row-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1-5);
+    min-width: 0;
+    font-size: var(--text-md);
+  }
+  .dx-catalog-row-title strong {
+    overflow: hidden;
+    font-weight: var(--weight-medium);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-catalog-row-description,
+  .dx-catalog-row-byline {
+    overflow: hidden;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-catalog-row-facts {
+    display: grid;
+    flex: none;
+    justify-items: end;
+    gap: var(--space-0-5);
+    max-width: 40%;
+  }
+  .dx-catalog-row-stat {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+}

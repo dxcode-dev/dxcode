@@ -272,8 +272,8 @@ export const mailAuthenticated = (
 /**
  * SPF passed for an envelope domain aligned with `From:` (relaxed): the mail
  * came through a server the From domain allows. Weaker than DMARC with
- * aligned DKIM, so dx accepts it only for a reply to an email the person sent
- * (inbound.ts).
+ * aligned DKIM: such mail reaches the Inbox marked unverified (`mailTrust`
+ * in inbound.ts).
  */
 export const mailSpfAligned = (
   authentication: MailAuthentication,

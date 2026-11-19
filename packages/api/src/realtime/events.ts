@@ -134,7 +134,7 @@ export const RealtimeNotificationsEvent = Schema.Struct({
   revision: Revision,
 });
 
-/** Mail reached or changed in the user's Mailbox; refetch it. */
+/** Mail reached or changed in the user's Mail; refetch it. */
 export const RealtimeMailboxEvent = Schema.Struct({
   type: Schema.Literal("mailbox.invalidated"),
   revision: Revision,

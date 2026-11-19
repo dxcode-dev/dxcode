@@ -39,7 +39,7 @@ const applySharing = (
   );
 
 /**
- * The server held a share back because the family's agents read Mailbox
+ * The server held a share back because the family's agents read Mail
  * mail its viewers would see; the owner confirms, then shares again with
  * `acknowledgeMailReads`.
  */

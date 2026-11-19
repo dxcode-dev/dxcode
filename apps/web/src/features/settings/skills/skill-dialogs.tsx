@@ -2,7 +2,6 @@ import {
   MAX_SKILL_INSTRUCTIONS_BYTES,
   SkillDescription,
   SkillName,
-  type SkillVersion,
 } from "@dx/domain";
 import { Link } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
@@ -16,16 +15,11 @@ import {
 } from "../../../shared/ui/dialog.js";
 import { Input } from "../../../shared/ui/input.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
-import {
-  SettingsRow,
-  SettingsSelect,
-  SettingsToggle,
-} from "../settings-primitives.js";
+import { SettingsRow } from "../settings-primitives.js";
 import type {
   SkillDraft,
   SkillPreview,
   SkillSaveFailure,
-  SkillsMutationAction,
 } from "./skills-mutations.js";
 import type { SkillData, SkillProposalData } from "./skills-queries.js";
 
@@ -199,163 +193,6 @@ export function SkillFormDialog({
   );
 }
 
-/** Behind a row's gear: version, pin, contents, and the less used actions. */
-export function SkillDetailsDialog({
-  skill,
-  canMutate,
-  busy,
-  pending,
-  finalFocus,
-  onAction,
-  onEdit,
-  onUploadVersion,
-  onExport,
-  onClose,
-}: {
-  readonly skill: SkillData;
-  readonly canMutate: boolean;
-  readonly busy: boolean;
-  /** The key of the action that is saving, if any. */
-  readonly pending?: string;
-  readonly finalFocus: React.RefObject<HTMLElement | null>;
-  readonly onAction: (
-    action: SkillsMutationAction,
-    message: string,
-    key?: string,
-  ) => Promise<boolean>;
-  readonly onEdit: () => void;
-  readonly onUploadVersion: () => void;
-  readonly onExport: () => void;
-  readonly onClose: () => void;
-}) {
-  const [confirmingRemove, setConfirmingRemove] = React.useState(false);
-  const latest = Math.max(...skill.versions);
-  const pinKey = `pinned:${skill.id}`;
-  return (
-    <DialogRoot open onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="skill-dialog" finalFocus={finalFocus}>
-        <DialogTitle>{skill.name}</DialogTitle>
-        <DialogDescription>
-          {skill.active.manifest.description}
-        </DialogDescription>
-        <div className="skill-dialog-rows">
-          <SettingsRow
-            title="Active version"
-            control={
-              <SettingsSelect
-                label={`Active version for ${skill.name}`}
-                value={String(skill.activeVersion)}
-                disabled={!canMutate || skill.pinned}
-                options={skill.versions.map((version) => [
-                  String(version),
-                  version === latest
-                    ? `Version ${version} (latest)`
-                    : `Version ${version}`,
-                ])}
-                onValueChange={(value) =>
-                  void onAction(
-                    {
-                      type: "updateState",
-                      skillId: skill.id,
-                      input: { activeVersion: Number(value) as SkillVersion },
-                    },
-                    `${skill.name} now uses version ${value}.`,
-                  )
-                }
-              />
-            }
-          />
-          <SettingsRow
-            title="Pin this version"
-            description="New versions publish without replacing it."
-            control={
-              <SettingsToggle
-                checked={skill.pinned}
-                disabled={!canMutate}
-                pending={pending === pinKey}
-                label={`Pin version ${skill.activeVersion} of ${skill.name}`}
-                onCheckedChange={(pinned) =>
-                  void onAction(
-                    {
-                      type: "updateState",
-                      skillId: skill.id,
-                      input: { pinned },
-                    },
-                    pinned
-                      ? `${skill.name} pinned to version ${skill.activeVersion}.`
-                      : `${skill.name} unpinned.`,
-                    pinKey,
-                  )
-                }
-              />
-            }
-          />
-        </div>
-        <details className="skill-contents">
-          <summary>Instructions</summary>
-          <pre>{skill.active.instructions}</pre>
-        </details>
-        {skill.active.resources.length === 0 ? null : (
-          <details className="skill-contents">
-            <summary>Files ({skill.active.resources.length})</summary>
-            <ul>
-              {skill.active.resources.map((resource) => (
-                <li key={resource.path}>
-                  <code>{resource.path}</code>{" "}
-                  {resource.sizeBytes.toLocaleString()} bytes
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-        <footer className="skill-dialog-actions">
-          {canMutate ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={busy}
-              onClick={async () => {
-                if (!confirmingRemove) {
-                  setConfirmingRemove(true);
-                  return;
-                }
-                if (
-                  await onAction(
-                    { type: "remove", skillId: skill.id },
-                    `${skill.name} removed.`,
-                  )
-                ) {
-                  onClose();
-                }
-              }}
-            >
-              {confirmingRemove ? `Remove ${skill.name}?` : "Remove"}
-            </Button>
-          ) : null}
-          <Button size="xs" variant="ghost" disabled={busy} onClick={onExport}>
-            Export
-          </Button>
-          {canMutate ? (
-            <>
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={busy}
-                onClick={onUploadVersion}
-              >
-                Upload version
-              </Button>
-              <Button size="xs" disabled={busy} onClick={onEdit}>
-                Edit
-              </Button>
-            </>
-          ) : null}
-        </footer>
-      </DialogContent>
-    </DialogRoot>
-  );
-}
-
 export function SkillImportDialog({
   onChooseFolder,
   onChooseExport,
@@ -370,10 +207,10 @@ export function SkillImportDialog({
       <DialogContent className="skill-dialog">
         <DialogTitle>Import Skill</DialogTitle>
         <DialogDescription>
-          Choose a skill folder with <code>skill.json</code>,{" "}
-          <code>instructions.md</code>, and text files under{" "}
-          <code>resources/</code>, or a <code>.skill.json</code> file exported
-          from dx. You review the contents before anything is saved.
+          Choose a skill folder with a <code>SKILL.md</code> and its other text
+          files, such as <code>scripts/</code> and <code>references/</code>, or
+          a <code>.skill.json</code> file exported from dx. You review the
+          contents before anything is saved.
         </DialogDescription>
         <footer className="skill-dialog-actions">
           <Button size="xs" variant="ghost" onClick={onChooseExport}>

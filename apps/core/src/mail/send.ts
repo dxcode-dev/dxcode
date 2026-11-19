@@ -21,8 +21,8 @@ import {
 } from "./store.js";
 
 /**
- * Mail the person sends from their Mailbox (wiki/agent-mail.md#mail-the-user-sends).
- * Only the signed-in person, from the Mailbox page; never an API key, an
+ * Mail the person sends from their Mail (wiki/agent-mail.md#mail-the-user-sends).
+ * Only the signed-in person, from the Mail page; never an API key, an
  * app, a plugin, or an agent. Always from their own address.
  */
 

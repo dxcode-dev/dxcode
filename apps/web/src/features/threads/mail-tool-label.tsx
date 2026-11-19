@@ -41,7 +41,7 @@ export function MailToolLabel({ part }: { readonly part: ToolPart }) {
   );
 }
 
-/** "Open in Mailbox", beside a mail tool's row when its result links one. */
+/** "Open in Mail", beside a mail tool's row when its result links one. */
 export function MailToolOpener({ part }: { readonly part: ToolPart }) {
   const navigate = useNavigate();
   const url = mailboxUrlOf(part);
@@ -63,7 +63,7 @@ export function MailToolOpener({ part }: { readonly part: ToolPart }) {
         void navigate({ href: url });
       }}
     >
-      Open in Mailbox
+      Open in Mail
     </a>
   );
 }

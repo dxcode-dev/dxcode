@@ -261,7 +261,7 @@ describe("D1 migration", () => {
       /entrypoint|executable|credential|secret/,
     );
     expect(sqlByName.get("skill_resource")).toContain(
-      "CHECK (size_bytes BETWEEN 0 AND 65536)",
+      "CHECK (size_bytes BETWEEN 0 AND 1048576)",
     );
     expect(sqlByName.get("threads")).toContain(
       "skill_snapshot_json TEXT NOT NULL DEFAULT '[]'",

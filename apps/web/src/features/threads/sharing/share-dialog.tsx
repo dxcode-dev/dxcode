@@ -204,7 +204,7 @@ export function ShareDialog({
   const workspace = settings.data?.workspace;
   const mutation = useUpdateThreadSharing(identity.id, thread.id);
   const [confirming, setConfirming] = React.useState(false);
-  // A share the server held back because the agent read Mailbox mail that
+  // A share the server held back because the agent read Mail mail that
   // viewers would see (THREAD_SHARING_MAIL_READS): what to send once the
   // owner agrees, and the server's count of what they'd see.
   const [mailReads, setMailReads] = React.useState<{

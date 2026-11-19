@@ -1,4 +1,5 @@
 import {
+  MAX_SKILL_FILE_BYTES,
   MAX_SKILL_FILES,
   SkillId,
   type SkillImportBundle,
@@ -75,7 +76,9 @@ describe("skill browser-file importer", () => {
       createdAt: "2026-08-23T00:00:00.000Z",
       createdByUserId: Schema.decodeUnknownSync(UserId)("skill-owner"),
     });
-    const importedAgain = await preview(exportSkillVersion(version));
+    const importedAgain = await preview(
+      exportSkillVersion(version, first.resources),
+    );
     expect(importedAgain.integrity).toBe(first.integrity);
     expect(importedAgain).toMatchObject({
       manifest: first.manifest,
@@ -94,7 +97,6 @@ describe("skill browser-file importer", () => {
       "symlink",
       file("resources/link.md", "target", "text/markdown", "symlink"),
     ],
-    ["executable source", file("resources/tool.ts", "export {}", "text/plain")],
     ["binary type", file("resources/image.png", "PNG", "image/png")],
     ["archive input", file("resources/payload.zip", "PK", "application/zip")],
     ["NUL text", file("resources/data.txt", "bad\0text", "text/plain")],
@@ -106,6 +108,33 @@ describe("skill browser-file importer", () => {
     await expect(rejected(bundle([unsafe]))).resolves.toBeInstanceOf(
       SkillImportRejected,
     );
+  });
+
+  it("imports a standard SKILL.md folder with its scripts at their paths", async () => {
+    const imported = await preview({
+      source: { type: "browser-files", label: "pdf" },
+      files: [
+        file(
+          "SKILL.md",
+          "---\nname: pdf\ndescription: Fill PDF forms.\nlicense: MIT\n---\n\n# PDF\n\nRun scripts/check.py.\n",
+        ),
+        file("scripts/check.py", "print('ok')\n", "text/x-python"),
+        file("FORMS.md", "# Forms\n"),
+        file("LICENSE.txt", "MIT\n", "text/plain"),
+      ],
+    });
+    expect(imported.manifest).toMatchObject({
+      name: "pdf",
+      description: "Fill PDF forms.",
+    });
+    expect(imported.instructions).toBe("# PDF\n\nRun scripts/check.py.");
+    expect(
+      imported.resources.map(({ path, mediaType }) => [path, mediaType]),
+    ).toEqual([
+      ["scripts/check.py", "text/x-python"],
+      ["FORMS.md", "text/markdown"],
+      ["LICENSE.txt", "text/plain"],
+    ]);
   });
 
   it("rejects executable manifest fields instead of silently accepting them", async () => {
@@ -140,7 +169,11 @@ describe("skill browser-file importer", () => {
         ),
       },
       { ...bundle(), files: [...bundle().files, bundle().files[0]] },
-      bundle([file("notes.md", "Must live below resources/")]),
+      // A SKILL.md folder whose front matter has no name.
+      {
+        ...bundle(),
+        files: [file("SKILL.md", "---\ndescription: No name\n---\n\nBody")],
+      },
     ];
     for (const input of cases) {
       await expect(rejected(input)).resolves.toBeInstanceOf(
@@ -160,11 +193,15 @@ describe("skill browser-file importer", () => {
       ],
     };
     const oversized = bundle([
-      file("resources/large.txt", "x".repeat(65_537), "text/plain"),
+      file(
+        "resources/large.txt",
+        "x".repeat(MAX_SKILL_FILE_BYTES + 1),
+        "text/plain",
+      ),
     ]);
     const expanded = bundle(
-      Array.from({ length: 5 }, (_, index) =>
-        file(`resources/${index}.txt`, "x".repeat(60_000), "text/plain"),
+      Array.from({ length: 6 }, (_, index) =>
+        file(`resources/${index}.txt`, "x".repeat(1_000_000), "text/plain"),
       ),
     );
     for (const input of [tooMany, oversized, expanded]) {

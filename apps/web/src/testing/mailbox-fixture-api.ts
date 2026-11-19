@@ -11,8 +11,8 @@ import { type ThreadId, UserId } from "@dx/domain";
 import { Schema } from "effect";
 
 /**
- * Fixture mail for the Mailbox's Storybook stories: one person's Mailbox,
- * served by an in-memory API that answers the Mailbox routes as Core will,
+ * Fixture mail for the Mail's Storybook stories: one person's Mail,
+ * served by an in-memory API that answers the Mail routes as Core will,
  * so every state renders through the real queries, mutations, and
  * optimistic updates.
  */
@@ -351,7 +351,7 @@ const conversations = (): FixtureConversation[] => {
           minutesAgo: 60 * 24 * 40,
           folder: "archive",
           subject: "Welcome to dx",
-          text: "Your Mailbox is ready. You and your agents share this address.",
+          text: "Your Mail is ready. You and your agents share this address.",
         }),
       ],
     },
@@ -450,7 +450,7 @@ const projectData = (id: string, name: string) => ({
   updatedAt: "2026-08-25T00:00:00.000Z",
 });
 
-/** Answers the Mailbox's routes from memory; returns the restore. */
+/** Answers the Mail's routes from memory; returns the restore. */
 export const installMailboxApi = (options: FixtureOptions) => {
   const state = {
     conversations: options.empty ? [] : conversations(),
@@ -705,10 +705,6 @@ export const installMailboxApi = (options: FixtureOptions) => {
         options.projectMail ?? {
           enabled: true,
           address: `alex+web@${DOMAIN}`,
-          visibility: "private",
-          startThreads: true,
-          workspace: true,
-          canManage: true,
         },
       );
     if (path === "/v1/settings/personal/account") {
@@ -756,7 +752,7 @@ export const installMailboxApi = (options: FixtureOptions) => {
 
 /** Answers the Project's mail route from memory; returns the restore. */
 export const installProjectMailApi = (data: ProjectMailData) => {
-  let current = data;
+  const current = data;
   const original = window.fetch;
   window.fetch = async (input, init) => {
     const url = new URL(
@@ -769,23 +765,6 @@ export const installProjectMailApi = (data: ProjectMailData) => {
     );
     if (!/^\/v1\/projects\/.+\/mail$/.test(url.pathname))
       return original(input, init);
-    if (init?.method === "PATCH" && current.enabled) {
-      const change = JSON.parse(String(init.body));
-      current = {
-        ...current,
-        ...(change.visibility === undefined
-          ? {}
-          : { visibility: change.visibility }),
-        ...(change.startThreads === undefined
-          ? {}
-          : { startThreads: change.startThreads }),
-        ...(change.agentMode === undefined
-          ? {}
-          : change.agentMode === null
-            ? { agentMode: undefined }
-            : { agentMode: change.agentMode }),
-      };
-    }
     return Response.json({ status: "success", data: current });
   };
   return () => {

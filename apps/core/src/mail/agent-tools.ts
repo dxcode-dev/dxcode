@@ -26,14 +26,14 @@ import {
  *
  * Who reads what:
  * - Only Threads owned by the mailbox owner, and only while the owner lets
- *   agents read (Mailbox settings).
+ *   agents read (Mail settings).
  * - A private Thread reads the plain inbox, its own Project's `+tag`, and
  *   Sent; never other Projects' tags, Spam, or private mail.
  * - A Thread shared with the workspace shows its tool results to everyone
  *   in it, so it reads only its Project's tag and the mail it claimed:
  *   mail that arrived after its wait_for_email began, from the sender
  *   domain the call named.
- * - Every read is logged, for "Read by agent in …" in the Mailbox.
+ * - Every read is logged, for "Read by agent in …" in the Mail.
  */
 
 const WAIT_MAX_SECONDS = 300;
@@ -242,7 +242,7 @@ export const createMailTools = (
     );
     if (found === undefined)
       throw new Error(
-        "This Thread cannot read its owner's mailbox: mail is off, the owner turned agent reading off, or they have not set up their Mailbox yet.",
+        "This Thread cannot read its owner's mailbox: mail is off, the owner turned agent reading off, or they have not set up their Mail yet.",
       );
     return found;
   };
@@ -318,7 +318,7 @@ export const createMailTools = (
     defineTool({
       name: "list_emails",
       description: description([
-        "List emails in your owner's mailbox that this Thread may read, newest first: each one's id, sender, subject, when it arrived, whether it was received or sent, whether its sender is authenticated, the start of its text, and a link to it in the Mailbox. The result also names the mailbox address; use it on your owner's behalf to sign up or log in to services.",
+        "List emails in your owner's mailbox that this Thread may read, newest first: each one's id, sender, subject, when it arrived, whether it was received or sent, whether its sender is authenticated, the start of its text, and a link to it in the Mail. The result also names the mailbox address; use it on your owner's behalf to sign up or log in to services.",
         "Mail never wakes you; check here, or wait for one with wait_for_email. Read one in full with read_email. Pass before_id to see older emails.",
         AUTHENTICATED,
         UNTRUSTED,
@@ -386,7 +386,7 @@ export const createMailTools = (
     defineTool({
       name: "read_email",
       description: description([
-        "Read one email from your owner's mailbox in full: its sender, whether the sender is authenticated, subject, text (HTML turned to text), its attachments' names, and a link to it in the Mailbox. Your owner sees that this Thread read it.",
+        "Read one email from your owner's mailbox in full: its sender, whether the sender is authenticated, subject, text (HTML turned to text), its attachments' names, and a link to it in the Mail. Your owner sees that this Thread read it.",
         AUTHENTICATED,
         UNTRUSTED,
       ]),

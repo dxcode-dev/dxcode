@@ -883,6 +883,8 @@ export {
   VerificationKeyName,
 } from "./settings/signing-key.js";
 export {
+  BrowserFilesSkillSource,
+  GitHubSkillSource,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_FILES,
   MAX_SKILL_INSTRUCTIONS_BYTES,
@@ -905,6 +907,7 @@ export {
   SkillMcpServerIds,
   SkillName,
   SkillResource,
+  SkillResourceInfo,
   SkillResourcePath,
   SkillSource,
   SkillTarget,

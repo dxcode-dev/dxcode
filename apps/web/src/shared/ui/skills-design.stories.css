@@ -1,0 +1,182 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* Layout of the Skills page design in Storybook (skills-design.stories.tsx). */
+@layer components {
+  .skills-v2 {
+    --settings-content-width: 1080px;
+    display: grid;
+    gap: var(--space-4);
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: var(--space-6);
+    color: var(--foreground);
+    font-size: var(--text-md);
+  }
+  .skills-v2[data-phone] {
+    padding: var(--space-3);
+  }
+  /* The intro spans the page, not the heading's text column. */
+  .skills-v2 .settings-heading p {
+    max-width: none !important;
+  }
+  .skills-v2 .dx-tabs-panel {
+    padding-top: var(--space-4);
+  }
+  .skills-v2-browser {
+    display: grid;
+    grid-template-columns: 260px minmax(0, 1fr);
+    height: 640px;
+    overflow: hidden;
+  }
+  .skills-v2[data-phone] .skills-v2-browser {
+    display: block;
+    height: auto;
+  }
+  .skills-v2-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-0-5);
+    min-height: 0;
+    padding: var(--space-2);
+    overflow: auto;
+    border-right: 1px solid var(--divider);
+  }
+  .skills-v2-search {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--control-sm);
+    margin-bottom: var(--space-1);
+    padding: 0 var(--space-2-5);
+    border: 1px solid var(--input);
+    border-radius: var(--radius-md);
+    background: var(--background);
+  }
+  .skills-v2-search svg {
+    flex: none;
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+    color: var(--muted-foreground);
+  }
+  .skills-v2-search .dx-input {
+    flex: 1;
+    min-width: 0;
+  }
+  .skills-v2-skill {
+    display: block;
+    width: 100%;
+    min-height: var(--control-md);
+    overflow: hidden;
+    padding: 0 var(--space-2);
+    color: inherit;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font: inherit;
+    font-weight: var(--weight-medium);
+    line-height: var(--control-md);
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .skills-v2-skill:hover:not([aria-current="true"]) {
+    background: var(--accent);
+  }
+  .skills-v2-skill[aria-current="true"] {
+    background: var(--secondary);
+  }
+  .skills-v2-skill-files {
+    margin: var(--space-1) 0 var(--space-2) var(--space-2);
+  }
+  .skills-v2-detail {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+  }
+  .skills-v2-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--space-1) var(--space-4);
+    padding: var(--space-4);
+    border-bottom: 1px solid var(--divider);
+  }
+  .skills-v2-header h2 {
+    margin: 0;
+    font-size: var(--text-xl);
+    font-weight: var(--weight-semibold);
+  }
+  .skills-v2-header-actions {
+    display: flex;
+    grid-row: 1;
+    grid-column: 2;
+    align-items: center;
+    gap: var(--space-2);
+  }
+  .skills-v2-state {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+  }
+  .skills-v2-description {
+    grid-column: 1 / -1;
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    line-height: var(--leading-relaxed);
+  }
+  .skills-v2-meta {
+    display: flex;
+    grid-column: 1 / -1;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1-5);
+    margin-top: var(--space-1);
+  }
+  .skills-v2-meta a {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--link);
+    font-size: var(--text-sm);
+    text-decoration: none;
+  }
+  .skills-v2-meta a:hover {
+    text-decoration: underline;
+  }
+  .skills-v2-meta svg {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+  }
+  .skills-v2-back {
+    display: none;
+  }
+  .skills-v2[data-phone] .skills-v2-back {
+    display: inline-flex;
+    align-self: flex-start;
+    margin: var(--space-2) var(--space-2) 0;
+  }
+  .skills-v2[data-phone] .skills-v2-list {
+    border-right: 0;
+  }
+  .skills-v2[data-phone] .skills-v2-header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .skills-v2[data-phone] .skills-v2-header-actions {
+    grid-row: auto;
+    grid-column: 1;
+  }
+  .skills-v2-phone-files {
+    padding: var(--space-2);
+    border-bottom: 1px solid var(--divider);
+  }
+  .skills-v2[data-phone] .dx-file-view {
+    min-height: 360px;
+  }
+}
