@@ -30,6 +30,22 @@ export type ModelSubscriptionProviderId =
 
 export const GITHUB_COPILOT_SUBSCRIPTION_PROVIDER_ID = "github-copilot";
 
+/**
+ * The name people see for a model connection. A GitHub Copilot
+ * subscription is stored as "GitHub Copilot (<connection id>)", which keeps
+ * it apart from a connection someone named "GitHub Copilot"; people see
+ * only "GitHub Copilot", as a person has one Copilot subscription.
+ */
+export const connectionDisplayName = (connection: {
+  readonly name: string;
+  readonly kind: string;
+  readonly providerId: string;
+}): string =>
+  connection.kind === "subscription" &&
+  connection.providerId === GITHUB_COPILOT_SUBSCRIPTION_PROVIDER_ID
+    ? "GitHub Copilot"
+    : connection.name;
+
 export const PersonalModelSubscriptionLifecycle = Schema.Literals([
   "connected",
   "needs-reauthorization",

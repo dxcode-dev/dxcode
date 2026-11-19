@@ -1,5 +1,10 @@
 import type { SpaceSharing, SpaceSuggestion } from "@dx/api";
-import type { ModelConnectionId, ProjectId, UserId } from "@dx/domain";
+import {
+  isClaudeCodeModel,
+  type ModelConnectionId,
+  type ProjectId,
+  type UserId,
+} from "@dx/domain";
 import {
   useInfiniteQuery,
   useQuery,
@@ -167,10 +172,15 @@ export function CreateSpaceDialog({
   // plan, which Core picks the same way.
   const [chosenPlan, setPlan] = React.useState<string>();
   const route = agent.data?.route;
-  const plan =
-    coordinatorModel === undefined && route?.kind === "claude-code"
-      ? chosenPlan
-      : undefined;
+  // The plan list shows while the coordinator runs on Claude Code, picked
+  // or by default.
+  const plan = (
+    coordinatorModel === undefined
+      ? route?.kind === "claude-code"
+      : isClaudeCodeModel(coordinatorModel.model)
+  )
+    ? chosenPlan
+    : undefined;
   const agentUnavailable =
     coordinatorModel === undefined && route?.kind === "unavailable";
   // Until the person picks, the first Project and the workspace when there

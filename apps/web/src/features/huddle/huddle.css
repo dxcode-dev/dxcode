@@ -3,7 +3,8 @@
 
 /* Header control: an icon like its neighbors, a round success-toned
    Button while a huddle is on; it sizes to its people and label. */
-.dx-button.huddle-header-pill {
+.dx-button.huddle-header-pill,
+.space-tab-tools .dx-button.space-icon-button.huddle-header-pill {
   width: auto;
   gap: 5px;
 }

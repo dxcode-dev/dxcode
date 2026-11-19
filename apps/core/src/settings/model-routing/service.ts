@@ -8,6 +8,7 @@ import type {
 } from "@dx/api";
 import {
   CLAUDE_CODE_PROVIDER_ID,
+  connectionDisplayName,
   customModelBaseUrlForFormatChange,
   EnvironmentVariableId,
   EnvironmentVariablePlaintext,
@@ -152,7 +153,7 @@ const toConnectionData = (
   claudePlan: ClaudePlanState | undefined,
 ): ConnectionData => ({
   id: connection.id,
-  name: connection.name,
+  name: connectionDisplayName(connection),
   kind: connection.kind,
   providerId: connection.providerId,
   ...(connection.baseUrl === undefined ? {} : { baseUrl: connection.baseUrl }),
@@ -1106,7 +1107,7 @@ export class ModelRoutingService {
       }),
       connections: connections.map((connection) => ({
         connectionId: connection.id,
-        name: connection.name,
+        name: connectionDisplayName(connection),
         kind: connection.kind,
         scope: connection.target.scope,
         priority: connection.priority,
@@ -1187,7 +1188,10 @@ export class ModelRoutingService {
           modelName: canonicalModelName(resolution.config.agent.model),
           source: resolution.source,
           served: match !== undefined,
-          servingConnectionName: match?.connection.name ?? null,
+          servingConnectionName:
+            match === undefined
+              ? null
+              : connectionDisplayName(match.connection),
         };
       }),
       models: [...served].map(([canonical, { connection }]) => {
@@ -1204,7 +1208,10 @@ export class ModelRoutingService {
           canonical,
           name: canonicalModelName(canonical),
           connectionId: connection.id,
-          connectionName: connection.name,
+          connectionName: connectionDisplayName(connection),
+          connectionKind: connection.kind,
+          connectionProviderId: connection.providerId,
+          connectionScope: connection.target.scope,
           contextWindow: capabilities.contextWindow,
           reasoning: capabilities.reasoning,
           vision: capabilities.vision,

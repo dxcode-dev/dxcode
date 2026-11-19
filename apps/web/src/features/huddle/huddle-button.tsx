@@ -56,6 +56,9 @@ export default function HuddleButton({
     variant === "space"
       ? "space-icon-button huddle-header-button"
       : "thread-title-action huddle-header-button";
+  // The pill holds words, so the header's square icon-button width must
+  // not apply; in a thread header that width wins without the text class.
+  const pill = `${base} huddle-header-pill${variant === "thread" ? " thread-title-action-text" : ""}`;
   if (here) {
     // Already in it: the link has nothing left to ask.
     if (prejoin) huddleJoinRequest.clear();
@@ -65,7 +68,7 @@ export default function HuddleButton({
         size="xs"
         shape="round"
         tone="success"
-        className={`${base} huddle-header-pill`}
+        className={pill}
         data-state="in"
         title="You're in this huddle. Open it."
         onClick={huddleView.expand}
@@ -101,7 +104,7 @@ export default function HuddleButton({
           size="xs"
           shape="round"
           tone="success"
-          className={`${base} huddle-header-pill`}
+          className={pill}
           data-state="on"
           aria-label={`Join huddle with ${names}`}
           title={`In the huddle: ${names}`}

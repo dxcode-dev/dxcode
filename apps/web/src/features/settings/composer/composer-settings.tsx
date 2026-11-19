@@ -19,6 +19,7 @@ import {
 import { modelDisplayName } from "../../../shared/model-display-name.js";
 import {
   pickerModelValue,
+  pickerOrder,
   pickerValueModel,
   servedPickerModel,
   unlistedPickerModel,
@@ -262,7 +263,7 @@ function StartingModeRow({
         <ModelPicker
           label="Model"
           appearance="field"
-          models={(choices?.models ?? []).map((model) =>
+          models={pickerOrder(choices?.models ?? []).map((model) =>
             servedPickerModel(model, []),
           )}
           loading={choicesQuery.isPending}

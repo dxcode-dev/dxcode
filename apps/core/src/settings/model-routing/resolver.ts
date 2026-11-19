@@ -1,4 +1,5 @@
 import {
+  connectionDisplayName,
   isClaudeCodeModel,
   MODE_IDS,
   type ModeConfig,
@@ -237,7 +238,7 @@ export const resolveSubmissionModel = (
       scope: match.connection.target.scope,
       kind: match.connection.kind,
       providerId: match.connection.providerId,
-      name: match.connection.name,
+      name: connectionDisplayName(match.connection),
     },
     capabilities,
   };

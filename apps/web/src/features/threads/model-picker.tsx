@@ -5,6 +5,11 @@ import { getBrowserCommandRegistry } from "../../shared/commands/command-registr
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import { effortLabel } from "../../shared/model-effort-label.js";
+import {
+  pickerOrder,
+  servedPickerModel,
+  unlistedPickerModel,
+} from "../../shared/model-picker-models.js";
 import { modelProvider } from "../../shared/model-provider.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { LazyPluginIcon } from "../../shared/ui/lazy-plugin-icon.js";
@@ -16,7 +21,6 @@ import {
   EFFORTS,
   modeSlot,
   payerLabel,
-  pickerGroups,
   pickerValue,
   RECOMMENDED,
   RECOMMENDED_MODE,
@@ -25,37 +29,26 @@ import {
 
 const PLUGIN_AGENTS = "plugin-agents";
 
+/** "plan picked on first use" as the panel's sentence. */
+const sentence = (text: string | undefined) =>
+  text === undefined ? undefined : `${text[0]?.toUpperCase()}${text.slice(1)}`;
+
 /**
  * The models the person can run, as the shared picker lists them: each
- * with its maker's logo and who pays for it, Claude Code models under the
- * plan that runs them, and installed plugins' agents last.
+ * with its maker's logo under the route that serves it, Claude Code first,
+ * and installed plugins' agents last.
  */
 const pickerModels = ({
   choices,
-  routingGraph,
   pluginAgentModes = [],
   claudePlan,
 }: {
   readonly choices: ChoicesData | undefined;
-  readonly routingGraph?: GraphData | undefined;
   readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
   readonly claudePlan?: string | undefined;
 }): ReadonlyArray<ModelPickerModel> => [
-  ...pickerGroups(choices, routingGraph, "").flatMap((group) =>
-    group.models.map((entry): ModelPickerModel => {
-      const provider = modelProvider(entry.canonical, entry.name);
-      return {
-        value: entry.value,
-        name: group.claudeCode ? `Claude Code · ${entry.name}` : entry.name,
-        provider: provider.id,
-        providerName: provider.name,
-        route: group.claudeCode
-          ? (claudePlan ?? "Your Claude Pro/Max plan")
-          : group.payer,
-        contextWindow: entry.contextWindow,
-        efforts: entry.reasoning ? EFFORTS : [],
-      };
-    }),
+  ...pickerOrder(choices?.models ?? []).map((model) =>
+    servedPickerModel(model, EFFORTS, sentence(claudePlan)),
   ),
   ...pluginAgentModes.map(
     (entry): ModelPickerModel => ({
@@ -63,7 +56,8 @@ const pickerModels = ({
       name: entry.label,
       provider: PLUGIN_AGENTS,
       providerName: "Plugin agents",
-      route: entry.plugin,
+      route: "Plugin agents",
+      routeMark: PLUGIN_AGENTS,
       description: `${entry.plugin} · ${
         entry.model === undefined
           ? "on the model above"
@@ -139,12 +133,7 @@ export function ModelPicker({
       routingGraph.edges.find(({ mode }) => mode === RECOMMENDED_MODE)
         ?.connectionId,
   );
-  const models = pickerModels({
-    choices,
-    routingGraph,
-    pluginAgentModes,
-    claudePlan,
-  });
+  const models = pickerModels({ choices, pluginAgentModes, claudePlan });
   const claudeCodeConnected = (choices?.models ?? []).some(({ canonical }) =>
     canonical.startsWith("claude-code/"),
   );
@@ -207,14 +196,15 @@ export function ModelPicker({
         ? {}
         : {
             unlisted: {
-              value: `model:${pick.model}`,
-              name: pick.claudeCode ? `Claude Code · ${pick.name}` : pick.name,
-              provider: unlistedProvider.id,
-              providerName: unlistedProvider.name,
-              route: pick.claudeCode
-                ? (claudePlan ?? "Your Claude Pro/Max plan")
-                : "Not served now",
-              efforts: pick.effort === undefined ? [] : EFFORTS,
+              ...unlistedPickerModel(
+                pick.model,
+                pick.name,
+                "Not served now",
+                pick.effort === undefined ? [] : EFFORTS,
+              ),
+              ...(pick.claudeCode && claudePlan !== undefined
+                ? { routeDetail: sentence(claudePlan) as string }
+                : {}),
             },
           })}
       {...(current === undefined ? {} : { triggerText: current })}

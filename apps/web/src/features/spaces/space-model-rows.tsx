@@ -1,5 +1,5 @@
 import type { SpaceAgentRoute } from "@dx/api";
-import type { ThinkingLevel, UserId } from "@dx/domain";
+import { isClaudeCodeModel, type ThinkingLevel, type UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
@@ -21,7 +21,7 @@ const routeModel = (
     route.model,
     route.modelName,
     route.kind === "claude-code"
-      ? "Your Claude Pro/Max plan"
+      ? "Claude Code"
       : route.kind === "model-routing"
         ? route.connectionName
         : "Not served",
@@ -65,6 +65,16 @@ export function SpaceModelRows({
   const choices = useQuery(modelRoutingChoicesQueryOptions(userId));
   const agentUnavailable =
     coordinatorModel === undefined && route?.kind === "unavailable";
+  // The model the coordinator runs on Claude Code, picked or by default:
+  // the plan list sits beside it.
+  const claudeCodeModel =
+    coordinatorModel === undefined
+      ? route?.kind === "claude-code"
+        ? route.model
+        : undefined
+      : isClaudeCodeModel(coordinatorModel.model)
+        ? coordinatorModel.model
+        : undefined;
   return (
     <>
       <SpaceFieldRow
@@ -77,8 +87,7 @@ export function SpaceModelRows({
             id={`${fieldId}-coordinator-model`}
             label="Coordinator model"
             servedModels={choices.data?.models ?? []}
-            // A Space reaches Claude Code through its Space model.
-            claudeCode={false}
+            claudeCode
             // Its route decides the default's model; pick a model
             // to set the effort.
             defaultEffort={false}
@@ -104,13 +113,11 @@ export function SpaceModelRows({
             }}
             onChange={onCoordinatorModelChange}
           />
-          {coordinatorModel === undefined &&
-          route?.kind === "claude-code" &&
-          PlanPicker !== undefined ? (
+          {claudeCodeModel !== undefined && PlanPicker !== undefined ? (
             <React.Suspense fallback={null}>
               <PlanPicker
                 choices={choices.data}
-                model={route.model}
+                model={claudeCodeModel}
                 plan={plan}
                 locked={locked}
                 onPlanChange={onPlanChange}

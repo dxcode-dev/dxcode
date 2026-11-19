@@ -4,10 +4,14 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import {
+  pickerOrder,
   servedPickerModel,
   unlistedPickerModel,
 } from "../../../shared/model-picker-models.js";
-import { ModelPicker } from "../../../shared/ui/model-picker.js";
+import {
+  ModelPicker,
+  type ModelPickerModel,
+} from "../../../shared/ui/model-picker.js";
 import { AUTO, type ModeDraft, type ModeSlot } from "./mode-dial-drafts.js";
 import { THINKING_LEVELS } from "./mode-dial-values.js";
 
@@ -55,6 +59,7 @@ export function MainAgentRole({
   id = "mode-dial-model",
   label = "Main Agent model",
   notServedHint = true,
+  effectiveRoute,
 }: {
   readonly choice: ModeDraft;
   /** What the main agent runs; undefined while Auto resolves only after Save. */
@@ -73,22 +78,33 @@ export function MainAgentRole({
   readonly label?: string;
   /** Off where something besides Model Routing serves the model. */
   readonly notServedHint?: boolean;
+  /**
+   * Where the effective model runs when Model Routing does not serve it,
+   * such as a Space's Claude Code plan.
+   */
+  readonly effectiveRoute?: Pick<
+    ModelPickerModel,
+    "route" | "routeMark" | "routeDetail"
+  >;
 }) {
   const servingModel = servedModels.find(
     (model) => model.canonical === effective?.model,
   );
-  const models = servedModels.map((model) =>
+  const models = pickerOrder(servedModels).map((model) =>
     servedPickerModel(model, THINKING_LEVELS),
   );
   const effectiveModel =
     effective === undefined
       ? undefined
       : servingModel === undefined
-        ? unlistedPickerModel(
-            effective.model,
-            nameOf(effective.model),
-            "Not served",
-          )
+        ? {
+            ...unlistedPickerModel(
+              effective.model,
+              nameOf(effective.model),
+              "Not served",
+            ),
+            ...effectiveRoute,
+          }
         : servedPickerModel(servingModel, THINKING_LEVELS);
   return (
     <>

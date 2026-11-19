@@ -11,8 +11,8 @@ import { modelDisplayName } from "../../shared/model-display-name.js";
 
 /**
  * The New Thread model picker. A Thread starts on one model at one effort;
- * the picker lists every model the person can run, grouped by who pays for
- * it, under the Recommended model new Threads start on. There are no modes:
+ * the picker lists every model the person can run, under the route that
+ * serves it, below the Recommended model new Threads start on. There are no modes:
  * an older Thread started on a mode keeps resolving it on the server.
  */
 
@@ -42,80 +42,6 @@ export const payerLabel = (
   return connection?.scope === "workspace"
     ? `${connectionName} · workspace`
     : connectionName;
-};
-
-export interface PickerModel {
-  readonly value: string;
-  readonly canonical: string;
-  readonly name: string;
-  readonly reasoning: boolean;
-  readonly contextWindow: number;
-  readonly payer: string;
-}
-
-export interface PickerGroup {
-  readonly payer: string;
-  readonly claudeCode: boolean;
-  readonly models: ReadonlyArray<PickerModel>;
-}
-
-/**
- * The models the person can start a Thread on, grouped by who pays: one
- * group per connection in routing order, Claude Code models (paid by the
- * Claude Pro/Max plan) first. A model served by two connections is listed
- * once, under the connection that serves it.
- */
-export const pickerGroups = (
-  choices: ChoicesData | undefined,
-  graph: GraphData | undefined,
-  query: string,
-): ReadonlyArray<PickerGroup> => {
-  const normalized = query.trim().toLowerCase();
-  const groups = new Map<string, PickerGroup>();
-  const seen = new Set<string>();
-  const models = (choices?.models ?? []).toSorted(
-    (a, b) =>
-      Number(isClaudeCodeModel(b.canonical)) -
-      Number(isClaudeCodeModel(a.canonical)),
-  );
-  for (const model of models) {
-    if (seen.has(model.canonical)) continue;
-    seen.add(model.canonical);
-    const claudeCode = isClaudeCodeModel(model.canonical);
-    const payer = claudeCode
-      ? "Your Claude Pro/Max plan"
-      : payerLabel(
-          model.connectionName,
-          graph?.connections.find(
-            ({ connectionId }) => connectionId === model.connectionId,
-          ),
-        );
-    const name = modelDisplayName(model.name);
-    if (
-      normalized !== "" &&
-      ![name, model.canonical, payer, claudeCode ? "claude code" : ""].some(
-        (text) => text.toLowerCase().includes(normalized),
-      )
-    )
-      continue;
-    const group = groups.get(payer) ?? { payer, claudeCode, models: [] };
-    groups.set(payer, {
-      ...group,
-      models: [
-        ...group.models,
-        {
-          value: `model:${model.canonical}`,
-          canonical: model.canonical,
-          name,
-          // Claude Code takes an effort on every model it runs.
-          reasoning: claudeCode || model.reasoning,
-          contextWindow: model.contextWindow,
-          payer,
-        },
-      ],
-    });
-  }
-  return [...groups.values()];
 };
 
 /** The picker's value for what the composer holds. */

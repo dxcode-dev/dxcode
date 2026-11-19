@@ -3,6 +3,7 @@ import { isClaudeCodeModel, type ThinkingLevel } from "@dx/domain";
 import {
   PICKER_EFFORTS,
   pickerModelValue,
+  pickerOrder,
   pickerValueModel,
   servedPickerModel,
 } from "../../shared/model-picker-models.js";
@@ -56,7 +57,7 @@ export function SpaceModelField({
   readonly loading: boolean;
   readonly onChange: (next: SpaceModelPick | undefined) => void;
 }) {
-  const models = servedModels.flatMap((model) =>
+  const models = pickerOrder(servedModels).flatMap((model) =>
     claudeCode || !isClaudeCodeModel(model.canonical)
       ? [servedPickerModel(model)]
       : [],

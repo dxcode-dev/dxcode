@@ -224,16 +224,15 @@ const shoot = (name: string, element: HTMLElement = row()) =>
   });
 const pick = async (trigger: HTMLButtonElement | null, name: RegExp) => {
   await userEvent.click(trigger as HTMLButtonElement);
-  await until(() =>
-    [...document.querySelectorAll('[role="option"]')].some((option) =>
-      name.test(option.textContent ?? ""),
-    ),
-  );
-  await userEvent.click(
+  // The open list's row: both rows' lists hold the same models, and a
+  // closed list can stay in the page.
+  const option = () =>
     [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
-      (option) => name.test(option.textContent ?? ""),
-    ) as HTMLElement,
-  );
+      (element) =>
+        name.test(element.textContent ?? "") && element.checkVisibility(),
+    );
+  await until(() => option() !== undefined);
+  await userEvent.click(option() as HTMLElement);
   await settle();
 };
 const create = async () => {
@@ -318,7 +317,8 @@ it("creates the Space with the coordinator and thread models picked, without pla
   );
   // A picked model runs on Model Routing: no plan list.
   expect(planSelect()).toBeNull();
-  await pick(threadPicker(), /^Claude Code · Claude Sonnet 5\.5/);
+  // Claude Code's models sit under its heading, named without a prefix.
+  await pick(threadPicker(), /^Claude Sonnet 5\.5/);
   await shoot("picked", row().parentElement as HTMLElement);
   await create();
   await until(() => server.created.length === 1);
@@ -327,6 +327,33 @@ it("creates the Space with the coordinator and thread models picked, without pla
     threadModel: { model: "claude-code/claude-sonnet-5-5", thinking: "medium" },
   });
   expect(server.created[0]).not.toHaveProperty("claudeConnectionId");
+});
+
+it("lets the coordinator run on Claude Code, on the plan picked", async () => {
+  const server = await mount({
+    route: {
+      kind: "model-routing",
+      model: "openai/gpt-6-2-sol",
+      modelName: "GPT-6.2 Sol",
+      thinking: "medium",
+      connectionName: "OpenAI",
+    },
+    plans: [plan(PLAN_1, "Claude Pro/Max"), plan(PLAN_2, "Claude Pro/Max 2")],
+  });
+  // The default runs on Model Routing: no plan list until Claude Code.
+  expect(planSelect()).toBeNull();
+  await pick(coordinator(), /^Claude Sonnet 5\.5/);
+  await until(() => planSelect() !== null);
+  expect(planOptions()).toEqual(["Auto", "Plan 1", "Plan 2"]);
+  await userEvent.selectOptions(planSelect() as HTMLSelectElement, PLAN_2);
+  await settle();
+  await shoot("coordinator-claude-code");
+  await create();
+  await until(() => server.created.length === 1);
+  expect(server.created[0]).toMatchObject({
+    agentModel: { model: "claude-code/claude-sonnet-5-5", thinking: "medium" },
+    claudeConnectionId: PLAN_2,
+  });
 });
 
 it("names a Model Routing model without plans", async () => {

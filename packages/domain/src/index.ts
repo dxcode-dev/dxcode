@@ -191,9 +191,9 @@ export {
   projectReaderOf,
 } from "./projects/project-reader.js";
 export {
+  type ProjectPresentationUpdate,
   ProjectRepository,
   type ProjectRepositoryShape,
-  type ProjectPresentationUpdate,
   type ProjectUpdate,
 } from "./projects/repository.js";
 export {
@@ -475,6 +475,7 @@ export {
   type ModeProfileOverrideRepositoryShape,
 } from "./settings/model-routing-repository.js";
 export {
+  connectionDisplayName,
   GITHUB_COPILOT_SUBSCRIPTION_PROVIDER_ID,
   ModelSubscriptionProviderId,
   PendingPersonalModelSubscriptionAuthorization,

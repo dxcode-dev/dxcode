@@ -20,29 +20,73 @@ export const pickerModelValue = (canonical: string) => `model:${canonical}`;
 export const pickerValueModel = (value: string) =>
   value.startsWith("model:") ? value.slice("model:".length) : undefined;
 
+/** What dx's picker lists a served model under, and that route's mark. */
+export const servedRoute = (
+  model: ServedModelChoiceData,
+): Pick<ModelPickerModel, "route" | "routeMark"> => {
+  if (isClaudeCodeModel(model.canonical))
+    return { route: "Claude Code", routeMark: "claude-code" };
+  const workspace = model.connectionScope === "workspace" ? " · workspace" : "";
+  switch (model.connectionKind) {
+    case "deployment":
+      return { route: "Included with dx" };
+    case "subscription":
+      return { route: model.connectionName, routeMark: "github-copilot" };
+    case "provider":
+      return {
+        route: `${model.connectionName}${workspace}`,
+        ...(model.connectionProviderId === undefined
+          ? {}
+          : { routeMark: model.connectionProviderId }),
+      };
+    default:
+      return { route: `${model.connectionName}${workspace}` };
+  }
+};
+
 /**
- * A served model as dx's picker lists it: its maker's logo, and who pays
- * for it, Claude Code models under the plan that runs them.
+ * Served models in the order dx's picker groups them: Claude Code first,
+ * then each connection in routing order.
+ */
+export const pickerOrder = (
+  models: ReadonlyArray<ServedModelChoiceData>,
+): ReadonlyArray<ServedModelChoiceData> =>
+  models.toSorted(
+    (a, b) =>
+      Number(isClaudeCodeModel(b.canonical)) -
+      Number(isClaudeCodeModel(a.canonical)),
+  );
+
+/**
+ * A served model as dx's picker lists it: its maker's logo, under the
+ * route that serves it. `claudePlan` says which plan runs a Claude Code
+ * model, in the details panel.
  */
 export const servedPickerModel = (
   model: ServedModelChoiceData,
   efforts: ReadonlyArray<ThinkingLevel> = PICKER_EFFORTS,
+  claudePlan?: string,
 ): ModelPickerModel => {
   const provider = modelProvider(model.canonical, model.name);
   const claudeCode = isClaudeCodeModel(model.canonical);
-  const name = modelDisplayName(model.name);
   return {
     value: pickerModelValue(model.canonical),
-    name: claudeCode ? `Claude Code · ${name}` : name,
+    name: modelDisplayName(model.name),
     provider: provider.id,
     providerName: provider.name,
-    route: claudeCode ? "Your Claude Pro/Max plan" : model.connectionName,
+    ...servedRoute(model),
+    ...(claudeCode && claudePlan !== undefined
+      ? { routeDetail: claudePlan }
+      : {}),
     contextWindow: model.contextWindow,
     efforts: claudeCode || model.reasoning ? efforts : [],
   };
 };
 
-/** A model the picker does not list, such as one nothing serves now. */
+/**
+ * A model the picker does not list, such as one nothing serves now. A
+ * Claude Code model is always under Claude Code.
+ */
 export const unlistedPickerModel = (
   canonical: string,
   name: string,
@@ -55,7 +99,9 @@ export const unlistedPickerModel = (
     name: modelDisplayName(name),
     provider: provider.id,
     providerName: provider.name,
-    route,
+    ...(isClaudeCodeModel(canonical)
+      ? { route: "Claude Code", routeMark: "claude-code" }
+      : { route }),
     efforts,
   };
 };

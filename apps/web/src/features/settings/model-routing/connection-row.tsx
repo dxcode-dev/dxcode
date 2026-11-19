@@ -90,7 +90,8 @@ export const ConnectionRow = ({
   const label = claude
     ? "Used in Claude Code mode only"
     : connection.kind === "subscription"
-      ? "GitHub Copilot"
+      ? // The name already says GitHub Copilot.
+        "Subscription"
       : connection.kind === "custom"
         ? "Custom URL"
         : `${providerKeyPresentation(connection.providerId, connection.providerId).name} API Key`;

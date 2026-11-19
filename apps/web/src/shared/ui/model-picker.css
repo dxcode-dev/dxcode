@@ -68,32 +68,6 @@
     flex: 1;
     border-bottom: 0;
   }
-  .dx-model-picker-grouping {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: var(--space-1);
-    height: var(--control-xs);
-    margin-right: var(--space-2);
-    padding: 0 var(--space-2);
-    color: var(--muted-foreground);
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    font: inherit;
-    font-size: var(--text-xs);
-    cursor: pointer;
-  }
-  .dx-model-picker-grouping:hover,
-  .dx-model-picker-grouping:focus-visible {
-    color: var(--foreground);
-    background: var(--accent);
-    outline: 0;
-  }
-  .dx-model-picker-grouping > svg {
-    width: var(--icon-sm);
-    height: var(--icon-sm);
-  }
   .dx-model-picker-body {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 220px;
@@ -102,15 +76,25 @@
   .dx-model-picker-list {
     max-height: min(380px, var(--available-height));
   }
+  /* A route's group heading: its mark in brand colors, its name. */
   .dx-model-picker-group {
     display: inline-flex;
     align-items: center;
     gap: var(--space-1-5);
+    color: var(--foreground);
+    font-size: var(--text-md);
   }
   .dx-model-picker-group .dx-model-mark {
-    width: var(--space-3);
-    height: var(--space-3);
     color: var(--muted-foreground);
+  }
+  /* A group's models sit in from its heading: their marks line up under
+     the route's name. */
+  .dx-model-picker-item[data-grouped] {
+    padding-inline-start: calc(
+      var(--space-2) +
+      var(--icon-sm) +
+      var(--space-1-5)
+    );
   }
   .dx-model-picker-item {
     gap: var(--space-2);
@@ -122,14 +106,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .dx-model-picker-item-route {
+  /* Rows the search filters out stay mounted; see PickerRows. */
+  .dx-model-picker-item[hidden],
+  .dx-model-picker [hidden] {
+    display: none;
+  }
+  .dx-model-picker-trigger-route {
+    display: inline-flex;
     flex: none;
-    max-width: 45%;
-    overflow: hidden;
-    color: var(--muted-foreground);
-    font-size: var(--text-sm);
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .dx-model-picker-item-lines {
     display: flex;
@@ -185,36 +169,39 @@
   }
   .dx-model-picker-panel-title > strong {
     min-width: 0;
-    overflow: hidden;
     font-weight: var(--weight-medium);
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: var(--leading-snug);
+    overflow-wrap: anywhere;
   }
   .dx-model-picker-panel > p {
     margin: 0;
     color: var(--muted-foreground);
     line-height: var(--leading-snug);
   }
+  /* Label and value side by side; a long value wraps under itself. */
   .dx-model-picker-panel dl {
     display: grid;
-    gap: var(--space-1);
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: var(--space-1-5) var(--space-3);
     margin: 0;
-  }
-  .dx-model-picker-panel dl > div {
-    display: flex;
-    justify-content: space-between;
-    gap: var(--space-2);
   }
   .dx-model-picker-panel dt {
     color: var(--muted-foreground);
   }
   .dx-model-picker-panel dd {
+    display: grid;
+    gap: var(--space-0-5);
     min-width: 0;
     margin: 0;
-    overflow: hidden;
-    text-align: right;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
+  }
+  .dx-model-picker-panel-route {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1-5);
+  }
+  .dx-model-picker-panel-detail {
+    color: var(--muted-foreground);
   }
   .dx-model-picker-effort-row {
     display: flex;

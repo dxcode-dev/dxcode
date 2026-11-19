@@ -251,7 +251,12 @@ export const ServedModelChoiceDataSchema = Schema.Struct({
   /** The model catalog's display name. */
   name: Schema.String,
   connectionId: ModelConnectionId,
+  /** The connection's name as people see it. */
   connectionName: Schema.String,
+  /** What the connection is, for the picker's group mark. */
+  connectionKind: Schema.optional(ConnectionKindSchema),
+  connectionProviderId: Schema.optional(Schema.String),
+  connectionScope: Schema.optional(Schema.Literals(["personal", "workspace"])),
   contextWindow: Schema.Int,
   reasoning: Schema.Boolean,
   vision: Schema.Boolean,

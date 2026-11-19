@@ -105,6 +105,15 @@ export function useSpaceAgentRow({
               effective={effective as never}
               autoLabel="Auto · Claude Opus 5.5"
               notServedHint={route?.kind !== "claude-code"}
+              {...(route?.kind === "claude-code" && !dirty
+                ? {
+                    effectiveRoute: {
+                      route: "Claude Code",
+                      routeMark: "claude-code",
+                      routeDetail: route.connectionName,
+                    },
+                  }
+                : {})}
               servedModels={servedModels}
               nameOf={nameOf}
               choicesPending={choices.isPending}
