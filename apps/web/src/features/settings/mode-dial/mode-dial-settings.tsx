@@ -4,9 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
-import { MODE_LABELS, MODES } from "../../../shared/mode-labels.js";
+import { MODES } from "../../../shared/mode-labels.js";
 import { settle } from "../../../shared/settle.js";
-import { DisclosureTrigger } from "../../../shared/ui/disclosure.js";
 import {
   modelRoutingChoicesQueryOptions,
   modeProfileQueryOptions,
@@ -29,21 +28,20 @@ import {
 } from "./mode-dial-drafts.js";
 import { modeDialMutationOptions } from "./mode-dial-mutations.js";
 import { MainAgentRole, SettingsSectionLink } from "./mode-dial-role.js";
-import { SpaceAgentRole } from "./space-agent-role.js";
+import { useSpaceAgentRow } from "./space-agent-role.js";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
 
 /** The slot whose model is Recommended: new Threads start on it. */
 const RECOMMENDED: ModeId = "medium";
-/** Retired modes: only Threads started on them before still run on them. */
-const OLDER: ReadonlyArray<ModeId> = ["low", "high", "ultra"];
 
 /**
- * Settings → Models: the Recommended model and effort new Threads start on,
- * for the person or (by an admin) the workspace, and the models older Threads
- * started on a retired mode still run on. A Thread keeps the model it starts
- * with; picking another model is a New Thread composer choice.
+ * Settings → Models & Routing: Model Routing's connections, then one Models
+ * card with the Recommended model new Threads start on, for the person or
+ * (by an admin) the workspace, and, on the personal page, the model new
+ * Spaces' coordinators run on, saved together. A Thread keeps the model it
+ * starts with; picking another model is a composer choice.
  */
 export const ModeDialSettings = (props: SettingsSectionProps) => {
   const { onDirtyChange, workspaceSlug } = props;
@@ -55,7 +53,6 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
   const queryClient = useQueryClient();
   const [drafts, setDrafts] = useState<Drafts>({});
   const [saving, setSaving] = useState(false);
-  const [olderOpen, setOlderOpen] = useState(false);
   const [error, setError] = useState<string>();
   const profile = useQuery(modeProfileQueryOptions(identity.id, target));
   // The workspace page names the slots the viewer's own picks replace.
@@ -74,11 +71,17 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
   const savedModes = profile.data?.modes as SavedModes | undefined;
   const dirtyModes = changedModes(drafts, savedModes);
   const dirty = dirtyModes.length > 0;
+  const space = useSpaceAgentRow({
+    enabled: spaces,
+    onDirtyChange: (spaceDirty) => onDirtyChange(spaceDirty || dirty),
+  });
   const updateDrafts = (next: Drafts, savedProfile?: SavedModes) => {
     setDrafts(next);
-    onDirtyChange(changedModes(next, savedProfile ?? savedModes).length > 0);
+    onDirtyChange(
+      changedModes(next, savedProfile ?? savedModes).length > 0 || space.dirty,
+    );
   };
-  const busy = saving || resetMutation.isPending;
+  const busy = saving || resetMutation.isPending || space.saving;
   // Claude Code models run as Claude Code, picked per Thread, never here.
   const servedModels = (choices.data?.models ?? []).filter(
     ({ canonical }) => !isClaudeCodeModel(canonical),
@@ -101,8 +104,8 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
         )
       : [];
   const save = async () => {
-    if (!savedModes || saving) return;
-    const baseline = savedModes;
+    if (saving || (!savedModes && !space.dirty)) return;
+    const baseline = savedModes as SavedModes;
     setSaving(true);
     setError(undefined);
     const outcome = await settle(async () => {
@@ -129,8 +132,10 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
         (previous, mode) => previous.then(() => saveDraft(mode)),
         Promise.resolve(),
       );
+      await space.save();
     });
-    if (!outcome.ok) setError(message(outcome.error));
+    if (outcome.ok) onDirtyChange(false);
+    else setError(message(outcome.error));
     setSaving(false);
   };
   const unservedDraft = dirtyModes.some((mode) => {
@@ -190,9 +195,6 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
       </div>
     );
   };
-  const olderPinned = OLDER.filter(
-    (mode) => savedModes?.[mode].source === "override",
-  );
   return (
     <div className="mode-tuning-page">
       <ModelRoutingSettings {...props} />
@@ -210,10 +212,7 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
           .
         </p>
       ) : null}
-      <SettingsCard
-        title="Default models"
-        description="Used when nobody picks a model. A pick in the composer always wins."
-      >
+      <SettingsCard>
         <SettingsRow
           title="New Threads"
           description={
@@ -223,55 +222,25 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
           }
           control={slotEditor(RECOMMENDED, "Recommended")}
         />
-      </SettingsCard>
-      <SettingsCard
-        variant="outline"
-        title="Older mode Threads"
-        description={`Threads started on the Low, High, or Ultra mode before modes were retired still run on these. New Threads never do.${olderPinned.length > 0 ? ` Picked: ${listModes(olderPinned)}.` : ""}`}
-        actions={
-          <DisclosureTrigger
-            expanded={olderOpen}
-            onClick={() => setOlderOpen(!olderOpen)}
-          >
-            {olderOpen ? "Hide" : "Show"}
-          </DisclosureTrigger>
-        }
-      >
-        {olderOpen
-          ? OLDER.map((mode) => (
-              <SettingsRow
-                key={mode}
-                title={`${MODE_LABELS[mode]} mode`}
-                control={slotEditor(mode, `${MODE_LABELS[mode]} mode`)}
-              />
-            ))
-          : null}
+        {space.row}
       </SettingsCard>
       <SettingsFormActions
-        dirty={dirty}
+        dirty={dirty || space.dirty}
         saving={busy}
-        message={
-          profile.isPending
-            ? "Loading…"
-            : profile.isError
-              ? "Unavailable"
-              : busy
-                ? "Saving…"
-                : dirty
-                  ? "Unsaved changes"
-                  : "In sync"
-        }
+        showStatus={false}
         {...(error === undefined ? {} : { error })}
         resetLabel="Discard"
         onReset={() => {
-          updateDrafts({});
+          space.discard();
+          setDrafts({});
+          // Nothing is left unsaved in either row.
+          onDirtyChange(false);
           setError(undefined);
         }}
         onSave={() => {
           if (!choices.isError && !unservedDraft) void save();
         }}
       />
-      {spaces ? <SpaceAgentRole /> : null}
     </div>
   );
 };

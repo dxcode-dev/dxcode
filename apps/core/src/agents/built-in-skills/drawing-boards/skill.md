@@ -23,12 +23,26 @@ arrow a4 retry -> cart "try again"
 ```
 
 - A line is `<kind> <id> "label" key=value …`. The id always follows the kind. Every setting is `key=value`; a bare number is an error.
-- Kinds: `rect`, `ellipse`, `diamond` (shapes, with an optional label), `text` (a free note, words required), `arrow`, `line`, `frame` (a labelled area that holds shapes). `freehand` and `image` lines are people's drawings; you can only move or resize them.
-- `x`, `y` are the top-left corner in pixels, and y grows downward. `w`, `h` apply to shapes and frames. A `text` takes no `w` or `h`; it sizes to its words.
+- Kinds: `rect`, `ellipse`, `diamond` (shapes, with an optional label), `text` (a free note, words required), `arrow`, `line`, `frame` (a labelled area that holds shapes), `image` (a picture, below). `freehand` lines are people's drawings; you can only move or resize them.
+- `x`, `y` are the top-left corner in pixels, and y grows downward. `w`, `h` apply to shapes, frames, and images. A `text` takes no `w` or `h`; it sizes to its words.
 - `arrow <id> <from> -> <to> "label"` connects two shapes by id, and dx draws a straight arrow between their outlines and keeps it attached when either moves. Arrows have no x or y to set.
 - Colors: `fill=` and `stroke=` take `#rrggbb` or a name: black, white, gray, red, pink, purple, blue, cyan, teal, green, yellow, orange. A named fill is the light shade and a named stroke the strong one, so `fill=red` reads as an error box with dark text.
 - Other keys: `size` (font size, 20 by default), `font` (hand, normal, code), `rough=0` for clean lines, `dash` (dashed, dotted), `align` (text), `head`/`tail` (arrowheads), `frame=<frame id>`, `link`.
 - `\n` in a label starts a new line. A label also wraps to its shape's width, and the shape grows taller when the wrapped label needs the room.
+
+## Images
+
+To put a screenshot, chart, or photo on a board, store the file first and name it with `src=`:
+
+```
+dxd files put ~/.dx/work/report/latency.png
+# prints https://…/v1/threads/…/storage/tsf_…/latency.png
+image latency src=https://…/v1/threads/…/storage/tsf_…/latency.png x=0 y=80 w=640
+```
+
+- `src` is the URL `dxd files put` printed, or a dx attachment URL from this Thread. The file must be a PNG, JPEG, GIF, or WebP of at most 10 MB. dx copies it into the board's own storage, so it shows for everyone who can open the board, after the file is gone.
+- Give `w` or `h` and the other keeps the image's proportions; give neither and it draws at its own size, at most 800 px on its longer side.
+- A read shows each image's `src` as the board stores it; write it back unchanged to keep the picture. A new `src` on an existing image swaps the picture in place.
 
 ## Lay it out before writing
 

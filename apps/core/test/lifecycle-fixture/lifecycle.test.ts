@@ -645,9 +645,9 @@ describe("generated Flue Worker lifecycle", () => {
       (_, turn) => `Heavy turn ${turn}`,
     );
     const unbounded = await walk("view=history&promptLimit=2");
-    // The web client's page: two prompts within 1 MiB (THREAD_HISTORY_PAGE).
+    // The web client's page: five prompts within 1 MiB (THREAD_HISTORY_PAGE).
     const bounded = await walk(
-      `view=history&promptLimit=2&maxBytes=${HISTORY_PAGE_BYTES}`,
+      `view=history&promptLimit=5&maxBytes=${HISTORY_PAGE_BYTES}`,
     );
     for (const pages of [unbounded, bounded])
       expect(pages.toReversed().flatMap(prompts)).toEqual(all);

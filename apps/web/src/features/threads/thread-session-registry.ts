@@ -31,6 +31,7 @@ import {
   absentHistoryResponse,
   sameOriginFetch,
 } from "../../shared/same-origin-fetch.js";
+import { THREAD_HISTORY_PAGE } from "../../shared/thread-history-page.js";
 import { projectQueryOptions } from "../projects/project-queries.js";
 import { DictationRecoverySession } from "./dictation/dictation-session.js";
 import { existingAgentUid } from "./existing-agent-uid.js";
@@ -41,13 +42,6 @@ import {
 } from "./image-attachments.js";
 import { sendRefusal } from "./send-failure.js";
 import { threadKeys, threadQueryOptions } from "./thread-queries.js";
-
-/**
- * Each history page holds the newest prompts that fit in 1 MiB of encoded
- * JSON, at most two and always at least one whole prompt, so a Thread with
- * large tool outputs does not paint megabytes. Older pages load on scroll.
- */
-export const THREAD_HISTORY_PAGE = { promptLimit: 2, maxBytes: 1_048_576 };
 
 /** Attempts per keyed send; the server deduplicates them by key. */
 const SEND_ATTEMPTS = 3;

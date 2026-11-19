@@ -9,6 +9,8 @@ const router = vi.hoisted(() => ({
   search: { mode: "high" } as { mode?: string },
   navigate: vi.fn(),
   data: {} as Record<string, unknown>,
+  /** What each mutation was asked to save, in order. */
+  saved: [] as unknown[],
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => ({
@@ -22,13 +24,24 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 }));
 vi.mock("@tanstack/react-query", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@tanstack/react-query")>()),
-  useQueryClient: () => ({}),
+  useQueryClient: () => ({
+    setQueryData: () => undefined,
+    invalidateQueries: () => undefined,
+  }),
   useQuery: ({ queryKey }: { queryKey: string[] }) => ({
     data: router.data[queryKey.at(-2) ?? ""],
     isError: false,
     isPending: router.data[queryKey.at(-2) ?? ""] === undefined,
   }),
-  useMutation: () => ({ mutate: vi.fn(), isPending: false, isError: false }),
+  useMutation: () => ({
+    mutate: vi.fn(),
+    mutateAsync: async (variables: unknown) => {
+      router.saved.push(variables);
+      return router.data.profile;
+    },
+    isPending: false,
+    isError: false,
+  }),
 }));
 vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
   ...(await importOriginal<
@@ -94,9 +107,13 @@ describe("models settings", () => {
           Array.from(container.querySelectorAll("button")).find(
             (element) => element.textContent?.trim() === text,
           );
-        const status = () =>
-          container.querySelector(".settings-form-actions > span")?.textContent;
-        expect(status()).toBe("In sync");
+        // One Save for the card, and no status line beside it.
+        expect(
+          container.querySelectorAll(".settings-form-actions"),
+        ).toHaveLength(1);
+        expect(
+          container.querySelector(".settings-form-actions > span"),
+        ).toBeNull();
         expect(button("Save")?.disabled).toBe(true);
         // Opens dx's model picker and picks the row that starts with `name`.
         const choose = async (name: string) => {
@@ -116,13 +133,12 @@ describe("models settings", () => {
         await choose("B");
         expect(picked()).toMatch(/^Recommended model: B\b/);
         expect(onDirtyChange).toHaveBeenLastCalledWith(true);
-        expect(status()).toBe("Unsaved changes");
         expect(button("Save")?.disabled).toBe(false);
         // Auto is the reset: back on Auto there is nothing to save.
         await choose("Auto");
         expect(picked()).toMatch(/^Recommended model: Auto,/);
         expect(onDirtyChange).toHaveBeenLastCalledWith(false);
-        expect(status()).toBe("In sync");
+        expect(button("Save")?.disabled).toBe(true);
         await choose("B");
         await React.act(() => button("Discard")?.click());
         expect(onDirtyChange).toHaveBeenLastCalledWith(false);
@@ -170,21 +186,101 @@ describe("models settings", () => {
       await React.act(() =>
         root.render(<ModeDialSettings onDirtyChange={vi.fn()} />),
       );
-      // Older mode Threads' models stay hidden until asked for.
+      // Older mode Threads' models are not on the page.
       expect(container.querySelector("#models-low")).toBeNull();
-      const show = Array.from(container.querySelectorAll("button")).find(
-        (element) => element.textContent?.trim() === "Show",
+      expect(container.textContent).not.toContain("Older mode");
+      const trigger = container.querySelector("#models-medium");
+      expect(trigger?.getAttribute("aria-label")).toMatch(
+        /: Auto, GLM 5\.3 Flash/,
       );
-      await React.act(() => show?.click());
-      for (const slot of ["medium", "low", "high", "ultra"]) {
-        const trigger = container.querySelector(`#models-${slot}`);
-        expect(trigger?.getAttribute("aria-label"), slot).toMatch(
-          /: Auto, GLM 5\.3 Flash/,
-        );
-        expect(trigger?.textContent, slot).toContain("GLM 5.3 Flash");
-      }
+      expect(trigger?.textContent).toContain("GLM 5.3 Flash");
       expect(container.textContent).not.toContain("cloudflare/");
       expect(container.textContent).not.toContain("glm-5.3-flash");
+    } finally {
+      await React.act(() => root.unmount());
+      container.remove();
+      router.data = {};
+    }
+  });
+
+  it("saves the New Threads and Space coordinator models with one Save", async () => {
+    router.search = {};
+    router.saved = [];
+    const models = ["A", "B"].map((name) => ({
+      canonical: `openai/${name.toLowerCase()}`,
+      name,
+      reasoning: true,
+      connectionName: "Provider",
+      contextWindow: 200_000,
+    }));
+    router.data = {
+      profile: {
+        modes: Object.fromEntries(
+          ["low", "medium", "high", "ultra"].map((mode) => [
+            mode,
+            {
+              source: "default",
+              config: { agent: { model: "openai/a", thinking: "medium" } },
+            },
+          ]),
+        ),
+      },
+      choices: { modes: [], models },
+      "space-agent-model": {
+        route: {
+          kind: "model-routing",
+          model: "openai/a",
+          modelName: "A",
+          thinking: "medium",
+          connectionName: "Provider",
+        },
+      },
+    };
+    const onDirtyChange = vi.fn();
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await React.act(() =>
+        root.render(<ModeDialSettings onDirtyChange={onDirtyChange} />),
+      );
+      const open = '.dx-model-picker:not([data-closed]) [role="option"]';
+      const pick = async (id: string, name: string) => {
+        const trigger = container.querySelector<HTMLButtonElement>(`#${id}`);
+        assert.exists(trigger);
+        await React.act(() => trigger.click());
+        await vi.waitFor(() =>
+          expect(document.querySelectorAll(open).length).toBeGreaterThan(0),
+        );
+        // Only the popup this trigger opened; the last one may still be
+        // closing.
+        const option = Array.from(
+          document.querySelectorAll<HTMLElement>(open),
+        ).find((element) => element.textContent?.startsWith(name));
+        assert.exists(option);
+        await React.act(() => option.click());
+      };
+      // Both rows sit in one card, under one Save.
+      expect(container.querySelectorAll(".settings-card")).toHaveLength(1);
+      await pick("models-medium", "B");
+      await pick("space-agent-model", "B");
+      const saves = Array.from(container.querySelectorAll("button")).filter(
+        (element) => element.textContent?.trim() === "Save",
+      );
+      expect(saves).toHaveLength(1);
+      await React.act(() => saves[0]?.click());
+      await vi.waitFor(() => expect(router.saved).toHaveLength(2));
+      expect(router.saved[0]).toMatchObject({
+        mode: "medium",
+        config: { agent: { model: "openai/b" } },
+      });
+      expect(router.saved[1]).toEqual({
+        model: "openai/b",
+        thinking: "medium",
+      });
+      await vi.waitFor(() =>
+        expect(onDirtyChange).toHaveBeenLastCalledWith(false),
+      );
     } finally {
       await React.act(() => root.unmount());
       container.remove();

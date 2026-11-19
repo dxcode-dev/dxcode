@@ -16,8 +16,10 @@ export {
   serializeBoard,
 } from "./artifacts/board.js";
 export {
+  type BoardImage,
   type BoardTextResult,
   boardFromText,
+  boardImageSources,
   boardLayoutNotes,
   boardTextElementCount,
   boardToText,

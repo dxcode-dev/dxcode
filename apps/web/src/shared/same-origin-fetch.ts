@@ -9,6 +9,7 @@ import { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { noticeUnauthenticated } from "./auth/session-ended.js";
 import { observeRequest } from "./diagnostics/client-diagnostics.js";
+import { THREAD_HISTORY_PAGE } from "./thread-history-page.js";
 
 /** The request's path, as the failed-request log records it. */
 const requestPath = (input: RequestInfo | URL) => {
@@ -87,7 +88,7 @@ const GATING_BOOT_READS = [
 
 /** Flue's first history page, as the Thread session asks for it. */
 const threadHistoryPath = (threadId: string) =>
-  `/v1/agents/dx/${encodeURIComponent(threadId)}?view=history&promptLimit=2&maxBytes=1048576`;
+  `/v1/agents/dx/${encodeURIComponent(threadId)}?view=history&promptLimit=${THREAD_HISTORY_PAGE.promptLimit}&maxBytes=${THREAD_HISTORY_PAGE.maxBytes}`;
 
 /** A Thread page's reads, from its URL; none elsewhere. */
 const threadBootReads = (pathname: string) => {

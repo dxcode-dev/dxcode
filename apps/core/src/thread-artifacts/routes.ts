@@ -7,7 +7,6 @@ import {
   GetThreadMembersResponseSchema,
   NotifyArtifactAgentResponseSchema,
   SaveThreadArtifactRequestSchema,
-  sanitizeAttachmentFilename,
   type ThreadArtifactCommentListResponse,
   type ThreadArtifactCommentResponse,
   type ThreadArtifactErrorCode,
@@ -34,6 +33,7 @@ import {
   putThreadStorageFile,
   threadStorageFileData,
 } from "../thread-storage/store.js";
+import { ARTIFACT_IMAGE_TYPES, imageName } from "./artifact-images.js";
 import {
   artifactCommented,
   artifactSaved,
@@ -165,29 +165,6 @@ const decodeBody = async <A, I>(
 
 const param = (context: Context<AppEnv>, name: string) =>
   context.req.param(name) ?? "";
-
-const ARTIFACT_IMAGE_TYPES = new Set([
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-]);
-
-const EXTENSION: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/gif": "gif",
-  "image/webp": "webp",
-};
-
-/** A safe file name for the image, with the extension its bytes call for. */
-const imageName = (requested: string | undefined, mimeType: string) => {
-  const base =
-    sanitizeAttachmentFilename(requested ?? "")
-      .replace(/\.[A-Za-z0-9]{1,5}$/, "")
-      .slice(0, 80) || "image";
-  return `${base}.${EXTENSION[mimeType] ?? "img"}`;
-};
 
 /** The person acting, not the owner a Contribute member acts as. */
 const writer = (context: Context<AppEnv>) => ({

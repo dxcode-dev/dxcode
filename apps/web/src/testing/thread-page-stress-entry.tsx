@@ -37,14 +37,12 @@ import {
   ThreadPresentationContext,
   ThreadSessionRegistryContext,
 } from "../features/threads/thread-session-context.js";
-import {
-  THREAD_HISTORY_PAGE,
-  ThreadSessionRegistry,
-} from "../features/threads/thread-session-registry.js";
+import { ThreadSessionRegistry } from "../features/threads/thread-session-registry.js";
 import { createAppRouter } from "../router.js";
 import { AuthContext } from "../shared/auth/auth-context.js";
 import { createQueryClient } from "../shared/query/query-client.js";
 import { ThemeProvider } from "../shared/theme/theme-provider.js";
+import { THREAD_HISTORY_PAGE } from "../shared/thread-history-page.js";
 import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,

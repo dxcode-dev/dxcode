@@ -337,12 +337,29 @@ const observeTranscriptResize = (
   return () => observer.disconnect();
 };
 
+/**
+ * How far above the viewport, in viewport heights, older history starts
+ * loading, so a reader scrolling up meets loaded turns instead of the top.
+ */
+const OLDER_HISTORY_PRELOAD_SCREENS = 2;
+
+/** Whether the sentinel is in the viewport or the preload band above it. */
+const withinPreload = (viewport: HTMLElement, sentinel: HTMLElement) => {
+  const view = viewport.getBoundingClientRect();
+  const mark = sentinel.getBoundingClientRect();
+  const preload = (view.bottom - view.top) * OLDER_HISTORY_PRELOAD_SCREENS;
+  return mark.bottom > view.top - preload && mark.top < view.bottom;
+};
+
 const observeOlderHistory = (
   viewport: HTMLDivElement,
   sentinel: HTMLDivElement,
   notify: () => void,
 ) => {
-  const observer = new IntersectionObserver(notify, { root: viewport });
+  const observer = new IntersectionObserver(notify, {
+    root: viewport,
+    rootMargin: `${OLDER_HISTORY_PRELOAD_SCREENS * 100}% 0px 0px 0px`,
+  });
   const resizeObserver = new ResizeObserver(notify);
   observer.observe(sentinel);
   resizeObserver.observe(viewport);
@@ -426,10 +443,7 @@ function useOlderHistoryDrain({
         current.viewport.clientHeight === 0
       )
         return;
-      const viewport = current.viewport.getBoundingClientRect();
-      const sentinel = current.sentinel.getBoundingClientRect();
-      if (sentinel.bottom <= viewport.top || sentinel.top >= viewport.bottom)
-        return;
+      if (!withinPreload(current.viewport, current.sentinel)) return;
       if (options.olderError !== undefined) {
         if (current.retryTimer !== undefined) return;
         if (current.retryOldestTurnId !== options.oldestTurnId) {
@@ -457,13 +471,7 @@ function useOlderHistoryDrain({
             current.viewport.clientHeight === 0
           )
             return;
-          const latestViewport = current.viewport.getBoundingClientRect();
-          const latestSentinel = current.sentinel.getBoundingClientRect();
-          if (
-            latestSentinel.bottom <= latestViewport.top ||
-            latestSentinel.top >= latestViewport.bottom
-          )
-            return;
+          if (!withinPreload(current.viewport, current.sentinel)) return;
           current.retryAttempt += 1;
           void latest.loadOlder();
         }, delay);

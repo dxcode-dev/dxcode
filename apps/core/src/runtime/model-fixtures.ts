@@ -168,6 +168,15 @@ const EMAIL_REQUEST =
   /^(?:Follow-up email|Email|The owner started this Thread from an email in their dx Mailbox,) from [^\n]+\nSubject: ([^\n]*)\n\n([^\n]*)/;
 
 /**
+ * An image on a board: the agent calls the real `artifact` tool with a board
+ * whose image line names the stored file, then answers with the board's
+ * link or the tool's refusal, so a local run proves the whole path.
+ */
+const BOARD_IMAGE_REQUEST =
+  /^Put the image at (\S+) on a new board titled "([^"\n]{1,80})"\.$/;
+const BOARD_IMAGE_CALL_ID = "dx-local-fixture-board-image";
+
+/**
  * The report a child sends the Thread that started it, which only its
  * system prompt names: a Thread that was not started by an agent has none.
  */
@@ -344,6 +353,54 @@ export const createLocalModelFixtureProvider = () => {
           `I got your email "${email[1]}". You asked: ${email[2]}`,
           { timestamp: 0 },
         ),
+      ]);
+      return core;
+    }
+    const boardImage = BOARD_IMAGE_REQUEST.exec(prompt ?? "");
+    if (boardImage !== null) {
+      const [, src, title] = boardImage;
+      const core = createFauxCore({
+        api: LOCAL_MODEL_FIXTURE_AUDIT_MARKER,
+        provider: LOCAL_MODEL_FIXTURE_PROVIDER,
+        models: [{ id: LOCAL_MODEL_FIXTURE_MODEL, reasoning: true }],
+        tokenSize: { min: 2, max: 2 },
+      });
+      // This request's own call: results after the latest prompt only.
+      const promptAt = context.messages.findLastIndex(
+        (message) => message.role === "user" && !isSignal(message),
+      );
+      const result = fixtureToolResultText(
+        { ...context, messages: context.messages.slice(promptAt + 1) },
+        BOARD_IMAGE_CALL_ID,
+        { withErrors: true },
+      );
+      const link = /"link":"(\/artifacts\/[^"]+)"/.exec(result ?? "")?.[1];
+      core.setResponses([
+        result === undefined
+          ? fauxAssistantMessage(
+              [
+                fauxToolCall(
+                  "artifact",
+                  {
+                    action: "create",
+                    type: "board",
+                    title,
+                    markdown: [
+                      `text title "${title}" x=0 y=0 size=28`,
+                      `image picture src=${src} x=0 y=70 w=640`,
+                    ].join("\n"),
+                  },
+                  { id: BOARD_IMAGE_CALL_ID },
+                ),
+              ],
+              { stopReason: "toolUse", timestamp: 0 },
+            )
+          : fauxAssistantMessage(
+              link === undefined
+                ? `The artifact tool refused the board: ${result}`
+                : `The board is ready: [${title}](${link}).`,
+              { timestamp: 0 },
+            ),
       ]);
       return core;
     }

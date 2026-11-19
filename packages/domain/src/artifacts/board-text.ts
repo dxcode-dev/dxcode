@@ -21,13 +21,30 @@ import {
  * default, and a line written back exactly as read changes nothing, so the
  * agent can edit lines with old_str/new_str like a document. Positions are
  * optional for new shapes: dx lays them out below what is there. Text
- * cannot draw a freehand stroke or an image, so those lines only move or
- * resize what people drew.
+ * cannot draw a freehand stroke, so its lines only move or resize what
+ * people drew. An image line names its picture with `src=`, the address of
+ * an image stored with dx; the caller resolves new addresses to stored
+ * images (`boardImageSources`) before applying the text.
  */
 
 export type BoardTextResult =
   | { readonly ok: true; readonly board: BoardDocument }
   | { readonly ok: false; readonly message: string };
+
+/** An image stored for the board, which an image line's `src` names. */
+export interface BoardImage {
+  /** The board's key for the file; the stored file's id. */
+  readonly fileId: string;
+  readonly mimeType: string;
+  /** Where people's editors read it: a path on dx's origin. */
+  readonly url: string;
+  /** Its size in pixels, for an image line without w and h. */
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The longest side an image line without w or h is drawn at. */
+const IMAGE_MAX_SIDE = 800;
 
 type Kind =
   | "rect"
@@ -58,7 +75,7 @@ const TYPE_KIND: Record<string, Kind> = Object.fromEntries(
 
 const SHAPES = new Set<Kind>(["rect", "ellipse", "diamond"]);
 /** Kinds text can only move or resize. */
-const DRAWN = new Set<Kind>(["freehand", "image"]);
+const DRAWN = new Set<Kind>(["freehand"]);
 const ID = /^[A-Za-z0-9_-]{1,64}$/;
 const COLOR = /^(#[0-9a-fA-F]{3,8}|transparent)$/;
 
@@ -291,6 +308,14 @@ const ATTRIBUTES: Record<string, Attribute> = {
     read: (element) => element.link ?? undefined,
     check: (text) => /^(https?:\/\/|\/)\S{0,2000}$/.test(text),
   },
+  src: {
+    key: "src",
+    read: (element, board) =>
+      typeof element.fileId === "string"
+        ? board.files[element.fileId]?.url
+        : undefined,
+    check: (text) => /^(https:\/\/|http:\/\/|\/)\S{1,2000}$/.test(text),
+  },
 };
 
 const STYLE = ["stroke", "width", "dash", "rough", "opacity"];
@@ -375,7 +400,7 @@ const KIND_ATTRIBUTES: Record<Kind, ReadonlyArray<string>> = {
     "frame",
     "link",
   ],
-  image: ["x", "y", "w", "h", "angle", "opacity", "frame", "link"],
+  image: ["src", "x", "y", "w", "h", "angle", "opacity", "frame", "link"],
 };
 
 /** Attributes a bound arrow leaves out: its ends decide them. */
@@ -1052,6 +1077,8 @@ const fitLabel = (kind: Kind, label: string | undefined, fontSize: number) => {
 export const boardFromText = (
   text: string,
   previous: BoardDocument,
+  /** Stored images by the `src` the text names them with. */
+  images: ReadonlyMap<string, BoardImage> = new Map(),
 ): BoardTextResult => {
   const fail = (line: number, message: string): BoardTextResult => ({
     ok: false,
@@ -1115,6 +1142,43 @@ export const boardFromText = (
       return fail(
         line.line,
         `creates a ${line.kind}; text cannot draw one. Lines for ${[...DRAWN].join(" and ")} only move or resize what people drew`,
+      );
+    else if (line.kind === "image" && !line.attributes.has("src"))
+      return fail(
+        line.line,
+        "creates an image without src; name the picture with src=, the URL dxd files put printed, as in image chart src=https://…/storage/tsf_…/chart.png x=0 y=0 w=480",
+      );
+  }
+  // An image line's src: a stored image the caller resolved, or one the
+  // board already shows, by its stored address or the source it was copied
+  // from.
+  const shown = imageAddresses(previous);
+  const newFiles: Record<string, { mimeType: string; url: string }> = {};
+  const imageFor = (src: string) => {
+    const image = images.get(src);
+    if (image !== undefined) {
+      newFiles[image.fileId] = { mimeType: image.mimeType, url: image.url };
+      return image;
+    }
+    const fileId = shown.get(src);
+    if (fileId === undefined) return undefined;
+    const drawn = previous.elements.find(
+      (element) => element.fileId === fileId && !element.isDeleted,
+    );
+    return {
+      fileId,
+      mimeType: previous.files[fileId]?.mimeType ?? "image/png",
+      url: src,
+      width: drawn?.width ?? 400,
+      height: drawn?.height ?? 300,
+    } satisfies BoardImage;
+  };
+  for (const line of parsed) {
+    const src = line.attributes.get("src");
+    if (src !== undefined && imageFor(src) === undefined)
+      return fail(
+        line.line,
+        `has src=${src}, which is not an image dx stored; use the URL dxd files put printed for a PNG, JPEG, GIF, or WebP file`,
       );
   }
   const named = new Map(parsed.map((line) => [line.id, line]));
@@ -1207,6 +1271,37 @@ export const boardFromText = (
             ? { name: line.label ?? null, roughness: 0 }
             : {}),
         };
+      } else if (line.kind === "image") {
+        const image = imageFor(line.attributes.get("src") as string);
+        if (image === undefined) return fail(line.line, "has no image");
+        const ratio = image.height / Math.max(1, image.width);
+        const given = {
+          w: line.attributes.has("w") ? element.width : undefined,
+          h: line.attributes.has("h") ? element.height : undefined,
+        };
+        const natural = Math.min(
+          1,
+          IMAGE_MAX_SIDE / Math.max(image.width, image.height, 1),
+        );
+        const width =
+          given.w ??
+          (given.h === undefined
+            ? Math.round(image.width * natural)
+            : Math.round(given.h / ratio));
+        const height = given.h ?? Math.round(width * ratio);
+        element = {
+          ...element,
+          width,
+          height,
+          fileId: image.fileId,
+          status: "saved",
+          scale: [1, 1],
+          crop: null,
+          customData: { source: line.attributes.get("src") },
+          strokeColor: "transparent",
+          backgroundColor: "transparent",
+          roundness: null,
+        };
       } else if (line.kind === "arrow" || line.kind === "line") {
         element = {
           ...element,
@@ -1229,7 +1324,8 @@ export const boardFromText = (
       if (
         (SHAPES.has(line.kind) ||
           line.kind === "text" ||
-          line.kind === "frame") &&
+          line.kind === "frame" ||
+          line.kind === "image") &&
         !line.attributes.has("x") &&
         !line.attributes.has("y")
       )
@@ -1247,9 +1343,34 @@ export const boardFromText = (
       const wanted = line.attributes.get(key);
       if (now === wanted) continue;
       if (key === "points" && kind === "freehand") continue;
+      if (key === "src") {
+        // Another picture in the same place; a line without src keeps it.
+        if (wanted === undefined) continue;
+        const image = imageFor(wanted);
+        if (image === undefined) return fail(line.line, "has no image");
+        if (image.fileId !== existing.fileId)
+          changes = { ...changes, fileId: image.fileId, status: "saved" };
+        continue;
+      }
       changes = { ...changes, ...applyAttribute(key, wanted, existing) };
       if (["x", "y", "w", "h", "angle", "points"].includes(key))
         geometryChanged.add(line.id);
+    }
+    // An image resized by one side keeps its proportions.
+    if (kind === "image") {
+      const ratio = existing.height / Math.max(1, existing.width);
+      if (
+        line.attributes.has("w") &&
+        !line.attributes.has("h") &&
+        changes.width !== undefined
+      )
+        changes = { ...changes, height: Math.round(changes.width * ratio) };
+      if (
+        line.attributes.has("h") &&
+        !line.attributes.has("w") &&
+        changes.height !== undefined
+      )
+        changes = { ...changes, width: Math.round(changes.height / ratio) };
     }
     if (line.kind === "text") {
       const fields = textFields(line.attributes, existing);
@@ -1508,8 +1629,53 @@ export const boardFromText = (
       ...previous,
       background,
       elements: order.map((id) => elements.get(id) as BoardElement),
+      files: { ...previous.files, ...newFiles },
     },
   };
+};
+
+/**
+ * Each address an image line may name a stored image by: its stored URL,
+ * and the source the agent copied it from.
+ */
+const imageAddresses = (board: BoardDocument) => {
+  const addresses = new Map(
+    Object.entries(board.files).map(([fileId, file]) => [file.url, fileId]),
+  );
+  for (const element of board.elements) {
+    const source = (element.customData as { source?: unknown } | undefined)
+      ?.source;
+    if (
+      element.type === "image" &&
+      typeof element.fileId === "string" &&
+      typeof source === "string" &&
+      board.files[element.fileId] !== undefined &&
+      !addresses.has(source)
+    )
+      addresses.set(source, element.fileId);
+  }
+  return addresses;
+};
+
+/**
+ * The `src` addresses the text's image lines name that the board does not
+ * show yet: the images the caller stores before applying the text.
+ */
+export const boardImageSources = (
+  text: string,
+  previous: BoardDocument,
+): ReadonlyArray<string> => {
+  const shown = imageAddresses(previous);
+  const sources = new Set<string>();
+  for (const [index, source] of text.split(/\r\n|\r|\n/).entries()) {
+    if (/^board(\s|$)/.test(source.trim())) continue;
+    const line = parseLine(source, index + 1);
+    if (line === undefined || "error" in line || line.kind !== "image")
+      continue;
+    const src = line.attributes.get("src");
+    if (src !== undefined && !shown.has(src)) sources.add(src);
+  }
+  return [...sources];
 };
 
 /** The elements text shows, so callers can count them. */

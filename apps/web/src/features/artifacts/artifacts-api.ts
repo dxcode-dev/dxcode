@@ -143,6 +143,21 @@ export const saveArtifact = async (
     )
   ).data;
 
+/** A data: URL's bytes; undefined when it is malformed. */
+const dataUrlBlob = (source: string): Blob | undefined => {
+  const match = /^data:([^;,]*)((?:;[^;,]*)*),(.*)$/s.exec(source);
+  if (match === null) return undefined;
+  const [, type = "", parameters = "", data = ""] = match;
+  try {
+    const bytes = parameters.split(";").includes("base64")
+      ? Uint8Array.from(atob(data), (char) => char.charCodeAt(0))
+      : new TextEncoder().encode(decodeURIComponent(data));
+    return new Blob([bytes], { type: type || "application/octet-stream" });
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * An image the artifact shows, as bytes, for an export to carry inside it;
  * undefined when it cannot be read (gone, or on another site).
@@ -150,6 +165,8 @@ export const saveArtifact = async (
 export const artifactImageBlob = async (
   source: string,
 ): Promise<Blob | undefined> => {
+  // Decoded here: dx's CSP refuses fetching data: URLs.
+  if (source.startsWith("data:")) return dataUrlBlob(source);
   try {
     const url = new URL(source, window.location.href);
     if (url.protocol !== "data:" && url.origin !== window.location.origin)

@@ -32,9 +32,12 @@ export const createStandaloneArtifact = async (
     readonly markdown?: string;
     readonly writer: ArtifactWriter;
     readonly now?: Date;
+    /** An id chosen beforehand, when its images were stored first. */
+    readonly id?: string;
   },
 ): Promise<CreateStandaloneResult> => {
   const result = await createArtifact(bindings, {
+    ...(input.id === undefined ? {} : { id: input.id }),
     threadId: null,
     ownerUserId: input.ownerUserId,
     title: input.title,

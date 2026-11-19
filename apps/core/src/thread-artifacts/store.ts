@@ -436,6 +436,8 @@ export const createArtifact = async (
     readonly markdown: string;
     readonly writer: ArtifactWriter;
     readonly now?: number;
+    /** An id chosen beforehand, when its images were stored first. */
+    readonly id?: string;
   },
 ): Promise<ArtifactWriteResult> => {
   const { db, bucket } = bindingsOf(bindings);
@@ -463,7 +465,7 @@ export const createArtifact = async (
     input.threadId === null ? 0 : await storedBytes(db, input.threadId, "");
   if (stored + bytes.byteLength > THREAD_ARTIFACT_MAX_STORED_BYTES)
     return { kind: "storage-full", storedBytes: stored };
-  const id = newArtifactId();
+  const id = input.id ?? newArtifactId();
   const now = input.now ?? Date.now();
   const key = artifactRevisionKey(input.threadId, id, 1, sha256);
   const writer = writerColumns(input.writer);

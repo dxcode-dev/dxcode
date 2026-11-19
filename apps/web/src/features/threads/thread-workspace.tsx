@@ -50,12 +50,8 @@ import { AgentPanel, type AgentPanelOptions } from "./agent-panel.js";
 import { ThreadScheduleHint } from "./automations/thread-schedule-hint.js";
 import { ChangesPane } from "./changes/changes-pane.js";
 import { useDictationSlot } from "./dictation/use-dictation.js";
-import { CenterFilePane } from "./files/center-file-pane.js";
 import type { CenterFileTab } from "./files/file-tab.js";
-import {
-  type ThreadFileLocation,
-  ThreadFilesPanel,
-} from "./files/files-panel.js";
+import type { ThreadFileLocation } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
 import type { MessageEditOptions } from "./message-edit.js";
 import { editThreadMessageMutationOptions } from "./message-edit-mutations.js";
@@ -514,14 +510,16 @@ function OpenThreadFilePane({
       className="thread-file-center-panel"
       aria-label={`File ${file.path}`}
     >
-      <CenterFilePane
-        active={active}
-        autosave={composer.data?.autosaveFiles === true}
-        file={file}
-        threadId={threadId}
-        onDirtyChange={onDirtyChange}
-        onShowInFiles={onShowInFiles}
-      />
+      <React.Suspense fallback={null}>
+        <CenterFilePane
+          active={active}
+          autosave={composer.data?.autosaveFiles === true}
+          file={file}
+          threadId={threadId}
+          onDirtyChange={onDirtyChange}
+          onShowInFiles={onShowInFiles}
+        />
+      </React.Suspense>
     </section>
   );
 }
@@ -756,6 +754,21 @@ function RetainedThreadSession({
   );
 }
 
+/**
+ * The Files tree and an open file's pane, loaded when a person opens one:
+ * the Thread page's first paint shows the transcript.
+ */
+const ThreadFilesPanel = React.lazy(() =>
+  import("./files/files-panel.js").then(({ ThreadFilesPanel: Panel }) => ({
+    default: Panel,
+  })),
+);
+const CenterFilePane = React.lazy(() =>
+  import("./files/center-file-pane.js").then(({ CenterFilePane: Pane }) => ({
+    default: Pane,
+  })),
+);
+
 /** The composer's model picker, loaded after the Thread's first paint. */
 const ThreadModelControl = React.lazy(() =>
   import("./thread-model-control.js").then(
@@ -971,15 +984,17 @@ function FilesView({
       ? { worktree: shown.target.worktree, path: shown.target.path }
       : undefined;
   return (
-    <ThreadFilesPanel
-      active={active}
-      threadId={threadId}
-      projectName={projectName}
-      selectedFile={selectedFile}
-      onOpenFile={onOpenFile}
-      // Only the owner and contributors see Files.
-      canWrite
-    />
+    <React.Suspense fallback={null}>
+      <ThreadFilesPanel
+        active={active}
+        threadId={threadId}
+        projectName={projectName}
+        selectedFile={selectedFile}
+        onOpenFile={onOpenFile}
+        // Only the owner and contributors see Files.
+        canWrite
+      />
+    </React.Suspense>
   );
 }
 

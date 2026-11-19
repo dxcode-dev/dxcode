@@ -53,6 +53,15 @@ import { artifactKeys } from "../artifacts-queries.js";
  * Live: while someone draws, the elements they change and their pointer go
  * to the others over the Thread's realtime socket, about 20 times a second,
  * and are never stored; the save that follows carries the same change.
+ *
+ * Leaving: the editor empties its scene as it unmounts, so the session
+ * keeps its own copy of the latest scene and saves from that. Saves still
+ * pending and images still uploading finish after the board closes.
+ *
+ * Images: a pasted or dropped image uploads to the Thread's storage (a
+ * library artifact's own storage); the board stores its address, never its
+ * bytes. Addresses the session learns only accumulate, so a save answered
+ * while an upload finishes never drops the new address.
  */
 
 /** How long after the last change a save waits. */
@@ -169,7 +178,20 @@ export class BoardSession {
   #saving: Promise<void> | undefined;
   #saveAgain = false;
   #retries = 0;
-  /** Image files: uploaded (in the board) or uploading now. */
+  /**
+   * The scene as last seen: every element, deleted ones included, and the
+   * view state merges need. Saves read this, never the editor, which is
+   * empty once it unmounts.
+   */
+  #scene: ReadonlyArray<ExcalidrawElement>;
+  #appState: AppState | undefined;
+  #background: string;
+  /** Every image address known: stored, received, or just uploaded. */
+  readonly #files = new Map<string, BoardFile>();
+  /** Raised when an upload adds an address; saved once a save carries it. */
+  #fileEpoch = 0;
+  #savedFileEpoch = 0;
+  /** Images uploading now. */
   readonly #uploading = new Set<string>();
   readonly #loadedFiles = new Set<string>();
   readonly #collaborators = new Map<
@@ -207,6 +229,10 @@ export class BoardSession {
     this.#folder = options.initial.artifact.folder;
     this.#syncedSum = versionSum(this.#board.elements);
     this.#lastSum = this.#syncedSum;
+    this.#scene = this.#board
+      .elements as unknown as ReadonlyArray<ExcalidrawElement>;
+    this.#background = this.#board.background;
+    this.#learnFiles(this.#board.files);
     for (const element of this.#board.elements)
       this.#sentVersions.set(element.id, element.version);
     this.#snapshot = {
@@ -241,8 +267,24 @@ export class BoardSession {
     return (
       this.#lastSum !== this.#syncedSum ||
       Object.keys(this.#meta).length > 0 ||
-      this.#saving !== undefined
+      this.#saving !== undefined ||
+      this.#uploading.size > 0 ||
+      this.#fileEpoch !== this.#savedFileEpoch
     );
+  }
+
+  /** Whether the next save has something to carry. */
+  get #unsaved() {
+    return (
+      this.#lastSum !== this.#syncedSum ||
+      Object.keys(this.#meta).length > 0 ||
+      this.#fileEpoch !== this.#savedFileEpoch
+    );
+  }
+
+  #learnFiles(files: Readonly<Record<string, BoardFile>>) {
+    for (const [id, file] of Object.entries(files))
+      if (!this.#files.has(id)) this.#files.set(id, file);
   }
 
   get readOnly() {
@@ -313,11 +355,13 @@ export class BoardSession {
     // Elements the editor restored may differ from the stored ones in
     // version (it repairs bindings and indices); that is the scene now.
     const elements = editor.getSceneElementsIncludingDeleted();
+    this.#scene = elements;
+    this.#appState = editor.getAppState();
     this.#lastSum = versionSum(elements);
     this.#syncedSum = this.#lastSum;
     for (const element of elements)
       this.#sentVersions.set(element.id, element.version);
-    void this.#loadFiles(this.#board.files);
+    void this.#loadFiles(Object.fromEntries(this.#files));
     const stopLive = live.observe(this.#receiveLive);
     this.#lapseTimer = setInterval(this.#lapse, 5_000);
     // Others on the board learn this person is here, before they move.
@@ -328,9 +372,11 @@ export class BoardSession {
       this.#lapseTimer = undefined;
       // Others stop seeing this pointer at once.
       this.#live?.send({ pointer: null, selected: [] });
-      if (this.dirty) void this.#save();
       this.#editor = undefined;
       this.#live = undefined;
+      // What is left saves from the session's copy of the scene; uploads
+      // still running save their image when they finish.
+      this.flush();
     };
   }
 
@@ -340,6 +386,11 @@ export class BoardSession {
     appState: AppState,
     files: BinaryFiles,
   ) => {
+    // The editor calls this as it unmounts too, with its scene emptied.
+    if (this.#editor === undefined) return;
+    this.#scene = elements;
+    this.#appState = appState;
+    this.#background = storedBackground(appState.viewBackgroundColor);
     const sum = versionSum(elements);
     const changes: { -readonly [K in keyof BoardSnapshot]?: BoardSnapshot[K] } =
       {};
@@ -490,16 +541,21 @@ export class BoardSession {
     this.#showCollaborators();
   };
 
-  /** Someone else's elements, merged in; not this person's to save. */
+  /**
+   * Someone else's elements, merged in; not this person's to save. Works on
+   * the session's scene, so a conflict after the board closed still merges.
+   */
   #merge(remote: ReadonlyArray<ExcalidrawElement>, synced?: number) {
     const editor = this.#editor;
-    if (editor === undefined) return;
-    const local = editor.getSceneElementsIncludingDeleted();
+    const appState = editor?.getAppState() ?? this.#appState;
+    if (appState === undefined) return;
+    const local = (editor?.getSceneElementsIncludingDeleted() ??
+      this.#scene) as ReadonlyArray<OrderedExcalidrawElement>;
     const before = versionSum(local);
     const merged = reconcileElements(
       local,
       restoreElements(remote, local, { refreshDimensions: false }) as never,
-      editor.getAppState(),
+      appState,
     ) as unknown as OrderedExcalidrawElement[];
     const after = versionSum(merged);
     for (const element of remote)
@@ -512,7 +568,8 @@ export class BoardSession {
     this.#syncedSum =
       synced === undefined ? this.#syncedSum + (after - before) : synced;
     this.#lastSum = after;
-    editor.updateScene({
+    this.#scene = merged;
+    editor?.updateScene({
       elements: merged,
       captureUpdate: CaptureUpdateAction.NEVER,
     });
@@ -577,8 +634,13 @@ export class BoardSession {
       title: this.#title,
       folder: this.#folder,
     });
+    this.#learnFiles(parsed.board.files);
     void this.#loadFiles(parsed.board.files);
-    if (this.#editor === undefined) {
+    if (this.#editor === undefined && this.#appState === undefined) {
+      // Never opened: the revision is the scene.
+      this.#scene = parsed.board
+        .elements as unknown as ReadonlyArray<ExcalidrawElement>;
+      this.#background = parsed.board.background;
       this.#syncedSum = versionSum(parsed.board.elements);
       this.#lastSum = this.#syncedSum;
       return;
@@ -591,6 +653,7 @@ export class BoardSession {
       this.#publish({ save: { kind: "unsaved" } });
       this.#scheduleSave();
     }
+    if (this.#editor === undefined) return;
     if (
       shownBackground(parsed.board.background) !==
       this.#editor.getAppState().viewBackgroundColor
@@ -627,7 +690,7 @@ export class BoardSession {
     this.#saveTimer = setTimeout(() => {
       this.#saveTimer = undefined;
       // Never in the middle of a drag: the gesture's end schedules again.
-      if (this.#button === "down") return;
+      if (this.#button === "down" && this.#editor !== undefined) return;
       void this.#save();
     }, SAVE_DELAY_MS);
   }
@@ -636,7 +699,7 @@ export class BoardSession {
   flush() {
     if (this.#saveTimer !== undefined) clearTimeout(this.#saveTimer);
     this.#saveTimer = undefined;
-    if (this.dirty) void this.#save();
+    if (this.#unsaved) void this.#save();
   }
 
   rename(title: string) {
@@ -672,33 +735,32 @@ export class BoardSession {
       ),
     );
     const files: Record<string, BoardFile> = {};
-    for (const [id, file] of Object.entries(this.#board.files))
-      if (used.has(id)) files[id] = file;
+    for (const [id, file] of this.#files) if (used.has(id)) files[id] = file;
     return serializeBoard({
       ...this.#board,
       elements: kept as unknown as ReadonlyArray<BoardElement>,
       files,
-      background: storedBackground(
-        this.#editor?.getAppState().viewBackgroundColor ??
-          this.#board.background,
-      ),
+      background: this.#background,
     });
   }
 
   #save(): Promise<void> {
-    if (this.#readOnly || this.#editor === undefined) return Promise.resolve();
+    if (this.#readOnly) return Promise.resolve();
     if (this.#saving !== undefined) {
       this.#saveAgain = true;
       return this.#saving;
     }
     const run = async () => {
       for (let attempt = 0; attempt < 5; attempt++) {
-        const editor = this.#editor;
-        if (editor === undefined) return;
-        const elements = editor.getSceneElementsIncludingDeleted();
+        const elements = this.#scene;
         const sum = versionSum(elements);
         const meta = this.#meta;
-        if (sum === this.#syncedSum && Object.keys(meta).length === 0) {
+        const fileEpoch = this.#fileEpoch;
+        if (
+          sum === this.#syncedSum &&
+          Object.keys(meta).length === 0 &&
+          fileEpoch === this.#savedFileEpoch
+        ) {
           this.#publish({ save: { kind: "saved" } });
           return;
         }
@@ -709,19 +771,21 @@ export class BoardSession {
             markdown: this.#body(elements),
             ...meta,
           });
-          this.#meta = {};
+          // Title or folder changed while saving stays for the next save.
+          if (this.#meta === meta) this.#meta = {};
           this.#retries = 0;
           const parsed = parseBoard(saved.markdown);
-          if (parsed.ok) this.#board = parsed.board;
+          if (parsed.ok) {
+            this.#board = parsed.board;
+            this.#learnFiles(parsed.board.files);
+          }
           this.#revision = saved.artifact.revision;
           this.#syncedSum = sum;
+          this.#savedFileEpoch = fileEpoch;
           acceptSavedArtifact(this.#queryClient, this.#threadId, saved);
           this.#publish({
             revision: this.#revision,
-            save:
-              this.#lastSum === this.#syncedSum
-                ? { kind: "saved" }
-                : { kind: "unsaved" },
+            save: this.#unsaved ? { kind: "unsaved" } : { kind: "saved" },
           });
           return;
         } catch (error) {
@@ -751,7 +815,7 @@ export class BoardSession {
       if (this.#saveAgain) {
         this.#saveAgain = false;
         void this.#save();
-      } else if (this.#lastSum !== this.#syncedSum) this.#scheduleSave();
+      } else if (this.#unsaved) this.#scheduleSave();
     });
     return this.#saving;
   }
@@ -762,7 +826,7 @@ export class BoardSession {
   #uploadFiles(files: BinaryFiles) {
     for (const [id, file] of Object.entries(files)) {
       if (
-        this.#board.files[id] !== undefined ||
+        this.#files.has(id) ||
         this.#uploading.has(id) ||
         !file.dataURL.startsWith("data:")
       )
@@ -781,20 +845,26 @@ export class BoardSession {
             }),
             () => undefined,
           );
-          this.#board = {
-            ...this.#board,
-            files: {
-              ...this.#board.files,
-              [id]: { mimeType: file.mimeType, url: stored.url },
-            },
-          };
-          this.#meta = { ...this.#meta };
-          // The file's address is part of the board: save it.
-          this.#syncedSum = Number.NaN;
-          this.#scheduleSave();
+          this.#files.set(id, { mimeType: file.mimeType, url: stored.url });
+          // The file's address is part of the board: save it, now when the
+          // board has closed.
+          this.#fileEpoch += 1;
+          this.#uploading.delete(id);
+          if (this.#editor === undefined) this.flush();
+          else {
+            this.#publish({ save: { kind: "unsaved" } });
+            this.#scheduleSave();
+          }
         } catch {
           this.#uploading.delete(id);
           this.#loadedFiles.delete(id);
+          // Others would see a blank image: say so while it is still here.
+          this.#publish({
+            save: {
+              kind: "error",
+              message: "An image couldn't be uploaded. Add it again.",
+            },
+          });
         }
       })();
     }

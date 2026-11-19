@@ -1,8 +1,10 @@
 import type { ThreadArtifactKind } from "@dx/api";
 import {
   type BoardDocument,
+  type BoardImage,
   boardElementLabel,
   boardFromText,
+  boardImageSources,
   boardLayoutNotes,
   boardToText,
   liveBoardElements,
@@ -39,10 +41,17 @@ export interface ArtifactKindHandler {
    * people's diffs) read it: lines of text.
    */
   readonly toText: (body: string) => string;
+  /**
+   * Stored files the agent's text names that the current body does not
+   * show yet, such as a board's new images; the caller stores them and
+   * passes them to `fromText`.
+   */
+  readonly sources?: (text: string, current: string) => ReadonlyArray<string>;
   /** The agent's text, applied to the current body. */
   readonly fromText: (
     text: string,
     current: string,
+    images?: ReadonlyMap<string, BoardImage>,
   ) =>
     | { readonly ok: true; readonly body: string }
     | { readonly ok: false; readonly message: string };
@@ -97,8 +106,9 @@ const board: ArtifactKindHandler = {
   },
   toText: (body) => boardToText(boardOf(body)),
   layoutNotes: (body) => boardLayoutNotes(boardOf(body)),
-  fromText: (text, current) => {
-    const result = boardFromText(text, boardOf(current));
+  sources: (text, current) => boardImageSources(text, boardOf(current)),
+  fromText: (text, current, images) => {
+    const result = boardFromText(text, boardOf(current), images);
     return result.ok
       ? { ok: true, body: serializeBoard(result.board) }
       : result;

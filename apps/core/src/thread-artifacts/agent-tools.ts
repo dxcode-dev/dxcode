@@ -23,6 +23,7 @@ import {
 } from "../realtime/publication.js";
 import { threadMembers } from "../thread-sharing/members.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
+import { storeBoardImages } from "./artifact-images.js";
 import { artifactCommented, artifactSaved } from "./ask-effects.js";
 import {
   addArtifactComment,
@@ -39,6 +40,7 @@ import {
   type ArtifactWriter,
   createArtifact,
   listArtifacts,
+  newArtifactId,
   readArtifact,
   saveArtifact,
 } from "./store.js";
@@ -104,12 +106,17 @@ export const applyArtifactEdits = (
 /**
  * Edits to a board's lines. Models copying a line into JSON often escape a
  * label's `\n` twice, so an edit that matches nowhere is tried again with
- * each doubled backslash read as one. When that matches nowhere either, the
- * error shows the board's current line for each id the edit names.
+ * each doubled backslash read as one. A line still not found names its
+ * element by id: it stands for that element's current line, since an agent
+ * often copies the line it wrote, not the one dx stored (which adds sizes
+ * and an image's stored address); `base_revision` already refuses an edit
+ * made from an older board. When an id names no line, the error shows the
+ * board's current line for each id the edit names.
  */
 const applyBoardEdits = (
   text: string,
   edits: ReadonlyArray<{ readonly old_str: string; readonly new_str: string }>,
+  { byId }: { readonly byId: boolean },
 ): ReturnType<typeof applyArtifactEdits> => {
   const applied = applyArtifactEdits(text, edits);
   if (applied.ok) return applied;
@@ -123,6 +130,27 @@ const applyBoardEdits = (
   );
   if (retried.ok) return retried;
   const lines = text.split("\n");
+  const currentLine = (line: string) => {
+    const [kind, id] = line.trim().split(/\s+/);
+    const found = lines.filter(
+      (candidate) =>
+        candidate === `${kind} ${id}` || candidate.startsWith(`${kind} ${id} `),
+    );
+    return found.length === 1 ? found[0] : undefined;
+  };
+  const matched = applyArtifactEdits(
+    text,
+    edits.map((edit) => ({
+      old_str: single(edit.old_str)
+        .split("\n")
+        .map((line) =>
+          lines.includes(line) ? line : (currentLine(line) ?? line),
+        )
+        .join("\n"),
+      new_str: single(edit.new_str),
+    })),
+  );
+  if (byId && matched.ok) return matched;
   const current = [
     ...new Set(
       edits.flatMap(({ old_str }) =>
@@ -383,7 +411,7 @@ const commentOperation = v.object({
 });
 
 const DESCRIPTION = [
-  'List, read, create, update, and delete artifacts: documents and drawing boards that belong to this Thread, which people open, edit, and comment on beside the conversation. Create one only when a person asks for a document or a board, or when a person will need to read or edit it after this turn: a spec or proposal to review, a report or runbook to share, a plan the team keeps updating, or a diagram. Everything else goes in your reply: small plans, questions, approvals, status updates, and one-off answers. "Approve merging PR #1931?" and "Plan: fix the button in three steps" are replies; "Write up the launch plan we will keep updating" and "Draw the sign-in flow" are artifacts. For your own notes on long-running work, create an artifact with audience "agent": it stays out of the artifact lists people see unless they choose to show agent notes, and it survives Orb resets. Keep scratch files, screenshots, and data exports under `~/.dx/work/<topic>/` in the workspace, outside the repository. For a diagram, flowchart, or sketch, create a drawing board (type "board"), described under Drawing boards below; load the drawing-boards skill before you draw or edit one.',
+  'List, read, create, update, and delete artifacts: documents and drawing boards that belong to this Thread, which people open, edit, and comment on beside the conversation. Create one only when a person asks for a document or a board, or when a person will need to read or edit it after this turn: a spec or proposal to review, a report or runbook to share, a plan the team keeps updating, or a diagram. Everything else goes in your reply: small plans, questions, approvals, status updates, and one-off answers. "Approve merging PR #1931?" and "Plan: fix the button in three steps" are replies; "Write up the launch plan we will keep updating" and "Draw the sign-in flow" are artifacts. For your own notes on long-running work, create an artifact with audience "agent": it stays out of the artifact lists people see unless they choose to show agent notes, and it survives Orb resets. Keep scratch files, screenshots, and data exports under `~/.dx/work/<topic>/` in the workspace, outside the repository. For a diagram, flowchart, or sketch, create a drawing board (type "board"), described under Drawing boards below; load the drawing-boards skill before you draw or edit one. To change an artifact, update it by its artifact_id: create makes another artifact, so never create a copy to show a change.',
   "You read and write artifacts as Markdown: GitHub-flavored Markdown plus `- [ ]`/`- [x]` checklists; `@[Name](user:USER_ID)` mentions of people and `@[dx](agent)` of yourself; `{{date:YYYY-MM-DD}}` and `{{time:ISO_INSTANT}}` chips; `{{project:PROJECT_ID|Name}}` project chips; `{{dropdown:Todo|*Doing:blue|Done:green}}` chips, where `*` marks the selection and colors are gray, blue, green, yellow, red, and purple (inside a table cell, write each of a chip's `|` as `\\|`); and `{{toggle:key|Label}}`, a button each reader uses to show or hide the chips tagged with its key, as in `{{time#key:ISO_INSTANT}}`. A fenced `dx-view` block holding one self-contained HTML page renders as an interactive view; the creating-views skill explains how to write one. To show an image, store the file with `dxd files put <path>` in the workspace and write `![description](<printed url>)`; it stays with this Thread, so only people who can open it see it. People add images from the editor the same way. An artifact holds at most 2 MB of Markdown.",
   "Keep artifacts shallow, because people navigate them by hand. An artifact is one page: use headings for its sections, including parallel parts such as one per meeting or per option. Keep artifacts at the top level, and use a folder (one level, a single name) only to group several related artifacts. Before creating one, list the existing artifacts and extend a matching one instead of starting a parallel one.",
   "read returns at most 500 lines with the artifact's revision. When that is not the whole artifact, it adds an outline of the heading lines with their line numbers; start_line and end_line read other parts. It also returns the open comments and, when people saved changes after your last save, edited_by_people_since: a diff of what they changed.",
@@ -396,8 +424,8 @@ const DESCRIPTION = [
 ].join("\n\n");
 
 const BOARD_DESCRIPTION = [
-  'Drawing boards: a board is a canvas people draw on with you. You read and write it as text in the markdown field, one element per line: `<kind> <id> "label" key=value …`, such as `rect login "Log in" x=0 y=0 w=180 h=80 fill=blue`. The id comes right after the kind; the label and the keys are optional, and a key is always written key=value. Kinds: rect, ellipse, diamond, text (a free note; its words in quotes are required), arrow, line, frame (a labelled area), and freehand and image, which only people draw (their lines only move or resize them). Connect shapes with `arrow <id> <from_id> -> <to_id> "label"`, as in `arrow a1 cart -> pay "next"`; the id and the label may be left out, and dx draws the arrow between the shapes\' outlines. Write a line break in a label as \\n. A shape\'s label wraps to the shape\'s width, and the shape grows taller when the wrapped label needs it.',
-  "Keys: x, y (the top-left corner, in pixels; y grows downward), w, h (shapes and frames only; text sizes to its words), fill and stroke (#rrggbb, or black, white, gray, red, pink, purple, blue, cyan, teal, green, yellow, orange; fill=none), width (stroke width), dash (solid, dashed, dotted), rough (0 clean, 1 hand-drawn, 2 sketchy), opacity, font (hand, normal, code), size (font size, 20 by default), align (text), head and tail (arrowheads: arrow, triangle, dot, bar, none), points (a line's or unconnected arrow's points relative to x,y, as 0,0;120,40), frame (the id of the frame it sits in; the frame hides what sticks out of it), link. Shapes written without x and y are laid out by dx below what is there, in rows following the arrows. An optional first line `board background=#rrggbb` sets the canvas color.",
+  'Drawing boards: a board is a canvas people draw on with you. You read and write it as text in the markdown field, one element per line: `<kind> <id> "label" key=value …`, such as `rect login "Log in" x=0 y=0 w=180 h=80 fill=blue`. The id comes right after the kind; the label and the keys are optional, and a key is always written key=value. Kinds: rect, ellipse, diamond, text (a free note; its words in quotes are required), arrow, line, frame (a labelled area), image (a picture: `image <id> src=<url> x=0 y=0 w=480`, where src is the URL `dxd files put` printed or a dx attachment URL from this Thread; dx copies it into the board storage, and with only w or h the other keeps its proportions), and freehand, which only people draw (its lines only move or resize it). Connect shapes with `arrow <id> <from_id> -> <to_id> "label"`, as in `arrow a1 cart -> pay "next"`; the id and the label may be left out, and dx draws the arrow between the shapes\' outlines. Write a line break in a label as \\n. A shape\'s label wraps to the shape\'s width, and the shape grows taller when the wrapped label needs it.',
+  "Keys: x, y (the top-left corner, in pixels; y grows downward), w, h (shapes, frames, and images; text sizes to its words), fill and stroke (#rrggbb, or black, white, gray, red, pink, purple, blue, cyan, teal, green, yellow, orange; fill=none), width (stroke width), dash (solid, dashed, dotted), rough (0 clean, 1 hand-drawn, 2 sketchy), opacity, font (hand, normal, code), size (font size, 20 by default), align (text), head and tail (arrowheads: arrow, triangle, dot, bar, none), points (a line's or unconnected arrow's points relative to x,y, as 0,0;120,40), frame (the id of the frame it sits in; the frame hides what sticks out of it), link. Shapes written without x and y are laid out by dx below what is there, in rows following the arrows. An optional first line `board background=#rrggbb` sets the canvas color.",
   "Writing a board back: a line read and written back unchanged changes nothing; a changed attribute changes that element; a line left out deletes its element; a new id creates one. Ids are letters, digits, _ and -. Keep the ids people's shapes have. Use edits (old_str/new_str on whole lines) for small changes. When create or update returns layout_notes, the board was saved but reads badly once drawn, such as shapes on top of each other or an arrow through a shape: fix each note with update. Comments on a board sit on a shape: add one with quote set to the shape's id. To show a board inside a document, put the board's link (create and read return it) on a line of its own in the document, as a Markdown link such as `[Checkout flow](link)`: people see the board's preview there and open it to edit.",
 ].join("\n\n");
 
@@ -440,9 +468,13 @@ export const createArtifactTools = (
     name: "artifact",
     description: `${DESCRIPTION}\n\n${BOARD_DESCRIPTION}`,
     input: v.object({
-      action: v.pipe(
-        v.picklist(["list", "read", "create", "update", "delete"]),
-        v.description("What to do."),
+      action: v.optional(
+        v.pipe(
+          v.picklist(["list", "read", "create", "update", "delete"]),
+          v.description(
+            "What to do. Left out: create for markdown without artifact_id, update for artifact_id with changes, read for artifact_id alone, else list.",
+          ),
+        ),
       ),
       scope: v.optional(
         v.pipe(
@@ -537,7 +569,9 @@ export const createArtifactTools = (
           v.number(),
           v.integer(),
           v.minValue(1),
-          v.description("update: the revision you read."),
+          v.description(
+            "update: the revision you read. Required with markdown; with only edits, left out means the current revision.",
+          ),
         ),
       ),
       edits: v.optional(
@@ -578,7 +612,25 @@ export const createArtifactTools = (
         ),
       ),
     }),
-    run: async ({ data }) => {
+    run: async ({ data: given }) => {
+      // A model sometimes leaves out action; the other fields say which.
+      const data = {
+        ...given,
+        action:
+          given.action ??
+          (given.artifact_id === undefined
+            ? given.markdown === undefined
+              ? ("list" as const)
+              : ("create" as const)
+            : given.edits !== undefined ||
+                given.markdown !== undefined ||
+                given.comments !== undefined ||
+                given.title !== undefined ||
+                given.folder !== undefined ||
+                given.audience !== undefined
+              ? ("update" as const)
+              : ("read" as const)),
+      };
       const context = getContext();
       const writer: ArtifactWriter = {
         kind: "agent",
@@ -596,6 +648,24 @@ export const createArtifactTools = (
         if (value === undefined)
           throw new Error(`${data.action} needs ${name}.`);
         return value;
+      };
+      /**
+       * New images the text names, copied into the artifact's own storage
+       * before the text applies.
+       */
+      const imagesFor = async (
+        handler: ReturnType<typeof artifactKind>,
+        text: string,
+        current: string,
+        home: ArtifactThreadId,
+        artifactId: string,
+      ) => {
+        const sources = handler.sources?.(text, current) ?? [];
+        if (sources.length === 0) return undefined;
+        return storeBoardImages(
+          { ...context.bindings, DB: context.db },
+          { threadId, home: { threadId: home, artifactId }, sources },
+        );
       };
       /** The person this Thread acts for; artifacts elsewhere are theirs to open. */
       const ownerReader = async (): Promise<LibraryReader> => {
@@ -757,10 +827,18 @@ export const createArtifactTools = (
       if (data.action === "create") {
         const kind = data.type ?? "document";
         const handler = artifactKind(kind);
-        const body = handler.fromText(
-          need(data.markdown, "markdown"),
+        const text = need(data.markdown, "markdown");
+        // A standalone artifact keeps its images under its own id, so the
+        // id comes first when the text adds images.
+        const id = newArtifactId();
+        const images = await imagesFor(
+          handler,
+          text,
           handler.emptyBody(),
+          data.standalone === true ? null : target,
+          id,
         );
+        const body = handler.fromText(text, handler.emptyBody(), images);
         if (!body.ok) throw new Error(body.message);
         if (data.standalone === true) {
           if (data.audience === "agent")
@@ -775,6 +853,7 @@ export const createArtifactTools = (
               kind,
               markdown: body.body,
               writer,
+              id,
             },
           );
           if (made.kind === "invalid") throw new Error(made.message);
@@ -803,7 +882,13 @@ export const createArtifactTools = (
         );
         if (current === undefined)
           throw new Error(`Artifact ${artifactId} was not found.`);
-        const base = need(data.base_revision, "base_revision");
+        // Edits alone may leave base_revision out: each old_str then has to
+        // match the current text, so nothing newer from people is lost.
+        const base =
+          data.base_revision ??
+          (data.edits !== undefined && data.markdown === undefined
+            ? current.artifact.revision
+            : need<number>(data.base_revision, "base_revision"));
         const rewrites =
           data.edits !== undefined ||
           data.markdown !== undefined ||
@@ -826,7 +911,13 @@ export const createArtifactTools = (
           if (data.edits !== undefined) {
             const applied =
               current.artifact.kind === "board"
-                ? applyBoardEdits(currentText, data.edits)
+                ? applyBoardEdits(currentText, data.edits, {
+                    // By id only when nothing newer from people can be lost:
+                    // the agent read a revision, or saved this one itself.
+                    byId:
+                      data.base_revision !== undefined ||
+                      current.artifact.updatedBy.kind === "agent",
+                  })
                 : applyArtifactEdits(currentText, data.edits);
             if (!applied.ok) throw new Error(applied.message);
             text = applied.markdown;
@@ -834,7 +925,17 @@ export const createArtifactTools = (
           const body =
             text === currentText
               ? { ok: true as const, body: current.markdown }
-              : handler.fromText(text, current.markdown);
+              : handler.fromText(
+                  text,
+                  current.markdown,
+                  await imagesFor(
+                    handler,
+                    text,
+                    current.markdown,
+                    target,
+                    current.artifact.id,
+                  ),
+                );
           if (!body.ok) throw new Error(body.message);
           const markdown = body.body;
           // Written back as read, with nothing renamed or moved: no revision.
