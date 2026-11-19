@@ -4,6 +4,7 @@ import { Puzzle } from "lucide-react";
 import * as React from "react";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
 import { PageShell } from "../../shared/layout/page-shell.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import type { PluginPaneFrameProps } from "../../shared/ui/markdown-view-frame.js";
 import { PluginIcon } from "../../shared/ui/plugin-icon.js";
 import {
@@ -21,7 +22,7 @@ import "./plugin-page.css";
  * `dx/plugin.message` it hears, `{ type: "dx.page", path }`.
  */
 
-const PaneFrame = React.lazy<React.ComponentType<PluginPaneFrameProps>>(() =>
+const PaneFrame = lazyComponent<React.ComponentType<PluginPaneFrameProps>>(() =>
   import("../../shared/ui/markdown-view-frame.js").then(
     (module) => ({ default: module.PluginPaneFrame }),
     () => ({

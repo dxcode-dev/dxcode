@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { ThemeProvider } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -10,7 +11,7 @@ import {
 
 // The auth gate already loaded this; it stays the one loading screen from
 // launch until the account's theme applies, so nothing flashes between.
-const DxLoading = React.lazy(() =>
+const DxLoading = lazyComponent(() =>
   import("../../../shared/brand/dx-loading.js").then((module) => ({
     default: module.DxLoading,
   })),

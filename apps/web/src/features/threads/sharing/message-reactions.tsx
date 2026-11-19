@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import type { ReactionCount } from "../../../shared/reactions/reaction-set.js";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import type { TranscriptRow } from "../transcript-view-model.js";
 import {
   messageReactionsQueryOptions,
@@ -97,7 +98,7 @@ const useRowReactions = (row: TranscriptRow): RowReactions | undefined => {
   };
 };
 
-const Controls = React.lazy(() => import("./message-reaction-controls.js"));
+const Controls = lazyComponent(() => import("./message-reaction-controls.js"));
 
 /** Add Reaction, beside the message's ⋯; loads with the first shared Thread. */
 export function MessageReactionAction({

@@ -4,12 +4,13 @@ import { lazyRouteComponent } from "@tanstack/react-router";
 import { Schema } from "effect";
 import * as React from "react";
 import { AuthContext } from "../../shared/auth/auth-context.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { sessionQueryOptions } from "./sign-in-queries.js";
 import { SignInUnavailable } from "./sign-in-unavailable.js";
 import { useSignOut } from "./sign-out-mutation.js";
 import { loadSignedOut } from "./signed-out-loader.js";
 
-const DxLoading = React.lazy(() =>
+const DxLoading = lazyComponent(() =>
   import("../../shared/brand/dx-loading.js").then((module) => ({
     default: module.DxLoading,
   })),

@@ -10,6 +10,7 @@ import { Lock } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxLoading } from "../../../shared/brand/dx-loading.js";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import type { PluginPaneFrameProps } from "../../../shared/ui/markdown-view-frame.js";
 import type { PluginPaneTab } from "../panes/pane-layout.js";
 import type { PluginPaneMenuProps } from "../panes/pane-views.js";
@@ -29,7 +30,7 @@ import "./plugin-ui.css";
  * and the Views menu's pane items when the menu first opens.
  */
 
-const PaneFrame = React.lazy<React.ComponentType<PluginPaneFrameProps>>(() =>
+const PaneFrame = lazyComponent<React.ComponentType<PluginPaneFrameProps>>(() =>
   import("../../../shared/ui/markdown-view-frame.js").then(
     (module) => ({ default: module.PluginPaneFrame }),
     () => ({

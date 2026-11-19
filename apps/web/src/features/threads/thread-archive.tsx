@@ -4,6 +4,7 @@ import { Archive, ArchiveRestore } from "lucide-react";
 import * as React from "react";
 import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import {
   ThreadArchiveContext,
   type ThreadArchiveController,
@@ -16,7 +17,7 @@ import {
 import { threadKeys, threadSeenWorking } from "./thread-queries.js";
 
 /** "Stop and archive?", loaded the first time a working Thread is archived. */
-const ConfirmDialog = React.lazy(() =>
+const ConfirmDialog = lazyComponent(() =>
   import("../../shared/ui/confirm-dialog.js").then((module) => ({
     default: module.ConfirmDialog,
   })),

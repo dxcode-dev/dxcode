@@ -8,6 +8,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { ClaudePlanPickerSlot } from "../../shared/claude-plan-picker-slot.js";
 import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { ParticipantStack } from "../../shared/ui/avatar.js";
 import { Button } from "../../shared/ui/button.js";
 import {
@@ -22,12 +23,12 @@ import "./spaces.css";
 
 // The dialogs load when one first opens: the sidebar is on the Thread page's
 // first load, and its budget.
-const CreateSpaceDialog = React.lazy(() =>
+const CreateSpaceDialog = lazyComponent(() =>
   import("./create-space-dialog.js").then((module) => ({
     default: module.CreateSpaceDialog,
   })),
 );
-const DiscoverSpacesDialog = React.lazy(() =>
+const DiscoverSpacesDialog = lazyComponent(() =>
   import("./discover-spaces-dialog.js").then((module) => ({
     default: module.DiscoverSpacesDialog,
   })),

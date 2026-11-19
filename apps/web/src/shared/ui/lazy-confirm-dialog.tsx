@@ -1,7 +1,8 @@
 import * as React from "react";
+import { lazyComponent } from "../stale-chunk.js";
 import type { ConfirmDialog } from "./confirm-dialog.js";
 
-const LoadedConfirmDialog = React.lazy(() =>
+const LoadedConfirmDialog = lazyComponent(() =>
   import("./confirm-dialog.js").then((module) => ({
     default: module.ConfirmDialog,
   })),

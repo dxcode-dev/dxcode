@@ -1,4 +1,5 @@
 import * as React from "react";
+import { lazyComponent } from "../stale-chunk.js";
 
 export interface MarkdownViewProps {
   readonly source: string;
@@ -12,7 +13,7 @@ export interface MarkdownViewProps {
  * Mermaid and KaTeX load with the first diagram or formula. A chunk that
  * cannot load leaves each view as its source.
  */
-const ViewFrame = React.lazy<React.ComponentType<MarkdownViewProps>>(() =>
+const ViewFrame = lazyComponent<React.ComponentType<MarkdownViewProps>>(() =>
   import("./markdown-view-frame.js").then(
     (module) => ({ default: module.ViewFrame }),
     () => ({ default: ({ fallback }: MarkdownViewProps) => fallback }),

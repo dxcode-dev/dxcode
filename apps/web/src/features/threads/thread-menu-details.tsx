@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
 import { MenuItem, MenuSeparator } from "../../shared/ui/menu.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
@@ -20,7 +21,7 @@ import { threadArchiveInFlight, threadKeys } from "./thread-queries.js";
 import { formatUsd } from "./thread-usage/thread-usage-format.js";
 import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
 
-const LazyThreadUsageDialog = React.lazy(() =>
+const LazyThreadUsageDialog = lazyComponent(() =>
   import("./thread-usage/thread-usage-dialog.js").then((module) => ({
     default: module.ThreadUsageDialog,
   })),

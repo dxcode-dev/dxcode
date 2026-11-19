@@ -1,7 +1,8 @@
 import * as React from "react";
+import { lazyComponent } from "../stale-chunk.js";
 import type { ImageViewer } from "./image-viewer.js";
 
-const LoadedImageViewer = React.lazy(() =>
+const LoadedImageViewer = lazyComponent(() =>
   import("./image-viewer.js").then((module) => ({
     default: module.ImageViewer,
   })),

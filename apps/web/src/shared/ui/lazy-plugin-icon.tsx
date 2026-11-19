@@ -1,4 +1,5 @@
 import * as React from "react";
+import { lazyComponent } from "../stale-chunk.js";
 import type { PluginIcon as PluginIconComponent } from "./plugin-icon.js";
 
 /**
@@ -7,7 +8,7 @@ import type { PluginIcon as PluginIconComponent } from "./plugin-icon.js";
  * square of the same size holds its place, so nothing shifts.
  */
 
-const Loaded = React.lazy(() =>
+const Loaded = lazyComponent(() =>
   import("./plugin-icon.js").then((module) => ({ default: module.PluginIcon })),
 );
 

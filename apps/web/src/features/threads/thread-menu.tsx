@@ -25,6 +25,7 @@ import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { useCommandKeycaps } from "../../shared/commands/use-command-keycaps.js";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import {
@@ -64,7 +65,7 @@ const loadDetails = () =>
     loadedDetails = module;
     return module;
   });
-const LazyDetails = React.lazy(loadDetails);
+const LazyDetails = lazyComponent(loadDetails);
 const preloadDetails = () => void loadDetails();
 
 /** Loads the rows once the browser is idle; returns its cancellation. */
@@ -78,7 +79,7 @@ const preloadDetailsWhenIdle = () => {
 };
 
 /** Report Bug, loaded when it first opens, as Settings loads it. */
-const BugReportDialog = React.lazy(() =>
+const BugReportDialog = lazyComponent(() =>
   import("./bug-reports/bug-report-dialog.js").then((module) => ({
     default: module.BugReportDialog,
   })),
@@ -89,7 +90,7 @@ const BugReportDialog = React.lazy(() =>
  * details chunk, which imports it, so the dialog's chunk list stays out of
  * the Thread page's first load.
  */
-const ThreadUsageDialog = React.lazy(() =>
+const ThreadUsageDialog = lazyComponent(() =>
   loadDetails().then((module) => ({
     default: module.ThreadUsageDialogLoader,
   })),

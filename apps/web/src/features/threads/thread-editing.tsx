@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
 import { toast } from "sonner";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import {
   ThreadEditingContext,
   type ThreadEditingController,
@@ -13,12 +14,12 @@ import {
 } from "./thread-mutations.js";
 import { listedChildCount, threadsQueryOptions } from "./thread-queries.js";
 
-const RenameThreadDialog = React.lazy(() =>
+const RenameThreadDialog = lazyComponent(() =>
   import("./thread-editing-dialogs.js").then((module) => ({
     default: module.RenameThreadDialog,
   })),
 );
-const DeleteThreadDialog = React.lazy(() =>
+const DeleteThreadDialog = lazyComponent(() =>
   import("./thread-editing-dialogs.js").then((module) => ({
     default: module.DeleteThreadDialog,
   })),

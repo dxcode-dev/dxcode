@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import * as React from "react";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { createPublicRouter } from "./public-router.js";
 import { signInOptionsQueryOptions } from "./sign-in-queries.js";
 import { SignInUnavailable } from "./sign-in-unavailable.js";
 
-const DxLoading = React.lazy(() =>
+const DxLoading = lazyComponent(() =>
   import("../../shared/brand/dx-loading.js").then((module) => ({
     default: module.DxLoading,
   })),

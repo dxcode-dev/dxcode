@@ -1,5 +1,6 @@
 import type { McpAppView as McpAppViewData } from "@dx/api";
 import * as React from "react";
+import { lazyComponent } from "../stale-chunk.js";
 
 export interface McpAppViewProps {
   readonly view: McpAppViewData;
@@ -8,7 +9,7 @@ export interface McpAppViewProps {
 }
 
 /** The frame code loads with the first view or card, as one chunk. */
-const McpAppFrame = React.lazy<React.ComponentType<McpAppViewProps>>(() =>
+const McpAppFrame = lazyComponent<React.ComponentType<McpAppViewProps>>(() =>
   import("./markdown-view-frame.js").then(
     (module) => ({ default: module.McpAppFrame }),
     () => ({ default: () => null }),

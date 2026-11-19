@@ -23,6 +23,7 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { Button } from "../../../shared/ui/button.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
 import {
@@ -67,7 +68,7 @@ const ThreadFilesTree = lazyRouteComponent(
   () => import("./files-tree.js"),
   "ThreadFilesTree",
 );
-const ThreadFileViewer = React.lazy(() =>
+const ThreadFileViewer = lazyComponent(() =>
   import("./file-viewer.js").then((module) => ({
     default: module.ThreadFileViewer,
   })),

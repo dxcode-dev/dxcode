@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { RouterProvider, useRouterState } from "@tanstack/react-router";
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { attachInAppNavigation } from "./features/install-app/in-app-navigation.js";
 import { FeedbackWidgetOnDx } from "./features/projects/feedback-widget-on-dx.js";
 import { recordBrowserTimeZone } from "./features/threads/automations/automations-queries.js";
@@ -15,12 +15,13 @@ import {
   type HuddleSlotProps,
 } from "./shared/huddle/huddle-slot.js";
 import { artifactLinkHere } from "./shared/navigation/open-artifact.js";
+import { lazyComponent } from "./shared/stale-chunk.js";
 import { Toaster } from "./shared/ui/sonner.js";
 import { toastOffsets } from "./shared/ui/toast-offsets.js";
 import { useMobile } from "./shared/use-mobile.js";
 
 const ReactQueryDevtools = import.meta.env.DEV
-  ? lazy(() =>
+  ? lazyComponent(() =>
       import("@tanstack/react-query-devtools").then((module) => ({
         default: module.ReactQueryDevtools,
       })),
@@ -28,7 +29,7 @@ const ReactQueryDevtools = import.meta.env.DEV
   : undefined;
 
 /** Report Bug with no Thread, for Settings; loaded when it first opens. */
-const AppBugReportDialog = lazy(() =>
+const AppBugReportDialog = lazyComponent(() =>
   import("./features/threads/bug-reports/bug-report-dialog.js").then(
     (module) => ({ default: module.BugReportDialog }),
   ),
@@ -92,12 +93,12 @@ function AppToaster({ router }: { readonly router: AppRouter }) {
 }
 
 // Huddle is experimental: none of it ships on first load.
-const HuddleButtonEntry = lazy(() =>
+const HuddleButtonEntry = lazyComponent(() =>
   import("./features/huddle/huddle-entry.js").then((module) => ({
     default: module.HuddleButtonEntry,
   })),
 );
-const HuddleLayerEntry = lazy(() =>
+const HuddleLayerEntry = lazyComponent(() =>
   import("./features/huddle/huddle-entry.js").then((module) => ({
     default: module.HuddleLayerEntry,
   })),

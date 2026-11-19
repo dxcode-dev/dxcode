@@ -17,6 +17,7 @@ import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import {
   type ThreadSnoozeController,
@@ -47,7 +48,7 @@ import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";
 
 /** A plugin Thread type's row icon, loaded only for such a row. */
-const PluginThreadTypeIcon = React.lazy(() =>
+const PluginThreadTypeIcon = lazyComponent(() =>
   import("../plugins/plugin-thread-type-icon.js").then((module) => ({
     default: module.PluginThreadTypeIcon,
   })),

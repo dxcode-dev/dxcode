@@ -24,6 +24,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { requestThreadView } from "../../shared/commands/thread-open-view-event.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
 import { HuddleSlot } from "../../shared/huddle/huddle-slot.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import type { ThreadAutomationView } from "../../shared/thread-automations-slot.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import { copyThreadUrl } from "../../shared/thread-copy.js";
@@ -68,8 +69,8 @@ import { useOpenSpaceThread } from "./use-open-space-thread.js";
 // for Space Actions.
 const loadThreadDetails = () => import("../threads/thread-menu-chunk.js");
 const preloadThreadDetails = () => void loadThreadDetails();
-const ThreadDetailRows = React.lazy(loadThreadDetails);
-const ThreadUsageDialog = React.lazy(() =>
+const ThreadDetailRows = lazyComponent(loadThreadDetails);
+const ThreadUsageDialog = lazyComponent(() =>
   loadThreadDetails().then((module) => ({
     default: module.ThreadUsageDialogLoader,
   })),

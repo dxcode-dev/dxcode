@@ -1,11 +1,12 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import type { HuddleSlotProps } from "../../shared/huddle/huddle-slot.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { useHuddleEnabled } from "./huddle-availability.js";
 import type { HuddlePlace } from "./huddle-session.js";
 
 // Huddle loads only where the deployment offers it.
-const HuddleButton = lazy(() => import("./huddle-button.js"));
-const HuddleLayer = lazy(() => import("./huddle-layer.js"));
+const HuddleButton = lazyComponent(() => import("./huddle-button.js"));
+const HuddleLayer = lazyComponent(() => import("./huddle-layer.js"));
 
 /** The header control for the Huddle slot; its fallback while Huddle is off. */
 export function HuddleButtonEntry({

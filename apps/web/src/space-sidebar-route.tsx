@@ -1,9 +1,9 @@
-import * as React from "react";
 import { SidebarSpacesSection } from "./features/spaces/sidebar-spaces-section.js";
 import { useDictationSlot } from "./features/threads/dictation/use-dictation.js";
+import { lazyComponent } from "./shared/stale-chunk.js";
 
 // Loads with New Space's Agent row, as the New Thread composer's does.
-const ClaudePlanPicker = React.lazy(() =>
+const ClaudePlanPicker = lazyComponent(() =>
   import("./features/threads/claude-code-mode.js").then((module) => ({
     default: module.ClaudePlanPicker,
   })),

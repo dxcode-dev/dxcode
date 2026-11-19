@@ -1,4 +1,5 @@
 import * as React from "react";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import type * as Icons from "./plugin-ui-icons.js";
 
 /**
@@ -9,13 +10,13 @@ import type * as Icons from "./plugin-ui-icons.js";
 
 const load = () => import("./plugin-ui-icons.js");
 
-const PaneIcon = React.lazy(() =>
+const PaneIcon = lazyComponent(() =>
   load().then((module) => ({ default: module.PluginPaneIcon })),
 );
-const RoutePaneIcon = React.lazy(() =>
+const RoutePaneIcon = lazyComponent(() =>
   load().then((module) => ({ default: module.RoutePluginPaneIcon })),
 );
-const ToolIcon = React.lazy(() =>
+const ToolIcon = lazyComponent(() =>
   load().then((module) => ({ default: module.PluginToolIcon })),
 );
 

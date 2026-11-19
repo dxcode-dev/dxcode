@@ -1,23 +1,24 @@
 import type { ThreadAutomationsData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import * as React from "react";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { loadAutomationViews } from "./automation-views-loader.js";
 import type { AutomationView } from "./automations-queries.js";
 
 // Each wraps its lazy view in its own Suspense, so a caller (the Space page
 // included) renders it like any component; see `automation-views-loader.ts`.
 
-const LazyContent = React.lazy(() =>
+const LazyContent = lazyComponent(() =>
   loadAutomationViews().then((module) => ({
     default: module.AutomationViewContent,
   })),
 );
-const LazyPanel = React.lazy(() =>
+const LazyPanel = lazyComponent(() =>
   loadAutomationViews().then((module) => ({
     default: module.AutomationsPanel,
   })),
 );
-const LazySheet = React.lazy(() =>
+const LazySheet = lazyComponent(() =>
   loadAutomationViews().then((module) => ({
     default: module.ThreadAutomationsSheet,
   })),

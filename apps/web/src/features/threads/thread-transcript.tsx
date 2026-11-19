@@ -5,6 +5,7 @@ import {
 } from "@tanstack/react-virtual";
 import { ArrowDown } from "lucide-react";
 import * as React from "react";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { Button } from "../../shared/ui/button.js";
 import { MessageActions } from "./message-actions.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
@@ -44,17 +45,17 @@ import { useTranscriptVirtualizer } from "./use-transcript-virtualizer.js";
  * delivered, loaded when a transcript first shows one, so they stay out of
  * the Thread page's first load.
  */
-const AutomationMessage = React.lazy(() =>
+const AutomationMessage = lazyComponent(() =>
   import("./thread-automation-messages.js").then((module) => ({
     default: module.AutomationMessage,
   })),
 );
-const PluginPostMessage = React.lazy(() =>
+const PluginPostMessage = lazyComponent(() =>
   import("./thread-automation-messages.js").then((module) => ({
     default: module.PluginPostMessage,
   })),
 );
-const CommentPromptMessage = React.lazy(() =>
+const CommentPromptMessage = lazyComponent(() =>
   import("./thread-automation-messages.js").then((module) => ({
     default: module.CommentPromptMessage,
   })),
@@ -1291,7 +1292,7 @@ function TranscriptFocusRequest({
 let transcriptMounted = false;
 
 // The selection popup loads after the transcript renders, not with it.
-const TranscriptSelectionPopup = React.lazy(() =>
+const TranscriptSelectionPopup = lazyComponent(() =>
   import("./transcript-selection-popup.js").then((module) => ({
     default: module.TranscriptSelectionPopup,
   })),

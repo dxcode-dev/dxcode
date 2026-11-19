@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import * as React from "react";
 import { settle } from "../../shared/settle.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
@@ -93,7 +94,7 @@ import {
  * composer has painted, so it stays out of the Thread page's first load. A
  * chunk that cannot load shows no row.
  */
-const ClefQuickActions = React.lazy(() =>
+const ClefQuickActions = lazyComponent(() =>
   import("./thread-quick-actions.js").then(
     (module) => ({ default: module.ClefQuickActions }),
     () => ({ default: () => null }),

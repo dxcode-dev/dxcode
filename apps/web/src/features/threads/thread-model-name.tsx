@@ -5,10 +5,11 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
 import { effortLabel } from "../../shared/model-effort-label.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { modelRoutingChoicesQueryOptions } from "../settings/model-routing/model-routing-queries.js";
 
-const ThreadModelMark = React.lazy(() =>
+const ThreadModelMark = lazyComponent(() =>
   import("./thread-model-mark.js").then((module) => ({
     default: module.ThreadModelMark,
   })),

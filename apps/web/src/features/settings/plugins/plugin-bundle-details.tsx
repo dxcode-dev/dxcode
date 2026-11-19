@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import * as React from "react";
 import type { PluginsTarget } from "../../../shared/api/client.js";
 import { settle } from "../../../shared/settle.js";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
@@ -26,7 +27,7 @@ import { PluginBundleUpdate } from "./plugin-bundle-update.js";
 import { PluginJobs } from "./plugin-jobs.js";
 
 /** The host cost line loads with the details, never with the page. */
-const PluginBundleHostCost = React.lazy(() =>
+const PluginBundleHostCost = lazyComponent(() =>
   import("./plugin-bundle-host-cost.js").then((module) => ({
     default: module.PluginBundleHostCost,
   })),

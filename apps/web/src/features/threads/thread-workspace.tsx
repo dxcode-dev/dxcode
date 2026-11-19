@@ -34,6 +34,7 @@ import {
 } from "../../shared/execution-environment-copy.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
+import { lazyComponent } from "../../shared/stale-chunk.js";
 import { Button } from "../../shared/ui/button.js";
 import {
   MarkdownFileLinkContext,
@@ -758,19 +759,19 @@ function RetainedThreadSession({
  * The Files tree and an open file's pane, loaded when a person opens one:
  * the Thread page's first paint shows the transcript.
  */
-const ThreadFilesPanel = React.lazy(() =>
+const ThreadFilesPanel = lazyComponent(() =>
   import("./files/files-panel.js").then(({ ThreadFilesPanel: Panel }) => ({
     default: Panel,
   })),
 );
-const CenterFilePane = React.lazy(() =>
+const CenterFilePane = lazyComponent(() =>
   import("./files/center-file-pane.js").then(({ CenterFilePane: Pane }) => ({
     default: Pane,
   })),
 );
 
 /** The composer's model picker, loaded after the Thread's first paint. */
-const ThreadModelControl = React.lazy(() =>
+const ThreadModelControl = lazyComponent(() =>
   import("./thread-model-control.js").then(
     ({ ThreadModelControl: Control }) => ({
       default: Control,

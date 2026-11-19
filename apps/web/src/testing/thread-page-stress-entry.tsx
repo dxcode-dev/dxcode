@@ -1108,6 +1108,15 @@ Object.assign(window, {
       await macrotask();
       return streamInto(conversation, n, options);
     },
+    /** Deliver a message this Thread's schedule sent, as a new turn. */
+    async deliverScheduledMessage(text: string) {
+      const n = ++liveTurn;
+      conversationFor(threadId).startTurn(
+        n,
+        `<dx_message_author role="owner" user_id="${userId}" identifier="Perf" automation="schedule" />\n${text}`,
+      );
+      await macrotask();
+    },
     /** Stream the agent's answer to the last message the composer sent. */
     async reply(options: StreamOptions) {
       const conversation = conversationFor(threadId);

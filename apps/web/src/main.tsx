@@ -1,7 +1,7 @@
 import { UserId } from "@dx/domain";
 import { hashKey, QueryClientProvider } from "@tanstack/react-query";
 import { Schema } from "effect";
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { AuthGate } from "./features/authentication/auth-gate.js";
 import { sessionQueryOptions } from "./features/authentication/sign-in-queries.js";
 import { loadSignedOut } from "./features/authentication/signed-out-loader.js";
@@ -14,6 +14,7 @@ import { peekBootSessionRead } from "./shared/auth/boot-session.js";
 import { onSessionEnded } from "./shared/auth/session-ended.js";
 import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
 import { queryClient } from "./shared/query/query-client.js";
+import { lazyComponent } from "./shared/stale-chunk.js";
 import { FallbackTitle } from "./shared/ui/document-title.js";
 import "./styles.css";
 
@@ -44,7 +45,7 @@ const stopWaitingForSession = queryClient
     startShellPrefetch();
   });
 const authenticatedApplicationModule = import("./authenticated-application.js");
-const AuthenticatedApplication = lazy(() =>
+const AuthenticatedApplication = lazyComponent(() =>
   authenticatedApplicationModule.then((module) => ({
     default: module.AuthenticatedApplication,
   })),

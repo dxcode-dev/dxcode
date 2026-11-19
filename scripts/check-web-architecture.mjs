@@ -24,6 +24,8 @@ const messages = {
     "Components may not read or write localStorage/sessionStorage directly. Keep ephemeral and sensitive drafts mount-scoped; put demonstrated device preferences in a versioned useSyncExternalStore adapter.",
   "no-component-query-client":
     "Only shared Query infrastructure may create a QueryClient, and only the application root and auth lifecycle may import its singleton. Use Query hooks or feature options elsewhere.",
+  "no-react-lazy":
+    "Load a component from its own chunk with lazyComponent from src/shared/stale-chunk.ts, not React.lazy: a tab opened before a deploy must reload when the chunk is gone instead of showing the error view.",
   "no-component-use-effect":
     "Do not call useEffect directly in a component. Derive during render, handle the originating event, use useSyncExternalStore, or isolate external-system synchronization in a shared hook.",
   "shared-ui-part":
@@ -474,6 +476,16 @@ export const inspectWebArchitecture = ({
       for (const namespace of namespaces(imports, "react"))
         addCalls("no-component-use-effect", [`${namespace}.useEffect`]);
     }
+    if (!displayPath.endsWith("/shared/stale-chunk.ts"))
+      for (const name of [
+        ...aliases(imports, "react", "lazy"),
+        ...namespaces(imports, "react").map((namespace) => `${namespace}.lazy`),
+      ])
+        for (const { index } of indices(
+          source,
+          new RegExp(`\\b${escapePattern(name)}\\s*[<(]`, "g"),
+        ))
+          add("no-react-lazy", index, `call ${name}`);
     if (displayPath !== queryClientOwner) {
       for (const name of aliases(
         imports,
@@ -504,7 +516,9 @@ export const inspectWebArchitecture = ({
         "/features/settings/model-routing/claude-code-notice-store.ts",
       ) ||
       displayPath.endsWith("/features/install-app/install-app-store.ts") ||
-      displayPath.endsWith("/features/spaces/space-details-store.ts");
+      displayPath.endsWith("/features/spaces/space-details-store.ts") ||
+      // The once-per-failure reload guard must outlive the reload.
+      displayPath.endsWith("/shared/stale-chunk.ts");
     if (!persistenceOwner)
       for (const { index, text } of indices(
         source,
