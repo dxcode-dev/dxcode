@@ -984,6 +984,52 @@ describe("GitHub subscriptions", () => {
     ).toBe(true);
   });
 
+  it("re-saves another Thread's subscription for that Thread, beside an equivalent one of its own", async () => {
+    const child = thread(
+      "thr_00000000-0000-4000-8000-00000000a5b1",
+      ownerProject.id as ProjectId,
+      owner,
+    );
+    await runRepositories(
+      Effect.gen(function* () {
+        yield* (yield* ThreadRepository).insert(child);
+      }),
+    );
+    const prComments = {
+      repository: REPO,
+      filter_kind: "pr-comments",
+      pr_number: 51,
+    };
+    const own = await call(main.id, "create_github_subscription", {
+      title: "PR 51",
+      ...prComments,
+    });
+    const theirs = await call(main.id, "create_github_subscription", {
+      title: "PR 51",
+      ...prComments,
+      thread: child.id,
+    });
+    expect(theirs).toMatchObject({ threadId: child.id, existed: false });
+
+    // Replacing its configuration without naming the Thread keeps its Thread.
+    const saved = await call(main.id, "update_github_subscription", {
+      subscription_id: theirs?.subscriptionId,
+      title: "PR 51 again",
+      ...prComments,
+    });
+    expect(saved).toMatchObject({
+      subscriptionId: theirs?.subscriptionId,
+      threadId: child.id,
+      title: "PR 51 again",
+      state: "active",
+    });
+    expect(
+      await call(main.id, "get_github_subscription", {
+        subscription_id: own?.subscriptionId,
+      }),
+    ).toMatchObject({ threadId: main.id, title: "PR 51", state: "active" });
+  });
+
   it("returns the saved subscription for an equivalent one and keeps it paused", async () => {
     const input = {
       title: "Issue 3",
@@ -1215,6 +1261,186 @@ describe("GitHub subscriptions", () => {
         .bind(doomed.id)
         .first<number>("count"),
     ).toBe(0);
+  });
+
+  describe("while archived", () => {
+    const HOUR = 3_600_000;
+    const comment = (pr: number, id: number) => ({
+      action: "created",
+      issue: { number: pr, pull_request: {} },
+      comment: {
+        id,
+        html_url: `https://github.com/acme/widgets/pull/${pr}#c${id}`,
+        body: `Comment ${id}`,
+        user: { login: "bob" },
+      },
+    });
+    const setArchived = (threadId: string, archived: boolean) =>
+      env.DB.prepare("UPDATE threads SET lifecycle_state = ? WHERE id = ?")
+        .bind(archived ? "archived" : "active", threadId)
+        .run();
+    /** An hourly schedule and a PR's comments, both on `threadId`. */
+    const automate = async (threadId: string, pr: number) => {
+      const set = await call(threadId, "set_schedule", {
+        title: "Hourly",
+        prompt: "Look at the queue.",
+        schedule: "DTSTART:20200101T000000Z\nRRULE:FREQ=HOURLY",
+        schedule_label: "Hourly",
+      });
+      const subscription = await call(threadId, "create_github_subscription", {
+        title: `PR ${pr}`,
+        repository: REPO,
+        filter_kind: "pr-comments",
+        pr_number: pr,
+      });
+      return {
+        next: Date.parse(String(set?.nextRunAt)),
+        subscriptionId: subscription?.subscriptionId,
+      };
+    };
+    const comments = () =>
+      delivered.messages.flatMap(({ threadId, body }) =>
+        parseGitHubDelivery(parseMessageAuthor(body).text).map(
+          (event) => `${threadId} ${event.label}`,
+        ),
+      );
+    const wakes = () =>
+      delivered.messages
+        .filter(
+          ({ body }) => parseMessageAuthor(body).automation === "schedule",
+        )
+        .map(({ threadId }) => threadId);
+
+    it("pause the Thread's schedule and GitHub events, and restoring it resumes them without replaying", async () => {
+      const { next, subscriptionId } = await automate(main.id, 31);
+      await setArchived(main.id, true);
+
+      await sweepAutomations(bindings, new Date(next));
+      await webhook("issue_comment", comment(31, 1));
+      expect(delivered.messages).toEqual([]);
+      expect(await call(main.id, "get_schedule", {})).toMatchObject({
+        status: "active",
+        nextRunAt: new Date(next + HOUR).toISOString(),
+        lastRun: { status: "skipped", detail: "The Thread is archived." },
+      });
+      // The subscription waits for the Thread to come back.
+      expect(
+        await call(main.id, "get_github_subscription", {
+          subscription_id: subscriptionId,
+        }),
+      ).toMatchObject({ state: "active", recentEvents: [] });
+
+      await setArchived(main.id, false);
+      await sweepAutomations(bindings, new Date(next + HOUR));
+      await webhook("issue_comment", comment(31, 2));
+      expect(wakes()).toEqual([main.id]);
+      // Only what came after the restore: comment 1 is not replayed.
+      expect(comments()).toEqual([`${main.id} bob commented on PR #31`]);
+      expect(String(delivered.messages.at(-1)?.body)).toContain("#c2");
+    });
+
+    it("of a Space pause every thread it started, and restoring the Space resumes them", async () => {
+      const space = thread(
+        "thr_00000000-0000-4000-8000-00000000a5a0",
+        ownerProject.id as ProjectId,
+        owner,
+      );
+      const started = thread(
+        "thr_00000000-0000-4000-8000-00000000a5a1",
+        ownerProject.id as ProjectId,
+        owner,
+      );
+      // A child of an ordinary Thread is not a Space's thread.
+      const child = thread(
+        "thr_00000000-0000-4000-8000-00000000a5a2",
+        ownerProject.id as ProjectId,
+        owner,
+      );
+      await runRepositories(
+        Effect.gen(function* () {
+          const threads = yield* ThreadRepository;
+          yield* threads.insert(space);
+          yield* threads.insert(started);
+          yield* threads.insert(child);
+        }),
+      );
+      await env.DB.batch([
+        env.DB.prepare("UPDATE threads SET kind = 'space' WHERE id = ?").bind(
+          space.id,
+        ),
+        env.DB.prepare(
+          "UPDATE threads SET parent_thread_id = ? WHERE id = ?",
+        ).bind(space.id, started.id),
+        env.DB.prepare(
+          "UPDATE threads SET parent_thread_id = ? WHERE id = ?",
+        ).bind(main.id, child.id),
+      ]);
+      const { next, subscriptionId } = await automate(started.id, 41);
+      await automate(child.id, 42);
+      // And CI on its push, still running.
+      github[`/repos/${REPO}/commits/aaaaaaa`] = { sha: SHA };
+      github[`/repos/${REPO}/commits/${SHA}/status`] = { statuses: [] };
+      github[`/repos/${REPO}/commits/${SHA}/check-runs`] = {
+        check_runs: [checkRun(1, "build", null)],
+      };
+      const ci = await call(started.id, "create_github_subscription", {
+        title: "CI for my push",
+        repository: REPO,
+        filter_kind: "ci",
+        commit_sha: "aaaaaaa",
+      });
+      const ciSettled = () =>
+        webhook("check_suite", {
+          action: "completed",
+          check_suite: { head_sha: SHA, status: "completed" },
+        });
+
+      // The Space is archived; the thread it started stays active.
+      await setArchived(space.id, true);
+      await setArchived(main.id, true);
+      await sweepAutomations(bindings, new Date(next));
+      await webhook("issue_comment", comment(41, 1));
+      await webhook("issue_comment", comment(42, 1));
+      github[`/repos/${REPO}/commits/${SHA}/check-runs`] = {
+        check_runs: [checkRun(1, "build", "success")],
+      };
+      await ciSettled();
+      expect(wakes()).toEqual([child.id]);
+      expect(comments()).toEqual([`${child.id} bob commented on PR #42`]);
+      expect(await call(started.id, "get_schedule", {})).toMatchObject({
+        status: "active",
+        lastRun: {
+          status: "skipped",
+          detail: "The Space that started this Thread is archived.",
+        },
+      });
+      expect(
+        await call(started.id, "get_github_subscription", {
+          subscription_id: subscriptionId,
+        }),
+      ).toMatchObject({ state: "active", recentEvents: [] });
+      expect(
+        await call(started.id, "get_github_subscription", {
+          subscription_id: ci?.subscriptionId,
+        }),
+      ).toMatchObject({ state: "active", recentEvents: [] });
+
+      delivered.messages = [];
+      await setArchived(space.id, false);
+      await sweepAutomations(bindings, new Date(next + HOUR));
+      await webhook("issue_comment", comment(41, 2));
+      // A re-run settles the same commit's checks again.
+      await ciSettled();
+      expect(wakes()).toEqual(expect.arrayContaining([started.id, child.id]));
+      expect(wakes()).toHaveLength(2);
+      expect(comments()).toEqual([
+        `${started.id} bob commented on PR #41`,
+        `${started.id} CI on aaaaaaa passed`,
+      ]);
+      expect(
+        delivered.messages.find(({ body }) => body.includes("Comment 1")),
+      ).toBeUndefined();
+    });
   });
 });
 

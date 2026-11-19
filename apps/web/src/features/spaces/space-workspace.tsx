@@ -11,6 +11,7 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearch,
 } from "@tanstack/react-router";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -502,11 +503,16 @@ export function SpaceWorkspace({
     spaceThreadsQueryOptions(identity.id, spaceThreadId),
   );
   const threads = threadsQuery.data;
-  const requested = useLocation({
-    select: (location) => {
-      const thread: unknown = location.search?.thread;
-      return typeof thread === "string" ? (thread as ThreadId) : undefined;
-    },
+  // The page's own URL, not the router's location: while the next page
+  // loads, the location is already the next page's, which names no thread,
+  // and reading it would restore the saved thread and navigate back here.
+  const requested = useSearch({
+    from: "/_product/threads/$threadId",
+    select: (search) => search.thread as ThreadId | undefined,
+  });
+  // Still on this Space's URL, not leaving it for another page.
+  const here = useLocation({
+    select: (location) => location.pathname === `/threads/${spaceThreadId}`,
   });
   const { layout, change } = useSpacePageLayout(spaceThreadId);
   const childThreadIds = new Set((threads ?? []).map(({ id }) => id as string));
@@ -554,7 +560,7 @@ export function SpaceWorkspace({
             forget: () => change({ thread: null }),
           }}
         >
-          {restored === undefined ? null : (
+          {restored === undefined || !here ? null : (
             // The URL names the thread again, as opening it does.
             <Navigate
               to="/threads/$threadId"

@@ -104,14 +104,19 @@ const deliverTo = async (
   waitUntil?: (promise: Promise<unknown>) => void,
 ) => {
   const thread = await threadState(db, row.thread_id);
-  if (thread === null || thread.lifecycle_state !== "active") {
-    await finishSubscription(
-      db,
-      row.id,
-      "failed",
-      "Its Thread was archived.",
-      now,
-    );
+  // Deleted: the subscription ends with its Thread.
+  if (thread === undefined) {
+    await finishSubscription(db, row.id, "failed", "Its Thread is gone.", now);
+    return;
+  }
+  // Archived, or its Space is: the event passes undelivered and the
+  // subscription keeps listening for after the Thread is restored.
+  if (thread.paused !== undefined) {
+    automationLogger.info("A paused Thread's GitHub event was not delivered.", {
+      event: "github_subscription_paused",
+      subscriptionId: row.id,
+      reason: thread.paused,
+    });
     return;
   }
   const event = await eventFor(bindings, db, row, happening);
@@ -131,7 +136,7 @@ const deliverTo = async (
     automation: "github",
     ...(waitUntil === undefined ? {} : { waitUntil }),
   };
-  const send = sendFor(db, row, target, thread.project_id);
+  const send = sendFor(db, row, target, thread.projectId);
   try {
     await send(fresh, finished);
   } catch (error) {

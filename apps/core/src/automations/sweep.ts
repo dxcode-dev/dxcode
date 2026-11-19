@@ -27,13 +27,37 @@ import {
 interface ThreadState {
   readonly lifecycle_state: string;
   readonly project_id: string;
+  readonly space_state: string | null;
 }
 
-export const threadState = (db: D1Database, threadId: string) =>
-  db
-    .prepare("SELECT lifecycle_state, project_id FROM threads WHERE id = ?")
+/**
+ * The Thread an automation wakes, and why it may not: an archived Thread,
+ * or a thread whose Space is archived, hears nothing until it is restored.
+ * Nothing it missed meanwhile is replayed.
+ */
+export const threadState = async (db: D1Database, threadId: string) => {
+  const row = await db
+    .prepare(
+      `SELECT thread.lifecycle_state, thread.project_id,
+              space.lifecycle_state AS space_state
+         FROM threads AS thread
+         LEFT JOIN threads AS space
+           ON space.id = thread.parent_thread_id AND space.kind = 'space'
+        WHERE thread.id = ?`,
+    )
     .bind(threadId)
     .first<ThreadState>();
+  // A deleted Thread is gone, not paused.
+  if (row === null || !["active", "archived"].includes(row.lifecycle_state))
+    return undefined;
+  const paused =
+    row.lifecycle_state !== "active"
+      ? "The Thread is archived."
+      : row.space_state !== null && row.space_state !== "active"
+        ? "The Space that started this Thread is archived."
+        : undefined;
+  return { projectId: row.project_id, paused };
+};
 
 export const message = (error: unknown) =>
   error instanceof Error ? error.message : "Unexpected failure.";
@@ -56,10 +80,12 @@ const fireSchedule = async (
   const occurrence = row.next_run_at as string;
   if (!(await claimFiring(db, row, now))) return;
   const thread = await threadState(db, row.thread_id);
-  if (thread === null || thread.lifecycle_state !== "active") {
+  // The occurrence is claimed and passes: restoring the Thread resumes the
+  // schedule at its next occurrence.
+  if (thread === undefined || thread.paused !== undefined) {
     await recordFiring(db, row.thread_id, {
       status: "skipped",
-      detail: "The Thread is archived.",
+      detail: thread?.paused ?? "The Thread is gone.",
     });
     return;
   }
@@ -78,7 +104,7 @@ const fireSchedule = async (
     } else {
       const started = await startThread(target, {
         parentThreadId: row.thread_id,
-        projectId: thread.project_id,
+        projectId: thread.projectId,
         title: `${row.title} · ${occurrence.slice(0, 16).replace("T", " ")} UTC`,
         prompt: row.prompt,
         selection: await selectionFor(db, row.thread_id, row.agent_mode),

@@ -350,6 +350,8 @@ export const createAutomationTools = (
     owner: CallingThread,
     args: SubscriptionArgs,
     tokenFor: (threadId: string) => Promise<string | undefined>,
+    /** The Thread a re-saved subscription already delivers to. */
+    savedThreadId?: string,
   ): Promise<{ readonly input: SubscriptionInput; readonly token: string }> => {
     const kind = args.filter_kind as FilterKind;
     const destination = args.destination ?? "this-thread";
@@ -378,7 +380,11 @@ export const createAutomationTools = (
     if (args.automatic === true && kind !== "ci" && kind !== "pr-comments")
       throw new Error("automatic is for CI and PR comment follow-ups.");
     checkAgentMode(owner, args.agent_mode);
-    const threadId = await targetThread(context, owner, args.thread);
+    const threadId = await targetThread(
+      context,
+      owner,
+      args.thread ?? savedThreadId,
+    );
     const token = await tokenFor(threadId);
     if (token === undefined)
       throw new Error(
@@ -744,7 +750,7 @@ export const createAutomationTools = (
     defineTool({
       name: "update_github_subscription",
       description:
-        "Pause or resume a GitHub event subscription with enabled, or replace its configuration by passing filter_kind with every field it needs (as for create). Resuming or replacing watches from now: events while it was paused are not delivered. Omit automatic to keep it.",
+        "Pause or resume a GitHub event subscription with enabled, or replace its configuration by passing filter_kind with every field it needs (as for create). Resuming or replacing watches from now: events while it was paused are not delivered. Omit automatic or thread to keep them.",
       input: v.object({
         subscription_id: text(64, "The subscription ID, ghs_…"),
         enabled: v.optional(v.boolean()),
@@ -809,6 +815,9 @@ export const createAutomationTools = (
                 : {}),
             },
             tokenFor,
+            // Left out, the thread stays the one it delivers to (or starts
+            // Threads under), not the calling Thread.
+            current.thread_id,
           );
           const row = await replaceSubscription(
             context.db,

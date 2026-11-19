@@ -93,7 +93,11 @@ interface Comment {
 }
 
 /** dx's Space, posts, and comments routes, with the real response shapes. */
-const serve = (seed: ReadonlyArray<Omit<Comment, "id">> = []) => {
+const serve = (
+  seed: ReadonlyArray<Omit<Comment, "id">> = [],
+  /** How the person left the Space's page, as the server has it saved. */
+  saved: { layout: unknown } = { layout: null },
+) => {
   const posts = seedPosts();
   /** The Space's threads as the server lists them now. */
   const children: Array<{ state: string; statusLine: string }> = [
@@ -295,11 +299,11 @@ const serve = (seed: ReadonlyArray<Omit<Comment, "id">> = []) => {
             ? (JSON.parse(String(init?.body)) as { text: string }).text
             : "",
       });
-    // How the person left the Space's page: never saved.
-    if (path === `/v1/threads/${SPACE}/layout`)
-      return ok({
-        layout: method === "PUT" ? JSON.parse(String(init?.body)) : null,
-      });
+    // How the person left the Space's page: each save kept.
+    if (path === `/v1/threads/${SPACE}/layout`) {
+      if (method === "PUT") saved.layout = JSON.parse(String(init?.body));
+      return ok({ layout: saved.layout });
+    }
     return new Promise<Response>(() => {});
   });
   return { posts, comments, posted, sent, traffic, children, timing };
@@ -396,8 +400,23 @@ const mount = async (initialEntry = `/threads/${SPACE}`) => {
       </main>
     ),
   });
+  // Other pages the sidebar opens; Personal settings loads a moment first,
+  // as the app's lazy pages do.
+  const home = createRoute({
+    getParentRoute: () => product,
+    path: "/",
+    component: () => <main data-testid="home-page" />,
+  });
+  const settings = createRoute({
+    getParentRoute: () => product,
+    path: "/settings",
+    loader: () => new Promise((resolve) => setTimeout(resolve, 300)),
+    component: () => <main data-testid="settings-page" />,
+  });
   const router = createRouter({
-    routeTree: rootRoute.addChildren([product.addChildren([thread])]),
+    routeTree: rootRoute.addChildren([
+      product.addChildren([thread, home, settings]),
+    ]),
     history: createMemoryHistory({ initialEntries: [initialEntry] }),
   });
   root = createRoot(document.body.appendChild(document.createElement("div")));
@@ -970,4 +989,53 @@ it("opens a comment's mention link at the comment, in its post's Comments panel"
   expect(shown.top).toBeGreaterThanOrEqual(list.top - 1);
   expect(shown.bottom).toBeLessThanOrEqual(list.bottom + 1);
   await page.screenshot({ path: `${SHOTS}/space-comment-link-1440.png` });
+});
+
+it("leaves a Space that reopens a saved thread for home, Personal settings, and back", async () => {
+  // Ways it could go wrong: the Space, still on screen while the next page
+  // loads, reads the next page's URL, finds no `?thread=`, and navigates
+  // back to restore its saved thread, so no link away from it works.
+  const saved = {
+    layout: {
+      version: 1,
+      root: { kind: "pane", id: "p0", tabs: [{ kind: "agent" }], active: 0 },
+      focused: "p0",
+      nextPane: 1,
+      nextTerminal: 1,
+      space: {
+        thread: CHILD,
+        tabs: false,
+        front: "thread",
+        details: "threads",
+      },
+    },
+  };
+  serve([], saved);
+  const router = await mount();
+  // The bare Space opens with the thread the person left open.
+  await until(() => router.state.location.search.thread === CHILD);
+  const visit = async (to: "/" | "/settings", testId: string) => {
+    await React.act(() => router.navigate({ to }));
+    await until(
+      () => document.querySelector(`[data-testid='${testId}']`) !== null,
+    );
+    await settle(400);
+    expect(router.state.location.pathname).toBe(to);
+    expect(router.state.resolvedLocation?.pathname).toBe(to);
+  };
+  await visit("/settings", "settings-page");
+  await React.act(() =>
+    router.navigate({
+      to: "/threads/$threadId",
+      params: { threadId: SPACE },
+      search: { thread: CHILD },
+    }),
+  );
+  await until(() => post(3) !== null);
+  await visit("/", "home-page");
+  // Back to the bare Space: it still reopens the saved thread.
+  await React.act(() =>
+    router.navigate({ to: "/threads/$threadId", params: { threadId: SPACE } }),
+  );
+  await until(() => router.state.location.search.thread === CHILD);
 });

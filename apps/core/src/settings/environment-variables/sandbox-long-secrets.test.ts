@@ -486,6 +486,9 @@ describe("shell reads mask wrapped base64 and long secrets split across reads (#
     );
     expect(building).toBeLessThan(2_000);
     expect(text).toBeLessThan(150);
-    expect(reads).toBeLessThan(150);
+    // Reads take 80–100 ms/MB on an idle machine and 150 under a loaded CI
+    // runner (v0.2.131 measured 152.5); 300 still fails a read path that
+    // got about three times slower.
+    expect(reads).toBeLessThan(300);
   }, 120_000);
 });
