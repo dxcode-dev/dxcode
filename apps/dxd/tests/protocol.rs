@@ -3740,6 +3740,134 @@ async fn real_daemon_serves_git_credentials_across_a_lost_connection() {
     drop(daemon);
 }
 
+/// `answer_credential`, acknowledging heartbeats as Core does, so a helper
+/// that keeps retrying for its full 30 s fails on its own output rather than
+/// on the mock's heartbeat lease.
+async fn answer_credential_acking(
+    socket: &mut Socket,
+    helper: &mut Helper,
+    generation: &str,
+    result: Value,
+) {
+    let request = loop {
+        tokio::select! {
+            frame = socket.next() => match frame.expect("socket open").unwrap() {
+                Message::Text(text) => {
+                    let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                    match value["type"].as_str() {
+                        Some("heartbeat") => send(socket, json!({"type": "heartbeat-ack", "generation": generation})).await,
+                        Some("workload-identity.request") => break value,
+                        _ => {}
+                    }
+                }
+                Message::Ping(data) => socket.send(Message::Pong(data)).await.unwrap(),
+                Message::Close(_) => panic!("daemon closed the socket"),
+                _ => {}
+            },
+            finished = &mut *helper => {
+                let (output, elapsed) = finished.unwrap();
+                panic!(
+                    "the helper gave up after {} ms without asking Core: {}",
+                    elapsed.as_millis(),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    };
+    assert_eq!(request["request"]["kind"], "git-credential");
+    send(
+        socket,
+        json!({
+            "type": "workload-identity.response", "generation": generation,
+            "requestId": request["requestId"], "result": result,
+        }),
+    )
+    .await;
+}
+
+/// Listening sockets bound at `path`, as `/proc/net/unix` lists them.
+fn listeners_at(path: &Path) -> usize {
+    let path = path.to_str().unwrap();
+    std::fs::read_to_string("/proc/net/unix")
+        .unwrap()
+        .lines()
+        .filter(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            // Flags 00010000 is __SO_ACCEPTCON: a listening socket.
+            fields.len() == 8 && fields[3] == "00010000" && fields[7] == path
+        })
+        .count()
+}
+
+/// Replaces the socket file at `path` with one nobody listens on, as a
+/// remounted home does: Boat serves `/home/user` from a lazy-restore FUSE
+/// mount for the first minute after a resume, then mounts the restored disk
+/// over it. dxd's listener stays on the hidden mount and the path now names
+/// a copied socket file with no listener behind it.
+fn orphan_socket_file(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::remove_file(path).unwrap();
+    drop(std::os::unix::net::UnixListener::bind(path).unwrap());
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+}
+
+/// Git credentials keep working when the daemon's socket path stops naming
+/// its listener (2026-11-18: every push from a resumed Boat Orb failed with
+/// "dx could not give Git credentials" once its home was remounted, while
+/// the daemon stayed connected). The daemon notices and listens again at the
+/// path within a couple of seconds, never removes a file that is not a
+/// socket, and keeps exactly one listener.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_serves_git_credentials_after_its_socket_path_changes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let socket_path = fixture.state.join("workload-identity.sock");
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential_acking(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("before the path changed", &output, elapsed);
+
+    // The home is remounted: the path names a socket file nobody listens on.
+    orphan_socket_file(&socket_path);
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential_acking(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("after a remount", &output, elapsed);
+    assert_eq!(
+        listeners_at(&socket_path),
+        1,
+        "the hidden listener is closed"
+    );
+
+    // The socket file is deleted.
+    std::fs::remove_file(&socket_path).unwrap();
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential_acking(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("after a deletion", &output, elapsed);
+    assert_eq!(listeners_at(&socket_path), 1);
+
+    // Something else owns the path: the daemon leaves it alone.
+    std::fs::remove_file(&socket_path).unwrap();
+    std::fs::write(&socket_path, "not a socket").unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(
+        std::fs::read_to_string(&socket_path).unwrap(),
+        "not a socket"
+    );
+    std::fs::remove_file(&socket_path).unwrap();
+    let mut helper = git_credential_helper(&fixture);
+    answer_credential_acking(&mut socket, &mut helper, &generation, issued()).await;
+    let (output, elapsed) = helper.await.unwrap();
+    assert_credential("after the file was removed", &output, elapsed);
+    assert_eq!(listeners_at(&socket_path), 1);
+}
+
 /// A real Desktop display: the toolbelt's Xvfb and openbox with the Orb's
 /// openbox configuration, the session's environment file in the fixture's
 /// home, and a Desktop directory whose `env.sh` names the toolbelt and whose

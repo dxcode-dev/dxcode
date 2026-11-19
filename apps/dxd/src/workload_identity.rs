@@ -83,11 +83,16 @@ impl Drop for ActiveRequest {
     }
 }
 
-pub fn start(
-    socket_path: &Path,
-    connected: Arc<AtomicBool>,
-    epoch: Arc<AtomicU64>,
-) -> io::Result<Relay> {
+/// How often the relay checks that its socket path still names its
+/// listener. A stat each time; a helper retries for `RECONNECT_WAIT`.
+const SOCKET_CHECK: Duration = Duration::from_secs(1);
+
+/// The listener's file: device and inode of the socket it bound.
+type SocketIdentity = (u64, u64);
+
+/// Binds a private socket at `socket_path`, replacing a socket file left
+/// there; any other file is never removed.
+fn bind(socket_path: &Path) -> io::Result<(UnixListener, SocketIdentity)> {
     let socket_directory = socket_path.parent().ok_or(io::ErrorKind::InvalidInput)?;
     validate_socket_directory(socket_directory)?;
     match fs::symlink_metadata(socket_path) {
@@ -105,15 +110,59 @@ pub fn start(
     {
         return Err(io::ErrorKind::PermissionDenied.into());
     }
+    listener.set_nonblocking(true)?;
+    Ok((listener, (metadata.dev(), metadata.ino())))
+}
+
+/// Whether `socket_path` still names the socket the relay listens on.
+fn names(socket_path: &Path, identity: SocketIdentity) -> bool {
+    fs::symlink_metadata(socket_path).is_ok_and(|metadata| {
+        metadata.file_type().is_socket() && (metadata.dev(), metadata.ino()) == identity
+    })
+}
+
+pub fn start(
+    socket_path: &Path,
+    connected: Arc<AtomicBool>,
+    epoch: Arc<AtomicU64>,
+) -> io::Result<Relay> {
+    let (listener, mut identity) = bind(socket_path)?;
     let (sender, requests) = channel(MAX_CONCURRENT_REQUESTS);
     let active = Arc::new(AtomicUsize::new(0));
-    listener.set_nonblocking(true)?;
-    let listener = tokio::net::UnixListener::from_std(listener)?;
+    let mut listener = tokio::net::UnixListener::from_std(listener)?;
+    let socket_path = socket_path.to_owned();
     // Accepting is readiness on the daemon loop's thread; each admitted
     // request is served on its own short-lived thread.
     tokio::spawn(async move {
+        let mut check = tokio::time::interval(SOCKET_CHECK);
+        check.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let stream = match listener.accept().await {
+            let accepted = tokio::select! {
+                accepted = listener.accept() => accepted,
+                _ = check.tick() => {
+                    // The path can stop naming this listener while the daemon
+                    // runs: Boat serves a resumed Orb's home from a lazy-restore
+                    // mount, then mounts the restored disk over it, hiding the
+                    // socket behind a copy nobody listens on. Every helper then
+                    // fails while the connection to Core is fine. Listen again
+                    // at the path; the hidden listener closes with it.
+                    if !names(&socket_path, identity) {
+                        // A failed bind (a file that is not a socket took the
+                        // path) is tried again at the next check.
+                        if let Ok((next, next_identity)) = bind(&socket_path).and_then(
+                            |(next, next_identity)| {
+                                Ok((tokio::net::UnixListener::from_std(next)?, next_identity))
+                            },
+                        ) {
+                            listener = next;
+                            identity = next_identity;
+                            eprintln!("dxd workload identity: socket path changed; listening again");
+                        }
+                    }
+                    continue;
+                }
+            };
+            let stream = match accepted {
                 Ok((stream, _)) => stream.into_std(),
                 Err(error) => Err(error),
             };
