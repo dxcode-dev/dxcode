@@ -18,6 +18,7 @@ import type {
 import type { Sandbox as E2BSandbox } from "e2b";
 import { SandboxNotFoundError, TimeoutError } from "e2b";
 import { describe, expect, it, vi } from "vitest";
+import { AGENT_SKILLS_DIRECTORY } from "../workspace-context.js";
 import { e2b } from "./adapter.js";
 
 const execute = promisify(executeCommand);
@@ -56,9 +57,19 @@ const makeE2B = () => {
   };
 };
 
+/**
+ * The guest's ~/.agents/skills is /home/user/.agents/skills, which is also
+ * the host's home on a dx Orb. Tests that do not name their own skills
+ * directory read an empty one, so the host's skills never reach a snapshot.
+ */
+const noHostSkills = join(tmpdir(), "dx-adapter-test-no-home-skills");
+
 const runGuestCommand = async (command: string, options?: CommandOptions) => {
+  const envs = { ...options?.envs };
+  if (envs.FLUE_WORKSPACE_CONTEXT_SKILLS === AGENT_SKILLS_DIRECTORY)
+    envs.FLUE_WORKSPACE_CONTEXT_SKILLS = noHostSkills;
   const result = await execute(command, {
-    env: { ...process.env, ...options?.envs },
+    env: { ...process.env, ...envs },
     maxBuffer: 8 * 1024 * 1024,
     timeout: options?.timeoutMs,
   });

@@ -2522,7 +2522,13 @@ async fn real_daemon_reports_memory_and_stops_listed_processes() {
             listed(&snapshot, sleeper_pid).expect("sleeper stays listed")["state"].clone();
         if hog_state == "stopping" {
             saw_hog_stopping = true;
-            assert!(hog.0.try_wait().unwrap().is_none());
+            // The hog survives SIGTERM for the whole grace period. Once the
+            // period ends, a heartbeat can SIGKILL it between this snapshot
+            // and the check, so it may have exited by then.
+            assert!(
+                hog.0.try_wait().unwrap().is_none()
+                    || stopped_at.elapsed() >= Duration::from_secs(5)
+            );
         }
         // Reap our children so they read as gone rather than zombies.
         let _ = sleeper.0.try_wait();
