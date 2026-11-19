@@ -1,5 +1,4 @@
 import { Tab, Tabs, TabsList } from "../../../shared/ui/tabs.js";
-import { spaceAgentModelQueryOptions } from "../../spaces/space-agent-model-queries.js";
 import "./model-routing.css";
 import type { ConnectionData } from "@dx/api";
 import {
@@ -7,7 +6,7 @@ import {
   workspaceRoleHasPermission,
 } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate } from "@tanstack/react-router";
+import { Link } from "@tanstack/react-router";
 import { ChevronRight, UsersRound } from "lucide-react";
 import {
   type Dispatch,
@@ -36,7 +35,6 @@ import { ClaudePlanPanel } from "./claude-plan-usage.js";
 import type { ConnectionDialogSubmit } from "./connection-dialog.js";
 import { ConnectionRow } from "./connection-row.js";
 import { CopilotConnectDialog } from "./copilot-connect-dialog.js";
-import { ModelRoutingGraph } from "./model-routing-graph.js";
 import {
   apiMessage,
   connectionMutationOptions,
@@ -47,7 +45,6 @@ import {
   modelCatalogQueryOptions,
   modelConnectionsQueryOptions,
   modelRoutingChoicesQueryOptions,
-  modelRoutingGraphQueryOptions,
 } from "./model-routing-queries.js";
 
 const message = apiMessage;
@@ -429,6 +426,11 @@ function RoutingConnections({
   );
 }
 
+/**
+ * Settings → Models & Routing, its first part: the plans and keys that pay
+ * for models, in the order a Thread tries them, as Model Routing showed
+ * them without its graph.
+ */
 export const ModelRoutingSettings = ({
   workspace,
   workspaceSlug,
@@ -445,7 +447,6 @@ export const ModelRoutingSettings = ({
     modelConnectionsQueryOptions(target, identity.id),
   );
   const catalog = useQuery(modelCatalogQueryOptions(target, identity.id));
-  const graph = useQuery(modelRoutingGraphQueryOptions(target, identity.id));
   const choices = useQuery({
     ...modelRoutingChoicesQueryOptions(identity.id),
     enabled: workspaceSlug === undefined,
@@ -453,18 +454,12 @@ export const ModelRoutingSettings = ({
   const settingsContext = useQuery(
     settingsContextQueryOptions(identity.id, target),
   );
-  // Where a new Space would run: personal only.
-  const spaceAgent = useQuery({
-    ...spaceAgentModelQueryOptions(identity.id),
-    enabled: workspaceSlug === undefined,
-  });
 
   const options = connectionMutationOptions(queryClient, target);
   const createMutation = useMutation(options.create);
   const updateMutation = useMutation(options.update);
 
   const [dialog, setDialog] = useState<DialogState>({ kind: "closed" });
-  const navigate = useNavigate();
   const [expanded, setExpanded] = useState<ReadonlyArray<string>>([]);
   const [submitError, setSubmitError] = useState<string>();
   const [fieldErrors, setFieldErrors] = useState<
@@ -558,7 +553,7 @@ export const ModelRoutingSettings = ({
   return (
     <div className="model-routing-settings routing-parity">
       <SettingsHeading
-        title="Model Routing"
+        title="Models & Routing"
         actions={
           canMutate ? (
             <AddProviderDialog
@@ -618,7 +613,7 @@ export const ModelRoutingSettings = ({
                     ? settingsPath({
                         scope: "workspace",
                         workspaceSlug: personalWorkspace.shortName,
-                        section: "model-routing",
+                        section: "models",
                       })
                     : undefined
                 }
@@ -632,45 +627,6 @@ export const ModelRoutingSettings = ({
           setExpanded={setExpanded}
           onEdit={(connection) => setDialog(editDialog(connection))}
         />
-      )}
-      {graph.isError ? (
-        <p className="model-routing-field-error" role="alert">
-          {message(graph.error)}
-        </p>
-      ) : graph.data ? (
-        <ModelRoutingGraph
-          graph={graph.data}
-          choices={personal ? choices.data : undefined}
-          connections={rows}
-          dictation={
-            settingsContext.data?.activeScope === "personal"
-              ? settingsContext.data.dictation
-              : undefined
-          }
-          space={spaceAgent.data?.route}
-          onConnectionClick={(id) => {
-            void navigate({ hash: id, replace: true, resetScroll: false });
-            setExpanded((current) =>
-              current.includes(id) ? current : [...current, id],
-            );
-            requestAnimationFrame(() => {
-              const element = document.getElementById(
-                `routing-connection-${id}`,
-              );
-              element?.scrollIntoView({
-                block: "nearest",
-                behavior: "instant",
-              });
-              element
-                ?.querySelector<HTMLButtonElement>(
-                  ".model-routing-connection-disclosure",
-                )
-                ?.focus({ preventScroll: true });
-            });
-          }}
-        />
-      ) : (
-        <DxLoading label="Loading routes…" />
       )}
       {catalog.isError || (personal && choices.isError) ? (
         <p className="model-routing-field-error" role="alert">

@@ -152,6 +152,36 @@ export const dispatchPaneLayoutAction = (
   return next;
 };
 
+/**
+ * Applies `update` to the saved layout and schedules the save, for state
+ * kept beside the panes, such as a Space page's. Unlike a pane action, it
+ * waits for a layout still loading rather than replacing it with the
+ * default one; once loaded, it applies at once.
+ */
+export const updatePaneLayout = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+  update: (layout: ThreadPaneLayout) => ThreadPaneLayout,
+) => {
+  const options = threadPaneLayoutQueryOptions(userId, threadId);
+  const apply = (base: ThreadPaneLayout) => {
+    const next = update(base);
+    if (next === base) return;
+    client.setQueryData(options.queryKey, next);
+    scheduleSave(threadId, next);
+  };
+  const current = client.getQueryData(options.queryKey);
+  if (current !== undefined) {
+    apply(current);
+    return;
+  }
+  void client
+    .ensureQueryData(options)
+    .catch(() => defaultPaneLayout())
+    .then((loaded) => apply(client.getQueryData(options.queryKey) ?? loaded));
+};
+
 /** A dispatcher for the Thread's layout that does not subscribe to it. */
 export function usePaneLayoutDispatch(threadId: ThreadId) {
   const client = useQueryClient();

@@ -349,11 +349,11 @@ describe("new thread configuration strip accessibility", () => {
       const options = Array.from(
         document.querySelectorAll<HTMLElement>('[role="option"]'),
       );
-      // The model's group names the connection that pays for it.
+      // The model's row names the connection that pays for it.
       expect(
-        Array.from(document.querySelectorAll(".dx-picker-label")).map(
-          (label) => label.textContent,
-        ),
+        options.find(
+          (option) => option.textContent?.startsWith("GPT 5.6 Luna") ?? false,
+        )?.textContent,
       ).toContain("LiteLLM2");
       const recommended = options.find((option) =>
         option.textContent?.startsWith("Recommended"),

@@ -16,6 +16,7 @@ import {
   type SettingsMembershipInvariantViolation,
   SettingsScopeForbidden,
   type WorkspaceId,
+  type WorkspaceMembership,
   type WorkspacePolicyDenied,
   WorkspacePolicyRepository,
   type WorkspaceProjectDefaults,
@@ -321,11 +322,21 @@ export class ProjectDefaultsService extends Context.Service<
           catalog: LoadedRunnerProfileCatalog,
         ) {
           const access = yield* settings.workspace(principal, workspaceSlug);
+          return yield* workspaceView(principal, access.workspace, catalog);
+        },
+      );
+
+      const workspaceView = Effect.fn("ProjectDefaultsService.workspaceView")(
+        function* (
+          principal: Principal,
+          membership: WorkspaceMembership,
+          catalog: LoadedRunnerProfileCatalog,
+        ) {
           const personal = yield* defaults.getPersonal(principal.userId);
           const workspace = yield* workspacePolicy(
-            access.workspace.workspace.id,
-            access.workspace.role,
-            access.workspace.workspace.lifecycleState,
+            membership.workspace.id,
+            membership.role,
+            membership.workspace.lifecycleState,
           );
           const resolved = resolveWorkspace(
             catalog.configuration.defaultProfileId,
@@ -338,12 +349,9 @@ export class ProjectDefaultsService extends Context.Service<
             resolved,
             restrictions: workspace.restrictions,
             canUpdate:
-              access.workspace.workspace.lifecycleState === "active" &&
-              workspaceRoleHasPermission(
-                access.workspace.role,
-                "workspace:update",
-              ),
-            workspaceRole: access.workspace.role,
+              membership.workspace.lifecycleState === "active" &&
+              workspaceRoleHasPermission(membership.role, "workspace:update"),
+            workspaceRole: membership.role,
           };
         },
       );
@@ -514,11 +522,19 @@ export class ProjectDefaultsService extends Context.Service<
             resolved = personal.resolved;
             restrictions = personal.restrictions;
           } else {
-            const workspace = yield* getWorkspace(
-              principal,
-              workspaceSlug,
-              catalog,
-            );
+            // A No Project Thread's project is the person's own, in their
+            // own workspace: read its defaults through their membership, so
+            // a personal-only credential such as an access token starts one
+            // as a browser session does. Workspace settings stay closed to
+            // that credential.
+            const membership = input.projectless
+              ? yield* workspaces.findByUser(principal.userId)
+              : Option.none();
+            const workspace =
+              Option.isSome(membership) &&
+              membership.value.workspace.shortName === workspaceSlug
+                ? yield* workspaceView(principal, membership.value, catalog)
+                : yield* getWorkspace(principal, workspaceSlug, catalog);
             resolved = workspace.resolved;
             restrictions = workspace.restrictions;
             workspaceId = workspace.settings.workspaceId;

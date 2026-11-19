@@ -19,6 +19,7 @@ import {
   PopoverRoot,
   PopoverTrigger,
 } from "../../shared/ui/popover.js";
+import { modelRoutingChoicesQueryOptions } from "../settings/model-routing/model-routing-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import {
   EnterKeycap,
@@ -26,6 +27,7 @@ import {
   SpaceGoalField,
   SpaceSharingSelect,
 } from "./space-form-fields.js";
+import { SpaceModelField, type SpaceModelPick } from "./space-model-field.js";
 import { isSpaceMailReadsRefusal, useUpdateSpace } from "./space-queries.js";
 import "./spaces.css";
 
@@ -107,6 +109,14 @@ export function EditSpaceDialog({
   const [color, setColor] = React.useState<ThreadColor>(space.color);
   const [sharing, setSharing] = React.useState<SpaceSharing>(space.sharing);
   const update = useUpdateSpace(userId);
+  const choices = useQuery(modelRoutingChoicesQueryOptions(userId));
+  const savedThreadModel = space.threadModel ?? undefined;
+  const [threadModel, setThreadModel] = React.useState<
+    SpaceModelPick | undefined
+  >(savedThreadModel);
+  const threadModelChanged =
+    threadModel?.model !== savedThreadModel?.model ||
+    threadModel?.thinking !== savedThreadModel?.thinking;
   const changes = {
     ...(name.trim() === space.name ? {} : { name: name.trim() }),
     ...(goal.trim() === (space.goal ?? "")
@@ -114,6 +124,9 @@ export function EditSpaceDialog({
       : { goal: goal.trim() === "" ? null : goal.trim() }),
     ...(color === space.color ? {} : { color }),
     ...(sharing === space.sharing ? {} : { sharing }),
+    ...(threadModelChanged
+      ? { threadModel: (threadModel ?? null) as never }
+      : {}),
   };
   const changed = Object.keys(changes).length > 0;
   const canSave = changed && name.trim() !== "" && !update.isPending;
@@ -178,6 +191,31 @@ export function EditSpaceDialog({
             value={sharing}
             onChange={setSharing}
           />
+          <label
+            className="space-dialog-label"
+            htmlFor={`${fieldId}-thread-model`}
+          >
+            Thread model
+          </label>
+          <SpaceModelField
+            id={`${fieldId}-thread-model`}
+            label="Thread model"
+            servedModels={choices.data?.models ?? []}
+            claudeCode
+            value={threadModel}
+            disabled={update.isPending || choices.isError}
+            loading={choices.isPending}
+            defaultRow={{
+              label: "Same as coordinator",
+              tag: "Coordinator",
+              detail: "Threads run on the Space's own model",
+            }}
+            onChange={setThreadModel}
+          />
+          <p className="space-dialog-hint">
+            New threads the Space starts run on it. The coordinator needs no
+            instruction for it.
+          </p>
           {sharing === "private" && space.sharing === "workspace" ? (
             <p className="space-dialog-hint">
               Members other than you leave the Space.

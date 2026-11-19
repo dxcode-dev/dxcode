@@ -35,6 +35,9 @@ export function RealtimeProvider({
       client.sendBoard(threadId, artifactId, payload),
     observe: (threadId, artifactId, listener) =>
       client.observeBoard(threadId, artifactId, listener),
+    present: (threadId) => client.presentClients(threadId),
+    observePresent: (threadId, listener) =>
+      client.observePresentUsers(threadId, listener),
   }));
   return (
     <RealtimeContext value={client}>

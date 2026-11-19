@@ -9,6 +9,8 @@ export interface SpaceThreadsContextValue {
   readonly childThreadIds: ReadonlySet<string>;
   /** Brings an opened thread's tab to the front where tabs share a strip. */
   readonly reveal?: (threadId: ThreadId) => void;
+  /** Forgets the open thread, so the Space opens without it next time. */
+  readonly forget?: () => void;
 }
 
 export const SpaceThreadsContext = React.createContext<
@@ -57,6 +59,7 @@ export const useCloseSpaceThread = () => {
   const navigate = useNavigate();
   return () => {
     if (space === undefined) return;
+    space.forget?.();
     void navigate({
       to: "/threads/$threadId",
       params: { threadId: space.spaceThreadId },

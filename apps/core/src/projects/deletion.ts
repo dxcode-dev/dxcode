@@ -165,6 +165,10 @@ export const deleteProject = async (
       `DELETE FROM thread_draft
         WHERE thread_id IN (${projectThreads}) AND ${deletedNow}`,
     ),
+    statement(
+      `DELETE FROM thread_slot_draft
+        WHERE thread_id IN (${projectThreads}) AND ${deletedNow}`,
+    ),
   ]);
   if (results[0]?.results.length !== 1) throw new ProjectDeletionNotFound();
   const tombstoned = new Set(

@@ -39,6 +39,7 @@ import {
   ThreadParticipantsMenuContent,
 } from "./sharing/thread-participants.js";
 import { ThreadMenu, ThreadMenuSubmenu } from "./thread-menu.js";
+import { useThreadModelName } from "./thread-model-name.js";
 import { TitleBarItemSlot } from "./title-bar-item.js";
 import { useTitleBarOverflow } from "./title-bar-overflow.js";
 import type { TranscriptViewModel } from "./transcript-view-model.js";
@@ -349,9 +350,13 @@ export function ThreadHeader({
           />
         ) : null}
         {compact ? null : thread.pluginAgent === undefined ? (
-          <span className="thread-title-meta" title={summary.title}>
-            {selectionLabel}
-          </span>
+          selection.kind === "model" ? (
+            <ThreadTitleModel selection={selection} />
+          ) : (
+            <span className="thread-title-meta" title={summary.title}>
+              {selectionLabel}
+            </span>
+          )
         ) : (
           <span
             className="thread-title-meta thread-title-agent"
@@ -412,6 +417,21 @@ export function ThreadHeader({
       </div>
       {dialogs}
     </header>
+  );
+}
+
+/** The title bar's model: its maker's logo and the picker's name for it. */
+function ThreadTitleModel({
+  selection,
+}: {
+  readonly selection: Parameters<typeof useThreadModelName>[0];
+}) {
+  const model = useThreadModelName(selection);
+  return (
+    <span className="thread-title-meta thread-title-model" title={model.title}>
+      {model.mark}
+      {model.name}
+    </span>
   );
 }
 

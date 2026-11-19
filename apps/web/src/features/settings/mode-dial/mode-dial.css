@@ -1,5 +1,5 @@
-/* Settings → Models: the Recommended model, older mode Threads' models, and
-   the Space model, each a model choice beside an effort choice. */
+/* Settings → Models: connections first, then the default models and the
+   Space model, each a settings row with dx's model picker. */
 .mode-tuning-page {
   display: grid;
   gap: var(--space-4);
@@ -17,81 +17,58 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-/* A model choice and its effort, side by side; stacked on a phone. */
-.tuning-agent-card {
+/* A row's model picker, with a hint under it when nothing serves it. */
+.models-slot {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
+  gap: var(--space-1-5);
+  justify-items: end;
+  width: min(320px, 100%);
 }
-.tuning-agent-card > label {
-  grid-column: 1 / -1;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
+.models-slot > .dx-model-picker-trigger {
+  width: 100%;
 }
-.tuning-agent-card > p,
-.tuning-agent-card .tuning-hint {
-  grid-column: 1 / -1;
+.models-slot > p {
   margin: 0;
+  text-align: right;
 }
 .tuning-hint {
   color: var(--muted-foreground);
   font-size: var(--text-xs);
   line-height: var(--leading-4);
 }
-.models-older-modes {
-  display: grid;
-  gap: var(--space-1);
-  padding-bottom: var(--space-1);
-}
-.models-older-modes > section {
+.space-agent-role-actions {
+  padding: var(--space-2) var(--space-4);
   border-top: 1px solid var(--divider);
-}
-.models-older-modes h3 {
-  margin: 0;
-  padding: var(--space-2-5) var(--space-3) 0;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-/* Settings → Models → Space: the model new Spaces run on. */
-.space-agent-role {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-3);
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-lg);
-}
-.tuning-mode-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-.tuning-mode-heading h2 {
-  margin: 0;
-  font-size: var(--text-md);
-  font-weight: var(--weight-semibold);
-}
-.space-agent-role .tuning-agent-card {
-  padding: 0;
-}
-.tuning-footer {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
 }
 .tuning-error {
   margin: 0;
+  padding: 0 var(--space-4) var(--space-3);
   color: var(--destructive);
   font-size: var(--text-sm);
 }
 @media (max-width: 639px) {
-  .tuning-agent-card {
-    grid-template-columns: minmax(0, 1fr);
+  .models-slot {
+    justify-items: stretch;
+    width: 100%;
   }
+  .models-slot > p {
+    text-align: left;
+  }
+}
+/* "Models", under the routing part of Models & Routing: a heading with no
+   intro, in the settings heading's type. */
+.models-section-heading {
+  width: 100%;
+  max-width: var(--settings-content-width, 823px);
+  margin: var(--space-4) auto 0;
+  color: var(--foreground);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-5);
+  letter-spacing: -0.025em;
+}
+/* Model Routing's list spans the page; the Models part lines up with it. */
+.mode-tuning-page
+> :is(.settings-card, .settings-form-actions, .models-section-heading) {
+  max-width: none;
 }

@@ -36,6 +36,7 @@ import {
   type EditorView,
   type NodeView,
 } from "prosemirror-view";
+import { runsAppCommandFromTextField } from "../../../shared/commands/command-dispatcher.js";
 import {
   parseArtifactMarkdown,
   artifactSchema as schema,
@@ -506,6 +507,18 @@ export const artifactNodeViews = (host: ChipViewHost): NodeViews => ({
 
 export const artifactClipboardTextParser = pastedMarkdown;
 
+/**
+ * App shortcuts that run from text fields (Alt+Enter for a new Thread) pass
+ * through the editor: ProseMirror otherwise marks every Enter handled.
+ */
+const appShortcuts = new Plugin({
+  props: {
+    handleDOMEvents: {
+      keydown: (_view, event) => runsAppCommandFromTextField(event),
+    },
+  },
+});
+
 export const createArtifactEditorState = (
   doc: Node,
   extra: ReadonlyArray<Plugin> = [],
@@ -513,6 +526,7 @@ export const createArtifactEditorState = (
   EditorState.create({
     doc: withTrailingParagraph(doc),
     plugins: [
+      appShortcuts,
       // First, so an open `/` or `@` menu takes the arrows and Enter.
       ...extra,
       rules,

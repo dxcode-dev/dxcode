@@ -1,8 +1,11 @@
 /**
- * The AGENTS.md of the workspace a Thread runs in: its owner's active
- * workspace (a person belongs to at most one). Empty when the owner has no
- * workspace or the workspace has none. A failed read rejects, so the
- * submission fails visibly instead of running without the admin's guidance.
+ * The workspace instructions a Thread started with: its owner's active
+ * workspace's AGENTS.md, copied when the Thread was created
+ * (`threads.workspace_agent_instructions`). An admin's later edit reaches new
+ * Threads only, so an open Thread's prompt, and its prompt cache, stay as
+ * they were. Empty when the owner had no workspace or the workspace had
+ * none. A failed read rejects, so the submission fails visibly instead of
+ * running without the admin's guidance.
  */
 export const loadThreadWorkspaceAgentInstructions = async (
   db: D1Database,
@@ -10,14 +13,9 @@ export const loadThreadWorkspaceAgentInstructions = async (
 ): Promise<string> => {
   const row = await db
     .prepare(
-      `SELECT instructions.content
+      `SELECT workspace_agent_instructions AS content
          FROM threads
-         JOIN member ON member.userId = threads.owner_user_id
-         JOIN organization ON organization.id = member.organizationId
-                          AND organization.lifecycleState = 'active'
-         JOIN workspace_agent_instructions AS instructions
-           ON instructions.workspace_id = member.organizationId
-        WHERE threads.id = ?`,
+        WHERE id = ?`,
     )
     .bind(threadId)
     .first<{ content: string }>();

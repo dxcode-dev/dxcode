@@ -824,7 +824,7 @@ export const createThreadTools = (
             };
           const selection: ThreadModelSelection | undefined =
             data.agent_mode === undefined
-              ? owner.selection
+              ? owner.childSelection
               : agentModeSelection(data.agent_mode, owner.selection);
           const runnerProfileId =
             data.orb_provider === undefined && data.orb_size === undefined
@@ -1392,20 +1392,23 @@ export const createThreadTools = (
                 }>;
               }
             | undefined;
+          // A child gets this by default: a Space's thread model, or the
+          // calling Thread's own.
+          const childDefault = owner.childSelection;
           const claudeCaller =
-            owner.selection?.kind === "model" &&
-            isClaudeCodeModel(owner.selection.model)
-              ? owner.selection
+            childDefault?.kind === "model" &&
+            isClaudeCodeModel(childDefault.model)
+              ? childDefault
               : undefined;
           return {
             output: {
               currentMode:
-                owner.selection?.kind === "mode"
-                  ? owner.selection.mode
+                childDefault?.kind === "mode"
+                  ? childDefault.mode
                   : claudeCaller !== undefined
                     ? claudeCaller.model
-                    : owner.selection?.kind === "model"
-                      ? `model:${owner.selection.model}`
+                    : childDefault?.kind === "model"
+                      ? `model:${childDefault.model}`
                       : "medium",
               modes: [
                 ...(choices?.modes ?? []).map((mode) => ({

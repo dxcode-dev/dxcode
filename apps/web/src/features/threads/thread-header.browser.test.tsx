@@ -380,15 +380,23 @@ describe("ThreadHeader", () => {
       [...document.querySelectorAll<HTMLElement>(".shortcut-keycaps")].map(
         (box) => {
           const keys = [...box.querySelectorAll("kbd")];
-          const content = keys.reduce(
-            (width, key) => width + key.getBoundingClientRect().width,
+          // The keys and, from three keys on, the pluses between them.
+          const items = [
+            ...box.querySelectorAll("kbd, .shortcut-keycaps-plus"),
+          ];
+          const content = items.reduce(
+            (width, item) => width + item.getBoundingClientRect().width,
             0,
           );
           const item = box.closest<HTMLElement>('[role="menuitem"]');
           if (item === null) throw new Error("A shortcut outside a menu item.");
           return {
             text: keys.map((key) => key.textContent).join(""),
-            slack: box.getBoundingClientRect().width - content,
+            // Padding and border, with the 2px gaps between items taken out.
+            slack:
+              box.getBoundingClientRect().width -
+              content -
+              2 * (items.length - 1),
             gapToItemEnd:
               item.getBoundingClientRect().right -
               box.getBoundingClientRect().right,
@@ -412,8 +420,8 @@ describe("ThreadHeader", () => {
         expect.stringMatching(/C$/),
       ]);
       for (const box of boxes) {
-        // 4px padding each side, 1px border each side, 2px between keys.
-        expect(box.slack).toBeLessThanOrEqual(16);
+        // 4px padding each side, 1px border each side.
+        expect(box.slack).toBeLessThanOrEqual(12);
         // Right-aligned inside the item's 8px padding.
         expect(box.gapToItemEnd).toBeLessThanOrEqual(10);
       }
@@ -442,7 +450,7 @@ describe("ThreadHeader", () => {
         ).toBeGreaterThanOrEqual(3),
       );
       for (const box of keycapBoxes()) {
-        expect(box.slack).toBeLessThanOrEqual(16);
+        expect(box.slack).toBeLessThanOrEqual(12);
         expect(box.gapToItemEnd).toBeLessThanOrEqual(10);
       }
     });

@@ -6,6 +6,7 @@ import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
 import type { ComposerSlot } from "../../../shared/composer/composer-slot.js";
 import { Button } from "../../../shared/ui/button.js";
+import { useComposerDraft } from "../../threads/composer-draft-queries.js";
 import { useSpacePeople } from "./space-people.js";
 import { postFailureText } from "./space-post-format.js";
 import { useCreateSpacePost } from "./space-posts-queries.js";
@@ -24,7 +25,9 @@ export function SpaceComposer({
   readonly Composer: ComposerSlot;
 }) {
   const { identity } = useAuthenticatedIdentity();
-  const [draft, setDraft] = React.useState("");
+  // Core keeps it per person, as a Thread's composer does: leaving the
+  // Space, a reload, or another device shows what was typed.
+  const [draft, setDraft] = useComposerDraft({ threadId: spaceThreadId });
   // A post that fails comes back to the box, ahead of anything typed since.
   const create = useCreateSpacePost(identity.id, spaceThreadId, (failed) =>
     setDraft((current) =>

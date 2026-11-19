@@ -126,7 +126,7 @@ function ProjectEmailCards({
       />
       <SettingsRow
         title="Start threads from email"
-        description="Your own email to your address here starts a thread, and your replies continue it. Off, the email is only filed under this project."
+        description="Your own email to your address here starts a thread, and your replies continue it. It must come from your sign-in address, on a domain that signs its mail (DKIM with DMARC), as Gmail and most providers do. Off, the email is only filed under this project."
         control={
           <SettingsToggle
             label="Start threads from email"

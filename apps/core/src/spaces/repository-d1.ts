@@ -40,6 +40,15 @@ export interface SpaceRow {
   /** The Space's own status (`set_thread_status`). */
   readonly status_line: string | null;
   readonly waiting_on_input: number | null;
+  /** The model its threads run on; null: the Space's own. */
+  readonly thread_model: string | null;
+  readonly thread_thinking: string | null;
+}
+
+/** The model a Space's threads run on, as stored. */
+export interface SpaceThreadModel {
+  readonly model: string;
+  readonly thinking: string;
 }
 
 export interface SpaceMemberRow {
@@ -57,6 +66,7 @@ const spaceColumns = (user: string, now: string) => `
   COALESCE(thread.last_activity_at, thread.updated_at) AS last_activity_at,
   space.goal, ${spaceAccessSql(user, now)} AS access,
   thread.status_line, space.waiting_on_input,
+  space.thread_model, space.thread_thinking,
   EXISTS (SELECT 1 FROM space_member AS joined
            WHERE joined.space_thread_id = thread.id
              AND joined.user_id = ${user}) AS joined`;
@@ -223,6 +233,8 @@ export const recordNewSpace = async (
     readonly color: ThreadColor;
     /** The workspace a `workspace` Space is shared with; absent: private. */
     readonly workspaceId: string | undefined;
+    /** The model its threads run on; null: the Space's own. */
+    readonly threadModel: SpaceThreadModel | null;
     readonly now: Date;
   },
 ) => {
@@ -247,10 +259,17 @@ export const recordNewSpace = async (
       ),
     db
       .prepare(
-        `INSERT INTO space (thread_id, goal, created_at) VALUES (?1, ?2, ?3)
+        `INSERT INTO space (thread_id, goal, created_at, thread_model, thread_thinking)
+         VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT (thread_id) DO NOTHING`,
       )
-      .bind(input.threadId, input.goal, input.now.getTime()),
+      .bind(
+        input.threadId,
+        input.goal,
+        input.now.getTime(),
+        input.threadModel?.model ?? null,
+        input.threadModel?.thinking ?? null,
+      ),
     joinStatement(db, input.threadId, input.ownerUserId, input.now),
   ]);
 };
@@ -306,10 +325,29 @@ export const updateSpaceRow = async (
     readonly color?: ThreadColor;
     /** Present to change sharing: the workspace, or undefined for private. */
     readonly sharing?: { readonly workspaceId: string | undefined };
+    /** Present to change the threads' model; null: the Space's own. */
+    readonly threadModel?: SpaceThreadModel | null;
     readonly now: Date;
   },
 ) => {
   const statements: D1PreparedStatement[] = [];
+  if (input.threadModel !== undefined)
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO space (thread_id, created_at, thread_model, thread_thinking)
+           VALUES (?1, ?2, ?3, ?4)
+           ON CONFLICT (thread_id) DO UPDATE SET
+             thread_model = excluded.thread_model,
+             thread_thinking = excluded.thread_thinking`,
+        )
+        .bind(
+          input.threadId,
+          input.now.getTime(),
+          input.threadModel?.model ?? null,
+          input.threadModel?.thinking ?? null,
+        ),
+    );
   if (input.name !== undefined || input.color !== undefined)
     statements.push(
       db

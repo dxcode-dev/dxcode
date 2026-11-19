@@ -49,6 +49,31 @@ const write = (threadId: string, body: unknown, who = principal) =>
     bindings,
   );
 
+/** One of a Thread's boxes besides its composer, as `?slot=` names it. */
+const box = (threadId: string, slot: string) => ({
+  read: async () => {
+    const response = await app().request(
+      `/threads/${threadId}/draft?slot=${encodeURIComponent(slot)}`,
+      {},
+      bindings,
+    );
+    return {
+      status: response.status,
+      text: (await response.json<{ data: { text?: string } }>()).data.text,
+    };
+  },
+  write: (text: string) =>
+    app().request(
+      `/threads/${threadId}/draft?slot=${encodeURIComponent(slot)}`,
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ text }),
+      },
+      bindings,
+    ),
+});
+
 const rows = (threadId: string) =>
   env.DB.prepare(
     `SELECT COUNT(*) AS count FROM thread_draft WHERE thread_id = ?`,
@@ -105,5 +130,53 @@ describe("Thread draft", () => {
       expect((await write(thread.data.id, bad)).status).toBe(400);
     expect((await read("thr_not-a-thread")).status).toBe(400);
     expect(await rows(thread.data.id)).toBe(0);
+  });
+
+  it("keeps each of a Thread's boxes apart from its composer", async () => {
+    const project = await createProjectViaApi("Draft");
+    const thread = await createThreadViaApi(project.data.id);
+    const id = thread.data.id;
+    const comment = box(id, "post-comment:post-1");
+    const artifactComment = box(id, "artifact-comment:art_1");
+
+    await write(id, { text: "composer" });
+    expect((await comment.write("a")).status).toBe(200);
+    expect((await artifactComment.write("b")).status).toBe(200);
+    expect(await read(id)).toEqual({ status: 200, text: "composer" });
+    expect(await comment.read()).toEqual({ status: 200, text: "a" });
+    expect(await artifactComment.read()).toEqual({ status: 200, text: "b" });
+    expect(await box(id, "post-comment:post-2").read()).toEqual({
+      status: 200,
+      text: "",
+    });
+
+    // Posting the comment clears only its box.
+    await comment.write("");
+    expect(await comment.read()).toEqual({ status: 200, text: "" });
+    expect(await read(id)).toEqual({ status: 200, text: "composer" });
+
+    for (const bad of ["", "other:1", "post-comment:", "post-comment:a/b"])
+      expect((await box(id, bad).read()).status).toBe(400);
+  });
+
+  it("keeps a person's newest boxes in a Thread when they write too many", async () => {
+    const project = await createProjectViaApi("Draft");
+    const thread = await createThreadViaApi(project.data.id);
+    const id = thread.data.id;
+    for (let index = 0; index <= 50; index += 1)
+      expect(
+        (await box(id, `post-comment:post-${index}`).write(`c${index}`)).status,
+      ).toBe(200);
+    const kept = await env.DB.prepare(
+      `SELECT COUNT(*) AS count FROM thread_slot_draft WHERE thread_id = ?`,
+    )
+      .bind(id)
+      .first<{ count: number }>();
+    expect(kept?.count).toBe(50);
+    // The box just written is always kept.
+    expect(await box(id, "post-comment:post-50").read()).toEqual({
+      status: 200,
+      text: "c50",
+    });
   });
 });

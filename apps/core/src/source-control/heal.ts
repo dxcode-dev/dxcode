@@ -1,5 +1,8 @@
 import { SourceControlAccessDenied } from "@dx/domain";
-import { readLiveGrantAuthority } from "./authority.js";
+import {
+  grantReachesRepositorySql,
+  readLiveGrantAuthority,
+} from "./authority.js";
 
 /**
  * The member's own connection that can reach a workspace Project's repository:
@@ -18,7 +21,7 @@ export const memberSourceGrant = async (
   input.provider === "github"
     ? db
         .prepare(`
-          SELECT grant_row.id
+          SELECT grant_row.id, grant_row.repository_scope
             FROM github_owner_grant AS grant_row
             JOIN github_installation AS installation
               ON installation.installation_id = grant_row.installation_id
@@ -28,17 +31,21 @@ export const memberSourceGrant = async (
            WHERE grant_row.owner_scope = 'personal' AND grant_row.owner_id = ?
              AND grant_row.status = 'active' AND installation.status = 'active'
              AND entitlement.entitled = 1
+             AND ${grantReachesRepositorySql()}
            ORDER BY grant_row.id = ? DESC, grant_row.created_at, grant_row.id
            LIMIT 1
         `)
         .bind(input.repositoryId, input.userId, input.preferredGrantId ?? "")
-        .first<{ id: string }>()
+        .first<{
+          id: string;
+          repository_scope?: "installation" | "selected";
+        }>()
     : db
         .prepare(
           "SELECT id FROM bitbucket_connection WHERE user_id = ? AND status = 'active' LIMIT 1",
         )
         .bind(input.userId)
-        .first<{ id: string }>();
+        .first<{ id: string; repository_scope?: undefined }>();
 
 interface LiveSourceGrant {
   readonly grantId: string;

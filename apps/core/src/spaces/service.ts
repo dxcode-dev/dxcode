@@ -77,6 +77,13 @@ export const spaceData = async (
     lifecycleState: row.lifecycle_state,
     statusLine: row.status_line,
     waitingOnInput: row.status_line !== null && row.waiting_on_input === 1,
+    threadModel:
+      row.thread_model === null || row.thread_thinking === null
+        ? null
+        : ({
+            model: row.thread_model,
+            thinking: row.thread_thinking,
+          } as NonNullable<SpaceData["threadModel"]>),
     createdAt: timestamp(row.created_at),
     lastActivityAt: timestamp(row.last_activity_at),
   }));

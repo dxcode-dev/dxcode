@@ -9,6 +9,7 @@ import {
   validateHotkey,
 } from "@tanstack/react-hotkeys";
 import type { MailboxCommand } from "./mailbox-command-event.js";
+import { physicalKeyEvent } from "./physical-key.js";
 
 export type CommandPlatform = ReturnType<typeof detectPlatform>;
 export type CommandContext =
@@ -96,6 +97,12 @@ export interface CommandDefinition<Id extends string = string> {
     Record<CommandPlatform, ReadonlyArray<Hotkey>>
   >;
   readonly sequence?: ReadonlyArray<string>;
+  /**
+   * Also runs from a text field (the composer, a search box, an editor) and
+   * from an open command surface, by a chord with Ctrl, Alt, or Cmd that the
+   * field does not use itself. For commands that make sense from anywhere.
+   */
+  readonly fromTextFields?: true;
   readonly execute: (runtime: CommandRuntime) => void;
 }
 
@@ -139,6 +146,7 @@ const commandDefinitions = Object.freeze([
       windows: ["Alt+Shift+/" as Hotkey],
       linux: ["Alt+Shift+/" as Hotkey],
     },
+    fromTextFields: true,
     execute: (runtime) => runtime.openKeymap(),
   },
   {
@@ -153,6 +161,7 @@ const commandDefinitions = Object.freeze([
       windows: ["Mod+K"],
       linux: ["Mod+K"],
     },
+    fromTextFields: true,
     execute: (runtime) => runtime.openCommandPalette(),
   },
   {
@@ -162,6 +171,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "global",
     defaults: everyPlatform("Mod+Shift+K"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadSearch(),
   },
   {
@@ -180,6 +190,7 @@ const commandDefinitions = Object.freeze([
     category: "Navigation",
     scope: "global",
     defaults: everyPlatform("Alt+Enter"),
+    fromTextFields: true,
     execute: (runtime) => runtime.navigateToNewThread(),
   },
   {
@@ -189,6 +200,7 @@ const commandDefinitions = Object.freeze([
     category: "Navigation",
     scope: "global",
     defaults: everyPlatform("Mod+," as Hotkey),
+    fromTextFields: true,
     execute: (runtime) => runtime.navigateToSettings(),
   },
   {
@@ -198,6 +210,7 @@ const commandDefinitions = Object.freeze([
     category: "Navigation",
     scope: "global",
     defaults: everyPlatform("Mod+Alt+," as Hotkey),
+    fromTextFields: true,
     execute: (runtime) => runtime.navigateToWorkspaceSettings(),
   },
   {
@@ -207,6 +220,7 @@ const commandDefinitions = Object.freeze([
     category: "Navigation",
     scope: "global",
     defaults: everyPlatform("Mod+Shift+C"),
+    fromTextFields: true,
     execute: (runtime) => runtime.copyCurrentUrl(),
   },
   {
@@ -307,6 +321,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Mod+U"),
+    fromTextFields: true,
     execute: (runtime) => runtime.addThreadImages(),
   },
   {
@@ -316,6 +331,7 @@ const commandDefinitions = Object.freeze([
     category: "Navigation",
     scope: "global",
     defaults: everyPlatform("Mod+Alt+A"),
+    fromTextFields: true,
     execute: (runtime) => runtime.navigateToAppearanceSettings(),
   },
   {
@@ -325,6 +341,7 @@ const commandDefinitions = Object.freeze([
     category: "Navigation",
     scope: "global",
     defaults: everyPlatform("Mod+Alt+K"),
+    fromTextFields: true,
     execute: (runtime) => runtime.navigateToKeyboardShortcuts(),
   },
   {
@@ -334,6 +351,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+A"),
+    fromTextFields: true,
     execute: (runtime) => runtime.focusThreadComposer(),
   },
   {
@@ -379,6 +397,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+F"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadView("files"),
   },
   {
@@ -388,6 +407,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+G"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadView("changes"),
   },
   {
@@ -397,6 +417,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+P"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadView("portal"),
   },
   {
@@ -406,6 +427,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+T"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadView("terminal"),
   },
   {
@@ -415,6 +437,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+X"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadView("desktop"),
   },
   {
@@ -424,6 +447,7 @@ const commandDefinitions = Object.freeze([
     category: "Threads",
     scope: "thread",
     defaults: everyPlatform("Control+Shift+D"),
+    fromTextFields: true,
     execute: (runtime) => runtime.openThreadView("artifacts"),
   },
   {
@@ -1196,7 +1220,7 @@ export const createCommandRegistry = <Id extends string = CommandId>(
         completeRecording({ kind: "clear" });
       return;
     }
-    const hotkey = normalizeHotkeyFromEvent(event, platform);
+    const hotkey = normalizeHotkeyFromEvent(physicalKeyEvent(event), platform);
     if (!hasNonModifierKey(hotkey, platform)) return;
     const definition = definitionFor(session.commandId);
     const parsed = parseHotkey(hotkey, platform);

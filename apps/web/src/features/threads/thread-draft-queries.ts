@@ -1,51 +1,89 @@
-import type { ThreadId, UserId } from "@dx/domain";
+import type { ThreadDraftSlot, WorkspaceDraftSlot } from "@dx/api";
+import type { ThreadId, UserId, WorkspaceId } from "@dx/domain";
 import {
   type QueryClient,
   QueryObserver,
   queryOptions,
   useQueryClient,
 } from "@tanstack/react-query";
-import { getThreadDraft, putThreadDraft } from "../../shared/api/client.js";
+import { getComposerDraft, putComposerDraft } from "../../shared/api/client.js";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { PresentationValue } from "./use-thread-presentation.js";
 
-/** How long after the last keystroke a Thread's draft is written to Core. */
+/** How long after the last keystroke a draft is written to Core. */
 export const THREAD_DRAFT_SAVE_DELAY_MS = 500;
 
+/**
+ * Which composer a draft belongs to: a Thread's own (a Space's included), a
+ * box inside a Thread the slot names (a post's comments, an artifact's new
+ * comment or a reply), or New Thread and New Space in a workspace, or
+ * `personal` outside any.
+ */
+export type DraftAddress =
+  | { readonly threadId: ThreadId; readonly slot?: ThreadDraftSlot }
+  | {
+      readonly workspace: WorkspaceId | "personal";
+      readonly slot: WorkspaceDraftSlot;
+    };
+
+const addressKey = (address: DraftAddress) =>
+  "threadId" in address
+    ? address.slot === undefined
+      ? address.threadId
+      : `${address.threadId}?${address.slot}`
+    : `workspace:${address.workspace}:${address.slot}`;
+
 export const threadDraftKeys = {
-  draft: (userId: UserId, threadId: ThreadId) =>
-    ["thread-draft", userId, threadId] as const,
+  draft: (userId: UserId, address: ThreadId | DraftAddress) =>
+    [
+      "thread-draft",
+      userId,
+      typeof address === "string" ? address : addressKey(address),
+    ] as const,
 };
 
+const asAddress = (address: ThreadId | DraftAddress): DraftAddress =>
+  typeof address === "string" ? { threadId: address } : address;
+
+const loadDraft = (address: DraftAddress, signal?: AbortSignal) =>
+  getComposerDraft(address, signal);
+
+const storeDraft = (address: DraftAddress, text: string, keepalive: boolean) =>
+  putComposerDraft(address, text, keepalive);
+
 interface UnsavedDraft {
-  readonly threadId: ThreadId;
+  readonly address: DraftAddress;
   readonly text: string;
   timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 /**
- * Edits Core does not have yet, by person and Thread. A fetch answers with
+ * Edits Core does not have yet, by person and composer. A fetch answers with
  * them rather than with the older text it read, so a refetch never undoes
  * typing.
  */
 const unsaved = new Map<string, UnsavedDraft>();
-const unsavedKey = (userId: UserId, threadId: ThreadId) =>
-  `${userId}:${threadId}`;
+const unsavedKey = (userId: UserId, address: DraftAddress) =>
+  `${userId}:${addressKey(address)}`;
 
 /**
- * The person's unsent message in one Thread's composer, kept in Core so each
- * of their devices shows it. Read again whenever a composer opens it or the
- * window regains focus; the last write wins.
+ * The person's unsent text in one composer, kept in Core so each of their
+ * devices shows it. Read again whenever a composer opens it or the window
+ * regains focus; the last write wins.
  */
-export const threadDraftQueryOptions = (userId: UserId, threadId: ThreadId) =>
-  queryOptions({
-    queryKey: threadDraftKeys.draft(userId, threadId),
+export const threadDraftQueryOptions = (
+  userId: UserId,
+  target: ThreadId | DraftAddress,
+) => {
+  const address = asAddress(target);
+  return queryOptions({
+    queryKey: threadDraftKeys.draft(userId, address),
     queryFn: async ({ signal }) => {
-      const key = unsavedKey(userId, threadId);
+      const key = unsavedKey(userId, address);
       const before = writes.get(key);
       const startedBefore = before?.started ?? 0;
       const writingBefore = (before?.inFlight ?? 0) > 0;
-      const saved = await getThreadDraft(threadId, signal);
+      const saved = await loadDraft(address, signal);
       const pending = unsaved.get(key);
       if (pending !== undefined) return pending.text;
       // A save crossed this read, so Core may have read before the save
@@ -60,8 +98,9 @@ export const threadDraftQueryOptions = (userId: UserId, threadId: ThreadId) =>
     refetchOnWindowFocus: true,
     retry: 1,
   });
+};
 
-/** The saves this page started for one person and Thread. */
+/** The saves this page started for one person and composer. */
 interface DraftWrites {
   /** How many started; a read that sees this change crossed a save. */
   started: number;
@@ -86,7 +125,7 @@ const save = (key: string, draft: UnsavedDraft, keepalive = false) => {
   current.inFlight += 1;
   current.text = draft.text;
   const put = () =>
-    putThreadDraft(draft.threadId, draft.text, { keepalive })
+    storeDraft(draft.address, draft.text, keepalive)
       .then(
         () => {
           if (unsaved.get(key) === draft) unsaved.delete(key);
@@ -122,24 +161,26 @@ if (typeof document !== "undefined") {
 }
 
 /**
- * Sets the Thread's draft and schedules the write. `""`, as when the message
- * is sent, removes it from Core as soon as earlier saves finish. A load still
- * in flight is cancelled so it cannot replace what the person typed.
+ * Sets the composer's draft and schedules the write. `""`, as when the
+ * message is sent, removes it from Core as soon as earlier saves finish. A
+ * load still in flight is cancelled so it cannot replace what the person
+ * typed.
  */
 export const setThreadDraft = (
   client: QueryClient,
   userId: UserId,
-  threadId: ThreadId,
+  target: ThreadId | DraftAddress,
   text: string,
 ) => {
-  const queryKey = threadDraftKeys.draft(userId, threadId);
-  const key = unsavedKey(userId, threadId);
+  const address = asAddress(target);
+  const queryKey = threadDraftKeys.draft(userId, address);
+  const key = unsavedKey(userId, address);
   const pending = unsaved.get(key);
   if (pending === undefined && client.getQueryData(queryKey) === text) return;
   if (pending?.timer !== undefined) clearTimeout(pending.timer);
   void client.cancelQueries({ queryKey, exact: true });
   client.setQueryData(queryKey, text);
-  const draft: UnsavedDraft = { threadId, text, timer: undefined };
+  const draft: UnsavedDraft = { address, text, timer: undefined };
   unsaved.set(key, draft);
   if (text === "") {
     void save(key, draft);
@@ -149,6 +190,16 @@ export const setThreadDraft = (
     draft.timer = undefined;
     void save(key, draft);
   }, THREAD_DRAFT_SAVE_DELAY_MS);
+};
+
+/** Writes every unsaved draft now, as a composer closes. */
+export const flushUnsavedThreadDrafts = () => {
+  for (const [key, draft] of unsaved) {
+    if (draft.timer === undefined) continue;
+    clearTimeout(draft.timer);
+    draft.timer = undefined;
+    void save(key, draft);
+  }
 };
 
 /** Drops unsaved drafts without writing them, when the person signs out. */
@@ -165,30 +216,31 @@ const values = new WeakMap<
 >();
 
 /**
- * The Thread's draft as a value a composer subscribes to. Subscribing loads
+ * The composer's draft as a value a composer subscribes to. Subscribing loads
  * it from Core; an owner can pass it down without re-rendering on each edit.
  */
 export const threadDraftValue = (
   client: QueryClient,
   userId: UserId,
-  threadId: ThreadId,
+  target: ThreadId | DraftAddress,
 ): PresentationValue<string> => {
+  const address = asAddress(target);
   let byThread = values.get(client);
   if (byThread === undefined) {
     byThread = new Map();
     values.set(client, byThread);
   }
-  const key = unsavedKey(userId, threadId);
+  const key = unsavedKey(userId, address);
   const existing = byThread.get(key);
   if (existing !== undefined) return existing;
-  const queryKey = threadDraftKeys.draft(userId, threadId);
+  const queryKey = threadDraftKeys.draft(userId, address);
   const value: PresentationValue<string> = {
     get: () => client.getQueryData<string>(queryKey) ?? "",
-    set: (text) => setThreadDraft(client, userId, threadId, text),
+    set: (text) => setThreadDraft(client, userId, address, text),
     subscribe: (listener) =>
       new QueryObserver(
         client,
-        threadDraftQueryOptions(userId, threadId),
+        threadDraftQueryOptions(userId, address),
       ).subscribe(() => listener()),
   };
   byThread.set(key, value);
@@ -196,8 +248,8 @@ export const threadDraftValue = (
 };
 
 /** The signed-in person's draft for the Thread, without subscribing to it. */
-export function useThreadDraftValue(threadId: ThreadId) {
+export function useThreadDraftValue(target: ThreadId | DraftAddress) {
   const client = useQueryClient();
   const { identity } = useAuthenticatedIdentity();
-  return threadDraftValue(client, identity.id, threadId);
+  return threadDraftValue(client, identity.id, target);
 }

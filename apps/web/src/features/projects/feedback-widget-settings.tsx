@@ -49,9 +49,12 @@ const copy = (text: string, label: string) => {
 export function FeedbackWidgetProjectSettings({
   projectId,
   userId,
+  readOnly,
 }: {
   readonly projectId: ProjectId;
   readonly userId: UserId;
+  /** Shows the widget's state without Enable, Turn Off, or origin changes. */
+  readonly readOnly: boolean;
 }) {
   const widget = useQuery(feedbackWidgetQueryOptions(userId, projectId));
   return (
@@ -72,6 +75,7 @@ export function FeedbackWidgetProjectSettings({
           projectId={projectId}
           userId={userId}
           data={widget.data}
+          readOnly={readOnly}
         />
       )}
     </div>
@@ -82,10 +86,12 @@ function FeedbackWidgetCards({
   projectId,
   userId,
   data,
+  readOnly,
 }: {
   readonly projectId: ProjectId;
   readonly userId: UserId;
   readonly data: FeedbackWidgetData;
+  readonly readOnly: boolean;
 }) {
   const queryClient = useQueryClient();
   const mutation = useMutation(
@@ -106,14 +112,19 @@ function FeedbackWidgetCards({
     return (
       <SettingsCard
         title="How It Works"
+        description={
+          readOnly ? "The widget is off for this project." : undefined
+        }
         actions={
-          <Button
-            size="xs"
-            disabled={mutation.isPending}
-            onClick={() => change({ kind: "enable" })}
-          >
-            {mutation.isPending ? "Enabling…" : "Enable"}
-          </Button>
+          readOnly ? undefined : (
+            <Button
+              size="xs"
+              disabled={mutation.isPending}
+              onClick={() => change({ kind: "enable" })}
+            >
+              {mutation.isPending ? "Enabling…" : "Enable"}
+            </Button>
+          )
         }
       >
         <ol className="project-feedback-widget-steps">
@@ -149,28 +160,31 @@ function FeedbackWidgetCards({
       <AllowedOrigins
         origins={data.allowedOrigins}
         pending={mutation.isPending}
+        readOnly={readOnly}
         onAdd={(origin, onSuccess) =>
           change({ kind: "add-origin", origin }, onSuccess)
         }
         onRemove={(origin) => change({ kind: "remove-origin", origin })}
       />
-      <SettingsCard>
-        <SettingsRow
-          title="Turn Off"
-          description="Stop the script on every site and sign everyone out of it. Turning it on again gives a new script tag."
-          control={
-            <Button
-              size="xs"
-              variant="destructive"
-              disabled={mutation.isPending}
-              onClick={() => setConfirmOff(true)}
-            >
-              Turn Off
-            </Button>
-          }
-        />
-        {errorLine}
-      </SettingsCard>
+      {readOnly ? null : (
+        <SettingsCard>
+          <SettingsRow
+            title="Turn Off"
+            description="Stop the script on every site and sign everyone out of it. Turning it on again gives a new script tag."
+            control={
+              <Button
+                size="xs"
+                variant="destructive"
+                disabled={mutation.isPending}
+                onClick={() => setConfirmOff(true)}
+              >
+                Turn Off
+              </Button>
+            }
+          />
+          {errorLine}
+        </SettingsCard>
+      )}
       <ConfirmDialog
         open={confirmOff}
         onOpenChange={setConfirmOff}
@@ -190,11 +204,13 @@ function FeedbackWidgetCards({
 function AllowedOrigins({
   origins,
   pending,
+  readOnly,
   onAdd,
   onRemove,
 }: {
   readonly origins: ReadonlyArray<string>;
   readonly pending: boolean;
+  readonly readOnly: boolean;
   readonly onAdd: (origin: string, onSuccess: () => void) => void;
   readonly onRemove: (origin: string) => void;
 }) {
@@ -232,48 +248,52 @@ function AllowedOrigins({
                 <ExternalLink aria-hidden="true" />
                 Open with ?dx
               </a>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`Remove ${origin}`}
-                disabled={pending}
-                onClick={() => onRemove(origin)}
-              >
-                <X />
-              </Button>
+              {readOnly ? null : (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Remove ${origin}`}
+                  disabled={pending}
+                  onClick={() => onRemove(origin)}
+                >
+                  <X />
+                </Button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <form
-        className="project-feedback-widget-origin-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          add();
-        }}
-      >
-        <Input
-          aria-label="Origin"
-          aria-invalid={invalid || undefined}
-          placeholder="https://staging.example.com"
-          value={text}
-          disabled={pending || full}
-          onChange={(event) => {
-            setText(event.target.value);
-            setInvalid(false);
+      {readOnly ? null : (
+        <form
+          className="project-feedback-widget-origin-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            add();
           }}
-        />
-        <Button
-          type="submit"
-          size="xs"
-          variant="outline"
-          aria-label="Add origin"
-          disabled={pending || full || text.trim() === ""}
         >
-          <Plus aria-hidden="true" />
-          Add
-        </Button>
-      </form>
+          <Input
+            aria-label="Origin"
+            aria-invalid={invalid || undefined}
+            placeholder="https://staging.example.com"
+            value={text}
+            disabled={pending || full}
+            onChange={(event) => {
+              setText(event.target.value);
+              setInvalid(false);
+            }}
+          />
+          <Button
+            type="submit"
+            size="xs"
+            variant="outline"
+            aria-label="Add origin"
+            disabled={pending || full || text.trim() === ""}
+          >
+            <Plus aria-hidden="true" />
+            Add
+          </Button>
+        </form>
+      )}
       {invalid ? (
         <p className="project-feedback-widget-error" role="alert">
           Enter an https address, or http on localhost, 127.0.0.1, or [::1].

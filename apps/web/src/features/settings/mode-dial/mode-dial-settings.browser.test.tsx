@@ -87,9 +87,9 @@ describe("models settings", () => {
             />,
           ),
         );
-        const select =
-          container.querySelector<HTMLSelectElement>("#models-medium");
-        assert.exists(select);
+        const trigger =
+          container.querySelector<HTMLButtonElement>("#models-medium");
+        assert.exists(trigger);
         const button = (text: string) =>
           Array.from(container.querySelectorAll("button")).find(
             (element) => element.textContent?.trim() === text,
@@ -98,26 +98,36 @@ describe("models settings", () => {
           container.querySelector(".settings-form-actions > span")?.textContent;
         expect(status()).toBe("In sync");
         expect(button("Save")?.disabled).toBe(true);
-        const choose = async (value: string) => {
-          await React.act(() => {
-            select.value = value;
-            select.dispatchEvent(new Event("change", { bubbles: true }));
-          });
+        // Opens dx's model picker and picks the row that starts with `name`.
+        const choose = async (name: string) => {
+          await React.act(() => trigger.click());
+          await vi.waitFor(() =>
+            expect(
+              document.querySelectorAll('[role="option"]').length,
+            ).toBeGreaterThan(0),
+          );
+          const option = Array.from(
+            document.querySelectorAll<HTMLElement>('[role="option"]'),
+          ).find((element) => element.textContent?.startsWith(name));
+          assert.exists(option);
+          await React.act(() => option.click());
         };
-        await choose("openai/b");
+        const picked = () => trigger.getAttribute("aria-label");
+        await choose("B");
+        expect(picked()).toMatch(/^Recommended model: B\b/);
         expect(onDirtyChange).toHaveBeenLastCalledWith(true);
         expect(status()).toBe("Unsaved changes");
         expect(button("Save")?.disabled).toBe(false);
         // Auto is the reset: back on Auto there is nothing to save.
-        await choose("auto");
-        expect(select.value).toBe("auto");
+        await choose("Auto");
+        expect(picked()).toMatch(/^Recommended model: Auto,/);
         expect(onDirtyChange).toHaveBeenLastCalledWith(false);
         expect(status()).toBe("In sync");
-        await choose("openai/b");
+        await choose("B");
         await React.act(() => button("Discard")?.click());
         expect(onDirtyChange).toHaveBeenLastCalledWith(false);
         // An unpicked slot shows Auto, not the model Auto resolves to.
-        expect(select.value).toBe("auto");
+        expect(picked()).toMatch(/^Recommended model: Auto,/);
       } finally {
         await React.act(() => root.unmount());
         container.remove();
@@ -167,10 +177,11 @@ describe("models settings", () => {
       );
       await React.act(() => show?.click());
       for (const slot of ["medium", "low", "high", "ultra"]) {
-        const auto = container.querySelector<HTMLOptionElement>(
-          `#models-${slot} option[value="auto"]`,
+        const trigger = container.querySelector(`#models-${slot}`);
+        expect(trigger?.getAttribute("aria-label"), slot).toMatch(
+          /: Auto, GLM 5\.3 Flash/,
         );
-        expect(auto?.textContent, slot).toBe("Auto · GLM 5.3 Flash");
+        expect(trigger?.textContent, slot).toContain("GLM 5.3 Flash");
       }
       expect(container.textContent).not.toContain("cloudflare/");
       expect(container.textContent).not.toContain("glm-5.3-flash");

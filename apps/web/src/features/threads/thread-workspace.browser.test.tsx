@@ -896,7 +896,7 @@ describe("ThreadSession panes", () => {
     );
 
     expect(openModelRouting).toHaveBeenCalledExactlyOnceWith(
-      "/settings/model-routing",
+      "/settings/models",
     );
     expect(composer?.value).toBe("Keep this draft");
     await React.act(() => root.unmount());

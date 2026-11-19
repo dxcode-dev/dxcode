@@ -121,8 +121,8 @@ export const resolveAgentMailbox = async (threadId: string) => {
 };
 
 /**
- * The workspace's AGENTS.md for this submission, read from current settings
- * so an admin's change reaches the next message in every member's Thread.
+ * The workspace's AGENTS.md as the Thread started with it: an admin's change
+ * reaches new Threads only, so open Threads keep their prompt cache.
  * Async, so a missing binding rejects with the other reads instead of
  * throwing while they are already in flight.
  */

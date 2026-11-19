@@ -10,8 +10,6 @@ const DRAFT_WARNINGS: Record<
 > = {
   "too-large":
     "This prompt is over the 64 KiB draft limit. It remains open but is not saved.",
-  "storage-unavailable":
-    "This draft could not be saved in this browser. It remains available while this composer stays open.",
 };
 
 /**

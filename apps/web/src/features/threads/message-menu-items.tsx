@@ -1,5 +1,6 @@
 import { ClipboardType, Copy, Link2, Pencil } from "lucide-react";
 import * as React from "react";
+import { getBrowserCommandRegistry } from "../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { MenuItem } from "../../shared/ui/menu.js";
 import type { MessageMenuRow } from "./message-actions.js";
@@ -20,9 +21,7 @@ const timeFormat = new Intl.DateTimeFormat(undefined, {
 });
 
 /** Ctrl+C, or ⌘C on Apple devices, as the keymap shows it. */
-const copyKeycaps = /Mac|iPhone|iPad/.test(navigator.userAgent)
-  ? ["⌘", "C"]
-  : ["Ctrl", "C"];
+const copyKeycaps = getBrowserCommandRegistry().getDisplayedKeycaps("Mod+C");
 
 /**
  * A message's menu items. A prompt copies as written; a reply copies as

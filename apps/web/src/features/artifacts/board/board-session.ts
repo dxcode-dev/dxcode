@@ -29,6 +29,7 @@ import type {
   BoardLiveEvent,
 } from "../../../shared/realtime/board-live.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
+import { type CursorPerson, collaboratorColor } from "../artifact-people.js";
 import type { ArtifactScope } from "../artifact-scope.js";
 import {
   type ArtifactDocument,
@@ -113,23 +114,6 @@ const versionSum = (elements: ReadonlyArray<{ readonly version: number }>) => {
   return sum + elements.length * 1e-6;
 };
 
-const COLORS = [
-  { background: "#ffc9c9", stroke: "#e03131" },
-  { background: "#b2f2bb", stroke: "#2f9e44" },
-  { background: "#a5d8ff", stroke: "#1971c2" },
-  { background: "#ffec99", stroke: "#f08c00" },
-  { background: "#d0bfff", stroke: "#7048e8" },
-  { background: "#99e9f2", stroke: "#0c8599" },
-  { background: "#fcc2d7", stroke: "#c2255c" },
-];
-
-/** A person's color, the same on every screen. */
-export const collaboratorColor = (userId: string) => {
-  let hash = 0;
-  for (const char of userId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return COLORS[hash % COLORS.length] as (typeof COLORS)[number];
-};
-
 const isElement = (value: unknown): value is ExcalidrawElement =>
   typeof value === "object" &&
   value !== null &&
@@ -193,9 +177,7 @@ export class BoardSession {
     Collaborator & { readonly userId: string; readonly seenAt: number }
   >();
   #lapseTimer: ReturnType<typeof setInterval> | undefined;
-  #names: (userId: string) => { name: string; avatarUrl?: string } = () => ({
-    name: "Someone",
-  });
+  #names: (userId: string) => CursorPerson = () => ({ name: "Someone" });
   #selectedKey = "";
   /**
    * Whether the person has pressed a key or a pointer on the board. Until
@@ -289,8 +271,24 @@ export class BoardSession {
   };
 
   /** Names and pictures for collaborators' cursors. */
-  setNames(names: (userId: string) => { name: string; avatarUrl?: string }) {
+  setNames(names: (userId: string) => CursorPerson) {
     this.#names = names;
+  }
+
+  /** Names changed (the members list answered): relabel every cursor. */
+  relabel() {
+    if (this.#collaborators.size === 0) return;
+    for (const [id, { avatarUrl: _, ...collaborator }] of this.#collaborators) {
+      const person = this.#names(collaborator.userId);
+      this.#collaborators.set(id, {
+        ...collaborator,
+        username: person.name,
+        ...(person.avatarUrl === undefined
+          ? {}
+          : { avatarUrl: person.avatarUrl }),
+      });
+    }
+    this.#showCollaborators();
   }
 
   // ---------------------------------------------------------- the editor
@@ -489,15 +487,7 @@ export class BoardSession {
       });
     const elements = (payload.elements ?? []).filter(isElement);
     if (elements.length > 0) this.#merge(elements);
-    editor.updateScene({
-      collaborators: new Map(
-        [...this.#collaborators].map(([id, collaborator]) => [
-          id as SocketId,
-          collaborator,
-        ]),
-      ),
-    });
-    this.#publishPresence();
+    this.#showCollaborators();
   };
 
   /** Someone else's elements, merged in; not this person's to save. */
@@ -543,6 +533,11 @@ export class BoardSession {
         changed = true;
       }
     if (!changed) return;
+    this.#showCollaborators();
+  };
+
+  /** Draws everyone's cursors and tells the header who is here. */
+  #showCollaborators() {
     this.#editor?.updateScene({
       collaborators: new Map(
         [...this.#collaborators].map(([id, collaborator]) => [
@@ -552,7 +547,7 @@ export class BoardSession {
       ),
     });
     this.#publishPresence();
-  };
+  }
 
   #publishPresence() {
     const present = [...this.#collaborators].map(([clientId, { userId }]) => ({

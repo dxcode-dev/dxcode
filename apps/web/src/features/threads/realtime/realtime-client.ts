@@ -134,6 +134,8 @@ export class RealtimeClient {
   readonly #slowWakeTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   readonly #workspaceStatusListeners = new Map<ThreadId, Set<() => void>>();
   readonly #presentUsers = new Map<PresenceScope, ReadonlyArray<UserId>>();
+  /** Each scope's open connections (client IDs), from the same snapshots. */
+  readonly #presentClients = new Map<PresenceScope, ReadonlySet<string>>();
   /** Live drawing listeners, by `<scope>\n<artifactId>`. */
   readonly #boardListeners = new Map<
     string,
@@ -262,6 +264,11 @@ export class RealtimeClient {
   /** People with this Thread open right now, one entry per user. */
   presentUsers(threadId: PresenceScope): ReadonlyArray<UserId> | undefined {
     return this.#presentUsers.get(threadId);
+  }
+
+  /** The connections (client IDs) with this Thread open right now. */
+  presentClients(threadId: PresenceScope): ReadonlySet<string> | undefined {
+    return this.#presentClients.get(threadId);
   }
 
   observeTyping(threadId: ThreadId, listener: () => void) {
@@ -595,6 +602,10 @@ export class RealtimeClient {
         ...new Set(event.participants.map(({ userId }) => userId)),
       ];
       this.#presentUsers.set(threadId, present);
+      this.#presentClients.set(
+        threadId,
+        new Set(event.participants.map(({ clientId }) => clientId)),
+      );
       // Someone new opened a shared Thread: refresh it for their name.
       const thread = scopeThread(threadId);
       if (
@@ -628,6 +639,7 @@ export class RealtimeClient {
     if (this.#presentUsers.size > 0) {
       const present = [...this.#presentUsers.keys()];
       this.#presentUsers.clear();
+      this.#presentClients.clear();
       for (const threadId of present)
         this.#presenceListeners.get(threadId)?.forEach((listener) => {
           listener();

@@ -3112,6 +3112,17 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
         ? "This stage serves Portals; deploy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with (turning Portals off needs a destroy)."
         : "This stage serves Portals; destroy it with the DX_DEPLOYMENT_PORTAL_DOMAIN and DX_DEPLOYMENT_PORTAL_ZONE_ID it was deployed with.",
     );
+  // A deploy without a mail domain would delete a stage's Mailbox setup:
+  // only when the operator turned mail off on purpose.
+  if (
+    operation === "deploy" &&
+    selection.mail === undefined &&
+    selection.mailRemoval !== true &&
+    deletionIds.some((id) => mailResourceTypes.has(id))
+  )
+    throw new Error(
+      "This stage runs the dx Mailbox; deploy it with its mail domain, or turn mail off on purpose: pnpm dx:deploy -- --mail for a self-host, or DX_DEPLOYMENT_MAIL_OFF=1.",
+    );
   const onlyRetiredRandomDeletions = deletionIds.every(
     (id) =>
       retiredRandomResourceIds.has(id) ||
@@ -3238,7 +3249,10 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           "DX_ATTACHMENT_R2_CREDENTIALS",
           "DX_INTEGRATION_GITHUB_APP",
           "DX_INTEGRATION_BITBUCKET_OAUTH",
-          // The runner forwards validated Portal settings itself.
+          // The runner forwards validated Portal and mail settings itself.
+          "DX_DEPLOYMENT_MAIL_DOMAIN",
+          "DX_DEPLOYMENT_MAIL_OFF",
+          "DX_DEPLOYMENT_MAIL_ZONE_ID",
           "DX_DEPLOYMENT_PORTAL_DOMAIN",
           "DX_DEPLOYMENT_PORTAL_WORKER_NAME",
           "DX_DEPLOYMENT_PORTAL_ZONE_ID",

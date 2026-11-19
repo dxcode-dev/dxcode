@@ -8,15 +8,14 @@ import {
   FolderGit2,
   Gauge,
   Info,
-  Sparkles,
 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { threadSelectionSummary } from "../../shared/thread-selection-summary.js";
-import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { MenuItem, MenuSeparator } from "../../shared/ui/menu.js";
 import { OrbIcon } from "../../shared/ui/orb-icon.js";
 import { threadOrbMemoryQueryOptions } from "./orb-memory/orb-memory-queries.js";
+import { useThreadModelName } from "./thread-model-name.js";
 import { threadArchiveInFlight, threadKeys } from "./thread-queries.js";
 import { formatUsd } from "./thread-usage/thread-usage-format.js";
 import { threadUsageQueryOptions } from "./thread-usage/thread-usage-queries.js";
@@ -149,23 +148,37 @@ function PluginAgentMenuItem({
   );
 }
 
-/** What the Thread runs on: its mode, or Claude Code or a model with its effort. */
+/**
+ * What the Thread runs on: its mode, or its model under the maker's logo
+ * and its effort, named as the model picker names them.
+ */
 function SelectionMenuItem({ thread }: { readonly thread: ThreadDetailData }) {
-  const selection = threadSelectionSummary(
-    thread.agentInitialization.selection,
-  );
-  return (
-    <MenuItem className="thread-menu-detail-item" title={selection.title}>
-      {selection.kind === "claude-code" ? (
-        <ClaudeIcon />
-      ) : selection.kind === "mode" ? (
+  const selection = thread.agentInitialization.selection;
+  if (selection.kind === "mode") {
+    const summary = threadSelectionSummary(selection);
+    return (
+      <MenuItem className="thread-menu-detail-item" title={summary.title}>
         <Gauge />
-      ) : (
-        <Sparkles />
-      )}
-      <span className="thread-menu-detail-label">{selection.label}</span>
-      {selection.detail === undefined ? null : (
-        <span className="thread-menu-detail-value">{selection.detail}</span>
+        <span className="thread-menu-detail-label">{summary.label}</span>
+        <span className="thread-menu-detail-value">{summary.detail}</span>
+      </MenuItem>
+    );
+  }
+  return <ModelMenuItem selection={selection} />;
+}
+
+function ModelMenuItem({
+  selection,
+}: {
+  readonly selection: Parameters<typeof useThreadModelName>[0];
+}) {
+  const model = useThreadModelName(selection);
+  return (
+    <MenuItem className="thread-menu-detail-item" title={model.title}>
+      {model.mark}
+      <span className="thread-menu-detail-label">{model.name}</span>
+      {model.effort === undefined ? null : (
+        <span className="thread-menu-detail-value">{model.effort}</span>
       )}
     </MenuItem>
   );

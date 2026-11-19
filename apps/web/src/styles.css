@@ -4452,6 +4452,22 @@
 .settings-row-control {
   min-width: 0;
 }
+/* A row with an icon or drag handle before its copy. */
+.settings-row[data-leading] {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.settings-row-leading {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  align-self: start;
+  min-height: var(--leading-4);
+  color: var(--muted-foreground);
+}
+.settings-row-leading svg {
+  width: var(--icon-sm);
+  height: var(--icon-sm);
+}
 
 .personal-usage-settings
   :where(
@@ -6704,13 +6720,7 @@
 }
 .new-thread-mode {
   position: relative;
-  color: var(--success);
-  background: color-mix(in srgb, var(--success) 15%, transparent);
   cursor: pointer;
-}
-.new-thread-mode[data-claude-code] {
-  color: var(--brand-anthropic-text);
-  background: color-mix(in srgb, var(--brand-anthropic) 16%, transparent);
 }
 .new-thread-mode-label {
   position: absolute;
@@ -6947,12 +6957,13 @@ img.orb-provider-logo {
     max-width: 40%;
   }
   .new-thread-project,
-  .new-thread-mode:has(.new-thread-mode-value) {
+  .new-thread-mode:has(.dx-model-picker-name) {
     flex: 0 1 auto;
     min-width: 0;
   }
   /* The chip leaves the model's effort to the picker. */
-  .new-thread-mode-effort {
+  .new-thread-mode-effort,
+  .new-thread-mode .dx-model-picker-effort {
     display: none;
   }
   .new-thread-mode {
@@ -11921,6 +11932,13 @@ body:has(.dx-app-shell) {
 .project-settings-state {
   padding: var(--space-6);
 }
+.project-settings-read-only {
+  width: 100%;
+  max-width: var(--settings-content-width, 823px);
+  margin: 0 auto var(--space-4);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
 .project-general-card > :where(.settings-row, .project-identity-row) {
   border-bottom: 1px solid var(--divider);
 }
@@ -12618,8 +12636,11 @@ body:has(.dx-app-shell) {
 /* More Actions' detail rows: what the Thread runs on beside its value, as
    in "claude code  Opus 5.5", and who paid its cost, as in "$0.08 ✓ Credits".
    The value elides first. */
-.dx-menu-item > .thread-menu-detail-label {
-  flex: none;
+.dx-menu-item.thread-menu-detail-item > span.thread-menu-detail-label {
+  flex: 0 1 auto;
+}
+.dx-menu-item.thread-menu-detail-item > span.thread-menu-detail-value {
+  flex: 1 1 0;
 }
 .dx-menu-item > .thread-menu-detail-value {
   padding-left: var(--space-3);
@@ -12687,4 +12708,16 @@ body:has(.dx-app-shell) {
 /* A plugin's icon sits where dx's own plugins show their 22 px mark. */
 .first-party-plugin-row > .plugin-bundle-row-icon {
   margin: 0 1px;
+}
+
+/* The title bar's model: its maker's logo before its name. */
+.thread-title-meta.thread-title-model {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.thread-title-model > svg {
+  flex: none;
+  width: var(--icon-sm);
+  height: var(--icon-sm);
 }

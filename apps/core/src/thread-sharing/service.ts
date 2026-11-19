@@ -11,7 +11,7 @@ import { userImageSql } from "../avatars/storage.js";
 import { countMailReadsBeyondSharedScope } from "../mail/store.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { threadUnreadSql } from "../threads/attention-d1.js";
-import { pruneUnreadableThreadDrafts } from "../threads/thread-draft-store.js";
+import { pruneUnreadableDrafts } from "../threads/thread-draft-store.js";
 import {
   CONTRIBUTE_WITHOUT_END,
   sharedThreadAccessSql,
@@ -421,7 +421,7 @@ export const updateThreadSharing = async (
         ),
     );
   // Members who can no longer read the family lose their drafts in it.
-  statements.push(pruneUnreadableThreadDrafts(db));
+  statements.push(...pruneUnreadableDrafts(db));
   await db.batch(statements);
   const sharing = sharingData(
     {

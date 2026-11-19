@@ -14,6 +14,7 @@ import {
   ProjectRepository,
   type ProjectRepositoryIdentity,
   type ProjectSourceAuthority,
+  type ProjectPresentationUpdate,
   type ProjectUpdate,
   projectReaderOf,
 } from "@dx/domain";
@@ -61,6 +62,16 @@ interface ProjectServiceShape {
     | ProjectNotFound
     | ProjectNameConflict
   >;
+  /** The description and icon, which every member who reads it may change. */
+  readonly updatePresentation: (
+    principal: Principal,
+    projectId: ProjectId,
+    revision: number,
+    update: ProjectPresentationUpdate,
+  ) => Effect.Effect<
+    Project,
+    Schema.SchemaError | PersistenceUnavailable | ProjectNotFound
+  >;
   readonly rebindRepository: (
     principal: Principal,
     projectId: ProjectId,
@@ -107,6 +118,15 @@ export class ProjectService extends Context.Service<
             repository.updateOwned(
               projectId,
               principal.userId,
+              revision,
+              update,
+            ),
+        ),
+        updatePresentation: Effect.fn("ProjectService.updatePresentation")(
+          (principal, projectId, revision, update) =>
+            repository.updatePresentation(
+              projectId,
+              projectReaderOf(principal),
               revision,
               update,
             ),

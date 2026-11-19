@@ -432,6 +432,9 @@ const useTerminalConnection = ({
           terminalTheme,
           // A hidden Terminal keeps its size, so its scrollback survives.
           () => activeRef.current,
+          // A Terminal the page restored leaves focus on the page; one the
+          // person opened takes it.
+          !restored,
         ).catch(() => {
           listeners.abort();
           socket.close();

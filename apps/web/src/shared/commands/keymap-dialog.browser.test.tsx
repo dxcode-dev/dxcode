@@ -56,7 +56,8 @@ describe("KeymapDialog", () => {
     const palette = [...document.querySelectorAll(".keymap-entry")].find(
       (row) => row.textContent?.includes("Open command palette"),
     );
-    expect(palette?.textContent).toContain("⌘⇧P");
-    expect(palette?.textContent).not.toContain("⌃O");
+    // A plus between every two keys: ⌘ + ⇧ + P.
+    expect(palette?.textContent).toContain("⌘+⇧+P");
+    expect(palette?.textContent).not.toContain("⌃+O");
   });
 });

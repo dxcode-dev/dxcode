@@ -1,9 +1,15 @@
 import type * as React from "react";
 import { useSyncExternalStore } from "react";
+import { getBrowserCommandRegistry } from "../../shared/commands/command-registry.js";
+import { physicalKeyEvent } from "../../shared/commands/physical-key.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { absoluteThreadUrl } from "../../shared/thread-url.js";
 
 const shortcutSnapshot = () => 0;
+
+/** ⌃I on Apple devices, Ctrl I elsewhere. */
+const insertKeycaps =
+  getBrowserCommandRegistry().getDisplayedKeycaps("Control+I");
 
 /** Control+I on every platform, as the keycaps show. */
 const isInsertShortcut = (event: KeyboardEvent) =>
@@ -14,7 +20,7 @@ const isInsertShortcut = (event: KeyboardEvent) =>
   !event.shiftKey &&
   !event.metaKey &&
   !event.altKey &&
-  event.key.toLowerCase() === "i";
+  physicalKeyEvent(event).key.toLowerCase() === "i";
 
 /**
  * `text` put at the prompt's caret, or over its selection, with a space
@@ -85,7 +91,7 @@ export function InsertCurrentThreadButton({
       disabled={disabled}
       onClick={insert}
     >
-      Insert Current Thread <ShortcutKeycaps keycaps={["⌃", "I"]} />
+      Insert Current Thread <ShortcutKeycaps keycaps={insertKeycaps} />
     </button>
   );
 }

@@ -6,3 +6,9 @@ export declare const mailDomainTradeoffs: (input: {
   readonly domain: string;
   readonly appHostname?: string;
 }) => ReadonlyArray<string>;
+
+export declare const MAIL_PERMISSIONS: ReadonlyArray<{
+  readonly label: string;
+  readonly scope: string;
+}>;
+export declare const MAIL_OAUTH_SCOPES: ReadonlyArray<string>;

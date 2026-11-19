@@ -87,15 +87,24 @@ export function SettingsRow({
   title,
   description,
   badge,
+  leading,
   control,
 }: {
+  /** Before the copy, such as a provider mark or a drag handle. */
+  readonly leading?: ReactNode;
   readonly title: ReactNode;
   readonly description?: ReactNode;
   readonly badge?: ReactNode;
   readonly control?: ReactNode;
 }) {
   return (
-    <div className="settings-row">
+    <div
+      className="settings-row"
+      data-leading={leading === undefined ? undefined : ""}
+    >
+      {leading === undefined ? null : (
+        <div className="settings-row-leading">{leading}</div>
+      )}
       <div className="settings-row-copy">
         <div className="settings-row-title">
           <strong>{title}</strong>

@@ -385,6 +385,10 @@ export const ProjectRepositoryD1 = Layer.effect(
                            AND grant_row.owner_id = ${authority.ownerId}
                            AND grant_row.status = 'active' AND installation.status = 'active'
                            AND entitlement.entitled = 1
+                                 AND (grant_row.repository_scope = 'installation' OR EXISTS (
+                                   SELECT 1 FROM github_owner_repository_selection AS selection
+                                    WHERE selection.owner_grant_id = grant_row.id
+                                      AND selection.provider_repository_id = entitlement.provider_repository_id))
                            AND COALESCE((SELECT epoch FROM github_authorization_epoch
                              WHERE subject_kind = 'owner-grant' AND subject_id = grant_row.id), 1)
                              = ${authority.authorizationEpoch}
@@ -643,6 +647,67 @@ export const ProjectRepositoryD1 = Layer.effect(
           }),
         ),
 
+      updatePresentation: (projectId, reader, revision, update) =>
+        observe(
+          "project.updatePresentation",
+          { projectId },
+          Effect.gen(function* () {
+            const current = yield* sql<ProjectRow>`
+              SELECT * FROM project_read_model
+              WHERE id = ${projectId} AND ${accessibleBy(reader)}
+                AND name != ${PROJECTLESS_PROJECT_NAME}
+            `.pipe(
+              Effect.catchTag("SqlError", (cause) =>
+                Effect.fail(
+                  unavailable("project.updatePresentation.read")(cause),
+                ),
+              ),
+              Effect.flatMap(decodeProjectRows),
+              Effect.flatMap((projects) =>
+                projects[0] === undefined
+                  ? Effect.fail(new ProjectNotFound({ projectId }))
+                  : Effect.succeed(projects[0]),
+              ),
+            );
+            if (current.revision !== revision) {
+              return yield* new ProjectNotFound({ projectId });
+            }
+            const now = yield* DateTime.now;
+            const next = yield* Schema.decodeUnknownEffect(
+              Schema.toType(Project),
+            )({
+              ...current,
+              ...update,
+              revision: revision + 1,
+              updatedAt: now,
+            });
+            const encoded = yield* Schema.encodeEffect(Project)(next);
+            // Only these columns: a member never reaches anything else.
+            const updated = yield* sql<{ readonly id: string }>`
+              UPDATE projects SET
+                description = ${encoded.description ?? null},
+                icon_key = ${encoded.iconKey ?? null},
+                revision = ${encoded.revision},
+                updated_at = ${encoded.updatedAt}
+              WHERE id = ${projectId} AND deleted_at IS NULL
+                AND ${accessibleBy(reader)}
+                AND name != ${PROJECTLESS_PROJECT_NAME}
+                AND revision = ${revision}
+              RETURNING id
+            `.pipe(
+              Effect.catchTag("SqlError", (cause) =>
+                Effect.fail(
+                  unavailable("project.updatePresentation.write")(cause),
+                ),
+              ),
+            );
+            if (updated.length !== 1) {
+              return yield* new ProjectNotFound({ projectId });
+            }
+            return next;
+          }),
+        ),
+
       rebindRepositoryOwned: (
         projectId,
         ownerUserId,
@@ -790,6 +855,10 @@ export const ProjectRepositoryD1 = Layer.effect(
                       AND grant_row.owner_id = ${authority.ownerId}
                       AND grant_row.status = 'active' AND installation.status = 'active'
                       AND entitlement.entitled = 1
+                                 AND (grant_row.repository_scope = 'installation' OR EXISTS (
+                                   SELECT 1 FROM github_owner_repository_selection AS selection
+                                    WHERE selection.owner_grant_id = grant_row.id
+                                      AND selection.provider_repository_id = entitlement.provider_repository_id))
                       AND COALESCE((SELECT epoch FROM github_authorization_epoch
                         WHERE subject_kind = 'owner-grant' AND subject_id = grant_row.id), 1)
                         = ${authority.authorizationEpoch}

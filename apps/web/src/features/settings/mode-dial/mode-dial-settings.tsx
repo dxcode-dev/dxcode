@@ -11,10 +11,11 @@ import {
   modelRoutingChoicesQueryOptions,
   modeProfileQueryOptions,
 } from "../model-routing/model-routing-queries.js";
+import { ModelRoutingSettings } from "../model-routing/model-routing-settings.js";
 import {
   SettingsCard,
   SettingsFormActions,
-  SettingsHeading,
+  SettingsRow,
 } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
@@ -44,10 +45,8 @@ const OLDER: ReadonlyArray<ModeId> = ["low", "high", "ultra"];
  * started on a retired mode still run on. A Thread keeps the model it starts
  * with; picking another model is a New Thread composer choice.
  */
-export const ModeDialSettings = ({
-  onDirtyChange,
-  workspaceSlug,
-}: SettingsSectionProps) => {
+export const ModeDialSettings = (props: SettingsSectionProps) => {
+  const { onDirtyChange, workspaceSlug } = props;
   const { identity } = useAuthenticatedIdentity();
   const target: ModelRoutingTarget =
     workspaceSlug === undefined
@@ -170,7 +169,7 @@ export const ModeDialSettings = ({
     ) : choice === undefined ? (
       <p role="status">Loading…</p>
     ) : (
-      <div className="tuning-agent-card" data-auto={choice === AUTO}>
+      <div className="models-slot" data-auto={choice === AUTO}>
         <MainAgentRole
           id={`models-${mode}`}
           label={`${label} model`}
@@ -196,14 +195,8 @@ export const ModeDialSettings = ({
   );
   return (
     <div className="mode-tuning-page">
-      <SettingsHeading
-        title="Models"
-        description={
-          target.scope === "personal"
-            ? "New Threads start on the Recommended model. Pick any other model for one Thread in the New Thread composer, where each model shows who pays for it. A Thread keeps the model and effort it started with."
-            : "The Recommended model everyone in this workspace starts new Threads on. A member's own Recommended model replaces this one; Auto uses dx's pick."
-        }
-      />
+      <ModelRoutingSettings {...props} />
+      <h2 className="models-section-heading">Models</h2>
       {personallyPinned.length > 0 ? (
         <p className="tuning-notice">
           Your own picks for{" "}
@@ -218,14 +211,18 @@ export const ModeDialSettings = ({
         </p>
       ) : null}
       <SettingsCard
-        title="Recommended model"
-        description={
-          target.scope === "personal"
-            ? "Auto follows your workspace's pick, or dx's when it has none."
-            : "Auto uses dx's pick."
-        }
+        title="Default models"
+        description="Used when nobody picks a model. A pick in the composer always wins."
       >
-        {slotEditor(RECOMMENDED, "Recommended")}
+        <SettingsRow
+          title="New Threads"
+          description={
+            target.scope === "personal"
+              ? "The Recommended model. Auto follows your workspace's pick, or dx's when it has none."
+              : "The Recommended model. Auto uses dx's pick."
+          }
+          control={slotEditor(RECOMMENDED, "Recommended")}
+        />
       </SettingsCard>
       <SettingsCard
         variant="outline"
@@ -240,16 +237,15 @@ export const ModeDialSettings = ({
           </DisclosureTrigger>
         }
       >
-        {olderOpen ? (
-          <div className="models-older-modes">
-            {OLDER.map((mode) => (
-              <section key={mode} aria-label={`${MODE_LABELS[mode]} mode`}>
-                <h3>{MODE_LABELS[mode]}</h3>
-                {slotEditor(mode, `${MODE_LABELS[mode]} mode`)}
-              </section>
-            ))}
-          </div>
-        ) : null}
+        {olderOpen
+          ? OLDER.map((mode) => (
+              <SettingsRow
+                key={mode}
+                title={`${MODE_LABELS[mode]} mode`}
+                control={slotEditor(mode, `${MODE_LABELS[mode]} mode`)}
+              />
+            ))
+          : null}
       </SettingsCard>
       <SettingsFormActions
         dirty={dirty}

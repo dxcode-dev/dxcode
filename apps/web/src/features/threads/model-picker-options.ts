@@ -25,18 +25,6 @@ export const RECOMMENDED_MODE: ModeId = "medium";
 /** The efforts the picker offers, lowest first. */
 export const EFFORTS: ReadonlyArray<ClaudeCodeEffort> = CLAUDE_CODE_EFFORTS;
 
-const EFFORT_LABELS: Readonly<Record<ThinkingLevel, string>> = {
-  off: "Off",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "X-High",
-  max: "Max",
-};
-
-export const effortLabel = (effort: ThinkingLevel) => EFFORT_LABELS[effort];
-
 /** A pin without an effort runs at this one on the server (RAW_MODEL_THINKING). */
 export const RAW_MODEL_DEFAULT_EFFORT: ThinkingLevel = "high";
 

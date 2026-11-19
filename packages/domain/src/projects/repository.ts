@@ -24,6 +24,15 @@ export interface ProjectUpdate {
   readonly remoteAliases?: ReadonlyArray<CanonicalGitRemoteAlias>;
 }
 
+/**
+ * What any member who can open a Project may change: how it is presented,
+ * never how its Threads run.
+ */
+export interface ProjectPresentationUpdate {
+  readonly description?: Project["description"];
+  readonly iconKey?: Project["iconKey"];
+}
+
 export interface ProjectRepositoryShape {
   readonly ensureProjectless: (
     ownerUserId: UserId,
@@ -64,6 +73,16 @@ export interface ProjectRepositoryShape {
     | PersistenceUnavailable
     | ProjectNotFound
     | ProjectNameConflict
+  >;
+  /** Changes only the description and icon, for anyone who reads the Project. */
+  readonly updatePresentation: (
+    projectId: ProjectId,
+    reader: ProjectReader,
+    revision: number,
+    update: ProjectPresentationUpdate,
+  ) => Effect.Effect<
+    Project,
+    Schema.SchemaError | PersistenceUnavailable | ProjectNotFound
   >;
   readonly rebindRepositoryOwned: (
     projectId: ProjectId,

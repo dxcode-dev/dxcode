@@ -23,6 +23,11 @@ export interface CallingThread {
   readonly projectless: boolean;
   /** The Thread is a Space: the children it starts record who asked. */
   readonly space: boolean;
+  /**
+   * What a child starts on when the caller names no agent mode: a Space's
+   * thread model when it set one, else the caller's own selection.
+   */
+  readonly childSelection: ThreadModelSelection | undefined;
 }
 
 /** Reads the calling Thread; every Thread tool acts as its owner. */
@@ -34,8 +39,10 @@ export const readCallingThread = async (
     .prepare(
       `SELECT t.owner_user_id, t.project_id, t.model_selection,
          t.parent_thread_id, t.workspace_access, t.kind,
-         p.name = ? AND p.owner_user_id = t.owner_user_id AS projectless
+         p.name = ? AND p.owner_user_id = t.owner_user_id AS projectless,
+         s.thread_model, s.thread_thinking
        FROM threads t LEFT JOIN projects p ON p.id = t.project_id
+       LEFT JOIN space s ON s.thread_id = t.id AND t.kind = 'space'
        WHERE t.id = ? LIMIT 1`,
     )
     .bind(PROJECTLESS_PROJECT_NAME, threadId)
@@ -47,6 +54,8 @@ export const readCallingThread = async (
       workspace_access: string | null;
       kind: string | null;
       projectless: number | null;
+      thread_model: string | null;
+      thread_thinking: string | null;
     }>();
   if (row === null) throw new Error("This Thread is unavailable.");
   let selection: ThreadModelSelection | undefined;
@@ -65,5 +74,15 @@ export const readCallingThread = async (
     ...(shared ? { sharedFamilyRoot: row.parent_thread_id ?? threadId } : {}),
     projectless: row.projectless === 1,
     space: row.kind === "space",
+    childSelection:
+      // Absent before the Space column exists, as in older test rows.
+      typeof row.thread_model === "string" &&
+      typeof row.thread_thinking === "string"
+        ? ({
+            kind: "model",
+            model: row.thread_model,
+            thinking: row.thread_thinking,
+          } as unknown as ThreadModelSelection)
+        : selection,
   };
 };

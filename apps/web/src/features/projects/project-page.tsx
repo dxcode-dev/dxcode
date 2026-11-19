@@ -131,19 +131,17 @@ export function ProjectPage() {
                 <ProjectRepositoryIcon provider={project.repository.provider} />
               </a>
             ) : null}
-            {project.viewerAccess?.canManage === false ? null : (
-              <Link
-                aria-label="Project Settings"
-                className={buttonVariants({
-                  variant: "ghost",
-                  size: "icon-xs",
-                })}
-                to="/projects/$projectId/settings"
-                params={{ projectId: project.id }}
-              >
-                <Settings />
-              </Link>
-            )}
+            <Link
+              aria-label="Project Settings"
+              className={buttonVariants({
+                variant: "ghost",
+                size: "icon-xs",
+              })}
+              to="/projects/$projectId/settings"
+              params={{ projectId: project.id }}
+            >
+              <Settings />
+            </Link>
             <Button
               size="icon-xs"
               variant="ghost"

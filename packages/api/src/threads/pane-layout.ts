@@ -138,8 +138,23 @@ export const ThreadPaneNodeSchema: Schema.Codec<
 ]);
 
 /**
+ * How a person left a Space's page, kept on the Space's own Thread: the
+ * thread it started that is open in a tab beside its chat, Side by Side or
+ * as Tabs, which tab is in front while they share a strip, and Space
+ * Details' tab.
+ */
+export const SpacePageLayoutSchema = Schema.Struct({
+  thread: Schema.optional(ThreadId),
+  tabs: Schema.Boolean,
+  front: Schema.Literals(["space", "thread"]),
+  details: Schema.Literals(["threads", "comments", "artifacts"]),
+});
+export type SpacePageLayout = typeof SpacePageLayoutSchema.Type;
+
+/**
  * The panes and tabs a person has open on one Thread, the same on every
- * device they use. `focused` is the pane new views join.
+ * device they use. `focused` is the pane new views join; `space`, on a
+ * Space's Thread, is how its page is laid out.
  */
 export const ThreadPaneLayoutSchema = Schema.Struct({
   version: Schema.Literal(1),
@@ -149,6 +164,7 @@ export const ThreadPaneLayoutSchema = Schema.Struct({
   nextTerminal: Schema.Int.check(
     Schema.isBetween({ minimum: 1, maximum: 1_001 }),
   ),
+  space: Schema.optional(SpacePageLayoutSchema),
 });
 export type ThreadPaneLayout = typeof ThreadPaneLayoutSchema.Type;
 

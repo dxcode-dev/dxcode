@@ -187,12 +187,15 @@ const marks: Readonly<
 export const ProviderMark = ({
   providerId,
   className,
+  fallback = null,
 }: {
   readonly providerId: string;
   readonly className?: string;
+  /** Drawn for a provider without a mark. */
+  readonly fallback?: ReactNode;
 }) => {
   const mark = marks[providerId];
-  if (mark === undefined) return null;
+  if (mark === undefined) return fallback;
   return (
     <svg
       aria-hidden="true"

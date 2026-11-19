@@ -676,7 +676,18 @@ function MessageCard({
 function MessageDetails({ message }: { readonly message: MailMessage }) {
   return (
     <div className="mailbox-message-body">
-      {message.authenticated || message.direction === "out" ? null : (
+      {message.authenticated ||
+      message.direction === "out" ? null : message.replyToSent ? (
+        <p className="mailbox-notice" role="note">
+          <ShieldAlert aria-hidden="true" />
+          <span>
+            A reply to your email from{" "}
+            <strong>{addressLine(message.from)}</strong>. Its domain doesn't
+            sign its mail, so dx kept it because it answers an email you sent
+            and came from a server its domain allows.
+          </span>
+        </p>
+      ) : (
         <p className="mailbox-notice" data-tone="warning" role="note">
           <ShieldAlert aria-hidden="true" />
           <span>

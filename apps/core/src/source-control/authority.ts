@@ -15,6 +15,20 @@ export interface LiveGrantAuthority {
   readonly policy_revision: number;
 }
 
+/**
+ * SQL that holds when the grant aliased `grant` reaches the repository row
+ * aliased `entitlement` (a `github_installation_repository`): every entitled
+ * repository for a grant from installing the App, and only its selected ones
+ * for a collaborator's grant on someone else's installation.
+ */
+export const grantReachesRepositorySql = (
+  grant = "grant_row",
+  entitlement = "entitlement",
+) => `(${grant}.repository_scope = 'installation' OR EXISTS (
+  SELECT 1 FROM github_owner_repository_selection AS selection
+   WHERE selection.owner_grant_id = ${grant}.id
+     AND selection.provider_repository_id = ${entitlement}.provider_repository_id))`;
+
 export const sourceAccessDenied = (
   reason: ConstructorParameters<typeof SourceControlAccessDenied>[0]["reason"],
   action: ConstructorParameters<typeof SourceControlAccessDenied>[0]["action"],
@@ -30,7 +44,8 @@ export const readLiveGrantAuthority = async (
     .prepare(`
       SELECT grant_row.installation_id, grant_row.status AS grant_status,
              installation.status AS installation_status,
-             CASE WHEN entitlement.entitled = 1 THEN 1 ELSE 0 END AS entitled,
+             CASE WHEN entitlement.entitled = 1
+                   AND ${grantReachesRepositorySql()} THEN 1 ELSE 0 END AS entitled,
              COALESCE(grant_epoch.epoch, 1) AS grant_epoch,
              COALESCE(installation_epoch.epoch, 1) AS installation_epoch,
              CASE WHEN grant_row.owner_scope = 'workspace'

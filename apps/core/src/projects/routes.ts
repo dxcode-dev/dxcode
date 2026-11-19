@@ -103,7 +103,10 @@ import { WorkspacePolicyService } from "../settings/workspace-policy/service.js"
 import { authorizeSource } from "../source-control/admission.js";
 import { purgeDeletedThread } from "../thread-deletion/cleanup.js";
 import { deployedThreadCleanup } from "../thread-deletion/routes.js";
-import { projectViewerAccess } from "./access.js";
+import {
+  projectViewerAccess,
+  projectViewerAccessWithCollaborators,
+} from "./access.js";
 import {
   deleteProject,
   type ProjectDeletion,
@@ -174,6 +177,21 @@ const withViewerAccess = (
   data: ReturnType<typeof projectData>,
   viewerAccess: ProjectViewerAccess | undefined,
 ) => (viewerAccess === undefined ? data : { ...data, viewerAccess });
+
+/**
+ * A changed Project as its viewer sees it, so the client keeps knowing what
+ * that viewer may change.
+ */
+const viewedProjectData = (
+  db: D1Database,
+  userId: string,
+  project: Parameters<typeof projectData>[0],
+) =>
+  Effect.promise(() => projectViewerAccess(db, userId, [project.id])).pipe(
+    Effect.map((access) =>
+      withViewerAccess(projectData(project), access.get(project.id)),
+    ),
+  );
 
 /**
  * Canonical additional repositories in request order, without duplicates or
@@ -601,7 +619,8 @@ projectRoutes.get("/", async (context) => {
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
     const access = yield* Effect.promise(() =>
-      projectViewerAccess(
+      projectViewerAccessWithCollaborators(
+        context.env,
         db,
         context.get("principal").userId,
         page.items.map((project) => project.id),
@@ -694,7 +713,12 @@ projectRoutes.get("/:projectId", async (context) => {
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
     const access = yield* Effect.promise(() =>
-      projectViewerAccess(db, context.get("principal").userId, [project.id]),
+      projectViewerAccessWithCollaborators(
+        context.env,
+        db,
+        context.get("principal").userId,
+        [project.id],
+      ),
     );
     return yield* Schema.encodeUnknownEffect(GetProjectResponseSchema)({
       status: "success",
@@ -827,7 +851,14 @@ projectRoutes.put("/:projectId/source", async (context) => {
       );
       return yield* Schema.encodeUnknownEffect(
         RebindProjectSourceResponseSchema,
-      )({ status: "success", data: projectData(project) });
+      )({
+        status: "success",
+        data: yield* viewedProjectData(
+          db,
+          context.get("principal").userId,
+          project,
+        ),
+      });
     }
     const authorized = yield* Effect.tryPromise({
       try: () =>
@@ -885,7 +916,14 @@ projectRoutes.put("/:projectId/source", async (context) => {
       Effect.provide(ProjectService.layer.pipe(Layer.provide(repositoryLayer))),
     );
     return yield* Schema.encodeUnknownEffect(RebindProjectSourceResponseSchema)(
-      { status: "success", data: projectData(project) },
+      {
+        status: "success",
+        data: yield* viewedProjectData(
+          db,
+          context.get("principal").userId,
+          project,
+        ),
+      },
     );
   });
   const result = await Effect.runPromise(Effect.result(operation));
@@ -1003,8 +1041,21 @@ projectRoutes.patch("/:projectId", async (context) => {
     const repositoryLayer = ProjectRepositoryD1.pipe(
       Layer.provide(D1Client.layer({ db })),
     );
+    const { revision: _, description, ...managed } = input;
     const project = yield* Effect.gen(function* () {
       const service = yield* ProjectService;
+      // A description alone is presentation, which every member who opens
+      // the Project may change; anything else takes its creator or an admin.
+      if (
+        description !== undefined &&
+        Object.values(managed).every((value) => value === undefined)
+      )
+        return yield* service.updatePresentation(
+          context.get("principal"),
+          params.projectId,
+          input.revision,
+          { description: description || undefined },
+        );
       const current = yield* service.get(
         context.get("principal"),
         params.projectId,
@@ -1121,7 +1172,11 @@ projectRoutes.patch("/:projectId", async (context) => {
       );
     return yield* Schema.encodeUnknownEffect(UpdateProjectResponseSchema)({
       status: "success",
-      data: projectData(project),
+      data: yield* viewedProjectData(
+        db,
+        context.get("principal").userId,
+        project,
+      ),
     });
   });
   const result = await Effect.runPromise(Effect.result(operation));
@@ -1415,8 +1470,11 @@ projectRoutes.put("/:projectId/icon", async (context) => {
         catch: (cause) =>
           PersistenceUnavailable.new({ operation: "project.icon.put" }, cause),
       });
+      // The icon is presentation: every member who opens the Project sets it.
       return yield* service
-        .update(context.get("principal"), projectId, revision, { iconKey })
+        .updatePresentation(context.get("principal"), projectId, revision, {
+          iconKey,
+        })
         .pipe(
           Effect.onError(() =>
             Effect.tryPromise({
@@ -1438,7 +1496,11 @@ projectRoutes.put("/:projectId/icon", async (context) => {
     );
     return yield* Schema.encodeUnknownEffect(UpdateProjectResponseSchema)({
       status: "success",
-      data: projectData(project),
+      data: yield* viewedProjectData(
+        db,
+        context.get("principal").userId,
+        project,
+      ),
     });
   });
   const result = await Effect.runPromise(Effect.result(operation));
@@ -1492,18 +1554,6 @@ projectRoutes.put("/:projectId/icon", async (context) => {
             },
           }),
           404,
-        ),
-      ProjectNameConflict: () =>
-        context.json(
-          Schema.encodeUnknownSync(UpdateProjectNameConflictResponseSchema)({
-            status: "error",
-            data: {
-              code: "PROJECT_NAME_CONFLICT",
-              message: "A project with this name already exists.",
-              requestId,
-            },
-          }),
-          409,
         ),
       PersistenceUnavailable: () =>
         context.json(

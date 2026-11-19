@@ -1,4 +1,7 @@
 import type { ProjectViewerAccess } from "@dx/api";
+import type { Bindings } from "../http/types.js";
+import { syncGitHubCollaboratorGrants } from "../source-control/github/control-plane.js";
+import { grantReachesRepositorySql } from "../source-control/authority.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
 
 interface AccessRow {
@@ -53,6 +56,7 @@ export const projectViewerAccess = async (
                    WHERE grant_row.owner_scope = 'personal' AND grant_row.owner_id = ?1
                      AND grant_row.status = 'active' AND installation.status = 'active'
                      AND entitlement.entitled = 1
+                     AND ${grantReachesRepositorySql()}
                 ) AS github_entitled,
                 EXISTS (
                   SELECT 1 FROM github_owner_grant
@@ -91,4 +95,26 @@ export const projectViewerAccess = async (
     }
   }
   return access;
+};
+
+/**
+ * `projectViewerAccess`, after matching the user's collaborator grants to
+ * GitHub (at most once a minute) when a GitHub Project shows no access: a
+ * collaborator on a teammate's repository then sees it as available.
+ */
+export const projectViewerAccessWithCollaborators = async (
+  bindings: Bindings,
+  db: D1Database,
+  userId: string,
+  projectIds: ReadonlyArray<string>,
+) => {
+  const access = await projectViewerAccess(db, userId, projectIds);
+  const missing = [...access.values()].some(
+    (entry) =>
+      entry.threads.status === "no-repository-access" &&
+      entry.threads.provider === "github",
+  );
+  if (!missing) return access;
+  await syncGitHubCollaboratorGrants(bindings, db, userId, false);
+  return projectViewerAccess(db, userId, projectIds);
 };

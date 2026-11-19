@@ -1440,3 +1440,42 @@ span.artifact-image-upload {
 .artifact-embed-empty {
   font-style: italic;
 }
+/* Someone else's caret and selection, in their color (`--artifact-remote`),
+   as their cursor shows on a board: a bar with their name above it. A
+   moved caret is a new element, so its name shows again. */
+.artifact-prose .artifact-remote-caret {
+  position: relative;
+  margin: 0 -1px;
+  border-left: 2px solid var(--artifact-remote);
+  pointer-events: none;
+}
+.artifact-prose .artifact-remote-caret-name {
+  position: absolute;
+  bottom: 100%;
+  left: -2px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs) var(--radius-xs) var(--radius-xs) 0;
+  background: var(--artifact-remote);
+  color: var(--on-accent);
+  font-family: var(--font-ui);
+  font-size: var(--text-2xs);
+  font-style: normal;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: nowrap;
+  user-select: none;
+  /* The name shows while the caret moves, then gets out of the text's way. */
+  animation: artifact-remote-name 4s ease-in forwards;
+}
+@keyframes artifact-remote-name {
+  0%,
+  85% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.artifact-prose .artifact-remote-selection {
+  background: color-mix(in srgb, var(--artifact-remote) 28%, transparent);
+}

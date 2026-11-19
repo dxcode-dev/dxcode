@@ -5,6 +5,7 @@ import {
   mailHtmlToText,
   mailMessageIds,
   mailRecipientOn,
+  mailSpfAligned,
   newMailMessageId,
   parseMailHeaderBlock,
   type parseMailHeaders,
@@ -203,9 +204,11 @@ export const mailDistrust = (parsed: ParsedMail, envelopeFrom: string) => {
     repeated ||
     !parsed.headersClean ||
     from.length !== 1 ||
-    // No real envelope sender needs quotes, parentheses, or `;`; one that
-    // has them could be echoed into Cloudflare's own results.
-    /["();\\=\s]/.test(envelopeFrom)
+    // No real envelope sender needs quotes, parentheses, `;`, or spaces; one
+    // that has them could be echoed into Cloudflare's own results. `=` is
+    // common (bulk senders' bounce addresses, such as `bounces+id-a=b.c@`)
+    // and can't start a result there: those split on `;` and spaces.
+    /["();\\\s]/.test(envelopeFrom)
   )
     return "header";
   const sender = parsed.header("sender");
@@ -278,18 +281,33 @@ const deliver = async (
   const from = mailHeaderAddresses(parsed.from);
   const fromAddress = from.length === 1 ? from[0] : undefined;
   const id = newMailMessageId();
+  const references = [
+    ...mailMessageIds(parsed.references),
+    ...mailMessageIds(parsed.inReplyTo),
+  ].flatMap((reference) => safeMessageId(reference) ?? []);
+  // A reply to an email the person sent from dx, whose From domain doesn't
+  // sign its mail (no DMARC with aligned DKIM) but whose server passed SPF
+  // for that domain, goes to the Inbox. A forger would also need the
+  // Message-ID of the person's email, which only its recipients saw. It
+  // stays unauthenticated: agents and the `+tag` gate still see that.
+  const answersSent =
+    distrust === "unauthenticated" &&
+    fromAddress !== undefined &&
+    references.length > 0 &&
+    mailSpfAligned(readMailAuthentication(parsed.headers), fromAddress) &&
+    (await db
+      .prepare(
+        `SELECT 1 AS found FROM mail_item
+          WHERE owner_user_id = ? AND direction = 'out'
+            AND message_id IN (SELECT value FROM json_each(?)) LIMIT 1`,
+      )
+      .bind(owner.userId, JSON.stringify(references))
+      .first<number>("found")) !== null;
+  const inbox = trusted || answersSent;
   // Spam is its own conversation: its Message-ID and References are the
   // sender's to forge.
-  const conversationKey = trusted
-    ? await conversationKeyFor(
-        db,
-        owner.userId,
-        messageId,
-        [
-          ...mailMessageIds(parsed.references),
-          ...mailMessageIds(parsed.inReplyTo),
-        ].flatMap((reference) => safeMessageId(reference) ?? []),
-      )
+  const conversationKey = inbox
+    ? await conversationKeyFor(db, owner.userId, messageId, references)
     : id;
   // A reply in a conversation the person marked private stays private.
   const privateMail =
@@ -306,7 +324,7 @@ const deliver = async (
       id,
       owner_user_id: owner.userId,
       direction: "in",
-      folder: distrust === undefined ? "inbox" : "spam",
+      folder: inbox ? "inbox" : "spam",
       tag: project?.tag ?? null,
       project_id: project?.projectId ?? null,
       private: privateMail ? 1 : 0,
@@ -330,7 +348,9 @@ const deliver = async (
       size: mail.raw.byteLength,
       has_attachments: parsed.parts.attachments.length > 0 ? 1 : 0,
       preview: parsed.preview,
-      disposition: distrust === undefined ? "stored" : `spam_${distrust}`,
+      // A reply the Inbox took on SPF is the only unauthenticated mail stored
+      // as `stored` (a person's "Not spam" keeps its `spam_*` reason).
+      disposition: inbox ? "stored" : `spam_${distrust}`,
       thread_id: null,
     },
     { raw: mail.raw, parts: parsed.parts },
@@ -340,14 +360,15 @@ const deliver = async (
     ownerUserId: owner.userId,
     mailId: id,
     tagged: project !== undefined,
-    spam: distrust !== undefined,
+    spam: !inbox,
+    replyTrust: answersSent,
     size: mail.raw.byteLength,
   });
   let outcome: InboundOutcome = {
-    kind: distrust === undefined ? "stored" : "spam",
+    kind: inbox ? "stored" : "spam",
     mailId: id,
     ownerUserId: owner.userId,
-    ...(distrust === undefined ? {} : { reason: distrust }),
+    ...(trusted ? {} : { reason: answersSent ? "reply" : distrust }),
   };
   // Only the owner's own email to their `+tag` can start work.
   if (

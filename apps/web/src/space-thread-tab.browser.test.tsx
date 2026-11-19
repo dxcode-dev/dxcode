@@ -167,6 +167,8 @@ const serve = () => {
         ],
       });
     if (path === `/v1/spaces/${SPACE}/catch-up`) return ok({ catchUp: null });
+    // How the person left the Space's page: never saved.
+    if (path === `/v1/threads/${SPACE}/layout`) return ok({ layout: null });
     return new Promise<Response>(() => {});
   });
 };

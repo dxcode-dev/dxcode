@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { mailDomainProblem } from "./mail.mjs";
 import { portalDomainProblem } from "./portals.mjs";
 
 const CONFIG_KEYS = new Set([
@@ -9,6 +10,7 @@ const CONFIG_KEYS = new Set([
   "domain",
   "zone",
   "portalDomain",
+  "mailDomain",
   "authEmailFrom",
   "adminEmail",
   "allowSignup",
@@ -256,6 +258,15 @@ export const validateSelfhostConfig = (input) => {
       : portalDomainProblem(portalDomain, domain?.toLowerCase());
   if (portalProblem !== undefined)
     throw new Error(`portalDomain ${portalProblem}.`);
+  // The dx Mailbox: a zone's own domain in the same account, whose mail dx
+  // takes over (deploy/selfhost/mail.mjs lists the trade-offs).
+  const mailDomain = optionalString(
+    input.mailDomain,
+    "mailDomain",
+  )?.toLowerCase();
+  const mailProblem =
+    mailDomain === undefined ? undefined : mailDomainProblem(mailDomain);
+  if (mailProblem !== undefined) throw new Error(`mailDomain ${mailProblem}.`);
   const authEmailFrom = optionalString(input.authEmailFrom, "authEmailFrom");
   const authEmailDomain = authEmailFrom?.split("@")[1]?.toLowerCase();
   if (
@@ -411,6 +422,7 @@ export const validateSelfhostConfig = (input) => {
     adminEmail: adminEmail.toLowerCase(),
     ...(domain === undefined ? {} : { domain, zone }),
     ...(portalDomain === undefined ? {} : { portalDomain }),
+    ...(mailDomain === undefined ? {} : { mailDomain }),
     ...(authEmailFrom === undefined
       ? {}
       : { authEmailFrom: authEmailFrom.toLowerCase() }),

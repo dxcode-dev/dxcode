@@ -30,6 +30,10 @@ import { Textarea } from "../../../shared/ui/textarea.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { cn, formatRelativeTime } from "../../../shared/utils.js";
 import {
+  artifactCommentDraftAddress,
+  useComposerDraft,
+} from "../../threads/composer-draft-queries.js";
+import {
   artifactMembersOptions,
   createArtifactCommentMutation,
   resolveArtifactCommentMutation,
@@ -78,8 +82,11 @@ function CommentComposer({
   focus = false,
   dictation,
   threadId,
+  replyTo,
 }: {
   readonly threadId: ArtifactScope;
+  /** The comment a reply answers: its box keeps its draft in Core. */
+  readonly replyTo?: string;
   readonly label: string;
   readonly placeholder: string;
   readonly pending: boolean;
@@ -98,7 +105,11 @@ function CommentComposer({
   /** The composer's mic, when dictation is available and the person may edit. */
   readonly dictation?: DictationSlot | undefined;
 }) {
-  const [own, setOwn] = React.useState("");
+  const [own, setOwn] = useComposerDraft(
+    replyTo === undefined
+      ? undefined
+      : artifactCommentDraftAddress(threadId, { replyTo }),
+  );
   const body = text?.value ?? own;
   const setBody = text?.set ?? setOwn;
   const box = React.useRef<HTMLTextAreaElement | null>(null);
@@ -168,6 +179,8 @@ function CommentComposer({
           if (
             event.key === "Enter" &&
             !event.shiftKey &&
+            // Alt+Enter starts a new Thread.
+            !event.altKey &&
             !event.nativeEvent.isComposing
           ) {
             event.preventDefault();
@@ -431,6 +444,7 @@ export function CommentCard({
           <CommentComposer
             key={comment.id}
             threadId={threadId}
+            replyTo={comment.id}
             dictation={dictation}
             label="Reply"
             placeholder="Reply, or @mention dx"

@@ -444,6 +444,20 @@ const seeOpenedThread = ({
     if (Option.isSome(threadId))
       openThreadSeen(context.queryClient, context.userId, threadId.value);
   }
+  // The Space remembers it, so it opens with it next time. Loaded only
+  // here, so a page without `?thread=` does not load it first.
+  const space = Schema.decodeUnknownOption(ThreadId)(params.threadId);
+  const opened = Schema.decodeUnknownOption(ThreadId)(search.thread);
+  if (Option.isSome(space) && Option.isSome(opened))
+    void import("./features/spaces/space-layout.js").then(
+      ({ rememberOpenedSpaceThread }) =>
+        rememberOpenedSpaceThread(
+          context.queryClient,
+          context.userId,
+          space.value,
+          opened.value,
+        ),
+    );
 };
 
 const threadRoute = createRoute({

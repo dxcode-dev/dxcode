@@ -1,4 +1,5 @@
 import { toast } from "sonner";
+import { physicalKeyEvent } from "../../shared/commands/physical-key.js";
 
 /** The rows a message menu acts on: what people and the agent wrote. */
 export type MessageMenuKind =
@@ -33,7 +34,7 @@ export const copyFocusedMessage = (
   if (event.target !== event.currentTarget) return;
   if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey)
     return;
-  if (event.key.toLowerCase() !== "c") return;
+  if (physicalKeyEvent(event.nativeEvent).key.toLowerCase() !== "c") return;
   if ((window.getSelection()?.toString() ?? "") !== "") return;
   event.preventDefault();
   void copyMessageText(text);

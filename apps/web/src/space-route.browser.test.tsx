@@ -287,6 +287,19 @@ const serve = (seed: ReadonlyArray<Omit<Comment, "id">> = []) => {
         comments: list,
       });
     }
+    // The composers' drafts (#2228): none kept, and each edit saved.
+    if (path.startsWith("/v1/threads/") && path.endsWith("/draft"))
+      return ok({
+        text:
+          method === "PUT"
+            ? (JSON.parse(String(init?.body)) as { text: string }).text
+            : "",
+      });
+    // How the person left the Space's page: never saved.
+    if (path === `/v1/threads/${SPACE}/layout`)
+      return ok({
+        layout: method === "PUT" ? JSON.parse(String(init?.body)) : null,
+      });
     return new Promise<Response>(() => {});
   });
   return { posts, comments, posted, sent, traffic, children, timing };

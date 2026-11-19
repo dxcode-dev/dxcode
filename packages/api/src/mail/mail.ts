@@ -179,6 +179,11 @@ export const MailMessageSchema = Schema.Struct({
   ),
   /** Why it is in Spam, in words, when dx put it there. */
   spamReason: Schema.optional(Schema.String),
+  /**
+   * Not signed by its own domain, but in the Inbox: it answers an email the
+   * person sent, from a server its domain allows (SPF).
+   */
+  replyToSent: Schema.optional(Schema.Literal(true)),
 });
 export type MailMessage = typeof MailMessageSchema.Type;
 

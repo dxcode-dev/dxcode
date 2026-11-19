@@ -110,7 +110,10 @@ import { createThreadMessageEditRoutes } from "./threads/message-edit-route.js";
 import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
-import { threadDraftRoutes } from "./threads/thread-draft-route.js";
+import {
+  threadDraftRoutes,
+  workspaceDraftRoutes,
+} from "./threads/thread-draft-route.js";
 import { workloadIdentityRoutes } from "./workload-identity/routes.js";
 
 installRuntimeTracing();
@@ -282,6 +285,7 @@ app.use("/v1/threads/:threadId/mcp-apps/*", authorizeThread);
 app.route("/v1/threads", mcpAppViewRoutes);
 // Per person too: each member of a shared Thread has their own draft.
 app.route("/v1/threads", threadDraftRoutes);
+app.route("/v1/drafts", workspaceDraftRoutes);
 app.route("/v1/agents/dx", dxAgentRoutes);
 
 app.notFound(pageNotFound(notFoundHandler));

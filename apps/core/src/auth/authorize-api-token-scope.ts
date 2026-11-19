@@ -26,7 +26,9 @@ const requiredScope = (
     path === "/v1/spaces" ||
     path.startsWith("/v1/spaces/") ||
     path === "/v1/attachments" ||
-    path.startsWith("/v1/attachments/")
+    path.startsWith("/v1/attachments/") ||
+    // New Thread and New Space drafts.
+    path.startsWith("/v1/drafts/")
   ) {
     return read ? "threads:read" : "threads:write";
   }

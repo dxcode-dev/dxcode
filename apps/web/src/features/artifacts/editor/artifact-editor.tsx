@@ -51,7 +51,12 @@ import {
   MenuTrigger,
 } from "../../../shared/ui/menu.js";
 import { cn } from "../../../shared/utils.js";
+import {
+  artifactCommentDraftAddress,
+  useComposerDraft,
+} from "../../threads/composer-draft-queries.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
+import { PresenceStack } from "../artifact-presence.js";
 import type { ArtifactScope } from "../artifact-scope.js";
 import type { ArtifactDocument } from "../artifacts-api.js";
 import { artifactsApi } from "../artifacts-api.js";
@@ -101,6 +106,10 @@ import {
 } from "./chip-picker.js";
 import { DRAFT_COMMENT } from "./comment-highlights.js";
 import { useCommentPeople } from "./comment-people.js";
+import {
+  type DocumentPresence,
+  useDocumentPresence,
+} from "./document-presence.js";
 import { ExportMenu } from "./export-menu.js";
 import { FindBar, useFindOpener } from "./find-bar.js";
 import { NotifyAgentButton } from "./notify-agent-button.js";
@@ -487,13 +496,15 @@ const artifactEditorProps = (
   readOnly: boolean,
   openComments: () => void,
   openProject: (projectId: string, newTab: boolean) => void,
+  presence: DocumentPresence,
 ): Omit<DirectEditorProps, "state"> => ({
   editable: () => !readOnly,
-  // Placeholders while editing; embedded boards below their links always.
+  // Placeholders while editing; embedded boards below their links always;
+  // everyone else's carets.
   decorations: (state) =>
     (readOnly ? DecorationSet.empty : placeholderDecorations(state)).add(
       state.doc,
-      embedDecorations(state, session),
+      [...embedDecorations(state, session), ...presence.decorations(state)],
     ),
   nodeViews: artifactNodeViews({
     // A reader may still flip toggles; only editors open pickers.
@@ -514,6 +525,7 @@ const artifactEditorProps = (
     ...linkClickProps.handleDOMEvents,
     focus: () => {
       session.setFocused(true);
+      presence.focus();
       return false;
     },
     // Into the selection's toolbar (its Link field) or a comment's card
@@ -545,7 +557,10 @@ const artifactEditorProps = (
       return true;
     },
   },
-  dispatchTransaction: session.dispatch,
+  dispatchTransaction: (tr) => {
+    session.dispatch(tr);
+    if (tr.selectionSet || tr.docChanged) presence.sync();
+  },
   // Clicking highlighted text opens its comment, unless it is a link.
   handleClick: (clicked, pos, event) => {
     if (linkToOpen(clicked, event) !== undefined) return false;
@@ -878,6 +893,7 @@ const commentOnSelection =
 /** The artifact's header: switcher, save state, comments, and its actions. */
 function ArtifactHeader({
   switcher,
+  present,
   session,
   snapshot,
   comments,
@@ -887,6 +903,8 @@ function ArtifactHeader({
   onFind,
 }: {
   readonly switcher: React.ReactNode;
+  /** Who else has it open, and the stack that shows them. */
+  readonly present: React.ReactNode;
   readonly session: ArtifactSession;
   readonly snapshot: ArtifactSessionSnapshot;
   readonly comments: {
@@ -901,6 +919,7 @@ function ArtifactHeader({
   return (
     <header className="artifact-header">
       {switcher}
+      {present}
       <SaveIndicator snapshot={snapshot} />
       <CommentsMenu
         comments={comments.data ?? []}
@@ -976,10 +995,13 @@ function OpenCommentCard({
  * far (kept while its card closes and opens), and why the selection can't
  * be quoted, if it can't.
  */
-function useCommentDraft(session: ArtifactSession) {
+function useCommentDraft(session: ArtifactSession, threadId: ArtifactScope) {
   const [draft, setDraft] = React.useState<CommentDraft>();
   const [quoteError, setQuoteError] = React.useState<string>();
-  const [draftBody, setDraftBody] = React.useState("");
+  // A Thread artifact's keeps in Core, so it outlasts the page.
+  const [draftBody, setDraftBody] = useComposerDraft(
+    artifactCommentDraftAddress(threadId, { artifactId: session.artifactId }),
+  );
   // Comment on the selection, from the toolbar or the selection's own.
   const start = commentOnSelection(session, (result) => {
     setQuoteError(result.error);
@@ -1029,6 +1051,26 @@ const useOpenProject = () => {
   };
 };
 
+/** The artifact's keys: Save, and its own Find rather than the browser's (#1810). */
+const artifactShortcut = (
+  event: React.KeyboardEvent,
+  session: ArtifactSession,
+  openFind: () => void,
+) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+    event.preventDefault();
+    session.flush();
+  }
+  if (
+    (event.metaKey || event.ctrlKey) &&
+    !event.altKey &&
+    event.key.toLowerCase() === "f"
+  ) {
+    event.preventDefault();
+    openFind();
+  }
+};
+
 export function ArtifactEditor({
   threadId,
   initial,
@@ -1074,7 +1116,7 @@ export function ArtifactEditor({
     start: comment,
     close: closeDraft,
     drop: dropDraft,
-  } = useCommentDraft(session);
+  } = useCommentDraft(session, threadId);
   // `@` lists the Thread's people; comments show their pictures.
   const { identity } = useAuthenticatedIdentity();
   const people = useCommentPeople(identity, threadId);
@@ -1095,6 +1137,8 @@ export function ArtifactEditor({
   const page = React.useRef<HTMLDivElement>(null);
   const view = React.useRef<EditorView>(undefined);
   const openProject = useOpenProject();
+  // Others' carets, named from the members list as it loads.
+  const { presence: carets, present } = useDocumentPresence(threadId, initial);
 
   useMountEffect(() => {
     const mount = host.current;
@@ -1102,10 +1146,11 @@ export function ArtifactEditor({
     if (mount === null || pageNode === null) return;
     const editor = new EditorView(mount, {
       state: session.state,
-      ...artifactEditorProps(session, readOnly, dropDraft, openProject),
+      ...artifactEditorProps(session, readOnly, dropDraft, openProject, carets),
     });
     view.current = editor;
     session.attach(editor, pageNode);
+    const stopPresence = carets.attach(editor, session.subscribe);
     const resize = new ResizeObserver(session.refreshLayout);
     resize.observe(pageNode);
     pageNode.addEventListener("scroll", session.refreshLayout, true);
@@ -1129,6 +1174,7 @@ export function ArtifactEditor({
       stopFollowing();
       stopComments();
       stopViewer();
+      stopPresence();
       session.detach(editor);
       releaseArtifactSession(queryClient, threadId, initial, session);
       editor.destroy();
@@ -1163,28 +1209,14 @@ export function ArtifactEditor({
       className="artifact-view"
       data-wide={wide || undefined}
       aria-label={`Artifact ${snapshot.title}`}
-      onKeyDown={(event) => {
-        if (
-          (event.metaKey || event.ctrlKey) &&
-          event.key.toLowerCase() === "s"
-        ) {
-          event.preventDefault();
-          session.flush();
-        }
-        // The artifact's Find, not the browser's (#1810).
-        if (
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey &&
-          event.key.toLowerCase() === "f"
-        ) {
-          event.preventDefault();
-          openFind();
-        }
-      }}
+      onKeyDown={(event) => artifactShortcut(event, session, openFind)}
     >
       <ArtifactHeader
         switcher={
           typeof switcher === "function" ? switcher(files.items) : switcher
+        }
+        present={
+          <PresenceStack users={present} people={people} where="document" />
         }
         session={session}
         snapshot={snapshot}

@@ -332,7 +332,7 @@ function RouteSource({
         {kind} from{" "}
         <Link
           to="/settings/$section"
-          params={{ section: "model-routing" }}
+          params={{ section: "models" }}
           onClick={onNavigate}
         >
           {route.ownerName === null
@@ -352,7 +352,7 @@ function RouteSource({
         ) : (
           <Link
             to="/workspaces/$workspaceSlug/$section"
-            params={{ workspaceSlug, section: "model-routing" }}
+            params={{ workspaceSlug, section: "models" }}
             onClick={onNavigate}
           >
             {label}

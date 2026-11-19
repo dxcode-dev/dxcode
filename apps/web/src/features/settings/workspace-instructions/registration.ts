@@ -9,7 +9,7 @@ export const workspaceInstructionsSettingsSection = {
   group: "agent",
   label: "Instructions",
   title: "Instructions",
-  description: "Guidance every member's top-level agent receives.",
+  description: "Guidance for the top-level agent in every member's new Thread.",
   icon: SquarePen,
   component: WorkspaceInstructionsSettings,
 } satisfies SettingsSectionRegistration;

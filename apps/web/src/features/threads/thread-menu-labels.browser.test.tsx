@@ -57,6 +57,18 @@ const claudeCode = {
   },
 } as ThreadDetailData;
 
+// A pinned model with a long name: its name shows in full, beside its effort.
+const longModel = {
+  ...claudeCode,
+  agentInitialization: {
+    selection: {
+      kind: "model",
+      model: "cloudflare/@cf/deepseek-ai/deepseek-v4-flash-0731",
+      thinking: "high",
+    },
+  },
+} as ThreadDetailData;
+
 const model = {
   rows: [],
   turns: [],
@@ -205,13 +217,17 @@ describe("More Actions", () => {
     [390, 844, true, thread],
     [1440, 900, false, claudeCode],
     [390, 844, true, claudeCode],
+    [1440, 900, false, longModel],
+    [390, 844, true, longModel],
   ] as const) {
     const kind =
       shown === child
         ? "a child Thread"
         : shown === claudeCode
           ? "a Claude Code Thread"
-          : "a Thread";
+          : shown === longModel
+            ? "a Thread on a long-named model"
+            : "a Thread";
     it(`shows every label in full for ${kind} at ${width}x${height}`, async () => {
       await page.viewport(width, height);
       await openMenu(shown, showDetails);

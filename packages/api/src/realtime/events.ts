@@ -168,11 +168,23 @@ export const RealtimeTypingEvent = Schema.Struct({
 });
 
 /**
- * Live drawing on a board (`scope` is the artifact's id): where the sender's
- * pointer is, what they have selected, and the elements they are changing
- * right now, before their save. Memory only, like typing: the next save
- * carries the same change, and the hub relays `elements` only from people
- * who can edit the Thread.
+ * A place in a document artifact: the `block`th text block, `offset` into
+ * its content, and the block's opening `text`, which finds the block again
+ * when blocks above it changed and are not saved yet.
+ */
+const DocumentPoint = Schema.Struct({
+  block: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  offset: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  text: Schema.String.check(Schema.isMaxLength(40)),
+});
+
+/**
+ * Live presence on an artifact (`scope` is the artifact's id). On a board:
+ * where the sender's pointer is, what they have selected, and the elements
+ * they are changing right now, before their save. In a document: the
+ * sender's caret and selection (`caret`; null when they leave). Memory
+ * only, like typing: the next save carries the same change, and the hub
+ * relays `elements` only from people who can edit the Thread.
  */
 export const BoardLivePayload = Schema.Struct({
   pointer: Schema.optional(
@@ -190,6 +202,11 @@ export const BoardLivePayload = Schema.Struct({
   ),
   elements: Schema.optional(
     Schema.Array(Schema.Unknown).check(Schema.isMaxLength(1000)),
+  ),
+  caret: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({ anchor: DocumentPoint, head: DocumentPoint }),
+    ),
   ),
 });
 export type BoardLivePayload = typeof BoardLivePayload.Type;

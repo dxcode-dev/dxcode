@@ -324,6 +324,7 @@ export const createSpaceRoutes = (
             context.env,
             ownerUserId,
             body.claudeConnectionId,
+            body.agentModel,
           ).catch((error: unknown) => {
             if (error instanceof SpacePlanRefused)
               throw new SpaceError(
@@ -353,6 +354,7 @@ export const createSpaceRoutes = (
             goal,
             color: body.color ?? defaultSpaceColor(created.threadId),
             workspaceId,
+            threadModel: body.threadModel ?? null,
             now: new Date(),
           });
           spaceLogger.info("Space created.", {
@@ -498,6 +500,9 @@ export const createSpaceRoutes = (
                 }),
             ...(body.color === undefined ? {} : { color: body.color }),
             ...(sharing === undefined ? {} : { sharing }),
+            ...(body.threadModel === undefined
+              ? {}
+              : { threadModel: body.threadModel }),
             now: new Date(),
           });
           await announce(context, db, threadId, {

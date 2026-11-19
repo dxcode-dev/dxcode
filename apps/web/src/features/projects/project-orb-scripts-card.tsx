@@ -61,15 +61,18 @@ type Drafts = Partial<Record<ProjectOrbScriptKind, string>>;
 
 /**
  * The Project's Orb scripts, each with its own Save. They run in the Orb of
- * every Thread in the Project, so only people who manage it see this card.
- * Unsaved drafts live here so one guard covers both editors.
+ * every Thread in the Project, so only people who manage it change them;
+ * everyone else reads them. Unsaved drafts live here so one guard covers both
+ * editors.
  */
 export function ProjectOrbScriptsCard({
   projectId,
   userId,
+  readOnly,
 }: {
   readonly projectId: ProjectId;
   readonly userId: UserId;
+  readonly readOnly: boolean;
 }) {
   const scripts = useQuery(projectOrbScriptsQueryOptions(userId, projectId));
   const [drafts, setDrafts] = React.useState<Drafts>({});
@@ -112,6 +115,7 @@ export function ProjectOrbScriptsCard({
             title={script.title}
             description={script.description}
             savedBody={saved(script.kind)}
+            readOnly={readOnly}
             draft={drafts[script.kind] ?? saved(script.kind)}
             onDraftChange={(draft) =>
               setDrafts((current) => ({ ...current, [script.kind]: draft }))
@@ -134,6 +138,7 @@ function OrbScriptEditor({
   title,
   description,
   savedBody,
+  readOnly,
   draft,
   onDraftChange,
   onSaved,
@@ -144,6 +149,7 @@ function OrbScriptEditor({
   readonly title: string;
   readonly description: React.ReactNode;
   readonly savedBody: string;
+  readonly readOnly: boolean;
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
   readonly onSaved: () => void;
@@ -183,7 +189,10 @@ function OrbScriptEditor({
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
-          placeholder={"#!/usr/bin/env bash\nset -euo pipefail"}
+          placeholder={
+            readOnly ? "No script" : "#!/usr/bin/env bash\nset -euo pipefail"
+          }
+          readOnly={readOnly}
           disabled={mutation.isPending}
           onChange={(event) => onDraftChange(event.target.value)}
         />
@@ -193,15 +202,17 @@ function OrbScriptEditor({
           </p>
         )}
       </div>
-      <div className="project-orb-script-actions">
-        <Button
-          size="xs"
-          type="submit"
-          disabled={draft === savedBody || tooLarge || mutation.isPending}
-        >
-          {mutation.isPending ? "Saving…" : "Save"}
-        </Button>
-      </div>
+      {readOnly ? null : (
+        <div className="project-orb-script-actions">
+          <Button
+            size="xs"
+            type="submit"
+            disabled={draft === savedBody || tooLarge || mutation.isPending}
+          >
+            {mutation.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      )}
     </form>
   );
 }

@@ -1,7 +1,10 @@
 import { useLocation, useNavigate, useRouter } from "@tanstack/react-router";
 import * as React from "react";
 import { settingsNavigationState } from "../navigation/settings-return.js";
-import { createCommandKeydownHandler } from "./command-dispatcher.js";
+import {
+  createCommandKeydownHandler,
+  createTextFieldCommandHandler,
+} from "./command-dispatcher.js";
 import { CommandPalette } from "./command-palette.js";
 import {
   type CommandContext,
@@ -48,12 +51,21 @@ const focusCommandTarget = (target: string) => {
 
 const dispatcherSnapshot = () => 0;
 
+/**
+ * `handler` listens before the page (capture); `textFieldHandler` after it
+ * (bubble), for the chords a focused text field left unhandled.
+ */
 const useGlobalCommandDispatcher = (
   handler: (event: KeyboardEvent) => void,
+  textFieldHandler: (event: KeyboardEvent) => void,
 ) => {
   const subscribe = (_onStoreChange: () => void) => {
     window.addEventListener("keydown", handler, true);
-    return () => window.removeEventListener("keydown", handler, true);
+    window.addEventListener("keydown", textFieldHandler);
+    return () => {
+      window.removeEventListener("keydown", handler, true);
+      window.removeEventListener("keydown", textFieldHandler);
+    };
   };
   React.useSyncExternalStore(subscribe, dispatcherSnapshot, dispatcherSnapshot);
 };
@@ -308,13 +320,16 @@ export function CommandProvider({
       runtime,
       commandContextFromPath(router.state.location.pathname),
     );
-  const handleKeyDown = createCommandKeydownHandler({
+  const dispatcherOptions = {
     registry,
     runtime,
     getContext: () => commandContextFromPath(window.location.pathname),
     document,
-  });
-  useGlobalCommandDispatcher(handleKeyDown);
+  };
+  useGlobalCommandDispatcher(
+    createCommandKeydownHandler(dispatcherOptions),
+    createTextFieldCommandHandler(dispatcherOptions),
+  );
 
   const paletteCommand = commands.find(
     (command) => command.id === "command-palette.open",

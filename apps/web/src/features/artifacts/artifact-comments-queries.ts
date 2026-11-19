@@ -87,3 +87,17 @@ export const artifactMembersOptions = (
       })
     : threadMembersQueryOptions(viewerId, thread);
 };
+
+/**
+ * Refetches an artifact's members: someone on it is not on the list yet
+ * (it was shared, or they joined the workspace, after the list loaded).
+ */
+export const refreshArtifactMembers = (
+  client: QueryClient,
+  viewerId: UserId,
+  threadId: ArtifactScope,
+) =>
+  client.invalidateQueries({
+    queryKey: artifactMembersOptions(viewerId, threadId).queryKey,
+    exact: true,
+  });

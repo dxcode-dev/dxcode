@@ -272,6 +272,17 @@ export const ThreadRepositoryD1 = Layer.effect(
                 sql`SELECT ${sql.literal(column)} FROM threads
                      WHERE id = ${encoded.parentThreadId ?? null}
                        AND owner_user_id = ${encoded.ownerUserId}`;
+              // The Thread keeps the workspace instructions it started with,
+              // as it keeps its owner's: an admin's edit reaches new Threads
+              // only, so an open Thread's prompt cache stays valid.
+              const ownerWorkspaceInstructions = sql`SELECT instructions.content
+                      FROM member
+                      JOIN organization
+                        ON organization.id = member.organizationId
+                       AND organization.lifecycleState = 'active'
+                      JOIN workspace_agent_instructions AS instructions
+                        ON instructions.workspace_id = member.organizationId
+                     WHERE member.userId = ${encoded.ownerUserId}`;
               const insertThread = sql`
                 INSERT INTO threads (
                   id,
@@ -281,6 +292,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   agent_instructions,
                   agent_instructions_revision,
                   agent_instructions_version,
+                  workspace_agent_instructions,
                   model_selection,
                   runner_profile_id,
                   plugin_snapshot_json,
@@ -305,6 +317,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                   ${encoded.agentInstructions.content},
                   ${encoded.agentInstructions.revision},
                   ${encoded.agentInstructions.version},
+                  COALESCE((${ownerWorkspaceInstructions}), ''),
                   ${JSON.stringify(encoded.selection)},
                   ${encoded.runnerProfileId ?? null},
                   ${JSON.stringify(encoded.plugins)},
@@ -516,6 +529,10 @@ export const ThreadRepositoryD1 = Layer.effect(
                                  AND grant_row.status = 'active'
                                  AND installation.status = 'active'
                                  AND entitlement.entitled = 1
+                                 AND (grant_row.repository_scope = 'installation' OR EXISTS (
+                                   SELECT 1 FROM github_owner_repository_selection AS selection
+                                    WHERE selection.owner_grant_id = grant_row.id
+                                      AND selection.provider_repository_id = entitlement.provider_repository_id))
                              )) OR (binding.provider = 'bitbucket'
                                AND binding.owner_scope = 'personal'
                                AND binding.installation_id IS NULL
@@ -559,6 +576,10 @@ export const ThreadRepositoryD1 = Layer.effect(
                                  AND grant_row.status = 'active'
                                  AND installation.status = 'active'
                                  AND entitlement.entitled = 1
+                                 AND (grant_row.repository_scope = 'installation' OR EXISTS (
+                                   SELECT 1 FROM github_owner_repository_selection AS selection
+                                    WHERE selection.owner_grant_id = grant_row.id
+                                      AND selection.provider_repository_id = entitlement.provider_repository_id))
                                  AND COALESCE((SELECT epoch FROM github_authorization_epoch
                                    WHERE subject_kind = 'owner-grant'
                                      AND subject_id = grant_row.id), 1)

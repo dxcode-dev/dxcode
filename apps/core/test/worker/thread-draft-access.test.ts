@@ -20,7 +20,10 @@ import {
 } from "../../src/testing/bindings.js";
 import { tombstoneThreads } from "../../src/thread-deletion/tombstone.js";
 import { threadSharingRoutes } from "../../src/thread-sharing/routes.js";
-import { threadDraftRoutes } from "../../src/threads/thread-draft-route.js";
+import {
+  threadDraftRoutes,
+  workspaceDraftRoutes,
+} from "../../src/threads/thread-draft-route.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
 
@@ -62,6 +65,7 @@ const createApp = (userId: UserId) => {
   app.route("/projects", projectRoutes);
   app.route("/threads", threadSharingRoutes);
   app.route("/threads", threadDraftRoutes);
+  app.route("/drafts", workspaceDraftRoutes);
   app.onError(errorHandler);
   return app;
 };
@@ -139,10 +143,56 @@ const share = async (workspaceAccess: "view" | "contribute" | "none") =>
     ).status,
   ).toBe(200);
 
-const saveDraft = async (userId: UserId, threadId: string, text: string) =>
+/** Saves the Thread composer's draft, and one in a post's comment box. */
+const saveDraft = async (userId: UserId, threadId: string, text: string) => {
   expect(
     (await send(userId, `/threads/${threadId}/draft`, "PUT", { text })).status,
   ).toBe(200);
+  expect(
+    (
+      await send(
+        userId,
+        `/threads/${threadId}/draft?slot=post-comment:post-1`,
+        "PUT",
+        { text: `${text} (comment)` },
+      )
+    ).status,
+  ).toBe(200);
+};
+
+const saveWorkspaceDraft = async (
+  userId: UserId,
+  workspace: string,
+  slot: "new-thread" | "new-space",
+) =>
+  expect(
+    (
+      await send(userId, `/drafts/workspaces/${workspace}/${slot}`, "PUT", {
+        text: `${userId} ${slot}`,
+      })
+    ).status,
+  ).toBe(200);
+
+const readWorkspaceDraft = async (userId: UserId, workspace: string) => {
+  const response = await send(
+    userId,
+    `/drafts/workspaces/${workspace}/new-thread`,
+  );
+  return response.status === 200
+    ? (await response.json<{ data: { text: string } }>()).data.text
+    : response.status;
+};
+
+/** Every stored New Thread or New Space draft, as `user workspace slot`. */
+const storedWorkspaceDrafts = async () =>
+  (
+    await env.DB.prepare(
+      `SELECT user_id, workspace_key, slot FROM workspace_draft
+        ORDER BY user_id, workspace_key, slot`,
+    ).all<{ user_id: string; workspace_key: string; slot: string }>()
+  ).results.map(
+    ({ user_id, workspace_key, slot }) => `${user_id} ${workspace_key} ${slot}`,
+  );
 
 const readDraft = async (userId: UserId, threadId: string) => {
   const response = await send(userId, `/threads/${threadId}/draft`);
@@ -151,20 +201,42 @@ const readDraft = async (userId: UserId, threadId: string) => {
     : response.status;
 };
 
-/** Every stored draft, as `user thread`. */
-const stored = async () =>
+const storedIn = async (table: "thread_draft" | "thread_slot_draft") =>
   (
     await env.DB.prepare(
-      "SELECT user_id, thread_id FROM thread_draft ORDER BY user_id, thread_id",
+      `SELECT user_id, thread_id FROM ${table} ORDER BY user_id, thread_id`,
     ).all<{ user_id: string; thread_id: string }>()
   ).results.map(({ user_id, thread_id }) => `${user_id} ${thread_id}`);
 
-/** The owner's and the member's drafts in the shared Thread, and the member's own. */
+/**
+ * Every stored draft, as `user thread`. A Thread's other boxes (here a
+ * post's comment box) follow the same access as its composer.
+ */
+const stored = async () => {
+  const composers = await storedIn("thread_draft");
+  expect(await storedIn("thread_slot_draft")).toEqual(composers);
+  return composers;
+};
+
+const everyWorkspaceDraft = [
+  `${member} ${workspaceId} new-thread`,
+  `${member} personal new-thread`,
+  `${owner} ${workspaceId} new-space`,
+];
+
+/**
+ * The owner's and the member's drafts in the shared Thread, the member's
+ * own, and their New Thread and New Space drafts.
+ */
 const draftEverywhere = async () => {
   await share("contribute");
   await saveDraft(owner, sharedThread.id, "owner's draft");
   await saveDraft(member, sharedThread.id, "member's draft");
   await saveDraft(member, memberTeamThread.id, "member's own draft");
+  await saveWorkspaceDraft(member, workspaceId, "new-thread");
+  await saveWorkspaceDraft(member, "personal", "new-thread");
+  await saveWorkspaceDraft(owner, workspaceId, "new-space");
+  expect(await storedWorkspaceDrafts()).toEqual(everyWorkspaceDraft);
   expect(await stored()).toEqual([
     `${member} ${sharedThread.id}`,
     `${member} ${memberTeamThread.id}`,
@@ -185,11 +257,41 @@ describe("Thread drafts never outlive access", () => {
         })
       ).status,
     ).toBe(404);
+    expect(
+      (
+        await send(
+          outsider,
+          `/threads/${sharedThread.id}/draft?slot=post-comment:post-1`,
+        )
+      ).status,
+    ).toBe(404);
+    // New Thread drafts: a workspace's are its members' alone.
+    expect(await readWorkspaceDraft(member, workspaceId)).toBe(
+      `${member} new-thread`,
+    );
+    expect(await readWorkspaceDraft(member, "personal")).toBe(
+      `${member} new-thread`,
+    );
+    expect(await readWorkspaceDraft(outsider, workspaceId)).toBe(404);
+    expect(await readWorkspaceDraft(outsider, "personal")).toBe("");
+    expect(
+      (
+        await send(
+          outsider,
+          `/drafts/workspaces/${workspaceId}/new-thread`,
+          "PUT",
+          {
+            text: "x",
+          },
+        )
+      ).status,
+    ).toBe(404);
   });
 
   it("deletes a member's draft when the owner unshares the Thread", async () => {
     await draftEverywhere();
     await share("none");
+    expect(await storedWorkspaceDrafts()).toEqual(everyWorkspaceDraft);
     expect(await readDraft(member, sharedThread.id)).toBe(404);
     expect(await stored()).toEqual([
       `${member} ${memberTeamThread.id}`,
@@ -205,6 +307,11 @@ describe("Thread drafts never outlive access", () => {
     expect(await readDraft(member, sharedThread.id)).toBe(404);
     expect(await readDraft(member, memberTeamThread.id)).toBe(404);
     expect(await stored()).toEqual([`${owner} ${sharedThread.id}`]);
+    expect(await readWorkspaceDraft(member, workspaceId)).toBe(404);
+    expect(await storedWorkspaceDrafts()).toEqual([
+      `${member} personal new-thread`,
+      `${owner} ${workspaceId} new-space`,
+    ]);
   });
 
   it("deletes a member's drafts when an admin removes them", async () => {
@@ -219,6 +326,10 @@ describe("Thread drafts never outlive access", () => {
       ).status,
     ).toBe(200);
     expect(await stored()).toEqual([`${owner} ${sharedThread.id}`]);
+    expect(await storedWorkspaceDrafts()).toEqual([
+      `${member} personal new-thread`,
+      `${owner} ${workspaceId} new-space`,
+    ]);
   });
 
   it("deletes every draft in a deleted Project's Threads, kept or not", async () => {
@@ -248,6 +359,9 @@ describe("Thread drafts never outlive access", () => {
       ).status,
     ).toBe(200);
     expect(await stored()).toEqual([`${owner} ${sharedThread.id}`]);
+    expect(await storedWorkspaceDrafts()).toEqual([
+      `${member} personal new-thread`,
+    ]);
   });
 
   it("deletes everyone's drafts with the Thread", async () => {
@@ -267,5 +381,8 @@ describe("Thread drafts never outlive access", () => {
     await draftEverywhere();
     await env.DB.prepare('DELETE FROM "user" WHERE id = ?').bind(member).run();
     expect(await stored()).toEqual([`${owner} ${sharedThread.id}`]);
+    expect(await storedWorkspaceDrafts()).toEqual([
+      `${owner} ${workspaceId} new-space`,
+    ]);
   });
 });

@@ -54,6 +54,8 @@ export const LOCAL_MODEL_FIXTURE_PROMPTS = {
     "Use the wait_for_email tool with from gmail.com to wait for a personal email. After the tool result, say whether it was refused.",
   verificationEmail:
     "Use the wait_for_email tool to wait for the Acme sign-up verification email in this Thread's inbox. After the tool result, reply with the verification code it contains.",
+  settingsInstructions:
+    "Quote the workspace and personal instructions from your system prompt. Do not use tools.",
 } as const;
 
 /** The tool call each tool fixture makes before its confirmation. */
@@ -183,6 +185,21 @@ const reportToParentCall = (context: Context) => {
   };
 };
 
+/**
+ * The Settings instructions the agent's system prompt carries, each block as
+ * it is or `(none)`, so a run shows which ones reached the model.
+ */
+const settingsInstructionsReply = (context: Context) => {
+  const prompt = getCurrentSystemPrompt(context.messages) ?? "";
+  const block = (tag: string) =>
+    // The block on its own lines, not the prose that names the tag.
+    new RegExp(`^<${tag}>\\n[\\s\\S]*?\\n</${tag}>$`, "m").exec(prompt)?.[0] ??
+    `<${tag}>(none)</${tag}>`;
+  return [block("workspace_instructions"), block("personal_instructions")].join(
+    "\n\n",
+  );
+};
+
 export type LocalModelFixtureKind = keyof typeof LOCAL_MODEL_FIXTURE_PROMPTS;
 
 export interface LocalModelFixtureDefinition {
@@ -217,9 +234,11 @@ const fixtureMismatch = () =>
 
 // dx prefixes each user message with its author tag; fixtures match the
 // prompt the person wrote, without a leading `@dx` that sent it to the agent
-// in a shared Thread.
+// in a shared Thread, or the post tag a Space adds after a person's post.
 const writtenPrompt = (text: string) =>
-  parseMessageAuthor(text).text.replace(/^@dx\s+/, "");
+  parseMessageAuthor(text)
+    .text.replace(/^@dx\s+/, "")
+    .replace(/\n\n<post id="[^"]+" \/>$/, "");
 
 /**
  * A notice Flue adds after the prompt, such as that the tools changed when a
@@ -356,6 +375,13 @@ export const createLocalModelFixtureProvider = () => {
       case "richReply":
         core.setResponses([
           fauxAssistantMessage(RICH_REPLY_TEXT, { timestamp: 0 }),
+        ]);
+        break;
+      case "settingsInstructions":
+        core.setResponses([
+          fauxAssistantMessage(settingsInstructionsReply(context), {
+            timestamp: 0,
+          }),
         ]);
         break;
       case "childReport":

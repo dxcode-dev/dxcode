@@ -126,6 +126,7 @@ export function ProjectSettingsPage({
   readonly renderEnvironmentSettings: (
     projectId: ProjectId,
     onDirtyChange: (dirty: boolean) => void,
+    readOnly: boolean,
   ) => React.ReactNode;
 }) {
   const params = useParams({ strict: false }) as {
@@ -170,8 +171,9 @@ export function ProjectSettingsPage({
         {projectQuery.isPending ? "Loading project…" : "Project not found."}
       </div>
     );
-  // A workspace Project's settings belong to its creator and admins.
-  const canManage = project.viewerAccess?.canManage !== false;
+  // Every member sees a workspace Project's settings; only its creator and
+  // workspace admins change them, which the server enforces.
+  const readOnly = project.viewerAccess?.canManage === false;
   return (
     <div className="project-settings-overlay">
       <section
@@ -205,26 +207,28 @@ export function ProjectSettingsPage({
               ))}
           </nav>
           <main>
-            {canManage ? null : (
-              <p className="project-settings-state" role="status">
-                Only the project's creator or a workspace admin can change its
-                settings.
+            {readOnly ? (
+              <p className="project-settings-read-only" role="status">
+                You can change this project's description and icon. Only its
+                creator or a workspace admin can change its other settings.
               </p>
-            )}
-            {canManage && section === "general" ? (
+            ) : null}
+            {section === "general" ? (
               <GeneralProjectSettings
                 key={project.id}
                 project={project}
+                readOnly={readOnly}
                 ownerName={ownerName}
                 userId={identity.id}
                 viewer={identity}
                 workspace={settingsQuery.data?.workspace}
               />
             ) : null}
-            {canManage && section === "orb" ? (
+            {section === "orb" ? (
               <OrbProjectSettings
                 key={project.id}
                 project={project}
+                readOnly={readOnly}
                 workspace={settingsQuery.data?.workspace}
                 settingsPending={
                   settingsQuery.data === undefined &&
@@ -233,13 +237,13 @@ export function ProjectSettingsPage({
                 userId={identity.id}
               />
             ) : null}
-            {canManage && section === "feedback-widget" ? (
+            {section === "feedback-widget" ? (
               <FeedbackWidgetProjectSettings
                 projectId={project.id}
+                readOnly={readOnly}
                 userId={identity.id}
               />
             ) : null}
-            {/* Read-only for people who do not manage the Project. */}
             {section === "email" ? (
               mailEnabled ? (
                 <ProjectEmailSettings
@@ -252,9 +256,10 @@ export function ProjectSettingsPage({
                 </p>
               )
             ) : null}
-            {canManage && section === "secrets" ? (
+            {section === "secrets" ? (
               <ProjectSecretsSettings
                 projectId={project.id}
+                readOnly={readOnly}
                 renderEnvironmentSettings={renderEnvironmentSettings}
               />
             ) : null}
@@ -398,12 +403,15 @@ const failure = (cause: unknown, fallback: string) =>
  */
 function GeneralProjectSettings({
   project,
+  readOnly,
   ownerName,
   userId,
   viewer,
   workspace,
 }: {
   readonly project: ProjectData;
+  /** Shows the settings without a way to change them. */
+  readonly readOnly: boolean;
   readonly ownerName: string;
   readonly userId: UserId;
   /** The signed-in person, who authors commits when the project asks for them. */
@@ -457,6 +465,7 @@ function GeneralProjectSettings({
     updateMutation.isPending ||
     rebindMutation.isPending ||
     iconMutation.isPending;
+  const disabled = saving || readOnly;
   const shipAndCommits = commitsAndShipChanges(draft);
   const dirty =
     draft.name !== baseline.name ||
@@ -470,6 +479,23 @@ function GeneralProjectSettings({
   const edit = (next: Extract<GeneralAction, { type: "edit" }>["edit"]) =>
     dispatch({ type: "edit", edit: next });
   const save = async () => {
+    // A member changes only the description, which the server allows them.
+    if (readOnly) {
+      dispatch({ type: "error" });
+      const saved = await settle(() =>
+        updateMutation.mutateAsync({
+          revision: baseline.revision,
+          description: draft.description,
+        }),
+      );
+      if (saved.ok) dispatch({ type: "reset", project: saved.value });
+      else
+        dispatch({
+          type: "error",
+          error: failure(saved.error, "The description could not be saved."),
+        });
+      return;
+    }
     const metadata = buildProjectMetadataChanges(
       baseline.name,
       draft.name,
@@ -554,7 +580,8 @@ function GeneralProjectSettings({
           ownerName={ownerName}
           name={draft.name}
           project={baseline}
-          disabled={saving}
+          disabled={disabled}
+          iconDisabled={saving}
           onNameChange={(name) => edit({ name })}
           onIconChosen={(file) => void upload(file)}
         />
@@ -578,24 +605,25 @@ function GeneralProjectSettings({
           options={repositories.options}
           value={draft.repository === undefined ? bound : draft.repository}
           loading={repositories.loading}
-          hint={repositories.hint}
-          disabled={saving}
-          connect={repositories.connect}
+          hint={readOnly ? undefined : repositories.hint}
+          disabled={disabled}
+          connect={!readOnly && repositories.connect}
           retrying={repositories.fetching}
-          onRetry={repositories.retry}
+          onRetry={readOnly ? undefined : repositories.retry}
           onValueChange={(repository) =>
             edit({ repository: repository ?? null })
           }
         />
         <GitRemoteAliasesSection
           value={aliases}
-          disabled={saving}
+          readOnly={readOnly}
+          disabled={disabled}
           onValueChange={(next) => edit({ aliases: next })}
         />
         <ShipBehaviorRow
           action={draft.shipAction}
           prompt={draft.shipPrompt}
-          disabled={saving}
+          disabled={disabled}
           onChange={(shipAction, shipPrompt) =>
             edit({
               shipAction,
@@ -609,7 +637,7 @@ function GeneralProjectSettings({
           saved={baseline.configuration.commitAuthor}
           viewer={viewer}
           workspace={baseline.workspaceId !== undefined}
-          disabled={saving}
+          disabled={disabled}
           onAuthorChange={(commitAuthor) => edit({ commitAuthor })}
           onCoAuthorChange={(dxCoAuthor) => edit({ dxCoAuthor })}
         />
@@ -618,7 +646,8 @@ function GeneralProjectSettings({
           options={additionalOptions}
           primaryWebUrl={baseline.repository?.webUrl}
           loading={repositories.loading}
-          disabled={saving}
+          readOnly={readOnly}
+          disabled={disabled}
           onValueChange={(next) => edit({ additional: next })}
         />
         <SettingsFormActions
@@ -631,12 +660,16 @@ function GeneralProjectSettings({
           onReset={() => undefined}
         />
       </SettingsCard>
-      <ChangeOwnerCard
-        project={project}
-        userId={userId}
-        workspace={workspace}
-      />
-      <DeleteProjectCard project={project} userId={userId} />
+      {readOnly ? null : (
+        <>
+          <ChangeOwnerCard
+            project={project}
+            userId={userId}
+            workspace={workspace}
+          />
+          <DeleteProjectCard project={project} userId={userId} />
+        </>
+      )}
       <UnsavedChangesGuard
         dirty={dirty}
         onDiscard={() => dispatch({ type: "reset", project })}
@@ -862,6 +895,7 @@ function ProjectIdentityRow({
   name,
   project,
   disabled,
+  iconDisabled,
   onNameChange,
   onIconChosen,
 }: {
@@ -869,6 +903,8 @@ function ProjectIdentityRow({
   readonly name: string;
   readonly project: ProjectData;
   readonly disabled: boolean;
+  /** Every member who opens the Project may set its icon. */
+  readonly iconDisabled: boolean;
   readonly onNameChange: (name: string) => void;
   readonly onIconChosen: (file: File) => void;
 }) {
@@ -906,7 +942,7 @@ function ProjectIdentityRow({
           <Button
             size="xs"
             variant="outline"
-            disabled={disabled}
+            disabled={iconDisabled}
             onClick={() =>
               document.getElementById("project-icon-input")?.click()
             }
@@ -920,7 +956,7 @@ function ProjectIdentityRow({
             type="file"
             aria-label="Project icon image"
             tabIndex={-1}
-            disabled={disabled}
+            disabled={iconDisabled}
             accept="image/png,image/jpeg,image/webp"
             onChange={(event) => {
               const file = event.currentTarget.files?.[0];
@@ -1052,10 +1088,12 @@ const copyCloneCommand = (cloneUrl: string) =>
  */
 function GitRemoteAliasesSection({
   value,
+  readOnly,
   disabled,
   onValueChange,
 }: {
   readonly value: ReadonlyArray<string>;
+  readonly readOnly: boolean;
   readonly disabled: boolean;
   readonly onValueChange: (value: ReadonlyArray<string>) => void;
 }) {
@@ -1090,52 +1128,56 @@ function GitRemoteAliasesSection({
           {value.map((alias) => (
             <li key={alias} title={alias}>
               <span>{alias}</span>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`Remove ${alias}`}
-                disabled={disabled}
-                onClick={() =>
-                  onValueChange(value.filter((saved) => saved !== alias))
-                }
-              >
-                <X />
-              </Button>
+              {readOnly ? null : (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Remove ${alias}`}
+                  disabled={disabled}
+                  onClick={() =>
+                    onValueChange(value.filter((saved) => saved !== alias))
+                  }
+                >
+                  <X />
+                </Button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <form
-        className="project-remote-alias-form"
-        onSubmit={(event) => {
-          event.preventDefault();
-          add();
-        }}
-      >
-        <Input
-          size="sm"
-          className="project-remote-alias-input"
-          aria-label="Git remote alias"
-          aria-invalid={invalid || undefined}
-          placeholder="git@github.com:owner/repo.git"
-          value={text}
-          disabled={disabled || full}
-          onChange={(event) => {
-            setText(event.target.value);
-            setInvalid(false);
+      {readOnly ? null : (
+        <form
+          className="project-remote-alias-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            add();
           }}
-        />
-        <Button
-          type="submit"
-          size="xs"
-          variant="outline"
-          aria-label="Add alias"
-          disabled={disabled || full || text.trim() === ""}
         >
-          <Plus aria-hidden="true" />
-          Add
-        </Button>
-      </form>
+          <Input
+            size="sm"
+            className="project-remote-alias-input"
+            aria-label="Git remote alias"
+            aria-invalid={invalid || undefined}
+            placeholder="git@github.com:owner/repo.git"
+            value={text}
+            disabled={disabled || full}
+            onChange={(event) => {
+              setText(event.target.value);
+              setInvalid(false);
+            }}
+          />
+          <Button
+            type="submit"
+            size="xs"
+            variant="outline"
+            aria-label="Add alias"
+            disabled={disabled || full || text.trim() === ""}
+          >
+            <Plus aria-hidden="true" />
+            Add
+          </Button>
+        </form>
+      )}
     </div>
   );
 }
@@ -1161,6 +1203,7 @@ function AdditionalRepositoriesSection({
   options,
   primaryWebUrl,
   loading,
+  readOnly,
   disabled,
   onValueChange,
 }: {
@@ -1168,6 +1211,7 @@ function AdditionalRepositoriesSection({
   readonly options: ReadonlyArray<RepositoryOption>;
   readonly primaryWebUrl: string | undefined;
   readonly loading: boolean;
+  readonly readOnly: boolean;
   readonly disabled: boolean;
   readonly onValueChange: (value: ReadonlyArray<RepositoryOption>) => void;
 }) {
@@ -1191,32 +1235,38 @@ function AdditionalRepositoriesSection({
                   ? repository.webUrl
                   : repository.fullName}
               </span>
-              <Button
-                size="icon-xs"
-                variant="ghost"
-                aria-label={`Remove ${repository.fullName}`}
-                disabled={disabled}
-                onClick={() =>
-                  onValueChange(
-                    value.filter(({ value: key }) => key !== repository.value),
-                  )
-                }
-              >
-                <X />
-              </Button>
+              {readOnly ? null : (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  aria-label={`Remove ${repository.fullName}`}
+                  disabled={disabled}
+                  onClick={() =>
+                    onValueChange(
+                      value.filter(
+                        ({ value: key }) => key !== repository.value,
+                      ),
+                    )
+                  }
+                >
+                  <X />
+                </Button>
+              )}
             </li>
           ))}
         </ul>
       )}
-      <AdditionalRepositoriesPicker
-        addTrigger
-        options={options}
-        primaryWebUrl={primaryWebUrl}
-        value={value}
-        loading={loading ? "Loading repositories…" : undefined}
-        disabled={disabled}
-        onValueChange={onValueChange}
-      />
+      {readOnly ? null : (
+        <AdditionalRepositoriesPicker
+          addTrigger
+          options={options}
+          primaryWebUrl={primaryWebUrl}
+          value={value}
+          loading={loading ? "Loading repositories…" : undefined}
+          disabled={disabled}
+          onValueChange={onValueChange}
+        />
+      )}
     </div>
   );
 }
@@ -1389,11 +1439,13 @@ function OrbProjectSettings({
   workspace,
   settingsPending,
   userId,
+  readOnly,
 }: {
   readonly project: ProjectData;
   readonly workspace?: SettingsContextData["workspace"];
   readonly settingsPending: boolean;
   readonly userId: UserId;
+  readonly readOnly: boolean;
 }) {
   const workspaceId = workspace?.id;
   const workspaceSlug = workspace?.shortName;
@@ -1416,6 +1468,7 @@ function OrbProjectSettings({
       project={project}
       userId={userId}
       defaultsTarget={defaultsTarget}
+      readOnly={readOnly}
     />
   );
 }
@@ -1424,10 +1477,12 @@ function ResolvedOrbProjectSettings({
   project,
   userId,
   defaultsTarget,
+  readOnly,
 }: {
   readonly project: ProjectData;
   readonly userId: UserId;
   readonly defaultsTarget: ProjectDefaultsTarget;
+  readonly readOnly: boolean;
 }) {
   const queryClient = useQueryClient();
   const defaults = useQuery(
@@ -1507,6 +1562,7 @@ function ResolvedOrbProjectSettings({
               groups={groups}
               selectedId={runnerProfileId}
               isDisabled={(profile) =>
+                readOnly ||
                 saving ||
                 unavailable.has(profile.id) ||
                 profile.availability !== "available" ||
@@ -1525,19 +1581,21 @@ function ResolvedOrbProjectSettings({
             {EXECUTION_ENVIRONMENT_DISPLAY_NAME} providers could not be loaded.
           </p>
         ) : null}
-        <SettingsFormActions
-          dirty={dirty}
-          saving={saving}
-          error={
-            updateMutation.error instanceof Error
-              ? updateMutation.error.message
-              : undefined
-          }
-          showStatus={false}
-          showReset={false}
-          onSave={() => void save()}
-          onReset={() => undefined}
-        />
+        {readOnly ? null : (
+          <SettingsFormActions
+            dirty={dirty}
+            saving={saving}
+            error={
+              updateMutation.error instanceof Error
+                ? updateMutation.error.message
+                : undefined
+            }
+            showStatus={false}
+            showReset={false}
+            onSave={() => void save()}
+            onReset={() => undefined}
+          />
+        )}
       </SettingsCard>
       <UnsavedChangesGuard
         dirty={dirty}
@@ -1545,7 +1603,11 @@ function ResolvedOrbProjectSettings({
           setRunnerProfileId(baseline.configuration.runnerProfileId)
         }
       />
-      <ProjectOrbScriptsCard projectId={project.id} userId={userId} />
+      <ProjectOrbScriptsCard
+        projectId={project.id}
+        userId={userId}
+        readOnly={readOnly}
+      />
       <ProjectOrbFilesCard projectId={project.id} userId={userId} />
     </div>
   );
@@ -1553,12 +1615,15 @@ function ResolvedOrbProjectSettings({
 
 function ProjectSecretsSettings({
   projectId,
+  readOnly,
   renderEnvironmentSettings,
 }: {
   readonly projectId: ProjectId;
+  readonly readOnly: boolean;
   readonly renderEnvironmentSettings: (
     projectId: ProjectId,
     onDirtyChange: (dirty: boolean) => void,
+    readOnly: boolean,
   ) => React.ReactNode;
 }) {
   const returnTo = useLocation({ select: (location) => location.href });
@@ -1585,7 +1650,7 @@ function ProjectSecretsSettings({
           </>
         }
       />
-      {renderEnvironmentSettings(projectId, setDirty)}
+      {renderEnvironmentSettings(projectId, setDirty, readOnly)}
       <UnsavedChangesGuard dirty={dirty} onDiscard={() => setDirty(false)} />
     </div>
   );

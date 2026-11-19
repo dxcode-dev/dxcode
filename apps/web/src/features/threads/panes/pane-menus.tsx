@@ -12,9 +12,8 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
-import type { CommandId } from "../../../shared/commands/command-registry.js";
-import { getBrowserCommandRegistry } from "../../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../../shared/commands/shortcut-keycaps.js";
+import { useCommandKeycaps } from "../../../shared/commands/use-command-keycaps.js";
 import { downloadFromUrl } from "../../../shared/download-from-url.js";
 import { terminalEnvironmentFormId } from "../../../shared/terminal-session.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
@@ -51,19 +50,6 @@ import {
 } from "./pane-layout.js";
 import { PANE_VIEWS, type PaneContents } from "./pane-views.js";
 import { TerminalWarmContext } from "./terminal-warm-context.js";
-
-/** The keycaps bound to a Thread command, as the keymap shows them. */
-const useCommandKeycaps = () => {
-  const registry = getBrowserCommandRegistry();
-  React.useSyncExternalStore(
-    registry.subscribe,
-    registry.getSnapshot,
-    registry.getServerSnapshot,
-  );
-  const commands = registry.getCommands("thread");
-  return (id: CommandId) =>
-    commands.find((command) => command.id === id)?.displayedKeycaps ?? [];
-};
 
 const availableViews = (contents: PaneContents) =>
   PANE_VIEW_KINDS.filter((view) => contents.views[view] !== undefined);

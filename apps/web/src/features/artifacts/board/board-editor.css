@@ -65,39 +65,6 @@
   cursor: default;
 }
 
-/* Who else is on the board: overlapping pictures in their cursor colors. */
-.board-presence {
-  display: inline-flex;
-  align-items: center;
-  flex: none;
-  margin-left: auto;
-  padding-right: 4px;
-}
-.board-presence-person {
-  display: inline-flex;
-  margin-left: -6px;
-  border-radius: var(--radius-full);
-  box-shadow:
-    0 0 0 2px var(--surface),
-    0 0 0 3.5px var(--board-person);
-}
-.board-presence-person:first-child {
-  margin-left: 0;
-}
-.board-presence-person .dx-avatar {
-  width: 20px;
-  height: 20px;
-  font-size: var(--text-3xs);
-}
-.board-presence-more {
-  margin-left: 6px;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
-.board-presence + .artifact-save {
-  margin-left: 4px;
-}
-
 /* The editor in dx's own colors and type, in light and dark: dx's tokens
    switch with the app's appearance (light-dark()), so these follow it. The
    doubled class outranks Excalidraw's own `.excalidraw.theme--dark`. */

@@ -1,18 +1,19 @@
-// Create Space's Agent row against a fake dx server, with the New Thread
-// composer's own plan list, at desktop and phone widths.
+// Create Space's two model rows against a fake dx server, with the New
+// Thread composer's own plan list, at desktop and phone widths.
 //
-// The row must show a Claude Code pick as the composer does: the orange
-// chip with the Claude icon and "<model> <effort>", the composer's plan list
-// ("Auto", "Plan 1", "Plan 2") and its limits button.
+// The Coordinator model row is dx's one model picker. Its Default row runs
+// the Space model from Settings on the route dx picked: Claude Code, with
+// the composer's plan list ("Auto", "Plan 1", "Plan 2") and limits button,
+// or Model Routing. The Thread model row is the same picker, defaulting to
+// "Same as coordinator".
 //
-// Ways it could go wrong: the row shows the long "Claude Code · … on …"
-// sentence instead of the chip; the chip is plain, lacks the Claude icon, or
-// words the model differently from the composer; the plan list shows with
-// one plan, hides with two, or lacks Auto; a
-// used-up plan is not marked; the picked plan is not the one the Space is
-// created on; the chip does not open the model picker; a Model Routing
-// route looks like Claude Code or shows a plan list; with no model served
-// the reason is hidden; the row overflows a phone's form.
+// Ways it could go wrong: the coordinator row hides the default's model or
+// route; the plan list shows with one plan, hides with two, or lacks Auto;
+// a used-up plan is not marked; the picked plan is not the one the Space is
+// created on; a Model Routing route shows a plan list; with no model served
+// the reason is hidden or the Space is created anyway; a model picked for
+// the coordinator or the threads is not sent; the default sends a model; a
+// row overflows a phone's form.
 //
 // Screenshots land in apps/web/.cache/spaces-ui/ (ignored by Git).
 
@@ -75,6 +76,27 @@ const CLAUDE_CODE_ROUTE = {
   connectionName: "Claude Pro/Max",
 };
 
+const SERVED = [
+  {
+    canonical: "openai/gpt-6-2-sol",
+    name: "GPT-6.2 Sol",
+    connectionId: "mcon_00000000-0000-4000-8000-0000000000f1",
+    connectionName: "OpenAI key",
+    contextWindow: 1_000_000,
+    reasoning: true,
+    vision: false,
+  },
+  {
+    canonical: "claude-code/claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
+    connectionId: PLAN_1,
+    connectionName: "Claude Pro/Max",
+    contextWindow: 1_000_000,
+    reasoning: true,
+    vision: false,
+  },
+];
+
 type Setup = {
   readonly route: Record<string, unknown>;
   readonly plans: ReadonlyArray<ReturnType<typeof plan>>;
@@ -93,7 +115,7 @@ const fakeServer = (setup: Setup) => {
     if (url.pathname === "/v1/settings/personal/model-routing/choices")
       return ok({
         modes: [],
-        models: [],
+        models: SERVED,
         claudePlans: setup.plans,
       });
     if (url.pathname === "/v1/spaces" && method === "POST") {
@@ -169,20 +191,24 @@ const mount = async (setup: Setup, width = 1440, height = 900) => {
   });
   await until(
     () =>
-      document
-        .querySelector(".space-agent-field")
-        ?.hasAttribute("data-route") === true,
+      coordinator()?.getAttribute("aria-label")?.includes("loading") === false,
   );
   await settle(200);
   return server;
 };
 
+const coordinator = () =>
+  document.querySelector<HTMLButtonElement>(
+    '[aria-label^="Coordinator model:"]',
+  );
+const threadPicker = () =>
+  document.querySelector<HTMLButtonElement>('[aria-label^="Thread model:"]');
 const row = () => {
-  const found = document.querySelector<HTMLElement>(".space-agent-field");
-  if (found === null) throw new Error("Expected the Agent row.");
+  const found = coordinator()?.closest<HTMLElement>(".space-field-row");
+  if (found === null || found === undefined)
+    throw new Error("Expected the Coordinator model row.");
   return found;
 };
-const chip = () => row().querySelector<HTMLButtonElement>(".space-agent-chip");
 const planSelect = () =>
   row().querySelector<HTMLSelectElement>('select[aria-label="Claude plan"]');
 const planOptions = () =>
@@ -191,55 +217,26 @@ const limitsButton = () =>
   row().querySelector<HTMLButtonElement>(
     'button[aria-label="Claude plan limits"]',
   );
-/** The row's words a person sees, without the screen reader's line. */
-const visibleText = () => {
-  const clone = row().cloneNode(true) as HTMLElement;
-  for (const hidden of clone.querySelectorAll(".visually-hidden"))
-    hidden.remove();
-  for (const select of clone.querySelectorAll("select")) select.remove();
-  return clone.textContent?.replace(/\s+/g, " ").trim();
-};
-const shoot = (name: string) =>
+const shoot = (name: string, element: HTMLElement = row()) =>
   page.screenshot({
-    path: `../../../.cache/spaces-ui/create-space-agent-${name}.png`,
-    element: row(),
+    path: `../../../.cache/spaces-ui/create-space-models-${name}.png`,
+    element,
   });
-
-it("shows one Claude plan as the composer's Claude Code chip", async () => {
-  await mount({
-    route: CLAUDE_CODE_ROUTE,
-    plans: [plan(PLAN_1, "Claude Pro/Max")],
-  });
-  const button = chip();
-  expect(button?.textContent?.trim()).toBe("Opus 5.5 Medium");
-  expect(button?.hasAttribute("data-claude-code")).toBe(true);
-  expect(button?.querySelector("svg")).not.toBeNull();
-  expect(getComputedStyle(button as Element).color).toBe("rgb(232, 130, 94)");
-  // The long route sentence is the screen reader's, not on screen.
-  expect(visibleText()).toBe("Opus 5.5 Medium");
-  expect(row().querySelector('[role="status"]')?.textContent).toBe(
-    "Claude Code · Claude Opus 5.5 · Medium, on Claude Pro/Max",
+const pick = async (trigger: HTMLButtonElement | null, name: RegExp) => {
+  await userEvent.click(trigger as HTMLButtonElement);
+  await until(() =>
+    [...document.querySelectorAll('[role="option"]')].some((option) =>
+      name.test(option.textContent ?? ""),
+    ),
   );
-  // One plan: no list, as in the composer; its limits are one tap away.
-  expect(planSelect()).toBeNull();
-  expect(limitsButton()).not.toBeNull();
-  await shoot("one-plan");
-});
-
-it("offers Auto and each plan, and creates the Space on the plan picked", async () => {
-  const server = await mount({
-    route: CLAUDE_CODE_ROUTE,
-    plans: [plan(PLAN_1, "Claude Pro/Max"), plan(PLAN_2, "Claude Pro/Max 2")],
-  });
-  await until(() => planSelect() !== null);
-  expect(planOptions()).toEqual(["Auto", "Plan 1", "Plan 2"]);
-  expect(chip()?.textContent?.trim()).toBe("Opus 5.5 Medium");
-  await shoot("auto");
-  await userEvent.selectOptions(planSelect() as HTMLSelectElement, PLAN_2);
+  await userEvent.click(
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => name.test(option.textContent ?? ""),
+    ) as HTMLElement,
+  );
   await settle();
-  expect(row().querySelector('[role="status"]')?.textContent).toContain(
-    "on Claude Pro/Max 2",
-  );
+};
+const create = async () => {
   await userEvent.type(
     document.getElementById(
       document
@@ -253,8 +250,43 @@ it("offers Auto and each plan, and creates the Space on the plan picked", async 
       (element) => element.textContent?.startsWith("Create Space"),
     ) as HTMLButtonElement,
   );
+};
+
+it("shows the Space model on Claude Code, with one plan's limits", async () => {
+  await mount({
+    route: CLAUDE_CODE_ROUTE,
+    plans: [plan(PLAN_1, "Claude Pro/Max")],
+  });
+  expect(coordinator()?.getAttribute("aria-label")).toBe(
+    "Coordinator model: Default, Claude Opus 5.5",
+  );
+  expect(coordinator()?.textContent).toContain("Claude Opus 5.5");
+  expect(coordinator()?.querySelector(".dx-model-mark svg")).not.toBeNull();
+  // One plan: no list, as in the composer; its limits are one tap away.
+  expect(planSelect()).toBeNull();
+  expect(limitsButton()).not.toBeNull();
+  expect(threadPicker()?.getAttribute("aria-label")).toBe(
+    "Thread model: Same as coordinator, Claude Opus 5.5, Medium effort",
+  );
+  await shoot("one-plan");
+});
+
+it("offers Auto and each plan, and creates the Space on the plan picked", async () => {
+  const server = await mount({
+    route: CLAUDE_CODE_ROUTE,
+    plans: [plan(PLAN_1, "Claude Pro/Max"), plan(PLAN_2, "Claude Pro/Max 2")],
+  });
+  await until(() => planSelect() !== null);
+  expect(planOptions()).toEqual(["Auto", "Plan 1", "Plan 2"]);
+  await shoot("auto");
+  await userEvent.selectOptions(planSelect() as HTMLSelectElement, PLAN_2);
+  await settle();
+  await create();
   await until(() => server.created.length === 1);
   expect(server.created[0]?.claudeConnectionId).toBe(PLAN_2);
+  // The defaults send no model: the server uses the person's settings.
+  expect(server.created[0]).not.toHaveProperty("agentModel");
+  expect(server.created[0]).not.toHaveProperty("threadModel");
 });
 
 it("lists Auto and two plans, and marks a used-up one", async () => {
@@ -275,18 +307,29 @@ it("lists Auto and two plans, and marks a used-up one", async () => {
   await shoot("used-up");
 });
 
-it("opens the model picker from the chip", async () => {
-  await mount({
+it("creates the Space with the coordinator and thread models picked, without plans", async () => {
+  const server = await mount({
     route: CLAUDE_CODE_ROUTE,
-    plans: [plan(PLAN_1, "Claude Pro/Max")],
+    plans: [plan(PLAN_1, "Claude Pro/Max"), plan(PLAN_2, "Claude Pro/Max 2")],
   });
-  await userEvent.click(chip() as HTMLButtonElement);
-  await until(
-    () => document.querySelector('[aria-label="Space model"]') !== null,
+  await pick(coordinator(), /^GPT-6\.2 Sol/);
+  expect(coordinator()?.getAttribute("aria-label")).toBe(
+    "Coordinator model: GPT-6.2 Sol, Medium effort",
   );
+  // A picked model runs on Model Routing: no plan list.
+  expect(planSelect()).toBeNull();
+  await pick(threadPicker(), /^Claude Code · Claude Sonnet 5\.5/);
+  await shoot("picked", row().parentElement as HTMLElement);
+  await create();
+  await until(() => server.created.length === 1);
+  expect(server.created[0]).toMatchObject({
+    agentModel: { model: "openai/gpt-6-2-sol", thinking: "medium" },
+    threadModel: { model: "claude-code/claude-sonnet-5-5", thinking: "medium" },
+  });
+  expect(server.created[0]).not.toHaveProperty("claudeConnectionId");
 });
 
-it("names a Model Routing model without Claude Code's look or plans", async () => {
+it("names a Model Routing model without plans", async () => {
   await mount({
     route: {
       kind: "model-routing",
@@ -297,15 +340,16 @@ it("names a Model Routing model without Claude Code's look or plans", async () =
     },
     plans: [],
   });
-  expect(chip()?.textContent?.trim()).toBe("GLM 5.3 Flash High");
-  expect(chip()?.hasAttribute("data-claude-code")).toBe(false);
+  expect(coordinator()?.getAttribute("aria-label")).toBe(
+    "Coordinator model: Default, GLM 5.3 Flash",
+  );
   expect(planSelect()).toBeNull();
   expect(limitsButton()).toBeNull();
   await shoot("model-routing");
 });
 
-it("says why no model serves Spaces and offers to pick one", async () => {
-  await mount({
+it("says why no model serves Spaces and creates nothing until one is picked", async () => {
+  const server = await mount({
     route: {
       kind: "unavailable",
       model: "anthropic/claude-opus-5-5",
@@ -316,17 +360,27 @@ it("says why no model serves Spaces and offers to pick one", async () => {
     plans: [],
   });
   expect(row().querySelector('[role="alert"]')?.textContent).toBe(
-    "No connection serves Claude Opus 5.5.",
-  );
-  expect(chip()?.textContent?.trim()).toBe("Pick a model");
-  await userEvent.click(chip() as HTMLButtonElement);
-  await until(
-    () => document.querySelector('[aria-label="Space model"]') !== null,
+    "No connection serves Claude Opus 5.5. Pick another model for this Space.",
   );
   await shoot("unavailable");
+  await create();
+  await settle(200);
+  expect(server.created).toHaveLength(0);
+  await pick(coordinator(), /^GPT-6\.2 Sol/);
+  expect(row().querySelector('[role="alert"]')).toBeNull();
+  await userEvent.click(
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (element) => element.textContent?.startsWith("Create Space"),
+    ) as HTMLButtonElement,
+  );
+  await until(() => server.created.length === 1);
+  expect(server.created[0]?.agentModel).toEqual({
+    model: "openai/gpt-6-2-sol",
+    thinking: "medium",
+  });
 });
 
-it("keeps the chip and plan list in one row inside a phone's form", async () => {
+it("keeps both model rows inside a phone's form", async () => {
   await mount(
     {
       route: CLAUDE_CODE_ROUTE,
@@ -337,20 +391,17 @@ it("keeps the chip and plan list in one row inside a phone's form", async () => 
   );
   await until(() => planSelect() !== null);
   const form = row().closest("form")?.getBoundingClientRect();
-  const controls = [chip(), planSelect()?.parentElement, limitsButton()].map(
-    (element) => element?.getBoundingClientRect(),
-  );
-  for (const box of controls) {
+  for (const control of [
+    coordinator(),
+    planSelect()?.parentElement,
+    limitsButton(),
+    threadPicker(),
+  ]) {
+    const box = control?.getBoundingClientRect();
     expect(box).toBeDefined();
     expect(box?.right ?? Infinity).toBeLessThanOrEqual((form?.right ?? 0) + 1);
-    expect(
-      Math.abs(
-        (box?.top ?? 0) +
-          (box?.height ?? 0) / 2 -
-          ((controls[0]?.top ?? 0) + (controls[0]?.height ?? 0) / 2),
-      ),
-    ).toBeLessThan(2);
+    expect(box?.left ?? -1).toBeGreaterThanOrEqual((form?.left ?? 0) - 1);
   }
   row().scrollIntoView();
-  await shoot("phone");
+  await shoot("phone", row().parentElement as HTMLElement);
 });

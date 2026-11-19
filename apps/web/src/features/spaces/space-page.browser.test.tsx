@@ -458,6 +458,9 @@ const serve = ({
       });
     if (path.startsWith(`/v1/threads/${SPACE}/message-comments/`))
       return ok({ message: null, comments: [] });
+    // How the person left the Space's page: never saved.
+    if (path === `/v1/threads/${SPACE}/layout`)
+      return ok({ layout: method === "PUT" ? body : null });
     return new Promise<Response>(() => {});
   });
   return state;

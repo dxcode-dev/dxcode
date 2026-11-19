@@ -621,6 +621,8 @@ export function SpaceCallAndSharing({
 export function SpacePanel({
   space,
   activeThreadId,
+  tab,
+  onTabChange,
   onOpenThread,
   onOpenComments,
   onOpened,
@@ -631,6 +633,12 @@ export function SpacePanel({
 }: {
   readonly space: SpaceData;
   readonly activeThreadId: ThreadId | undefined;
+  /**
+   * The tab it opens on, the one last chosen in the column, which saves each
+   * choice; the phone's sheet opens on Threads.
+   */
+  readonly tab?: SpacePanelTab;
+  readonly onTabChange?: (tab: SpacePanelTab) => void;
   readonly onOpenThread: (threadId: ThreadId) => void;
   /** Brings the Space chat, where a message's comments open, to the front. */
   readonly onOpenComments: () => void;
@@ -650,7 +658,8 @@ export function SpacePanel({
     threads?.some(
       (thread) => thread.unread === true && thread.id !== activeThreadId,
     ) === true;
-  const [tab, setTab] = React.useState<SpacePanelTab>("threads");
+  // Read once: the tabs own the choice while the panel is open.
+  const [openOn] = React.useState(tab ?? "threads");
   const status = spaceStatusText(space);
   return (
     <div
@@ -703,8 +712,9 @@ export function SpacePanel({
       <Tabs
         variant="segmented"
         className="space-panel-tabs"
-        value={tab}
-        onValueChange={(value) => setTab(value as SpacePanelTab)}
+        // The tabs switch at once; the column's choice is saved.
+        defaultValue={openOn}
+        onValueChange={(value) => onTabChange?.(value as SpacePanelTab)}
       >
         <TabsList className="space-panel-tab-list" aria-label="Space panel">
           <Tab className="space-panel-tab" value="threads">

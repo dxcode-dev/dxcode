@@ -215,6 +215,7 @@ import {
   ThreadDeletedResponseSchema,
   type ThreadDetailData,
   ThreadDraftResponseSchema,
+  type ThreadDraftSlot,
   ThreadFollowResponseSchema,
   ThreadIdUnavailableResponseSchema,
   type ThreadListItem,
@@ -252,6 +253,7 @@ import {
   type WorkspaceAgentInstructionsData,
   WorkspaceAgentInstructionsErrorResponseSchema,
   WorkspaceAgentInstructionsResponseSchema,
+  type WorkspaceDraftSlot,
   WorkspaceInviteLinkResponseSchema,
   WorkspaceInvitePreviewResponseSchema,
   WorkspaceMemberResponseSchema,
@@ -2835,38 +2837,46 @@ export const putThreadPaneLayout = async (
     )
   ).data.layout;
 
-/** The signed-in person's unsent message in a Thread's composer; "" if none. */
-export const getThreadDraft = async (
-  threadId: ThreadId,
+/**
+ * Where a composer's draft lives: `/v1/threads/:threadId/draft` with an
+ * optional `?slot=`, or `/v1/drafts/workspaces/:workspace/:slot`.
+ */
+const draftPath = (
+  draft:
+    | { readonly threadId: ThreadId; readonly slot?: ThreadDraftSlot }
+    | { readonly workspace: string; readonly slot: WorkspaceDraftSlot },
+) =>
+  "threadId" in draft
+    ? `/v1/threads/${encodeURIComponent(draft.threadId)}/draft${
+        draft.slot === undefined
+          ? ""
+          : `?slot=${encodeURIComponent(draft.slot)}`
+      }`
+    : `/v1/drafts/workspaces/${encodeURIComponent(draft.workspace)}/${draft.slot}`;
+
+/** The signed-in person's unsent text in one composer; "" if none. */
+export const getComposerDraft = async (
+  draft: Parameters<typeof draftPath>[0],
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/draft`,
-      ThreadDraftResponseSchema,
-      { signal },
-    )
-  ).data.text;
+  (await request(draftPath(draft), ThreadDraftResponseSchema, { signal })).data
+    .text;
 
 /**
- * Saves the person's draft in a Thread's composer; `""` removes it.
- * `keepalive` lets a save started as the page unloads finish.
+ * Saves the person's draft in one composer; `""` removes it. `keepalive`
+ * lets a save started as the page unloads finish.
  */
-export const putThreadDraft = async (
-  threadId: ThreadId,
+export const putComposerDraft = async (
+  draft: Parameters<typeof draftPath>[0],
   text: string,
-  options: { readonly keepalive?: boolean } = {},
+  keepalive: boolean,
 ) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/draft`,
-      ThreadDraftResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({ text }),
-        ...(options.keepalive ? { keepalive: true } : {}),
-      },
-    )
+    await request(draftPath(draft), ThreadDraftResponseSchema, {
+      method: "PUT",
+      body: JSON.stringify({ text }),
+      ...(keepalive ? { keepalive: true } : {}),
+    })
   ).data.text;
 
 export const markAllNotificationsRead = async () =>

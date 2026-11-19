@@ -87,13 +87,16 @@ export const resolveSpaceAgentRoute = async (
   bindings: Bindings,
   userId: UserId,
   claudeConnectionId?: string,
+  /** The model picked for this one Space, over the person's setting. */
+  override?: Pin,
 ): Promise<SpaceAgentResolution> => {
   const db = bindings.DB;
   if (db === undefined) throw new Error("Model routing is not configured.");
-  const effective: Pin = (await loadSpaceAgentModel(db, userId)) ?? {
-    model: SPACE_AGENT_DEFAULT.model as Pin["model"],
-    thinking: SPACE_AGENT_DEFAULT.thinking,
-  };
+  const effective: Pin = override ??
+    (await loadSpaceAgentModel(db, userId)) ?? {
+      model: SPACE_AGENT_DEFAULT.model as Pin["model"],
+      thinking: SPACE_AGENT_DEFAULT.thinking,
+    };
   const thinking = effective.thinking;
   const claudeCode = claudeCodeModelFor(effective.model);
   if (claudeCode !== undefined) {
@@ -199,7 +202,7 @@ export const resolveSpaceAgentRoute = async (
         model: effective.model,
         modelName: modelName(effective.model),
         thinking,
-        message: `No connection serves ${modelName(effective.model)}. Connect a Claude Pro/Max plan or a provider that serves it in Model Routing, or pick another model for Spaces in Mode Dial.`,
+        message: `No connection serves ${modelName(effective.model)}. Connect a Claude Pro/Max plan or a provider that serves it, or pick another model for Spaces, in Settings → Models & Routing.`,
       },
     };
   }
@@ -231,7 +234,7 @@ const failure = (
     status as never,
   );
 
-/** `/v1/settings/personal/space-agent-model`: Settings → Mode Dial → Space. */
+/** `/v1/settings/personal/space-agent-model`: Settings → Models & Routing → Spaces. */
 export const spaceAgentModelRoutes = new Hono<AppEnv>()
   .get("/", async (context) => {
     const db = context.env.DB;

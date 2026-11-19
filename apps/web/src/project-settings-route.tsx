@@ -3,9 +3,10 @@ import { ProjectEnvironmentVariablesSettings } from "./features/settings/environ
 
 export const ProjectSettingsRoute = () => (
   <ProjectSettingsPage
-    renderEnvironmentSettings={(projectId, onDirtyChange) => (
+    renderEnvironmentSettings={(projectId, onDirtyChange, readOnly) => (
       <ProjectEnvironmentVariablesSettings
         projectId={projectId}
+        readOnly={readOnly}
         onDirtyChange={onDirtyChange}
       />
     )}

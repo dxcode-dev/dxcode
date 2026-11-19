@@ -9,11 +9,12 @@ import {
   X,
 } from "lucide-react";
 import * as React from "react";
+import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { useCommandKeycaps } from "../../shared/commands/use-command-keycaps.js";
 import { Button } from "../../shared/ui/button.js";
 import { LazyImageViewer as ImageViewer } from "../../shared/ui/lazy-image-viewer.js";
 import {
   MenuItem,
-  MenuItemHint,
   MenuPopup,
   MenuRoot,
   MenuTrigger,
@@ -352,6 +353,7 @@ export function AttachmentMenu({
   readonly onScreenshot: () => void;
 }) {
   const [open, setOpen] = React.useState(false);
+  const addKeycaps = useCommandKeycaps();
   const inputRef = React.useRef<HTMLInputElement>(null);
   return (
     <span className="attachment-menu-wrap">
@@ -394,7 +396,10 @@ export function AttachmentMenu({
           >
             <Paperclip />
             <span>Add Images &amp; Files</span>
-            <MenuItemHint>⌘U</MenuItemHint>
+            <ShortcutKeycaps
+              keycaps={addKeycaps("thread.add-images")}
+              emptyLabel=""
+            />
           </MenuItem>
           <MenuItem
             nativeButton

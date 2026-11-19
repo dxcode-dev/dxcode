@@ -1260,9 +1260,9 @@ function ThreadSessionContent({
   const workspace = settingsQuery.data?.workspace;
   const modelRoutingDestination =
     project.workspaceId === undefined
-      ? "/settings/model-routing"
+      ? "/settings/models"
       : workspace?.id === project.workspaceId
-        ? `/workspaces/${workspace.shortName}/settings/model-routing`
+        ? `/workspaces/${workspace.shortName}/settings/models`
         : undefined;
   const openModelRouting =
     modelRoutingDestination === undefined

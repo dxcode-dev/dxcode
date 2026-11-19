@@ -50,7 +50,7 @@ export function PersonalAgentInstructionsForm(
       {...props}
       heading="What dx should know about you. The agent gets these alongside each project's AGENTS.md, even in projects without one."
       fileName="Global AGENTS.md"
-      fileDescription="Personal guidance for the top-level agent in every new Thread, like an AGENTS.md that follows you across projects. Subagents and system tasks do not receive it."
+      fileDescription="Personal guidance for your top-level agent, like an AGENTS.md that follows you across projects. Subagents and system tasks do not receive it. Changes apply to new Threads. Open Threads keep the instructions they started with."
       maxLength={MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH}
       savedMessage="Saved. New Threads use these instructions."
     />

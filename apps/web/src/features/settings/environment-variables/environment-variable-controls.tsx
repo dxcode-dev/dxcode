@@ -591,7 +591,7 @@ export function EnvironmentVariableValues({
                 <td className="environment-values-cell environment-values-value">
                   <Link
                     to="/settings/$section"
-                    params={{ section: "model-routing" }}
+                    params={{ section: "models" }}
                     state={(previous) => previous}
                     className="environment-values-link"
                   >

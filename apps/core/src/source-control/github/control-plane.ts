@@ -6,6 +6,7 @@ import {
 import { Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { sourceControlLogger } from "../../logging.js";
+import { grantReachesRepositorySql } from "../authority.js";
 import {
   type ConfigEncryptionKeyring,
   loadConfigEncryptionKeyring,
@@ -123,6 +124,29 @@ const incrementEpoch = (
         epoch = epoch + 1, updated_at = excluded.updated_at
     `)
     .bind(kind, subjectId, now);
+
+/**
+ * Statements that disconnect a collaborator's grant: its selections go, and
+ * its epoch moves so Threads that captured it are refused.
+ */
+const dropCollaboratorGrant = (
+  db: D1Database,
+  grantId: string,
+  now: string,
+) => [
+  db
+    .prepare(
+      "DELETE FROM github_owner_repository_selection WHERE owner_grant_id = ?",
+    )
+    .bind(grantId),
+  db
+    .prepare(`
+      UPDATE github_owner_grant SET status = 'disconnected', updated_at = ?
+       WHERE id = ? AND repository_scope = 'selected'
+    `)
+    .bind(now, grantId),
+  incrementEpoch(db, "owner-grant", grantId, now),
+];
 
 interface AuthorizationRow {
   readonly id: string;
@@ -611,10 +635,12 @@ export const createGitHubControlPlane = (input: {
           FROM github_owner_grant AS stale
          WHERE stale.owner_scope = 'personal' AND stale.owner_id = ?
            AND stale.status = 'disconnected'
+           AND stale.repository_scope = 'installation'
            AND NOT EXISTS (
              SELECT 1 FROM github_owner_grant AS current
               WHERE current.installation_id = stale.installation_id
                 AND current.status != 'disconnected'
+                AND current.repository_scope = 'installation'
            )
       `)
       .bind(userId)
@@ -877,6 +903,7 @@ export const createGitHubControlPlane = (input: {
       ]);
       throw cause;
     }
+    await syncCollaboratorGrantsQuietly(userId);
     return transaction.return_to ?? undefined;
   };
 
@@ -1110,6 +1137,7 @@ export const createGitHubControlPlane = (input: {
           vault.remove(personalOwner(actorUserId), verifierReference),
         ),
       );
+      await syncCollaboratorGrantsQuietly(actorUserId);
       return {
         grantId,
         status,
@@ -1222,6 +1250,173 @@ export const createGitHubControlPlane = (input: {
       if (reactivated.meta.changes !== 1)
         return yield* new GitHubControlPlaneInvalid();
     });
+
+  /**
+   * Matches the user's collaborator grants to GitHub. For every App
+   * installation dx knows that GitHub lists for the user's token but the
+   * user did not install, the user holds a `selected` grant reaching exactly
+   * the repositories GitHub lists for them there (those they own or
+   * collaborate on), among the ones the installation is entitled to. A
+   * repository they lost moves the grant's epoch, and a grant left with none
+   * is disconnected. Grants from installing the App are never touched.
+   */
+  const syncCollaboratorGrants = async (actorUserId: string) => {
+    const authorization = await freshAuthorization(actorUserId);
+    const accessToken = await readAccessToken(
+      vault,
+      keyring,
+      actorUserId,
+      authorization.access_token_reference_id,
+    );
+    const visible = await provider.listUserInstallations(accessToken);
+    const grants = await db
+      .prepare(`
+        SELECT id, installation_id, repository_scope, status
+          FROM github_owner_grant
+         WHERE owner_scope = 'personal' AND owner_id = ?
+      `)
+      .bind(actorUserId)
+      .all<{
+        id: string;
+        installation_id: string;
+        repository_scope: "installation" | "selected";
+        status: string;
+      }>();
+    const byInstallation = new Map(
+      grants.results.map((grant) => [grant.installation_id, grant]),
+    );
+    const reached = new Map<string, ReadonlyArray<string>>();
+    for (const installation of visible) {
+      const own = byInstallation.get(installation.id);
+      if (own !== undefined && own.repository_scope === "installation")
+        continue;
+      const known = await db
+        .prepare(
+          "SELECT 1 AS found FROM github_installation WHERE installation_id = ? AND status = 'active'",
+        )
+        .bind(installation.id)
+        .first<{ found: number }>();
+      if (known === null) continue;
+      const repositories = await provider.listUserInstallationRepositories(
+        accessToken,
+        installation.id,
+      );
+      const ids = repositories.map((repository) => repository.id);
+      if (ids.length === 0) continue;
+      const entitled = await db
+        .prepare(`
+          SELECT provider_repository_id FROM github_installation_repository
+           WHERE installation_id = ? AND entitled = 1
+             AND provider_repository_id IN (SELECT value FROM json_each(?))
+        `)
+        .bind(installation.id, JSON.stringify(ids))
+        .all<{ provider_repository_id: string }>();
+      if (entitled.results.length > 0)
+        reached.set(
+          installation.id,
+          entitled.results.map((row) => row.provider_repository_id),
+        );
+    }
+    const now = nowIso();
+    const statements: D1PreparedStatement[] = [
+      db
+        .prepare(`
+          UPDATE github_user_authorization
+             SET collaborator_grants_synced_at = ?
+           WHERE id = ?
+        `)
+        .bind(now, authorization.id),
+    ];
+    for (const grant of grants.results) {
+      if (grant.repository_scope !== "selected") continue;
+      if (grant.status === "disconnected") continue;
+      if (!reached.has(grant.installation_id))
+        statements.push(...dropCollaboratorGrant(db, grant.id, now));
+    }
+    for (const [installationId, repositoryIds] of reached) {
+      const grantId =
+        byInstallation.get(installationId)?.id ??
+        `ghg_personal_${actorUserId}_${installationId}`;
+      const previous = await db
+        .prepare(`
+          SELECT provider_repository_id FROM github_owner_repository_selection
+           WHERE owner_grant_id = ?
+        `)
+        .bind(grantId)
+        .all<{ provider_repository_id: string }>();
+      const next = new Set(repositoryIds);
+      const lost = previous.results.some(
+        (row) => !next.has(row.provider_repository_id),
+      );
+      statements.push(
+        db
+          .prepare(`
+            INSERT INTO github_owner_grant (
+              id, owner_scope, owner_id, installation_id, status,
+              repository_scope, created_by_user_id, created_at, updated_at
+            ) VALUES (?, 'personal', ?, ?, 'active', 'selected', ?, ?, ?)
+            ON CONFLICT(owner_scope, owner_id, installation_id) DO UPDATE SET
+              status = 'active', updated_at = excluded.updated_at
+             WHERE github_owner_grant.repository_scope = 'selected'
+          `)
+          .bind(grantId, actorUserId, installationId, actorUserId, now, now),
+        db
+          .prepare(`
+            DELETE FROM github_owner_repository_selection
+             WHERE owner_grant_id = ?
+               AND provider_repository_id NOT IN (SELECT value FROM json_each(?))
+          `)
+          .bind(grantId, JSON.stringify(repositoryIds)),
+        ...repositoryIds.map((repositoryId) =>
+          db
+            .prepare(`
+              INSERT OR IGNORE INTO github_owner_repository_selection (
+                owner_grant_id, installation_id, provider_repository_id,
+                selected_at, selected_by_user_id
+              ) VALUES (?, ?, ?, ?, ?)
+            `)
+            .bind(grantId, installationId, repositoryId, now, actorUserId),
+        ),
+        ...(lost ? [incrementEpoch(db, "owner-grant", grantId, now)] : []),
+      );
+    }
+    await db.batch(statements);
+  };
+
+  /**
+   * `syncCollaboratorGrants` without failing the caller, at most once a
+   * minute unless `force`: a person without a GitHub sign-in, or a GitHub
+   * outage, leaves their grants as they were.
+   */
+  const syncCollaboratorGrantsQuietly = async (
+    actorUserId: string,
+    force = true,
+  ) => {
+    try {
+      if (!force) {
+        const recent = await db
+          .prepare(`
+            SELECT 1 AS found FROM github_user_authorization
+             WHERE user_id = ? AND status = 'active'
+               AND collaborator_grants_synced_at > ?
+          `)
+          .bind(actorUserId, new Date(Date.now() - 60_000).toISOString())
+          .first<{ found: number }>();
+        if (recent !== null) return;
+      }
+      await syncCollaboratorGrants(actorUserId);
+    } catch (cause) {
+      sourceControlLogger.warn("GitHub collaborator grant sync failed.", {
+        event: "github_collaborator_grant_sync_failed",
+        failureCategory:
+          cause instanceof GitHubProviderError
+            ? `provider:${cause.category}`
+            : cause instanceof GitHubControlPlaneForbidden
+              ? "no-authorization"
+              : "unknown",
+      });
+    }
+  };
 
   const renewer =
     input.renewer ??
@@ -1377,13 +1572,23 @@ export const createGitHubControlPlane = (input: {
   ) => {
     const grant = await db
       .prepare(`
-        SELECT installation_id FROM github_owner_grant
+        SELECT installation_id, repository_scope FROM github_owner_grant
          WHERE id = ? AND owner_scope = ? AND owner_id = ?
            AND status != 'disconnected'
       `)
       .bind(grantId, owner.scope, owner.id)
-      .first<{ installation_id: string }>();
+      .first<{
+        installation_id: string;
+        repository_scope: "installation" | "selected";
+      }>();
     if (grant === null) throw new GitHubControlPlaneForbidden();
+    if (grant.repository_scope === "selected") {
+      // A collaborator's grant is someone else's installation: drop only the
+      // grant, never the installation or its owner's grant.
+      const now = nowIso();
+      await db.batch(dropCollaboratorGrant(db, grantId, now));
+      return;
+    }
     const authorization = await activeAuthorization(db, actorUserId);
     const accessToken = await readAccessToken(
       vault,
@@ -1499,6 +1704,8 @@ export const createGitHubControlPlane = (input: {
     completeInstallation,
     reconcile,
     refresh,
+    syncCollaboratorGrants,
+    syncCollaboratorGrantsQuietly,
     userAccessToken,
     revokeAuthorization,
     disconnect,
@@ -1528,6 +1735,43 @@ export const readGitHubUserAccessToken = async (
     vault,
     renewer: githubRenewerFor(bindings, db),
   }).userAccessToken(userId);
+};
+
+/**
+ * Matches the user's collaborator grants to GitHub (`syncCollaboratorGrants`)
+ * without failing: at most once a minute unless `force`.
+ */
+export const syncGitHubCollaboratorGrants = async (
+  bindings: Bindings,
+  db: D1Database,
+  userId: string,
+  force = true,
+) => {
+  let controlPlane: ReturnType<typeof createGitHubControlPlane>;
+  try {
+    const config = await Effect.runPromise(
+      loadGitHubAppConfiguration(bindings),
+    );
+    const keyring = await Effect.runPromise(
+      loadConfigEncryptionKeyring(bindings),
+    );
+    const vault = await Effect.runPromise(
+      Effect.gen(function* () {
+        return yield* IntegrationCredentialVault;
+      }).pipe(Effect.provide(IntegrationCredentialVaultD1(db))),
+    );
+    controlPlane = createGitHubControlPlane({
+      db,
+      config,
+      keyring,
+      vault,
+      renewer: githubRenewerFor(bindings, db),
+    });
+  } catch {
+    // A deployment without the GitHub App has no grants to sync.
+    return;
+  }
+  await controlPlane.syncCollaboratorGrantsQuietly(userId, force);
 };
 
 /** The person's GitHub sign-in, for Settings to ask for a reconnect. */
@@ -1575,10 +1819,12 @@ export const listGitHubGrants = async (db: D1Database, owner: GitHubOwner) => {
           SELECT repository.provider_repository_id, repository.full_name,
                  repository.web_url, repository.visibility
             FROM github_installation_repository AS repository
+            JOIN github_owner_grant AS grant_row ON grant_row.id = ?
            WHERE repository.installation_id = ? AND repository.entitled = 1
+             AND ${grantReachesRepositorySql("grant_row", "repository")}
            ORDER BY repository.provider_repository_id
         `)
-        .bind(grant.installation_id)
+        .bind(grant.id, grant.installation_id)
         .all<Record<string, string | number>>();
       return {
         id: grant.id,

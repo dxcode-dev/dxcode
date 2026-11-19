@@ -14,6 +14,7 @@ import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
+import { effortLabel } from "../../shared/model-effort-label.js";
 import {
   modelRoutingChoicesQueryOptions,
   modelRoutingGraphQueryOptions,
@@ -21,7 +22,6 @@ import {
 import { claudePlanNumber } from "./claude-code-mode-options.js";
 import { ModelPicker } from "./model-picker.js";
 import {
-  effortLabel,
   modeSlot,
   RAW_MODEL_DEFAULT_EFFORT,
   resolvedPick,

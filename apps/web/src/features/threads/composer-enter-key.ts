@@ -17,7 +17,8 @@ const typesOnTouchKeyboard = () =>
  * keyboard, Enter sends and Shift+Enter adds a line. On a touch device, Enter
  * adds a line and the send button sends; Cmd/Ctrl+Enter also sends, because
  * a keyboard attached to a tablet cannot be told apart from the on-screen
- * one. IME composition never sends.
+ * one. IME composition never sends, and neither does Alt+Enter: it starts a
+ * new Thread.
  */
 export function useComposerEnterKey() {
   const touch = React.useSyncExternalStore(
@@ -31,6 +32,7 @@ export function useComposerEnterKey() {
     sends: (event: React.KeyboardEvent<HTMLTextAreaElement>) =>
       event.key === "Enter" &&
       !event.shiftKey &&
+      !event.altKey &&
       !event.nativeEvent.isComposing &&
       (!touch || event.metaKey || event.ctrlKey),
   };

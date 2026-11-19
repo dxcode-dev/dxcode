@@ -59,6 +59,7 @@ import { orbProvidersQueryOptions } from "../settings/orb-providers/orb-provider
 import { projectDefaultsQueryOptions } from "../settings/project-defaults/project-defaults-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { claudePlanPick } from "./claude-code-mode-options.js";
+import { useWorkspaceDraftText } from "./composer-draft-queries.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { attachmentsUploading } from "./image-attachments.js";
 import { InsertCurrentThreadButton } from "./insert-current-thread.js";
@@ -218,7 +219,9 @@ const useNewThreadDraft = (
   userId: UserId,
   workspaceId: WorkspaceId | "personal",
 ) => {
-  const store = getBrowserNewThreadDraftStore({ userId, workspaceId });
+  // Core keeps the prompt, so a reload or another device shows it.
+  const text = useWorkspaceDraftText(workspaceId, "new-thread");
+  const store = getBrowserNewThreadDraftStore({ userId, workspaceId }, text);
   return {
     store,
     snapshot: React.useSyncExternalStore(
@@ -493,11 +496,7 @@ function useComposerOpening(
   const composerOpen = React.useRef(true);
   useMountEffect(() => {
     // The opener's prompt joins the saved draft rather than replacing it.
-    const draftText = draftStore.getSnapshot().text.trimEnd();
-    if (initialPrompt !== undefined && !draftText.includes(initialPrompt))
-      draftStore.setText(
-        draftText === "" ? initialPrompt : `${draftText}\n\n${initialPrompt}`,
-      );
+    if (initialPrompt !== undefined) draftStore.appendPrompt(initialPrompt);
   });
   useMountEffect(() => {
     composerOpen.current = true;

@@ -1414,23 +1414,21 @@ button.space-goal-text {
   margin-left: 0;
 }
 
-/* Create Space → Agent: the New Thread composer's Claude Code chip, plan
-   list, and limits button, in one row; the reason above when no model
-   serves Spaces. */
-.space-agent-field {
-  display: grid;
-  justify-items: start;
-  gap: var(--space-2);
-  min-height: 36px;
-  align-content: center;
-}
-.space-agent-chips {
+/* Create Space → Coordinator model: dx's model picker, then the New Thread
+   composer's plan list and limits button in one row; the reason under them
+   when no model serves Spaces. */
+.space-model-row {
   display: flex;
   align-items: center;
   gap: var(--space-1-5);
   min-width: 0;
   max-width: 100%;
 }
+.space-model-row > .dx-model-picker-trigger {
+  flex: 1;
+  min-width: 0;
+}
+/* The Space panel's model chip. */
 .space-agent-chip {
   min-width: 0;
 }
@@ -1440,43 +1438,12 @@ button.space-goal-text {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.space-agent-chip:disabled {
-  cursor: default;
-  opacity: 0.5;
-}
 .space-agent-message {
   margin: 0;
   font-size: var(--text-md);
   line-height: var(--leading-4-5);
   color: var(--destructive);
 }
-/* A stacked dialog over Create Space (shared/ui/dialog.tsx). */
-.space-agent-picker {
-  display: grid;
-  gap: var(--space-3-5);
-}
-.space-agent-picker-title {
-  margin: 0;
-  font-size: var(--text-xl);
-}
-.space-agent-picker-lede,
-.space-agent-picker-route {
-  margin: 0;
-  font-size: var(--text-md);
-  color: var(--muted-foreground);
-}
-.space-agent-picker-route[data-route="unavailable"] {
-  color: var(--destructive);
-}
-.dx-select.space-agent-picker-select {
-  width: 100%;
-}
-.space-agent-picker-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
-
 /* A thread's issues, pull requests, CI, and listeners in a Space's strip
    and in Space Details, as a Thread's title bar shows them. */
 .space-tab-strip .automation-chip,

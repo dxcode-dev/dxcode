@@ -10,7 +10,7 @@ import { userImageSql } from "../../avatars/storage.js";
 import { encodeBase64Url } from "../../encoding/base64.js";
 import type { Bindings } from "../../http/types.js";
 import { settingsAuditLogger } from "../../logging.js";
-import { pruneUnreadableThreadDrafts } from "../../threads/thread-draft-store.js";
+import { pruneUnreadableDrafts } from "../../threads/thread-draft-store.js";
 import {
   type ConfigValueEnvelope,
   decryptConfigValue,
@@ -271,7 +271,7 @@ const deleteMembership = async (
         "DELETE FROM member WHERE organizationId = ? AND userId = ? AND role != 'owner' RETURNING userId",
       )
       .bind(workspaceId, userId),
-    pruneUnreadableThreadDrafts(db),
+    ...pruneUnreadableDrafts(db),
   ]);
   return result?.results.length === 1;
 };

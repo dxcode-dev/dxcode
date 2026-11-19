@@ -1,0 +1,33 @@
+/* Who else is on an artifact: faces in the header, each ringed in that
+   person's cursor color (`--artifact-person`). */
+.artifact-presence {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  margin-left: auto;
+  padding-right: 4px;
+}
+.artifact-presence-person {
+  display: inline-flex;
+  margin-left: -6px;
+  border-radius: var(--radius-full);
+  box-shadow:
+    0 0 0 2px var(--surface),
+    0 0 0 3.5px var(--artifact-person);
+}
+.artifact-presence-person:first-child {
+  margin-left: 0;
+}
+.artifact-presence-person .dx-avatar {
+  width: 20px;
+  height: 20px;
+  font-size: var(--text-3xs);
+}
+.artifact-presence-more {
+  margin-left: 6px;
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+.artifact-presence + .artifact-save {
+  margin-left: 4px;
+}

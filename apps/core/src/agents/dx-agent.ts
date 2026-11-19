@@ -183,7 +183,7 @@ interface DxAgentPromptData {
    * (wiki/agent-mail.md).
    */
   readonly mailbox?: AgentMailbox;
-  /** The AGENTS.md of the owner's workspace, as of this submission. */
+  /** The AGENTS.md of the owner's workspace, as the Thread started with it. */
   readonly workspaceInstructions?: string;
   /**
    * The Space this Thread is, as of this submission: it runs the Space

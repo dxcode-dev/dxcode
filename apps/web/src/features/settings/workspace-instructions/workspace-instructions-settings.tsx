@@ -76,9 +76,9 @@ function WorkspaceInstructions({
       saving={update.isPending}
       heading="Guidance every member's agent receives. Members add their own instructions, and each project adds its AGENTS.md."
       fileName="Workspace AGENTS.md"
-      fileDescription="Guidance for workspace members' top-level agents in every Thread."
+      fileDescription="Guidance for workspace members' top-level agents. Changes apply to new Threads. Open Threads keep the instructions they started with."
       maxLength={MAX_WORKSPACE_AGENT_INSTRUCTIONS_LENGTH}
-      savedMessage="Saved. Members' agents use these from their next message."
+      savedMessage="Saved. Members' new Threads use these instructions."
       {...(instructions.data.canUpdate
         ? {}
         : { readOnlyNote: "Only workspace admins can change these." })}

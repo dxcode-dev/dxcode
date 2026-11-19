@@ -425,7 +425,7 @@ describe("Thread Usage", () => {
       "Workers AIProvided by this dx deployment$0Estimated list price",
     ]);
     expect(routes[0]?.querySelector("a")?.getAttribute("href")).toBe(
-      "/workspaces/acme/model-routing",
+      "/workspaces/acme/models",
     );
     expect(routes[1]?.querySelector("a")).toBeNull();
 

@@ -31,6 +31,7 @@ import {
 import {
   mailDomainProblem,
   mailDomainTradeoffs,
+  preflightMailZone,
 } from "../deploy/selfhost/mail.mjs";
 import { preflightPortalZone } from "../deploy/selfhost/portals.mjs";
 import { assertToolchain } from "../deploy/selfhost/toolchain.mjs";
@@ -510,6 +511,37 @@ const portals =
         return { domain: portalSettings.domain, zoneId: preflight.zoneId };
       })();
 
+// The dx Mailbox: a self-host's saved mail domain (or, for one deployed
+// before it was saved, DX_DEPLOYMENT_MAIL_DOMAIN); a hosted target's
+// DX_DEPLOYMENT_MAIL_DOMAIN. The zone ID is optional: before planning, the
+// domain must be an active zone's own domain in this account and the
+// credential must reach its DNS, Email Routing, and Email Sending; the
+// preflight finds the zone ID from the domain when none is given.
+const mailDomainSetting = (
+  (target === "selfhost" ? selfhostConfig.mailDomain : undefined) ??
+  process.env.DX_DEPLOYMENT_MAIL_DOMAIN
+)
+  ?.trim()
+  .toLowerCase();
+const mail =
+  operation !== "deploy" || !mailDomainSetting
+    ? undefined
+    : await (async () => {
+        const problem = mailDomainProblem(mailDomainSetting);
+        if (problem !== undefined)
+          throw new Error(`The mail domain ${mailDomainSetting} ${problem}.`);
+        const { zoneId } = await preflightMailZone({
+          auth: selfhostCloudflareAuth ?? {
+            accountId,
+            headers: cloudflareHeaders,
+            method: "api-token",
+          },
+          mailDomain: mailDomainSetting,
+          zoneId: process.env.DX_DEPLOYMENT_MAIL_ZONE_ID?.trim() || undefined,
+        });
+        return { domain: mailDomainSetting, zoneId };
+      })();
+
 let dxdBinary;
 let dxdChecksum = "0".repeat(64);
 let dxdReleaseUrl = "https://destroy.invalid/dxd";
@@ -742,19 +774,21 @@ console.log(
 console.log(
   `Attachments: direct to R2 (${attachmentSigning === "token" ? "bucket-scoped signing token" : "operator's R2 API token"})`,
 );
-// The dx Mailbox: any zone apex works; the operator sees what giving dx a
-// domain's mail means instead of being refused (wiki/agent-mail.md).
-const mailDomain = process.env.DX_DEPLOYMENT_MAIL_DOMAIN?.trim().toLowerCase();
-if (mailDomain) {
-  const problem = mailDomainProblem(mailDomain);
-  if (problem !== undefined)
-    throw new Error(`DX_DEPLOYMENT_MAIL_DOMAIN ${problem}.`);
+// The dx Mailbox: any zone's own domain works; the operator sees what giving
+// dx a domain's mail means instead of being refused (wiki/agent-mail.md).
+if (mail !== undefined) {
   for (const line of mailDomainTradeoffs({
-    domain: mailDomain,
+    domain: mail.domain,
     appHostname: selection.domain,
   }))
     console.log(line);
-} else console.log("dx Mailbox: off");
+  console.log(`  Mail zone: ${mail.domain} (${mail.zoneId})`);
+} else
+  console.log(
+    process.env.DX_DEPLOYMENT_MAIL_OFF === "1"
+      ? "dx Mailbox: turning off (removes Email Routing, Email Sending, and the DMARC record from its zone)"
+      : "dx Mailbox: off",
+  );
 
 const authHome =
   target === "selfhost" && selfhostCloudflareAuth.method === "alchemy-oauth"
@@ -849,6 +883,15 @@ const environment = {
         DX_DEPLOYMENT_PORTAL_DOMAIN: portals.domain,
         DX_DEPLOYMENT_PORTAL_ZONE_ID: portals.zoneId,
         DX_DEPLOYMENT_PORTAL_WORKER_NAME: portalWorkerName(stage),
+      }),
+  // The validated mail zone, and an explicit turn-off (see the deploy guard).
+  ...(mail === undefined
+    ? process.env.DX_DEPLOYMENT_MAIL_OFF === "1"
+      ? { DX_DEPLOYMENT_MAIL_OFF: "1" }
+      : {}
+    : {
+        DX_DEPLOYMENT_MAIL_DOMAIN: mail.domain,
+        DX_DEPLOYMENT_MAIL_ZONE_ID: mail.zoneId,
       }),
   DX_DEPLOYMENT_DAEMON_INGRESS_NAME: daemonIngressWorkerName(stage),
   DX_DEPLOYMENT_NAME: selfhostConfig?.name ?? "",

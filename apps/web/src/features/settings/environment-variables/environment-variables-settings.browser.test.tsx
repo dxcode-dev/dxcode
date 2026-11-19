@@ -391,7 +391,7 @@ describe("environment variables settings", () => {
 
     await act(() => link.click());
     await vi.waitUntil(
-      () => router.state.location.pathname === "/settings/model-routing",
+      () => router.state.location.pathname === "/settings/models",
     );
 
     await act(() => root.unmount());

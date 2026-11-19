@@ -368,10 +368,15 @@ export const handlePlusMail = async (
   };
   // 1. Genuine (checked as it was stored) and not automated.
   const stored = await db
-    .prepare("SELECT folder, private FROM mail_item WHERE id = ?")
+    .prepare(
+      "SELECT folder, private, authenticated FROM mail_item WHERE id = ?",
+    )
     .bind(mailId)
-    .first<{ folder: string; private: number }>();
+    .first<{ folder: string; private: number; authenticated: number }>();
   if (stored?.folder === "spam") return { kind: "spam", mailId, ownerUserId };
+  // Only mail signed by its own domain (DMARC with aligned DKIM) starts work;
+  // a reply the Inbox took on SPF alone is only filed.
+  if (stored?.authenticated !== 1) return kept("unverified");
   // Mail in a private conversation stays private in the Thread it starts.
   const privateMail = stored?.private === 1;
   if (automated(parsed, configuration.domain)) return spam("automated");

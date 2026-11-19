@@ -27,6 +27,8 @@ export interface MailAuthentication {
   readonly dmarcHeaderFrom: string | undefined;
   /** Domains of DKIM signatures that passed, from the trusted header. */
   readonly dkimPassDomains: ReadonlyArray<string>;
+  /** Envelope (`smtp.mailfrom`) domains whose SPF check passed. */
+  readonly spfPassDomains: ReadonlyArray<string>;
 }
 
 /**
@@ -186,6 +188,7 @@ export const readMailAuthentication = (
     dmarc: undefined,
     dmarcHeaderFrom: undefined,
     dkimPassDomains: [],
+    spfPassDomains: [],
   } as const;
   const top = headers.find(({ name }) => name === "authentication-results");
   if (top === undefined) return untrusted;
@@ -195,6 +198,7 @@ export const readMailAuthentication = (
   let dmarc: string | undefined;
   let dmarcHeaderFrom: string | undefined;
   const dkimPassDomains: string[] = [];
+  const spfPassDomains: string[] = [];
   for (const part of parts) {
     // A result starts with `method=result`; the rest are its properties.
     const tokens = part
@@ -210,13 +214,27 @@ export const readMailAuthentication = (
       dmarc = result;
       dmarcHeaderFrom = properties.get("header.from")?.replace(/\.$/, "");
     }
+    if (name === "spf" && result === "pass") {
+      const mailFrom = properties.get("smtp.mailfrom")?.replace(/\.$/, "");
+      const domain = mailFrom
+        ?.slice(mailFrom.lastIndexOf("@") + 1)
+        .toLowerCase();
+      if (domain !== undefined && /^[a-z0-9.-]+$/.test(domain))
+        spfPassDomains.push(domain);
+    }
     if (name === "dkim" && result === "pass") {
       const domain = properties.get("header.d")?.replace(/\.$/, "");
       if (domain !== undefined && /^[a-z0-9.-]+$/.test(domain))
         dkimPassDomains.push(domain);
     }
   }
-  return { trusted: true, dmarc, dmarcHeaderFrom, dkimPassDomains };
+  return {
+    trusted: true,
+    dmarc,
+    dmarcHeaderFrom,
+    dkimPassDomains,
+    spfPassDomains,
+  };
 };
 
 /**
@@ -248,6 +266,28 @@ export const mailAuthenticated = (
     // DMARC was evaluated for this From: domain, not another one.
     authentication.dmarcHeaderFrom === domain &&
     authentication.dkimPassDomains.some((signer) => dkimAligned(domain, signer))
+  );
+};
+
+/**
+ * SPF passed for an envelope domain aligned with `From:` (relaxed): the mail
+ * came through a server the From domain allows. Weaker than DMARC with
+ * aligned DKIM, so dx accepts it only for a reply to an email the person sent
+ * (inbound.ts).
+ */
+export const mailSpfAligned = (
+  authentication: MailAuthentication,
+  fromAddress: string,
+) => {
+  const domain = fromAddress
+    .slice(fromAddress.lastIndexOf("@") + 1)
+    .toLowerCase();
+  return (
+    authentication.trusted &&
+    domain.length > 0 &&
+    authentication.spfPassDomains.some((envelope) =>
+      dkimAligned(domain, envelope),
+    )
   );
 };
 

@@ -191,6 +191,7 @@ export {
 export {
   ProjectRepository,
   type ProjectRepositoryShape,
+  type ProjectPresentationUpdate,
   type ProjectUpdate,
 } from "./projects/repository.js";
 export {

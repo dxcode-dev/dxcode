@@ -21,6 +21,8 @@ import {
 import { ArrowRight, Folder, LoaderCircle, Plus, RotateCw } from "lucide-react";
 import type { ReactNode } from "react";
 import * as React from "react";
+import { getBrowserCommandRegistry } from "../../shared/commands/command-registry.js";
+import { physicalKeyEvent } from "../../shared/commands/physical-key.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { useNewProjectSurface } from "../../shared/new-project-surface.js";
 import { Button } from "../../shared/ui/button.js";
@@ -210,7 +212,13 @@ function ProjectPicker({
           placeholder="Choose a project…"
           value={projectQuery}
           onChange={(event) => setProjectQuery(event.target.value)}
-          trailing={<ShortcutKeycaps keycaps={["⌃", "J"]} />}
+          trailing={
+            <ShortcutKeycaps
+              keycaps={getBrowserCommandRegistry().getDisplayedKeycaps(
+                "Control+J",
+              )}
+            />
+          }
         />
         <ChoiceSelectList className="project-picker-list">
           <ChoiceSelectItem
@@ -744,11 +752,12 @@ export function NewThreadConfigurationStrip({
       event.metaKey ||
       event.altKey ||
       event.shiftKey ||
-      !["s", "j"].includes(event.key.toLowerCase())
+      !["s", "j"].includes(physicalKeyEvent(event).key.toLowerCase())
     )
       return;
     event.preventDefault();
-    if (event.key.toLowerCase() === "j") projectTriggerRef.current?.click();
+    if (physicalKeyEvent(event).key.toLowerCase() === "j")
+      projectTriggerRef.current?.click();
     else openAndFocusModePicker();
   };
   const subscribeToShortcut = (_onStoreChange: () => void) => {

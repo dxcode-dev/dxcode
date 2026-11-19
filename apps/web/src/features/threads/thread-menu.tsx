@@ -21,11 +21,8 @@ import {
   Trash2,
 } from "lucide-react";
 import * as React from "react";
-import {
-  type CommandId,
-  getBrowserCommandRegistry,
-} from "../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { useCommandKeycaps } from "../../shared/commands/use-command-keycaps.js";
 import { useNowMinute } from "../../shared/hooks/use-clock.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
@@ -177,7 +174,7 @@ export function ThreadMenu({
   }>();
   const [usageOpen, setUsageOpen] = React.useState(false);
   const openUsage = () => setUsageOpen(true);
-  const copyUrlKeycaps = useCommandKeycaps("navigation.copy-url");
+  const copyUrlKeycaps = useCommandKeycaps()("navigation.copy-url");
   const download = (format: "markdown" | "json") => {
     // The serializers come with the menu's details chunk, which loads when
     // the page is idle or the menu is reached for, so they stay out of the
@@ -392,20 +389,6 @@ export function ThreadMenu({
     </>
   );
 }
-
-/** The keycaps bound to a command, as the keymap shows them. */
-const useCommandKeycaps = (id: CommandId) => {
-  const registry = getBrowserCommandRegistry();
-  React.useSyncExternalStore(
-    registry.subscribe,
-    registry.getSnapshot,
-    registry.getServerSnapshot,
-  );
-  return (
-    registry.getCommands("thread").find((command) => command.id === id)
-      ?.displayedKeycaps ?? []
-  );
-};
 
 /** Snooze, with its wake times, or Wake while the Thread is snoozed. */
 function SnoozeMenuItem({

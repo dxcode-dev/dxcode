@@ -1,0 +1,271 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's one model picker. See model-picker.tsx. The list and its rows are
+   ChoiceSelect's (picker.css); this file adds the maker marks, the panel
+   beside the list, and the three triggers. */
+@layer components {
+  .dx-model-mark {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+    color: var(--foreground);
+  }
+  .dx-model-mark > svg {
+    width: 100%;
+    height: 100%;
+  }
+
+  /* Trigger: the mark, the name, the effort in muted text. */
+  .dx-model-picker-trigger {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .dx-model-picker-value {
+    display: inline-flex;
+    flex: 1;
+    align-items: center;
+    gap: var(--space-1-5);
+    min-width: 0;
+  }
+  .dx-model-picker-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-model-picker-effort,
+  .dx-model-picker-placeholder {
+    flex: none;
+    color: var(--muted-foreground);
+  }
+  .dx-model-picker-tag {
+    flex: none;
+    margin-left: auto;
+    padding: 0 var(--space-1-5);
+    color: var(--muted-foreground);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-full);
+    font-size: var(--text-xs);
+    line-height: var(--leading-4);
+  }
+  .dx-model-picker-trigger[data-appearance="field"] {
+    min-width: 240px;
+  }
+
+  /* Popup: search row, then the list and the panel side by side. */
+  .dx-model-picker {
+    width: min(600px, calc(100vw - 16px));
+  }
+  .dx-model-picker-search {
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid var(--divider);
+  }
+  .dx-model-picker-search > .dx-picker-search {
+    flex: 1;
+    border-bottom: 0;
+  }
+  .dx-model-picker-grouping {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: var(--space-1);
+    height: var(--control-xs);
+    margin-right: var(--space-2);
+    padding: 0 var(--space-2);
+    color: var(--muted-foreground);
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+  }
+  .dx-model-picker-grouping:hover,
+  .dx-model-picker-grouping:focus-visible {
+    color: var(--foreground);
+    background: var(--accent);
+    outline: 0;
+  }
+  .dx-model-picker-grouping > svg {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+  }
+  .dx-model-picker-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px;
+    min-height: 0;
+  }
+  .dx-model-picker-list {
+    max-height: min(380px, var(--available-height));
+  }
+  .dx-model-picker-group {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1-5);
+  }
+  .dx-model-picker-group .dx-model-mark {
+    width: var(--space-3);
+    height: var(--space-3);
+    color: var(--muted-foreground);
+  }
+  .dx-model-picker-item {
+    gap: var(--space-2);
+  }
+  .dx-model-picker-item-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-model-picker-item-route {
+    flex: none;
+    max-width: 45%;
+    overflow: hidden;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-model-picker-item-lines {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-0-5);
+    min-width: 0;
+  }
+  .dx-model-picker-item-note {
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+  }
+  .dx-model-picker-default-mark {
+    display: grid;
+    flex: none;
+    place-items: center;
+    align-self: flex-start;
+    width: var(--icon-sm);
+    height: var(--leading-4-5);
+    color: var(--muted-foreground);
+  }
+  .dx-model-picker-default-mark > svg {
+    width: var(--icon-sm);
+    height: var(--icon-sm);
+  }
+  .dx-model-picker-actions {
+    display: flex;
+    flex-wrap: wrap;
+    padding: 3px 5px;
+    border-top: 1px solid var(--divider);
+  }
+  .dx-model-picker-actions > .dx-picker-action {
+    width: auto;
+  }
+
+  /* The panel: the highlighted model's facts and its effort. */
+  .dx-model-picker-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2-5);
+    min-width: 0;
+    padding: var(--space-3);
+    border-left: 1px solid var(--divider);
+    background: var(--muted);
+    font-size: var(--text-sm);
+  }
+  .dx-model-picker-panel-title {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+    font-size: var(--text-md);
+  }
+  .dx-model-picker-panel-title > strong {
+    min-width: 0;
+    overflow: hidden;
+    font-weight: var(--weight-medium);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-model-picker-panel > p {
+    margin: 0;
+    color: var(--muted-foreground);
+    line-height: var(--leading-snug);
+  }
+  .dx-model-picker-panel dl {
+    display: grid;
+    gap: var(--space-1);
+    margin: 0;
+  }
+  .dx-model-picker-panel dl > div {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+  .dx-model-picker-panel dt {
+    color: var(--muted-foreground);
+  }
+  .dx-model-picker-panel dd {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    text-align: right;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-model-picker-effort-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--divider);
+    font-size: var(--text-sm);
+  }
+  .dx-model-picker-effort-row > span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--muted-foreground);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-model-picker-effort-for {
+    color: var(--foreground);
+  }
+  .dx-model-picker-effort-control {
+    flex: none;
+  }
+
+  /* A phone: one column; the panel shows only the effort, under the list. */
+  @media (max-width: 639px) {
+    .dx-model-picker {
+      width: calc(100vw - 16px);
+    }
+    .dx-model-picker-body {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .dx-model-picker-list {
+      max-height: min(56vh, var(--available-height));
+    }
+    .dx-model-picker-panel {
+      display: none;
+    }
+    .dx-model-picker-effort-row {
+      flex-direction: column;
+      align-items: stretch;
+      gap: var(--space-1-5);
+    }
+    .dx-model-picker-effort-control > .dx-tab {
+      flex: 1;
+      justify-content: center;
+      min-width: 0;
+      padding-inline: 0;
+    }
+    .dx-model-picker-item {
+      min-height: var(--control-lg);
+    }
+  }
+}

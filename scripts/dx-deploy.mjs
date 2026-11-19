@@ -38,6 +38,13 @@ import {
   checkGitHubApp,
 } from "../deploy/selfhost/github-app-check.mjs";
 import {
+  listMailZoneCandidates,
+  MAIL_OAUTH_SCOPES,
+  MAIL_PERMISSIONS,
+  mailDomainTradeoffs,
+  preflightMailZone,
+} from "../deploy/selfhost/mail.mjs";
+import {
   ALCHEMY_OAUTH_RELOGIN,
   listPortalZoneCandidates,
   missingPortalOAuthScopes,
@@ -471,6 +478,91 @@ export const collectPortalDomain = async ({
   return undefined;
 };
 
+export const MAIL_PROMPT =
+  "Enable the dx Mailbox (each person gets username@<domain>, shared with their agents; dx takes over all mail on a Cloudflare zone in this account)";
+export const MAIL_SKIP_PROMPT =
+  "Mail domain (number or zone name, blank to leave the dx Mailbox off)";
+
+const mailZoneUse = (mail) => {
+  if (mail === false) return "";
+  if (mail === undefined) return " (could not read its mail setup)";
+  const parts = [
+    ...(mail.mxRecords > 0
+      ? [`${mail.mxRecords} MX record${mail.mxRecords === 1 ? "" : "s"}`]
+      : []),
+    ...(mail.routingOn ? ["Email Routing on"] : []),
+    ...(mail.sendingOn ? ["Email Sending on"] : []),
+  ];
+  return ` (already handles mail: ${parts.join(", ")})`;
+};
+
+/**
+ * Chooses the dx Mailbox's mail domain among the account's active zones: a
+ * zone's own domain, since Cloudflare's catch-all works only there. Shows
+ * what giving dx a domain's mail means, and asks again before taking over a
+ * zone that already handles mail. The chosen zone passes the mail permission
+ * preflight, which finds its zone ID. Returns undefined when mail stays off.
+ */
+export const collectMailDomain = async ({
+  answer,
+  yes,
+  log,
+  auth,
+  appDomain,
+  current,
+  fetch = globalThis.fetch,
+}) => {
+  const candidates = await listMailZoneCandidates({ auth, fetch });
+  if (candidates.length === 0) {
+    log(
+      "The dx Mailbox stays off: this Cloudflare account has no active zone. Add one, then run pnpm dx:deploy -- --mail.\n",
+    );
+    return undefined;
+  }
+  log(
+    "The dx Mailbox gives each person username@<mail domain>. dx takes over all mail on that domain. Zones that can be the mail domain:\n",
+  );
+  candidates.forEach((zone, index) => {
+    log(
+      `  ${index + 1}. ${zone.name}${zone.name === current ? " (current mail domain)" : mailZoneUse(zone.mail)}\n`,
+    );
+  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const choice = ((await answer(MAIL_SKIP_PROMPT, "")) ?? "")
+      .trim()
+      .toLowerCase();
+    if (choice === "") break;
+    const zone = /^\d+$/.test(choice)
+      ? candidates[Number(choice) - 1]
+      : candidates.find(({ name }) => name === choice);
+    if (zone === undefined) {
+      log(`${choice} is not one of the listed zones.\n`);
+      continue;
+    }
+    if (zone.name !== current) {
+      for (const line of mailDomainTradeoffs({
+        domain: zone.name,
+        appHostname: appDomain,
+      }))
+        log(`${line}\n`);
+      if (
+        !(await yes(
+          zone.mail === false
+            ? `Use ${zone.name} for the dx Mailbox`
+            : `${zone.name} already handles mail, which dx would take over. Use it for the dx Mailbox anyway`,
+          false,
+        ))
+      )
+        continue;
+    }
+    await preflightMailZone({ auth, mailDomain: zone.name, fetch });
+    log(`Mail zone ${zone.name} prerequisites passed.\n`);
+    return zone.name;
+  }
+  log("The dx Mailbox stays off.\n");
+  return undefined;
+};
+
 export const collectDeploymentConfig = async ({
   answer,
   yes,
@@ -739,16 +831,34 @@ export const runDxDeploy = async ({
       : portalsFlag
         ? await yes(PORTALS_PROMPT, existing.portalDomain !== undefined)
         : existing.portalDomain !== undefined;
+  // The dx Mailbox needs Email Routing, Email Sending, and DNS, which
+  // Alchemy's default OAuth login does not request either. A deployment
+  // first deployed with DX_DEPLOYMENT_MAIL_DOMAIN keeps that domain.
+  const mailFlag = flags.has("--mail");
+  const environmentMailDomain =
+    environment.DX_DEPLOYMENT_MAIL_DOMAIN?.trim().toLowerCase();
+  const currentMailDomain = existing?.mailDomain ?? environmentMailDomain;
+  let mailWanted =
+    existing === undefined
+      ? environmentMailDomain !== undefined || (await yes(MAIL_PROMPT, false))
+      : mailFlag
+        ? await yes(MAIL_PROMPT, currentMailDomain !== undefined)
+        : currentMailDomain !== undefined;
+  const extraScopes = [
+    ...(portalsWanted ? PORTAL_OAUTH_SCOPES : []),
+    ...(mailWanted ? MAIL_OAUTH_SCOPES : []),
+  ];
   // Alchemy's prompts own the terminal while they run.
   const alchemy = (args) => {
     rl.close();
     try {
       return runAlchemyCli(args, {
         ...process.env,
-        ...(portalsWanted
+        ...(extraScopes.length > 0
           ? {
-              ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES:
-                PORTAL_OAUTH_SCOPES.join(" "),
+              ALCHEMY_CLOUDFLARE_OAUTH_EXTRA_SCOPES: [
+                ...new Set(extraScopes),
+              ].join(" "),
             }
           : {}),
       });
@@ -811,6 +921,39 @@ export const runDxDeploy = async ({
       portalsWanted = false;
     }
   }
+  const missingMailScopes = () =>
+    cloudflareAuth.method === "alchemy-oauth"
+      ? MAIL_PERMISSIONS.filter(
+          ({ scope }) => !(cloudflareAuth.scopes ?? []).includes(scope),
+        )
+          .map(({ scope }) => scope)
+          .join(", ")
+      : "";
+  if (mailWanted && missingMailScopes() !== "") {
+    stdout.write(
+      `The dx Mailbox needs the Alchemy Cloudflare login to include ${missingMailScopes()}, which this login was not granted.\n`,
+    );
+    if (
+      await yes(
+        "Sign in to Cloudflare again now with mail access (choose OAuth and the same account)",
+        true,
+      )
+    ) {
+      alchemyLogin(true);
+      cloudflareAuth = loadAlchemyCloudflareAuth({ environment });
+      if (missingMailScopes() !== "")
+        throw new Error(
+          `The new Alchemy Cloudflare login still lacks ${missingMailScopes()}. Run pnpm dx:deploy -- --mail to sign in again, or deploy with CLOUDFLARE_API_TOKEN.`,
+        );
+    } else if (currentMailDomain !== undefined && !mailFlag)
+      throw new Error(
+        `This deployment's dx Mailbox is on ${currentMailDomain}, which needs ${missingMailScopes()}. Sign in again with pnpm dx:deploy -- --mail, or turn mail off there.`,
+      );
+    else {
+      stdout.write("The dx Mailbox stays off.\n");
+      mailWanted = false;
+    }
+  }
   if (
     existing?.cloudflareAccountId !== undefined &&
     existing.cloudflareAccountId !== cloudflareAuth.accountId
@@ -849,6 +992,22 @@ export const runDxDeploy = async ({
         : "Portal zone is readable; this token cannot read its own policies, so DNS and Workers Routes Edit are confirmed at apply.\n",
     );
   }
+  if (currentMailDomain !== undefined && mailWanted && !mailFlag) {
+    await preflightMailZone({
+      auth: cloudflareAuth,
+      mailDomain: currentMailDomain,
+    });
+    stdout.write("Mail zone prerequisites passed.\n");
+  }
+  const chooseMailDomain = (appDomain, current) =>
+    collectMailDomain({
+      answer,
+      yes,
+      log: (message) => stdout.write(message),
+      auth: cloudflareAuth,
+      appDomain,
+      current,
+    });
   const choosePortalDomain = (appDomain, current) =>
     collectPortalDomain({
       answer,
@@ -928,6 +1087,41 @@ export const runDxDeploy = async ({
       ...rest,
       ...(portalDomain === undefined ? {} : { portalDomain }),
     });
+  }
+  // The dx Mailbox: a new deployment chooses its mail domain (or keeps the
+  // one DX_DEPLOYMENT_MAIL_DOMAIN named); `--mail` turns it on, moves it, or
+  // turns it off, which removes Email Routing, Email Sending, and the DMARC
+  // record from the zone; an existing deployment deployed with
+  // DX_DEPLOYMENT_MAIL_DOMAIN saves that domain so later deploys keep it.
+  if (existing === undefined || mailFlag) {
+    const { mailDomain: _previous, ...rest } = config;
+    const mailDomain = mailWanted
+      ? existing === undefined && environmentMailDomain !== undefined
+        ? environmentMailDomain
+        : await chooseMailDomain(config.domain, currentMailDomain)
+      : undefined;
+    if (mailDomain === undefined && currentMailDomain !== undefined) {
+      environment.DX_DEPLOYMENT_MAIL_OFF = "1";
+      stdout.write(
+        `The dx Mailbox turns off: this deploy removes Email Routing, Email Sending, and the DMARC record from ${currentMailDomain}. Stored mail is kept.\n`,
+      );
+    }
+    config = validateSelfhostConfig({
+      ...rest,
+      ...(mailDomain === undefined ? {} : { mailDomain }),
+    });
+  } else if (
+    config.mailDomain === undefined &&
+    environmentMailDomain !== undefined &&
+    mailWanted
+  ) {
+    config = validateSelfhostConfig({
+      ...config,
+      mailDomain: environmentMailDomain,
+    });
+    stdout.write(
+      `Saved the dx Mailbox domain ${environmentMailDomain} from DX_DEPLOYMENT_MAIL_DOMAIN in ${configPath}; later deploys keep it without the variable.\n`,
+    );
   }
   // Deployments created before a plugin existed were never asked about it.
   if (

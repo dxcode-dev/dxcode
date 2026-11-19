@@ -3,12 +3,16 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { spaceRouteText } from "../../../shared/space-agent-route.js";
-import { Button } from "../../../shared/ui/button.js";
 import { spaceAgentModelMutationOptions } from "../../spaces/space-agent-model-mutations.js";
 import { spaceAgentModelQueryOptions } from "../../spaces/space-agent-model-queries.js";
 import { modelRoutingChoicesQueryOptions } from "../model-routing/model-routing-queries.js";
+import {
+  SettingsCard,
+  SettingsFormActions,
+  SettingsRow,
+} from "../settings-primitives.js";
 import { AUTO, type ModeDraft } from "./mode-dial-drafts.js";
-import { MainAgentRole, SettingsSectionLink } from "./mode-dial-role.js";
+import { MainAgentRole } from "./mode-dial-role.js";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : "Request failed.";
@@ -64,92 +68,77 @@ export function SpaceAgentRole() {
       : draft.model !== pin?.model || draft.thinking !== pin?.thinking);
   const route = query.data?.route;
   return (
-    <section className="space-agent-role" aria-labelledby="space-agent-heading">
-      <div className="tuning-mode-heading">
-        <h2 id="space-agent-heading">Space</h2>
-      </div>
-      <p className="tuning-hint">
-        The model a new Space's main agent runs on. When a Space is created, dx
-        runs it on Claude Code if your Claude Pro/Max plan serves the model,
-        otherwise through Model Routing. The Space keeps that choice.
-      </p>
-      <div className="tuning-agent-card" data-auto={choice === AUTO}>
-        <label htmlFor="space-agent-model">Space agent</label>
-        {query.isError ? (
-          <p role="alert">{message(query.error)}</p>
-        ) : choice === undefined ? (
-          <p role="status">Loading…</p>
-        ) : (
-          <MainAgentRole
-            id="space-agent-model"
-            label="Space agent model"
-            choice={choice}
-            effective={effective as never}
-            autoLabel="Auto · Claude Opus 5.5"
-            notServedHint={route?.kind !== "claude-code"}
-            servedModels={servedModels}
-            nameOf={nameOf}
-            choicesPending={choices.isPending}
-            choicesError={choices.isError ? message(choices.error) : undefined}
-            busy={save.isPending}
-            target={{ scope: "personal" }}
-            onChoose={(next) => {
-              setError(undefined);
-              setDraft(next);
-            }}
-          />
-        )}
-        {route !== undefined && !dirty ? (
-          <p
-            className="tuning-hint"
-            data-route={route.kind}
-            role={route.kind === "unavailable" ? "alert" : "status"}
-          >
-            {route.kind === "unavailable" ? null : "New Spaces run on "}
-            {spaceRouteText(route)}
-            {route.kind === "unavailable" ? (
-              <>
-                {" "}
-                <SettingsSectionLink
-                  target={{ scope: "personal" }}
-                  section="model-routing"
-                >
-                  Open Model Routing
-                </SettingsSectionLink>
-              </>
-            ) : null}
-          </p>
-        ) : null}
-      </div>
-      <footer className="tuning-footer">
-        <span role="status">
-          {save.isPending ? "Saving…" : dirty ? "Unsaved changes" : "In sync"}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!dirty || save.isPending}
-          onClick={() => setDraft(undefined)}
-        >
-          Discard
-        </Button>
-        <Button
-          size="sm"
-          className="tuning-save"
-          disabled={!dirty || save.isPending || draft === undefined}
-          onClick={() => {
+    <SettingsCard
+      className="space-agent-role"
+      title="Spaces"
+      description="The model a new Space's coordinator runs on. When you create a Space you can pick another, and a separate model for the threads it starts."
+    >
+      <SettingsRow
+        title="Space coordinator"
+        description={
+          route !== undefined && !dirty ? (
+            <span
+              data-route={route.kind}
+              role={route.kind === "unavailable" ? "alert" : "status"}
+            >
+              {route.kind === "unavailable" ? null : "New Spaces run on "}
+              {spaceRouteText(route)}
+            </span>
+          ) : (
+            "dx runs a new Space on Claude Code when your Claude Pro/Max plan serves the model, otherwise through your connections."
+          )
+        }
+        control={
+          query.isError ? (
+            <p role="alert">{message(query.error)}</p>
+          ) : choice === undefined ? (
+            <p role="status">Loading…</p>
+          ) : (
+            <div className="models-slot" data-auto={choice === AUTO}>
+              <MainAgentRole
+                id="space-agent-model"
+                label="Space agent model"
+                choice={choice}
+                effective={effective as never}
+                autoLabel="Auto · Claude Opus 5.5"
+                notServedHint={route?.kind !== "claude-code"}
+                servedModels={servedModels}
+                nameOf={nameOf}
+                choicesPending={choices.isPending}
+                choicesError={
+                  choices.isError ? message(choices.error) : undefined
+                }
+                busy={save.isPending}
+                target={{ scope: "personal" }}
+                onChoose={(next) => {
+                  setError(undefined);
+                  setDraft(next);
+                }}
+              />
+            </div>
+          )
+        }
+      />
+      <div className="space-agent-role-actions">
+        <SettingsFormActions
+          dirty={dirty}
+          saving={save.isPending}
+          message={
+            save.isPending ? "Saving…" : dirty ? "Unsaved changes" : "In sync"
+          }
+          resetLabel="Discard"
+          onReset={() => setDraft(undefined)}
+          onSave={() => {
             if (draft !== undefined)
               save.mutate(draft === AUTO ? null : (draft as never));
           }}
-        >
-          {save.isPending ? "Saving…" : "Save"}
-        </Button>
-      </footer>
+        />
+      </div>
       {error ? (
         <p className="tuning-error" role="alert">
           {error}
         </p>
       ) : null}
-    </section>
+    </SettingsCard>
   );
 }

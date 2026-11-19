@@ -43,6 +43,7 @@ export const tombstoneStatements = (
                 title = ?3,
                 title_pending_until = NULL,
                 agent_instructions = '',
+                workspace_agent_instructions = '',
                 skill_snapshot_json = '[]',
                 plugin_snapshot_json = '[]',
                 pinned_at = NULL,
@@ -118,6 +119,11 @@ export const tombstoneStatements = (
       .bind(ids, ownerUserId),
     db
       .prepare(`DELETE FROM thread_draft WHERE ${tombstoneOf("thread_id")}`)
+      .bind(ids, ownerUserId),
+    db
+      .prepare(
+        `DELETE FROM thread_slot_draft WHERE ${tombstoneOf("thread_id")}`,
+      )
       .bind(ids, ownerUserId),
     // A deleted Thread's schedule and GitHub subscriptions must stop waking
     // anything; a subscription's delivered events go with it.

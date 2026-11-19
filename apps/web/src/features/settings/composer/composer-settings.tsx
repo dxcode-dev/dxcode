@@ -18,6 +18,13 @@ import {
 } from "../../../shared/composer-start.js";
 import { modelDisplayName } from "../../../shared/model-display-name.js";
 import {
+  pickerModelValue,
+  pickerValueModel,
+  servedPickerModel,
+  unlistedPickerModel,
+} from "../../../shared/model-picker-models.js";
+import { ModelPicker } from "../../../shared/ui/model-picker.js";
+import {
   projectQueryOptions,
   projectsQueryOptions,
 } from "../../projects/project-queries.js";
@@ -247,45 +254,73 @@ function StartingModeRow({
     pinnedModel === undefined && mode !== "medium"
       ? choices?.modes.find((slot) => slot.mode === mode)
       : undefined;
-  const models = (choices?.models ?? []).filter(
-    ({ canonical }) => canonical !== pinnedModel,
-  );
-  const options: ReadonlyArray<SettingsSelectOption> = [
-    [
-      RECOMMENDED,
-      recommended === undefined
-        ? "Recommended"
-        : `Recommended · ${modelDisplayName(recommended.modelName)}`,
-    ],
-    ...(carried === undefined
-      ? []
-      : [[CARRIED, modelDisplayName(carried.modelName)] as const]),
-    ...(pinnedModel === undefined
-      ? []
-      : [[pinnedModel, nameOf(pinnedModel)] as const]),
-    ...models.map(
-      ({ canonical, name }): SettingsSelectOption => [
-        canonical,
-        modelDisplayName(name),
-      ],
-    ),
-  ];
   return (
     <SettingsRow
       title="Model"
       description="The model a New Thread starts on. Picking one in the composer changes it here too."
       control={
-        <SettingsSelect
+        <ModelPicker
           label="Model"
-          value={pinnedModel ?? (carried === undefined ? RECOMMENDED : CARRIED)}
-          options={options}
+          appearance="field"
+          models={(choices?.models ?? []).map((model) =>
+            servedPickerModel(model, []),
+          )}
+          loading={choicesQuery.isPending}
+          value={
+            pinnedModel !== undefined
+              ? pickerModelValue(pinnedModel)
+              : carried === undefined
+                ? RECOMMENDED
+                : CARRIED
+          }
+          defaultOption={{
+            value: RECOMMENDED,
+            label: "Recommended",
+            tag: "Recommended",
+            detail:
+              recommended === undefined
+                ? "What dx suggests for most work"
+                : `${modelDisplayName(recommended.modelName)}, what dx suggests for most work`,
+            ...(recommended === undefined
+              ? {}
+              : {
+                  resolves: pickerModelValue(recommended.config.model),
+                  resolvedModel: unlistedPickerModel(
+                    recommended.config.model,
+                    recommended.modelName,
+                    recommended.servingConnectionName ?? "Not served",
+                  ),
+                }),
+          }}
+          {...(carried !== undefined && pinnedModel === undefined
+            ? {
+                unlisted: {
+                  ...unlistedPickerModel(
+                    carried.config.model,
+                    carried.modelName,
+                    carried.servingConnectionName ?? "Not served",
+                  ),
+                  value: CARRIED,
+                },
+              }
+            : pinnedModel !== undefined
+              ? {
+                  unlisted: unlistedPickerModel(
+                    pinnedModel,
+                    nameOf(pinnedModel),
+                    "Not served now",
+                  ),
+                }
+              : {})}
           onValueChange={(next) => {
             if (next === CARRIED) return;
             if (next === RECOMMENDED) {
               onChange({ mode: "medium" });
               return;
             }
-            const model = Schema.decodeUnknownOption(ModelId)(next);
+            const model = Schema.decodeUnknownOption(ModelId)(
+              pickerValueModel(next),
+            );
             if (Option.isSome(model)) onChange({ model: model.value });
           }}
         />

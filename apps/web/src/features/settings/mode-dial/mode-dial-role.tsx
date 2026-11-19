@@ -3,54 +3,13 @@ import type { ThinkingLevel } from "@dx/domain";
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import type { ModelRoutingTarget } from "../../../shared/api/client.js";
-import { Select } from "../../../shared/ui/select.js";
+import {
+  servedPickerModel,
+  unlistedPickerModel,
+} from "../../../shared/model-picker-models.js";
+import { ModelPicker } from "../../../shared/ui/model-picker.js";
 import { AUTO, type ModeDraft, type ModeSlot } from "./mode-dial-drafts.js";
 import { THINKING_LEVELS } from "./mode-dial-values.js";
-
-const EFFORT_NAMES: Readonly<Record<ThinkingLevel, string>> = {
-  off: "Off",
-  minimal: "Minimal",
-  low: "Low",
-  medium: "Medium",
-  high: "High",
-  xhigh: "X-High",
-  max: "Max",
-};
-
-/** A model's reasoning effort, as a plain choice list. */
-function ReasoningEffort({
-  value,
-  label,
-  disabled,
-  onChange,
-  name = "Main Agent reasoning effort",
-}: {
-  readonly value: ThinkingLevel;
-  /** The list's accessible name. */
-  readonly name?: string;
-  /** Shown instead of the level, such as Auto before it resolves. */
-  readonly label?: string | undefined;
-  readonly disabled: boolean;
-  readonly onChange: (value: ThinkingLevel) => void;
-}) {
-  return (
-    <Select
-      size="md"
-      aria-label={name}
-      value={label === undefined ? value : "auto"}
-      disabled={disabled}
-      options={
-        label === undefined
-          ? THINKING_LEVELS.map((level) => [
-              level,
-              `${EFFORT_NAMES[level]} effort`,
-            ])
-          : [["auto", label]]
-      }
-      onValueChange={(next) => onChange(next as ThinkingLevel)}
-    />
-  );
-}
 
 /** A link to another settings page in the same scope. */
 export function SettingsSectionLink({
@@ -81,7 +40,7 @@ export function SettingsSectionLink({
   );
 }
 
-/** The Main Agent's model and effort: Auto, or a pin. */
+/** The Main Agent's model and effort: Auto, or a pin, in dx's one picker. */
 export function MainAgentRole({
   choice,
   effective,
@@ -109,7 +68,7 @@ export function MainAgentRole({
   readonly busy: boolean;
   readonly target: ModelRoutingTarget;
   readonly onChoose: (next: ModeDraft) => void;
-  /** The model select's id, for the label beside it. */
+  /** The picker's id, for the label beside it. */
   readonly id?: string;
   readonly label?: string;
   /** Off where something besides Model Routing serves the model. */
@@ -118,53 +77,68 @@ export function MainAgentRole({
   const servingModel = servedModels.find(
     (model) => model.canonical === effective?.model,
   );
+  const models = servedModels.map((model) =>
+    servedPickerModel(model, THINKING_LEVELS),
+  );
+  const effectiveModel =
+    effective === undefined
+      ? undefined
+      : servingModel === undefined
+        ? unlistedPickerModel(
+            effective.model,
+            nameOf(effective.model),
+            "Not served",
+          )
+        : servedPickerModel(servingModel, THINKING_LEVELS);
   return (
     <>
-      <Select
+      <ModelPicker
         id={id}
-        size="md"
-        aria-label={label}
-        value={choice === AUTO ? AUTO : choice.model}
-        disabled={busy || choicesPending || choicesError !== undefined}
-        onChange={(e) => {
-          if (e.target.value === AUTO) {
+        label={label}
+        appearance="field"
+        models={models}
+        value={choice === AUTO ? AUTO : `model:${choice.model}`}
+        disabled={busy || choicesError !== undefined}
+        loading={choicesPending}
+        defaultOption={{
+          value: AUTO,
+          label: "Auto",
+          detail:
+            autoLabel.replace(/^Auto( · )?/, "") || "dx's pick, after Save",
+          ...(choice === AUTO && effectiveModel !== undefined
+            ? { resolves: effectiveModel.value, resolvedModel: effectiveModel }
+            : {}),
+        }}
+        {...(choice !== AUTO && servingModel === undefined
+          ? {
+              unlisted: unlistedPickerModel(
+                choice.model,
+                nameOf(choice.model),
+                "Not served",
+              ),
+            }
+          : {})}
+        {...(effective !== undefined && servingModel?.reasoning === true
+          ? {
+              effort: effective.thinking,
+              onEffortChange: (thinking: ThinkingLevel) =>
+                onChoose({ ...effective, thinking }),
+            }
+          : {})}
+        onValueChange={(next) => {
+          if (next === AUTO) {
             onChoose(AUTO);
             return;
           }
-          const model = servedModels.find(
-            (m) => m.canonical === e.target.value,
-          );
+          const canonical = next.slice("model:".length);
+          const model = servedModels.find((m) => m.canonical === canonical);
           onChoose({
-            model: e.target.value,
+            model: canonical,
             thinking:
               model?.reasoning === false
                 ? "off"
                 : (effective?.thinking ?? "medium"),
           });
-        }}
-      >
-        <option value={AUTO}>{autoLabel}</option>
-        {choice !== AUTO &&
-        !servedModels.some((m) => m.canonical === choice.model) ? (
-          <option value={choice.model} disabled>
-            {nameOf(choice.model)} · Not served
-          </option>
-        ) : null}
-        {servedModels.map((model) => (
-          <option key={model.canonical} value={model.canonical}>
-            {model.name}
-          </option>
-        ))}
-      </Select>
-      <ReasoningEffort
-        name={label.replace(/ model$/, " reasoning effort")}
-        value={effective?.thinking ?? "medium"}
-        label={effective === undefined ? "Auto" : undefined}
-        disabled={
-          busy || effective === undefined || servingModel?.reasoning !== true
-        }
-        onChange={(thinking: ThinkingLevel) => {
-          if (effective) onChoose({ ...effective, thinking });
         }}
       />
       {choicesError !== undefined ? (
@@ -176,9 +150,9 @@ export function MainAgentRole({
         !choicesPending &&
         servingModel === undefined ? (
         <p className="tuning-hint">
-          Not served. Add a connection in{" "}
-          <SettingsSectionLink target={target} section="model-routing">
-            Model Routing
+          Not served. Add a connection above, in{" "}
+          <SettingsSectionLink target={target} section="models">
+            Models & Routing
           </SettingsSectionLink>
           .
         </p>

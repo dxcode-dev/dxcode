@@ -8,8 +8,9 @@ import {
 const hiddenNavigationIds: Readonly<
   Record<SettingsScope, ReadonlySet<string>>
 > = {
-  personal: new Set(["personal-signing-keys"]),
-  workspace: new Set(),
+  // Model Routing's address opens Settings → Models.
+  personal: new Set(["personal-signing-keys", "personal-model-routing"]),
+  workspace: new Set(["workspace-model-routing"]),
 };
 
 export const isWorkspaceAdmin = (role: WorkspaceRole | undefined) =>

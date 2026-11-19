@@ -1,6 +1,7 @@
 import {
   ModelConnectionId,
   ProjectId,
+  SpaceAgentModel,
   ThreadColor,
   ThreadId,
   ThreadLifecycleState,
@@ -71,6 +72,11 @@ export const SpaceDataSchema = Schema.Struct({
   statusLine: Schema.NullOr(Schema.String.check(Schema.isMaxLength(120))),
   /** Its status ends waiting on a person: the Space needs input. */
   waitingOnInput: Schema.Boolean,
+  /**
+   * The model every thread the Space starts runs on; null: the Space's own
+   * model. Optional for older clients and caches.
+   */
+  threadModel: Schema.optional(Schema.NullOr(SpaceAgentModel)),
   createdAt: Timestamp,
   lastActivityAt: Timestamp,
 });
@@ -132,6 +138,16 @@ export const CreateSpaceRequestSchema = Schema.Struct({
    * takes the first plan when the automatic pick is off.
    */
   claudeConnectionId: Schema.optional(ModelConnectionId),
+  /**
+   * The model the Space itself runs on. Left out, the person's Space model
+   * from Settings → Models.
+   */
+  agentModel: Schema.optional(SpaceAgentModel),
+  /**
+   * The model every thread the Space starts runs on, without any
+   * instruction to the Space's agent. Left out, its own model.
+   */
+  threadModel: Schema.optional(SpaceAgentModel),
 });
 
 export type CreateSpaceRequest = typeof CreateSpaceRequestSchema.Type;
@@ -143,6 +159,8 @@ export const UpdateSpaceRequestSchema = Schema.Struct({
   goal: Schema.optional(Schema.NullOr(SpaceGoalSchema)),
   color: Schema.optional(ThreadColor),
   sharing: Schema.optional(SpaceSharingSchema),
+  /** The model the Space's threads run on; `null`: the Space's own. */
+  threadModel: Schema.optional(Schema.NullOr(SpaceAgentModel)),
   /**
    * The owner saw that the Space's agents read Mailbox mail a shared Thread
    * could not, which members will see. Without it, sharing a private Space

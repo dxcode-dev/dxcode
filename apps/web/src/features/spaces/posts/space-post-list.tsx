@@ -207,6 +207,8 @@ function EditPostForm({
           } else if (
             event.key === "Enter" &&
             !event.shiftKey &&
+            // Alt+Enter starts a new Thread.
+            !event.altKey &&
             !event.nativeEvent.isComposing
           ) {
             event.preventDefault();

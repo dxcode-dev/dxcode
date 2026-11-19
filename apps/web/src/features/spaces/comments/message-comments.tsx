@@ -31,6 +31,7 @@ import { Textarea } from "../../../shared/ui/textarea.js";
 import { ThreadReferenceContext } from "../../../shared/ui/thread-reference-context.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
+import { useComposerDraft } from "../../threads/composer-draft-queries.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
 import { spaceThreadReferences } from "../cards/space-thread-references.js";
 import { showLinked } from "../posts/focus-post.js";
@@ -272,7 +273,12 @@ function CommentComposer({
   readonly onTyping: (scope: string) => void;
 }) {
   const { identity } = useAuthenticatedIdentity();
-  const [body, setBody] = React.useState("");
+  // Kept in Core per person and post, so it outlasts the panel closing and
+  // shows on their other devices.
+  const [body, setBody] = useComposerDraft({
+    threadId,
+    slot: `post-comment:${messageId}`,
+  });
   const [error, setError] = React.useState<string>();
   const box = React.useRef<HTMLTextAreaElement | null>(null);
   const announced = React.useRef(0);
@@ -360,6 +366,8 @@ function CommentComposer({
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
+              // Alt+Enter starts a new Thread.
+              !event.altKey &&
               !event.nativeEvent.isComposing
             ) {
               event.preventDefault();

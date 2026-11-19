@@ -569,6 +569,70 @@ describe("The Space agent's management tools", () => {
     expect(rest.nextCursor).toBeUndefined();
   });
 
+  it("starts the Space's threads on its thread model with no instruction, until the owner clears it", async () => {
+    // The model the test deployment serves, at another effort than the
+    // Space's own.
+    const threadModel = {
+      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      thinking: "high",
+    } as const;
+    const created = await send(owner, "/v1/spaces", "POST", {
+      projectId: ownerProject.id,
+      name: "Model split",
+      sharing: "private",
+      threadModel,
+    });
+    expect(created.status).toBe(201);
+    const space = created.body.data.space as SpaceData;
+    expect(space.threadModel).toEqual(threadModel);
+    const spaceId = space.threadId as ThreadId;
+    const selectionOf = async (threadId: string) =>
+      JSON.parse(
+        (
+          await env.DB.prepare(
+            "SELECT model_selection FROM threads WHERE id = ?",
+          )
+            .bind(threadId)
+            .first<{ model_selection: string }>()
+        )?.model_selection ?? "null",
+      );
+    const spaceSelection = await selectionOf(spaceId);
+    // The coordinator keeps its own model and effort.
+    expect(spaceSelection).not.toEqual({ kind: "model", ...threadModel });
+    const asked = (
+      await send(owner, `/v1/spaces/${spaceId}/posts`, "POST", {
+        text: "Write the release notes.",
+      })
+    ).body.data.post as SpacePost;
+    const createThread = createThreadTools(
+      spaceId,
+      () => ({ db: env.DB, bindings }),
+      "sub_model_split",
+      false,
+      owner,
+      { space: true },
+    ).find(({ name }) => name === "create_thread");
+    if (createThread === undefined) throw new Error("No create_thread tool.");
+    const start = async (title: string) =>
+      (
+        (await createThread.run({
+          // No agent_mode: the coordinator gives no instruction about models.
+          data: { prompt: title, title, request_post_id: asked.id },
+          toolCallId: `call_${crypto.randomUUID()}`,
+        } as never)) as { output: { threadId: ThreadId } }
+      ).output.threadId;
+    const first = await start("Release notes");
+    expect(await selectionOf(first)).toEqual({ kind: "model", ...threadModel });
+
+    const cleared = await send(owner, `/v1/spaces/${spaceId}`, "PATCH", {
+      threadModel: null,
+    });
+    expect(cleared.status).toBe(200);
+    expect((cleared.body.data.space as SpaceData).threadModel).toBeNull();
+    const second = await start("Changelog");
+    expect(await selectionOf(second)).toEqual(spaceSelection);
+  });
+
   it("relays a ship request with the project's Ship Behavior prompt first", async () => {
     const spaceId = await createSpace();
     const threadTools = createThreadTools(

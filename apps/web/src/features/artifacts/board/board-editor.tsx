@@ -1,5 +1,4 @@
 import type { ThreadArtifactComment } from "@dx/api";
-import type { UserId } from "@dx/domain";
 import {
   CaptureUpdateAction,
   Excalidraw,
@@ -25,7 +24,6 @@ import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js"
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { useBoardLiveChannel } from "../../../shared/realtime/board-live.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
-import { Avatar } from "../../../shared/ui/avatar.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
@@ -38,9 +36,12 @@ import {
 } from "../../../shared/ui/menu.js";
 import { cn } from "../../../shared/utils.js";
 import {
-  artifactCommentsOptions,
-  artifactMembersOptions,
-} from "../artifact-comments-queries.js";
+  artifactCommentDraftAddress,
+  useComposerDraft,
+} from "../../threads/composer-draft-queries.js";
+import { artifactCommentsOptions } from "../artifact-comments-queries.js";
+import { ArtifactPeople } from "../artifact-people.js";
+import { PresenceStack } from "../artifact-presence.js";
 import type { ArtifactScope } from "../artifact-scope.js";
 import { type ArtifactDocument, artifactsApi } from "../artifacts-api.js";
 import {
@@ -55,7 +56,6 @@ import {
   type BoardSaveState,
   BoardSession,
   type BoardSnapshot,
-  collaboratorColor,
   storedBackground,
 } from "./board-session.js";
 import "@excalidraw/excalidraw/index.css";
@@ -108,51 +108,6 @@ function SaveIndicator({
         </span>
       );
   }
-}
-
-/** Who else is on the board now, in their cursor colors. */
-function PresenceStack({
-  present,
-  people,
-}: {
-  readonly present: BoardSnapshot["present"];
-  readonly people: ReturnType<typeof useCommentPeople>;
-}) {
-  const users = [...new Set(present.map(({ userId }) => userId))];
-  if (users.length === 0) return null;
-  const names = users.map((userId) => people.get(userId)?.name ?? "Someone");
-  return (
-    <span
-      className="board-presence"
-      role="status"
-      aria-label={`On this board: ${names.join(", ")}`}
-      title={`On this board: ${names.join(", ")}`}
-    >
-      {users.slice(0, 4).map((userId, index) => {
-        const person = people.get(userId);
-        return (
-          <span
-            key={userId}
-            className="board-presence-person"
-            style={
-              {
-                "--board-person": collaboratorColor(userId).stroke,
-              } as React.CSSProperties
-            }
-          >
-            <Avatar
-              name={names[index] ?? "Someone"}
-              {...(person?.image === undefined ? {} : { image: person.image })}
-              seed={userId}
-            />
-          </span>
-        );
-      })}
-      {users.length > 4 ? (
-        <span className="board-presence-more">+{users.length - 4}</span>
-      ) : null}
-    </span>
-  );
 }
 
 /** Where a shape's comment pin sits, in the canvas's own pixels. */
@@ -431,7 +386,10 @@ export function BoardEditor({
   const [draft, setDraft] = React.useState<
     (CommentDraft & { readonly target: string }) | undefined
   >();
-  const [draftBody, setDraftBody] = React.useState("");
+  // A Thread artifact's keeps in Core, so it outlasts the page.
+  const [draftBody, setDraftBody] = useComposerDraft(
+    artifactCommentDraftAddress(threadId, { artifactId }),
+  );
   const [activeComment, setActiveComment] = React.useState<string>();
   // The editor reads its first scene once, as it mounts.
   const [initialData] = React.useState(() => session.initialData());
@@ -467,22 +425,15 @@ export function BoardEditor({
 
   // The editor's API arrives once it mounts; the live channel starts then.
   useMountEffect(() => () => session.detach());
+  // Cursor names follow the members list as it loads and refreshes.
+  const [cursorPeople] = React.useState(
+    () => new ArtifactPeople(queryClient, identity, threadId),
+  );
+  useMountEffect(() => cursorPeople.follow(() => session.relabel()));
   const connect = (api: ExcalidrawImperativeAPI) => {
     if (editor === api) return;
     setEditor(api);
-    session.setNames((userId) => {
-      const members =
-        queryClient.getQueryData(
-          artifactMembersOptions(identity.id as UserId, threadId).queryKey,
-        ) ?? [];
-      const member = members.find((entry) => entry.userId === userId);
-      return member === undefined
-        ? { name: userId === identity.id ? identity.name : "Someone" }
-        : {
-            name: member.name,
-            ...(member.image === undefined ? {} : { avatarUrl: member.image }),
-          };
-    });
+    session.setNames(cursorPeople.person);
     session.attach(api, live);
   };
 
@@ -537,7 +488,11 @@ export function BoardEditor({
     >
       <header className="artifact-header">
         {typeof switcher === "function" ? switcher(files.items) : switcher}
-        <PresenceStack present={snapshot.present} people={people} />
+        <PresenceStack
+          users={snapshot.present.map(({ userId }) => userId)}
+          people={people}
+          where="board"
+        />
         {readOnly ? (
           <span className="artifact-save" role="status">
             View only

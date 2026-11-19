@@ -17,6 +17,7 @@ import {
 } from "./bitbucket/control-plane.js";
 import { readBitbucketRepository } from "./bitbucket/repository-reader.js";
 import { createGitHubAppJwt } from "./github/app-auth.js";
+import { syncGitHubCollaboratorGrants } from "./github/control-plane.js";
 import { loadGitHubAppConfiguration } from "./github/configuration.js";
 import {
   createGitHubProvider,
@@ -342,17 +343,34 @@ const resolveProjectSourceTarget = async (input: ProjectSourceInput) => {
   // A Thread clones on behalf of its creator: a personal grant authorizes only
   // the user who holds it. Another member of a workspace Project's workspace
   // uses their own connection to the same repository.
-  const memberGrant =
+  const findMemberGrant = () =>
+    memberSourceGrant(input.db, {
+      provider: binding.provider as "github" | "bitbucket",
+      userId: input.ownerUserId,
+      repositoryId: String(binding.provider_repository_id),
+      ...(input.preferredGrantId === undefined
+        ? {}
+        : { preferredGrantId: input.preferredGrantId }),
+    });
+  let memberGrant =
     binding.owner_scope === "personal" && binding.owner_id !== input.ownerUserId
-      ? await memberSourceGrant(input.db, {
-          provider: binding.provider as "github" | "bitbucket",
-          userId: input.ownerUserId,
-          repositoryId: String(binding.provider_repository_id),
-          ...(input.preferredGrantId === undefined
-            ? {}
-            : { preferredGrantId: input.preferredGrantId }),
-        })
+      ? await findMemberGrant()
       : undefined;
+  // A collaborator on the repository reaches it through the creator's
+  // installation while GitHub lists it for their own GitHub sign-in: checked
+  // now when they have no grant, and at most a minute old when they have one.
+  if (
+    binding.provider === "github" &&
+    (memberGrant === null || memberGrant?.repository_scope === "selected")
+  ) {
+    await syncGitHubCollaboratorGrants(
+      input.bindings,
+      input.db,
+      input.ownerUserId,
+      memberGrant === null,
+    );
+    memberGrant = await findMemberGrant();
+  }
   if (memberGrant === null) throw deny("grant-missing", "reconnect");
   return {
     kind: "connected" as const,

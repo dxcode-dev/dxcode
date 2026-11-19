@@ -224,11 +224,11 @@ describe("new Thread Send waits until the Thread can run", () => {
     await view.pressEnter();
     expect(view.onSubmit).not.toHaveBeenCalled();
     const link = view.setupLink("Set up a model");
-    expect(link?.getAttribute("href")).toBe("/settings/model-routing");
+    expect(link?.getAttribute("href")).toBe("/settings/models");
     expect(view.setupLink("Set up an Orb")).toBeUndefined();
 
     await React.act(async () => link?.click());
-    expect(view.router.state.location.pathname).toBe("/settings/model-routing");
+    expect(view.router.state.location.pathname).toBe("/settings/models");
   });
 
   it("keeps Send off when the pinned model is not served", async () => {

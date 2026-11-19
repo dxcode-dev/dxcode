@@ -23,7 +23,7 @@ import { Input } from "../../shared/ui/input.js";
 import { cn } from "../../shared/utils.js";
 import { projectsQueryOptions } from "../projects/project-queries.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
-import { SpaceAgentField, SpaceAgentPicker } from "./space-agent-field.js";
+import { useComposerDraft } from "../threads/composer-draft-queries.js";
 import {
   refreshSpaceAgentModel,
   spaceAgentModelQueryOptions,
@@ -35,6 +35,8 @@ import {
   SpaceProjectCombobox,
   SpaceSharingSelect,
 } from "./space-form-fields.js";
+import type { SpaceModelPick } from "./space-model-field.js";
+import { SpaceModelRows } from "./space-model-rows.js";
 import {
   spaceSuggestionsQueryOptions,
   useCreateSpace,
@@ -81,6 +83,29 @@ function SuggestionCard({
  * proposes from recent threads; on the right its name, goal, Project, and
  * who it is shared with. Creating it opens the Space.
  */
+interface SpaceDraft {
+  readonly name: string;
+  readonly goal: string;
+}
+
+/** The New Space draft as Core keeps it: its name and goal as JSON. */
+const decodeSpaceDraft = (text: string): SpaceDraft => {
+  try {
+    const value = JSON.parse(text) as Partial<
+      Record<keyof SpaceDraft, unknown>
+    >;
+    return {
+      name: typeof value.name === "string" ? value.name : "",
+      goal: typeof value.goal === "string" ? value.goal : "",
+    };
+  } catch {
+    return { name: "", goal: "" };
+  }
+};
+
+const encodeSpaceDraft = (draft: SpaceDraft) =>
+  draft.name === "" && draft.goal === "" ? "" : JSON.stringify(draft);
+
 export function CreateSpaceDialog({
   userId,
   dictation,
@@ -102,8 +127,22 @@ export function CreateSpaceDialog({
   const suggestions = useQuery(spaceSuggestionsQueryOptions(userId)).data;
   const projects = projectsQuery.data?.pages.flatMap((page) => page.items);
   const workspace = settingsQuery.data?.workspace;
-  const [name, setName] = React.useState("");
-  const [goal, setGoal] = React.useState("");
+  // The name and goal keep in Core as the New Thread prompt does, so
+  // closing the dialog, a reload, or another device shows them again.
+  const [form, setForm] = useComposerDraft(
+    settingsQuery.data === undefined
+      ? undefined
+      : { workspace: workspace?.id ?? "personal", slot: "new-space" },
+  );
+  const { name, goal } = decodeSpaceDraft(form);
+  const setName = (next: string) =>
+    setForm((current) =>
+      encodeSpaceDraft({ ...decodeSpaceDraft(current), name: next }),
+    );
+  const setGoal = (next: string) =>
+    setForm((current) =>
+      encodeSpaceDraft({ ...decodeSpaceDraft(current), goal: next }),
+    );
   const [chosenProjectId, setProjectId] = React.useState<ProjectId>();
   const [chosenSharing, setSharing] = React.useState<SpaceSharing>();
   const [chosenSuggestion, setChosenSuggestion] =
@@ -118,13 +157,22 @@ export function CreateSpaceDialog({
     refetchOnMount: "always",
   });
   const queryClient = useQueryClient();
-  const [picking, setPicking] = React.useState(false);
+  // A model picked for this Space; undefined runs the Space model from
+  // Settings → Models.
+  const [coordinatorModel, setCoordinatorModel] =
+    React.useState<SpaceModelPick>();
+  // The model the Space's threads run on; undefined: the coordinator's.
+  const [threadModel, setThreadModel] = React.useState<SpaceModelPick>();
   // A plan picked from the Agent row's list; none is Auto, or the first
   // plan, which Core picks the same way.
   const [chosenPlan, setPlan] = React.useState<string>();
+  const route = agent.data?.route;
   const plan =
-    agent.data?.route.kind === "claude-code" ? chosenPlan : undefined;
-  const agentUnavailable = agent.data?.route.kind === "unavailable";
+    coordinatorModel === undefined && route?.kind === "claude-code"
+      ? chosenPlan
+      : undefined;
+  const agentUnavailable =
+    coordinatorModel === undefined && route?.kind === "unavailable";
   // Until the person picks, the first Project and the workspace when there
   // is one.
   const projectId = chosenProjectId ?? projects?.[0]?.id;
@@ -149,10 +197,8 @@ export function CreateSpaceDialog({
   const onSubmit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canCreate) return;
-    if (agentUnavailable) {
-      setPicking(true);
-      return;
-    }
+    // The coordinator row says why and asks for another model.
+    if (agentUnavailable) return;
     create.mutate(
       {
         name: name.trim(),
@@ -162,6 +208,12 @@ export function CreateSpaceDialog({
         ...(plan === undefined
           ? {}
           : { claudeConnectionId: plan as ModelConnectionId }),
+        ...(coordinatorModel === undefined
+          ? {}
+          : { agentModel: coordinatorModel as never }),
+        ...(threadModel === undefined
+          ? {}
+          : { threadModel: threadModel as never }),
       },
       {
         // The route changed after the dialog read it (a plan disabled, the
@@ -170,12 +222,11 @@ export function CreateSpaceDialog({
           if (
             (error as { readonly code?: string }).code ===
             "SPACE_MODEL_UNAVAILABLE"
-          ) {
+          )
             void refreshSpaceAgentModel(queryClient, userId);
-            setPicking(true);
-          }
         },
         onSuccess: (space) => {
+          setForm("");
           onCreated();
           void navigate({
             to: "/threads/$threadId",
@@ -303,21 +354,20 @@ export function CreateSpaceDialog({
                   onChange={setSharing}
                 />
               </SpaceFieldRow>
-              <SpaceFieldRow
-                label="Agent"
-                help="The model the Space's agent runs on. It keeps this choice."
-                htmlFor={`${fieldId}-agent`}
-              >
-                <SpaceAgentField
-                  id={`${fieldId}-agent`}
-                  identity={userId}
-                  plan={chosenPlan}
-                  locked={create.isPending}
-                  PlanPicker={PlanPicker}
-                  onChange={() => setPicking(true)}
-                  onPlanChange={setPlan}
-                />
-              </SpaceFieldRow>
+              <SpaceModelRows
+                fieldId={fieldId}
+                userId={userId}
+                route={route}
+                routePending={agent.isPending}
+                locked={create.isPending}
+                coordinatorModel={coordinatorModel}
+                onCoordinatorModelChange={setCoordinatorModel}
+                threadModel={threadModel}
+                onThreadModelChange={setThreadModel}
+                plan={plan}
+                onPlanChange={setPlan}
+                PlanPicker={PlanPicker}
+              />
               {create.error === null ||
               // The Agent row and the picker say this one.
               (create.error as { readonly code?: string }).code ===
@@ -342,9 +392,6 @@ export function CreateSpaceDialog({
           </section>
         </div>
       </DialogContent>
-      {picking ? (
-        <SpaceAgentPicker identity={userId} onClose={() => setPicking(false)} />
-      ) : null}
     </DialogRoot>
   );
 }

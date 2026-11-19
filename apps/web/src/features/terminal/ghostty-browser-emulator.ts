@@ -46,6 +46,7 @@ export async function mountBrowserTerminal(
   onData: (data: string) => void,
   theme: ITheme,
   visible: () => boolean = () => true,
+  takeFocus = true,
 ): Promise<BrowserTerminalEmulator> {
   if (initialization === undefined)
     initialization = Ghostty.load(ghosttyWasmUrl);
@@ -78,7 +79,19 @@ export async function mountBrowserTerminal(
   terminal.loadAddon(fit);
   const previousBackgroundColor = element.style.backgroundColor;
   const previousCaretColor = element.style.caretColor;
-  terminal.open(element);
+  // The emulator focuses itself as it opens (now and a tick later). A
+  // Terminal the page restored, not one the person opened, leaves focus where
+  // it was, so the app's keyboard shortcuts keep working on the page.
+  if (takeFocus) terminal.open(element);
+  else {
+    const focus = terminal.focus;
+    terminal.focus = () => {};
+    try {
+      terminal.open(element);
+    } finally {
+      terminal.focus = focus;
+    }
+  }
   terminal.setRenderPaused(!visible());
   if (theme.background !== undefined)
     element.style.setProperty("background-color", theme.background);

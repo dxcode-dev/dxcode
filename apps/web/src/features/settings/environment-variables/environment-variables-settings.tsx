@@ -92,9 +92,11 @@ const initialEditorState: EditorState = {
 function useEnvironmentVariableController({
   target,
   workspace,
+  readOnly,
   onDirtyChange,
 }: {
   readonly target: EnvironmentVariablesTarget;
+  readonly readOnly: boolean;
   readonly workspace: SettingsSectionProps["workspace"];
   readonly onDirtyChange: SettingsSectionProps["onDirtyChange"];
 }) {
@@ -151,9 +153,10 @@ function useEnvironmentVariableController({
   const dialogTriggerRef = React.useRef<HTMLElement>(null);
   const fieldId = React.useId();
   const canMutate =
-    target.scope !== "workspace" ||
-    (workspace !== undefined &&
-      workspaceRoleHasPermission(workspace.role, "workspace:update"));
+    !readOnly &&
+    (target.scope !== "workspace" ||
+      (workspace !== undefined &&
+        workspaceRoleHasPermission(workspace.role, "workspace:update")));
   const execute = async (action: EnvironmentVariablesMutationAction) => {
     const outcome = await settle(() => mutation.mutateAsync(action));
     mutation.reset();
@@ -351,9 +354,12 @@ export function EnvironmentVariablesSettings(props: SettingsSectionProps) {
 
 export function ProjectEnvironmentVariablesSettings({
   projectId,
+  readOnly,
   onDirtyChange,
 }: {
   readonly projectId: ProjectId;
+  /** A member who neither created the Project nor administers the workspace. */
+  readonly readOnly: boolean;
   readonly onDirtyChange: (dirty: boolean) => void;
 }) {
   const target = { scope: "project" as const, projectId };
@@ -361,6 +367,7 @@ export function ProjectEnvironmentVariablesSettings({
     <EnvironmentVariablesContent
       key={`${target.scope}:${projectId}`}
       target={target}
+      readOnly={readOnly}
       onDirtyChange={onDirtyChange}
     />
   );
@@ -389,14 +396,18 @@ function EnvironmentVariablesContent({
   target,
   onDirtyChange,
   workspace,
+  readOnly = false,
   intro,
 }: SettingsSectionProps & {
   readonly target: EnvironmentVariablesTarget;
+  /** The page says why, as Project Settings does for a member. */
+  readonly readOnly?: boolean;
   readonly intro?: React.ReactNode;
 }) {
   const controller = useEnvironmentVariableController({
     target,
     workspace,
+    readOnly,
     onDirtyChange,
   });
   const { editor, dialogTriggerRef, updateEditor } = controller;
@@ -424,7 +435,7 @@ function EnvironmentVariablesContent({
   return (
     <div className="environment-variables-settings">
       {intro}
-      {!controller.canMutate ? (
+      {!controller.canMutate && !readOnly ? (
         <SettingsCard title="Read-only workspace values">
           <p>
             Your workspace role does not include configuration changes. Only

@@ -1,8 +1,9 @@
 import "./kbd.css";
 
 /**
- * A key combination, as a keyboard shortcut shows it: each key in one
- * bordered box, read as "Ctrl plus K". With no keys it shows `emptyLabel`
+ * A key combination, as a keyboard shortcut shows it: its keys in one
+ * bordered box with a plus between them, read as "Ctrl plus K": Ctrl + K,
+ * Ctrl + Shift + U, ⌘ + ⇧ + U. With no keys it shows `emptyLabel`
  * ("Not set"), or nothing when that is empty.
  */
 export function Keycaps({
@@ -22,8 +23,15 @@ export function Keycaps({
       role="img"
       aria-label={keys.join(" plus ")}
     >
-      {keys.map((key) => (
-        <kbd key={key}>{key}</kbd>
+      {keys.map((key, index) => (
+        <span className="shortcut-keycap" key={key}>
+          {index > 0 ? (
+            <span className="shortcut-keycaps-plus" aria-hidden="true">
+              +
+            </span>
+          ) : null}
+          <kbd>{key}</kbd>
+        </span>
       ))}
     </span>
   );

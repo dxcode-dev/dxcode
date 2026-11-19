@@ -163,7 +163,7 @@ describe.each(PHONES)(
         vi.waitFor(() =>
           expect(
             document
-              .querySelector(".model-picker-positioner")
+              .querySelector(".dx-model-picker-positioner")
               ?.hasAttribute("data-side"),
           ).toBe(true),
         ),
@@ -171,7 +171,7 @@ describe.each(PHONES)(
       await React.act(
         () => new Promise((resolve) => requestAnimationFrame(resolve)),
       );
-      const popup = document.querySelector(".model-picker") as HTMLElement;
+      const popup = document.querySelector(".dx-model-picker") as HTMLElement;
       expect(box(popup).top).toBeGreaterThanOrEqual(0);
       expect(box(popup).bottom).toBeLessThanOrEqual(innerHeight);
       expect(box(popup).left).toBeGreaterThanOrEqual(0);

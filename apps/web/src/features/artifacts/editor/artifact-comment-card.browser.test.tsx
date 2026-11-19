@@ -28,6 +28,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { AuthContext } from "../../../shared/auth/auth-context.js";
 import { createQueryClient } from "../../../shared/query/query-client.js";
+import { discardUnsavedThreadDrafts } from "../../threads/thread-draft-queries.js";
 import { artifactCommentsOptions } from "../artifact-comments-queries.js";
 import { ArtifactEditor } from "./artifact-editor.js";
 
@@ -74,6 +75,8 @@ afterEach(async () => {
   await React.act(() => root?.unmount());
   root = undefined;
   calls = [];
+  // Drafts queue their writes for the whole page, as across a sign-out.
+  discardUnsavedThreadDrafts();
   document.body.replaceChildren();
   vi.unstubAllGlobals();
 });
@@ -194,13 +197,22 @@ for (const width of [1440, 390]) {
       expect(box.value).toBe("Looks long\nTrim it");
       await userEvent.keyboard("{Enter}");
       await settle();
-      expect(calls).toEqual([
+      // Posting sends the comment and empties its draft kept in Core (#2228).
+      expect(calls.filter(({ method }) => method === "POST")).toEqual([
         expect.objectContaining({
-          method: "POST",
           body: expect.objectContaining({
             quote: "second paragraph",
             body: "Looks long\nTrim it",
           }),
+        }),
+      ]);
+      expect(calls.filter(({ method }) => method !== "POST")).toEqual([
+        expect.objectContaining({
+          method: "PUT",
+          url: expect.stringContaining(
+            `/draft?slot=${encodeURIComponent(`artifact-comment:${artifact().id}`)}`,
+          ),
+          body: { text: "" },
         }),
       ]);
     });

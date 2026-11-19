@@ -475,6 +475,14 @@ export const mailboxRoutes = new Hono<AppEnv>()
           item.folder !== "spam"
             ? {}
             : { spamReason: SPAM_REASONS[item.disposition] }),
+          // In the Inbox unauthenticated and still `stored`: a reply dx took
+          // on SPF because it answers the person's email (inbound.ts).
+          ...(item.direction === "in" &&
+          item.folder !== "spam" &&
+          item.authenticated !== 1 &&
+          item.disposition === "stored"
+            ? { replyToSent: true as const }
+            : {}),
         });
       }
       return context.json(

@@ -1,7 +1,17 @@
-import type { SpaceData, SpaceThreadItem, ThreadDetailData } from "@dx/api";
+import type {
+  SpaceData,
+  SpacePageLayout,
+  SpaceThreadItem,
+  ThreadDetailData,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
+import {
+  Navigate,
+  useLocation,
+  useNavigate,
+  useParams,
+} from "@tanstack/react-router";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { DxLoading } from "../../shared/brand/dx-loading.js";
@@ -23,6 +33,7 @@ import { SpaceAutomationsContext } from "./space-automations-context.js";
 import { type RenderSpaceComments, SpaceChat } from "./space-chat.js";
 import { useSpaceDetailsHidden } from "./space-details-store.js";
 import { threadSelectionChip } from "./space-format.js";
+import { type SpacePageChange, useSpacePageLayout } from "./space-layout.js";
 import { SpacePanel } from "./space-panel.js";
 import {
   spaceQueryOptions,
@@ -217,9 +228,8 @@ function SpacePage({
   space,
   threads,
   childThreadId,
-  spaceTabActive,
-  onSelectSpaceTab,
-  onSelectThreadTab,
+  layout,
+  onChange,
   renderThread,
   renderComments,
   Artifact,
@@ -229,10 +239,9 @@ function SpacePage({
   readonly space: SpaceData;
   readonly threads: ReadonlyArray<SpaceThreadItem> | undefined;
   readonly childThreadId: ThreadId | undefined;
-  /** With the thread's tab beside it in one strip, the chat shows. */
-  readonly spaceTabActive: boolean;
-  readonly onSelectSpaceTab: () => void;
-  readonly onSelectThreadTab: () => void;
+  /** How the person left the page: Side by Side, the front tab, Details. */
+  readonly layout: SpacePageLayout;
+  readonly onChange: (change: SpacePageChange) => void;
   readonly renderThread: (slots: SpaceThreadSlots) => React.ReactNode;
   readonly renderComments?: RenderSpaceComments;
   readonly Artifact?: SpaceArtifactSlot;
@@ -246,7 +255,6 @@ function SpacePage({
   const phone = useMediaQuery(PHONE_QUERY);
   const [detailsHidden, setDetailsHidden] = useSpaceDetailsHidden(identity.id);
   const [sheetOpen, setSheetOpen] = React.useState(false);
-  const [tabbed, setTabbed] = React.useState(false);
   const [dialog, setDialog] = React.useState<SpaceDialog>();
   const archive = useOptionalThreadArchive();
   const { Chips } = React.use(SpaceAutomationsContext);
@@ -255,7 +263,13 @@ function SpacePage({
   const childIds = new Set((threads ?? []).map(({ id }) => id as string));
   const captureChildLinks = useChildLinkCapture(childIds);
   const child = childThreadId;
-  const split = child !== undefined && splitFits && !tabbed;
+  // With the thread's tab beside it in one strip, the chat shows when the
+  // person chose it for this thread.
+  const spaceTabActive =
+    child !== undefined && layout.front === "space" && layout.thread === child;
+  const onSelectSpaceTab = () => onChange({ thread: child, front: "space" });
+  const onSelectThreadTab = () => onChange({ thread: child, front: "thread" });
+  const split = child !== undefined && splitFits && !layout.tabs;
   const column = detailsColumnFits && !detailsHidden;
   const showSpace = child === undefined || split || spaceTabActive;
   const showThread = child !== undefined && (split || !spaceTabActive);
@@ -290,7 +304,9 @@ function SpacePage({
     else setSheetOpen(true);
   };
   const item = threads?.find(({ id }) => id === child);
-  const toggleSplit = splitFits ? () => setTabbed((now) => !now) : undefined;
+  const toggleSplit = splitFits
+    ? () => onChange({ tabs: !layout.tabs })
+    : undefined;
   // The Space chat's strip ends with Space Details' quick parts while the
   // column is not shown, unless the thread's own strip ends the row.
   const stripTools = (menu: boolean) =>
@@ -403,6 +419,8 @@ function SpacePage({
           <SpacePanel
             space={space}
             activeThreadId={child}
+            tab={layout.details}
+            onTabChange={(details) => onChange({ details })}
             onOpenThread={openThread}
             onOpenComments={showChat}
             onEdit={onEdit}
@@ -480,20 +498,28 @@ export function SpaceWorkspace({
   const spaceThreadId = threadId as ThreadId;
   const spaceQuery = useQuery(spaceQueryOptions(identity.id, spaceThreadId));
   const space = spaceQuery.data;
-  const threads = useQuery(
+  const threadsQuery = useQuery(
     spaceThreadsQueryOptions(identity.id, spaceThreadId),
-  ).data;
+  );
+  const threads = threadsQuery.data;
   const requested = useLocation({
     select: (location) => {
       const thread: unknown = location.search?.thread;
       return typeof thread === "string" ? (thread as ThreadId) : undefined;
     },
   });
-  const childThreadId = requested === spaceThreadId ? undefined : requested;
-  // Which tab shows while the thread's tab shares the Space chat's strip:
-  // the thread when it was just opened, until the Space tab is chosen.
-  const [spaceTabFor, setSpaceTabFor] = React.useState<ThreadId>();
+  const { layout, change } = useSpacePageLayout(spaceThreadId);
   const childThreadIds = new Set((threads ?? []).map(({ id }) => id as string));
+  // Opened without a thread (the sidebar, a reload of the bare Space, another
+  // device), the Space brings back the thread the person left open, while
+  // it is still one of the Space's.
+  const saved = requested === undefined ? layout?.thread : undefined;
+  const restoring =
+    saved !== undefined && threads === undefined && !threadsQuery.isError;
+  const restored =
+    saved !== undefined && childThreadIds.has(saved) ? saved : undefined;
+  const opened = requested ?? restored;
+  const childThreadId = opened === spaceThreadId ? undefined : opened;
   // Not found says so at once, as a Thread that does not exist does.
   if (space === undefined && spaceQuery.isError)
     return (
@@ -513,7 +539,9 @@ export function SpaceWorkspace({
         </Button>
       </div>
     );
-  if (space === undefined)
+  // The page waits for its saved layout, so it opens as the person left it
+  // instead of changing under them.
+  if (space === undefined || layout === undefined || restoring)
     return <DxLoading label="Loading Space…" variant="pane" />;
   return (
     <SpacePostFilesContext value={files ?? NO_FILES}>
@@ -522,18 +550,28 @@ export function SpaceWorkspace({
           value={{
             spaceThreadId,
             childThreadIds,
-            reveal: () => setSpaceTabFor(undefined),
+            reveal: (thread) => change({ thread, front: "thread" }),
+            forget: () => change({ thread: null }),
           }}
         >
+          {restored === undefined ? null : (
+            // The URL names the thread again, as opening it does.
+            <Navigate
+              to="/threads/$threadId"
+              params={{ threadId: spaceThreadId }}
+              search={(previous: Record<string, unknown>) => ({
+                ...previous,
+                thread: restored,
+              })}
+              replace
+            />
+          )}
           <SpacePage
             space={space}
             threads={threads}
             childThreadId={childThreadId}
-            spaceTabActive={
-              childThreadId !== undefined && spaceTabFor === childThreadId
-            }
-            onSelectSpaceTab={() => setSpaceTabFor(childThreadId)}
-            onSelectThreadTab={() => setSpaceTabFor(undefined)}
+            layout={layout}
+            onChange={change}
             renderThread={renderThread}
             renderComments={renderComments}
             Artifact={Artifact}

@@ -11,7 +11,7 @@ const GAP_COPY = {
   model: {
     text: "No model serves this choice.",
     link: "Set up a model",
-    section: "model-routing",
+    section: "models",
   },
 } as const;
 

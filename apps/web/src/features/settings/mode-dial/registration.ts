@@ -7,8 +7,8 @@ export const personalModeDialSettingsSection = {
   scope: "personal",
   slug: "models",
   group: "agent",
-  label: "Models",
-  title: "Models",
+  label: "Models & Routing",
+  title: "Models & Routing",
   description:
     "The Recommended model and effort new Threads start on, and the models older mode Threads run on.",
   icon: Sparkles,
@@ -20,8 +20,8 @@ export const workspaceModeDialSettingsSection = {
   scope: "workspace",
   slug: "models",
   group: "agent",
-  label: "Models",
-  title: "Models",
+  label: "Models & Routing",
+  title: "Models & Routing",
   description:
     "The Recommended model and effort everyone in the workspace starts new Threads on.",
   icon: Sparkles,
