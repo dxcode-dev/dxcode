@@ -123,6 +123,8 @@ export interface TranscriptOutlineAnchor {
   readonly id: `outline:${string}`;
   readonly rowId: TranscriptRowId;
   readonly turnId: TranscriptTurnId;
+  /** Flue's id for the prompt, as the prompt outline lists it. */
+  readonly messageId: string;
   readonly label: string;
   readonly timestamp?: string;
 }
@@ -206,6 +208,17 @@ const outlineLabel = (text: string) => {
   return characters.length > 80
     ? `${characters.slice(0, 79).join("")}…`
     : normalized;
+};
+
+/**
+ * The outline label for a prompt's raw text, as a loaded prompt row shows
+ * it: without the author tag and the attachment block. The text may be cut
+ * short, so an attachment block that never closes is dropped too.
+ */
+export const promptOutlineLabel = (raw: string) => {
+  const text = parseMessageAttachments(parseMessageAuthor(raw).text).text;
+  const block = text.indexOf("<dx_attachments");
+  return outlineLabel(block === -1 ? text : text.slice(0, block));
 };
 
 const authoritativeTimestamp = (message: FlueConversationMessage) => {
@@ -516,6 +529,7 @@ const outlineAnchor = rowVariant((row): TranscriptOutlineAnchor => {
     id: `outline:${row.id.slice(4)}`,
     rowId: row.id,
     turnId: row.turnId,
+    messageId: row.messageId,
     label: outlineLabel(row.kind === "user-prompt" ? row.text : ""),
     ...(timestamp ? { timestamp } : {}),
   };

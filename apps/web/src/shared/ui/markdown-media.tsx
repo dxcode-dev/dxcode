@@ -6,6 +6,11 @@ import { LazyImageViewer as ImageViewer } from "./lazy-image-viewer.js";
 import type { MarkdownMediaSource } from "./markdown-file-link-context.js";
 import type { GalleryItem } from "./markdown-galleries.js";
 import { useMarkdownMediaSource } from "./markdown-media-source.js";
+import {
+  applyPlayback,
+  type MediaPlayback,
+  readPlayback,
+} from "./media-playback.js";
 
 const viewerMedia = (
   source: MarkdownMediaSource,
@@ -40,6 +45,10 @@ export function MarkdownMediaGallery({
   const resolve = useMarkdownMediaSource();
   const [index, setIndex] = React.useState(0);
   const [viewing, setViewing] = React.useState<number>();
+  // The shown video, when the shown item is one: the viewer takes over from
+  // it and hands back to it.
+  const video = React.useRef<HTMLVideoElement>(null);
+  const [handedOff, setHandedOff] = React.useState<MediaPlayback>();
   const media = items.flatMap((item, position): ViewerMedia[] => {
     const source = item.src === "" ? undefined : resolve(item.src);
     const name =
@@ -56,12 +65,27 @@ export function MarkdownMediaGallery({
   const current = media[shown] as ViewerMedia;
   const step = (offset: number) =>
     setIndex((shown + offset + media.length) % media.length);
+  const open = () => {
+    const playing = video.current;
+    if (playing !== null) {
+      setHandedOff(readPlayback(playing));
+      playing.pause();
+    } else setHandedOff(undefined);
+    setViewing(shown);
+  };
   return (
     <figure
       className="markdown-gallery"
       aria-roledescription="carousel"
       aria-label={`Gallery, ${media.length} items`}
       onKeyDown={(event) => {
+        // The viewer's keys reach here through its portal; it steps itself.
+        // A focused player seeks with the arrows.
+        if (
+          !event.currentTarget.contains(event.target as Node) ||
+          event.target instanceof HTMLMediaElement
+        )
+          return;
         if (event.key === "ArrowRight") step(1);
         else if (event.key === "ArrowLeft") step(-1);
       }}
@@ -72,7 +96,7 @@ export function MarkdownMediaGallery({
             type="button"
             className="markdown-gallery-open"
             aria-label={`View ${current.name} full screen`}
-            onClick={() => setViewing(shown)}
+            onClick={open}
           >
             <img
               src={current.url}
@@ -88,6 +112,7 @@ export function MarkdownMediaGallery({
             src={current.url}
             aria-label={current.name}
             key={current.key}
+            ref={video}
             controls
             playsInline
             preload="metadata"
@@ -121,7 +146,7 @@ export function MarkdownMediaGallery({
           className="markdown-gallery-expand"
           aria-label="Open full screen"
           title="Open full screen"
-          onClick={() => setViewing(shown)}
+          onClick={open}
         >
           <Maximize2 />
         </Button>
@@ -136,11 +161,16 @@ export function MarkdownMediaGallery({
         <ImageViewer
           items={media}
           index={viewing}
+          playback={handedOff}
           onIndexChange={(next) => {
             setViewing(next);
             setIndex(next);
           }}
-          onClose={() => setViewing(undefined)}
+          onClose={(playback) => {
+            setViewing(undefined);
+            if (playback !== undefined && video.current !== null)
+              applyPlayback(video.current, playback);
+          }}
         />
       )}
     </figure>

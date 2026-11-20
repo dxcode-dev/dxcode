@@ -2,6 +2,11 @@ struct Params {
   time: f32,
   state: f32,
   pointer: vec2f,
+  // The mark's CSS color for its state, so it follows the light or dark page.
+  ink: vec4f,
+  // The loading waterline: lighter than the ink on a dark page, darker on a
+  // light one.
+  highlight: vec4f,
 }
 
 @group(0) @binding(0) var glyphTexture: texture_2d<f32>;
@@ -45,11 +50,7 @@ fn glyph(uv: vec2f) -> f32 {
 
   let base = glyph(uv - vec2f(shift, 0.0));
   var alpha = base;
-  var color = vec3f(0.965, 1.0, 0.96);
-  if (thinking) { color = vec3f(0.72, 0.61, 1.0); }
-  if (working) { color = vec3f(0.965, 0.514, 0.231); }
-  if (complete) { color = vec3f(0.39, 0.86, 0.55); }
-  if (failed) { color = vec3f(1.0, 0.28, 0.22); }
+  let color = params.ink.rgb;
 
   var waterHighlight = 0.0;
   if (loading) {
@@ -62,9 +63,8 @@ fn glyph(uv: vec2f) -> f32 {
     let waterMask = smoothstep(waterSurface - 0.008, waterSurface + 0.008, uv.y);
     alpha = base * waterMask;
     waterHighlight = base * exp(-abs(uv.y - waterSurface) * 135.0) * 0.7;
-    color = vec3f(0.72, 0.96, 0.84);
   }
 
-  let finalColor = color * alpha + vec3f(0.86, 1.0, 0.94) * waterHighlight;
+  let finalColor = color * alpha + params.highlight.rgb * waterHighlight;
   return vec4f(finalColor, max(alpha, waterHighlight));
 }

@@ -121,6 +121,34 @@ describe("tool output media", () => {
     await React.act(() => root.unmount());
   });
 
+  it("opens the viewer on the tile clicked, not the first", async () => {
+    const ids = ["att_entry_a_1", "att_entry_b_2", "att_entry_c_3"];
+    const { row, root } = await renderToolCall({
+      toolName: "view_media",
+      toolCallId: "tiles",
+      input: { path: "/home/user/attachments" },
+      output: ids.map((id) => ({
+        type: "image",
+        data: id,
+        mimeType: "image/png",
+      })),
+    });
+    const tiles = row.querySelectorAll<HTMLButtonElement>(
+      "button.message-image-tile",
+    );
+    expect(tiles).toHaveLength(3);
+    await React.act(() => tiles[1]?.click());
+    await vi.waitFor(() =>
+      expect(
+        document.querySelector(".dx-image-viewer-count")?.textContent,
+      ).toBe("2 / 3"),
+    );
+    expect(
+      document.querySelector(".dx-image-viewer img")?.getAttribute("src"),
+    ).toBe(`${AGENT}/attachments/${ids[1]}`);
+    await React.act(() => root.unmount());
+  });
+
   it("shows view_media's answer to an objective as prose", async () => {
     const { row, root } = await renderToolCall({
       toolName: "view_media",

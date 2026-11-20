@@ -6620,7 +6620,7 @@
 .new-thread-header-action kbd {
   font: inherit;
 }
-.new-thread-dialog form {
+:is(.new-thread-dialog, .new-thread-surface) form {
   display: flex;
   flex-direction: column;
   padding: 0;
@@ -6635,7 +6635,7 @@
   padding: var(--space-2) 0 9px;
   border-bottom: 1px solid var(--divider);
 }
-.new-thread-dialog textarea {
+:is(.new-thread-dialog, .new-thread-surface) textarea {
   display: block;
   field-sizing: content;
   width: 100%;
@@ -6650,10 +6650,10 @@
   letter-spacing: 0;
   line-height: var(--leading-5);
 }
-.new-thread-dialog textarea::placeholder {
+:is(.new-thread-dialog, .new-thread-surface) textarea::placeholder {
   color: var(--muted-foreground);
 }
-.new-thread-dialog footer {
+:is(.new-thread-dialog, .new-thread-surface) footer {
   display: flex;
   align-items: center;
   gap: var(--space-1-5);
@@ -6666,7 +6666,7 @@
 .new-thread-config-spacer {
   flex: 1;
 }
-.new-thread-dialog .error-notice {
+:is(.new-thread-dialog, .new-thread-surface) .error-notice {
   margin-top: var(--space-2);
 }
 .attachment-menu-wrap {
@@ -6696,7 +6696,7 @@
   width: 14px;
   height: 14px;
 }
-.new-thread-dialog .composer-attachments {
+:is(.new-thread-dialog, .new-thread-surface) .composer-attachments {
   margin: var(--space-1) var(--space-4) 0;
 }
 .new-thread-project {

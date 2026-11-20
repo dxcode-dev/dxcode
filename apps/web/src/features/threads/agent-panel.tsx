@@ -10,7 +10,13 @@ import {
   THREAD_SNOOZE_UNTIL_NEEDED_MS,
   threadSnoozeState,
 } from "@dx/domain";
-import type { FailedSend, UseFlueAgentResult } from "@flue/react";
+import type {
+  FailedSend,
+  FlueClient,
+  FlueConversationPrompt,
+  FlueHistoryWindow,
+  UseFlueAgentResult,
+} from "@flue/react";
 import {
   AlertCircle,
   ArrowUp,
@@ -1372,6 +1378,11 @@ type PanelAgent = UseFlueAgentResult & {
   readonly loadingOlder?: boolean;
   readonly olderError?: Error;
   readonly loadOlder?: () => Promise<void>;
+  readonly historyWindow?: FlueHistoryWindow;
+  readonly openHistoryWindow?: (cursor: string) => Promise<void>;
+  readonly loadWindowOlder?: () => Promise<void>;
+  readonly loadWindowNewer?: () => Promise<void>;
+  readonly closeHistoryWindow?: () => void;
 };
 
 export interface AgentPanelOptions {
@@ -1744,6 +1755,33 @@ const sendingOnlyChat = (model: TranscriptViewModel, admittingChat: boolean) =>
   ) &&
   !model.turns.some((turn) => turn.status === "active");
 
+const NO_DISCARDED_SENDS: ReadonlySet<string> = new Set();
+const noMoreHistory = () => Promise.resolve();
+const noWindow = () => {};
+
+/**
+ * The Thread's full prompt list for the outline, read each time the outline
+ * opens; the list from the last read shows meanwhile.
+ */
+function usePromptList(readPrompts: FlueClient["prompts"] | undefined) {
+  const [prompts, setPrompts] =
+    React.useState<ReadonlyArray<FlueConversationPrompt>>();
+  const pending = React.useRef<Promise<void>>(undefined);
+  const load = () => {
+    if (readPrompts === undefined || pending.current !== undefined) return;
+    pending.current = readPrompts()
+      .then(
+        (list) => setPrompts(list.prompts),
+        // The outline keeps the loaded prompts; the next open reads again.
+        () => undefined,
+      )
+      .finally(() => {
+        pending.current = undefined;
+      });
+  };
+  return { prompts, load };
+}
+
 /** The transcript, the one part of the panel that renders every frame. */
 function AgentConversation({
   source,
@@ -1761,9 +1799,12 @@ function AgentConversation({
   onFocusRequested,
   onReply,
   canDictate,
+  readPrompts,
 }: {
   readonly onReply?: TranscriptReply;
   readonly canDictate: boolean;
+  /** Reads the Thread's full prompt list, for the outline. */
+  readonly readPrompts?: FlueClient["prompts"];
   readonly source: AgentSource<PanelAgent>;
   readonly transcripts: ReturnType<typeof createTranscriptDerivation>;
   readonly view: TranscriptView;
@@ -1783,7 +1824,35 @@ function AgentConversation({
     source.getSnapshot,
     source.getSnapshot,
   );
-  const { agent, model } = transcripts.derive(observed, view);
+  const { agent, model: liveModel } = transcripts.derive(observed, view);
+  // History opened at an older prompt shows instead of the live
+  // conversation once its first page arrives, until it joins the live pages.
+  const [windowTranscripts] = React.useState(createTranscriptDerivation);
+  const historyWindow =
+    agent.historyWindow !== undefined && agent.historyWindow.messages.length > 0
+      ? agent.historyWindow
+      : undefined;
+  const model =
+    historyWindow === undefined
+      ? liveModel
+      : windowTranscripts.derive(
+          {
+            ...agent,
+            messages: historyWindow.messages,
+            settlements: historyWindow.settlements,
+            finalOutputs: historyWindow.finalOutputs,
+            failedSends: [],
+            hasMore: historyWindow.hasOlder,
+          },
+          {
+            discardedSends: NO_DISCARDED_SENDS,
+            unconfirmed: false,
+            inboundMessages: undefined,
+            chatEcho: view.chatEcho,
+            admittedMessageId: view.admittedMessageId,
+          },
+        ).model;
+  const promptList = usePromptList(readPrompts);
   const initialSubmissionObserved =
     optimisticCreation?.submissionId !== undefined &&
     agent.messages.some(
@@ -1813,10 +1882,35 @@ function AgentConversation({
       onReply={onReply}
       canDictate={canDictate}
       historyReady={agent.historyReady}
-      hasMore={agent.hasMore}
-      loadingOlder={agent.loadingOlder}
-      olderError={agent.olderError}
-      loadOlder={agent.loadOlder}
+      {...(historyWindow === undefined
+        ? {
+            hasMore: agent.hasMore,
+            loadingOlder: agent.loadingOlder,
+            olderError: agent.olderError,
+            loadOlder: agent.loadOlder,
+          }
+        : {
+            hasMore: historyWindow.hasOlder,
+            loadingOlder: historyWindow.loading === "older",
+            olderError: historyWindow.error,
+            loadOlder: agent.loadWindowOlder,
+            historyWindow: {
+              hasNewer: historyWindow.hasNewer,
+              loadingNewer: historyWindow.loading === "newer",
+              newerError: historyWindow.error,
+              loadNewer: agent.loadWindowNewer ?? noMoreHistory,
+              close: agent.closeHistoryWindow ?? noWindow,
+            },
+          })}
+      {...(agent.openHistoryWindow === undefined || readPrompts === undefined
+        ? {}
+        : {
+            promptOutline: {
+              prompts: promptList.prompts,
+              load: promptList.load,
+              open: agent.openHistoryWindow,
+            },
+          })}
       {...(focus === undefined
         ? {}
         : { focus, onFocusHandled, onFocusRequested })}
@@ -2058,6 +2152,7 @@ export function AgentPanel({
           <AgentConversation
             source={source}
             transcripts={transcripts}
+            readPrompts={retainedThread?.client.prompts}
             view={view}
             archived={archived}
             active={active}

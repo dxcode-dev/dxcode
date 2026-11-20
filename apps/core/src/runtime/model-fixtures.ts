@@ -274,9 +274,22 @@ const promptFromContext = (context: Context) => {
   return undefined;
 };
 
+/**
+ * A numbered text check, `History marker 12. <text completion prompt>`,
+ * answered as the text completion. Seeded long Threads use it so each
+ * prompt reads differently in the transcript and its outline.
+ */
+export const localHistoryMarkerPrompt = (marker: number) =>
+  `History marker ${marker}. ${LOCAL_MODEL_FIXTURE_PROMPTS_TEXT_COMPLETION}`;
+const HISTORY_MARKER = /^History marker ([1-9]\d{0,4})\. /;
+
 export const localModelFixtureForPrompt = (prompt: string | undefined) => {
-  const fixture = localModelFixtureDefinitions.find(
-    (candidate) => candidate.prompt === prompt,
+  const marker = prompt === undefined ? null : HISTORY_MARKER.exec(prompt);
+  const fixture = localModelFixtureDefinitions.find((candidate) =>
+    marker !== null
+      ? candidate.kind === "textCompletion" &&
+        prompt === localHistoryMarkerPrompt(Number(marker[1]))
+      : candidate.prompt === prompt,
   );
   if (fixture === undefined) throw fixtureMismatch();
   return fixture;

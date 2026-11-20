@@ -10,7 +10,7 @@ overrides:
   "@earendil-works/pi-ai": 1.1.0
   "@earendil-works/pi-agent-core": 1.1.0
   "@earendil-works/pi-telemetry": 1.1.0
-  "@flue/runtime": file:third-party/flue/runtime-804d67ed6b35c65d9d0b2d11adf24aa74034cce6.tgz
+  "@flue/runtime": file:third-party/flue/runtime-084cde21dd671596d1e3468159e1cf65ed57ae06.tgz
 
 patchedDependencies:
   alchemy@2.0.0-beta.83: third-party/alchemy/alchemy@2.0.0-beta.83.patch

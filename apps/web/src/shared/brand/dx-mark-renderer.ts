@@ -11,6 +11,31 @@ const stateValue: Record<DxMarkState, number> = {
   loading: 5,
 };
 
+type Rgba = readonly [number, number, number, number];
+
+/** The mark's CSS color (`brand.css`, per state and light or dark page). */
+const markInk = (mark: HTMLElement | null): Rgba => {
+  const channels =
+    mark === null
+      ? undefined
+      : getComputedStyle(mark)
+          .color.match(/[\d.]+/g)
+          ?.slice(0, 3)
+          .map((channel) => Number(channel) / 255);
+  return channels?.length === 3
+    ? [channels[0] ?? 1, channels[1] ?? 1, channels[2] ?? 1, 1]
+    : [0.965, 1, 0.96, 1];
+};
+
+/**
+ * The loading waterline beside an ink: halfway to white for a light ink
+ * (a dark page), a third darker for a dark ink (a light page).
+ */
+const waterline = ([red, green, blue]: Rgba): Rgba =>
+  0.2126 * red + 0.7152 * green + 0.0722 * blue > 0.5
+    ? [(red + 1) / 2, (green + 1) / 2, (blue + 1) / 2, 1]
+    : [red * 0.66, green * 0.66, blue * 0.66, 1];
+
 /** Creates the offscreen canvas used to rasterize the canonical dx glyph. */
 const makeGlyphCanvas = (width: number, height: number) => {
   const canvas = document.createElement("canvas");
@@ -106,9 +131,24 @@ export function mountDxMark(
             time: 0,
             state: stateValue[state],
             pointer: [pointer.x, pointer.y],
+            ink: markInk(mark),
+            highlight: waterline(markInk(mark)),
           },
         },
       });
+      // The page's appearance can change while the mark shows: Appearance
+      // settings, the palette, or the system's light or dark setting.
+      const recolor = () => {
+        const ink = markInk(mark);
+        shader.set({ params: { ink, highlight: waterline(ink) } });
+      };
+      const appearance = new MutationObserver(recolor);
+      appearance.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["data-resolved-appearance", "data-palette"],
+      });
+      const systemScheme = window.matchMedia("(prefers-color-scheme: light)");
+      systemScheme.addEventListener("change", recolor);
       const startedAt = performance.now();
       const loop = frameLoop(
         gpu,
@@ -133,6 +173,8 @@ export function mountDxMark(
         { fps: motionless() ? 1 : 30 },
       );
       teardown = () => {
+        appearance.disconnect();
+        systemScheme.removeEventListener("change", recolor);
         loop.stop();
         glyphTexture.dispose();
         target.dispose();

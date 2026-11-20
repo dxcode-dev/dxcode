@@ -4,25 +4,27 @@
   place-items: center;
   width: min(72vw, 640px);
   aspect-ratio: 1.55;
-  color: #f6fff5;
+  /* Each state's ink, for a light and a dark page. The WebGPU renderer
+     reads this color, so the mark and its text fallback always match. */
+  color: light-dark(#121a14, #f6fff5);
   isolation: isolate;
   container-type: inline-size;
 }
 
 .dx-brand-mark[data-state="loading"] {
-  color: #b8f5d6;
+  color: light-dark(#15855a, #b8f5d6);
 }
 .dx-brand-mark[data-state="thinking"] {
-  color: #b89cff;
+  color: light-dark(#6942e0, #b89cff);
 }
 .dx-brand-mark[data-state="working"] {
-  color: #f6833b;
+  color: light-dark(#cf5a14, #f6833b);
 }
 .dx-brand-mark[data-state="complete"] {
-  color: #63db8c;
+  color: light-dark(#1b8a4b, #63db8c);
 }
 .dx-brand-mark[data-state="error"] {
-  color: #ff4738;
+  color: light-dark(#d02a1c, #ff4738);
 }
 
 .dx-brand-mark-fallback,

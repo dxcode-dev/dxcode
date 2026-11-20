@@ -48,11 +48,24 @@
     height: var(--icon-lg);
   }
   .dx-image-viewer-stage {
+    position: relative;
     display: grid;
     place-items: center;
     min-height: 0;
     padding: 0 72px 56px;
     overflow: hidden;
+  }
+  /* The space around the item: a click there closes the viewer. */
+  .dx-image-viewer-dismiss {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: default;
+  }
+  .dx-image-viewer-stage > :not(.dx-image-viewer-dismiss) {
+    position: relative;
   }
   .dx-image-viewer-stage > img,
   .dx-image-viewer-stage > video {

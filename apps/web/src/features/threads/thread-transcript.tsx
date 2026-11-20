@@ -1,3 +1,4 @@
+import type { FlueConversationPrompt } from "@flue/react";
 import {
   elementScroll,
   measureElement as measureObservedElement,
@@ -19,7 +20,10 @@ import {
 } from "./sharing/message-authors.js";
 import { MessageReactionChips } from "./sharing/message-reactions.js";
 import { ThreadSourceMessage } from "./thread-source-message.js";
-import { TranscriptOutline } from "./transcript-outline.js";
+import {
+  TranscriptOutline,
+  type TranscriptOutlineEntry,
+} from "./transcript-outline.js";
 import type { TranscriptReply } from "./transcript-selection-popup.js";
 import {
   sameTranscriptRow,
@@ -339,27 +343,39 @@ const observeTranscriptResize = (
 };
 
 /**
- * How far above the viewport, in viewport heights, older history starts
- * loading, so a reader scrolling up meets loaded turns instead of the top.
+ * How far past the viewport, in viewport heights, more history starts
+ * loading, so a reader scrolling up (or, in a history window, down) meets
+ * loaded turns instead of the edge.
  */
-const OLDER_HISTORY_PRELOAD_SCREENS = 2;
+const HISTORY_PRELOAD_SCREENS = 2;
 
-/** Whether the sentinel is in the viewport or the preload band above it. */
-const withinPreload = (viewport: HTMLElement, sentinel: HTMLElement) => {
+/** Which edge of the transcript a history sentinel marks. */
+type HistoryEdge = "top" | "bottom";
+
+/** Whether the sentinel is in the viewport or the preload band past it. */
+const withinPreload = (
+  viewport: HTMLElement,
+  sentinel: HTMLElement,
+  edge: HistoryEdge,
+) => {
   const view = viewport.getBoundingClientRect();
   const mark = sentinel.getBoundingClientRect();
-  const preload = (view.bottom - view.top) * OLDER_HISTORY_PRELOAD_SCREENS;
-  return mark.bottom > view.top - preload && mark.top < view.bottom;
+  const preload = (view.bottom - view.top) * HISTORY_PRELOAD_SCREENS;
+  return edge === "top"
+    ? mark.bottom > view.top - preload && mark.top < view.bottom
+    : mark.top < view.bottom + preload && mark.bottom > view.top;
 };
 
-const observeOlderHistory = (
+const observeHistoryEdge = (
   viewport: HTMLDivElement,
   sentinel: HTMLDivElement,
+  edge: HistoryEdge,
   notify: () => void,
 ) => {
+  const band = `${HISTORY_PRELOAD_SCREENS * 100}%`;
   const observer = new IntersectionObserver(notify, {
     root: viewport,
-    rootMargin: `${OLDER_HISTORY_PRELOAD_SCREENS * 100}% 0px 0px 0px`,
+    rootMargin: edge === "top" ? `${band} 0px 0px 0px` : `0px 0px ${band} 0px`,
   });
   const resizeObserver = new ResizeObserver(notify);
   observer.observe(sentinel);
@@ -371,7 +387,12 @@ const observeOlderHistory = (
   };
 };
 
-function useOlderHistoryDrain({
+/**
+ * Loads the next page while the edge's sentinel is within two screens:
+ * older history at the top, or, in a history window, newer at the bottom.
+ */
+function useHistoryDrain({
+  edge,
   active,
   historyReady,
   oldestTurnId,
@@ -380,6 +401,7 @@ function useOlderHistoryDrain({
   olderError,
   loadOlder,
 }: {
+  readonly edge: HistoryEdge;
   readonly active: boolean;
   readonly historyReady: boolean;
   readonly oldestTurnId?: string;
@@ -444,7 +466,7 @@ function useOlderHistoryDrain({
         current.viewport.clientHeight === 0
       )
         return;
-      if (!withinPreload(current.viewport, current.sentinel)) return;
+      if (!withinPreload(current.viewport, current.sentinel, edge)) return;
       if (options.olderError !== undefined) {
         if (current.retryTimer !== undefined) return;
         if (current.retryOldestTurnId !== options.oldestTurnId) {
@@ -472,7 +494,7 @@ function useOlderHistoryDrain({
             current.viewport.clientHeight === 0
           )
             return;
-          if (!withinPreload(current.viewport, current.sentinel)) return;
+          if (!withinPreload(current.viewport, current.sentinel, edge)) return;
           current.retryAttempt += 1;
           void latest.loadOlder();
         }, delay);
@@ -494,9 +516,10 @@ function useOlderHistoryDrain({
       current.sentinel === undefined
     )
       return disconnect;
-    current.releaseObservers = observeOlderHistory(
+    current.releaseObservers = observeHistoryEdge(
       current.viewport,
       current.sentinel,
+      edge,
       schedule,
     );
     schedule();
@@ -711,6 +734,30 @@ function useMessageFocus({
   };
 }
 
+/**
+ * History opened at a prompt the live transcript had not loaded. The
+ * transcript shows it instead of the live conversation and loads newer
+ * pages as the reader scrolls down, until it joins the live pages.
+ */
+export interface TranscriptHistoryWindow {
+  readonly hasNewer: boolean;
+  readonly loadingNewer: boolean;
+  readonly newerError?: Error;
+  readonly loadNewer: () => Promise<void>;
+  /** Returns to the live conversation. */
+  readonly close: () => void;
+}
+
+/** The Thread's full prompt list behind the outline. */
+export interface TranscriptPromptOutline {
+  /** Every prompt, oldest first, once read. */
+  readonly prompts?: ReadonlyArray<FlueConversationPrompt>;
+  /** Reads the list again; the outline calls it as it opens. */
+  readonly load: () => void;
+  /** Opens history at a prompt the transcript has not loaded. */
+  readonly open: (cursor: string) => Promise<void>;
+}
+
 function useTranscriptViewport({
   active = true,
   model,
@@ -719,6 +766,7 @@ function useTranscriptViewport({
   loadingOlder = false,
   olderError,
   loadOlder,
+  historyWindow,
 }: {
   readonly active?: boolean;
   readonly defaultWorkExpanded?: boolean;
@@ -738,7 +786,11 @@ function useTranscriptViewport({
   readonly onFocusRequested?: () => void;
   /** The focus was applied, or the message is not in this Thread. */
   readonly onFocusHandled?: () => void;
+  /** Shown instead of the live conversation while open. */
+  readonly historyWindow?: TranscriptHistoryWindow;
+  readonly promptOutline?: TranscriptPromptOutline;
 }) {
+  const windowed = historyWindow !== undefined;
   const [position] = useThreadPresentation(
     "transcriptPosition",
     createTranscriptPositionStore,
@@ -762,7 +814,8 @@ function useTranscriptViewport({
     sentinelRef: historySentinelRef,
     schedule: scheduleHistoryDrain,
     markRestored: markHistoryRestored,
-  } = useOlderHistoryDrain({
+  } = useHistoryDrain({
+    edge: "top",
     active,
     historyReady,
     oldestTurnId: model.turns[0]?.id,
@@ -771,6 +824,29 @@ function useTranscriptViewport({
     olderError,
     loadOlder,
   });
+  const {
+    viewportRef: newerViewportRef,
+    sentinelRef: newerSentinelRef,
+    schedule: scheduleNewerDrain,
+    markRestored: markNewerRestored,
+  } = useHistoryDrain({
+    edge: "bottom",
+    active: active && windowed,
+    historyReady,
+    oldestTurnId: model.turns.at(-1)?.id,
+    hasMore: historyWindow?.hasNewer ?? false,
+    loadingOlder: historyWindow?.loadingNewer ?? false,
+    olderError: historyWindow?.newerError,
+    loadOlder: historyWindow?.loadNewer,
+  });
+  const scheduleDrains = () => {
+    scheduleHistoryDrain();
+    scheduleNewerDrain();
+  };
+  const markRestored = () => {
+    markHistoryRestored();
+    markNewerRestored();
+  };
   const [initialLastRead] = React.useState(
     () => restored?.lastRead ?? model.rows.at(-1)?.id,
   );
@@ -818,7 +894,8 @@ function useTranscriptViewport({
     initialMeasurementsCache: restored?.measurements,
     initialOffset: restored?.offset,
     anchorTo: "end",
-    followOnAppend: true,
+    // A history window grows at the bottom as the reader moves down.
+    followOnAppend: !windowed,
     scrollEndThreshold: LIVE_EDGE_THRESHOLD_PX,
     scrollToFn: (offset, options, instance) => {
       // Native anchoring writes its target before notifying React about new
@@ -862,13 +939,16 @@ function useTranscriptViewport({
       return size;
     },
     onChange: (instance) => {
-      const nextAtEnd = instance.isAtEnd();
+      // A history window's end is not the live end: the reader stays away
+      // from it, and its position is not the one to restore.
+      const nextAtEnd = instance.isAtEnd() && !windowed;
       setAtEnd((current) => (current === nextAtEnd ? current : nextAtEnd));
       if (nextAtEnd) lastReadRef.current = model.rows.at(-1)?.id;
-      else setReadBeforeLeaving(lastReadRef.current);
+      else if (!windowed) setReadBeforeLeaving(lastReadRef.current);
       const element = instance.scrollElement;
       const saved = position.saved();
       if (
+        !windowed &&
         element !== null &&
         (saved === undefined || saved.width === element.clientWidth)
       ) {
@@ -890,7 +970,7 @@ function useTranscriptViewport({
         });
       }
       refreshVisiblePromptRows();
-      scheduleHistoryDrain();
+      scheduleDrains();
     },
   });
 
@@ -902,7 +982,7 @@ function useTranscriptViewport({
       queueMicrotask(() => {
         if (element.isConnected) {
           virtualizer.measureElement(element);
-          scheduleHistoryDrain();
+          scheduleDrains();
         }
       });
     else virtualizer.measureElement(null);
@@ -918,7 +998,7 @@ function useTranscriptViewport({
           viewport.getBoundingClientRect().top +
           viewport.scrollTop,
       );
-      scheduleHistoryDrain();
+      scheduleDrains();
     };
     // Shown again, the margin is unchanged; the observer's first report,
     // after the browser lays out, confirms it without forcing a layout.
@@ -926,7 +1006,8 @@ function useTranscriptViewport({
     return observeTranscriptResize([element, viewport], measureMargin);
   };
 
-  const hasUnread = !atEnd && model.rows.at(-1)?.id !== readBeforeLeaving;
+  const hasUnread =
+    !windowed && !atEnd && model.rows.at(-1)?.id !== readBeforeLeaving;
   const viewportRef = (element: HTMLDivElement | null) => {
     setScrollElement(element);
     if (element !== null) {
@@ -935,6 +1016,7 @@ function useTranscriptViewport({
       // Read before the virtualizer measures what arrived while hidden.
       const followEnd = position.saved()?.atEnd ?? true;
       const releaseHistoryViewport = historyViewportRef(element);
+      const releaseNewerViewport = newerViewportRef(element);
       let frame = 0;
       let width = reappeared
         ? element.clientWidth
@@ -944,7 +1026,7 @@ function useTranscriptViewport({
         if (saved.atEnd) {
           position.setWidth(element.clientWidth);
           virtualizer.scrollToEnd();
-          markHistoryRestored();
+          markRestored();
           return;
         }
         const index = Array.from(
@@ -956,7 +1038,7 @@ function useTranscriptViewport({
         );
         if (index === undefined) {
           element.scrollTo({ top: saved.offset });
-          markHistoryRestored();
+          markRestored();
           return;
         }
         virtualizer.scrollToIndex(index, {
@@ -968,7 +1050,7 @@ function useTranscriptViewport({
           if (offset !== undefined)
             virtualizer.scrollToOffset(offset + (saved.anchor?.within ?? 0));
           position.setWidth(element.clientWidth);
-          markHistoryRestored();
+          markRestored();
         });
       };
       const disconnect = observeTranscriptResize([element], () => {
@@ -982,11 +1064,12 @@ function useTranscriptViewport({
         // Shown again: the browser kept the scroll offset and the turns
         // stayed mounted. Follow what streamed in while it was hidden.
         if (reappeared) {
-          if (followEnd) virtualizer.scrollToEnd();
-          markHistoryRestored();
+          // A history window keeps its place; the live end is elsewhere.
+          if (followEnd && !windowed) virtualizer.scrollToEnd();
+          markRestored();
         } else if (restored === undefined || restored.atEnd) {
           virtualizer.scrollToEnd();
-          markHistoryRestored();
+          markRestored();
         } else {
           restoreAnchor(restored);
         }
@@ -995,6 +1078,7 @@ function useTranscriptViewport({
         cancelAnimationFrame(frame);
         disconnect();
         releaseHistoryViewport?.();
+        releaseNewerViewport?.();
       };
     }
   };
@@ -1010,12 +1094,51 @@ function useTranscriptViewport({
       lastReadRef.current = lastRowId;
     },
   );
+  // Leaving a history window for the end waits for the live rows to render.
+  const [endAfterWindow, setEndAfterWindow] = React.useState(false);
+  const leaveWindow = () => {
+    setEndAfterWindow(true);
+    historyWindow?.close();
+  };
+  const endAfterWindowRef = (element: HTMLSpanElement | null) => {
+    if (element === null) return;
+    // In the commit, before the older-history observer sees the live rows
+    // at the window's scroll offset near their top and loads a page.
+    virtualizer.scrollToEnd();
+    setAtEnd(true);
+    lastReadRef.current = model.rows.at(-1)?.id;
+    // The live rows and the list's offset are measured over the next
+    // frames: keep the transcript at its bottom until it stays there.
+    let frame = 0;
+    let frames = 0;
+    let steady = 0;
+    const settle = () => {
+      frames += 1;
+      virtualizer.scrollToEnd();
+      const viewport = scrollElement;
+      if (viewport !== null) {
+        const bottom = viewport.scrollHeight - viewport.clientHeight;
+        if (bottom - viewport.scrollTop > 1) viewport.scrollTop = bottom;
+        steady =
+          viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop <=
+          1
+            ? steady + 1
+            : 0;
+      }
+      if (steady >= 3 || frames >= 30) setEndAfterWindow(false);
+      else frame = requestAnimationFrame(settle);
+    };
+    frame = requestAnimationFrame(settle);
+    return () => cancelAnimationFrame(frame);
+  };
   // Sending a message shows it and the reply, even when the reader had
   // scrolled up: the virtualizer follows appends only at the end. Its own
   // ref, so the viewport's attach keeps its identity.
   const followRef = (element: HTMLSpanElement | null) => {
     if (element === null) return;
-    const follow = () => jumpToEnd(lastReadRef.current);
+    const follow = windowed
+      ? leaveWindow
+      : () => jumpToEnd(lastReadRef.current);
     followOnSend.set(follow);
     return () => {
       if (followOnSend.get() === follow) followOnSend.set(undefined);
@@ -1054,10 +1177,15 @@ function useTranscriptViewport({
     visiblePromptRows,
     refreshVisiblePromptRows,
     historySentinelRef,
-    scheduleHistoryDrain,
+    scheduleHistoryDrain: scheduleDrains,
     jumpToEnd,
     followRef,
     navigateToRow,
+    windowed,
+    leaveWindow,
+    endAfterWindow,
+    endAfterWindowRef,
+    newerSentinelRef,
   };
 }
 
@@ -1109,8 +1237,10 @@ export function TranscriptViewport(
     historyReady = false,
     hasMore = false,
     olderError,
-    focus,
+    focus: requestedFocus,
     onFocusHandled,
+    historyWindow,
+    promptOutline,
   } = props;
   const {
     viewportRef,
@@ -1128,7 +1258,44 @@ export function TranscriptViewport(
     jumpToEnd,
     followRef,
     navigateToRow,
+    windowed,
+    leaveWindow,
+    endAfterWindow,
+    endAfterWindowRef,
+    newerSentinelRef,
   } = useTranscriptViewport(props);
+  // A prompt picked from the outline that the transcript had not loaded:
+  // history opens at it, then the transcript scrolls to it like a link.
+  const [outlineTarget, setOutlineTarget] = React.useState<{
+    readonly promptId: string;
+    readonly requestKey: string;
+  }>();
+  const outlineRowId =
+    outlineTarget === undefined
+      ? undefined
+      : model.rows.find(
+          (row) =>
+            row.kind === "user-prompt" &&
+            row.messageId === outlineTarget.promptId,
+        )?.id;
+  const focus: TranscriptFocus | undefined =
+    requestedFocus ??
+    (outlineTarget === undefined || outlineRowId === undefined
+      ? undefined
+      : { messageId: outlineRowId, requestKey: outlineTarget.requestKey });
+  const navigateToEntry = (entry: TranscriptOutlineEntry) => {
+    if (entry.anchor !== undefined) {
+      setOutlineTarget(undefined);
+      navigateToRow(entry.anchor);
+      return;
+    }
+    if (entry.prompt === undefined || promptOutline === undefined) return;
+    setOutlineTarget({
+      promptId: entry.prompt.id,
+      requestKey: crypto.randomUUID(),
+    });
+    void promptOutline.open(entry.prompt.cursor);
+  };
   const focusRef = useMessageFocus({
     focus,
     model,
@@ -1138,7 +1305,10 @@ export function TranscriptViewport(
     loadingOlder,
     olderError,
     loadOlder,
-    onHandled: onFocusHandled,
+    onHandled:
+      requestedFocus === undefined
+        ? () => setOutlineTarget(undefined)
+        : onFocusHandled,
   });
   const rowsByTurn = transcriptRowsByTurn(model);
   const { processingTurnId, steeringTurnIds } = transcriptProgress(
@@ -1170,7 +1340,7 @@ export function TranscriptViewport(
       >
         <div className="agent-transcript">
           {header}
-          {pinnedContent}
+          {windowed ? null : pinnedContent}
           {loadOlder !== undefined ? (
             <div className="transcript-history-boundary">
               <div
@@ -1237,24 +1407,48 @@ export function TranscriptViewport(
               );
             })}
           </div>
-          {footer}
+          {historyWindow === undefined ? (
+            footer
+          ) : (
+            <div className="transcript-history-boundary">
+              <div className="transcript-history-status" aria-live="polite">
+                {historyWindow.loadingNewer ||
+                historyWindow.newerError !== undefined ? (
+                  <ProcessingIndicator accessibleLabel="Loading newer prompts" />
+                ) : null}
+              </div>
+              <div
+                ref={newerSentinelRef}
+                className="transcript-history-sentinel"
+                aria-hidden="true"
+              />
+            </div>
+          )}
         </div>
       </section>
       <div className="transcript-controls">
         <TranscriptOutline
           anchors={model.outline}
+          prompts={promptOutline?.prompts}
+          hasUnloaded={hasMore || windowed}
           visibleRowIds={visiblePromptRows}
-          onNavigate={navigateToRow}
-          onOpen={refreshVisiblePromptRows}
+          onNavigate={navigateToEntry}
+          onOpen={() => {
+            refreshVisiblePromptRows();
+            promptOutline?.load();
+          }}
         />
         <TranscriptJumpControl
           atEnd={atEnd}
           hasUnread={hasUnread}
           lastRowId={model.rows.at(-1)?.id}
-          onJump={jumpToEnd}
+          onJump={windowed ? leaveWindow : jumpToEnd}
         />
       </div>
       {focus === undefined ? null : <span hidden ref={focusRef} />}
+      {endAfterWindow && !windowed ? (
+        <span hidden ref={endAfterWindowRef} />
+      ) : null}
       <span hidden ref={followRef} />
     </>
   );

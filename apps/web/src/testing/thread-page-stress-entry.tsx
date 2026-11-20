@@ -94,6 +94,10 @@ const DRAFT_CLEAR_LAG_MS = Number(params.get("draftClearLag") ?? 0);
 // `quickActions=1` shows the composer's quick-action row, as a deployment
 // with Workers AI's Clef does.
 const QUICK_ACTIONS = params.get("quickActions") === "1";
+// `media=1` ends the newest reply with a gallery of two videos and an image
+// in Thread storage, for proofs of the gallery and its full-window viewer.
+// The proof serves the files at those paths.
+const MEDIA = params.get("media") === "1";
 
 const userId = "usr_perf" as UserId;
 const projectId = "prj_00000000-0000-4000-8000-000000000147" as ProjectId;
@@ -384,6 +388,14 @@ const answerMarkdown = (seed: number) =>
   "\n```\n\n| file | change |\n| --- | --- |\n| a.ts | +12 |\n| b.ts | -4 |\n\n" +
   "- first point\n- second point with a [link](https://example.com)\n";
 
+const storedFile = (id: string, name: string) =>
+  `/v1/threads/${threadId}/storage/tsf_${id.repeat(32)}/${name}`;
+const mediaGallery = [
+  `![Checkout flow](${storedFile("a", "checkout-flow.webm")})`,
+  `![Settings flow](${storedFile("b", "settings-flow.webm")})`,
+  `![Error state](${storedFile("c", "error-state.png")})`,
+].join("\n\n");
+
 const historyTurn = (i: number): Message[] => [
   {
     id: `u${i}`,
@@ -413,7 +425,14 @@ const historyTurn = (i: number): Message[] => [
         input: k % 2 ? { path: `src/f${k}.ts` } : { command: `rg value${k}` },
         output: "x".repeat(TOOL_OUTPUT_CHARS),
       })),
-      { type: "text", text: answerMarkdown(i), state: "done" },
+      {
+        type: "text",
+        text:
+          MEDIA && i === HISTORY_TURNS - 1
+            ? `${answerMarkdown(i)}\n${mediaGallery}`
+            : answerMarkdown(i),
+        state: "done",
+      },
     ],
   } as unknown as Message,
 ];

@@ -12,6 +12,12 @@ import {
 import * as React from "react";
 import { Button } from "./button.js";
 import { buttonVariants } from "./button-variants.js";
+import {
+  applyPlayback,
+  type MediaPlayback,
+  pauseOtherMedia,
+  readPlayback,
+} from "./media-playback.js";
 import "./image-viewer.css";
 
 /** One image, video, or other file the viewer shows, by a same-origin URL. */
@@ -34,6 +40,10 @@ export interface ViewerMedia {
  * plays with its own controls. Images zoom between fit and actual size.
  * `actions` adds buttons for the shown item, such as Remove, beside Open,
  * Download, and Close. Mount it while open; closing calls `onClose`.
+ *
+ * A video another player was showing takes over from it: `playback` starts
+ * the opened item where that player stopped, and `onClose` hands back where
+ * the shown video is. While a video plays here, every other player pauses.
  */
 export function ImageViewer({
   items,
@@ -43,19 +53,33 @@ export function ImageViewer({
   actions,
   closeLabel = "Close viewer",
   showOpenInTab = true,
+  playback,
 }: {
   readonly items: ReadonlyArray<ViewerMedia>;
   readonly index?: number;
   readonly onIndexChange?: (index: number) => void;
-  readonly onClose: () => void;
+  /** Where the item at `index` starts, when it is a video. */
+  readonly playback?: MediaPlayback;
+  /** Gets the shown video's playback, when a video is shown. */
+  readonly onClose: (playback?: MediaPlayback) => void;
   readonly actions?: (item: ViewerMedia) => React.ReactNode;
   readonly closeLabel?: string;
   /** Open in a new tab; off for a file only this page can read, such as a blob. */
   readonly showOpenInTab?: boolean;
 }) {
   const [zoomed, setZoomed] = React.useState(false);
+  const [opened] = React.useState(() => items[index]?.key);
+  const video = React.useRef<HTMLVideoElement>(null);
+  const handedOver = React.useRef(false);
   const item = items[index];
   if (item === undefined) return null;
+  const close = () => {
+    const shown = video.current;
+    if (shown === null) return onClose();
+    const playback = readPlayback(shown);
+    shown.pause();
+    onClose(playback);
+  };
   const several = items.length > 1 && onIndexChange !== undefined;
   const step = (offset: number) => {
     setZoomed(false);
@@ -63,14 +87,15 @@ export function ImageViewer({
   };
   const action = buttonVariants({ variant: "subtle", size: "icon-sm" });
   return (
-    <Dialog.Root open onOpenChange={(open) => (open ? undefined : onClose())}>
+    <Dialog.Root open onOpenChange={(open) => (open ? undefined : close())}>
       <Dialog.Portal>
         <Dialog.Backdrop className="dx-image-viewer-backdrop" />
         <Dialog.Popup
           className="dx-image-viewer"
           aria-label={item.name}
           onKeyDown={(event) => {
-            if (!several) return;
+            // A focused player seeks with the arrows itself.
+            if (!several || event.target instanceof HTMLMediaElement) return;
             if (event.key === "ArrowRight") step(1);
             else if (event.key === "ArrowLeft") step(-1);
           }}
@@ -128,12 +153,33 @@ export function ImageViewer({
             className="dx-image-viewer-stage"
             data-zoomed={zoomed ? "" : undefined}
           >
+            {/* The dark space around the item closes it, as Close does.
+                Hidden from assistive tech and the tab order, which have
+                Close and Escape. */}
+            <Dialog.Close
+              className="dx-image-viewer-dismiss"
+              tabIndex={-1}
+              aria-hidden="true"
+            />
             {item.kind === "video" ? (
               // biome-ignore lint/a11y/useMediaCaption: agent-made and user-supplied media has no caption track; the name labels it.
               <video
                 src={item.url}
                 aria-label={item.name}
                 key={item.key}
+                ref={(element) => {
+                  video.current = element;
+                  if (
+                    element === null ||
+                    playback === undefined ||
+                    item.key !== opened ||
+                    handedOver.current
+                  )
+                    return;
+                  handedOver.current = true;
+                  applyPlayback(element, playback);
+                }}
+                onPlay={(event) => pauseOtherMedia(event.currentTarget)}
                 controls
                 playsInline
                 preload="metadata"

@@ -104,6 +104,10 @@ export const frameCoalescedAgentSource = (
     resendPrompt: session.resendPrompt.bind(session),
     refresh: session.refresh,
     loadOlder: session.loadOlder,
+    openHistoryWindow: session.openHistoryWindow,
+    loadWindowOlder: session.loadWindowOlder,
+    loadWindowNewer: session.loadWindowNewer,
+    closeHistoryWindow: session.closeHistoryWindow,
   };
   let snapshot: Snapshot | undefined;
   let agent: AgentSessionResult | undefined;

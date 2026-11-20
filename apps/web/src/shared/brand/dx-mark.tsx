@@ -73,6 +73,7 @@ export function DxMark({
   still = false,
 }: {
   readonly state?: DxMarkState;
+  /** The accessible name; empty marks the mark decorative. */
   readonly label?: string;
   readonly className?: string;
   readonly interactive?: boolean;
@@ -88,8 +89,11 @@ export function DxMark({
       className={`dx-brand-mark ${className}`.trim()}
       data-state={state}
       data-motion={still ? "still" : undefined}
-      role="img"
-      aria-label={label}
+      // An empty label marks it decorative, as inside DxLoading, whose
+      // status already names it.
+      {...(label === ""
+        ? { "aria-hidden": true }
+        : { role: "img", "aria-label": label })}
     >
       <span className="dx-brand-mark-fallback" aria-hidden="true">
         dx
