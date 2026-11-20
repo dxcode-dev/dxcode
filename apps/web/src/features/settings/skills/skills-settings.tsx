@@ -68,6 +68,23 @@ import {
   skillsQueryOptions,
 } from "./skills-queries.js";
 
+const utf8 = new TextDecoder("utf-8", { fatal: true });
+
+/**
+ * A file's text, decoded strictly: a file that is not UTF-8 text, such as an
+ * image, is refused here, by name, instead of reaching dx as replacement
+ * characters.
+ */
+const textOf = async (file: File, path: string) => {
+  try {
+    return utf8.decode(await file.arrayBuffer());
+  } catch {
+    throw new Error(
+      `${path}: Only valid UTF-8 text without NUL bytes is allowed.`,
+    );
+  }
+};
+
 const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
   if (selected.length === 1) {
     const file = selected[0];
@@ -101,7 +118,7 @@ const filesBundle = async (selected: FileList): Promise<SkillImportBundle> => {
         kind: "file" as const,
         mediaType: file.type,
         encoding: "utf-8" as const,
-        content: await file.text(),
+        content: await textOf(file, path),
       };
     }),
   );

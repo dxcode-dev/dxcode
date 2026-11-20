@@ -10,7 +10,7 @@ export const MAX_CONNECTION_HEADERS = 32;
 /**
  * Canonical pi-ai catalog id in `provider/model` form. The provider segment
  * carries no slashes; the model segment may (e.g.
- * `cloudflare/@cf/zai-org/glm-5.3-flash`).
+ * `cloudflare/@cf/zai-org/glm-4.7-flash`).
  */
 export const ModelId = Schema.String.check(
   Schema.isMinLength(3),

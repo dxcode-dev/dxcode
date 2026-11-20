@@ -101,13 +101,92 @@ describe("skill browser-file importer", () => {
     ["archive input", file("resources/payload.zip", "PK", "application/zip")],
     ["NUL text", file("resources/data.txt", "bad\0text", "text/plain")],
     [
-      "invalid UTF-8 replacement",
-      file("resources/data.txt", "bad\uFFFDtext", "text/plain"),
+      "malformed text (a lone surrogate)",
+      file("resources/data.txt", "bad\uD800text", "text/plain"),
     ],
   ])("rejects %s", async (_label, unsafe) => {
     await expect(rejected(bundle([unsafe]))).resolves.toBeInstanceOf(
       SkillImportRejected,
     );
+  });
+
+  // heygen-com/hyperframes quotes the replacement character a failed
+  // transcript shows in references/captions.md.
+  it("imports a file that quotes U+FFFD as text", async () => {
+    const quoted =
+      "More than 20% `\u266A` or `\uFFFD` tokens means the transcript failed.\n";
+    const imported = await preview(
+      bundle([file("references/captions.md", quoted)]),
+    );
+    expect(imported.resources.map(({ path }) => path)).toContain(
+      "references/captions.md",
+    );
+  });
+
+  // Popular skills.sh skills, each refused before (top 1,000, 2026-11).
+  it.each([
+    [
+      "an unquoted colon in the description (pbakaus/impeccable/frontend-design)",
+      "---\nname: frontend-design\ndescription: DEPRECATED: Run /impeccable instead.\n---\n\nUse impeccable.\n",
+      {
+        name: "frontend-design",
+        description: "DEPRECATED: Run /impeccable instead.",
+      },
+    ],
+    [
+      "a name that is not kebab-case (google-labs-code/stitch-skills/reactcomponents)",
+      "---\nname: react:components\ndescription: Converts designs into React components.\n---\n\nBuild them.\n",
+      { name: "react-components" },
+    ],
+  ])("imports a SKILL.md with %s", async (_label, skillMd, expected) => {
+    const imported = await preview({
+      source: { type: "browser-files", label: "skills.sh" },
+      files: [file("SKILL.md", skillMd)],
+    });
+    expect(imported.manifest).toMatchObject(expected);
+  });
+
+  it("shortens a description over 1,024 characters (anthropics/skills/claude-api)", async () => {
+    const long = `Reference for the Claude API. ${"Trigger whenever the prompt names Claude. ".repeat(40)}`;
+    const imported = await preview({
+      source: { type: "browser-files", label: "skills.sh" },
+      files: [
+        file(
+          "SKILL.md",
+          `---\nname: claude-api\ndescription: |-\n  ${long}\n---\n\nUse the API.\n`,
+        ),
+      ],
+    });
+    expect(imported.manifest.description.length).toBeLessThanOrEqual(1024);
+    expect(imported.manifest.description.endsWith("…")).toBe(true);
+    expect(long.startsWith(imported.manifest.description.slice(0, -1))).toBe(
+      true,
+    );
+  });
+
+  it("imports paths of any script with spaces and a leading underscore, and refuses shell characters", async () => {
+    const imported = await preview(
+      bundle([
+        file("demos/什么是token.html", "<p>token</p>", "text/html"),
+        file("_bundled/MANIFEST.json", "{}"),
+        file("references/My Notes (v2).md", "# Notes"),
+      ]),
+    );
+    expect(imported.resources.map(({ path }) => path)).toEqual([
+      "demos/什么是token.html",
+      "_bundled/MANIFEST.json",
+      "references/My Notes (v2).md",
+    ]);
+    for (const path of [
+      "a$(id).md",
+      "a`id`.md",
+      'a".md',
+      "a\\b.md",
+      " lead.md",
+    ])
+      await expect(
+        rejected(bundle([file(path, "x", "text/markdown")])),
+      ).resolves.toBeInstanceOf(SkillImportRejected);
   });
 
   it("imports a standard SKILL.md folder with its scripts at their paths", async () => {

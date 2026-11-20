@@ -6,6 +6,7 @@ import {
 } from "@earendil-works/pi-ai/providers/all";
 import { Schema } from "effect";
 import { builtinModelsWithSuccessors } from "./newer-models.js";
+import { RETIRED_WORKERS_AI_MODELS } from "./retired-models.js";
 
 export const MODEL_CATALOG_SOURCE = "flue-2.3.0-pi-1.1.0" as const;
 
@@ -23,20 +24,11 @@ const PI_PROVIDER_IDS: Record<string, string> = {
 export const piCatalogProviderId = (providerId: string): string =>
   PI_PROVIDER_IDS[providerId] ?? providerId;
 
-const currentWorkersAiModels: ReadonlyArray<Model<Api>> = [
-  {
-    id: "@cf/zai-org/glm-5.3-flash",
-    name: "GLM 5.3 Flash",
-    api: "openai-completions",
-    provider: "cloudflare",
-    baseUrl: "https://api.cloudflare.com/client/v4",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
-    contextWindow: 1_048_576,
-    maxTokens: 16_384,
-  },
-];
+/**
+ * Workers AI models dx knows ahead of pi-ai's catalog, with dx's reviewed
+ * metadata. Empty while pi-ai's list is current.
+ */
+const currentWorkersAiModels: ReadonlyArray<Model<Api>> = [];
 
 /**
  * Claude Code models. The `claude-code` api is not a wire format: the Claude
@@ -86,7 +78,6 @@ const MODEL_DISPLAY_NAMES: Readonly<Record<string, string>> = {
   "cloudflare/@cf/zai-org/glm-4.7-flash": "GLM 4.7 Flash",
   "cloudflare/@cf/zai-org/glm-5.2": "GLM 5.2",
   "cloudflare/@cf/zai-org/glm-5.3": "GLM 5.3",
-  "cloudflare/@cf/zai-org/glm-5.3-flash": "GLM 5.3 Flash",
 };
 
 const withDisplayName = (providerId: string, model: Model<Api>): Model<Api> => {
@@ -104,7 +95,7 @@ export const catalogProviderModels = (providerId: string) => {
           ...currentWorkersAiModels.filter(
             ({ id }) => !models.some((model) => model.id === id),
           ),
-        ]
+        ].filter(({ id }) => !RETIRED_WORKERS_AI_MODELS.has(id))
       : models
   ).map((model) => withDisplayName(providerId, model));
 };

@@ -236,6 +236,13 @@ const findButtonByText = (scope: ParentNode, text: string) => {
   return button;
 };
 
+const folderInputOf = (container: HTMLElement) => {
+  const input = container.querySelector<HTMLInputElement>(
+    'input[aria-label="Select skill folder"]',
+  );
+  if (!input) throw new Error("Folder input not found.");
+  return input;
+};
 const exportInputOf = (container: HTMLElement) => {
   const input = container.querySelector<HTMLInputElement>(
     'input[aria-label="Select exported skill"]',
@@ -328,6 +335,57 @@ describe("SkillsSettings import routing", () => {
           request.url === skillVersionEndpoint(codeReviewer.id),
       ),
     ).toEqual([]);
+
+    await act(() => root.unmount());
+  });
+
+  it("uploads a file quoting U+FFFD as text, and refuses a file that is not UTF-8 by name", async () => {
+    const network = new FrontendNetworkHarness(
+      respondSkills({ name: "captions", description: "Captions." }),
+    );
+    vi.stubGlobal("fetch", network.fetch);
+    const { container, root } = await mountSkills();
+    const skill = new File(
+      ["---\nname: captions\ndescription: Captions.\n---\n\nUse it.\n"],
+      "SKILL.md",
+      { type: "text/markdown" },
+    );
+    const quoting = new File(
+      ["Over 20% `\uFFFD` tokens means it failed.\n"],
+      "captions.md",
+      { type: "text/markdown" },
+    );
+
+    await act(() => setInputFiles(folderInputOf(container), [skill, quoting]));
+    const preview = await vi.waitFor(() => {
+      const request = network.requests.find(
+        ({ method, url }) => method === "POST" && url === skillsPreviewEndpoint,
+      );
+      expect(request).toBeDefined();
+      return request;
+    });
+    const sent = JSON.parse(String(preview && network.bodyOf(preview))) as {
+      files: Array<{ path: string; content: string }>;
+    };
+    expect(sent.files.find(({ path }) => path === "captions.md")?.content).toBe(
+      "Over 20% `\uFFFD` tokens means it failed.\n",
+    );
+
+    const before = network.requests.length;
+    const image = new File(
+      [new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe])],
+      "logo.png",
+      {
+        type: "image/png",
+      },
+    );
+    await act(() => setInputFiles(folderInputOf(container), [skill, image]));
+    await vi.waitFor(() =>
+      expect(container.textContent).toContain(
+        "logo.png: Only valid UTF-8 text without NUL bytes is allowed.",
+      ),
+    );
+    expect(network.requests.slice(before)).toEqual([]);
 
     await act(() => root.unmount());
   });

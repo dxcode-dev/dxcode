@@ -17,7 +17,7 @@ describe("effective context window", () => {
     ],
     ["anthropic/claude-opus-4-8", 1_000_000, ANTHROPIC_CONTEXT_WINDOW],
     ["google/gemini-3.8-flash", 1_048_576, 1_048_576],
-    ["cloudflare/@cf/zai-org/glm-5.3-flash", 1_048_576, 1_048_576],
+    ["cloudflare/@cf/zai-org/glm-4.7-flash", 1_048_576, 1_048_576],
   ])("%s: %i → %i", (canonical, native, expected) => {
     expect(effectiveContextWindow(canonical, native)).toBe(expected);
   });

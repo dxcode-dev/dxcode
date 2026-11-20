@@ -154,7 +154,7 @@ describe("models settings", () => {
 
   it("names Auto's model as the catalog does when no connection serves it", async () => {
     router.search = {};
-    const model = "cloudflare/@cf/zai-org/glm-5.3-flash";
+    const model = "cloudflare/@cf/zai-org/glm-4.7-flash";
     router.data = {
       profile: {
         modes: Object.fromEntries(
@@ -171,7 +171,7 @@ describe("models settings", () => {
         modes: ["low", "medium", "high", "ultra"].map((mode) => ({
           mode,
           config: { model, thinking: "high" },
-          modelName: "GLM 5.3 Flash",
+          modelName: "GLM 4.7 Flash",
           source: "default",
           served: false,
           servingConnectionName: null,
@@ -191,11 +191,11 @@ describe("models settings", () => {
       expect(container.textContent).not.toContain("Older mode");
       const trigger = container.querySelector("#models-medium");
       expect(trigger?.getAttribute("aria-label")).toMatch(
-        /: Auto, GLM 5\.3 Flash/,
+        /: Auto, GLM 4\.7 Flash/,
       );
-      expect(trigger?.textContent).toContain("GLM 5.3 Flash");
+      expect(trigger?.textContent).toContain("GLM 4.7 Flash");
       expect(container.textContent).not.toContain("cloudflare/");
-      expect(container.textContent).not.toContain("glm-5.3-flash");
+      expect(container.textContent).not.toContain("glm-4.7-flash");
     } finally {
       await React.act(() => root.unmount());
       container.remove();

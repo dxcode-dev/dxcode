@@ -8,6 +8,7 @@ import {
 } from "@dx/domain";
 import { Schema } from "effect";
 import { describe, expect, it } from "vitest";
+import { catalogProviderModels } from "./catalog.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import { resolveSubmissionModel } from "./resolver.js";
 
@@ -173,5 +174,33 @@ describe("resolveSubmissionModel", () => {
     } catch (error) {
       expect((error as ModelNotServed).reason).toBe("unknown-model");
     }
+  });
+
+  // Cloudflare retired GLM 5.3 Flash on 2026-11-20: requests to it answer
+  // 410 Gone. Threads, modes, and Space pins saved to dx's old default must
+  // keep working, and no one may pick a retired model.
+  it("runs a Thread saved to the retired GLM 5.3 Flash default on GLM 4.7 Flash", () => {
+    const workersAi = conn({
+      kind: "deployment",
+      providerId: "cloudflare" as StoredModelConnection["providerId"],
+    });
+    const resolved = resolve(
+      [workersAi],
+      selection({ model: "cloudflare/@cf/zai-org/glm-5.3-flash" as never }),
+    );
+    expect(resolved.model).toBe("cloudflare/@cf/zai-org/glm-4.7-flash");
+    expect(resolved.upstreamModel).toBe("@cf/zai-org/glm-4.7-flash");
+  });
+
+  it("offers no Workers AI model Cloudflare retired", () => {
+    const ids = catalogProviderModels("cloudflare").map(({ id }) => id);
+    expect(ids).toContain("@cf/zai-org/glm-4.7-flash");
+    for (const retired of [
+      "@cf/zai-org/glm-5.3-flash",
+      "@cf/zai-org/glm-5.2",
+      "@cf/moonshotai/kimi-k2.6",
+      "@cf/qwen/qwen3-30b-a3b-fp8",
+    ])
+      expect(ids).not.toContain(retired);
   });
 });

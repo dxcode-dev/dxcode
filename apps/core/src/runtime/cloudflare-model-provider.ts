@@ -4,18 +4,23 @@ import {
   cloudflareBindingProvider,
 } from "@flue/runtime/cloudflare/workers-ai";
 
-export const GLM_5_3_FLASH_MODEL_ID = "@cf/zai-org/glm-5.3-flash" as const;
+/**
+ * The Workers AI model dev, preview, and staging run on: the cheapest one
+ * that drives dx's tools reliably (Cloudflare retired GLM 5.3 Flash on
+ * 2026-11-20). Text only.
+ */
+export const GLM_4_7_FLASH_MODEL_ID = "@cf/zai-org/glm-4.7-flash" as const;
 
-const glm53Flash: Model<Api> = {
-  id: GLM_5_3_FLASH_MODEL_ID,
-  name: "GLM 5.3 Flash",
+const glm47Flash: Model<Api> = {
+  id: GLM_4_7_FLASH_MODEL_ID,
+  name: "GLM 4.7 Flash",
   api: "cloudflare-ai-binding",
   provider: "cloudflare",
   baseUrl: "",
   reasoning: true,
-  input: ["text", "image"],
-  cost: { input: 0.15, output: 0.5, cacheRead: 0.03, cacheWrite: 0 },
-  contextWindow: 1_048_576,
+  input: ["text"],
+  cost: { input: 0.06, output: 0.4, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 131_072,
   maxTokens: 0,
 };
 
@@ -25,8 +30,8 @@ export const createDxCloudflareModelProvider = (
 ): Provider => {
   const provider = cloudflareBindingProvider({ binding });
   const models = Object.freeze([
-    ...provider.getModels().filter(({ id }) => id !== GLM_5_3_FLASH_MODEL_ID),
-    glm53Flash,
+    ...provider.getModels().filter(({ id }) => id !== GLM_4_7_FLASH_MODEL_ID),
+    glm47Flash,
   ]);
   return Object.assign(provider, { getModels: () => models });
 };

@@ -2432,7 +2432,7 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
     });
   });
 
-  it("asks Workers AI GLM 5.3 Flash for low thinking", async () => {
+  it("asks Workers AI GLM 4.7 Flash for low thinking", async () => {
     await seed();
     const payloads: Record<string, unknown>[] = [];
     const ai = {
@@ -2463,7 +2463,7 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
       const response = await complete({
         selection: {
           kind: "model",
-          model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+          model: "cloudflare/@cf/zai-org/glm-4.7-flash",
         },
       });
 
@@ -2472,7 +2472,7 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
         text: "BUG: iOS paste",
       });
       expect(ai.run).toHaveBeenCalledOnce();
-      expect(ai.run.mock.calls[0]?.[0]).toBe("@cf/zai-org/glm-5.3-flash");
+      expect(ai.run.mock.calls[0]?.[0]).toBe("@cf/zai-org/glm-4.7-flash");
       expect(payloads[0]).toMatchObject({
         reasoning_effort: "low",
         max_completion_tokens: 2_048,

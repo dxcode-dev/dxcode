@@ -39,7 +39,10 @@ import { runRepositories } from "./runtime.js";
  * - the file route serves another scope's skill or a missing path;
  * - a Thread reads files of a skill outside its snapshot, or a large file
  *   comes back from R2 changed;
- * - a Space's `read_skill_file` reads a skill or file it does not have.
+ * - a Space's `read_skill_file` reads a skill or file it does not have;
+ * - a skill a website serves itself (`host/slug`) cannot be listed or
+ *   installed, or dx fetches files it never imports;
+ * - one file with NUL bytes, or one skills.sh failure, fails a whole skill.
  */
 
 const owner = Schema.decodeSync(UserId)("sources-owner");
@@ -72,7 +75,23 @@ const skillFiles = (version = 1) => [
 ];
 
 let directoryVersion = 1;
+/** skills.sh answers 503 this many more times before it serves a download. */
+let directoryOutages = 0;
 const DOWNLOAD_URL = "https://skills.sh/api/download/anthropics/skills/pdf";
+const WEBSITE_INDEX =
+  "https://skills.example.com/.well-known/skills/index.json";
+const WEBSITE_SKILL = "https://skills.example.com/.well-known/skills/lark-doc";
+const websiteFiles = [
+  {
+    path: "SKILL.md",
+    contents:
+      "---\nname: lark-doc\ndescription: Read and edit Lark documents.\n---\n\n# Lark docs\n\nSee references/api.md.\n",
+  },
+  { path: "references/api.md", contents: "# API\n\nCall docs +fetch.\n" },
+  { path: "references/中文 notes.md", contents: "# 笔记\n" },
+  { path: "assets/logo.png", contents: "PNG" },
+  { path: "data/latin1.txt", contents: "\xff\xfe" },
+];
 
 /** skills.sh answers through the Workers cache; a test starts it empty. */
 const clearDirectoryCache = async () => {
@@ -80,6 +99,9 @@ const clearDirectoryCache = async () => {
   for (const url of [
     DOWNLOAD_URL,
     "https://skills.sh/api/search?q=pdf&limit=24",
+    "https://skills.sh/api/download/acme/tools/nul",
+    WEBSITE_INDEX,
+    ...websiteFiles.map(({ path }) => `${WEBSITE_SKILL}/${path}`),
   ])
     await cache.delete(url);
 };
@@ -140,6 +162,7 @@ const repoArchive = async () =>
 
 beforeEach(async () => {
   directoryVersion = 1;
+  directoryOutages = 0;
   await clearDirectoryCache();
   fetched.length = 0;
   const archive = await repoArchive();
@@ -161,12 +184,58 @@ beforeEach(async () => {
               },
             ],
           });
-        if (url.pathname === "/api/download/anthropics/skills/pdf")
+        if (url.pathname === "/api/download/acme/tools/nul")
+          return Response.json({
+            hash: "f".repeat(64),
+            files: [
+              {
+                path: "SKILL.md",
+                contents:
+                  "---\nname: nul\ndescription: Diagnoses renderers.\n---\n\nRun scripts/diagnostics.mjs.\n",
+              },
+              {
+                path: "scripts/diagnostics.mjs",
+                contents: "export const separator = '\u0000';\n",
+              },
+            ],
+          });
+        if (url.pathname === "/api/download/anthropics/skills/pdf") {
+          if (directoryOutages > 0) {
+            directoryOutages -= 1;
+            return new Response("busy", { status: 503 });
+          }
           return Response.json({
             hash: `${directoryVersion}`.repeat(64).slice(0, 64),
             files: skillFiles(directoryVersion),
           });
+        }
         return new Response("missing", { status: 404 });
+      }
+      if (url.hostname === "skills.example.com") {
+        if (url.pathname === "/.well-known/skills/index.json")
+          return Response.json({
+            skills: [
+              {
+                name: "lark-doc",
+                description: "Read and edit Lark documents.",
+                files: websiteFiles.map(({ path }) => path),
+              },
+            ],
+          });
+        const file = websiteFiles.find(
+          ({ path }) =>
+            `/.well-known/skills/lark-doc/${path
+              .split("/")
+              .map(encodeURIComponent)
+              .join("/")}` === url.pathname,
+        );
+        if (file === undefined) return new Response("missing", { status: 404 });
+        // latin1.txt is bytes that are not UTF-8.
+        return new Response(
+          file.path === "data/latin1.txt"
+            ? new Uint8Array([0xff, 0xfe])
+            : file.contents,
+        );
       }
       if (url.hostname === "codeload.github.com") {
         const bytes = archive.slice();
@@ -311,6 +380,56 @@ describe("skills from skills.sh and GitHub", () => {
       (await app(stranger)(`${personal}/${skill.id}/files?path=REFERENCE.md`))
         .status,
     ).toBe(404);
+  });
+
+  it("installs a skill a website serves itself, fetching only the files dx imports", async () => {
+    const { preview, installed } = await install(personal, {
+      kind: "skills.sh",
+      id: "skills.example.com/lark-doc",
+    });
+    expect(installed.status).toBe(201);
+    expect(preview.skipped).toEqual([
+      { path: "assets/logo.png", reason: "Binary files are not imported." },
+      { path: "data/latin1.txt", reason: "The file is not UTF-8 text." },
+    ]);
+    const skill = installed.body.data;
+    expect(skill.name).toBe("lark-doc");
+    expect(skill.active.source).toEqual({
+      type: "browser-files",
+      label: "skills.sh/skills.example.com/lark-doc",
+    });
+    expect(
+      skill.active.resources.map(({ path }: { path: string }) => path),
+    ).toEqual(["references/api.md", "references/中文 notes.md"]);
+    // The binary file is listed, never downloaded.
+    expect(fetched.some((url) => url.includes("logo.png"))).toBe(false);
+  });
+
+  it("installs a skill without its file that has NUL bytes, and through a skills.sh outage", async () => {
+    const nul = await install(personal, {
+      kind: "skills.sh",
+      id: "acme/tools/nul",
+    });
+    expect(nul.installed.status).toBe(201);
+    expect(nul.preview.skipped).toEqual([
+      {
+        path: "scripts/diagnostics.mjs",
+        reason: "The file has NUL bytes, so it is read as binary.",
+      },
+    ]);
+
+    // Two 503s, then the download: the retry hides the outage.
+    directoryOutages = 2;
+    const pdf = await install(personal, {
+      kind: "skills.sh",
+      id: "anthropics/skills/pdf",
+    });
+    expect(pdf.installed.status).toBe(201);
+    expect(
+      fetched.filter(
+        (url) => url === "skills.sh/api/download/anthropics/skills/pdf",
+      ).length,
+    ).toBe(3);
   });
 
   it("refuses an install whose files changed after review, and updates in place", async () => {

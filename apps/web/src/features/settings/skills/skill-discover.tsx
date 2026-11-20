@@ -134,6 +134,11 @@ function SkillSourcePage({
   }
   const repository =
     data.source.type === "github" ? data.source.repository : "";
+  // A skill a website serves itself: skills.sh names it `host/skill`.
+  const site =
+    source.kind === "skills.sh" && source.id.split("/").length === 2
+      ? source.id.split("/")[0]
+      : undefined;
   // Code the agent may run; schemas and docs under scripts/ do not count.
   const scripts = data.files.filter(({ path }) =>
     /\.(py|sh|bash|zsh|js|mjs|cjs|ts|rb|pl|ps1)$/i.test(path),
@@ -179,18 +184,29 @@ function SkillSourcePage({
   };
   const facts = (
     <dl className="skill-discover-facts">
-      <div>
-        <dt>Repository</dt>
-        <dd>
-          <a
-            href={`https://github.com/${repository}${data.source.type === "github" && data.source.path ? `/tree/${data.commit ?? "HEAD"}/${data.source.path}` : ""}`}
-            target="_blank"
-            rel="noreferrer"
-          >
-            {repository}
-          </a>
-        </dd>
-      </div>
+      {site === undefined ? (
+        <div>
+          <dt>Repository</dt>
+          <dd>
+            <a
+              href={`https://github.com/${repository}${data.source.type === "github" && data.source.path ? `/tree/${data.commit ?? "HEAD"}/${data.source.path}` : ""}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {repository}
+            </a>
+          </dd>
+        </div>
+      ) : (
+        <div>
+          <dt>Website</dt>
+          <dd>
+            <a href={`https://${site}`} target="_blank" rel="noreferrer">
+              {site}
+            </a>
+          </dd>
+        </div>
+      )}
       <div>
         <dt>Version</dt>
         <dd>
@@ -247,7 +263,7 @@ function SkillSourcePage({
             <div>
               <h2>{data.manifest.name}</h2>
               <p className="skill-discover-muted">
-                {repository}
+                {site ?? repository}
                 {directoryInstalls === undefined
                   ? ""
                   : ` · ${installCount(directoryInstalls)} installs`}

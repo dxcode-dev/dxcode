@@ -15,7 +15,7 @@ import { Schema } from "effect";
  * module.
  */
 export const DEV_WORKERS_AI_MODEL = Schema.decodeUnknownSync(ModelId)(
-  "cloudflare/@cf/zai-org/glm-5.3-flash",
+  "cloudflare/@cf/zai-org/glm-4.7-flash",
 );
 
 export const DEV_PROFILE: Profile = {

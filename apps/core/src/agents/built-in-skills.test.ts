@@ -31,6 +31,8 @@ import { installSkillFiles } from "./built-in-skills.js";
  * 7. The built-in and settings installs remove each other's skills.
  * 8. An unchanged install rewrites every file on every turn.
  * 9. The old copy under ~/.local/share/dx stays behind.
+ * 10. A file whose path has spaces or letters of another script is written
+ *     elsewhere, or breaks the install script's quoting.
  */
 
 const run = promisify(execFile);
@@ -224,5 +226,24 @@ describe("installing skills outside the repository", () => {
     await expect(readdir(join(home, ".local/share/dx"))).resolves.toEqual([
       "empty-template",
     ]);
+  });
+
+  it("writes paths with spaces and letters of any script where they belong", async () => {
+    const files = [
+      { path: "notes/SKILL.md", content: "# Notes\n" },
+      { path: "notes/demos/什么是token.html", content: "<p>token</p>\n" },
+      { path: "notes/references/My Notes (v2).md", content: "# Mine\n" },
+      { path: "notes/_bundled/MANIFEST.json", content: "{}\n" },
+    ];
+
+    await installSkillFiles(target, "settings", "v1", async () => ({
+      files,
+      complete: true,
+    }));
+
+    for (const { path, content } of files)
+      await expect(
+        readFile(join(home, ".agents/skills", path), "utf8"),
+      ).resolves.toBe(content);
   });
 });

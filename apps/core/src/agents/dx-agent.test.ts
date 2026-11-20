@@ -145,7 +145,7 @@ describe("DxAgent", () => {
     skills.readThreadSkillResources.mockClear();
     runtime.execution.createSandbox.mockReset().mockResolvedValue({});
     runtime.selectModel.mockReset().mockImplementation(() => ({
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
       options: undefined,
     }));
   });
@@ -337,7 +337,7 @@ describe("DxAgent", () => {
 
   it("resolves the plugin tool set once per prompt submission and fails visibly", async () => {
     runtime.resolvePromptData.mockResolvedValue({
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
       thinking: "medium",
     });
     pluginHost.resolveAgentPluginTools.mockResolvedValueOnce({
@@ -355,7 +355,7 @@ describe("DxAgent", () => {
       DxAgent.resolvePromptData?.(undefined, context),
     ).resolves.toEqual({
       route: {
-        model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+        model: "cloudflare/@cf/zai-org/glm-4.7-flash",
         thinking: "medium",
       },
       plugins: {
@@ -720,7 +720,7 @@ describe("DxAgent", () => {
       thinking: "high",
     };
     const dxModel = {
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
       thinking: "medium",
     };
 

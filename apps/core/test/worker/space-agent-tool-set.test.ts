@@ -65,7 +65,7 @@ vi.mock("../../src/runtime/agent-composition.js", () => ({
     execution,
     model: {
       select: () => ({
-        model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+        model: "cloudflare/@cf/zai-org/glm-4.7-flash",
         options: undefined,
       }),
       resolvePromptData: async () => undefined,

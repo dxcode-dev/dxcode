@@ -114,10 +114,10 @@ describe("routing presentation names models as the server does", () => {
         {
           mode: "low",
           config: {
-            model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+            model: "cloudflare/@cf/zai-org/glm-4.7-flash",
             thinking: "high",
           },
-          modelName: "GLM 5.3 Flash",
+          modelName: "GLM 4.7 Flash",
           source: "default",
           served: true,
         },
@@ -125,7 +125,7 @@ describe("routing presentation names models as the server does", () => {
       edges: [
         {
           mode: "low",
-          model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+          model: "cloudflare/@cf/zai-org/glm-4.7-flash",
           connectionId: "mcon_1" as GraphData["edges"][number]["connectionId"],
         },
       ],
@@ -156,7 +156,7 @@ describe("routing presentation names models as the server does", () => {
     } as unknown as ChoicesData;
     const { groups } = routingPresentation({ graph, choices });
     expect(groups.flatMap((g) => g.rows.map((r) => r.name))).toEqual([
-      "GLM 5.3 Flash",
+      "GLM 4.7 Flash",
       "GPT OSS 120B",
       "GLM 5.2",
     ]);

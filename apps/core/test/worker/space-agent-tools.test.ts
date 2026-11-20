@@ -573,7 +573,7 @@ describe("The Space agent's management tools", () => {
     // The model the test deployment serves, at another effort than the
     // Space's own.
     const threadModel = {
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
       thinking: "high",
     } as const;
     const created = await send(owner, "/v1/spaces", "POST", {

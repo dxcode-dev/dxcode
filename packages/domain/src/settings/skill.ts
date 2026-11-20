@@ -65,6 +65,24 @@ export const SkillIntegrity = Schema.String.check(
 
 export type SkillIntegrity = typeof SkillIntegrity.Type;
 
+/**
+ * A path a skill file may have: relative segments of letters and digits in
+ * any script, spaces, and `_ - . + @ ~ , ( ) [ ] =`, none hidden (a leading
+ * `.`) or empty, at most 256 characters. No character the Orb installer's
+ * shell quoting would read (`$`, backtick, quotes, backslash) is allowed.
+ */
+export const isSafeSkillFilePath = (path: string) =>
+  path.length > 0 &&
+  path.length <= 256 &&
+  path
+    .split("/")
+    .every(
+      (segment) =>
+        /^[\p{L}\p{N}\p{M}_+@~,()[\]= .-]+$/u.test(segment) &&
+        !segment.startsWith(".") &&
+        segment.trim() === segment,
+    );
+
 export const SkillResourcePath = Schema.String.check(
   Schema.isMinLength(1),
   Schema.isMaxLength(256),

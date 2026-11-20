@@ -886,6 +886,7 @@ export {
 export {
   BrowserFilesSkillSource,
   GitHubSkillSource,
+  isSafeSkillFilePath,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_FILES,
   MAX_SKILL_INSTRUCTIONS_BYTES,

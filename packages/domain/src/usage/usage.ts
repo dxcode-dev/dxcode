@@ -34,7 +34,7 @@ export const UsageEventKind = Schema.Literals([
 export type UsageEventKind = typeof UsageEventKind.Type;
 
 /**
- * Provider-scoped model id (e.g. `gpt-5.2`, `@cf/zai-org/glm-5.3-flash`) as
+ * Provider-scoped model id (e.g. `gpt-5.2`, `@cf/zai-org/glm-4.7-flash`) as
  * recorded by usage telemetry and price rows — NOT the canonical
  * `provider/model` `ModelId` used by model routing.
  */

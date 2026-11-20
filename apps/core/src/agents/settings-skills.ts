@@ -1,3 +1,4 @@
+import { isSafeSkillFilePath } from "@dx/domain";
 import { defineSkill } from "@flue/runtime";
 import { builtInSkillsLogger } from "../logging.js";
 import { readThreadSkillResources } from "../settings/skills/execution.js";
@@ -38,8 +39,8 @@ interface SettingsSkill {
 // `scripts/`), so a resource may sit anywhere under the skill but never
 // replace its SKILL.md, start a segment with a dot, or climb out.
 const safeName = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-const safeResourcePath =
-  /^(?!SKILL\.md$)[A-Za-z0-9_-][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$/;
+const safeResourcePath = (path: string) =>
+  path !== "SKILL.md" && isSafeSkillFilePath(path);
 
 const installable = (skills: ReadonlyArray<SettingsSkill>) =>
   skills.filter(({ name }) => safeName.test(name));
@@ -96,7 +97,7 @@ const skillFiles = async (
           return [];
         }
         const resources = skill.resources.map(({ path }) => {
-          if (!safeResourcePath.test(path)) return [];
+          if (!safeResourcePath(path)) return [];
           const content = stored.files.get(path);
           if (content !== undefined)
             return [{ path: `${skill.name}/${path}`, content }];

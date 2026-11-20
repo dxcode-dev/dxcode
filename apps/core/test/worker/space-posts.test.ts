@@ -324,7 +324,7 @@ describe("A new Space", () => {
       .first<{ model_selection: string; execution_mode: string }>();
     expect(JSON.parse(row?.model_selection ?? "{}")).toMatchObject({
       kind: "model",
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
       thinking: "medium",
     });
     expect(row?.execution_mode).toBe("executor");

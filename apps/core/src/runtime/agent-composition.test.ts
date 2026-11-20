@@ -138,7 +138,7 @@ describe("agent runtime composition", () => {
     expect(runtime.capabilities).toBe("model-only");
     expect(runtime.execution).toBeUndefined();
     expect(runtime.model.select(undefined)).toEqual({
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
       options: undefined,
     });
   });

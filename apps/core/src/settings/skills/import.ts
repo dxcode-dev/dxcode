@@ -1,4 +1,5 @@
 import {
+  isSafeSkillFilePath,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_FILES,
   MAX_SKILL_INSTRUCTIONS_BYTES,
@@ -18,7 +19,9 @@ import { Effect, Option, Schema } from "effect";
 import {
   binaryBrowserMediaType,
   frontMatter,
+  skillDescriptionFrom,
   skillFileMediaType,
+  skillNameFrom,
 } from "./skill-files.js";
 
 const textEncoder = new TextEncoder();
@@ -48,8 +51,17 @@ const sha256 = async (value: string | Uint8Array): Promise<string> => {
   ).join("");
 };
 
+/**
+ * A file's text: well-formed (it encodes as UTF-8 unchanged) and without NUL
+ * bytes. U+FFFD is an ordinary character; a skill may quote it. Uploads are
+ * decoded strictly in the browser, so a binary file never reaches here as
+ * replacement characters.
+ */
+const loneSurrogate =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 const checkedText = (value: string, path: string, maximumBytes: number) => {
-  if (value.includes("\0") || value.includes("\uFFFD")) {
+  if (value.includes("\0") || loneSurrogate.test(value)) {
     return reject(path, "Only valid UTF-8 text without NUL bytes is allowed.");
   }
   const bytes = textEncoder.encode(value).byteLength;
@@ -61,26 +73,8 @@ const checkedText = (value: string, path: string, maximumBytes: number) => {
     : Effect.succeed(bytes);
 };
 
-const safePath = (path: string) => {
-  if (
-    path.startsWith("/") ||
-    path.includes("\\") ||
-    path.includes("\0") ||
-    /%(?:2e|2f|5c)/i.test(path)
-  ) {
-    return false;
-  }
-  const segments = path.split("/");
-  return (
-    segments.every(
-      (segment) =>
-        segment.length > 0 &&
-        segment !== "." &&
-        segment !== ".." &&
-        !segment.startsWith("."),
-    ) && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(path)
-  );
-};
+const safePath = (path: string) =>
+  isSafeSkillFilePath(path) && !/%(?:2e|2f|5c)/i.test(path);
 
 const canonicalPayload = (preview: {
   readonly manifest: typeof SkillManifest.Type;
@@ -128,18 +122,21 @@ const readSkillDocument = Effect.fn("readSkillDocument")(function* (
       MAX_SKILL_INSTRUCTIONS_BYTES * 2,
     );
     const { data, body } = frontMatter(skillMd.content);
+    // Lenient as agents are: the name in the format's form, the description
+    // within its limit.
     const manifest = yield* Schema.decodeUnknownEffect(SkillManifest)({
       schemaVersion: 1,
-      name: typeof data.name === "string" ? data.name.trim().toLowerCase() : "",
+      name: typeof data.name === "string" ? skillNameFrom(data.name) : "",
       description:
-        typeof data.description === "string" ? data.description.trim() : "",
+        typeof data.description === "string"
+          ? skillDescriptionFrom(data.description)
+          : "",
     }).pipe(
       Effect.mapError(
         () =>
           new SkillImportRejected({
             field: "SKILL.md",
-            reason:
-              "SKILL.md front matter needs a kebab-case name and a description of up to 1,024 characters.",
+            reason: "SKILL.md front matter needs a name and a description.",
           }),
       ),
     );
@@ -227,7 +224,7 @@ export const previewSkillFiles = Effect.fn("previewSkillFiles")(function* (
     if (!safePath(file.path)) {
       return yield* reject(
         file.path,
-        "Paths must be safe relative paths without traversal or hidden segments.",
+        "Use relative paths of letters, digits, spaces, and _-.+@~,()[]=, with no hidden or empty segments.",
       );
     }
     if (paths.has(file.path)) {

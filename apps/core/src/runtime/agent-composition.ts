@@ -179,7 +179,7 @@ const localClaudeCodeModelAdapter = (
   },
 });
 
-const defaultCloudflareModel = "cloudflare/@cf/zai-org/glm-5.3-flash";
+const defaultCloudflareModel = "cloudflare/@cf/zai-org/glm-4.7-flash";
 
 /** Deployed threads must resolve; a missing route fails visibly. */
 const cloudflareModelAdapter: AgentModelAdapter = {

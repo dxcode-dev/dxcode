@@ -21,6 +21,7 @@ import { catalogModelExists, findCatalogModel } from "./catalog.js";
 import { effectiveContextWindow } from "./context-window.js";
 import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
+import { currentWorkersAiModel } from "./retired-models.js";
 
 const canonicalParts = (canonical: string) => {
   const slash = canonical.indexOf("/");
@@ -202,7 +203,7 @@ export interface ResolveSubmissionInput {
 export const resolveSubmissionModel = (
   input: ResolveSubmissionInput,
 ): ResolvedSubmissionModel => {
-  const { model, thinking } =
+  const { model: saved, thinking } =
     input.selection.kind === "mode"
       ? (
           input.modeOverrides.get(input.selection.mode) ??
@@ -212,6 +213,9 @@ export const resolveSubmissionModel = (
           model: input.selection.model,
           thinking: pinThinking(input.selection),
         };
+  // A Thread, mode, or Space saved to a retired default runs on its
+  // replacement.
+  const model = currentWorkersAiModel(saved);
   const entitlements = input.copilotEntitlements ?? (() => undefined);
   const match = findServingConnection(input.connections, model, entitlements);
   if (match === undefined) {

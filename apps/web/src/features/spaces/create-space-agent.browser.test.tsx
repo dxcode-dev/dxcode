@@ -360,15 +360,15 @@ it("names a Model Routing model without plans", async () => {
   await mount({
     route: {
       kind: "model-routing",
-      model: "cloudflare/@cf/zai-org/glm-5.3-flash",
-      modelName: "GLM 5.3 Flash",
+      model: "cloudflare/@cf/zai-org/glm-4.7-flash",
+      modelName: "GLM 4.7 Flash",
       thinking: "high",
       connectionName: "Workers AI",
     },
     plans: [],
   });
   expect(coordinator()?.getAttribute("aria-label")).toBe(
-    "Coordinator model: Default, GLM 5.3 Flash",
+    "Coordinator model: Default, GLM 4.7 Flash",
   );
   expect(planSelect()).toBeNull();
   expect(limitsButton()).toBeNull();

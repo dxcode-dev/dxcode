@@ -8,10 +8,10 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDxCloudflareModelProvider,
-  GLM_5_3_FLASH_MODEL_ID,
+  GLM_4_7_FLASH_MODEL_ID,
 } from "./cloudflare-model-provider.js";
 
-const modelId = GLM_5_3_FLASH_MODEL_ID;
+const modelId = GLM_4_7_FLASH_MODEL_ID;
 
 describe("Flue Cloudflare binding provider", () => {
   afterEach(() => resetModelsForTests());
@@ -39,10 +39,10 @@ describe("Flue Cloudflare binding provider", () => {
       id: modelId,
       provider: "cloudflare",
       api: "cloudflare-ai-binding",
-      contextWindow: 1_048_576,
+      contextWindow: 131_072,
       maxTokens: 0,
       reasoning: true,
-      input: ["text", "image"],
+      input: ["text"],
     });
     expect(resolveModel("cloudflare/@cf/future-model")).toMatchObject({
       id: "@cf/future-model",

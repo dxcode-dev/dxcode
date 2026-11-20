@@ -16,7 +16,7 @@ export const seedSpaceUsers = async (userIds: ReadonlyArray<string>) => {
       ).bind(userId),
       env.DB.prepare(
         `INSERT OR IGNORE INTO space_agent_model (user_id, model, thinking, updated_at)
-         VALUES (?1, 'cloudflare/@cf/zai-org/glm-5.3-flash', 'medium', '2026-11-09T00:00:00.000Z')`,
+         VALUES (?1, 'cloudflare/@cf/zai-org/glm-4.7-flash', 'medium', '2026-11-09T00:00:00.000Z')`,
       ).bind(userId),
     ]),
   );

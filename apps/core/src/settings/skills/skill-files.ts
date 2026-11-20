@@ -20,12 +20,61 @@ export const frontMatter = (
   try {
     data = YAML.parse(match[1] ?? "", { maxAliasCount: 10 });
   } catch {
-    data = undefined;
+    data = looseFrontMatter(match[1] ?? "");
   }
   return {
     data: isRecord(data) ? data : {},
     body: source.slice(match[0].length),
   };
+};
+
+/**
+ * Front matter that is not valid YAML, read as agents read it: each
+ * unindented `key: value` line, its value up to the line's end. A popular
+ * skill writes `description: DEPRECATED: Use impeccable.`, which YAML refuses
+ * for its second colon.
+ */
+const looseFrontMatter = (source: string) => {
+  const data: Record<string, string> = {};
+  for (const line of source.split(/\r?\n/)) {
+    const pair = /^([A-Za-z][\w-]*):[ \t]*(.*?)[ \t]*$/.exec(line);
+    if (pair === null) continue;
+    const [, key = "", raw = ""] = pair;
+    const quoted = /^(["'])(.*)\1$/.exec(raw);
+    data[key] = quoted === null ? raw : (quoted[2] ?? "");
+  }
+  return data;
+};
+
+/**
+ * A SKILL.md `name` as the Agent Skills format requires it: lowercase ASCII
+ * letters and digits in hyphen-separated words, at most 64 characters, so
+ * `react:components` becomes `react-components`. Empty when nothing is left.
+ */
+export const skillNameFrom = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+    .replace(/-+$/, "");
+
+const MAX_DESCRIPTION = 1024;
+
+/**
+ * A SKILL.md `description` within the format's 1,024 characters: a longer
+ * one is cut at the last space before the limit and ends with an ellipsis.
+ * The full text stays in the skill's SKILL.md body as its author wrote it.
+ */
+export const skillDescriptionFrom = (value: string) => {
+  const trimmed = value.trim();
+  if (trimmed.length <= MAX_DESCRIPTION) return trimmed;
+  let cut = trimmed.slice(0, MAX_DESCRIPTION - 1);
+  // Never end on half of a surrogate pair.
+  if (/[\uD800-\uDBFF]$/.test(cut)) cut = cut.slice(0, -1);
+  const space = cut.search(/\s\S*$/);
+  return `${(space > MAX_DESCRIPTION / 2 ? cut.slice(0, space) : cut).trimEnd()}…`;
 };
 
 const textMediaTypes = new Map([

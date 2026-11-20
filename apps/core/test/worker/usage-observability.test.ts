@@ -151,7 +151,7 @@ describe("usage observability D1", () => {
   it("prices a proxied turn from its canonical route rather than its observed alias", async () => {
     const canonicalPrice = catalogUsagePrice(
       "cloudflare",
-      "@cf/zai-org/glm-5.3-flash",
+      "@cf/zai-org/glm-4.7-flash",
     );
     if (canonicalPrice === undefined)
       throw new Error("Expected canonical catalog price.");
@@ -162,7 +162,7 @@ describe("usage observability D1", () => {
       Response.json({
         connectionId: "mcon_usage",
         providerId: "cloudflare",
-        modelId: "@cf/zai-org/glm-5.3-flash",
+        modelId: "@cf/zai-org/glm-4.7-flash",
       });
     await recordFlueUsage(
       {
@@ -211,7 +211,7 @@ describe("usage observability D1", () => {
         .first(),
     ).resolves.toMatchObject({
       provider_id: "cloudflare",
-      model_id: "@cf/zai-org/glm-5.3-flash",
+      model_id: "@cf/zai-org/glm-4.7-flash",
       observed_provider_id: "custom-proxy",
       observed_model_id: "opaque-upstream-alias",
       price_status: "fresh",
@@ -234,10 +234,10 @@ describe("usage observability D1", () => {
         request: {
           providerId: "cloudflare",
           providerName: "Cloudflare Workers AI",
-          requestedModel: "@cf/zai-org/glm-5.3-flash",
+          requestedModel: "@cf/zai-org/glm-4.7-flash",
         },
         response: {
-          responseModel: "@cf/zai-org/glm-5.3-flash",
+          responseModel: "@cf/zai-org/glm-4.7-flash",
           usage: { input: 2, output: 1, totalTokens: 3 },
         },
       } as never,
