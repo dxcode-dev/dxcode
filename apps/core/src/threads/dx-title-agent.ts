@@ -1,5 +1,4 @@
 import {
-  isClaudeCodeModel,
   THREAD_TITLE_MAX_LENGTH,
   type ThreadId,
   type ThreadModelSelection,
@@ -14,10 +13,9 @@ import { enqueueKnownThreadSearchIndex } from "../thread-search/enqueue.js";
  * DxTitleAgent: a single tool-free model call that replaces a new thread's
  * deterministic title. It is not a Flue agent and has no route, conversation,
  * or Durable Object of its own; the thread's credential coordinator runs the
- * call with low thinking on the owner's `low` mode, dx's fast tier, so a
- * Thread on a slow model (Kimi K2.6 took longer than the budget) still gets
- * its title; the Thread's own model is the fallback when the `low` mode
- * cannot serve it. A Claude Code Thread's title comes from its own run.
+ * call on the Thread's own model at its lowest thinking effort, and asks once
+ * more after a failed or unusable answer. A Claude Code Thread's title comes
+ * from its own run.
  * Clients show a loading title meanwhile; any failure reveals the
  * deterministic title.
  */
@@ -102,30 +100,12 @@ export const claudeCodeTitleInput = (body: string): string | undefined => {
     : `${DX_TITLE_AGENT_SYSTEM_PROMPT}\n\n${message}`;
 };
 
-/** The fast selection titles are asked of first: the owner's `low` mode. */
-const TITLE_SELECTION: ThreadModelSelection = {
-  kind: "mode",
-  profileId: "default",
-  mode: "low",
-};
-
-/** A second attempt starts only with at least this long left. */
-const FALLBACK_MIN_MS = 8_000;
-
-const sameSelection = (
-  left: ThreadModelSelection,
-  right: ThreadModelSelection,
-) => JSON.stringify(left) === JSON.stringify(right);
-
-/** The selections a title is asked of, in order. */
-export const titleSelections = (
-  selection: ThreadModelSelection,
-): ReadonlyArray<ThreadModelSelection> =>
-  // A Claude Code Thread's title comes from its first run on its plan.
-  (selection.kind === "model" && isClaudeCodeModel(selection.model)) ||
-  sameSelection(selection, TITLE_SELECTION)
-    ? [selection]
-    : [TITLE_SELECTION, selection];
+/**
+ * A failed or unusable answer is asked again once, on the same model, only
+ * with at least this long left; a timeout is not, since the next try would
+ * meet the same deadline.
+ */
+const RETRY_MIN_MS = 8_000;
 
 /** One completion on one selection. */
 const completeTitle = async (
@@ -165,22 +145,26 @@ const completeTitle = async (
   }
 };
 
-/** Model call and sanitation; undefined keeps the stored fallback title. */
+/**
+ * Model call and sanitation on the Thread's own model; undefined keeps the
+ * stored fallback title.
+ */
 const generateTitle = async (
   coordinator: DurableObjectNamespace,
   job: DxTitleAgentJob,
   message: string,
 ): Promise<string | typeof CLAUDE_CODE_TITLE | undefined> => {
   const deadline = Date.now() + REQUEST_TIMEOUT_MS;
-  let failure = "NO_SELECTION";
-  for (const selection of titleSelections(job.selection)) {
+  let failure = "NO_ATTEMPT";
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     const remaining = deadline - Date.now();
-    if (remaining < FALLBACK_MIN_MS && failure !== "NO_SELECTION") break;
+    if (attempt > 0 && (remaining < RETRY_MIN_MS || failure === "TIMEOUT"))
+      break;
     const answer = await completeTitle(
       coordinator,
       job,
       message,
-      selection,
+      job.selection,
       remaining,
     );
     if (!answer.ok) {
@@ -189,13 +173,13 @@ const generateTitle = async (
       continue;
     }
     const title = sanitizeGeneratedTitle(answer.text);
-    if (title === undefined)
-      threadPersistenceLogger.warn("Thread title generation was unusable.", {
-        event: "thread_title_generation_failed",
-        threadId: job.threadId,
-        code: "UNUSABLE_TITLE",
-      });
-    return title;
+    if (title !== undefined) return title;
+    threadPersistenceLogger.warn("Thread title generation was unusable.", {
+      event: "thread_title_generation_failed",
+      threadId: job.threadId,
+      code: "UNUSABLE_TITLE",
+    });
+    failure = "UNUSABLE_TITLE";
   }
   threadPersistenceLogger.warn("Thread title generation failed.", {
     event: "thread_title_generation_failed",

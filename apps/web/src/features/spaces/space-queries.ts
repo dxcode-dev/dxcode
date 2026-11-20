@@ -18,12 +18,18 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
+import { DateTime } from "effect";
 import { ApiError, request } from "../../shared/api/client.js";
 import {
   invalidateThreadQueries,
   THREAD_FRESHNESS_SLO_MS,
 } from "../threads/thread-queries.js";
 
+import {
+  lifecycleOf,
+  requestedChanges,
+  type Unseen,
+} from "../threads/thread-requested-change-queries.js";
 import { spaceKeys } from "./space-cache-queries.js";
 
 const staleTime = 30_000;
@@ -146,10 +152,77 @@ const listSpaceArtifacts = async (
     )
   ).data.items;
 
+/**
+ * The person's Spaces with the archives and restores a read may predate: an
+ * archived Space leaves the list, a restored one returns, from the list or
+ * the Space as the page last held it.
+ */
+export const spacesWithChanges = (
+  spaces: ReadonlyArray<SpaceData>,
+  unseen: Unseen,
+  cachedSpace: (threadId: ThreadId) => SpaceData | undefined,
+): ReadonlyArray<SpaceData> => {
+  let next = spaces;
+  for (const [threadId, changes] of unseen) {
+    const lifecycleState = lifecycleOf(changes);
+    if (lifecycleState === "archived")
+      next = next.filter((space) => space.threadId !== threadId);
+    if (
+      lifecycleState === "active" &&
+      !next.some((space) => space.threadId === threadId)
+    ) {
+      const space = cachedSpace(threadId);
+      if (space !== undefined)
+        next = placedSpace(next, { ...space, lifecycleState });
+    }
+  }
+  return next;
+};
+
+/** The Space with the lifecycle a read may predate. */
+export const spaceWithChanges = (space: SpaceData, unseen: Unseen) => {
+  const lifecycleState = lifecycleOf(unseen.get(space.threadId) ?? []);
+  return lifecycleState === undefined ? space : { ...space, lifecycleState };
+};
+
+/** Puts a Space at its place among the person's Spaces: newest activity first. */
+const placedSpace = (
+  spaces: ReadonlyArray<SpaceData>,
+  space: SpaceData,
+): ReadonlyArray<SpaceData> => {
+  const others = spaces.filter(({ threadId }) => threadId !== space.threadId);
+  const at = others.findIndex(
+    (other) =>
+      DateTime.toEpochMillis(other.lastActivityAt) <
+      DateTime.toEpochMillis(space.lastActivityAt),
+  );
+  return at === -1
+    ? [...others, space]
+    : [...others.slice(0, at), space, ...others.slice(at)];
+};
+
 export const joinedSpacesQueryOptions = (userId: UserId) =>
   queryOptions({
     queryKey: spaceKeys.joined(userId),
-    queryFn: ({ signal }) => listSpaces(signal),
+    // A read can predate a Space archived or restored on this page.
+    queryFn: ({ client, signal }) =>
+      requestedChanges(client).read(
+        () => listSpaces(signal),
+        (spaces, unseen) =>
+          spacesWithChanges(
+            spaces,
+            unseen,
+            (threadId) =>
+              client
+                .getQueryData<ReadonlyArray<SpaceData>>(
+                  spaceKeys.joined(userId),
+                )
+                ?.find((space) => space.threadId === threadId) ??
+              client.getQueryData<SpaceData>(
+                spaceKeys.detail(userId, threadId),
+              ),
+          ),
+      ),
     staleTime,
     gcTime,
     refetchInterval: THREAD_FRESHNESS_SLO_MS,
@@ -183,7 +256,11 @@ export const spaceSuggestionsQueryOptions = (userId: UserId) =>
 export const spaceQueryOptions = (userId: UserId, threadId: ThreadId) =>
   queryOptions({
     queryKey: spaceKeys.detail(userId, threadId),
-    queryFn: ({ signal }) => getSpace(threadId, signal),
+    queryFn: ({ client, signal }) =>
+      requestedChanges(client).read(
+        () => getSpace(threadId, signal),
+        spaceWithChanges,
+      ),
     staleTime,
     gcTime,
   });

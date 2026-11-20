@@ -17,6 +17,10 @@ import {
   THREAD_FRESHNESS_SLO_MS,
   threadKeys,
 } from "./thread-queries.js";
+import {
+  requestedChanges,
+  withChanges,
+} from "./thread-requested-change-queries.js";
 
 type Row = ThreadListClientItem;
 type ListData = InfiniteData<ThreadPage, unknown>;
@@ -278,7 +282,11 @@ export class ThreadListRows {
     if (cached.some(isOptimisticThread)) return refetchLists();
     let row: Row;
     try {
-      row = await this.#fetchRow(threadId);
+      // The row can predate an archive, pin, or rename this page asked for.
+      row = await requestedChanges(client).read(
+        () => this.#fetchRow(threadId),
+        (fetched, unseen) => withChanges(fetched, unseen.get(threadId)),
+      );
     } catch {
       // Gone, no longer shared with this person, or unreachable.
       return refetchLists();

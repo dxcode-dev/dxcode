@@ -19,6 +19,12 @@ import {
 } from "../../shared/api/client.js";
 import { retryOnMountQuery } from "../../shared/query/query-retry.js";
 import { prefetchThreadHistory } from "../../shared/same-origin-fetch.js";
+import {
+  listedRow,
+  pageWithChanges,
+  requestedChanges,
+  withChanges,
+} from "./thread-requested-change-queries.js";
 
 const staleTime = 30_000;
 const gcTime = 5 * 60_000;
@@ -152,8 +158,26 @@ export const threadsQueryOptions = (
 ) =>
   infiniteQueryOptions({
     queryKey: threadKeys.list(userId, projectId, lifecycleState, tree),
-    queryFn: ({ pageParam, signal }) =>
-      listThreads(projectId, pageParam, signal, lifecycleState, tree),
+    // A page read can predate an archive, pin, or rename this page asked
+    // for; it shows the change until a read after the answer lands.
+    queryFn: ({ client, pageParam, queryKey, signal }) =>
+      requestedChanges(client).read(
+        () => listThreads(projectId, pageParam, signal, lifecycleState, tree),
+        (page, unseen) =>
+          pageWithChanges(
+            page,
+            queryKey,
+            pageParam === undefined,
+            unseen,
+            (threadId) =>
+              listedRow(
+                client.getQueryData<InfiniteData<ThreadPage, unknown>>(
+                  queryKey,
+                ),
+                threadId,
+              ),
+          ),
+      ),
     initialPageParam: undefined as PageCursor | undefined,
     getNextPageParam: (page) => page.nextCursor,
     staleTime,
@@ -272,7 +296,10 @@ export const threadQueryOptions = (userId: UserId, threadId: ThreadId) =>
   queryOptions({
     queryKey: threadKeys.detail(userId, threadId),
     queryFn: async (context) => {
-      const thread = await readThread(context, threadId);
+      const thread = await requestedChanges(context.client).read(
+        () => readThread(context, threadId),
+        (detail, unseen) => withChanges(detail, unseen.get(threadId)),
+      );
       settleListedTitle(context.client, userId, thread);
       return thread;
     },

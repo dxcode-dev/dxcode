@@ -7,9 +7,12 @@ import {
   ThreadModelSelection,
 } from "@dx/domain";
 import {
+  type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
+  getSupportedThinkingLevels,
   isContextOverflow,
+  type Model,
   normalizeContext,
 } from "@earendil-works/pi-ai";
 import { Effect, Option, Schema } from "effect";
@@ -522,6 +525,12 @@ const anthropicDocuments = (payload: unknown) => {
 const COMPLETE_TIMEOUT_MS = 25_000;
 /** A plugin's call may reason longer; the plugin host waits 60 seconds. */
 const COMPLETE_PLUGIN_TIMEOUT_MS = 55_000;
+
+/** The model's lowest supported thinking level; "off" asks none. */
+const lowestReasoning = (model: Model<Api>): CompleteReasoning => {
+  const lowest = getSupportedThinkingLevels(model)[0] ?? "off";
+  return lowest === "off" ? "none" : lowest;
+};
 
 const completionRequest = (envelope: CompleteEnvelope) =>
   JSON.stringify([
@@ -1433,7 +1442,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
    * title). It resolves the owner's route like a new submission,
    * then reuses the pinned transports without storing a pin or usage
    * attribution and without `blockConcurrencyWhile`, so it never delays the
-   * agent's own `/resolve`. Thinking effort is low for every model.
+   * agent's own `/resolve`. A title runs at the model's lowest thinking
+   * effort.
    */
   async #handleComplete(
     envelope: CompleteEnvelope,
@@ -1525,9 +1535,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     // Code Thread's title waits for its first run (see claude-code/registration.ts).
     if (route.model.api === CLAUDE_CODE_API)
       return jsonResponse({ code: CLAUDE_CODE_TITLE_DEFERRED }, 409);
-    // Low effort is supported across the catalog, unlike "off" (GLM 5.3
-    // Flash); a plugin may ask for another, and `none` sends none.
-    const asked = envelope.reasoning ?? "low";
+    // A title asks the model's lowest effort; "off" sends none, which each
+    // adapter turns into its provider's own no-thinking setting (GLM 4.7
+    // Flash ignores low effort and timed out on most titles). Media analysis
+    // runs at low; a plugin may ask for another, and `none` sends none.
+    const asked =
+      envelope.reasoning ??
+      (envelope.plugin === undefined && attachments.length === 0
+        ? lowestReasoning(route.model)
+        : "low");
     const reasoning = asked === "none" ? undefined : asked;
     // pi's API adapters read the prompt only from the transcript's leading
     // system message; a raw `systemPrompt` field is ignored.

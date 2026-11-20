@@ -390,7 +390,9 @@ export function SpacePanelMenu({
               <span>Edit Space…</span>
             </MenuItem>
           )}
-          <MenuItem onClick={() => void copyThreadUrl(space.threadId)}>
+          <MenuItem
+            onClick={() => void copyThreadUrl(space.threadId, "Space URL")}
+          >
             <Link2 />
             <span>Copy Space URL</span>
           </MenuItem>

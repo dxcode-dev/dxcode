@@ -16,19 +16,17 @@ import {
   Trash2,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import * as React from "react";
 import { copyThreadId, copyThreadUrl } from "../../shared/thread-copy.js";
 import { useOptionalThreadEditing } from "../../shared/thread-editing.js";
 import type { ThreadSnoozeController } from "../../shared/thread-snooze.js";
 import {
-  ContextMenuRoot,
-  ContextMenuTrigger,
   MenuItem,
   MenuPopup,
   MenuSeparator,
   MenuSubmenuRoot,
   MenuSubmenuTrigger,
 } from "../../shared/ui/menu.js";
+import { RowContextMenu } from "../../shared/ui/row-context-menu.js";
 import { SubthreadIcon } from "../../shared/ui/subthread-icon.js";
 import { ThreadColorSubmenu } from "../../shared/ui/thread-color-submenu.js";
 import { SnoozeMenuItems } from "../../shared/ui/thread-snooze-menu.js";
@@ -285,96 +283,17 @@ function ThreadContextMenuItems({
   );
 }
 
-const menuPopup = (items: ReactNode) => (
-  <MenuPopup
-    sideOffset={0}
-    // Only a keyboard close returns focus to the row; after a click
-    // the row would keep a focus highlight beside the new selection.
-    finalFocus={(closeType) => closeType === "keyboard"}
-  >
-    {items}
-  </MenuPopup>
-);
-
-/** Each row's menu, by the row's trigger element, for the list's one menu. */
-const SharedMenuRows = React.createContext<
-  Map<Element, ThreadContextMenuProps> | undefined
->(undefined);
-
-/**
- * One context menu for every Thread row inside it (#1462). A row registers
- * what its menu offers; right-click or long-press opens the menu for the
- * row under the pointer, so a list of rows mounts one menu, not one each.
- */
-export function SharedThreadContextMenu({
-  children,
-}: {
-  readonly children: ReactNode;
-}) {
-  const [rows] = React.useState(
-    () => new Map<Element, ThreadContextMenuProps>(),
-  );
-  const [active, setActive] = React.useState<ThreadContextMenuProps>();
-  return (
-    <SharedMenuRows.Provider value={rows}>
-      <ContextMenuRoot
-        onOpenChange={(open, details) => {
-          if (!open) return;
-          const target = details.event.target;
-          const row =
-            target instanceof Element
-              ? target.closest(".thread-context-trigger")
-              : null;
-          const menu = row === null ? undefined : rows.get(row);
-          // Outside any row there is nothing to offer.
-          if (menu === undefined) {
-            details.cancel();
-            return;
-          }
-          setActive(menu);
-          menu.onOpenChange?.(true);
-        }}
-      >
-        <ContextMenuTrigger render={<div className="thread-context-scope" />}>
-          {children}
-        </ContextMenuTrigger>
-        {menuPopup(
-          active === undefined ? null : (
-            <ThreadContextMenuItems key={active.thread.id} {...active} />
-          ),
-        )}
-      </ContextMenuRoot>
-    </SharedMenuRows.Provider>
-  );
-}
-
 export function ThreadContextMenu({
   children,
   ...menu
 }: ThreadContextMenuProps & { readonly children: ReactNode }) {
-  const rows = React.useContext(SharedMenuRows);
-  // Inside a shared menu the row only says what its menu offers.
-  if (rows !== undefined)
-    return (
-      <div
-        className="thread-context-trigger"
-        ref={(node) => {
-          if (node === null) return;
-          rows.set(node, menu);
-          return () => {
-            rows.delete(node);
-          };
-        }}
-      >
-        {children}
-      </div>
-    );
   return (
-    <ContextMenuRoot onOpenChange={menu.onOpenChange}>
-      <ContextMenuTrigger render={<div className="thread-context-trigger" />}>
-        {children}
-      </ContextMenuTrigger>
-      {menuPopup(<ThreadContextMenuItems {...menu} />)}
-    </ContextMenuRoot>
+    <RowContextMenu
+      menuKey={menu.thread.id}
+      items={() => <ThreadContextMenuItems {...menu} />}
+      onOpenChange={menu.onOpenChange}
+    >
+      {children}
+    </RowContextMenu>
   );
 }

@@ -67,7 +67,6 @@ export function AutomationMessage({
                   ? "From Settings"
                   : "Scheduled wake-up"}
         </span>
-        {pending ? <small>Steering</small> : null}
       </DisclosureTrigger>
       {open ? (
         <div className="thread-source-body">
@@ -92,11 +91,9 @@ const COMMENTED_MESSAGE =
 export function CommentPromptMessage({
   name,
   text,
-  pending,
 }: {
   readonly name: string;
   readonly text: string;
-  readonly pending: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
   return (
@@ -108,7 +105,6 @@ export function CommentPromptMessage({
       >
         <MessagesSquare strokeWidth={2} />
         <span>{name} asked dx in a comment</span>
-        {pending ? <small>Steering</small> : null}
       </DisclosureTrigger>
       {open ? (
         <div className="thread-source-body">
@@ -128,13 +124,11 @@ export function PluginPostMessage({
   plugin,
   note,
   text,
-  pending,
   sentAt,
 }: {
   readonly plugin: MessagePlugin;
   readonly note: boolean;
   readonly text: string;
-  readonly pending: boolean;
   readonly sentAt?: string;
 }) {
   const kind = note ? "Note" : "Plugin";
@@ -165,9 +159,7 @@ export function PluginPostMessage({
             {plugin.scope === "workspace" ? "Workspace" : "Repository"}
           </span>
         )}
-        {pending ? (
-          <span className="plugin-post-kind">Steering</span>
-        ) : sentAt === undefined ? null : (
+        {sentAt === undefined ? null : (
           <time dateTime={sentAt} title={new Date(sentAt).toLocaleString()}>
             <TimeText text={(now) => conciseAge(sentAt, now)} />
           </time>

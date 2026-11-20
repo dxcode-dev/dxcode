@@ -318,6 +318,12 @@ describe("Agent37 in a person's own workspace", () => {
     });
     expect(ran).toMatchObject({ exitCode: 0, stdout: "user\n" });
     expect(instance.execs.every(({ root }) => !root)).toBe(true);
+    // A command longer than one argument may be, as a Claude Code launch
+    // with its files inline is, still runs.
+    const long = await handle.guest.commands.run(
+      `: ${"x".repeat(200_000)}; whoami`,
+    );
+    expect(long).toMatchObject({ exitCode: 0, stdout: "user\n" });
 
     // Files above the exec request and output caps arrive whole.
     const flue = await handle.sandbox("/home/user/workspace");

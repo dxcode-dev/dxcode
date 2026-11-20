@@ -17,6 +17,11 @@ import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { EXECUTION_ENVIRONMENT_DISPLAY_NAME } from "../../shared/execution-environment-copy.js";
 import { useTimeText } from "../../shared/hooks/use-clock.js";
+import {
+  clearSidebarContextPress,
+  focusSidebarCommandItem,
+  noteSidebarContextPress,
+} from "../../shared/sidebar-command-focus.js";
 import { lazyComponent } from "../../shared/stale-chunk.js";
 import { threadColorAttributes } from "../../shared/thread-color.js";
 import {
@@ -38,11 +43,6 @@ import {
 } from "../../shared/ui/thread-title.js";
 import { isOptimisticThread } from "../threads/thread-mutations.js";
 import { compactAge, exactTime } from "./inbox-time.js";
-import {
-  clearSidebarContextPress,
-  focusSidebarCommandItem,
-  noteSidebarContextPress,
-} from "./sidebar-command-focus.js";
 import { countControlAttributes } from "./sidebar-thread-count.js";
 import { observeTitleOverflow } from "./sidebar-title-overflow.js";
 import { ThreadContextMenu } from "./thread-context-menu.js";

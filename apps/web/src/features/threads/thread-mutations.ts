@@ -1,6 +1,7 @@
 import type {
   InitialThreadMessage,
   ProjectData,
+  SpaceData,
   ThreadData,
   ThreadDetailData,
   ThreadListItem,
@@ -21,10 +22,12 @@ import type {
   UserId,
 } from "@dx/domain";
 import {
+  hashKey,
   type InfiniteData,
   mutationOptions,
   notifyManager,
   type QueryClient,
+  type QueryKey,
 } from "@tanstack/react-query";
 import { DateTime } from "effect";
 import {
@@ -40,8 +43,16 @@ import {
   updateThread,
 } from "../../shared/api/client.js";
 import { seedProjectDetail } from "../projects/project-mutations.js";
+import {
+  invalidateSpaceForThread,
+  spaceKeys,
+} from "../spaces/space-cache-queries.js";
 import { belongsInLoadedList, listOrder } from "./thread-list-order-queries.js";
 import { invalidateThreadQueries, threadKeys } from "./thread-queries.js";
+import {
+  requestedChanges,
+  withChanges,
+} from "./thread-requested-change-queries.js";
 
 type ThreadListData = InfiniteData<ThreadPage, unknown>;
 const optimisticCreation = "__dxOptimisticCreation" as const;
@@ -339,6 +350,20 @@ export const setThreadPinnedMutationOptions = (
         queryKey: threadKeys.lists(userId),
       });
       const now = Date.now();
+      const apply = <Thread extends ThreadData>(thread: Thread): Thread => {
+        const { pinnedAt: _pinnedAt, ...unpinned } = thread;
+        // Pinning wakes a snoozed Thread.
+        return pinned
+          ? {
+              ...withSnooze(thread, null, now),
+              pinnedAt: DateTime.makeUnsafe(now),
+            }
+          : (unpinned as Thread);
+      };
+      const change = requestedChanges(queryClient).request({
+        threadId,
+        apply,
+      });
       queryClient.setQueriesData<ThreadListData>(
         { queryKey: threadKeys.lists(userId) },
         (current) =>
@@ -347,37 +372,33 @@ export const setThreadPinnedMutationOptions = (
             : {
                 ...current,
                 pages: current.pages.map((page) =>
-                  flatMapListedThreads(page, (thread) => {
-                    if (thread.id !== threadId) return [thread];
-                    const { pinnedAt: _pinnedAt, ...unpinned } = thread;
-                    // Pinning wakes a snoozed Thread.
-                    return [
-                      pinned
-                        ? {
-                            ...withSnooze(thread, null, now),
-                            pinnedAt: DateTime.makeUnsafe(now),
-                          }
-                        : unpinned,
-                    ];
-                  }),
+                  flatMapListedThreads(page, (thread) => [
+                    thread.id === threadId ? apply(thread) : thread,
+                  ]),
                 ),
               },
       );
-      return { previousLists };
+      return { previousLists, change };
     },
-    onSuccess: (thread: ThreadData) => {
+    onSuccess: (thread: ThreadData, _variables, context) => {
+      requestedChanges(queryClient).settle(context.change);
+      const pending = requestedChanges(queryClient).pending(thread.id);
       // Pinning wakes a snoozed Thread.
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
-        (detail) => withThreadRow(detail, thread),
+        (detail) => {
+          const next = withThreadRow(detail, thread);
+          return next === undefined ? next : withChanges(next, pending);
+        },
       );
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });
     },
-    onError: (_error, _variables, rollback) => {
-      for (const [queryKey, data] of rollback?.previousLists ?? [])
-        queryClient.setQueryData(queryKey, data);
+    onError: (_error, { threadId }, context) => {
+      requestedChanges(queryClient).drop(context?.change);
+      if (context !== undefined)
+        restoreThread(queryClient, userId, threadId, context.previousLists);
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });
@@ -470,10 +491,15 @@ export const setThreadSnoozedMutationOptions = (
         queryKey: threadKeys.lists(userId),
       });
       const now = Date.now();
+      const apply = <Thread extends ThreadData>(thread: Thread): Thread =>
+        withSnooze(thread, snoozedUntil, now);
+      const change = requestedChanges(queryClient).request({
+        threadId,
+        apply,
+      });
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, threadId),
-        (detail) =>
-          detail === undefined ? detail : withSnooze(detail, snoozedUntil, now),
+        (detail) => (detail === undefined ? detail : apply(detail)),
       );
       queryClient.setQueriesData<ThreadListData>(
         { queryKey: threadKeys.lists(userId) },
@@ -484,34 +510,39 @@ export const setThreadSnoozedMutationOptions = (
                 ...current,
                 pages: current.pages.map((page) =>
                   flatMapListedThreads(page, (thread) => [
-                    thread.id === threadId
-                      ? withSnooze(thread, snoozedUntil, now)
-                      : thread,
+                    thread.id === threadId ? apply(thread) : thread,
                   ]),
                 ),
               },
       );
-      return { previousDetail, previousLists };
+      return { previousDetail, previousLists, change };
     },
-    onSuccess: (thread: ThreadData) => {
+    onSuccess: (thread: ThreadData, _variables, context) => {
+      requestedChanges(queryClient).settle(context.change);
       if (superseded(thread.id)) return;
+      const pending = requestedChanges(queryClient).pending(thread.id);
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
-        (detail) => withThreadRow(detail, thread),
+        (detail) => {
+          const next = withThreadRow(detail, thread);
+          return next === undefined ? next : withChanges(next, pending);
+        },
       );
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });
     },
-    onError: (_error, { threadId }, rollback) => {
+    onError: (_error, { threadId }, context) => {
+      requestedChanges(queryClient).drop(context?.change);
       if (superseded(threadId)) return;
-      if (rollback !== undefined)
-        queryClient.setQueryData(
-          threadKeys.detail(userId, threadId),
-          rollback.previousDetail,
+      if (context !== undefined)
+        restoreThread(
+          queryClient,
+          userId,
+          threadId,
+          context.previousLists,
+          context.previousDetail,
         );
-      for (const [queryKey, data] of rollback?.previousLists ?? [])
-        queryClient.setQueryData(queryKey, data);
       // The rollback can hold an earlier request's optimistic state.
       return Promise.all([
         queryClient.invalidateQueries({
@@ -524,9 +555,19 @@ export const setThreadSnoozedMutationOptions = (
   });
 };
 
+/** A Thread archived or restored, as the server will apply it. */
+const archivedAs =
+  (archived: boolean) =>
+  <Thread extends ThreadData>(thread: Thread): Thread => ({
+    ...thread,
+    lifecycleState: archived ? "archived" : "active",
+    ...(archived ? { pinnedAt: undefined } : {}),
+  });
+
 /**
  * Shows Threads archived or restored in the detail and list caches at once,
- * before the server answers, and returns what they held before.
+ * before the server answers, and returns what they held before with the
+ * change each one requested.
  */
 const showArchived = async (
   queryClient: QueryClient,
@@ -542,6 +583,10 @@ const showArchived = async (
       }),
     ),
     queryClient.cancelQueries({ queryKey: threadKeys.lists(userId) }),
+    queryClient.cancelQueries({
+      queryKey: spaceKeys.joined(userId),
+      exact: true,
+    }),
   ]);
   const previousDetails = threadIds.map((threadId) =>
     queryClient.getQueryData<ThreadDetailData>(
@@ -552,17 +597,11 @@ const showArchived = async (
     queryKey: threadKeys.lists(userId),
   });
   const lifecycleState = archived ? "archived" : "active";
+  const apply = archivedAs(archived);
   for (const threadId of threadIds)
     queryClient.setQueryData<ThreadDetailData>(
       threadKeys.detail(userId, threadId),
-      (detail) =>
-        detail === undefined
-          ? detail
-          : {
-              ...detail,
-              lifecycleState,
-              ...(archived ? { pinnedAt: undefined } : {}),
-            },
+      (detail) => (detail === undefined ? detail : apply(detail)),
     );
   const changing = new Set<ThreadId>(threadIds);
   // Each Thread's row as it will read, from whichever list holds it, so the
@@ -572,13 +611,56 @@ const showArchived = async (
     for (const page of data?.pages ?? [])
       for (const thread of [...page.items, ...(page.children ?? [])])
         if (changing.has(thread.id) && !moved.has(thread.id))
-          moved.set(thread.id, {
-            ...thread,
-            lifecycleState,
-            ...(archived ? { pinnedAt: undefined } : {}),
-          });
+          moved.set(thread.id, apply(thread));
+  // Until the server answers, reads that predate the change show it too.
+  const ledger = requestedChanges(queryClient);
+  // An Undo while no loaded list holds the Thread puts back its last row.
+  for (const threadId of threadIds) {
+    const row = moved.has(threadId) ? undefined : ledger.row(threadId);
+    if (row !== undefined) moved.set(threadId, apply(row));
+  }
+  const changes = new Map(
+    threadIds.map((threadId) => {
+      const row = moved.get(threadId);
+      return [
+        threadId,
+        ledger.request({
+          threadId,
+          lifecycleState,
+          apply,
+          ...(row === undefined ? {} : { row }),
+        }),
+      ] as const;
+    }),
+  );
   // One render for every list: the row never shows in neither section.
   notifyManager.batch(() => {
+    // A Space leaves the Spaces section at once, or returns to it.
+    for (const threadId of threadIds) {
+      const space = queryClient.getQueryData<SpaceData>(
+        spaceKeys.detail(userId, threadId),
+      );
+      if (space !== undefined)
+        queryClient.setQueryData<SpaceData>(
+          spaceKeys.detail(userId, threadId),
+          { ...space, lifecycleState },
+        );
+      queryClient.setQueryData<ReadonlyArray<SpaceData>>(
+        spaceKeys.joined(userId),
+        (spaces) =>
+          spaces === undefined
+            ? spaces
+            : archived
+              ? spaces.filter((joined) => joined.threadId !== threadId)
+              : space === undefined
+                ? spaces
+                : // First until the answer's refetch puts it in order.
+                  [
+                    { ...space, lifecycleState },
+                    ...spaces.filter((joined) => joined.threadId !== threadId),
+                  ],
+      );
+    }
     for (const query of queryClient.getQueryCache().findAll({
       queryKey: threadKeys.lists(userId),
     })) {
@@ -599,13 +681,7 @@ const showArchived = async (
               )
                 return [];
               listed.add(thread.id);
-              return [
-                {
-                  ...thread,
-                  lifecycleState,
-                  ...(archived ? { pinnedAt: undefined } : {}),
-                },
-              ];
+              return [apply(thread)];
             }),
           ),
         };
@@ -619,7 +695,7 @@ const showArchived = async (
       });
     }
   });
-  return { previousDetails, previousLists };
+  return { previousDetails, previousLists, changes };
 };
 
 type ListedThread = ThreadPage["items"][number];
@@ -646,6 +722,111 @@ const insertListed = (
 };
 
 /**
+ * Puts one Thread back as the cache held it before a change the server
+ * refused, with the changes still in flight for it applied. Every other row
+ * stays as it is: restoring whole lists would also undo the archives, pins,
+ * and renames requested since the snapshot.
+ */
+const restoreThread = (
+  queryClient: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+  previousLists: ReadonlyArray<readonly [QueryKey, ThreadListData | undefined]>,
+  previousDetail?: ThreadDetailData,
+) => {
+  const pending = requestedChanges(queryClient).pending(threadId);
+  if (previousDetail !== undefined)
+    queryClient.setQueryData(
+      threadKeys.detail(userId, threadId),
+      withChanges(previousDetail, pending),
+    );
+  const before = new Map(
+    previousLists.map(([queryKey, data]) => [hashKey(queryKey), data]),
+  );
+  notifyManager.batch(() => {
+    for (const query of queryClient.getQueryCache().findAll({
+      queryKey: threadKeys.lists(userId),
+    })) {
+      if (!before.has(query.queryHash)) continue;
+      const previous = before.get(query.queryHash);
+      const listLifecycle = (
+        query.queryKey[3] as { readonly lifecycleState?: string | null }
+      )?.lifecycleState;
+      queryClient.setQueryData<ThreadListData>(query.queryKey, (current) => {
+        if (current === undefined) return current;
+        let next: ThreadListData = {
+          ...current,
+          pages: current.pages.map((page) =>
+            flatMapListedThreads(page, (thread) =>
+              thread.id === threadId ? [] : [thread],
+            ),
+          ),
+        };
+        for (const [index, page] of (previous?.pages ?? []).entries()) {
+          const asRoot = page.items.find(({ id }) => id === threadId);
+          const asChild = page.children?.find(({ id }) => id === threadId);
+          const row = asRoot ?? asChild;
+          if (row === undefined) continue;
+          const restored = withChanges(row, pending);
+          if (
+            listLifecycle != null &&
+            listLifecycle !== restored.lifecycleState
+          )
+            break;
+          if (asRoot !== undefined) next = insertListed(next, restored);
+          else
+            next = {
+              ...next,
+              pages: next.pages.map((nextPage, at) =>
+                at === index
+                  ? {
+                      ...nextPage,
+                      children: [...(nextPage.children ?? []), restored],
+                    }
+                  : nextPage,
+              ),
+            };
+          break;
+        }
+        return next;
+      });
+    }
+  });
+};
+
+/**
+ * Each Thread's archive and restore requests, chained in the order they
+ * were chosen, so Undo works while the archive is still in flight. Other
+ * Threads' requests run alongside: archiving five Threads in a row must not
+ * wait for each Orb to stop before the next request leaves (a reload in
+ * that wait would lose the archives not yet sent).
+ */
+const threadRequests = new WeakMap<
+  QueryClient,
+  Map<ThreadId, Promise<unknown>>
+>();
+
+const inThreadOrder = <Result>(
+  queryClient: QueryClient,
+  threadId: ThreadId,
+  run: () => Promise<Result>,
+): Promise<Result> => {
+  let chains = threadRequests.get(queryClient);
+  if (chains === undefined) {
+    chains = new Map();
+    threadRequests.set(queryClient, chains);
+  }
+  const previous = chains.get(threadId) ?? Promise.resolve();
+  const result = previous.then(run, run);
+  const tail = result.catch(() => undefined);
+  chains.set(threadId, tail);
+  void tail.then(() => {
+    if (chains.get(threadId) === tail) chains.delete(threadId);
+  });
+  return result;
+};
+
+/**
  * The server's own reason an archive or restore failed, when it gave one;
  * a lost connection's browser text ("Failed to fetch") is not one (#1771).
  */
@@ -663,9 +844,9 @@ export interface ArchivedThreads {
 
 /**
  * Archives or restores many Threads, such as every Inactive one. They
- * change on the page at once; the requests then run a few at a time, in
- * order with single archives, and the lists refetch once at the end, so a
- * Thread the server refused comes back.
+ * change on the page at once; the requests then run a few at a time, each
+ * in order with that Thread's single archives. A Thread the server refused
+ * comes back, and the lists refetch once at the end.
  */
 export const setThreadsArchivedMutationOptions = (
   queryClient: QueryClient,
@@ -673,7 +854,6 @@ export const setThreadsArchivedMutationOptions = (
 ) =>
   mutationOptions({
     mutationKey: [...threadKeys.all(userId), "archive-many"] as const,
-    scope: { id: "thread-archive" },
     mutationFn: async ({
       threadIds,
       archived,
@@ -686,7 +866,11 @@ export const setThreadsArchivedMutationOptions = (
       for (let at = 0; at < threadIds.length; at += BULK_ARCHIVE_CONCURRENCY) {
         const batch = threadIds.slice(at, at + BULK_ARCHIVE_CONCURRENCY);
         const results = await Promise.allSettled(
-          batch.map((threadId) => setThreadArchived(threadId, archived)),
+          batch.map((threadId) =>
+            inThreadOrder(queryClient, threadId, () =>
+              setThreadArchived(threadId, archived),
+            ),
+          ),
         );
         results.forEach((result, index) => {
           const threadId = batch[index];
@@ -698,6 +882,22 @@ export const setThreadsArchivedMutationOptions = (
     },
     onMutate: ({ threadIds, archived }) =>
       showArchived(queryClient, userId, threadIds, archived),
+    onSuccess: ({ changed, failed }, _variables, context) => {
+      const ledger = requestedChanges(queryClient);
+      for (const threadId of changed)
+        ledger.settle(context.changes.get(threadId));
+      for (const threadId of failed) {
+        ledger.drop(context.changes.get(threadId));
+        restoreThread(queryClient, userId, threadId, context.previousLists);
+      }
+    },
+    onError: (_error, { threadIds }, context) => {
+      if (context === undefined) return;
+      for (const threadId of threadIds) {
+        requestedChanges(queryClient).drop(context.changes.get(threadId));
+        restoreThread(queryClient, userId, threadId, context.previousLists);
+      }
+    },
     onSettled: (_result, _error, { threadIds }) =>
       Promise.all([
         ...threadIds.map((threadId) =>
@@ -728,10 +928,7 @@ export const setThreadArchivedMutationOptions = (
     }) > 1;
   return mutationOptions({
     mutationKey,
-    // Archives and unarchives reach the server in the order they were
-    // chosen, so Undo works while the archive is still in flight.
-    scope: { id: "thread-archive" },
-    mutationFn: async ({
+    mutationFn: ({
       threadId,
       archived,
       children,
@@ -750,37 +947,52 @@ export const setThreadArchivedMutationOptions = (
         | true
         | ReadonlyArray<ThreadId>
         | Promise<ReadonlyArray<ThreadId> | undefined>;
-    }) => setThreadArchived(threadId, archived, await children, reason),
+    }) =>
+      inThreadOrder(queryClient, threadId, async () =>
+        setThreadArchived(threadId, archived, await children, reason),
+      ),
     onMutate: async ({ threadId, archived }) => {
-      const { previousDetails, previousLists } = await showArchived(
+      const { previousDetails, previousLists, changes } = await showArchived(
         queryClient,
         userId,
         [threadId],
         archived,
       );
-      return { previousDetail: previousDetails[0], previousLists };
+      return {
+        previousDetail: previousDetails[0],
+        previousLists,
+        change: changes.get(threadId),
+      };
     },
-    onSuccess: ({ thread }: ArchivedThread) => {
+    onSuccess: ({ thread }: ArchivedThread, _variables, context) => {
+      requestedChanges(queryClient).settle(context.change);
       if (superseded(thread.id)) return;
+      const pending = requestedChanges(queryClient).pending(thread.id);
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
-        (detail) => (detail === undefined ? detail : { ...detail, ...thread }),
+        (detail) =>
+          detail === undefined
+            ? detail
+            : withChanges({ ...detail, ...thread }, pending),
       );
-      return queryClient.invalidateQueries({
-        queryKey: threadKeys.lists(userId),
-      });
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: threadKeys.lists(userId),
+        }),
+        invalidateSpaceForThread(queryClient, userId, thread.id),
+      ]);
     },
-    onError: (_error, { threadId }, rollback) => {
+    onError: (_error, { threadId }, context) => {
+      requestedChanges(queryClient).drop(context?.change);
       if (superseded(threadId)) return;
-      if (rollback !== undefined) {
-        queryClient.setQueryData(
-          threadKeys.detail(userId, threadId),
-          rollback.previousDetail,
+      if (context !== undefined)
+        restoreThread(
+          queryClient,
+          userId,
+          threadId,
+          context.previousLists,
+          context.previousDetail,
         );
-        for (const [queryKey, data] of rollback.previousLists) {
-          queryClient.setQueryData(queryKey, data);
-        }
-      }
       return Promise.all([
         queryClient.invalidateQueries({
           queryKey: threadKeys.detail(userId, threadId),
@@ -789,6 +1001,7 @@ export const setThreadArchivedMutationOptions = (
         queryClient.invalidateQueries({
           queryKey: threadKeys.lists(userId),
         }),
+        invalidateSpaceForThread(queryClient, userId, threadId),
       ]);
     },
   });
@@ -896,6 +1109,10 @@ export const updateThreadMutationOptions = (
       const previousLists = queryClient.getQueriesData<ThreadListData>({
         queryKey: threadKeys.lists(userId),
       });
+      const change = requestedChanges(queryClient).request({
+        threadId,
+        apply: (thread) => withThreadUpdate(thread, update),
+      });
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, threadId),
         (detail) =>
@@ -917,32 +1134,34 @@ export const updateThreadMutationOptions = (
                 ),
               },
       );
-      return { previousDetail, previousLists };
+      return { previousDetail, previousLists, change };
     },
-    onSuccess: (thread: ThreadData) => {
+    onSuccess: (thread: ThreadData, _variables, context) => {
+      requestedChanges(queryClient).settle(context.change);
+      const pending = requestedChanges(queryClient).pending(thread.id);
       queryClient.setQueryData<ThreadDetailData>(
         threadKeys.detail(userId, thread.id),
         (detail) => {
           if (detail === undefined) return detail;
           // Optional fields the server omitted are cleared, not kept.
           const { color: _color, titlePending: _pending, ...rest } = detail;
-          return { ...rest, ...thread };
+          return withChanges({ ...rest, ...thread }, pending);
         },
       );
       return queryClient.invalidateQueries({
         queryKey: threadKeys.lists(userId),
       });
     },
-    onError: (_error, { threadId }, rollback) => {
-      if (rollback !== undefined) {
-        queryClient.setQueryData(
-          threadKeys.detail(userId, threadId),
-          rollback.previousDetail,
+    onError: (_error, { threadId }, context) => {
+      requestedChanges(queryClient).drop(context?.change);
+      if (context !== undefined)
+        restoreThread(
+          queryClient,
+          userId,
+          threadId,
+          context.previousLists,
+          context.previousDetail,
         );
-        for (const [queryKey, data] of rollback.previousLists) {
-          queryClient.setQueryData(queryKey, data);
-        }
-      }
       // The snapshot may predate an overlapping update that succeeded, so
       // the server, not the rollback, decides what the Thread shows.
       return Promise.all([

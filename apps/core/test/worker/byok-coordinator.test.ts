@@ -2163,7 +2163,7 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
       ...(await state.storage.list()).keys(),
     ]);
 
-  it("completes on the thread's current route at low effort without pinning or attributing", async () => {
+  it("completes on the thread's current route at its lowest effort without pinning or attributing", async () => {
     await seed();
     const before = await storageKeys();
     const calls: {
@@ -2432,7 +2432,7 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
     });
   });
 
-  it("asks Workers AI GLM 4.7 Flash for low thinking", async () => {
+  it("asks Workers AI GLM 4.7 Flash for a title without thinking", async () => {
     await seed();
     const payloads: Record<string, unknown>[] = [];
     const ai = {
@@ -2473,14 +2473,107 @@ describe("ByokCredentialCoordinatorObject /complete", () => {
       });
       expect(ai.run).toHaveBeenCalledOnce();
       expect(ai.run.mock.calls[0]?.[0]).toBe("@cf/zai-org/glm-4.7-flash");
+      // GLM 4.7 Flash ignores reasoning_effort and thought past the timeout.
       expect(payloads[0]).toMatchObject({
-        reasoning_effort: "low",
+        chat_template_kwargs: { enable_thinking: false },
         max_completion_tokens: 2_048,
       });
+      expect(payloads[0]).not.toHaveProperty("reasoning_effort");
       expect(payloads[0]).not.toHaveProperty("tools");
     } finally {
       delete (await coordinatorEnv()).AI;
     }
+  });
+
+  // 2026-11-20: titles went to the owner's low mode, whose
+  // GLM 4.7 Flash timed out on every one, and Threads kept their fallback.
+  describe("DxTitleAgent on the Thread's own model", () => {
+    const coordinatorEnv = () =>
+      runInDurableObject(
+        stub(),
+        (instance) =>
+          (instance as unknown as { env: Record<string, unknown> }).env,
+      );
+    const titleRow = () =>
+      env.DB.prepare(
+        "SELECT title, title_pending_until FROM threads WHERE id = ?",
+      )
+        .bind(THREAD)
+        .first<{ title: string; title_pending_until: string | null }>();
+    const titleThread = async (answers: string[]) => {
+      await seed();
+      await env.DB.prepare(
+        "UPDATE threads SET title_pending_until = ? WHERE id = ?",
+      )
+        .bind(new Date(Date.now() + 40_000).toISOString(), THREAD)
+        .run();
+      const bodies: Record<string, unknown>[] = [];
+      const upstream = vi.fn(async (request: Request) => {
+        bodies.push((await request.json()) as Record<string, unknown>);
+        return astraAnswer(answers.shift() ?? "");
+      });
+      stubFetch(upstream);
+      // The owner's low mode would run on Workers AI GLM 4.7 Flash.
+      const ai = { run: vi.fn(async () => astraAnswer("Low mode title")) };
+      (await coordinatorEnv()).AI = ai;
+      try {
+        await runDxTitleAgent(env as never, {
+          threadId: THREAD as never,
+          ownerUserId: OWNER as never,
+          selection: {
+            kind: "model",
+            model: "openai/gpt-6-astra" as never,
+          },
+          message: "Fix OAuth callback retries when refresh tokens expire",
+          persisted: Promise.resolve(true),
+        });
+      } finally {
+        delete (await coordinatorEnv()).AI;
+      }
+      return { upstream, ai, bodies };
+    };
+    const astraAnswer = (text: string) =>
+      new Response(
+        `data: ${JSON.stringify({
+          id: "chat-title",
+          object: "chat.completion.chunk",
+          created: 0,
+          model: "astra-litellm",
+          choices: [
+            {
+              index: 0,
+              delta: { role: "assistant", content: text },
+              finish_reason: "stop",
+            },
+          ],
+        })}\n\ndata: [DONE]\n\n`,
+        { headers: { "content-type": "text/event-stream" } },
+      );
+
+    it("titles the Thread with its own model, never the owner's low mode", async () => {
+      const { upstream, ai } = await titleThread(["OAuth refresh retries"]);
+
+      expect(ai.run).not.toHaveBeenCalled();
+      expect(upstream).toHaveBeenCalledOnce();
+      expect(await titleRow()).toEqual({
+        title: "OAuth refresh retries",
+        title_pending_until: null,
+      });
+    });
+
+    it("asks the Thread's own model once more after an unusable answer", async () => {
+      const { upstream, ai } = await titleThread([
+        "I cannot title this message for you",
+        "OAuth refresh retries",
+      ]);
+
+      expect(ai.run).not.toHaveBeenCalled();
+      expect(upstream).toHaveBeenCalledTimes(2);
+      expect(await titleRow()).toEqual({
+        title: "OAuth refresh retries",
+        title_pending_until: null,
+      });
+    });
   });
 
   it("reports a classified upstream failure without retrying", async () => {

@@ -5,7 +5,7 @@ import type {
   ThreadDetailData,
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
   Navigate,
   useLocation,
@@ -24,9 +24,8 @@ import type { DictationSlot } from "../../shared/dictation/dictation-slot.js";
 import { useOptionalThreadArchive } from "../../shared/thread-archive.js";
 import type { ThreadAutomationsSlot } from "../../shared/thread-automations-slot.js";
 import { Button } from "../../shared/ui/button.js";
-import { ConfirmDialog } from "../../shared/ui/confirm-dialog.js";
 import { DrawerContent, DrawerRoot } from "../../shared/ui/drawer.js";
-import { deleteThreadMutationOptions } from "../threads/thread-mutations.js";
+import { DeleteSpaceDialog } from "./delete-space-dialog.js";
 import { EditSpaceDialog } from "./edit-space-dialog.js";
 import { SpacePostFilesContext } from "./posts/space-post-files-context.js";
 import { SPACE_ARTIFACT_SHEET } from "./space-artifact.js";
@@ -143,56 +142,6 @@ const useSpaceArtifactRequested = () =>
       typeof location.search?.artifact === "string",
   });
 
-/** Deletes the Space after asking; its page goes home once it is gone. */
-function DeleteSpaceDialog({
-  space,
-  onClose,
-}: {
-  readonly space: SpaceData;
-  readonly onClose: () => void;
-}) {
-  const { identity } = useAuthenticatedIdentity();
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const remove = useMutation(
-    deleteThreadMutationOptions(queryClient, identity.id),
-  );
-  return (
-    <ConfirmDialog
-      open
-      onOpenChange={(open) => (open ? undefined : onClose())}
-      title="Delete Space?"
-      description={
-        <>
-          &ldquo;{space.name}&rdquo; and its chat will be permanently deleted.
-          The threads it started stay in your sidebar.
-        </>
-      }
-      error={
-        remove.error === null
-          ? undefined
-          : remove.error instanceof Error && remove.error.message !== ""
-            ? remove.error.message
-            : "The Space could not be deleted."
-      }
-      confirmLabel={remove.isPending ? "Deleting…" : "Delete"}
-      destructive
-      pending={remove.isPending}
-      onConfirm={() =>
-        remove.mutate(
-          { threadId: space.threadId },
-          {
-            onSuccess: () => {
-              onClose();
-              void navigate({ to: "/" });
-            },
-          },
-        )
-      }
-    />
-  );
-}
-
 /**
  * Opens a link to one of the Space's threads in a tab instead of leaving
  * the Space, for links anywhere in the chat or an open thread.
@@ -258,6 +207,7 @@ function SpacePage({
   const [sheetOpen, setSheetOpen] = React.useState(false);
   const [dialog, setDialog] = React.useState<SpaceDialog>();
   const archive = useOptionalThreadArchive();
+  const navigate = useNavigate();
   const { Chips } = React.use(SpaceAutomationsContext);
   const open = useOpenSpaceThread();
   const close = useCloseSpaceThread();
@@ -461,7 +411,11 @@ function SpacePage({
         />
       ) : null}
       {dialog === "delete" ? (
-        <DeleteSpaceDialog space={space} onClose={() => setDialog(undefined)} />
+        <DeleteSpaceDialog
+          space={space}
+          onClose={() => setDialog(undefined)}
+          onDeleted={() => void navigate({ to: "/" })}
+        />
       ) : null}
     </div>
   );

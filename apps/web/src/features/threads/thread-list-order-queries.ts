@@ -35,15 +35,8 @@ interface ListFilters {
   readonly tree: string | null;
 }
 
-/**
- * The list's filters admit the row, and its loaded pages reach the row's
- * place: the list should show the row, so a list without it is stale.
- */
-export const belongsInLoadedList = (
-  queryKey: readonly unknown[],
-  data: ListData,
-  row: Row,
-) => {
+/** The list's filters admit the row: its Project, lifecycle, and tree. */
+export const listAdmits = (queryKey: readonly unknown[], row: Row) => {
   const filters = queryKey[3] as ListFilters | undefined;
   if (filters === undefined) return false;
   if (filters.projectId !== null && filters.projectId !== row.projectId)
@@ -55,12 +48,23 @@ export const belongsInLoadedList = (
     return false;
   if (filters.tree === "roots" && row.parentThreadId !== undefined)
     return false;
-  if (
-    filters.tree !== null &&
-    filters.tree !== "roots" &&
-    filters.tree !== row.parentThreadId
-  )
-    return false;
+  return (
+    filters.tree === null ||
+    filters.tree === "roots" ||
+    filters.tree === row.parentThreadId
+  );
+};
+
+/**
+ * The list's filters admit the row, and its loaded pages reach the row's
+ * place: the list should show the row, so a list without it is stale.
+ */
+export const belongsInLoadedList = (
+  queryKey: readonly unknown[],
+  data: ListData,
+  row: Row,
+) => {
+  if (!listAdmits(queryKey, row)) return false;
   const lastPage = data.pages.at(-1);
   if (lastPage?.nextCursor === undefined) return true;
   const last = lastPage.items.at(-1);

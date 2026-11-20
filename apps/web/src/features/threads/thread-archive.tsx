@@ -1,3 +1,4 @@
+import type { SpaceData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Archive, ArchiveRestore } from "lucide-react";
@@ -9,6 +10,7 @@ import {
   ThreadArchiveContext,
   type ThreadArchiveController,
 } from "../../shared/thread-archive.js";
+import { spaceKeys } from "../spaces/space-cache-queries.js";
 import {
   archiveFailureReason,
   setThreadArchivedMutationOptions,
@@ -73,17 +75,21 @@ export function ThreadArchiveProvider({
   ) => {
     const includeChildren = children !== undefined;
     let undone = false;
+    // A Space says so; its page has its Thread cached, and the sidebar
+    // lists it among the Spaces until this archive takes it out.
+    const space =
+      queryClient.getQueryData<{ readonly kind?: string }>(
+        threadKeys.detail(identity.id, threadId),
+      )?.kind === "space" ||
+      queryClient
+        .getQueryData<ReadonlyArray<SpaceData>>(spaceKeys.joined(identity.id))
+        ?.some((listed) => listed.threadId === threadId) === true;
     const request = mutateAsync({
       threadId,
       archived,
       ...(children === undefined ? {} : { children }),
       ...(reason === undefined ? {} : { reason }),
     });
-    // A Space says so; its page has its Thread cached.
-    const space =
-      queryClient.getQueryData<{ readonly kind?: string }>(
-        threadKeys.detail(identity.id, threadId),
-      )?.kind === "space";
     // Every call names each option, because a toast updated in place
     // keeps any option the new one leaves out.
     const notify = (description: string | undefined) =>

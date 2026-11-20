@@ -20,6 +20,7 @@ import {
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
+import { SharedRowContextMenu } from "../../shared/ui/row-context-menu.js";
 import { mailboxQueryOptions } from "../mailbox/mailbox-queries.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import { SidebarAccountMenu } from "./sidebar-account-menu.js";
@@ -37,7 +38,6 @@ import {
   nextSnoozeWake,
   withPendingThreads,
 } from "./sidebar-thread-utils.js";
-import { SharedThreadContextMenu } from "./thread-context-menu.js";
 import {
   ThreadHoverPreview,
   type ThreadPreviewAnchor,
@@ -424,7 +424,7 @@ function AppSidebarContent({
       </div>
 
       {/* The rows share one context menu instead of one each (#1462). */}
-      <SharedThreadContextMenu>
+      <SharedRowContextMenu>
         <SidebarThreadNavigation
           leadingContent={spacesSection}
           archiveContent={
@@ -472,7 +472,7 @@ function AppSidebarContent({
           archivingThreadId={archive.pendingThreadId}
           pinningThreadId={pinningThreadId}
         />
-      </SharedThreadContextMenu>
+      </SharedRowContextMenu>
 
       {extensionRegion}
 

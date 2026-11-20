@@ -513,9 +513,6 @@
 .thread-privacy-badge[data-privacy="workspace"] {
   color: var(--foreground);
 }
-.thread-title-bar .thread-access-chip {
-  margin: 0 var(--space-1);
-}
 .thread-title-bar button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.55;
@@ -1244,19 +1241,6 @@
   margin-bottom: var(--space-2);
   padding: var(--space-1) 0;
 }
-/* A prompt waiting while the agent finishes earlier work; the chip matches
-   a waiting message from another Thread. */
-.user-message > .message-steering {
-  display: block;
-  width: fit-content;
-  margin: var(--space-1) 0 0 auto;
-  padding: 0 5px;
-  border-radius: var(--radius-xs);
-  color: var(--muted-foreground);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-  font-size: var(--text-xs);
-  line-height: var(--leading-4);
-}
 .agent-message .message-content {
   padding: var(--space-1) 0;
 }
@@ -1265,14 +1249,6 @@
 .thread-source-row {
   margin-bottom: var(--space-2);
   padding: var(--space-1) 0;
-}
-.thread-source-toggle > small {
-  flex: none;
-  padding: 0 5px;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--foreground) 6%, transparent);
-  font-size: var(--text-xs);
-  line-height: var(--leading-4);
 }
 .thread-source-body {
   max-height: 320px;

@@ -389,7 +389,7 @@ export function ThreadHeader({
           </TitleBarItemSlot>
         ) : (
           <span
-            className="thread-access-chip"
+            className="thread-privacy-badge thread-access-chip"
             data-access={thread.access}
             title={
               thread.access === "view"
@@ -397,7 +397,11 @@ export function ThreadHeader({
                 : `Shared by ${ownerName ?? "the owner"}: messages run as them`
             }
           >
-            {thread.access === "view" ? <Eye /> : <UsersRound />}
+            {thread.access === "view" ? (
+              <Eye aria-hidden="true" />
+            ) : (
+              <UsersRound aria-hidden="true" />
+            )}
             {compact
               ? null
               : thread.access === "view"

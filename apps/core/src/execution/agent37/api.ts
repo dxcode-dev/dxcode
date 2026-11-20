@@ -18,6 +18,12 @@ const REGISTER_TIMEOUT_MS = 600_000;
  * `504 try_again` and kills the command; dx's own limit ends it first.
  */
 export const MAX_COMMAND_SECONDS = 840;
+/**
+ * Agent37 runs a command of up to its 1 MB request cap, but a program dx
+ * starts refuses any one argument of 128 KiB or more ("Argument list too
+ * long"): a longer script runs from a file instead (`throughFile`).
+ */
+const ARGUMENT_BYTES = 120 * 1024;
 /** Exec calls Agent37 says are safe to send again (`name` dedupes them). */
 const EXEC_RETRIES = 4;
 const EXEC_RETRY_MS = 2_000;
@@ -244,7 +250,9 @@ export const agent37Api = (
       // `timeout` ends the command at dx's limit (exit 124), so it never
       // outlives the call that waits for it.
       const body = JSON.stringify({
-        command: `exec timeout -k 5 ${seconds} sh -c ${quote(command)}`,
+        command: fitsArgument(command)
+          ? `exec timeout -k 5 ${seconds} sh -c ${quote(command)}`
+          : throughFile(command, `exec timeout -k 5 ${seconds} sh "$f"`),
         ...(options.root === true ? { user: "root" } : {}),
         // The same name makes a resent call return the first run's result.
         name: `dx-${crypto.randomUUID()}`,
@@ -318,3 +326,22 @@ export const agent37Api = (
 };
 
 export const quote = (value: string) => `'${value.replaceAll("'", `'\\''`)}'`;
+
+/** Whether `script` can be passed to a program as one argument. */
+export const fitsArgument = (script: string) =>
+  new TextEncoder().encode(script).length < ARGUMENT_BYTES;
+
+/**
+ * Shell that writes `script` to a private temporary file, through a heredoc
+ * the shell reads itself, then runs `run`, which names the file `$f`. The
+ * script deletes its file as it starts.
+ */
+export const throughFile = (script: string, run: string) => {
+  const end = `DX_SCRIPT_${crypto.randomUUID().replaceAll("-", "")}`;
+  return `f=$(mktemp /tmp/dx-exec-XXXXXXXX) || exit 125
+cat >"$f" <<'${end}' || { rm -f -- "$f"; exit 125; }
+rm -f -- "$0"
+${script}
+${end}
+${run}`;
+};

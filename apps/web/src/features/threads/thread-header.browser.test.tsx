@@ -209,6 +209,57 @@ describe("ThreadHeader", () => {
     );
   });
 
+  // Failure list: the member's chip loses its badge look; its icon stacks
+  // over its label; it is taller or shorter than the owner's badge; the
+  // label wraps or elides.
+  it.each([
+    ["contribute", "Contributor"],
+    ["view", "View only"],
+  ] as const)(
+    "shows a %s member's access on one row, like the owner's privacy badge",
+    async (access, text) => {
+      const shared = {
+        ...thread,
+        visibility: "workspace",
+        sharing: { workspaceAccess: access },
+      } as ThreadDetailData;
+      const bar = async (detail: ThreadDetailData) => {
+        const container = await render(<ThreadHeader thread={detail} />);
+        container.style.width = "1280px";
+        return container;
+      };
+      const owner = await bar(shared);
+      const member = await bar({ ...shared, access });
+
+      const badge = owner.querySelector<HTMLElement>(".thread-privacy-badge");
+      const chip = member.querySelector<HTMLElement>(".thread-access-chip");
+      const badgeIcon = badge?.querySelector("svg");
+      const chipIcon = chip?.querySelector("svg");
+      const label = chip?.lastChild;
+      if (!badge || !chip || !badgeIcon || !chipIcon || !label)
+        throw new Error("The owner's badge or the member's chip is missing");
+      expect(chip.textContent).toBe(text);
+      const icon = chipIcon.getBoundingClientRect();
+      const words = document.createRange();
+      words.selectNodeContents(label);
+      const line = words.getBoundingClientRect();
+      // One row: the label is one line, beside the icon, not under it.
+      expect(words.getClientRects()).toHaveLength(1);
+      expect(icon.right).toBeLessThanOrEqual(line.left);
+      expect(
+        Math.abs(icon.top + icon.height / 2 - (line.top + line.height / 2)),
+      ).toBeLessThan(2);
+      // The same badge the owner sees.
+      expect(chip.getBoundingClientRect().height).toBe(
+        badge.getBoundingClientRect().height,
+      );
+      expect(getComputedStyle(chip).backgroundColor).toBe(
+        getComputedStyle(badge).backgroundColor,
+      );
+      expect(icon.width).toBe(badgeIcon.getBoundingClientRect().width);
+    },
+  );
+
   describe("compact overflow", () => {
     // Failure list: the bar overflows its box; a control hides although it
     // fits; a hidden control is missing from More Actions, or a shown one is

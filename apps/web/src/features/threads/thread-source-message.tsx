@@ -121,7 +121,6 @@ function CollapsedThreadMessage({
       >
         <SubthreadIcon strokeWidth={2} />
         <span>Message from {name}</span>
-        {pending ? <small>Steering</small> : null}
       </DisclosureTrigger>
       {open ? (
         <div className="thread-source-body">

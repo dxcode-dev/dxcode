@@ -6,7 +6,7 @@ import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { userEvent } from "vitest/browser";
-import { focusSidebarCommandItem } from "../../features/navigation/sidebar-command-focus.js";
+import { focusSidebarCommandItem } from "../sidebar-command-focus.js";
 import { CommandProvider } from "./command-provider.js";
 import { createCommandRegistry } from "./command-registry.js";
 

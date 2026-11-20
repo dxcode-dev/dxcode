@@ -10,7 +10,10 @@
 // checked once edited; the Project search cannot pick; the new Space never
 // lists in the sidebar; Discover lists nothing, shows no empty state, or
 // Join neither joins nor opens the Space; a Space without a workspace offers
-// workspace sharing.
+// workspace sharing; right-click, M, or a long press on a Space row opens
+// no menu, opens the Space as well, or offers the owner's actions to a
+// member; Edit Space…, Archive Space, Delete Space…, or Leave Space sends
+// nothing or leaves the Space listed.
 //
 // Screenshots land in apps/web/.cache/spaces-ui/ (ignored by Git).
 
@@ -114,6 +117,10 @@ const fakeServer = () => {
     ],
     created: [] as unknown[],
     joins: [] as string[],
+    leaves: [] as string[],
+    archives: [] as Array<{ threadId: string; archived: boolean }>,
+    deletes: [] as string[],
+    updates: [] as Array<{ threadId: string; body: unknown }>,
     /** Every path the app requested. */
     requests: [] as string[],
     suggestions: [
@@ -192,6 +199,66 @@ const fakeServer = () => {
       const joined = { ...found, joined: true };
       state.joined.push(joined);
       return ok({ space: joined });
+    }
+    const leave = /^\/v1\/spaces\/([^/]+)\/leave$/u.exec(path);
+    if (leave !== null && method === "POST") {
+      const found = state.joined.find(({ threadId }) => threadId === leave[1]);
+      if (found === undefined) return new Response(null, { status: 404 });
+      state.leaves.push(found.threadId);
+      state.joined = state.joined.filter((item) => item !== found);
+      return ok({ space: { ...found, joined: false } });
+    }
+    const update = /^\/v1\/spaces\/([^/]+)$/u.exec(path);
+    if (update !== null && method === "PATCH") {
+      const index = state.joined.findIndex(
+        ({ threadId }) => threadId === update[1],
+      );
+      const found = state.joined[index];
+      if (found === undefined) return new Response(null, { status: 404 });
+      const body = JSON.parse(String(init?.body)) as Partial<SpaceData>;
+      state.updates.push({ threadId: found.threadId, body });
+      const updated = { ...found, ...body };
+      state.joined[index] = updated;
+      return ok({ space: updated });
+    }
+    const archive = /^\/v1\/threads\/([^/]+)\/archive$/u.exec(path);
+    if (archive !== null && method === "PATCH") {
+      const found = state.joined.find(
+        ({ threadId }) => threadId === archive[1],
+      );
+      if (found === undefined) return new Response(null, { status: 404 });
+      const { archived } = JSON.parse(String(init?.body)) as {
+        archived: boolean;
+      };
+      state.archives.push({ threadId: found.threadId, archived });
+      if (archived)
+        state.joined = state.joined.filter((item) => item !== found);
+      return ok({
+        id: found.threadId,
+        kind: "space",
+        title: found.name,
+        projectId: found.projectId,
+        visibility: "private",
+        createdAt: now,
+        updatedAt: now,
+        lastActivityAt: now,
+        activityStatus: "idle",
+        lifecycleState: archived ? "archived" : "active",
+        agentUrl: `/v1/agents/dx/${found.threadId}`,
+        mode: "high",
+      });
+    }
+    const remove = /^\/v1\/threads\/([^/?]+)$/u.exec(path);
+    if (remove !== null && method === "DELETE") {
+      state.deletes.push(remove[1] ?? "");
+      state.joined = state.joined.filter(
+        ({ threadId }) => threadId !== remove[1],
+      );
+      return ok({
+        threadId: remove[1],
+        deletedAt: now,
+        cleanup: "complete",
+      });
     }
     return new Promise<Response>(() => {});
   });
@@ -939,4 +1006,208 @@ it("lists Spaces below the pinned Threads and above the rest, on a computer and 
   expect
     .soft(sidebarOrder())
     .toEqual(["pinned", "spaces", projects[0]?.id, "snoozed", "archived"]);
+});
+
+const OWN_SPACE = "thr_00000000-0000-4000-8000-0000000000c3" as ThreadId;
+/** A Space the person owns and one a teammate shares that they joined. */
+const seedOwnAndJoined = (server: ReturnType<typeof fakeServer>) => {
+  server.joined = [
+    space(OWN_SPACE, { name: "dx management" }),
+    space(TEAM_SPACE, {
+      name: "Payments",
+      color: "blue",
+      ownerUserId: "usr_teammate" as UserId,
+      members: [
+        { userId: "usr_teammate" as UserId, name: "Ben" },
+        { userId, name: "Ada Owner" },
+      ],
+      access: "contribute",
+    }),
+  ];
+};
+const spaceRow = (threadId: ThreadId) =>
+  section()?.querySelector<HTMLAnchorElement>(
+    `a.thread-row[href='/threads/${threadId}']`,
+  ) ?? null;
+const openMenu = () => document.querySelector<HTMLElement>(".dx-menu");
+/** The open menu's top-level items, as they read. */
+const menuItems = () =>
+  [
+    ...(openMenu()?.querySelectorAll<HTMLElement>(
+      ":scope .dx-menu-item, :scope [role='menuitem']",
+    ) ?? []),
+  ]
+    .map((item) => item.textContent?.trim())
+    .filter((text, index, all) => all.indexOf(text) === index);
+const menuItem = (label: string) => {
+  const found = [
+    ...document.querySelectorAll<HTMLElement>(".dx-menu [role='menuitem']"),
+  ].find((item) => item.textContent?.trim() === label);
+  if (found === undefined) throw new Error(`Expected the ${label} item.`);
+  return found;
+};
+const rightClick = (element: Element) =>
+  React.act(() => {
+    const box = element.getBoundingClientRect();
+    element.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        button: 2,
+        clientX: box.left + 20,
+        clientY: box.top + box.height / 2,
+      }),
+    );
+  });
+const closeMenu = async () => {
+  await userEvent.keyboard("{Escape}");
+  await until(() => openMenu() === null);
+};
+
+it("opens a Space row's menu on right-click with the owner's actions, and a member's with Leave", async () => {
+  const { router } = await mount(true, 1440, 900, seedOwnAndJoined);
+  await until(() => spaceRows().length === 2);
+
+  const own = spaceRow(OWN_SPACE) as HTMLAnchorElement;
+  await rightClick(own);
+  await until(() => openMenu() !== null);
+  await shot("space-menu-owner-1440");
+  expect(menuItems()).toEqual([
+    "Edit Space…",
+    "Archive Space",
+    "Delete Space…",
+    "Copy",
+  ]);
+  // Opening the menu does not open the Space.
+  expect(router.state.location.pathname).toBe("/");
+  await closeMenu();
+
+  await rightClick(spaceRow(TEAM_SPACE) as HTMLAnchorElement);
+  await until(() => openMenu() !== null);
+  await shot("space-menu-member-1440");
+  expect(menuItems()).toEqual(["Leave Space", "Copy"]);
+  await closeMenu();
+  expect(router.state.location.pathname).toBe("/");
+});
+
+it("opens a focused Space row's menu with M, and on a phone with a long press that does not open the Space", async () => {
+  await mount(true, 1440, 900, seedOwnAndJoined);
+  await until(() => spaceRows().length === 2);
+  const own = spaceRow(OWN_SPACE) as HTMLAnchorElement;
+  await React.act(() => own.focus());
+  expect(own.dataset.commandFocused).toBe("true");
+  await userEvent.keyboard("m");
+  await until(() => openMenu() !== null);
+  expect(menuItems()).toContain("Edit Space…");
+  await closeMenu();
+
+  await React.act(() => root?.unmount());
+  root = undefined;
+  document.body.replaceChildren();
+  vi.unstubAllGlobals();
+  viewport.mobile = true;
+  const phone = await mount(true, 390, 844, seedOwnAndJoined);
+  await userEvent.click(
+    document.querySelector<HTMLButtonElement>(
+      "button[aria-label='Open sidebar'], button[aria-label='Show sidebar']",
+    ) as HTMLButtonElement,
+  );
+  await until(() => spaceRow(OWN_SPACE) !== null);
+  const row = spaceRow(OWN_SPACE) as HTMLAnchorElement;
+  const box = row.getBoundingClientRect();
+  const touch = (type: string) => {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", {
+      value:
+        type === "touchend"
+          ? []
+          : [{ clientX: box.left + 20, clientY: box.top + box.height / 2 }],
+    });
+    return event;
+  };
+  await React.act(() => row.dispatchEvent(touch("touchstart")));
+  await settle(700);
+  await until(() => openMenu() !== null);
+  await React.act(() => row.dispatchEvent(touch("touchend")));
+  // The finger lifting clicks the row; it must not open the Space.
+  await React.act(() => row.click());
+  await shot("space-menu-owner-390");
+  expect(menuItems()).toEqual([
+    "Edit Space…",
+    "Archive Space",
+    "Delete Space…",
+    "Copy",
+  ]);
+  expect(phone.router.state.location.pathname).toBe("/");
+});
+
+it("edits, archives, and deletes an owned Space and leaves a joined one from its row's menu", async () => {
+  const { server } = await mount(true, 1440, 900, seedOwnAndJoined);
+  await until(() => spaceRows().length === 2);
+
+  // Edit Space… opens the Space's own dialog and saves the new name.
+  await rightClick(spaceRow(OWN_SPACE) as HTMLAnchorElement);
+  await until(() => openMenu() !== null);
+  await userEvent.click(menuItem("Edit Space…"));
+  await until(() => document.querySelector("[role='dialog']") !== null);
+  const dialog = document.querySelector<HTMLElement>("[role='dialog']");
+  await shot("space-menu-edit-1440");
+  const name = dialog?.querySelector<HTMLInputElement>(
+    "input[id$='-name']",
+  ) as HTMLInputElement;
+  expect(name.value).toBe("dx management");
+  await userEvent.clear(name);
+  await userEvent.type(name, "dx ops");
+  await userEvent.click(button(dialog, "SaveEnter"));
+  await until(() => server.updates.length === 1);
+  expect(server.updates[0]).toMatchObject({
+    threadId: OWN_SPACE,
+    body: { name: "dx ops" },
+  });
+  await until(() =>
+    spaceRows().some(({ name: listed }) => listed === "dx ops"),
+  );
+
+  // Archive Space archives it and it leaves the section.
+  await rightClick(spaceRow(OWN_SPACE) as HTMLAnchorElement);
+  await until(() => openMenu() !== null);
+  await userEvent.click(menuItem("Archive Space"));
+  await until(() => server.archives.length === 1);
+  expect(server.archives[0]).toEqual({ threadId: OWN_SPACE, archived: true });
+  await until(() => spaceRow(OWN_SPACE) === null);
+
+  // Leave Space leaves the teammate's Space.
+  await rightClick(spaceRow(TEAM_SPACE) as HTMLAnchorElement);
+  await until(() => openMenu() !== null);
+  await userEvent.click(menuItem("Leave Space"));
+  await until(() => server.leaves.length === 1);
+  expect(server.leaves).toEqual([TEAM_SPACE]);
+  await until(() => spaceRows().length === 0);
+});
+
+it("deletes an owned Space from its row's menu after asking", async () => {
+  const { server } = await mount(true, 1440, 900, seedOwnAndJoined);
+  await until(() => spaceRows().length === 2);
+  await rightClick(spaceRow(OWN_SPACE) as HTMLAnchorElement);
+  await until(() => openMenu() !== null);
+  await userEvent.click(menuItem("Delete Space…"));
+  await until(
+    () =>
+      document
+        .querySelector("[role='alertdialog'], [role='dialog']")
+        ?.textContent?.includes("Delete Space?") === true,
+  );
+  await shot("space-menu-delete-1440");
+  // Nothing is deleted until the person confirms.
+  expect(server.deletes).toEqual([]);
+  await userEvent.click(
+    button(
+      document.querySelector("[role='alertdialog'], [role='dialog']"),
+      "Delete",
+    ),
+  );
+  await until(() => server.deletes.length === 1);
+  expect(server.deletes).toEqual([OWN_SPACE]);
+  await until(() => spaceRow(OWN_SPACE) === null);
+  expect(spaceRow(TEAM_SPACE)).not.toBeNull();
 });

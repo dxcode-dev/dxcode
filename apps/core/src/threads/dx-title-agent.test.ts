@@ -64,7 +64,7 @@ describe("DxTitleAgent", () => {
     expect(sanitizeGeneratedTitle("x".repeat(81))).toBeUndefined();
   });
 
-  it("asks the owner's fast low mode for a title, not the Thread's model", async () => {
+  it("asks the Thread's own model for a title, never the owner's low mode", async () => {
     const { bindings, fetch, prepare, bind } = fakeBindings(
       Response.json({ text: "OAuth refresh retries" }),
     );
@@ -77,7 +77,7 @@ describe("DxTitleAgent", () => {
     expect(JSON.parse(String(init?.body))).toMatchObject({
       threadId: job.threadId,
       ownerUserId: job.ownerUserId,
-      selection: { kind: "mode", profileId: "default", mode: "low" },
+      selection: job.selection,
       message: `<user_message>\n${job.message}\n</user_message>`,
     });
     expect(prepare).toHaveBeenCalledOnce();
@@ -109,7 +109,7 @@ describe("DxTitleAgent", () => {
     expect(bind).toHaveBeenLastCalledWith(job.threadId);
   });
 
-  it("falls back to the Thread's own model when the low mode cannot serve", async () => {
+  it("asks the Thread's own model once more after a failed answer", async () => {
     const { bindings, fetch, bind } = fakeBindings([
       Response.json({ code: "MODEL_NOT_SERVED" }, { status: 400 }),
       Response.json({ text: "OAuth refresh retries" }),
@@ -121,10 +121,7 @@ describe("DxTitleAgent", () => {
       fetch.mock.calls.map(
         ([, init]) => JSON.parse(String(init?.body)).selection,
       ),
-    ).toEqual([
-      { kind: "mode", profileId: "default", mode: "low" },
-      job.selection,
-    ]);
+    ).toEqual([job.selection, job.selection]);
     expect(bind).toHaveBeenCalledWith("OAuth refresh retries", job.threadId);
   });
 

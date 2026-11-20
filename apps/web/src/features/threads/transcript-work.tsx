@@ -55,9 +55,12 @@ function TranscriptTurnContent({
     defaultWorkExpanded,
   );
   const prompt = rows.filter((row) => row.kind === "user-prompt");
-  const final = rows.filter((row) => row.id === turn.finalAnswerRowId);
-  const attachments = rows.filter((row) => row.kind === "attachment");
   const intermediateIds = new Set(turn.intermediateRowIds);
+  // The answer: the last reply, and any it follows that came after the work.
+  const final = rows.filter(
+    (row) => !intermediateIds.has(row.id) && row.kind !== "user-prompt",
+  );
+  const attachments = rows.filter((row) => row.kind === "attachment");
   const intermediate = rows.filter(
     (row) => intermediateIds.has(row.id) && row.kind !== "attachment",
   );

@@ -108,13 +108,46 @@ const instanceBody = (instance: FakeInstance) => ({
 const result = (stdout: string, exitCode = 0, stderr = "") =>
   json({ exit_code: exitCode, stdout, stderr, truncated: false });
 
+/**
+ * Linux's limit on one argument (MAX_ARG_STRLEN), with its terminating NUL.
+ * Agent37 takes a longer request, but the instance's shell refuses to start
+ * a program with any longer argument (checked on a live instance,
+ * 2026-11-20: 131,071 bytes ran, 131,072 failed with exit 126).
+ */
+const MAX_ARGUMENT_BYTES = 131_072;
+
+const tooLong = (words: ReadonlyArray<string>) =>
+  words.some(
+    (word) => new TextEncoder().encode(word).length + 1 > MAX_ARGUMENT_BYTES,
+  );
+
+/**
+ * A script api.ts staged in a file (`throughFile`), and the line that runs
+ * it; undefined for a command that is not one.
+ */
+const staged = (command: string) => {
+  const match =
+    /^f=\$\(mktemp [^\n]*\ncat >"\$f" <<'(\w+)'[^\n]*\nrm -f -- "\$0"\n([\s\S]*)\n\1\n([^\n]*)$/.exec(
+      command,
+    );
+  return match === null
+    ? undefined
+    : { script: match[2] as string, run: match[3] as string };
+};
+
 /** Runs one exec in `instance`, as the scripts dx sends would. */
 const run = (world: Agent37World, instance: FakeInstance, command: string) => {
-  // api.ts wraps every command: `exec timeout -k 5 N sh -c '<command>'`.
-  const wrapped = shellWords(command);
+  // api.ts wraps every command: `exec timeout -k 5 N sh -c '<command>'`, or
+  // runs a long one from a file with `exec timeout -k 5 N sh "$f"`.
+  const file = staged(command);
+  const wrapped = shellWords(file?.run ?? command);
   if (wrapped[0] !== "exec" || wrapped[1] !== "timeout")
     return result("", 2, "unwrapped command");
-  const inner = wrapped[7] as string;
+  if (tooLong(wrapped))
+    return result("", 126, "sh: 1: exec: timeout: Argument list too long\n");
+  const inner = file === undefined ? (wrapped[7] as string) : file.script;
+  if (file !== undefined && !/^exec timeout -k 5 \d+ sh "\$f"$/.test(file.run))
+    return result("", 127, "staged script not run by sh");
   if (inner.includes("dx-orb-check"))
     return world.missingDesktop
       ? result("FAIL desktop.start      no display\n", 1)
@@ -122,7 +155,33 @@ const run = (world: Agent37World, instance: FakeInstance, command: string) => {
   if (inner.includes("supervisor.pid") && inner.includes("etimes"))
     return result(`${instance.startedAt}\n`);
   if (inner.includes("supervisor.pid")) return result("");
+  // A guest command: `exec bash -l -c '<lines>'`, or from a file.
+  const guest = staged(inner);
+  if (guest !== undefined)
+    return guest.run === 'exec bash -l "$f"'
+      ? result(guest.script.includes("whoami") ? "user\n" : "ran as user")
+      : result("", 127, "staged guest script not run by bash -l");
+  // A written piece: base64 in a heredoc, into its staging file.
+  const piece =
+    /^base64 -d (>>?) ('(?:[^']|'\\'')*') <<'DX_BASE64'\n([A-Za-z0-9+/=\n]*)\nDX_BASE64$/.exec(
+      inner,
+    );
+  if (piece !== null) {
+    const path = shellWords(piece[2] as string)[0] as string;
+    const content = atob((piece[3] as string).replaceAll("\n", ""));
+    instance.files.set(
+      path,
+      (piece[1] === ">>" ? (instance.files.get(path) ?? "") : "") + content,
+    );
+    return result("");
+  }
   const words = shellWords(inner);
+  if (tooLong(words))
+    return result(
+      "",
+      126,
+      `sh: 1: exec: ${words[0] === "exec" ? words[1] : words[0]}: Argument list too long\n`,
+    );
   if (words[0] === "exec" && words[1] === "bash")
     // A guest command: `exec bash -l -c '<lines>'`.
     return result(
@@ -147,14 +206,6 @@ const run = (world: Agent37World, instance: FakeInstance, command: string) => {
         ),
       ),
     );
-  if (body.includes("base64 -d >>")) {
-    files.set(first, (files.get(first) ?? "") + atob(second));
-    return result("");
-  }
-  if (body.includes("base64 -d >")) {
-    files.set(first, atob(second));
-    return result("");
-  }
   if (body.includes('cat -- "$1" >"$2"')) {
     if (!files.has(first)) return result("", 1, "No such file");
     files.set(second, files.get(first) as string);

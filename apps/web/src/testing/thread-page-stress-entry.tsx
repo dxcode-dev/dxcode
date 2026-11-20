@@ -437,6 +437,135 @@ const historyTurn = (i: number): Message[] => [
   } as unknown as Message,
 ];
 
+// `scenario=` appends one transcript shape after the history:
+// `space-report` is a Space's child Thread that answers, reports to the Space
+// with send_thread_message, and closes with a line; `steering` is a running
+// command with a prompt sent while it runs, which the agent has not taken.
+const SCENARIO = params.get("scenario");
+const at = (offset: number) => new Date(listOrigin + offset).toISOString();
+const SPACE_SUMMARY =
+  "Fixed both transcript issues on a local branch; nothing is pushed.\n\n" +
+  "- **Mid-turn prompts:** a prompt sent while the agent works now shows like any other prompt.\n" +
+  "- **Folded summary:** the answer stays below *Worked* when the agent reports to its Space after it.\n\n" +
+  "Waiting for the go-ahead to ship.";
+const scenarioMessages = (): Message[] => {
+  if (SCENARIO === "space-report")
+    return [
+      {
+        id: "entry_space_prompt",
+        role: "user",
+        purpose: "user",
+        display: "visible",
+        submissionId: "s-space",
+        turnId: "t-space",
+        timestamp: at(0),
+        parts: [
+          { type: "text", text: "Fix the transcript folding", state: "done" },
+        ],
+      },
+      {
+        id: "entry_space_work",
+        role: "assistant",
+        purpose: "assistant",
+        display: "visible",
+        submissionId: "s-space",
+        turnId: "t-space",
+        timestamp: at(5_000),
+        parts: [
+          {
+            type: "text",
+            text: "Running the transcript tests.",
+            state: "done",
+          },
+          {
+            type: "dynamic-tool",
+            toolName: "Bash",
+            toolCallId: "c-space-1",
+            state: "output-available",
+            input: { command: "pnpm vitest run thread-transcript" },
+            output: "Tests  61 passed (61)",
+          },
+        ],
+      },
+      {
+        id: "entry_space_answer",
+        role: "assistant",
+        purpose: "assistant",
+        display: "visible",
+        submissionId: "s-space",
+        turnId: "t-space",
+        timestamp: at(60_000),
+        parts: [
+          { type: "text", text: SPACE_SUMMARY, state: "done" },
+          {
+            type: "dynamic-tool",
+            toolName: "mcp__dx__send_thread_message",
+            toolCallId: "c-space-2",
+            state: "output-available",
+            input: {
+              message: "Fixed both transcript issues; waiting on ship.",
+            },
+            output: "Sent.",
+          },
+        ],
+      },
+      {
+        id: "entry_space_closing",
+        role: "assistant",
+        purpose: "assistant",
+        display: "visible",
+        submissionId: "s-space",
+        turnId: "t-space",
+        timestamp: at(65_000),
+        parts: [
+          { type: "text", text: "Reported to the Space.", state: "done" },
+        ],
+      },
+    ] as unknown as Message[];
+  if (SCENARIO === "steering")
+    return [
+      {
+        id: "entry_steer_prompt",
+        role: "user",
+        purpose: "user",
+        display: "visible",
+        submissionId: "s-steer",
+        timestamp: at(0),
+        parts: [
+          { type: "text", text: "Run the full test suite", state: "done" },
+        ],
+      },
+      {
+        id: "entry_steer_step",
+        role: "assistant",
+        purpose: "assistant",
+        display: "visible",
+        submissionId: "s-steer",
+        turnId: "t-steer",
+        timestamp: at(5_000),
+        parts: [
+          {
+            type: "dynamic-tool",
+            toolName: "Bash",
+            toolCallId: "c-steer-1",
+            state: "input-available",
+            input: { command: "pnpm test" },
+          },
+        ],
+      },
+      {
+        id: "local-steer",
+        role: "user",
+        purpose: "user",
+        display: "visible",
+        parts: [
+          { type: "text", text: "Also check the mobile layout", state: "done" },
+        ],
+      },
+    ] as unknown as Message[];
+  return [];
+};
+
 // Every request and Flue send, for proofs that assert what a page sent.
 const requests: { method: string; url: string }[] = [];
 const sends: unknown[] = [];
@@ -477,13 +606,21 @@ class FakeConversation {
   constructor(id: ThreadId) {
     this.conversation = {
       conversationId: id,
-      messages: Array.from({ length: HISTORY_TURNS }, (_, i) =>
-        historyTurn(i),
-      ).flat(),
-      settlements: Array.from({ length: HISTORY_TURNS }, (_, i) => ({
-        submissionId: `s${i}`,
-        outcome: "completed" as const,
-      })),
+      messages: [
+        ...Array.from({ length: HISTORY_TURNS }, (_, i) =>
+          historyTurn(i),
+        ).flat(),
+        ...scenarioMessages(),
+      ],
+      settlements: [
+        ...Array.from({ length: HISTORY_TURNS }, (_, i) => ({
+          submissionId: `s${i}`,
+          outcome: "completed" as const,
+        })),
+        ...(SCENARIO === "space-report"
+          ? [{ submissionId: "s-space", outcome: "completed" as const }]
+          : []),
+      ],
       finalOutputs: [],
     };
     this.client = {

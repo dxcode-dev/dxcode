@@ -363,6 +363,39 @@ const rowVariant = <Variant>(create: (row: TranscriptRow) => Variant) => {
   };
 };
 
+/**
+ * dx tools an agent calls after it answers to report or follow up: a
+ * Space's child Thread answers, sends its result to the Space, and may close
+ * with a line. They are not work the answer describes.
+ */
+const FOLLOW_UP_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "send_thread_message",
+  "notify_user",
+  "update_thread",
+  "link_github_issue",
+  "create_github_subscription",
+  "update_github_subscription",
+  "set_schedule",
+  "update_schedule",
+]);
+
+/**
+ * The ids of a completed turn's answer: what the agent wrote after its last
+ * work. Follow-up tool calls among it fold into the work.
+ */
+const answerTail = (rows: ReadonlyArray<TranscriptRow>) => {
+  const lastWork = rows.findLastIndex(
+    (row) => isToolRow(row) && !FOLLOW_UP_TOOL_NAMES.has(row.part.toolName),
+  );
+  return rows
+    .slice(lastWork + 1)
+    .flatMap((row) =>
+      row.kind === "assistant-prose" || row.kind === "final-answer"
+        ? [row.id]
+        : [],
+    );
+};
+
 /** A completed turn's last reply is its answer. */
 const asFinalAnswer = rowVariant(
   (row): TranscriptRow => ({ ...row, kind: "final-answer" }) as TranscriptRow,
@@ -448,8 +481,11 @@ const deriveTurn = (id: TranscriptTurnId, inputs: TurnInputs): DerivedTurn => {
     finalAnswer === undefined
       ? sourceRows
       : sourceRows.map((row) => (row === answer ? finalAnswer : row));
+  const answerRowIds = new Set(
+    finalAnswerRowId === undefined ? [] : answerTail(rows),
+  );
   const intermediateRowIds = rows.flatMap((row) =>
-    row.id === finalAnswerRowId || row.kind === "user-prompt" ? [] : [row.id],
+    answerRowIds.has(row.id) || row.kind === "user-prompt" ? [] : [row.id],
   );
   const toolRows = rows.filter(isToolRow);
   const responseStartedAt = authoritativeResponseStart(

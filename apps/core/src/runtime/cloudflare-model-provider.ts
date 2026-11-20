@@ -24,11 +24,34 @@ const glm47Flash: Model<Api> = {
   maxTokens: 0,
 };
 
+/**
+ * GLM 4.7 Flash thinks unless its chat template turns thinking off, and it
+ * ignores `reasoning_effort`: at "low" a three-word title took 4 to 25 s and
+ * hundreds of output tokens. A request that asks no effort runs without
+ * thinking, as Spaces' own calls to the model do.
+ */
+const withoutUnaskedThinking = (
+  binding: CloudflareAIBinding,
+): CloudflareAIBinding => ({
+  run: (model, payload, options) =>
+    binding.run(
+      model,
+      model === GLM_4_7_FLASH_MODEL_ID &&
+        payload.reasoning_effort === undefined &&
+        payload.chat_template_kwargs === undefined
+        ? { ...payload, chat_template_kwargs: { enable_thinking: false } }
+        : payload,
+      options,
+    ),
+});
+
 /** Adds current dx-reviewed metadata without changing Flue's binding transport. */
 export const createDxCloudflareModelProvider = (
   binding: CloudflareAIBinding,
 ): Provider => {
-  const provider = cloudflareBindingProvider({ binding });
+  const provider = cloudflareBindingProvider({
+    binding: withoutUnaskedThinking(binding),
+  });
   const models = Object.freeze([
     ...provider.getModels().filter(({ id }) => id !== GLM_4_7_FLASH_MODEL_ID),
     glm47Flash,

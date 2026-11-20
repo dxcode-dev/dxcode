@@ -3,7 +3,13 @@ import type {
   OrbExecResult,
   OrbGuestClient,
 } from "../guest/orb-guest-client.js";
-import { type Agent37Api, MAX_COMMAND_SECONDS, quote } from "./api.js";
+import {
+  type Agent37Api,
+  fitsArgument,
+  MAX_COMMAND_SECONDS,
+  quote,
+  throughFile,
+} from "./api.js";
 
 /** An Orb command gets E2B's 5 minutes unless it asks for another limit. */
 const DEFAULT_TIMEOUT_MS = 300_000;
@@ -11,7 +17,8 @@ const FILE_COMMAND_SECONDS = 120;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /**
  * Agent37 caps an exec body at 1 MB and each output stream at 512 KB, so
- * files move in base64 pieces below both.
+ * files move in base64 pieces below both. A written piece travels in a
+ * heredoc, never as one argument, which would be refused at 128 KiB.
  */
 const WRITE_CHUNK_BYTES = 512 * 1024;
 const READ_CHUNK_BYTES = 360 * 1024;
@@ -19,6 +26,9 @@ const READ_CHUNK_BYTES = 360 * 1024;
 /** One `sh` script with positional arguments, as one command line. */
 const script = (body: string, ...args: ReadonlyArray<string>) =>
   ["sh", "-c", quote(body), "sh", ...args.map(quote)].join(" ");
+
+/** Ends a heredoc of base64, which never holds this line. */
+const BASE64_END = "DX_BASE64";
 
 /** Copies staged file $1 to $2, making its folder. */
 const PLACE = 'mkdir -p -- "$(dirname -- "$2")" && cat -- "$1" >"$2"';
@@ -61,9 +71,12 @@ export const agent37GuestClient = (
       lines.push(`export ${name}=${quote(value)}`);
     }
     lines.push(command);
+    const body = lines.join("\n");
     const result = await api.exec(
       instance,
-      `exec bash -l -c ${quote(lines.join("\n"))}`,
+      fitsArgument(body)
+        ? `exec bash -l -c ${quote(body)}`
+        : throughFile(body, 'exec bash -l "$f"'),
       { timeoutSeconds: seconds(options.timeoutMs ?? DEFAULT_TIMEOUT_MS) },
     );
     return {
@@ -123,11 +136,11 @@ export const agent37GuestClient = (
         ) {
           await checked(
             "writeFile",
-            script(
-              `printf %s "$2" | base64 -d ${offset === 0 ? ">" : ">>"} "$1"`,
-              temporary,
-              toBase64(content.subarray(offset, offset + WRITE_CHUNK_BYTES)),
-            ),
+            `base64 -d ${offset === 0 ? ">" : ">>"} ${quote(temporary)} <<'${BASE64_END}'\n${(
+              toBase64(
+                content.subarray(offset, offset + WRITE_CHUNK_BYTES),
+              ).match(/.{1,76}/g) ?? []
+            ).join("\n")}\n${BASE64_END}`,
           );
           if (content.length === 0) break;
         }

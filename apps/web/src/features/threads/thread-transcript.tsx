@@ -118,8 +118,6 @@ const measuredTurnSizes = (
 interface TranscriptRowShellProps {
   readonly measureElement: (element: HTMLElement | null) => void;
   readonly row: TranscriptRow;
-  /** A prompt waiting for the agent, which is still on earlier work. */
-  readonly steering?: boolean;
 }
 
 /** Unchanged rows of a re-rendering turn skip render (and Markdown parsing). */
@@ -127,7 +125,6 @@ export const TranscriptRowShell = React.memo(
   TranscriptRowShellContent,
   (previous: TranscriptRowShellProps, next: TranscriptRowShellProps) =>
     previous.measureElement === next.measureElement &&
-    previous.steering === next.steering &&
     sameTranscriptRow(previous.row, next.row),
 );
 
@@ -136,14 +133,6 @@ const measureNothing = () => {};
 // Module-level so memoized turns can compare it by identity.
 const renderTranscriptRow = (row: TranscriptRow) => (
   <TranscriptRowShell key={row.id} row={row} measureElement={measureNothing} />
-);
-const renderSteeringRow = (row: TranscriptRow) => (
-  <TranscriptRowShell
-    key={row.id}
-    row={row}
-    measureElement={measureNothing}
-    steering
-  />
 );
 
 /**
@@ -156,8 +145,8 @@ const waitingPrompt = (row: TranscriptRow) =>
 /**
  * Where the agent is. The dot sits on the latest running turn that is more
  * than prompts waiting for the agent: prompts sent while it works wait below
- * it, marked Steering, until the agent takes them. A message another Thread
- * sent is its own turn with its own mark, so it never holds the dot.
+ * it until the agent takes them. A message another Thread sent is its own
+ * turn with its own mark, so it never holds the dot.
  */
 const transcriptProgress = (
   model: TranscriptViewModel,
@@ -176,21 +165,13 @@ const transcriptProgress = (
     return rows.length > 0 && rows.every(waitingPrompt);
   };
   const working = running.findLast((turn) => !waiting(turn));
-  const steeringTurnIds = new Set<string>();
-  if (working !== undefined)
-    for (const turn of running.slice(running.indexOf(working) + 1))
-      steeringTurnIds.add(turn.id);
   // Nothing else runs: a new prompt is what the agent starts on.
-  return {
-    processingTurnId: (working ?? running.at(-1))?.id,
-    steeringTurnIds,
-  };
+  return (working ?? running.at(-1))?.id;
 };
 
 function TranscriptRowShellContent({
   measureElement,
   row,
-  steering = false,
 }: TranscriptRowShellProps) {
   const user = row.kind === "user-prompt";
   const fromThread = user ? row.sourceThreadId : undefined;
@@ -242,7 +223,6 @@ function TranscriptRowShellContent({
           plugin={plugin}
           note={row.chat === true}
           text={row.text}
-          pending={!row.admitted || steering}
           {...(row.sentAt === undefined ? {} : { sentAt: row.sentAt })}
         />
       </React.Suspense>,
@@ -300,7 +280,6 @@ function TranscriptRowShellContent({
         <CommentPromptMessage
           name={author?.name ?? row.author?.name ?? "Someone"}
           text={row.text}
-          pending={!row.admitted}
         />
       </React.Suspense>,
     );
@@ -326,9 +305,6 @@ function TranscriptRowShellContent({
       <div className="message-content">
         <TranscriptRowContent row={row} />
       </div>
-      {user && steering ? (
-        <small className="message-steering">Steering</small>
-      ) : null}
     </>,
   );
 }
@@ -1311,10 +1287,7 @@ export function TranscriptViewport(
         : onFocusHandled,
   });
   const rowsByTurn = transcriptRowsByTurn(model);
-  const { processingTurnId, steeringTurnIds } = transcriptProgress(
-    model,
-    rowsByTurn,
-  );
+  const processingTurnId = transcriptProgress(model, rowsByTurn);
   // Editing a message previews what the edit removes: every turn after the
   // edited message's turn dims (the rest of that turn dims in CSS).
   const editingRowId = React.use(MessageEditContext)?.editingRowId;
@@ -1396,11 +1369,7 @@ export function TranscriptViewport(
                       processing={
                         showProcessingIndicator && turn.id === processingTurnId
                       }
-                      renderRow={
-                        steeringTurnIds.has(turn.id)
-                          ? renderSteeringRow
-                          : renderTranscriptRow
-                      }
+                      renderRow={renderTranscriptRow}
                     />
                   </div>
                 </div>
