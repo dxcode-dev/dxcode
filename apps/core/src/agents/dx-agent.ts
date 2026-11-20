@@ -85,6 +85,7 @@ import {
   agentPluginHostContext,
   agentThreadToolsContext,
   type ResolvedThreadAgent,
+  resolveAgentAdditionalRepositories,
   resolveAgentBugReportReader,
   resolveAgentCodePlugins,
   resolveAgentMailbox,
@@ -155,6 +156,8 @@ import {
   DxAgentInitialDataSchema,
 } from "./dx-agent-initial-data.js";
 import {
+  type AdditionalRepositoryPromptData,
+  additionalRepositoriesPrompt,
   composeClaudeCodePrompt,
   composeDxAgentPrompt,
   dxWorkspaceSkill,
@@ -196,6 +199,8 @@ interface DxAgentPromptData {
   readonly startingSpace?: StartingSpacePromptData;
   /** The Thread runs without an Orb (`runsWithoutOrb`, from D1). */
   readonly orbFree?: true;
+  /** The Project's additional repositories, which the prompt lists. */
+  readonly additionalRepositories?: ReadonlyArray<AdditionalRepositoryPromptData>;
   /**
    * Installed plugins with code, as of this submission: what each one's
    * Dynamic Worker handles and the tools it registered.
@@ -290,7 +295,11 @@ const workspaceNotes = (
   threadId: string,
   promptData: DxAgentPromptData | undefined,
 ) =>
-  [threadPortalPrompt(threadId), mailPrompt(promptData?.mailbox)]
+  [
+    additionalRepositoriesPrompt(promptData?.additionalRepositories),
+    threadPortalPrompt(threadId),
+    mailPrompt(promptData?.mailbox),
+  ]
     .filter((part) => part.length > 0)
     .join("\n\n");
 
@@ -1107,6 +1116,7 @@ DxAgent.resolvePromptData = async (
     startingSpace,
     installedCodePlugins,
     repositoryPlugins,
+    additionalRepositories,
   ] = await traceSpan(
     "agent.resolvePromptData",
     "phase",
@@ -1166,6 +1176,14 @@ DxAgent.resolvePromptData = async (
                   ),
             )
           : Promise.resolve(undefined),
+        // A Space has no repositories; an Orb-free Thread never clones them.
+        agentRuntimeComposition.capabilities === "workspace"
+          ? threadState.then((state) =>
+              state.kind === "space" || runsWithoutOrb(state)
+                ? []
+                : resolveAgentAdditionalRepositories(context.instanceId),
+            )
+          : Promise.resolve([]),
       ]),
   ).catch(async (error: unknown) => {
     // A failed read leaves no started sandbox behind.
@@ -1234,6 +1252,7 @@ DxAgent.resolvePromptData = async (
     startingSpace === undefined &&
     codePlugins === undefined &&
     repositoryPluginData === undefined &&
+    additionalRepositories.length === 0 &&
     !orbFree
   )
     return undefined;
@@ -1250,6 +1269,7 @@ DxAgent.resolvePromptData = async (
     ...(repositoryPluginData === undefined
       ? {}
       : { repositoryPlugins: repositoryPluginData }),
+    ...(additionalRepositories.length === 0 ? {} : { additionalRepositories }),
   };
 };
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {

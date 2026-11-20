@@ -5,6 +5,10 @@ import { getLogger } from "@logtape/logtape";
 import { Effect } from "effect";
 import { readOrbThreadState } from "../agents/orb-free.js";
 import { mayUseBugReportTools } from "../bug-reports/agent-tools.js";
+import {
+  additionalRepositoryDirectories,
+  readAdditionalRepositories,
+} from "../execution/source-preparation.js";
 import type { Bindings } from "../http/types.js";
 import { resolveAgentMailbox as resolveMailboxScope } from "../mail/agent-tools.js";
 import { markRunFailure } from "../runtime/run-failure.js";
@@ -128,6 +132,24 @@ export const resolveAgentMailbox = async (threadId: string) => {
  */
 export const resolveAgentWorkspaceInstructions = async (threadId: string) =>
   loadThreadWorkspaceAgentInstructions(agentPluginHostContext().db, threadId);
+
+/**
+ * The Project's additional repositories with their directories under
+ * ~/workspace/repos, for the prompt; empty when it has none or the read
+ * failed (logged by the read).
+ */
+export const resolveAgentAdditionalRepositories = async (threadId: string) => {
+  const rows =
+    (await readAdditionalRepositories(agentPluginHostContext().db, threadId)) ??
+    [];
+  const directories = additionalRepositoryDirectories(
+    rows.map(({ full_name }) => full_name),
+  );
+  return rows.map(({ full_name }, index) => ({
+    fullName: full_name,
+    directory: directories[index] ?? full_name,
+  }));
+};
 
 /**
  * The Space this submission's Thread is, read from current settings so a

@@ -12,6 +12,9 @@
 //! - Glob characters in a tracked path: Python passes the path as a pathspec,
 //!   so `star*.txt` also pulls in `star-x.txt`'s patch; dxd uses literal
 //!   pathspecs.
+//! - dxd shows up to twelve checkouts; main stopped at five.
+//! - Each worktree names its `kind` (primary, repository, or worktree), which
+//!   main's capture predates; it is checked, then left out of the comparison.
 //! - Untracked text is split into patch lines on `\n` only, as Git does;
 //!   Python's `splitlines` also splits on `\r`, `\f`, `\v`, and a few Unicode
 //!   separators, producing patch lines Git never would.
@@ -148,7 +151,19 @@ fn difference(path: &str, left: &Value, right: &Value) -> Option<String> {
 fn assert_parity(root: &Path, baseline: &str) -> Value {
     let (rust, python) = captures(root, baseline);
     let python = python.expect("the Python oracle failed");
-    let rust = rust.expect("dxd changes-capture failed");
+    let mut rust = rust.expect("dxd changes-capture failed");
+    for worktree in rust["worktrees"].as_array_mut().into_iter().flatten() {
+        let kind = worktree
+            .as_object_mut()
+            .and_then(|worktree| worktree.remove("kind"));
+        assert!(
+            matches!(
+                kind.as_ref().and_then(Value::as_str),
+                Some("primary" | "repository" | "worktree")
+            ),
+            "unexpected worktree kind {kind:?}"
+        );
+    }
     if let Some(difference) = difference("$", &rust, &python) {
         panic!("dxd and main differ at {difference}");
     }
@@ -383,10 +398,10 @@ fn linked_worktrees() {
     assert_eq!(capture["worktrees"].as_array().unwrap().len(), 4);
     assert_eq!(capture["ranges"][0]["truncated"], false);
 
-    // A pruned (deleted) worktree disappears; more than four linked
-    // worktrees truncate the set.
+    // A pruned (deleted) worktree disappears; more than eleven linked
+    // worktrees truncate the set. Main stopped at four, so only dxd runs.
     fs::remove_dir_all(&detached).unwrap();
-    for index in 0..4 {
+    for index in 0..10 {
         let path = fixture.sibling(&format!("extra-{index}"));
         git(
             root,
@@ -401,8 +416,10 @@ fn linked_worktrees() {
         );
         write(&path, "extra.txt", format!("extra {index}\n"));
     }
-    let capture = assert_parity(root, &baseline);
-    assert_eq!(capture["worktrees"].as_array().unwrap().len(), 5);
+    let capture = captures(root, &baseline)
+        .0
+        .expect("dxd changes-capture failed");
+    assert_eq!(capture["worktrees"].as_array().unwrap().len(), 12);
     assert_eq!(capture["ranges"][0]["truncated"], true);
 }
 

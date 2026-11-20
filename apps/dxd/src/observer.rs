@@ -205,6 +205,9 @@ struct WatchSet {
     ignored: Option<IgnoredPaths>,
     /// Last seen entry count of each Git index under this root.
     index_entries: HashMap<PathBuf, Option<u32>>,
+    /// Watches only `root` and its parent, for checkouts arriving in or
+    /// leaving `~/workspace/repos` (`worktrees::repositories_root`).
+    arrivals: bool,
 }
 
 impl WatchSet {
@@ -217,6 +220,7 @@ impl WatchSet {
             capped: false,
             ignored: None,
             index_entries: HashMap::new(),
+            arrivals: false,
         };
         let git_directory = set.root.join(".git");
         let worktree_indexes = fs::read_dir(git_directory.join("worktrees"))
@@ -233,6 +237,34 @@ impl WatchSet {
             eprintln!("dxd observer: ignore discovery unavailable; using legacy traversal");
         }
         set.add_tree(&set.root.clone(), budget);
+        Ok(set)
+    }
+
+    /// A set that reports checkouts arriving in or leaving `root`. Its parent
+    /// is watched too, so `root` itself appearing is seen.
+    fn arrivals(root: PathBuf) -> io::Result<Self> {
+        let mut set = Self {
+            root,
+            inotify: Inotify::new()?,
+            watched: HashMap::new(),
+            directories: HashMap::new(),
+            capped: false,
+            ignored: None,
+            index_entries: HashMap::new(),
+            arrivals: true,
+        };
+        for directory in [
+            set.root.parent().map(Path::to_owned),
+            Some(set.root.clone()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Ok(wd) = set.inotify.add(&directory) {
+                set.watched.insert(directory.clone(), wd);
+                set.directories.insert(wd, directory);
+            }
+        }
         Ok(set)
     }
 
@@ -368,6 +400,18 @@ enum Outcome {
 
 fn classify(set: &mut WatchSet, event: &Event, budget: usize) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
+    if set.arrivals {
+        // Its parent's other entries, and anything inside a checkout (which
+        // that checkout's own set reports), are not arrivals.
+        if event.mask & libc::IN_Q_OVERFLOW != 0
+            || event.path == set.root
+            || event.path.parent() == Some(set.root.as_path())
+        {
+            outcomes.push(Outcome::Reconcile);
+            outcomes.push(Outcome::Mutation);
+        }
+        return outcomes;
+    }
     if event.mask & libc::IN_Q_OVERFLOW != 0 {
         outcomes.push(Outcome::Reconcile);
         outcomes.push(Outcome::Mutation);
@@ -412,6 +456,14 @@ fn build_watch_sets(primary: &Path, budget: usize) -> io::Result<Vec<WatchSet>> 
         let set = WatchSet::build(root, remaining)?;
         remaining = remaining.saturating_sub(set.watched.len());
         sets.push(set);
+    }
+    if let Some(root) = primary
+        .canonicalize()
+        .ok()
+        .as_deref()
+        .and_then(crate::worktrees::repositories_root)
+    {
+        sets.push(WatchSet::arrivals(root)?);
     }
     Ok(sets)
 }

@@ -1,0 +1,50 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* One tab per checkout: see repository-tabs.tsx. */
+@layer components {
+  .dx-repository-tabs {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+  }
+  .dx-repository-tabs-list.dx-tabs-list {
+    flex: none;
+    gap: 0;
+    padding: 0 var(--space-1-5);
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  .dx-repository-tabs-list::-webkit-scrollbar {
+    display: none;
+  }
+  .dx-repository-tabs .dx-repository-tab {
+    flex: none;
+    height: var(--control-md);
+    padding: 0 var(--space-2);
+    font-size: var(--text-xs);
+  }
+  .dx-repository-tab-name {
+    max-width: 18ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .dx-repository-tab-count {
+    min-width: 1.6em;
+    padding: 0 var(--space-1);
+    color: var(--muted-foreground);
+    border-radius: var(--radius-full);
+    background: var(--muted);
+    font-family: var(--font-mono);
+    font-size: var(--text-2xs);
+    line-height: 1.6;
+    text-align: center;
+  }
+  .dx-repository-tabs-panel {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+  }
+}

@@ -62,6 +62,7 @@ import {
   MenuRoot,
   MenuTrigger,
 } from "../../../shared/ui/menu.js";
+import { RepositoryTabs } from "../../../shared/ui/repository-tabs.js";
 
 /**
  * Syntax highlighting runs in workers: a diff renders plain lines at once and
@@ -166,12 +167,11 @@ export function ChangesPaneContent({
       : [
           {
             id: PRIMARY_WORKTREE_ID,
-            name: "Workspace",
+            name: projectName,
             head: changes.head,
             ...(changes.branch === undefined ? {} : { branch: changes.branch }),
           },
         ]);
-  const showWorktreeGroups = worktrees.length > 1;
   const showRangeNavigation =
     range.kind !== "all" ||
     hasFiles ||
@@ -321,33 +321,21 @@ export function ChangesPaneContent({
           </ChangesState>
         ) : null}
         {changes !== undefined ? (
-          <>
-            {hasFiles && !showWorktreeGroups ? (
-              <div className="changes-range-heading">{rangeLabel(range)}</div>
-            ) : null}
-            {changes.files.length === 0 ? (
-              <div className="changes-empty" role="status">
-                <EmptyState icon={<FileDiffIcon />} title="No Changes" />
-              </div>
-            ) : (
-              <ChangesFileList
-                key={JSON.stringify(range)}
-                worktrees={worktrees}
-                projectName={projectName}
-                files={visibleFiles}
-                expanded={expanded}
-                onToggleFile={toggleFile}
-                transport={transport}
-                threadId={threadId}
-                range={range}
-                captureId={changes.captureId}
-                diffStyle={diffStyle}
-                overflow={overflow}
-                onOpenFile={contentsHidden ? undefined : onOpenFile}
-                contentsHidden={contentsHidden}
-              />
-            )}
-          </>
+          <ChangesCheckouts
+            worktrees={worktrees}
+            projectName={projectName}
+            files={visibleFiles}
+            range={range}
+            expanded={expanded}
+            onToggleFile={toggleFile}
+            transport={transport}
+            threadId={threadId}
+            captureId={changes.captureId}
+            diffStyle={diffStyle}
+            overflow={overflow}
+            onOpenFile={contentsHidden ? undefined : onOpenFile}
+            contentsHidden={contentsHidden}
+          />
         ) : null}
       </ChangesDiffScroller>
 
@@ -590,9 +578,96 @@ function PushConfirmation({
   );
 }
 
-function ChangesFileList({
+/**
+ * The capture's changed files: a flat list for one checkout, else one tab
+ * per checkout. The chosen tab, else the first with changes, else the main
+ * checkout opens; a checkout that went away falls back the same way.
+ */
+function ChangesCheckouts({
   worktrees,
   projectName,
+  files,
+  range,
+  ...list
+}: Omit<React.ComponentProps<typeof ChangesFileList>, "worktreeLabel"> & {
+  readonly worktrees: ReadonlyArray<ThreadChangesWorktree>;
+  readonly projectName: string;
+}) {
+  const [chosenWorktree, setChosenWorktree] = React.useState<string>();
+  const labelOf = (worktree: ThreadChangesWorktree) =>
+    worktree.id === PRIMARY_WORKTREE_ID ? projectName : worktree.name;
+  const filesIn = (worktree: ThreadChangesWorktree) =>
+    files.filter(
+      (file) => (file.worktree ?? PRIMARY_WORKTREE_ID) === worktree.id,
+    );
+  const shown =
+    worktrees.find(({ id }) => id === chosenWorktree) ??
+    worktrees.find((worktree) => filesIn(worktree).length > 0) ??
+    worktrees[0];
+  if (worktrees.length <= 1 || shown === undefined)
+    return (
+      <>
+        {files.length > 0 ? (
+          <div className="changes-range-heading">{rangeLabel(range)}</div>
+        ) : null}
+        {files.length === 0 ? (
+          <div className="changes-empty" role="status">
+            <EmptyState icon={<FileDiffIcon />} title="No Changes" />
+          </div>
+        ) : (
+          <ChangesFileList
+            key={JSON.stringify(range)}
+            files={files}
+            range={range}
+            {...list}
+          />
+        )}
+      </>
+    );
+  const shownFiles = filesIn(shown);
+  return (
+    <RepositoryTabs
+      className="changes-repositories"
+      label="Repositories"
+      tabs={worktrees.map((worktree) => ({
+        id: worktree.id,
+        name: labelOf(worktree),
+        count: filesIn(worktree).length,
+        ...(worktree.kind === undefined ? {} : { kind: worktree.kind }),
+        ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
+      }))}
+      value={shown.id}
+      onValueChange={setChosenWorktree}
+    >
+      <div className="changes-range-heading">
+        {rangeLabel(range)} ·{" "}
+        <span className="changes-range-revision">
+          {`${shown.branch ?? "detached"}@${shown.head.slice(0, 7)}`}
+        </span>
+      </div>
+      {shownFiles.length === 0 ? (
+        <div className="changes-empty" role="status">
+          <EmptyState
+            icon={<FileDiffIcon />}
+            title={`No changes in ${labelOf(shown)}`}
+          />
+        </div>
+      ) : (
+        <ChangesFileList
+          key={`${shown.id}:${JSON.stringify(range)}`}
+          worktreeLabel={labelOf(shown)}
+          files={shownFiles}
+          range={range}
+          {...list}
+        />
+      )}
+    </RepositoryTabs>
+  );
+}
+
+/** One checkout's changed files; `worktreeLabel` names it on opened files. */
+function ChangesFileList({
+  worktreeLabel,
   files,
   expanded,
   onToggleFile,
@@ -605,8 +680,7 @@ function ChangesFileList({
   onOpenFile,
   contentsHidden,
 }: {
-  readonly worktrees: ReadonlyArray<ThreadChangesWorktree>;
-  readonly projectName: string;
+  readonly worktreeLabel?: string;
   readonly files: ReadonlyArray<ThreadChangedFile>;
   readonly expanded: ReadonlySet<string>;
   readonly onToggleFile: (
@@ -626,25 +700,8 @@ function ChangesFileList({
   ) => void;
   readonly contentsHidden: boolean;
 }) {
-  const [collapsed, setCollapsed] = React.useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
-  const filesByWorktree = new Map<
-    ThreadChangesWorktreeId,
-    Array<ThreadChangedFile>
-  >();
-  for (const file of files) {
+  return files.map((file) => {
     const worktree = file.worktree ?? PRIMARY_WORKTREE_ID;
-    const group = filesByWorktree.get(worktree) ?? [];
-    group.push(file);
-    filesByWorktree.set(worktree, group);
-  }
-  const renderFile = (
-    file: ThreadChangedFile,
-    worktree: ThreadChangesWorktreeId,
-    worktreeLabel: string | undefined,
-    openFile: typeof onOpenFile,
-  ) => {
     const identity = `${worktree}:${file.path}`;
     return (
       <ChangedFileRow
@@ -660,102 +717,11 @@ function ChangesFileList({
         captureId={captureId}
         diffStyle={diffStyle}
         overflow={overflow}
-        onOpenFile={openFile}
+        onOpenFile={onOpenFile}
         contentsHidden={contentsHidden}
       />
     );
-  };
-  if (worktrees.length === 1)
-    return files.map((file) =>
-      renderFile(
-        file,
-        file.worktree ?? PRIMARY_WORKTREE_ID,
-        undefined,
-        onOpenFile,
-      ),
-    );
-  return worktrees.map((worktree) => {
-    const group = filesByWorktree.get(worktree.id);
-    if (group === undefined || group.length === 0) return null;
-    const isCollapsed = collapsed.has(worktree.id);
-    return (
-      <WorktreeChanges
-        key={worktree.id}
-        worktree={worktree}
-        label={
-          worktree.id === PRIMARY_WORKTREE_ID ? projectName : worktree.name
-        }
-        files={group}
-        range={range}
-        collapsed={isCollapsed}
-        onToggle={() =>
-          setCollapsed((current) => {
-            const next = new Set(current);
-            if (next.has(worktree.id)) next.delete(worktree.id);
-            else next.add(worktree.id);
-            return next;
-          })
-        }
-      >
-        {isCollapsed
-          ? null
-          : group.map((file) =>
-              renderFile(
-                file,
-                worktree.id,
-                worktree.id === PRIMARY_WORKTREE_ID
-                  ? projectName
-                  : worktree.name,
-                onOpenFile,
-              ),
-            )}
-      </WorktreeChanges>
-    );
   });
-}
-
-function WorktreeChanges({
-  worktree,
-  label,
-  files,
-  range,
-  collapsed,
-  onToggle,
-  children,
-}: {
-  readonly worktree: ThreadChangesWorktree;
-  readonly label: string;
-  readonly files: ReadonlyArray<ThreadChangedFile>;
-  readonly range: ThreadChangesRange;
-  readonly collapsed: boolean;
-  readonly onToggle: () => void;
-  readonly children: React.ReactNode;
-}) {
-  const additions = files.reduce((total, file) => total + file.additions, 0);
-  const deletions = files.reduce((total, file) => total + file.deletions, 0);
-  const revision = `${worktree.branch ?? "detached"}@${worktree.head.slice(0, 7)}`;
-  return (
-    <section className="changes-worktree" aria-label={`${label} changes`}>
-      <button
-        type="button"
-        className="changes-worktree-trigger"
-        aria-expanded={!collapsed}
-        onClick={onToggle}
-      >
-        <ChevronDown data-open={!collapsed || undefined} aria-hidden="true" />
-        <strong>
-          {label} · {rangeLabel(range)}
-        </strong>
-        <span>{revision}</span>
-        <small>
-          <span className="changes-additions">+{additions}</span>
-          <span className="changes-deletions">-{deletions}</span>
-          <span>{files.length}</span>
-        </small>
-      </button>
-      {children}
-    </section>
-  );
 }
 
 function ChangesToolbar({

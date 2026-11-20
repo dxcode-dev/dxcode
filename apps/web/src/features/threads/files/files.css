@@ -73,9 +73,10 @@
   white-space: nowrap;
 }
 
-/* Plain buttons left in the panel, such as worktree rows; shared buttons
-   keep their own look. */
-:where(.thread-files-panel, .thread-file-viewer) button:not(.dx-button) {
+/* Plain buttons left in the panel; shared buttons and tabs keep their own
+   look. */
+:where(.thread-files-panel, .thread-file-viewer)
+button:not(.dx-button, [role="tab"]) {
   border: 0;
   border-radius: var(--radius-sm);
   padding: var(--space-1) 7px;
@@ -85,7 +86,7 @@
 }
 
 :where(.thread-files-panel, .thread-file-viewer)
-  button:not(.dx-button):is(
+  button:not(.dx-button, [role="tab"]):is(
     :hover:not(:disabled),
     [aria-selected="true"],
     [aria-pressed="true"]
@@ -155,60 +156,8 @@
   overflow: auto;
 }
 
-.thread-files-worktree {
-  display: flex;
-  flex: none;
-  flex-direction: column;
-  min-height: 0;
-  border-bottom: 1px solid var(--border);
-}
-
-.thread-files-worktree > .thread-files-tree {
-  flex: none;
-  height: min(280px, var(--thread-files-tree-content-height, 280px));
-}
-
-.thread-files-worktree-trigger.thread-files-worktree-trigger {
-  display: flex;
-  align-items: center;
-  flex: none;
-  gap: var(--space-1-5);
-  width: 100%;
-  min-width: 0;
-  min-height: 34px;
-  border-radius: 0;
-  padding: 0 var(--space-2-5);
-  text-align: left;
-}
-
-.thread-files-worktree-chevron {
-  width: 13px;
-  height: 13px;
-  transition: transform 120ms ease;
-  transform: rotate(-90deg);
-}
-
-.thread-files-worktree-chevron[data-open] {
-  transform: rotate(0deg);
-}
-
-.thread-files-worktree-label {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--foreground);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.thread-files-worktree-branch {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.thread-files-repositories {
+  flex: 1;
 }
 
 .thread-files-tree > file-tree {

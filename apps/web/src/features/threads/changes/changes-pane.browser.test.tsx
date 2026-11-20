@@ -281,7 +281,7 @@ describe("Changes pane", () => {
     client.clear();
   });
 
-  it("groups duplicate paths by worktree and collapses each group independently", async () => {
+  it("shows each checkout's changes in its own tab", async () => {
     const linkedId = "wt_0123456789abcdef" as ThreadChangesWorktreeId;
     const primaryId = "primary" as ThreadChangesWorktreeId;
     const baseFile = dataFor({ kind: "all" }).files[0];
@@ -336,16 +336,20 @@ describe("Changes pane", () => {
     );
     await settle();
 
-    const primary = container.querySelector('[aria-label="dx changes"]');
-    const linked = container.querySelector(
-      '[aria-label="agent-worktree changes"]',
+    const tab = (name: string) =>
+      [...container.querySelectorAll('[role="tab"]')].find((element) =>
+        element.textContent?.startsWith(name),
+      ) ?? null;
+    expect(tab("dx")?.getAttribute("aria-selected")).toBe("true");
+    expect(tab("dx")?.textContent).toBe("dx1 changed");
+    expect(container.querySelectorAll(".changes-file-trigger")).toHaveLength(1);
+    await click(tab("agent-worktree"));
+    expect(tab("agent-worktree")?.getAttribute("aria-selected")).toBe("true");
+    expect(container.querySelector(".changes-range-heading")?.textContent).toBe(
+      `ALL CHANGES · agent@${head.slice(0, 7)}`,
     );
-    expect(primary?.querySelectorAll(".changes-file-trigger")).toHaveLength(1);
+    const linked = container.querySelector(".dx-repository-tabs-panel");
     expect(linked?.querySelectorAll(".changes-file-trigger")).toHaveLength(1);
-    await click(linked?.querySelector(".changes-worktree-trigger") ?? null);
-    expect(linked?.querySelectorAll(".changes-file-trigger")).toHaveLength(0);
-    expect(primary?.querySelectorAll(".changes-file-trigger")).toHaveLength(1);
-    await click(linked?.querySelector(".changes-worktree-trigger") ?? null);
     await click(linked?.querySelector(".changes-file-trigger") ?? null);
     await settle();
     expect(transport.getDiff).toHaveBeenCalledWith(

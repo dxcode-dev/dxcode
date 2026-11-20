@@ -123,72 +123,22 @@
   letter-spacing: 0.04em;
 }
 
-.changes-worktree + .changes-worktree {
-  border-top: 8px solid var(--surface);
-}
-
-.changes-worktree-trigger {
+/* Several checkouts: the tab strip stays on top while the diffs scroll,
+   and the range heading sticks under it. */
+.changes-repositories .dx-repository-tabs-list {
   position: sticky;
-  z-index: 2;
+  z-index: 3;
   top: 0;
-  display: flex;
-  width: 100%;
-  min-width: 0;
-  align-items: center;
-  gap: 7px;
-  padding: 9px var(--space-3);
-  color: var(--muted-foreground);
-  border: 0;
-  border-bottom: 1px solid var(--divider);
-  background: color-mix(in srgb, var(--chat-foreground) 2%, var(--surface));
-  font: inherit;
-  text-align: left;
+  background: var(--surface);
 }
 
-.changes-worktree-trigger:hover {
-  color: var(--chat-foreground);
-  background: var(--secondary);
+.changes-repositories .changes-range-heading {
+  top: calc(var(--control-md) + 1px);
 }
 
-.changes-worktree-trigger > svg {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  transform: rotate(-90deg);
-}
-
-.changes-worktree-trigger > svg[data-open] {
-  transform: none;
-}
-
-.changes-worktree-trigger strong,
-.changes-worktree-trigger > span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.changes-worktree-trigger strong {
-  color: var(--chat-foreground);
-  font-size: var(--text-2xs);
-  font-weight: var(--weight-semibold);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.changes-worktree-trigger > span {
-  flex-shrink: 2;
+.changes-range-revision {
   font-family: var(--font-mono);
-  font-size: var(--text-2xs);
-}
-
-.changes-worktree-trigger small {
-  display: flex;
-  flex: none;
-  gap: 5px;
-  margin-left: auto;
-  font-family: var(--font-mono);
+  font-weight: var(--weight-normal);
 }
 
 .changes-file {

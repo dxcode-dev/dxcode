@@ -281,7 +281,7 @@ describe("Thread Files lazy reads", () => {
       expect(container.textContent).toContain("README.md"),
     );
     expect(container.querySelector('[role="alert"]')).toBeNull();
-    expect(container.querySelector(".thread-files-worktree")).toBeNull();
+    expect(container.querySelector(".dx-repository-tabs")).toBeNull();
     await React.act(() => root.unmount());
   });
 

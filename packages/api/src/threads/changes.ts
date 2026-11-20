@@ -4,7 +4,7 @@ import { errorResponse, successResponse } from "../http/response.js";
 
 export const THREAD_CHANGES_MAX_FILES = 200;
 export const THREAD_CHANGES_MAX_COMMITS = 50;
-export const THREAD_CHANGES_MAX_WORKTREES = 5;
+export const THREAD_CHANGES_MAX_WORKTREES = 12;
 export const THREAD_CHANGES_MAX_PATCH_BYTES = 256 * 1_024;
 export const THREAD_CHANGES_MAX_PATH_LENGTH = 1_024;
 
@@ -97,6 +97,11 @@ export const ThreadChangesWorktreeSchema = Schema.Struct({
       Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
     ),
   ),
+  /**
+   * The Thread's own checkout, a repository of its own under
+   * ~/workspace/repos, or a linked worktree. Absent in older captures.
+   */
+  kind: Schema.optional(Schema.Literals(["primary", "repository", "worktree"])),
 });
 export type ThreadChangesWorktree = typeof ThreadChangesWorktreeSchema.Type;
 

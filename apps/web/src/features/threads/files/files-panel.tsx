@@ -14,7 +14,6 @@ import {
 } from "@tanstack/react-query";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import {
-  ChevronDown,
   ChevronsDownUp,
   FilePlus,
   Files,
@@ -26,6 +25,7 @@ import * as React from "react";
 import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { Button } from "../../../shared/ui/button.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
+import { RepositoryTabs } from "../../../shared/ui/repository-tabs.js";
 import {
   type ChangesTransport,
   defaultChangesTransport,
@@ -149,7 +149,8 @@ function FilesWorktreeRoot({
 }: {
   readonly active: boolean;
   readonly threadId: ThreadId;
-  readonly worktree: Pick<ThreadChangesWorktree, "id" | "branch">;
+  readonly worktree: Pick<ThreadChangesWorktree, "id">;
+  /** Names the checkout on opened files when the workspace has several. */
   readonly label: string;
   readonly grouped: boolean;
   readonly gitStatus: ReadonlyMap<string, ThreadChangedFile["status"]>;
@@ -161,7 +162,6 @@ function FilesWorktreeRoot({
   readonly panelWrites?: PanelWrites;
   readonly command?: FilesTreeCommand;
 }) {
-  const [collapsed, setCollapsed] = React.useState(false);
   const queryClient = useQueryClient();
   const write = useMutation(
     writeThreadFilesOptions(transport, threadId, worktree.id, queryClient),
@@ -262,28 +262,7 @@ function FilesWorktreeRoot({
         ) : null}
       </>
     );
-  if (!grouped) return content;
-  return (
-    <section className="thread-files-worktree" aria-label={`${label} files`}>
-      <button
-        className="thread-files-worktree-trigger"
-        type="button"
-        aria-expanded={!collapsed}
-        onClick={() => setCollapsed((current) => !current)}
-      >
-        <ChevronDown
-          className="thread-files-worktree-chevron"
-          data-open={!collapsed || undefined}
-          aria-hidden="true"
-        />
-        <strong className="thread-files-worktree-label">{label}</strong>
-        <span className="thread-files-worktree-branch">
-          {worktree.branch ?? "detached"}
-        </span>
-      </button>
-      {collapsed ? null : content}
-    </section>
-  );
+  return content;
 }
 
 /** One icon button in the Files toolbar. */
@@ -336,12 +315,22 @@ export const ThreadFilesPanel = ({
   const worktrees = captured?.worktrees ?? [
     {
       id: PRIMARY_WORKTREE,
+      kind: "primary" as const,
       name: projectName,
       head: captured?.head ?? "0000000000000000000000000000000000000000",
       ...(captured?.branch === undefined ? {} : { branch: captured.branch }),
     },
   ];
   const grouped = worktrees.length > 1;
+  const labelOf = (worktree: Pick<ThreadChangesWorktree, "id" | "name">) =>
+    worktree.id === PRIMARY_WORKTREE ? projectName : worktree.name;
+  // The tab the person chose, else the shown file's checkout, else the main
+  // one; a checkout that went away falls back the same way.
+  const [chosenWorktree, setChosenWorktree] = React.useState<string>();
+  const shownWorktree =
+    worktrees.find(({ id }) => id === chosenWorktree) ??
+    worktrees.find(({ id }) => id === selectedFile?.worktree) ??
+    worktrees[0];
   // The latest capture's statuses stay on screen while the next one is taken;
   // a stale capture is still the best known state of the worktree.
   const files = captured?.files;
@@ -379,8 +368,8 @@ export const ThreadFilesPanel = ({
         onError: setError,
       }
     : undefined;
-  // Toolbar actions go to the worktree of the shown file, else the first.
-  const targetWorktree = selectedFile?.worktree ?? worktrees[0]?.id;
+  // Toolbar actions go to the shown tab's checkout.
+  const targetWorktree = shownWorktree?.id;
   const runCommand = (kind: FilesTreeCommand["kind"]) => {
     if (targetWorktree === undefined) return;
     setError(undefined);
@@ -488,31 +477,44 @@ export const ThreadFilesPanel = ({
           onClose={() => setDeleting(undefined)}
         />
       )}
-      <div className="thread-files-worktrees">
-        {worktrees.map((worktree) => (
-          <FilesWorktreeRoot
-            active={active}
-            gitStatus={gitStatusByWorktree.get(worktree.id) ?? NO_GIT_STATUS}
-            grouped={grouped}
-            key={worktree.id}
-            label={
-              worktree.id === PRIMARY_WORKTREE ? projectName : worktree.name
-            }
-            onOpenFile={onOpenFile}
-            selectedPath={
-              selectedFile?.worktree === worktree.id
-                ? selectedFile.path
-                : undefined
-            }
-            threadId={threadId}
-            transport={transport}
-            worktree={worktree}
-            collapseSignal={collapseSignal}
-            {...(panelWrites === undefined ? {} : { panelWrites })}
-            {...(command?.worktree === worktree.id ? { command } : {})}
-          />
-        ))}
-      </div>
+      <RepositoryTabs
+        className="thread-files-repositories"
+        label="Repositories"
+        tabs={worktrees.map((worktree) => ({
+          id: worktree.id,
+          name: labelOf(worktree),
+          ...(worktree.kind === undefined ? {} : { kind: worktree.kind }),
+          ...(worktree.branch === undefined ? {} : { branch: worktree.branch }),
+        }))}
+        value={shownWorktree?.id ?? PRIMARY_WORKTREE}
+        onValueChange={setChosenWorktree}
+      >
+        <div className="thread-files-worktrees">
+          {shownWorktree === undefined ? null : (
+            <FilesWorktreeRoot
+              active={active}
+              gitStatus={
+                gitStatusByWorktree.get(shownWorktree.id) ?? NO_GIT_STATUS
+              }
+              grouped={grouped}
+              key={shownWorktree.id}
+              label={labelOf(shownWorktree)}
+              onOpenFile={onOpenFile}
+              selectedPath={
+                selectedFile?.worktree === shownWorktree.id
+                  ? selectedFile.path
+                  : undefined
+              }
+              threadId={threadId}
+              transport={transport}
+              worktree={shownWorktree}
+              collapseSignal={collapseSignal}
+              {...(panelWrites === undefined ? {} : { panelWrites })}
+              {...(command?.worktree === shownWorktree.id ? { command } : {})}
+            />
+          )}
+        </div>
+      </RepositoryTabs>
     </section>
   );
 };

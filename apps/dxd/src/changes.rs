@@ -22,7 +22,6 @@ const GIT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_GIT_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 200;
 const MAX_COMMITS: usize = 50;
-const MAX_WORKTREES: usize = 5;
 const MAX_PATCH_BYTES: usize = 256 * 1024;
 const MAX_PATCH_LINES: usize = 10_000;
 const MAX_OBJECT_BYTES: usize = 8 * 1024 * 1024;
@@ -160,6 +159,18 @@ pub struct Worktree {
     pub name: String,
     pub head: String,
     pub branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<WorktreeKind>,
+}
+
+/// What a checkout is: the Thread's own, a repository of its own under
+/// `~/workspace/repos`, or a linked worktree of any repository.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorktreeKind {
+    Primary,
+    Repository,
+    Worktree,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -355,14 +366,7 @@ fn discover_worktrees(root: &Path) -> CaptureResult<(Vec<(String, String, PathBu
     if !candidates.contains(&primary) {
         return Err(CaptureError::Git);
     }
-    let mut linked = candidates
-        .into_iter()
-        .filter(|path| *path != primary)
-        .collect::<Vec<_>>();
-    linked.sort();
-    linked.dedup();
-    let truncated = linked.len() > MAX_WORKTREES - 1;
-    linked.truncate(MAX_WORKTREES - 1);
+    let (linked, truncated) = crate::worktrees::candidates(&primary, candidates);
     let mut selected = vec![primary.clone()];
     for path in linked {
         let top = git_text(&path, &["rev-parse", "--show-toplevel"], &[0, 128])?;
@@ -438,6 +442,17 @@ fn worktree_state(
         branch,
         upstream_label: (!upstream_label.is_empty()).then_some(upstream_label),
     })
+}
+
+/// Whether `commit` is a commit in the repository at `root`.
+fn has_commit(root: &Path, commit: &str) -> CaptureResult<bool> {
+    let object = format!("{commit}^{{commit}}");
+    git_text(
+        root,
+        &["rev-parse", "--verify", "--quiet", &object],
+        &[0, 1, 128],
+    )
+    .map(|sha| !sha.is_empty())
 }
 
 fn record(digest: &mut Sha256, tag: &str, value: &[u8]) {
@@ -1129,6 +1144,22 @@ fn capture_inner(
             } else {
                 EMPTY_TREE.to_owned()
             }
+        } else if state.id != "primary" && !has_commit(&state.path, baseline)? {
+            // A repository of its own never had the Thread's starting commit:
+            // its work is what its upstream lacks, or, without one, what is
+            // not yet committed.
+            match &state.upstream_label {
+                Some(upstream) => {
+                    let merge_base =
+                        git_text(&state.path, &["merge-base", upstream, &state.head], &[0, 1])?;
+                    if merge_base.is_empty() {
+                        EMPTY_TREE.to_owned()
+                    } else {
+                        merge_base
+                    }
+                }
+                None => state.head.clone(),
+            }
         } else {
             let merge_base =
                 git_text(&state.path, &["merge-base", baseline, &state.head], &[0, 1])?;
@@ -1192,6 +1223,13 @@ fn capture_inner(
                     name: state.name.clone(),
                     head: state.head.clone(),
                     branch: state.branch.clone(),
+                    kind: Some(if state.id == "primary" {
+                        WorktreeKind::Primary
+                    } else if crate::worktrees::is_linked_worktree(&state.path) {
+                        WorktreeKind::Worktree
+                    } else {
+                        WorktreeKind::Repository
+                    }),
                 })
                 .collect(),
         ),
@@ -1571,6 +1609,118 @@ mod tests {
         };
         assert_ne!(second.fingerprint, capture.fingerprint);
         assert_eq!(second.ranges[0].files[4].additions, 3);
+    }
+
+    #[test]
+    fn shows_each_checkout_under_the_repositories_folder_with_its_own_work() {
+        let (directory, root, baseline) = repository();
+        let repos = directory.path().join("repos");
+        fs::create_dir_all(&repos).unwrap();
+        // A repository of its own, cloned from a remote, with one unpushed
+        // commit and one uncommitted edit.
+        let remote = directory.path().join("remote");
+        fs::create_dir_all(&remote).unwrap();
+        git_ok(&remote, &["init", "-q", "-b", "main"]);
+        git_ok(&remote, &["config", "user.email", "a@b.c"]);
+        git_ok(&remote, &["config", "user.name", "a"]);
+        fs::write(remote.join("api.txt"), "v1\n").unwrap();
+        git_ok(&remote, &["add", "."]);
+        git_ok(&remote, &["commit", "-q", "-m", "api"]);
+        git_ok(
+            directory.path(),
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                repos.join("api").to_str().unwrap(),
+            ],
+        );
+        let api = repos.join("api");
+        git_ok(&api, &["config", "user.email", "a@b.c"]);
+        git_ok(&api, &["config", "user.name", "a"]);
+        fs::write(api.join("committed.txt"), "c\n").unwrap();
+        git_ok(&api, &["add", "."]);
+        git_ok(&api, &["commit", "-q", "-m", "local"]);
+        fs::write(api.join("api.txt"), "v2\n").unwrap();
+        // A worktree of the primary checkout, put where agents are told to.
+        git_ok(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "feature",
+                repos.join("repo-feature").to_str().unwrap(),
+            ],
+        );
+        fs::write(repos.join("repo-feature/feature.txt"), "f\n").unwrap();
+        // Neither a dx clone in progress nor a plain folder is a checkout.
+        fs::create_dir_all(repos.join(".dx-clone-1")).unwrap();
+        fs::create_dir_all(repos.join("notes")).unwrap();
+
+        let CandidateOutcome::Complete { capture } =
+            capture(&root, &request(&baseline, None), &CaptureCache::default())
+        else {
+            panic!("expected a complete capture")
+        };
+        let worktrees = capture.worktrees.as_ref().unwrap();
+        let shown = worktrees
+            .iter()
+            .map(|worktree| (worktree.name.as_str(), worktree.kind))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            shown,
+            [
+                ("repo", Some(WorktreeKind::Primary)),
+                ("api", Some(WorktreeKind::Repository)),
+                ("repo-feature", Some(WorktreeKind::Worktree)),
+            ]
+        );
+        let files = |range: usize, name: &str| {
+            let id = &worktrees
+                .iter()
+                .find(|worktree| worktree.name == name)
+                .unwrap()
+                .id;
+            capture.ranges[range]
+                .files
+                .iter()
+                .filter(|file| file.worktree.as_ref() == Some(id))
+                .map(|file| (file.path.clone(), file.status))
+                .collect::<Vec<_>>()
+        };
+        // All: the clone's unpushed commit and its edit; the worktree's file.
+        assert_eq!(
+            files(0, "api"),
+            [
+                ("api.txt".to_owned(), FileStatus::Modified),
+                ("committed.txt".to_owned(), FileStatus::Added),
+            ]
+        );
+        assert_eq!(
+            files(0, "repo-feature"),
+            [("feature.txt".to_owned(), FileStatus::Untracked)]
+        );
+        assert!(files(0, "repo").is_empty());
+        // Uncommitted: only the edit.
+        assert_eq!(
+            files(1, "api"),
+            [("api.txt".to_owned(), FileStatus::Modified)]
+        );
+
+        // A checkout arriving later moves the fingerprint.
+        let before = fingerprint_only(&root, "main").unwrap();
+        git_ok(
+            directory.path(),
+            &[
+                "clone",
+                "-q",
+                remote.to_str().unwrap(),
+                repos.join("web").to_str().unwrap(),
+            ],
+        );
+        assert_ne!(fingerprint_only(&root, "main").unwrap(), before);
     }
 
     #[test]
