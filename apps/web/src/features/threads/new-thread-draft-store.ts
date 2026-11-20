@@ -308,6 +308,23 @@ export const getBrowserNewThreadDraftStore = (
 };
 
 /**
+ * The composer Start thread opens on one email: its own prompt, files, and
+ * send, held while the page lasts, so the person's New Thread draft is left
+ * as it was and a resend reuses the Thread this email started.
+ */
+export const getBrowserEmailThreadDraftStore = (
+  userId: UserId,
+  mailId: string,
+) => {
+  const key = `${newThreadDraftStoragePrefix}${encodeURIComponent(userId)}:mail:${encodeURIComponent(mailId)}`;
+  let store = browserStores.get(key);
+  if (store !== undefined) return store;
+  store = createNewThreadDraftStore({});
+  browserStores.set(key, store);
+  return store;
+};
+
+/**
  * Forgets the person's composers on this page as they sign out. Their
  * drafts stay in Core for their next sign-in, as a Thread's do.
  */

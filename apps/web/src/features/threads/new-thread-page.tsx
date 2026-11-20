@@ -35,6 +35,7 @@ import {
   startingProjectId,
 } from "../../shared/composer-start.js";
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
+import type { ComposerEmail } from "../../shared/new-thread-surface.js";
 import { DialogRoot } from "../../shared/ui/dialog.js";
 import { DocumentTitle } from "../../shared/ui/document-title.js";
 import {
@@ -70,7 +71,10 @@ import {
 } from "./model-picker-options.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
 import { useDraftImages } from "./new-thread-draft-images.js";
-import { getBrowserNewThreadDraftStore } from "./new-thread-draft-store.js";
+import {
+  getBrowserEmailThreadDraftStore,
+  getBrowserNewThreadDraftStore,
+} from "./new-thread-draft-store.js";
 import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { submitNewThread } from "./new-thread-submission.js";
 import { NewThreadToasts } from "./new-thread-toasts.js";
@@ -100,6 +104,7 @@ export function NewThreadModal({
   initialProjectId,
   initialPluginThreadType,
   initialPrompt,
+  email,
   finalFocus,
   onClose,
   onAccepted,
@@ -109,6 +114,11 @@ export function NewThreadModal({
   readonly initialPluginThreadType?: string;
   /** Text the composer opens with, after any draft the person already has. */
   readonly initialPrompt?: string;
+  /**
+   * Start thread in Mail: the email the Thread starts from, attached in the
+   * composer and sent with the prompt.
+   */
+  readonly email?: ComposerEmail;
   readonly finalFocus?: React.ComponentProps<typeof ModalSurface>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
@@ -167,7 +177,7 @@ export function NewThreadModal({
       <DialogRoot open onOpenChange={(open) => !open && onClose()}>
         <ModalSurface
           className="new-thread-dialog"
-          ariaLabel="New thread"
+          ariaLabel={newThreadLabel(email)}
           finalFocus={finalFocus}
         >
           <ModalSurfaceHeader>
@@ -188,6 +198,7 @@ export function NewThreadModal({
         ? {}
         : { initialPluginThreadType })}
       initialPrompt={initialPrompt}
+      email={email}
       finalFocus={finalFocus}
       onClose={onClose}
       onAccepted={onAccepted}
@@ -206,6 +217,9 @@ export function NewThreadModal({
 
 const NO_TYPES: ReadonlyArray<PluginThreadTypeOption> = [];
 
+const newThreadLabel = (email: ComposerEmail | undefined) =>
+  email === undefined ? "New thread" : "New thread from email";
+
 /** Used when remembered composer choices cannot be loaded. */
 const NO_COMPOSER_DEFAULTS: PersonalComposerDefaultsData = {
   project: null,
@@ -218,10 +232,15 @@ const NO_COMPOSER_DEFAULTS: PersonalComposerDefaultsData = {
 const useNewThreadDraft = (
   userId: UserId,
   workspaceId: WorkspaceId | "personal",
+  email: ComposerEmail | undefined,
 ) => {
-  // Core keeps the prompt, so a reload or another device shows it.
+  // Core keeps the prompt, so a reload or another device shows it. An
+  // email's composer keeps its own, apart from the New Thread draft.
   const text = useWorkspaceDraftText(workspaceId, "new-thread");
-  const store = getBrowserNewThreadDraftStore({ userId, workspaceId }, text);
+  const store =
+    email === undefined
+      ? getBrowserNewThreadDraftStore({ userId, workspaceId }, text)
+      : getBrowserEmailThreadDraftStore(userId, email.mailId);
   return {
     store,
     snapshot: React.useSyncExternalStore(
@@ -511,6 +530,7 @@ function ScopedNewThreadModal({
   initialProjectId,
   initialPluginThreadType,
   initialPrompt,
+  email,
   finalFocus,
   onClose,
   onAccepted,
@@ -523,6 +543,7 @@ function ScopedNewThreadModal({
   readonly initialProjectId?: ProjectId;
   /** Text the composer opens with, after any draft the person already has. */
   readonly initialPrompt?: string;
+  readonly email?: ComposerEmail;
   readonly finalFocus?: React.ComponentProps<typeof ModalSurface>["finalFocus"];
   readonly onClose: () => void;
   readonly onAccepted: () => void;
@@ -584,7 +605,7 @@ function ScopedNewThreadModal({
     store: draftStore,
     snapshot: draft,
     creation,
-  } = useNewThreadDraft(identity.id, workspaceId);
+  } = useNewThreadDraft(identity.id, workspaceId, email);
   const prompt = draft.text;
   const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
     RunnerProfileId | undefined
@@ -630,7 +651,7 @@ function ScopedNewThreadModal({
   const submit = async (submittedPrompt = prompt) => {
     if (
       draftStore.getCreation().sending ||
-      (!submittedPrompt.trim() && images.length === 0) ||
+      (!submittedPrompt.trim() && images.length === 0 && email === undefined) ||
       attachmentsUploading(images)
     )
       return;
@@ -664,6 +685,9 @@ function ScopedNewThreadModal({
         onAccepted,
         onAcceptedNavigationFailure: setAcceptedNavigationTarget,
         composerOpen: () => composerOpen.current,
+        ...(email === undefined
+          ? {}
+          : { email: { mailId: email.mailId, subject: email.subject } }),
       });
     } catch (cause) {
       setError(
@@ -693,7 +717,7 @@ function ScopedNewThreadModal({
     <DialogRoot open onOpenChange={(open) => !open && close()}>
       <ModalSurface
         className="new-thread-dialog"
-        ariaLabel="New thread"
+        ariaLabel={newThreadLabel(email)}
         initialFocus={textareaRef}
         finalFocus={finalFocus}
       >
@@ -774,6 +798,7 @@ function ScopedNewThreadModal({
             workspace === undefined ? undefined : setVisibility
           }
           mentionMembers={mentionMembers}
+          email={email}
         />
         <NewThreadToasts
           warning={draft.warning}

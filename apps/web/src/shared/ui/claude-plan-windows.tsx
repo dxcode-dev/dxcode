@@ -1,4 +1,8 @@
-import { type ClaudePlanWindow, claudePlanWindowName } from "@dx/domain";
+import {
+  type ClaudePlanWindow,
+  claudePlanCurrentWindow,
+  claudePlanWindowName,
+} from "@dx/domain";
 import { claudePlanWhen } from "./claude-plan-when.js";
 import "./claude-plan-windows.css";
 
@@ -13,8 +17,12 @@ const ClaudePlanWindowRow = ({
   readonly now: Date;
 }) => {
   const name = claudePlanWindowName(window.id);
-  // A window past its reset has started over; its last reading is stale.
+  // A window past its reset has started over; its last reading is stale. A
+  // weekly one shows its next reset, a week after the last.
   const reset = window.resetsAt * 1000 <= now.getTime();
+  const next = reset
+    ? claudePlanCurrentWindow(window, Math.floor(now.getTime() / 1000))
+    : undefined;
   const percent = Math.round(window.utilization * 100);
   return (
     <li className="claude-plan-window">
@@ -31,7 +39,9 @@ const ClaudePlanWindowRow = ({
         {reset ? "–" : `${percent}%`}
       </span>
       <span className="claude-plan-window-reset">
-        {reset ? "Reset" : "Resets"} {claudePlanWhen(window.resetsAt, now)}
+        {next !== undefined
+          ? `Resets ${claudePlanWhen(next.resetsAt, now)}`
+          : `${reset ? "Reset" : "Resets"} ${claudePlanWhen(window.resetsAt, now)}`}
       </span>
     </li>
   );

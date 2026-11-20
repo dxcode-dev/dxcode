@@ -11,11 +11,10 @@ import {
   MailLabelResponseSchema,
   type SendMailRequest,
   SendMailResponseSchema,
-  StartThreadFromMailResponseSchema,
   type UpdateMailboxSettingsRequestSchema,
   type UpdateMailConversationRequest,
 } from "@dx/api";
-import type { ProjectId, UserId } from "@dx/domain";
+import type { UserId } from "@dx/domain";
 import {
   type InfiniteData,
   infiniteQueryOptions,
@@ -382,34 +381,6 @@ export const sendMailMutationOptions = (client: QueryClient, userId: UserId) =>
       ).data,
     onSuccess: () =>
       client.invalidateQueries({ queryKey: mailboxKeys.all(userId) }),
-  });
-
-/** Starts a Thread in a Project from one email, with an instruction. */
-export const startThreadFromMailMutationOptions = (
-  client: QueryClient,
-  userId: UserId,
-) =>
-  mutationOptions({
-    mutationKey: [...mailboxKeys.all(userId), "start-thread"],
-    mutationFn: async ({
-      mailId,
-      projectId,
-      instruction,
-    }: {
-      readonly mailId: string;
-      readonly projectId: ProjectId;
-      readonly instruction: string;
-    }) =>
-      (
-        await request(
-          `/v1/mailbox/messages/${encodeURIComponent(mailId)}/start-thread`,
-          StartThreadFromMailResponseSchema,
-          json("POST", { projectId, instruction }),
-          MailErrorResponseSchema,
-        )
-      ).data,
-    onSuccess: () =>
-      client.invalidateQueries({ queryKey: mailboxKeys.conversations(userId) }),
   });
 
 /**

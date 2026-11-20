@@ -76,6 +76,7 @@ export async function submitNewThread({
   onAccepted,
   onAcceptedNavigationFailure,
   composerOpen,
+  email,
 }: {
   readonly submittedPrompt: string;
   readonly effectiveProjectId: ProjectId | "";
@@ -109,6 +110,11 @@ export async function submitNewThread({
   readonly onAcceptedNavigationFailure: (threadId: ThreadId) => void;
   /** False once the composer is gone, e.g. the user closed it mid-create. */
   readonly composerOpen: () => boolean;
+  /**
+   * The email the Thread starts from: Mail puts it in the first message, and
+   * its subject names the Thread.
+   */
+  readonly email?: { readonly mailId: string; readonly subject: string };
 }) {
   let stagedImages: ReadonlyArray<PendingAttachment> | undefined;
   let pendingThreadId: ThreadId | undefined;
@@ -169,7 +175,9 @@ export async function submitNewThread({
         : newThreadId(),
     };
     const threadId = attempt.threadId;
-    const title = generateThreadTitle(submittedPrompt);
+    const title = generateThreadTitle(
+      email === undefined ? submittedPrompt : email.subject.trim() || "Email",
+    );
     registry.beginCreation({
       id: threadId,
       project,
@@ -199,6 +207,7 @@ export async function submitNewThread({
       ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
       ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
       ...(visibility === "workspace" ? { visibility } : {}),
+      ...(email === undefined ? {} : { fromMailId: email.mailId }),
       threadId,
       initialMessage: {
         body: sentBody,

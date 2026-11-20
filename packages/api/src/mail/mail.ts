@@ -283,16 +283,11 @@ export const SendMailResponseSchema = successResponse(
   Schema.Struct({ id: MailId, conversationKey: Schema.String }),
 );
 
-export const StartThreadFromMailRequestSchema = Schema.Struct({
-  projectId: ProjectId,
-  instruction: Schema.String.check(
-    Schema.isMinLength(1),
-    Schema.isMaxLength(20_000),
-  ),
-});
-export const StartThreadFromMailResponseSchema = successResponse(
-  Schema.Struct({ threadId: ThreadId }),
-);
+/*
+ * Start thread (`POST /v1/mailbox/messages/:id/start-thread`) takes the New
+ * Thread composer's own request, `CreateThreadRequestSchema`, and answers as
+ * `POST /v1/threads` does, `CreateThreadResponseSchema`.
+ */
 
 /** Project Settings → Email: the person's address and the defaults. */
 export const ProjectMailDataSchema = Schema.Union([

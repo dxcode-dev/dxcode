@@ -135,13 +135,14 @@ const reported = async (
   connectionId: string,
   windows: { id: string; utilization: number; resetsAt: number }[],
   limit?: { id: string; resetsAt: number },
+  observedAt = now() - 60,
 ) => {
   const usage = {
     status: limit === undefined ? "allowed" : "rejected",
     ...(limit === undefined ? {} : { limit }),
     windows,
     extraUsage: { status: "rejected", inUse: false },
-    observedAt: now() - 60,
+    observedAt,
   };
   await env.DB.prepare(
     `INSERT INTO claude_code_plan (connection_id, usage, updated_at)
@@ -802,6 +803,100 @@ describe("Claude plan auto pick", () => {
     });
     const childId = child?.output.threadId as string;
     expect((await boundTo(childId))?.claude_connection_id).toBe(resetsSoon);
+  });
+});
+
+describe("Claude plan auto pick with stale or no readings", () => {
+  const day = 24 * hour;
+
+  /**
+   * Only Claude Code runs report a plan's limits, so a plan auto skips keeps
+   * its last reading forever. Here: a plan mid-window near its weekly pace,
+   * a plan last read a week ago whose weekly limit reset yesterday, and a
+   * plan that never ran Claude Code.
+   */
+  it("routes to an idle plan whose weekly limit has reset, then to one never read, over a plan near its weekly pace", async () => {
+    const { cookie, userId } = await signup(
+      "claude-plan-auto-stale@example.com",
+      189,
+    );
+    const busy = await connect(cookie, "Claude Pro/Max", TOKENS[0]);
+    const idle = await connect(cookie, "Claude Pro/Max 2", TOKENS[1]);
+    const projectId = "prj_00000000-0000-4000-8000-0000000c1689";
+    await seedProject(userId, projectId);
+    await env.DB.prepare(
+      "UPDATE projects SET runner_profile_id = 'a1.medium' WHERE id = ?",
+    )
+      .bind(projectId)
+      .run();
+    // 36% of the week with 4 days left: 3 points under its 39% pace.
+    await reported(busy, [
+      { id: "five_hour", utilization: 0.19, resetsAt: now() + 3.6 * hour },
+      { id: "seven_day", utilization: 0.36, resetsAt: now() + 4 * day },
+    ]);
+    // Last read a week ago; both windows have reset since.
+    const weeklyReset = now() - 22 * hour;
+    await reported(
+      idle,
+      [
+        { id: "five_hour", utilization: 0, resetsAt: now() - 6.5 * day },
+        { id: "seven_day", utilization: 0, resetsAt: weeklyReset },
+      ],
+      undefined,
+      now() - 7 * day,
+    );
+
+    const first = await create(cookie, projectId, { selection });
+    expect(first.status).toBe(201);
+    assert.exists(first.body.data.id);
+    expect((await boundTo(first.body.data.id))?.claude_connection_id).toBe(
+      idle,
+    );
+
+    // list_agent_modes names the same plan, and shows the idle plan's
+    // weekly limit at its next expected reset, a week after the last one.
+    const tools = Object.fromEntries(
+      createThreadTools(
+        first.body.data.id,
+        () => ({ db: env.DB, bindings, waitUntil: keep }),
+        "sub_auto_stale",
+      ).map((tool) => [
+        tool.name,
+        tool as unknown as {
+          run: (input: {
+            data: Record<string, unknown>;
+            toolCallId: string;
+          }) => Promise<{ output: Record<string, unknown> }>;
+        },
+      ]),
+    );
+    const listed = await tools.list_agent_modes?.run({
+      data: {},
+      toolCallId: "modes-stale",
+    });
+    expect(listed?.output.claudeAutoPlan).toMatchObject({ plan: idle });
+    const plans = listed?.output.claudePlans as
+      | { plan: string; limits: unknown }[]
+      | undefined;
+    const idleListing = plans?.find(({ plan }) => plan === idle);
+    expect(idleListing?.limits).toContainEqual({
+      limit: "Weekly limit",
+      usedPercent: 0,
+      resetsAt: new Date((weeklyReset + 7 * day) * 1000).toISOString(),
+    });
+
+    // A third plan that never ran Claude Code: its room is unknown, which
+    // auto weighs as an average plan mid-week, ahead of one near its pace.
+    const never = await connect(cookie, "Claude Pro/Max 3", TOKENS[2]);
+    await call(`${base}/connections/${idle}/enabled`, cookie, "POST", {
+      enabled: false,
+    });
+    const second = await create(cookie, projectId, { selection });
+    expect(second.status).toBe(201);
+    assert.exists(second.body.data.id);
+    expect((await boundTo(second.body.data.id))?.claude_connection_id).toBe(
+      never,
+    );
   });
 });
 

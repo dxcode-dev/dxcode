@@ -267,6 +267,29 @@ export const claudePlanBlockedUntil = (
   return resetsAt > now ? resetsAt : undefined;
 };
 
+const WEEK_SECONDS = 7 * 24 * 3_600;
+
+/**
+ * A window as it stands at `now`. A weekly window past its reset has started
+ * over at 0% and resets a week after the last reset, as often as needed, so
+ * a plan no one has run since still shows its next reset. A 5-hour window
+ * starts only with the next use, so one past its reset is gone (undefined).
+ */
+export const claudePlanCurrentWindow = (
+  window: ClaudePlanWindow,
+  now: number,
+): (ClaudePlanWindow & { readonly rolledFrom?: number }) | undefined => {
+  if (window.resetsAt > now) return window;
+  if (window.id === "five_hour") return undefined;
+  const weeks = Math.floor((now - window.resetsAt) / WEEK_SECONDS) + 1;
+  return {
+    id: window.id,
+    utilization: 0,
+    resetsAt: window.resetsAt + weeks * WEEK_SECONDS,
+    rolledFrom: window.resetsAt + (weeks - 1) * WEEK_SECONDS,
+  };
+};
+
 /** The names Claude Code itself gives the plan's windows. */
 const WINDOW_NAMES: Record<ClaudePlanWindowId, string> = {
   five_hour: "5-hour limit",

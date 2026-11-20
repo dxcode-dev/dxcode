@@ -1,36 +1,24 @@
-import type { MailAgentAccess, MailMessage } from "@dx/api";
-import type { ProjectId, UserId } from "@dx/domain";
-import {
-  useInfiniteQuery,
-  useMutation,
-  useQueryClient,
-} from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import type { MailAgentAccess } from "@dx/api";
+import type { UserId } from "@dx/domain";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import * as React from "react";
-import { toast } from "sonner";
 import { Button } from "../../shared/ui/button.js";
 import {
   DialogContent,
-  DialogDescription,
   DialogRoot,
   DialogTitle,
 } from "../../shared/ui/dialog.js";
-import { Field } from "../../shared/ui/field.js";
 import { Input } from "../../shared/ui/input.js";
-import { Select } from "../../shared/ui/select.js";
 import {
   SettingsCard,
   SettingsRow,
   SettingsSelect,
 } from "../../shared/ui/settings.js";
-import { Textarea } from "../../shared/ui/textarea.js";
-import { projectsQueryOptions } from "../projects/project-queries.js";
-import { addressName, isEmailAddress, subjectText } from "./mail-format.js";
+import { isEmailAddress } from "./mail-format.js";
 import {
   type EnabledMailbox,
   mailErrorMessage,
-  startThreadFromMailMutationOptions,
   updateMailboxSettingsMutationOptions,
 } from "./mailbox-queries.js";
 import { LabelNameForm } from "./mailbox-rail.js";
@@ -270,157 +258,6 @@ export function NewLabelDialog({
           onCreated={onCreated}
           onDone={() => onOpenChange(false)}
         />
-      </DialogContent>
-    </DialogRoot>
-  );
-}
-
-/**
- * Starts a Thread from one email: a Project and an instruction. The email
- * then links to the Thread it started.
- */
-export function StartThreadDialog({
-  userId,
-  mailbox,
-  message,
-  onOpenChange,
-}: {
-  readonly userId: UserId;
-  readonly mailbox: EnabledMailbox;
-  readonly message: MailMessage;
-  readonly onOpenChange: (open: boolean) => void;
-}) {
-  const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const projectsQuery = useInfiniteQuery(projectsQueryOptions(userId));
-  const projects = (projectsQuery.data?.pages ?? []).flatMap(
-    (page) => page.items,
-  );
-  const start = useMutation(
-    startThreadFromMailMutationOptions(queryClient, userId),
-  );
-  const taggedProject = mailbox.projects.find(
-    (project) => project.tag === message.tag,
-  );
-  const tagged = taggedProject?.projectId;
-  // The email's own Project stays a choice even past the first page.
-  const options: ReadonlyArray<readonly [string, string]> = [
-    ...(taggedProject === undefined ||
-    projects.some((project) => project.id === taggedProject.projectId)
-      ? []
-      : [[taggedProject.projectId, taggedProject.projectName] as const]),
-    ...projects.map((project) => [project.id, project.name] as const),
-  ];
-  const [picked, setPicked] = React.useState<string>();
-  const projectId = picked ?? tagged ?? projects[0]?.id;
-  const [instruction, setInstruction] = React.useState("");
-  const id = React.useId();
-  const ready =
-    projectId !== undefined && instruction.trim() !== "" && !start.isPending;
-  return (
-    <DialogRoot open onOpenChange={onOpenChange}>
-      <DialogContent size="md" className="mailbox-dialog">
-        <DialogTitle className="mailbox-dialog-title">
-          Start a thread
-        </DialogTitle>
-        <DialogDescription className="mailbox-dialog-description">
-          The agent gets “{subjectText(message.subject)}” from{" "}
-          {addressName(message.from)} and your instruction.
-        </DialogDescription>
-        <form
-          className="mailbox-dialog-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!ready) return;
-            start.mutate(
-              {
-                mailId: message.id,
-                projectId: projectId as ProjectId,
-                instruction: instruction.trim(),
-              },
-              {
-                onSuccess: ({ threadId }) => {
-                  onOpenChange(false);
-                  toast.success("Thread started.", {
-                    action: {
-                      label: "Open",
-                      onClick: () =>
-                        void navigate({
-                          to: "/threads/$threadId",
-                          params: { threadId },
-                        }),
-                    },
-                  });
-                },
-              },
-            );
-          }}
-        >
-          <Field id={`${id}-project`} label="Project">
-            <Select
-              id={`${id}-project`}
-              size="md"
-              value={projectId ?? ""}
-              disabled={options.length === 0}
-              onValueChange={setPicked}
-              options={
-                options.length === 0
-                  ? [
-                      [
-                        "",
-                        projectsQuery.isPending
-                          ? "Loading projects…"
-                          : "No projects",
-                      ],
-                    ]
-                  : options
-              }
-            />
-          </Field>
-          <Field id={`${id}-instruction`} label="Instruction">
-            <Textarea
-              id={`${id}-instruction`}
-              autoFocus
-              rows={4}
-              maxLength={20_000}
-              placeholder="What should the agent do with this email?"
-              value={instruction}
-              onChange={(event) => setInstruction(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-            />
-          </Field>
-          {start.isError ? (
-            <p className="mailbox-dialog-error" role="alert">
-              {mailErrorMessage(
-                start.error,
-                "The thread could not be started.",
-              )}
-            </p>
-          ) : null}
-          <div className="mailbox-dialog-actions">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => onOpenChange(false)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="submit"
-              size="sm"
-              busy={start.isPending}
-              aria-disabled={!ready || undefined}
-            >
-              Start thread
-            </Button>
-          </div>
-        </form>
       </DialogContent>
     </DialogRoot>
   );

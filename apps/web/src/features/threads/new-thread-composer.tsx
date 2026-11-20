@@ -18,11 +18,13 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import type * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
+import type { ComposerEmail } from "../../shared/new-thread-surface.js";
 import { Textarea } from "../../shared/ui/textarea.js";
 import { newThreadOrbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { newThreadSetupGaps } from "./composer-readiness.js";
 import { NewThreadSetupNotice } from "./composer-setup-notice.js";
+import { EmailAttachment } from "./email-attachment.js";
 import { type PendingAttachment, pastedFiles } from "./image-attachments.js";
 import {
   AttachmentMenu,
@@ -79,6 +81,7 @@ export function NewThreadComposer({
   visibility,
   onVisibilityChange,
   mentionMembers,
+  email,
 }: {
   readonly prompt: string;
   readonly images: ReadonlyArray<PendingAttachment>;
@@ -131,6 +134,11 @@ export function NewThreadComposer({
    * the workspace, so they can open it; outside a workspace `@` is text.
    */
   readonly mentionMembers?: ReadonlyArray<ThreadMemberData>;
+  /**
+   * The email the Thread starts from (Start thread in Mail). It shows with
+   * the files and is enough to send without a prompt.
+   */
+  readonly email?: ComposerEmail;
 }) {
   const uploading = useAttachmentsUploading(images);
   // The provider list the page reads runnerOrbs from (the same query), for
@@ -221,6 +229,7 @@ export function NewThreadComposer({
             onFiles={onFiles}
             onScreenshot={onScreenshot}
           />
+          {email === undefined ? null : <EmailAttachment email={email} />}
           <ImagePreviews
             images={images}
             onRemove={onRemoveImage}
@@ -245,7 +254,7 @@ export function NewThreadComposer({
           !uploading &&
           !runnerOrbsPending &&
           setupGaps.length === 0 &&
-          Boolean(prompt.trim() || images.length > 0)
+          Boolean(prompt.trim() || images.length > 0 || email !== undefined)
         }
         retrying={false}
         onProjectChange={onProjectChange}

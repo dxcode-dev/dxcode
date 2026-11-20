@@ -434,22 +434,6 @@ const ACCOUNT = {
   uiSounds: false,
 };
 
-const projectData = (id: string, name: string) => ({
-  id,
-  name,
-  configuration: {
-    shipAction: "ship",
-    commitAuthor: { preference: "dx", name: "dx", email: "noreply@dx.local" },
-    signingPreference: "disabled",
-    runnerProfileId: "e2b-default",
-    publicCodeEnabled: false,
-    dxCoAuthor: true,
-  },
-  revision: 0,
-  createdAt: "2026-08-25T00:00:00.000Z",
-  updatedAt: "2026-08-25T00:00:00.000Z",
-});
-
 /** Answers the Mail's routes from memory; returns the restore. */
 export const installMailboxApi = (options: FixtureOptions) => {
   const state = {
@@ -690,16 +674,6 @@ export const installMailboxApi = (options: FixtureOptions) => {
       });
       return ok({ id: sent.id, conversationKey: key });
     }
-    if (/^\/v1\/mailbox\/messages\/.+\/start-thread$/.test(path))
-      return ok({ threadId: threadId(99) });
-    if (path === "/v1/projects")
-      return ok({
-        items: [
-          projectData(projectId(1), "dx web"),
-          projectData(projectId(2), "dx api"),
-          projectData(projectId(3), "docs"),
-        ],
-      });
     if (/^\/v1\/projects\/.+\/mail$/.test(path))
       return ok(
         options.projectMail ?? {

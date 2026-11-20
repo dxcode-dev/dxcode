@@ -5,6 +5,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import { CommandProvider } from "../../shared/commands/command-provider.js";
 import {
+  type ComposerEmail,
   NewThreadSurfaceContext,
   type NewThreadSurfaceValue,
 } from "../../shared/new-thread-surface.js";
@@ -44,6 +45,7 @@ export function NewThreadProvider({
         readonly key: number;
         readonly projectId?: ProjectId;
         readonly prompt?: string;
+        readonly email?: ComposerEmail;
       }
     | undefined
   >();
@@ -59,7 +61,7 @@ export function NewThreadProvider({
       : null;
   };
   const value: NewThreadSurfaceValue = {
-    openNewThread: (projectId, prompt) => {
+    openNewThread: (projectId, prompt, email) => {
       const element =
         document.activeElement instanceof HTMLElement
           ? document.activeElement
@@ -68,7 +70,7 @@ export function NewThreadProvider({
         element: element === document.body ? null : element,
         mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
       };
-      setInvocation({ key: Date.now(), projectId, prompt });
+      setInvocation({ key: Date.now(), projectId, prompt, email });
     },
     pendingCreations: registry?.pendingCreations,
     subscribePendingCreations: registry?.subscribeCreations,
@@ -88,6 +90,7 @@ export function NewThreadProvider({
             key={invocation.key}
             initialProjectId={invocation.projectId}
             initialPrompt={invocation.prompt}
+            email={invocation.email}
             finalFocus={finalFocus}
             onClose={() => setInvocation(undefined)}
             onAccepted={() => setInvocation(undefined)}

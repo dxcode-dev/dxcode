@@ -5,6 +5,7 @@ import {
   CLAUDE_CODE_PROVIDER_ID,
   type ClaudePlanUsage,
   claudePlanBlockedUntil,
+  claudePlanCurrentWindow,
   claudePlanWindowName,
   generateThreadTitle,
   isClaudeCodeModel,
@@ -239,12 +240,19 @@ const claudePlanListing = (
     limits:
       plan.usage === undefined || plan.usage.windows.length === 0
         ? "unknown until Claude Code runs on this plan"
-        : plan.usage.windows.map(({ id, utilization, resetsAt }) => ({
-            limit: claudePlanWindowName(id),
-            usedPercent:
-              resetsAt <= now ? 0 : Math.round(Math.min(utilization, 1) * 100),
-            resetsAt: isoSeconds(resetsAt),
-          })),
+        : plan.usage.windows.map((window) => {
+            // A weekly window past its reset shows its next expected reset.
+            const { id, utilization, resetsAt } =
+              claudePlanCurrentWindow(window, now) ?? window;
+            return {
+              limit: claudePlanWindowName(id),
+              usedPercent:
+                resetsAt <= now
+                  ? 0
+                  : Math.round(Math.min(utilization, 1) * 100),
+              resetsAt: isoSeconds(resetsAt),
+            };
+          }),
     ...(plan.usage === undefined
       ? {}
       : { reportedAt: isoSeconds(plan.usage.observedAt) }),

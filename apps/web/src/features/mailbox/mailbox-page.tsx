@@ -1,5 +1,5 @@
 import type { MailMessage, UpdateMailConversationRequest } from "@dx/api";
-import type { UserId } from "@dx/domain";
+import type { ProjectId, UserId } from "@dx/domain";
 import {
   useInfiniteQuery,
   useMutation,
@@ -14,17 +14,15 @@ import {
   onMailboxCommand,
 } from "../../shared/commands/mailbox-command-event.js";
 import { useEventSubscription } from "../../shared/hooks/use-event-subscription.js";
+import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
 import { EmptyState } from "../../shared/ui/empty-state.js";
 import { SheetContent, SheetRoot, SheetTitle } from "../../shared/ui/sheet.js";
 import { useMobile } from "../../shared/use-mobile.js";
 import { conversationFolder, latestMessage } from "./mail-conversation.js";
+import { addressName } from "./mail-format.js";
 import { type ComposeIntent, MailboxComposer } from "./mailbox-composer.js";
-import {
-  MailboxSettingsDialog,
-  NewLabelDialog,
-  StartThreadDialog,
-} from "./mailbox-dialogs.js";
+import { MailboxSettingsDialog, NewLabelDialog } from "./mailbox-dialogs.js";
 import { MailboxList, type MailListState } from "./mailbox-list.js";
 import {
   type EnabledMailbox,
@@ -128,8 +126,7 @@ export function MailboxPage({
 type OpenDialog =
   | { readonly kind: "settings" }
   | { readonly kind: "username" }
-  | { readonly kind: "label"; readonly conversationKey: string }
-  | { readonly kind: "start-thread"; readonly message: MailMessage };
+  | { readonly kind: "label"; readonly conversationKey: string };
 
 /** Whether focus sits in an overlay, which takes Escape itself. */
 const focusInOverlay = () =>
@@ -178,6 +175,7 @@ function MailboxWorkspace({
   );
   const [composer, setComposer] = React.useState<ComposeIntent>();
   const [dialog, setDialog] = React.useState<OpenDialog>();
+  const { openNewThread } = useNewThreadSurface();
   const [foldersOpen, setFoldersOpen] = React.useState(false);
   const searchInput = React.useRef<HTMLInputElement>(null);
 
@@ -281,7 +279,19 @@ function MailboxWorkspace({
     reply: (message, all) =>
       compose({ mode: all ? "reply-all" : "reply", message }),
     forward: (message) => compose({ mode: "forward", message }),
-    startThread: (message) => setDialog({ kind: "start-thread", message }),
+    // The New Thread composer, with the email attached, in the email's own
+    // Project when it was sent to one.
+    startThread: (message) =>
+      openNewThread(
+        mailbox.projects.find((project) => project.tag === message.tag)
+          ?.projectId as ProjectId | undefined,
+        undefined,
+        {
+          mailId: message.id,
+          subject: message.subject,
+          from: addressName(message.from),
+        },
+      ),
   };
 
   useEventSubscription(onMailboxCommand, (action: MailboxCommand) => {
@@ -427,16 +437,6 @@ function MailboxWorkspace({
             change(dialog.conversationKey, { addLabels: [labelId] });
         }}
       />
-      {dialog?.kind === "start-thread" ? (
-        <StartThreadDialog
-          userId={userId}
-          mailbox={mailbox}
-          message={dialog.message}
-          onOpenChange={(next) => {
-            if (!next) setDialog(undefined);
-          }}
-        />
-      ) : null}
     </div>
   );
 }

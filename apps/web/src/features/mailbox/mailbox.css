@@ -968,11 +968,6 @@
   white-space: nowrap;
 }
 .mailbox-username-actions,
-.mailbox-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-2);
-}
 .dialog-popup.mailbox-dialog {
   display: grid;
   gap: var(--space-3);
@@ -988,10 +983,6 @@
   color: var(--muted-foreground);
   font-size: var(--text-sm);
   line-height: var(--leading-normal);
-}
-.mailbox-dialog-form {
-  display: grid;
-  gap: var(--space-3);
 }
 .mailbox-dialog-error {
   margin: 0;

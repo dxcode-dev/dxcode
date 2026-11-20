@@ -1,5 +1,6 @@
 import {
   CreateMailLabelRequestSchema,
+  CreateThreadRequestSchema,
   DeploymentAdminPersonResponseSchema,
   type GetMailboxResponse,
   type GetMailConversationResponse,
@@ -12,7 +13,6 @@ import {
   SendMailRequestSchema,
   SetMailSendingRequestSchema,
   SetMailSendingResponseSchema,
-  StartThreadFromMailRequestSchema,
   UpdateMailboxSettingsRequestSchema,
   UpdateMailConversationRequestSchema,
   UpdateMailLabelRequestSchema,
@@ -36,7 +36,6 @@ import { readBoundedBody, readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { mailLogger } from "../logging.js";
 import { publishUserInvalidation } from "../realtime/publication.js";
-import { idempotentThreadId } from "../threads/agent-tools.js";
 import {
   LOCAL_OUTBOX_PREFIX,
   mailboxFor,
@@ -50,7 +49,7 @@ import {
   sendMail,
   sentToday,
 } from "./send.js";
-import { emailRequestBody, startMailThread } from "./start-thread.js";
+import { mailThreadRequest, startMailThread } from "./start-thread.js";
 import {
   conversationItems,
   createLabel,
@@ -726,16 +725,7 @@ export const mailboxRoutes = new Hono<AppEnv>()
   .post(
     "/messages/:id/start-thread",
     withMailbox(async (context, { db, owner }) => {
-      const body = Schema.decodeUnknownOption(StartThreadFromMailRequestSchema)(
-        await readBoundedJson(context.req.raw).catch(() => undefined),
-      );
-      if (Option.isNone(body))
-        return fail(
-          context,
-          400,
-          "MAIL_INVALID_REQUEST",
-          "Pick a project and say what to do.",
-        );
+      const raw = await readBoundedJson(context.req.raw).catch(() => undefined);
       const item = await readMailItem(
         db,
         owner.userId,
@@ -748,61 +738,65 @@ export const mailboxRoutes = new Hono<AppEnv>()
           "MAIL_NOT_FOUND",
           "That email was not found.",
         );
-      const principal = context.get("principal") as Principal;
+      const parts =
+        typeof raw === "object" && raw !== null && !Array.isArray(raw)
+          ? await readMailParts(context.env, item)
+          : undefined;
+      // The New Thread composer's request, with the email in its message.
+      const request =
+        parts === undefined
+          ? Option.none()
+          : Schema.decodeUnknownOption(CreateThreadRequestSchema)(
+              mailThreadRequest(raw as Record<string, unknown>, {
+                senderEmail:
+                  item.from_address ?? item.envelope_from ?? "unknown sender",
+                subject: item.subject ?? "",
+                text: parts.text,
+                attachments: parts.attachments,
+              }),
+            );
       if (
-        (await reachableProject(db, principal, body.value.projectId)) ===
-        undefined
+        Option.isNone(request) ||
+        request.value.threadId === undefined ||
+        request.value.parentThreadId !== undefined
       )
         return fail(
           context,
-          404,
-          "MAIL_NOT_FOUND",
-          "That project was not found.",
+          400,
+          "MAIL_INVALID_REQUEST",
+          "The thread could not be started from this request.",
         );
-      const parts = await readMailParts(context.env, item);
-      const threadId = await idempotentThreadId(
-        `mailbox-start\n${owner.userId}\n${item.id}\n${crypto.randomUUID()}`,
-      );
       const started = await startMailThread(context.env, {
         ownerUserId: owner.userId,
-        projectId: body.value.projectId,
-        threadId,
-        title: item.subject || "Email",
-        body: emailRequestBody({
-          senderEmail:
-            item.from_address ?? item.envelope_from ?? "unknown sender",
-          subject: item.subject ?? "",
-          text: parts.text,
-          attachments: parts.attachments,
-          instruction: body.value.instruction,
-        }),
+        request: Schema.encodeSync(CreateThreadRequestSchema)(request.value),
         waitUntil: (promise) => context.executionCtx.waitUntil(promise),
       });
-      if (started === undefined)
-        return fail(
-          context,
-          422,
-          "MAIL_INVALID_REQUEST",
-          "dx could not start the thread.",
+      if (started.response.ok) {
+        // The email shows the Thread it started; its folder and any Spam
+        // reason stay as they were. A resend of the same Thread changes
+        // nothing.
+        await db
+          .prepare(
+            "UPDATE mail_item SET thread_id = ? WHERE id = ? AND owner_user_id = ? AND thread_id IS NULL",
+          )
+          .bind(request.value.threadId, item.id, owner.userId)
+          .run();
+        await publishUserInvalidation(
+          context.env,
+          owner.userId as never,
+          "mailbox.invalidated",
         );
-      // The email shows the Thread it started; its folder and any Spam
-      // reason stay as they were.
-      await db
-        .prepare(
-          "UPDATE mail_item SET thread_id = ? WHERE id = ? AND owner_user_id = ? AND thread_id IS NULL",
-        )
-        .bind(started, item.id, owner.userId)
-        .run();
-      await publishUserInvalidation(
-        context.env,
-        owner.userId as never,
-        "mailbox.invalidated",
-      );
-      return context.json(
-        { status: "success", data: { threadId: started as ThreadId } },
-        201,
-        noStore,
-      );
+      } else
+        mailLogger.warn("An email could not start a Thread.", {
+          event: "mail_start_failed",
+          ownerUserId: owner.userId,
+          status: started.response.status,
+        });
+      // `/v1/threads`' own answer, refusals included, as the composer reads it.
+      return new Response(JSON.stringify(started.payload ?? null), {
+        status: started.response.status,
+        headers: { "content-type": "application/json", ...noStore },
+      });
     }),
   );
 

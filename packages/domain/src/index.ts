@@ -214,6 +214,7 @@ export {
   ClaudePlanWindowId,
   claudeCodeEffort,
   claudePlanBlockedUntil,
+  claudePlanCurrentWindow,
   claudePlanExtraUsage,
   claudePlanExtraUsageOffReason,
   claudePlanLimitText,

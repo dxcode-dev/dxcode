@@ -114,13 +114,10 @@
   ),
   textarea,
   select {
-    font-size: max(var(--text-input-touch), 1em) !important;
+    font-size: max(var(--text-input-touch), 1em);
   }
   :root[data-text-size="small"] :is(input, textarea, select) {
-    font-size: max(
-      calc(var(--text-input-touch) / var(--text-zoom)),
-      1em
-    ) !important;
+    font-size: max(calc(var(--text-input-touch) / var(--text-zoom)), 1em);
   }
 }
 
@@ -2572,6 +2569,46 @@
   width: 32px;
   height: 32px;
   border-radius: var(--radius-sm);
+}
+/* The email a new Thread starts from, beside the composer's files. */
+.composer-email-attachment {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  max-width: min(100%, 360px);
+  height: 32px;
+  padding: 0 var(--space-2-5) 0 var(--space-2);
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.composer-email-attachment svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+.composer-email-attachment-subject {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* The sender keeps its name in view; a long subject gives way first. */
+.composer-email-attachment-from {
+  flex: 0 0 auto;
+  max-width: 40%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .composer-attachment-preview > img,
 .composer-attachment-preview > .attachment-file-thumb {

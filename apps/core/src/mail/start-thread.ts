@@ -1,19 +1,22 @@
 import {
+  type CreateThreadRequestSchema,
+  parseMessageAttachments,
+  withMessageAttachments,
+} from "@dx/api";
+import {
   escapeEmailContent,
-  THREAD_TITLE_MAX_LENGTH,
+  generateThreadTitle,
   type UserId,
 } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
-import { mailLogger } from "../logging.js";
 import { ownerRequest } from "../threads/owner-request.js";
 
 /**
- * Start thread in Mail (wiki/agent-mail.md): the person picks an email, a
- * Project, and writes what to do. Email never starts or continues work by
- * itself; only this action does.
+ * Start thread in Mail (wiki/agent-mail.md): the person opens the New Thread
+ * composer on an email, with the email attached, and sends it. Email never
+ * starts or continues work by itself; only this action does.
  */
 
-const MAX_INSTRUCTION_CHARS = 20_000;
 const MAX_EMAIL_CHARS = 50_000;
 
 /**
@@ -39,8 +42,7 @@ export const emailRequestBody = (input: {
     `The owner started this Thread from an email in their dx Mail, from ${line(input.senderEmail, 320)}.`,
     `Subject: ${line(input.subject, 300) || "(no subject)"}`,
     "",
-    input.instruction.slice(0, MAX_INSTRUCTION_CHARS) ||
-      "(The owner wrote no instruction.)",
+    input.instruction.trim() || "(The owner wrote no instruction.)",
     ...(input.attachments.length === 0
       ? []
       : [
@@ -60,23 +62,52 @@ export const emailRequestBody = (input: {
 };
 
 /**
- * Starts a private Thread owned by the person in the Project, in their own
- * default mode. The first message carries `automation="email"`, so the
- * email is untrusted data and `manage_dx` refuses the turn. Returns the
- * Thread's id, or undefined when it did not start.
+ * The New Thread composer's request with the email in its first message:
+ * the person's prompt is the request, the email wrapped data, and the
+ * email's subject names the Thread. The result is checked as any
+ * `POST /v1/threads` request before it is sent.
  */
-export const startMailThread = async (
+export const mailThreadRequest = (
+  request: { readonly [key: string]: unknown },
+  email: Omit<Parameters<typeof emailRequestBody>[0], "instruction">,
+) => {
+  const message = request.initialMessage as
+    | { readonly body?: unknown; readonly attachments?: unknown }
+    | undefined;
+  // The composer's files trail its prompt as an attachment block, which
+  // Core reads only at the end of a message: it goes after the email.
+  const prompt = parseMessageAttachments(
+    typeof message?.body === "string" ? message.body : "",
+  );
+  return {
+    ...request,
+    title: generateThreadTitle(email.subject.trim() || "Email"),
+    generateTitle: false,
+    initialMessage: {
+      attachments: message?.attachments ?? [],
+      body: withMessageAttachments(
+        emailRequestBody({ ...email, instruction: prompt.text }),
+        prompt.attachments,
+      ),
+    },
+  };
+};
+
+/**
+ * Starts the Thread as `POST /v1/threads` would for the person. Its first
+ * message carries `automation="email"`, so the email is untrusted data and
+ * `manage_dx` refuses the turn. Answers with `/v1/threads`' own response, so
+ * the composer reads it as a new Thread's.
+ */
+export const startMailThread = (
   bindings: Bindings,
   input: {
     readonly ownerUserId: string;
-    readonly projectId: string;
-    readonly threadId: string;
-    readonly title: string;
-    readonly body: string;
+    readonly request: typeof CreateThreadRequestSchema.Encoded;
     readonly waitUntil: (promise: Promise<unknown>) => void;
   },
-) => {
-  const started = await ownerRequest(
+) =>
+  ownerRequest(
     {
       bindings,
       ownerUserId: input.ownerUserId as UserId,
@@ -85,24 +116,5 @@ export const startMailThread = async (
     },
     "POST",
     "/v1/threads",
-    {
-      threadId: input.threadId,
-      projectId: input.projectId,
-      title: input.title.slice(0, THREAD_TITLE_MAX_LENGTH).trimEnd(),
-      generateTitle: false,
-      initialMessage: { body: input.body, attachments: [] },
-    },
+    input.request,
   );
-  const created = (started.payload?.data as { id?: unknown } | undefined)?.id;
-  if (!started.response.ok || created !== input.threadId) {
-    mailLogger.warn("An email could not start a Thread.", {
-      event: "mail_start_failed",
-      projectId: input.projectId,
-      ownerUserId: input.ownerUserId,
-      status: started.response.status,
-      code: (started.payload?.data as { code?: string } | undefined)?.code,
-    });
-    return undefined;
-  }
-  return input.threadId;
-};

@@ -1,6 +1,7 @@
 import {
   type ClaudePlanUsage,
   claudePlanBlockedUntil,
+  claudePlanCurrentWindow,
   claudePlanWindowFamily,
 } from "./claude-code.js";
 
@@ -55,6 +56,13 @@ export const CLAUDE_PLAN_MAX_LOAD = 6;
 const WEEKLY_PACE_TARGET = 0.9;
 const WEEKLY_PACE_SLACK = 0.05;
 
+/**
+ * A plan with no weekly reading, because Claude Code never ran on it, is
+ * weighed as an unused plan halfway through its week: it goes ahead of plans
+ * near their pace, and its first Thread reports its real limits.
+ */
+const UNKNOWN_WEEKLY_PACE = WEEKLY_PACE_TARGET / 2;
+
 const percent = (fraction: number) => `${Math.round(fraction * 100)}%`;
 
 const duration = (seconds: number) => {
@@ -73,8 +81,17 @@ interface Scored {
   readonly window?: { readonly used: number; readonly resetsAt: number };
   readonly projected: number;
   readonly fits: boolean;
-  readonly weekly: { readonly used: number; readonly pace: number };
+  readonly weekly: {
+    readonly used: number;
+    readonly pace: number;
+    /** Unknown: no weekly reading. Reset: the reading is from before it. */
+    readonly reading: "current" | "reset" | "unknown";
+    /** When the weekly window last reset, for a reading from before then. */
+    readonly resetAt?: number;
+  };
   readonly onPace: boolean;
+  /** Further behind its weekly pace than the slack: weekly room going spare. */
+  readonly behind: boolean;
 }
 
 const score = (
@@ -83,9 +100,12 @@ const score = (
   model: string,
   now: number,
 ): Scored => {
-  const windows = (plan.usage?.windows ?? []).filter(
-    ({ resetsAt }) => resetsAt > now,
-  );
+  // Readings past their reset are rolled forward: a weekly window to 0% and
+  // its next reset, a 5-hour window dropped until the next use opens one.
+  const windows = (plan.usage?.windows ?? []).flatMap((window) => {
+    const current = claudePlanCurrentWindow(window, now);
+    return current === undefined ? [] : [current];
+  });
   const load = Math.max(0, plan.load ?? 0);
   const five = windows.find(({ id }) => id === "five_hour");
   const used5h = five?.utilization ?? 0;
@@ -99,13 +119,20 @@ const score = (
       const family = claudePlanWindowFamily(id);
       return family === undefined || model.includes(family);
     })
-    .map(({ utilization, resetsAt }) => {
+    .map(({ utilization, resetsAt, rolledFrom }) => {
       const elapsed = Math.min(1, Math.max(0, 1 - (resetsAt - now) / WEEK));
-      return { used: utilization, pace: WEEKLY_PACE_TARGET * elapsed };
+      return {
+        used: utilization,
+        pace: WEEKLY_PACE_TARGET * elapsed,
+        ...(rolledFrom === undefined
+          ? { reading: "current" as const }
+          : { reading: "reset" as const, resetAt: rolledFrom }),
+      };
     })
     .sort((a, b) => b.used - b.pace - (a.used - a.pace))[0] ?? {
     used: 0,
-    pace: 0,
+    pace: UNKNOWN_WEEKLY_PACE,
+    reading: "unknown" as const,
   };
   return {
     plan,
@@ -118,6 +145,7 @@ const score = (
     fits: projected <= 1 && load + 1 <= CLAUDE_PLAN_MAX_LOAD,
     weekly,
     onPace: weekly.used <= weekly.pace + WEEKLY_PACE_SLACK,
+    behind: weekly.pace - weekly.used > WEEKLY_PACE_SLACK,
   };
 };
 
@@ -125,7 +153,10 @@ const score = (
 const weeklyRoom = ({ weekly }: Scored) => weekly.pace - weekly.used;
 
 const preferred = (a: Scored, b: Scored) => {
-  // Use it or lose it: an open window that resets soonest first.
+  // Use it or lose it, weekly first: a plan well behind its weekly pace
+  // loses that room at its reset, such as an idle plan whose week restarted.
+  if (a.behind !== b.behind) return a.behind ? -1 : 1;
+  // Then an open 5-hour window that resets soonest.
   if (a.window !== undefined && b.window !== undefined)
     if (a.window.resetsAt !== b.window.resetsAt)
       return a.window.resetsAt - b.window.resetsAt;
@@ -150,9 +181,14 @@ const describe = (scored: Scored, now: number, lead: string) => {
       : `5-hour limit ${percent(scored.window.used)}, resets in ${duration(
           scored.window.resetsAt - now,
         )}`;
-  const weekly = `weekly ${percent(scored.weekly.used)} (pace ${percent(
-    scored.weekly.pace,
-  )})`;
+  const weekly =
+    scored.weekly.reading === "unknown"
+      ? "weekly limit unknown until Claude Code runs on it"
+      : scored.weekly.reading === "reset" && scored.weekly.resetAt !== undefined
+        ? `weekly limit reset ${duration(now - scored.weekly.resetAt)} ago, unused since (pace ${percent(scored.weekly.pace)})`
+        : `weekly ${percent(scored.weekly.used)} (pace ${percent(
+            scored.weekly.pace,
+          )})`;
   const running =
     scored.load === 1 ? "1 Thread running" : `${scored.load} Threads running`;
   return `${lead}: ${five}; ${weekly}; ${running}.`;
@@ -191,9 +227,11 @@ export const pickClaudePlan = (
     const summary =
       healthy === undefined
         ? "every plan is near its limit"
-        : picked.window !== undefined
-          ? "resets soonest with room left"
-          : "most weekly room";
+        : picked.weekly.reading === "unknown"
+          ? "weekly limit not read yet"
+          : picked.window !== undefined
+            ? "resets soonest with room left"
+            : "most weekly room";
     return {
       kind: "picked",
       connectionId: picked.plan.connectionId,
