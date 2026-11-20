@@ -22,9 +22,10 @@ import {
   type Context,
   normalizeContext,
 } from "@earendil-works/pi-ai";
-import type { Sandbox } from "@flue/runtime";
+import type { Sandbox, ToolDefinition } from "@flue/runtime";
 import { local } from "@flue/runtime/node";
 import { Redacted, Schema } from "effect";
+import * as v from "valibot";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { settingsInstructions } from "../agents/dx-agent-prompt.js";
 import { classifyRunFailure } from "../runtime/run-failure.js";
@@ -444,6 +445,64 @@ const complete = (id: string, uuid: string, text: string) =>
     message: { id, role: "assistant", content: [{ type: "text", text }] },
     parent_tool_use_id: null,
   });
+/** A subagent's complete message: Claude Code tags it with its Agent call. */
+const subagentCalls = (
+  agent: string,
+  calls: ReadonlyArray<{ readonly id: string; readonly input: unknown }>,
+) =>
+  line({
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: calls.map(({ id, input }) => ({
+        type: "tool_use",
+        id,
+        name: "note",
+        input,
+      })),
+    },
+    parent_tool_use_id: agent,
+  });
+const subagentResult = (agent: string, id: string, text: string) =>
+  line({
+    type: "user",
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: id, content: text }],
+    },
+    parent_tool_use_id: agent,
+  });
+/** Where the dx tool bridge waits for dx's answer to a dx tool call. */
+const dxAnswer = (id: string) => `${STATE}/mcp/results/${id}.json`;
+/** The guest-relative path a `#wait` line takes. */
+const waitForDxAnswer = (id: string) =>
+  `#wait .local/state/dx-claude-code/mcp/results/${id}.json`;
+/** A dx tool for subagent tests: notes its text, as long as `run` takes. */
+const noteTool = (run: (text: string) => Promise<string>) =>
+  ({
+    name: "note",
+    description: "Notes a text.",
+    input: v.object({ text: v.string() }),
+    run: ({ data }: { readonly data: { readonly text: string } }) =>
+      run(data.text),
+  }) as unknown as ToolDefinition;
+/** A handle on the workspace whose connection closed: every call fails. */
+const closedSandbox = (sandbox: Sandbox): Sandbox => {
+  const closed = () => Promise.reject(new Error("Connection closed."));
+  return {
+    ...sandbox,
+    exec: closed,
+    readFile: closed,
+    readFileBuffer: closed,
+    readdir: closed,
+    stat: closed,
+    exists: closed,
+    writeFile: closed,
+    mkdir: closed,
+    rm: closed,
+  };
+};
+
 /** Where Claude Code keeps a session of the Thread's repository. */
 const sessionTranscript = (session: string) =>
   `${GUEST_HOME}/.claude/projects/-home-user-workspace-repo/${session}.jsonl`;
@@ -1886,6 +1945,235 @@ exec /usr/bin/tr "$@"
       content: [{ type: "text", text: "Tool mcp__dx__gone not found" }],
       isError: true,
     });
+  });
+
+  /**
+   * A turn whose Claude starts a subagent (Agent) that calls the dx tool
+   * `note`: the model call that streams the Agent call, then the Agent
+   * mirror Flue runs, which answers the subagent's dx calls (#2282).
+   */
+  const subagentTurn = async (
+    guest: Awaited<ReturnType<typeof createGuest>>,
+    subagent: ReadonlyArray<string>,
+    run: (text: string) => Promise<string>,
+  ) => {
+    await guest.script([
+      init(),
+      ...response("m1", [
+        {
+          id: "toolu_agent",
+          name: "Agent",
+          input: { description: "Review", prompt: "Note two things." },
+        },
+      ]),
+      ...subagent,
+      toolResult("toolu_agent", "Noted both."),
+      ...response("m2", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const tools = claudeCodeMirrorTools(claude.threadId);
+    expect(
+      await claude.answer({
+        messages: [user("Review it", 71)],
+        tools: tools.map(({ name, description }) => ({
+          name,
+          description,
+          parameters: { type: "object" } as never,
+        })),
+      }),
+    ).toMatchObject({ type: "done", reason: "toolUse" });
+    // The Thread's dx tools, registered after the launch so the fake CLI
+    // runs without the bridge: its `#wait` lines wait as the bridge does.
+    claudeCodeDxTools(claude.threadId, [noteTool(run)]);
+    const agent = tools.find(({ name }) => name === "Agent");
+    if (agent === undefined) throw new Error("Expected the Agent mirror.");
+    return { claude, agent };
+  };
+
+  it("answers a subagent's dx calls through the run's live workspace handle when the Agent call's handle closed (#2282)", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    const { agent } = await subagentTurn(
+      guest,
+      [
+        subagentCalls("toolu_agent", [
+          { id: "toolu_s1", input: { text: "one" } },
+          { id: "toolu_s2", input: { text: "two" } },
+        ]),
+        waitForDxAnswer("toolu_s1"),
+        subagentResult("toolu_agent", "toolu_s1", "noted one"),
+        waitForDxAnswer("toolu_s2"),
+        subagentResult("toolu_agent", "toolu_s2", "noted two"),
+      ],
+      async (text) => `noted ${text}`,
+    );
+    // Flue hands the Agent mirror a handle that stopped answering, as a
+    // workspace connection does after a reset; the run's reader has its own.
+    const output = await agent.run({
+      toolCallId: "toolu_agent",
+      signal: AbortSignal.timeout(20_000),
+      harness: { sandbox: closedSandbox(guest.sandbox) },
+      log: console,
+    } as never);
+    expect(output).toBe("Noted both.");
+    for (const [id, text] of [
+      ["toolu_s1", "noted one"],
+      ["toolu_s2", "noted two"],
+    ] as const)
+      expect(JSON.parse(guest.file(dxAnswer(id)) ?? "null")).toEqual({
+        content: [{ type: "text", text }],
+        isError: false,
+      });
+  });
+
+  it("answers a subagent's other dx calls while one of them is still running (#2282)", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    let release: (() => void) | undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    // The subagent's first call waits on its second's answer: run one at a
+    // time, neither would ever answer.
+    const { agent } = await subagentTurn(
+      guest,
+      [
+        subagentCalls("toolu_agent", [
+          { id: "toolu_slow", input: { text: "slow" } },
+          { id: "toolu_fast", input: { text: "fast" } },
+        ]),
+        waitForDxAnswer("toolu_fast"),
+        subagentResult("toolu_agent", "toolu_fast", "noted fast"),
+        waitForDxAnswer("toolu_slow"),
+        subagentResult("toolu_agent", "toolu_slow", "noted slow"),
+      ],
+      async (text) => {
+        if (text === "slow") await released;
+        return `noted ${text}`;
+      },
+    );
+    const running = agent.run({
+      toolCallId: "toolu_agent",
+      signal: AbortSignal.timeout(20_000),
+      harness: { sandbox: guest.sandbox },
+      log: console,
+    } as never);
+    await waitFor(() => guest.file(dxAnswer("toolu_fast")) !== undefined);
+    expect(guest.file(dxAnswer("toolu_slow"))).toBeUndefined();
+    release?.();
+    expect(await running).toBe("Noted both.");
+    expect(JSON.parse(guest.file(dxAnswer("toolu_slow")) ?? "null")).toEqual({
+      content: [{ type: "text", text: "noted slow" }],
+      isError: false,
+    });
+  });
+
+  it("fails the Agent call with the cause and stops Claude when dx cannot hand a subagent its dx result (#2282)", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    const { claude, agent } = await subagentTurn(
+      guest,
+      [
+        subagentCalls("toolu_agent", [
+          { id: "toolu_s1", input: { text: "one" } },
+        ]),
+        waitForDxAnswer("toolu_s1"),
+        subagentResult("toolu_agent", "toolu_s1", "noted one"),
+      ],
+      async (text) => `noted ${text}`,
+    );
+    // The answer can never be written: the bridge would wait 30 minutes.
+    guest.before = ({ op, path }) =>
+      op === "write" && path.includes("/mcp/results/")
+        ? new Error("No space left on device")
+        : undefined;
+    const started = Date.now();
+    const failure = await Promise.resolve(
+      agent.run({
+        toolCallId: "toolu_agent",
+        signal: AbortSignal.timeout(25_000),
+        harness: { sandbox: guest.sandbox },
+        log: console,
+      } as never),
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain(
+      "dx could not return the result of note to Claude Code's subagent",
+    );
+    expect((failure as Error).message).toContain("No space left on device");
+    expect(Date.now() - started).toBeLessThan(20_000);
+    // Claude is stopped, not left waiting on an answer that never comes.
+    const [dir] = [...runDirectories(guest.ops)];
+    await waitFor(() => guest.file(`${STATE}/runs/${dir}/exit`) !== undefined);
+    expect(guest.file(dxAnswer("toolu_s1"))).toBeUndefined();
+
+    // Flue records the Agent call's error and asks the model again: the
+    // turn goes on in Claude's resumed session. (No dx tools,
+    // so this fake CLI again runs without the bridge.)
+    guest.before = () => undefined;
+    claudeCodeDxTools(claude.threadId, []);
+    await guest.script([
+      init(),
+      ...response("m3", [{ text: "The review subagent failed." }]),
+      result("The review subagent failed."),
+    ]);
+    expect(
+      await claude.answer({
+        messages: [
+          user("Review it", 71),
+          assistant(
+            [
+              {
+                type: "toolCall",
+                id: "toolu_agent",
+                name: "Agent",
+                arguments: {
+                  description: "Review",
+                  prompt: "Note two things.",
+                },
+              },
+            ],
+            "toolUse",
+          ),
+          {
+            role: "toolResult",
+            toolCallId: "toolu_agent",
+            toolName: "Agent",
+            content: [{ type: "text", text: (failure as Error).message }],
+            isError: true,
+            timestamp: Date.now(),
+          },
+        ],
+      }),
+    ).toMatchObject({
+      type: "done",
+      reason: "stop",
+      message: {
+        content: [{ type: "text", text: "The review subagent failed." }],
+      },
+    });
+    // A new attempt that resumes Claude's session, so the turn goes on, and
+    // tells Claude why its subagent returned nothing.
+    expect(runDirectories(guest.ops).size).toBe(2);
+    expect(guest.home("claude-args").split("\n")).toEqual(
+      expect.arrayContaining(["--resume", "session-1"]),
+    );
+    expect(
+      JSON.parse(guest.home("claude-stdin.jsonl")).message.content,
+    ).toEqual([
+      {
+        type: "text",
+        text: `dx stopped your previous attempt at this turn. These subagent calls failed and returned nothing:\n- Agent (toolu_agent): ${(failure as Error).message}`,
+      },
+      { type: "text", text: "Review it" },
+    ]);
   });
 
   it("decides each of Claude's own tool calls the bridge asks about with the Thread's plugin gate", {

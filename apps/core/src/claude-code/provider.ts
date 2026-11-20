@@ -50,7 +50,7 @@ import {
   claudeCodeToolGate,
   claudeCodeToolResultObserver,
 } from "./tool-gate.js";
-import { mirroredToolCall } from "./tools.js";
+import { CLAUDE_CODE_SUBAGENT_TOOLS, mirroredToolCall } from "./tools.js";
 import {
   type ClaudeCodeInputBlock,
   type ClaudeCodeRepositorySkill,
@@ -619,6 +619,42 @@ export const claudeCodeContextAttachments: SelectContextAttachments = (
   );
 };
 
+/**
+ * The errors Flue recorded for Claude's subagent calls after its last
+ * segment, as a note for the attempt that replaces a stopped one. dx stops
+ * Claude when it cannot answer a subagent's dx call (#2282); the resumed
+ * session only shows that Agent call as interrupted, so without the note
+ * Claude would start the same subagent again.
+ */
+const subagentFailureNote = (
+  messages: Context["messages"],
+): ClaudeCodeInputBlock[] => {
+  const lastAssistant = messages.findLastIndex(
+    ({ role }) => role === "assistant",
+  );
+  const failures = messages
+    .slice(lastAssistant + 1)
+    .flatMap((message) =>
+      message.role === "toolResult" &&
+      message.isError &&
+      CLAUDE_CODE_SUBAGENT_TOOLS.has(message.toolName)
+        ? [
+            `- ${message.toolName} (${message.toolCallId}): ${message.content
+              .flatMap((block) => (block.type === "text" ? [block.text] : []))
+              .join("\n")}`,
+          ]
+        : [],
+    );
+  return failures.length === 0
+    ? []
+    : [
+        {
+          type: "text",
+          text: `dx stopped your previous attempt at this turn. These subagent calls failed and returned nothing:\n${failures.join("\n")}`,
+        },
+      ];
+};
+
 const position = (context: Context) => {
   const messages = context.messages;
   const { lastUser, turnStart } = turnBounds(messages);
@@ -920,10 +956,12 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
         // A retry re-runs the turn from history, with nothing added: the
         // resumed session gets the turn's own input again, a new session the
         // message that anchors it. Flue owns how often a turn is retried.
-        const input = () =>
-          pending.length > 0
+        const input = () => [
+          ...subagentFailureNote(context.messages),
+          ...(pending.length > 0
             ? inputBlocks(pending)
-            : inputBlocks(freshSession ? [anchor] : turnInput);
+            : inputBlocks(freshSession ? [anchor] : turnInput)),
+        ];
         let launchedToken: string | undefined;
         let launchedSession: string | undefined;
         const launchAttempt = async () => {
@@ -980,6 +1018,7 @@ export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
                 : {
                     freshInput: [
                       { type: "text" as const, text: earlier },
+                      ...subagentFailureNote(context.messages),
                       ...inputBlocks(pending.length > 0 ? pending : turnInput),
                     ],
                   }),

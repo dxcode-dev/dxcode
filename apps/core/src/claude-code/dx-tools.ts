@@ -8,6 +8,7 @@ import type {
 } from "@flue/runtime";
 import { toJsonSchema } from "@valibot/to-json-schema";
 import * as v from "valibot";
+import { claudeCodeLogger } from "../logging.js";
 import { claudeCodeRuns } from "./runs.js";
 import { UNREADABLE_TOOL_INPUT } from "./stream.js";
 import {
@@ -109,18 +110,28 @@ interface CallContext {
   readonly harness: FlueHarness;
 }
 
-/**
- * Validates Claude's arguments and runs the tool, then hands the result to
- * the waiting server. Every call gets an answer, a rejected one included:
- * Claude waits on the server until it does.
- */
-const execute = async (
+type Outcome =
+  | {
+      readonly ok: true;
+      readonly result: unknown;
+      readonly image: ReturnType<typeof takeImage>;
+    }
+  | { readonly ok: false; readonly error: unknown };
+
+/** The text Claude gets for a call that failed. */
+const failureText = (name: string, error: unknown, signal?: AbortSignal) =>
+  signal?.aborted
+    ? "Stopped."
+    : error instanceof Error && error.message !== ""
+      ? error.message
+      : `${name} failed.`;
+
+/** Validates Claude's arguments and runs the tool. */
+const perform = async (
   tool: ToolDefinition,
   args: unknown,
   context: CallContext,
-) => {
-  const sandbox = context.harness.sandbox as Sandbox;
-  let result: unknown;
+): Promise<Outcome> => {
   try {
     if (
       typeof args === "object" &&
@@ -141,22 +152,36 @@ const execute = async (
     }
     if (tool.durable === true)
       throw new Error(`${tool.name} cannot run outside dx's own tool loop.`);
-    result = await tool.run({ ...context, data } as never);
+    const result = await tool.run({ ...context, data } as never);
+    return { ok: true, result, image: takeImage(context.toolCallId) };
   } catch (error) {
     takeImage(context.toolCallId);
+    return { ok: false, error };
+  }
+};
+
+/**
+ * Validates Claude's arguments and runs the tool, then hands the result to
+ * the waiting server. Every call gets an answer, a rejected one included:
+ * Claude waits on the server until it does.
+ */
+const execute = async (
+  tool: ToolDefinition,
+  args: unknown,
+  context: CallContext,
+) => {
+  const sandbox = context.harness.sandbox as Sandbox;
+  const outcome = await perform(tool, args, context);
+  if (!outcome.ok) {
     await answer(
       sandbox,
       context.toolCallId,
-      context.signal?.aborted
-        ? "Stopped."
-        : error instanceof Error && error.message !== ""
-          ? error.message
-          : `${tool.name} failed.`,
+      failureText(tool.name, outcome.error, context.signal),
       true,
     ).catch(() => undefined);
-    throw error;
+    throw outcome.error;
   }
-  const image = takeImage(context.toolCallId);
+  const { result, image } = outcome;
   await answer(sandbox, context.toolCallId, resultText(result), false, image);
   return { result, image };
 };
@@ -297,29 +322,98 @@ export const claudeCodeDxSandboxTool = (
   },
 });
 
+/** The Claude Code run a subagent's dx call answers through. */
+export interface ClaudeCodeSubagentWorkspace {
+  /** The run reader's handle, which replaces one that stopped answering. */
+  readonly sandbox: Sandbox;
+  reconnectSandbox(): Promise<Sandbox>;
+}
+
+/** Writes of one answer before dx gives up on handing it over. */
+const SUBAGENT_ANSWER_ATTEMPTS = 3;
+/** A write that has not finished by then counts as failed. */
+const SUBAGENT_ANSWER_WRITE_MS = 30_000;
+
+const withinAnswerDeadline = <A>(write: Promise<A>) => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    write,
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("the workspace did not finish the write")),
+        SUBAGENT_ANSWER_WRITE_MS,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
 /**
  * A dx tool call one of Claude's subagents made. It never reaches a Flue
- * segment, so the Agent call that started the subagent runs it.
+ * segment, so the Agent call that started the subagent runs it, through the
+ * run's own workspace handle: the Agent call's handle may have stopped
+ * answering while the run's reader replaced its own (#2282). The answer is
+ * written again on a new handle when a write fails. When it still cannot be
+ * written this throws: the bridge would otherwise hold the subagent for 30
+ * minutes on a call dx already finished.
  */
 export const runClaudeCodeSubagentDxCall = async (
   threadId: string,
   call: { readonly id: string; readonly name: string; readonly input: unknown },
-  context: Omit<CallContext, "toolCallId">,
+  context: Omit<CallContext, "toolCallId"> & {
+    readonly workspace: ClaudeCodeSubagentWorkspace;
+  },
 ) => {
+  const { workspace, ...rest } = context;
   const tool = threadTools
     .get(threadId)
     ?.find(({ name }) => name === dxToolName(call.name));
-  if (tool === undefined) {
-    await answer(
-      context.harness.sandbox as Sandbox,
-      call.id,
-      `${call.name} is not available in this Thread.`,
-      true,
-    );
-    return;
+  const outcome: Outcome =
+    tool === undefined
+      ? {
+          ok: false,
+          error: new Error(`${call.name} is not available in this Thread.`),
+        }
+      : await perform(tool, call.input, {
+          ...rest,
+          toolCallId: call.id,
+          // The harness keeps its methods; only its workspace changes.
+          harness: Object.create(rest.harness, {
+            sandbox: { value: workspace.sandbox },
+          }) as FlueHarness,
+        });
+  const [text, isError, image] = outcome.ok
+    ? [resultText(outcome.result), false, outcome.image]
+    : [failureText(call.name, outcome.error, rest.signal), true, undefined];
+  let failure: unknown;
+  for (let attempt = 0; attempt < SUBAGENT_ANSWER_ATTEMPTS; attempt += 1) {
+    if (rest.signal?.aborted) return;
+    const sandbox =
+      attempt === 0 ? workspace.sandbox : await workspace.reconnectSandbox();
+    try {
+      await withinAnswerDeadline(
+        answer(sandbox, call.id, text, isError, image),
+      );
+      return;
+    } catch (error) {
+      failure = error;
+    }
   }
-  await execute(tool, call.input, { ...context, toolCallId: call.id }).catch(
-    () => undefined,
+  const cause =
+    failure instanceof Error
+      ? failure.message || failure.name
+      : String(failure);
+  claudeCodeLogger.error(
+    "dx could not answer a Claude Code subagent's dx call.",
+    {
+      event: "claude_code_subagent_answer_lost",
+      threadId,
+      tool: call.name,
+      toolCallId: call.id,
+      detail: cause.slice(0, 500),
+    },
+  );
+  throw new Error(
+    `dx could not return the result of ${call.name} to Claude Code's subagent (${cause}), so it stopped Claude Code instead of leaving the subagent waiting on it.`,
   );
 };
 

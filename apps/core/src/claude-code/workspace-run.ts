@@ -899,6 +899,7 @@ export class ClaudeCodeRun {
   /** The current run of failed reads already reconnected the sandbox. */
   #reconnected = false;
   #sandbox: Sandbox;
+  #reconnecting: Promise<Sandbox> | undefined;
 
   constructor(
     readonly key: string,
@@ -985,6 +986,30 @@ export class ClaudeCodeRun {
         })
         .finally(() => observingHooks.delete(result.toolUseId));
     }
+  }
+
+  /**
+   * The handle this reader reads the run through. It replaces a handle that
+   * stopped answering, so work done for the run, such as answering a
+   * subagent's dx calls, goes through it rather than an older one (#2282).
+   */
+  get sandbox(): Sandbox {
+    return this.#sandbox;
+  }
+
+  /**
+   * A new handle for this reader, after a write through it failed. Calls
+   * that fail together share one reconnect.
+   */
+  reconnectSandbox(): Promise<Sandbox> {
+    this.#reconnecting ??= (async () => {
+      const next = await this.reconnect?.().catch(() => undefined);
+      if (next !== undefined) this.#sandbox = next;
+      return this.#sandbox;
+    })().finally(() => {
+      this.#reconnecting = undefined;
+    });
+    return this.#reconnecting;
   }
 
   #forgetReadFailures() {

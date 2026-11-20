@@ -73,7 +73,11 @@ const description = (name: string) =>
   `Claude Code's ${name} tool. Claude Code runs it in the workspace.`;
 
 /** Claude Code tools that run a subagent. */
-const SUBAGENT_TOOLS: ReadonlySet<string> = new Set(["Agent", "Task"]);
+export const CLAUDE_CODE_SUBAGENT_TOOLS: ReadonlySet<string> = new Set([
+  "Agent",
+  "Task",
+]);
+const SUBAGENT_TOOLS = CLAUDE_CODE_SUBAGENT_TOOLS;
 
 /** Tools whose result may have changed the workspace. */
 const MUTATING = new Set([
@@ -126,36 +130,54 @@ const claudeCodeResult = async (
   );
   if (run === undefined)
     throw new Error(`Claude Code has no record of ${name} call ${toolCallId}.`);
+  // A subagent's dx tool calls never reach a Flue segment; the Agent call
+  // that waits on the subagent runs them. Each runs on its own while the
+  // run is read on, so a slow call never holds up the subagent's others.
+  const subagent = SUBAGENT_TOOLS.has(name);
+  const calls = new AbortController();
+  const stopCalls = () => calls.abort();
+  signal?.addEventListener("abort", stopCalls, { once: true });
+  // A call whose answer dx could not hand over (#2282).
+  let lost: Error | undefined;
   try {
-    // A subagent's dx tool calls never reach a Flue segment; the Agent
-    // call that waits on the subagent runs them.
     const answered = new Set<string>();
     for (;;) {
       await run.waitFor(
         () =>
+          lost !== undefined ||
           run.stream.toolResults.has(toolCallId) ||
-          (SUBAGENT_TOOLS.has(name) &&
+          (subagent &&
             pendingSubagentDxCalls(run, toolCallId, answered).length > 0),
         signal,
       );
+      if (lost !== undefined) throw lost;
       if (run.stream.toolResults.has(toolCallId)) break;
-      const calls = SUBAGENT_TOOLS.has(name)
+      const pending = subagent
         ? pendingSubagentDxCalls(run, toolCallId, answered)
         : [];
-      if (calls.length === 0) break;
-      for (const call of calls) {
+      if (pending.length === 0) break;
+      for (const call of pending) {
         answered.add(call.id);
-        await runClaudeCodeSubagentDxCall(threadId, call, {
-          ...(signal === undefined ? {} : { signal }),
+        void runClaudeCodeSubagentDxCall(threadId, call, {
+          signal: calls.signal,
           log,
           harness,
+          workspace: run,
+        }).catch((error: unknown) => {
+          lost ??= error instanceof Error ? error : new Error(String(error));
         });
       }
     }
   } catch (error) {
-    // Stop while Claude runs a tool ends the CLI run, not only the wait.
-    if (signal?.aborted) await run.stop();
+    // Stop while Claude runs a tool ends the CLI run, not only the wait;
+    // so does a subagent call dx could not answer, which Claude would
+    // otherwise wait on for 30 minutes.
+    if (signal?.aborted || error === lost) await run.stop();
     throw error;
+  } finally {
+    // The subagent finished or the call ended: its open calls are moot.
+    calls.abort();
+    signal?.removeEventListener("abort", stopCalls);
   }
   const result = run.stream.toolResults.get(toolCallId);
   if (MUTATING.has(name)) await run.syncChanges();
