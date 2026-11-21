@@ -48,6 +48,35 @@ var fromBase64 = (value) => {
 var encodeRpcValue = (value) => value instanceof Uint8Array ? { $bytes: toBase64(value) } : value instanceof ArrayBuffer ? { $bytes: toBase64(new Uint8Array(value)) } : value;
 var decodeRpcValue = (value) => typeof value === "object" && value !== null && "$bytes" in value && typeof value.$bytes === "string" ? fromBase64(value.$bytes) : value;
 //#endregion
+//#region apps/core/src/execution/cloudflare/anthropic-location.ts
+/**
+* Claude Code in an Orb calls Anthropic from the Orb's own network, and
+* Anthropic refuses some places Cloudflare runs containers: there claude.ai
+* answers the Claude Code installer with its "unavailable in region" page
+* and the API answers HTTP 403. From 2026-11-20 Cloudflare ran Orbs in Hong
+* Kong (hkg01, hkg12), and every Claude Code Thread there failed before its
+* first turn (thr_05ddbf21).
+*
+* A container runs where its Durable Object runs, and a new object starts
+* next to the code that first calls it. So an Orb object Core first calls
+* from such a place is created with a location hint for the nearest place
+* Anthropic serves. Anywhere else it gets no hint and stays next to the
+* person. A hint only places a new object; an existing one never moves.
+*/
+/**
+* Cloudflare locations (IATA codes) in places Anthropic refuses, and the
+* hint for the nearest place it serves. Only the colo decides: a Worker's
+* or Durable Object's trace and `request.cf` name the country of its
+* egress IP, not where it runs (on a preview, `colo=SIN` came with
+* `loc=US`), so a country would miss Hong Kong.
+*/
+var SERVED_NEAR = {
+	HKG: "apac-se",
+	MFM: "apac-se"
+};
+/** The hint for a new object first called from `at`, if it needs one. */
+var anthropicServedHint = (at) => at.colo === void 0 ? void 0 : SERVED_NEAR[at.colo.toUpperCase()];
+//#endregion
 //#region node_modules/.pnpm/@logtape+logtape@2.3.1/node_modules/@logtape/logtape/dist/filter.js
 /**
 * Converts a {@link FilterLike} value to an actual {@link Filter}.
@@ -4486,6 +4515,7 @@ var authorized = (request, secret) => {
 var call = async (stub, method, args) => {
 	return stub[method](...args);
 };
+var stringOf = (value) => typeof value === "string" ? value : void 0;
 var account_orb_worker_default = { async fetch(request, env) {
 	if (!authorized(request, env.DX_ORB_WORKER_SECRET)) return json({ error: "unauthorized" }, 401);
 	const url = new URL(request.url);
@@ -4497,7 +4527,9 @@ var account_orb_worker_default = { async fetch(request, env) {
 	if (request.method !== "POST" || url.pathname !== "/rpc") return json({ error: "not found" }, 404);
 	const body = await request.json().catch(() => void 0);
 	if (typeof body?.threadId !== "string" || body.threadId.length === 0 || body.threadId.length > 128 || !isAccountOrbMethod(body.method) || !Array.isArray(body.args)) return json({ error: "invalid request" }, 400);
-	const stub = env.ORB_CONTAINER.get(env.ORB_CONTAINER.idFromName(body.threadId));
+	const locationHint = anthropicServedHint({ colo: stringOf(request.cf?.colo) });
+	const id = env.ORB_CONTAINER.idFromName(body.threadId);
+	const stub = locationHint === void 0 ? env.ORB_CONTAINER.get(id) : env.ORB_CONTAINER.get(id, { locationHint });
 	try {
 		return json({ result: encodeRpcValue(await call(stub, body.method, body.args.map(decodeRpcValue))) });
 	} catch (cause) {

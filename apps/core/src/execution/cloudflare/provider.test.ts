@@ -181,6 +181,86 @@ describe("Cloudflare Containers Orb provider", () => {
     expect(stub.setIdleDeadline).toHaveBeenCalledWith(60_000);
   });
 
+  // Placement (thr_05ddbf21, 2026-11-20). A container runs where its object
+  // runs, and a new object starts next to the code that first calls it.
+  // Created from Hong Kong, an Orb ran there, where claude.ai answers the
+  // Claude Code installer with a web page and the API with HTTP 403. Ways
+  // Core could get it wrong: it creates the first object, or a stalled
+  // wake's next one, without a hint while it runs where Anthropic refuses;
+  // it hints an object it runs next to a place Anthropic serves, moving
+  // that person's Orb away from them; a location it cannot read stops the
+  // Orb from starting; it reads the location on every wake.
+  const traceFrom = (lines: string) =>
+    vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain("/cdn-cgi/trace");
+      return new Response(`fl=1\nh=www.cloudflare.com\n${lines}\n`);
+    });
+  const hintsFor = (namespace: { get: Mock }, name: string) =>
+    namespace.get.mock.calls
+      .filter(([id]) => id === name)
+      .map(
+        ([, options]) =>
+          (options as { locationHint?: string } | undefined)?.locationHint,
+      );
+
+  it("creates a Thread's Orb object next to a place Anthropic serves when Core runs where Anthropic refuses", async () => {
+    // A Durable Object's trace names its egress IP's country, not where it
+    // runs: on the preview a child's creator read `colo=SIN`, `loc=US`. The
+    // colo decides.
+    for (const lines of ["colo=HKG\nloc=HK", "colo=HKG\nloc=US"]) {
+      const trace = traceFrom(lines);
+      vi.stubGlobal("fetch", trace);
+      try {
+        const row = uninitialized();
+        const { namespace } = bind(row);
+        await cloudflareExecutionProvider.workspace.create(
+          context,
+          { threadId },
+          { authorize: async () => undefined },
+        );
+        expect(hintsFor(namespace, threadId)).toContain("apac-se");
+        expect(row.provider_sandbox_id).toBe("orb-object-id");
+        // A wake reads no location: the object already exists.
+        trace.mockClear();
+        await cloudflareExecutionProvider.workspace.connect(
+          context,
+          { threadId },
+          { authorize: async () => undefined },
+        );
+        expect(trace).not.toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
+  it("leaves an Orb object unhinted where Anthropic serves, or where Core cannot tell", async () => {
+    for (const trace of [
+      traceFrom("colo=SIN\nloc=SG"),
+      traceFrom("colo=SIN\nloc=US"),
+      // A reading's country alone never moves an Orb.
+      traceFrom("colo=SIN\nloc=HK"),
+      vi.fn(async () => {
+        throw new Error("network down");
+      }),
+    ]) {
+      vi.stubGlobal("fetch", trace);
+      try {
+        const row = uninitialized();
+        const { namespace } = bind(row);
+        await cloudflareExecutionProvider.workspace.create(
+          context,
+          { threadId },
+          { authorize: async () => undefined },
+        );
+        expect(hintsFor(namespace, threadId).filter(Boolean)).toEqual([]);
+        expect(row.state).toBe("initialized");
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    }
+  });
+
   it("wakes an existing container by its stored identity, reporting residency first", async () => {
     const row: Row = {
       provider: "cloudflare",
@@ -951,6 +1031,27 @@ describe("Cloudflare Containers Orb provider", () => {
     );
     expect(first.open).toHaveBeenCalledTimes(1);
     expect(world.object(`${threadId}~2`).adopt).not.toHaveBeenCalled();
+  });
+
+  it("creates a stalled wake's next object next to a place Anthropic serves when Core runs where Anthropic refuses (#1956, thr_05ddbf21)", async () => {
+    vi.stubGlobal("fetch", traceFrom("colo=HKG\nloc=HK"));
+    try {
+      const row = wokenRow(threadId);
+      const world = bindObjects(row);
+      world.object(threadId).open.mockImplementationOnce(async () => ({
+        kind: "stalled",
+        handover: handover(0),
+      }));
+      await cloudflareExecutionProvider.workspace.connect(
+        context,
+        { threadId },
+        { authorize: async () => undefined },
+      );
+      expect(world.object(`${threadId}~1`).adopt).toHaveBeenCalled();
+      expect(hintsFor(world.namespace, `${threadId}~1`)).toContain("apac-se");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("a wake that follows a move before Core adopted it gets the handover from the first object, and never marks the workspace lost (#1956, thr_edc0a58e)", async () => {

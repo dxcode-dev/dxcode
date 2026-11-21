@@ -298,6 +298,21 @@ fails them as `WORKSPACE_RESET`, which Core retries as a whole submission so
 activation sets the workspace up again
 ([`orb-container.ts`](../../apps/core/src/execution/cloudflare/orb-container.ts)).
 
+A container runs where its Orb container object runs, and a new object
+starts next to the code that first calls it. Claude Code calls Anthropic
+from the Orb's own network, and Anthropic refuses some places Cloudflare
+runs containers: from 2026-11-20 Orbs in Hong Kong (`hkg01`, `hkg12`) got
+claude.ai's "unavailable in region" page for the installer and HTTP 403
+from the API (thr_05ddbf21). So when Core creates a Thread's first object,
+or a stalled wake's next one, from such a place (the colo in Cloudflare's trace,
+`colo=HKG`; its `loc` names the egress IP's country, not where Core runs), it passes a location hint for the nearest place Anthropic
+serves (`apac-se` for Hong Kong); elsewhere it passes none, so the Orb
+stays near the person. A connected account's Orb Worker does the same from
+`request.cf`. A hint only places a new object: an Orb already in such a
+place stays there, and its Claude Code launch says where it runs instead of
+piping the page to bash
+([`anthropic-location.ts`](../../apps/core/src/execution/cloudflare/anthropic-location.ts)).
+
 Snapshots are stored beside the image in the same registry repository
 (`rootfs-snapshot-*` tags) and are tied to the image version: keep an old
 image while any Thread's snapshot still refers to it.

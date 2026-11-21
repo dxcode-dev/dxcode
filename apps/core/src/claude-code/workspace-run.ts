@@ -479,12 +479,30 @@ current() {
 CLAUDE="$HOME/.local/bin/claude"
 if ! current "$CLAUDE"; then
   OUTDATED=""
+  UPDATE=""
   if [ -e "$CLAUDE" ]; then
     OUTDATED="$(version "$CLAUDE")"
-    OUTDATED="Claude Code \${OUTDATED:-of an unknown version} is older than ${CLAUDE_CODE_MIN_VERSION}, the oldest dx can run, and could not be updated. Run \\\`claude update\\\` in the workspace's terminal, then retry."
+    OUTDATED="Claude Code \${OUTDATED:-of an unknown version} is older than ${CLAUDE_CODE_MIN_VERSION}, the oldest dx can run, and could not be updated."
+    UPDATE="Run \\\`claude update\\\` in the workspace's terminal, then retry."
   fi
-  if ! (set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash -s latest) > "$D/install.log" 2>&1 || ! current "$CLAUDE"; then
-    { echo "\${OUTDATED:-Claude Code could not be installed.}"; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
+  # Where Anthropic does not serve the Orb's network, claude.ai answers the
+  # installer's address with its "unavailable in region" page (thr_05ddbf21,
+  # an Orb in Hong Kong). bash must never run that page, and \`claude update\`
+  # fetches from the same place, so the person is told where it ran instead.
+  REFUSED=""
+  if curl -fsSL https://claude.ai/install.sh > "$D/install.sh" 2> "$D/install.log"; then
+    if [ "$(tr -d ' \\t\\r\\n' < "$D/install.sh" | head -c 1)" = "<" ]; then
+      REFUSED="claude.ai answered with a web page instead of the Claude Code installer, as it does where Anthropic does not serve Claude\${CLOUDFLARE_COUNTRY_A2:+ (this Orb runs in $CLOUDFLARE_COUNTRY_A2)}. Start a new Thread for an Orb in another place."
+    else
+      bash "$D/install.sh" latest >> "$D/install.log" 2>&1 || true
+    fi
+  fi
+  if [ -n "$REFUSED" ]; then
+    echo "\${OUTDATED:-Claude Code could not be installed.} $REFUSED" | tee "$D/stderr.log" >&2
+    exit 3
+  fi
+  if ! current "$CLAUDE"; then
+    { echo "\${OUTDATED:-Claude Code could not be installed.}\${UPDATE:+ $UPDATE}"; tail -n 20 "$D/install.log"; } | tee "$D/stderr.log" >&2
     exit 3
   fi
 fi

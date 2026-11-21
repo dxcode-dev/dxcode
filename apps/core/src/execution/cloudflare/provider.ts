@@ -41,6 +41,7 @@ import {
   accountOrbContainer,
   type OrbContainerRpc,
 } from "./account-orb-client.js";
+import { orbPlacement } from "./anthropic-location.js";
 import {
   ORB_WORKSPACE_RESET_DETAIL,
   type OrbOpenResult,
@@ -221,16 +222,24 @@ const orbContainer = (
   context: ExecutionContext,
   bindings: Bindings,
   threadId: string,
-  at: { readonly sandboxId?: string | null; readonly name?: string } = {},
+  at: {
+    readonly sandboxId?: string | null;
+    readonly name?: string;
+    /** Where a new object starts; an existing one ignores it. */
+    readonly locationHint?: DurableObjectLocationHint;
+  } = {},
 ): { readonly stub: OrbContainerRpc; readonly sandboxId: string } => {
   if (context.account.scope === "deployment") {
     const namespace = bindings.ORB_CONTAINER;
     if (namespace === undefined) throw unavailable("no ORB_CONTAINER binding");
-    const stub = namespace.get(
+    const id =
       at.sandboxId !== undefined && at.sandboxId !== null
         ? namespace.idFromString(at.sandboxId)
-        : namespace.idFromName(at.name ?? threadId),
-    );
+        : namespace.idFromName(at.name ?? threadId);
+    const stub =
+      at.locationHint === undefined
+        ? namespace.get(id)
+        : namespace.get(id, { locationHint: at.locationHint });
     return {
       stub: stub as unknown as OrbContainerRpc,
       sandboxId: stub.id.toString(),
@@ -658,7 +667,28 @@ const openCloudflareWorkspaceTimed = async (
       clearInterval(progress);
     }
   };
+  // A new object starts next to its first caller; where Anthropic refuses
+  // that place, it starts where Anthropic serves Claude Code instead. Read
+  // only when an object is created. A connected account's Orb Worker places
+  // its objects itself.
+  const placement = async () => {
+    if (context.account.scope !== "deployment") return undefined;
+    const placed = await timing.step("locate", orbPlacement);
+    orbContainerLogger.info("Orb object placement read.", {
+      event: "orb_container_placement",
+      threadId: id,
+      outcome: placed === undefined ? "unread" : "read",
+      ...(placed?.colo === undefined ? {} : { colo: placed.colo }),
+      ...(placed?.country === undefined ? {} : { country: placed.country }),
+      ...(placed?.locationHint === undefined
+        ? {}
+        : { locationHint: placed.locationHint }),
+    });
+    return placed?.locationHint;
+  };
   const provision = async (record: ExecutionWorkspaceRecord) => {
+    const locationHint = await placement();
+    if (locationHint !== undefined) bind({ locationHint });
     const handle = ready(await open(true));
     return (await timing.step("initialize", () =>
       records.initialize(id, record, sandboxId),
@@ -747,11 +777,14 @@ const openCloudflareWorkspaceTimed = async (
       const generation = handover.generation + 1;
       const name = `${id}~${generation}`;
       const movedAt = Date.now();
-      const next = orbContainer(context, bindings, id, { name });
+      const startsOver = result.earlier !== true;
+      const locationHint = startsOver ? await placement() : undefined;
+      const at = locationHint === undefined ? { name } : { name, locationHint };
+      const next = orbContainer(context, bindings, id, at);
       const adopted = await next.stub.adopt(handover);
       if (adopted !== "adopted") throw unavailable("start-over conflict");
-      bind({ name });
-      const startedOver = result.earlier !== true;
+      bind(at);
+      const startedOver = startsOver;
       if (startedOver) {
         moves += 1;
         orbContainerLogger.warn(

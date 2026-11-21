@@ -24,6 +24,7 @@ import {
   encodeRpcValue,
   isAccountOrbMethod,
 } from "./account-orb-protocol.js";
+import { anthropicServedHint } from "./anthropic-location.js";
 import type { OrbContainerObject } from "./orb-container-object.js";
 
 export {
@@ -68,6 +69,9 @@ const call = async (
   return target[method](...args);
 };
 
+const stringOf = (value: unknown) =>
+  typeof value === "string" ? value : undefined;
+
 export default {
   async fetch(request, env) {
     if (!authorized(request, env.DX_ORB_WORKER_SECRET))
@@ -96,9 +100,16 @@ export default {
       !Array.isArray(body.args)
     )
       return json({ error: "invalid request" }, 400);
-    const stub = env.ORB_CONTAINER.get(
-      env.ORB_CONTAINER.idFromName(body.threadId),
-    );
+    // A new object starts next to this Worker; where Anthropic refuses that
+    // place, it starts where Anthropic serves Claude Code instead.
+    const locationHint = anthropicServedHint({
+      colo: stringOf(request.cf?.colo),
+    });
+    const id = env.ORB_CONTAINER.idFromName(body.threadId);
+    const stub =
+      locationHint === undefined
+        ? env.ORB_CONTAINER.get(id)
+        : env.ORB_CONTAINER.get(id, { locationHint });
     try {
       const result = await call(
         stub,

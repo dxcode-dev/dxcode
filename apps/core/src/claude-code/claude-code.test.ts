@@ -238,6 +238,8 @@ const createGuest = async (
     readonly oldClaude?: string;
     /** The downloaded installer installs the current Claude Code. */
     readonly installerWorks?: boolean;
+    /** claude.ai answers the installer's address with this page instead. */
+    readonly installerPage?: string;
     /** This program as the installed Claude Code instead of the fake. */
     readonly claudeProgram?: string;
   } = {},
@@ -272,9 +274,11 @@ exec /usr/bin/awk "$@"
   await writeFile(join(root, "claude-latest"), FAKE_CLAUDE, { mode: 0o755 });
   await tool(
     "curl",
-    options.installerWorks === true
-      ? `#!/bin/sh\necho 'mkdir -p "$HOME/.local/bin" && cp ${join(root, "claude-latest")} "$HOME/.local/bin/claude"'\n`
-      : "#!/bin/sh\necho 'echo \"Installation failed: checksum mismatch\" >&2; exit 1'\n",
+    options.installerPage !== undefined
+      ? `#!/bin/sh\ncat <<'PAGE'\n${options.installerPage}\nPAGE\n`
+      : options.installerWorks === true
+        ? `#!/bin/sh\necho 'mkdir -p "$HOME/.local/bin" && cp ${join(root, "claude-latest")} "$HOME/.local/bin/claude"'\n`
+        : "#!/bin/sh\necho 'echo \"Installation failed: checksum mismatch\" >&2; exit 1'\n",
   );
   // dx runs Claude Code from where its installer puts it, never from PATH.
   const claudeAt = (body: string) =>
@@ -1092,6 +1096,28 @@ exec /bin/mkdir "$@"
         ),
       },
     });
+    expect(guest.file(`${GUEST_HOME}/old-claude-ran`)).toBeUndefined();
+  });
+
+  // thr_05ddbf21: in an Orb Cloudflare ran in Hong Kong, claude.ai answered
+  // the installer's address with its "unavailable in region" page. dx piped
+  // the page to bash, and the person read a bash syntax error and advice to
+  // run `claude update`, which fetches from the same place.
+  it("says Anthropic refused the Orb's location when claude.ai answers the installer with a web page", async () => {
+    const guest = await createGuest({
+      oldClaude: "2.1.296",
+      installerPage:
+        '<!DOCTYPE html><html lang="en" class="anthropicsans"><head><title>Claude</title></head><body>App unavailable</body></html>',
+    });
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const failed = await claude.answer({ messages: [user("Say hello", 1)] });
+    expect(failed).toMatchObject({ type: "error" });
+    const message = (failed as { error: { errorMessage: string } }).error
+      .errorMessage;
+    expect(message).toMatch(/Claude Code 2\.1\.296 is older than 2\.1\.310/);
+    expect(message).toMatch(/claude\.ai answered with a web page/);
+    expect(message).toMatch(/Anthropic does not serve/);
+    expect(message).not.toMatch(/syntax error|claude update|DOCTYPE/);
     expect(guest.file(`${GUEST_HOME}/old-claude-ran`)).toBeUndefined();
   });
 
