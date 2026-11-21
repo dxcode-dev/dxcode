@@ -27,6 +27,7 @@ use crate::protocol::{
     RequestOperation, ServerMessage, StorageOperation, UpdateStatus, WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
+use crate::sandbox::{self, Sandbox, SandboxDone, SandboxOutcome, SandboxPaths};
 use crate::services::{ServicePaths, Services};
 use crate::storage::{Transfer, TransferResult};
 use crate::terminal::TerminalOutbound;
@@ -167,6 +168,9 @@ pub struct Daemon {
     mcp: McpServers,
     /// Plugin processes (the Orb host); they outlive a session.
     plugins: PluginHosts,
+    /// The agent's commands and file access; they outlive a session.
+    sandbox: Sandbox,
+    sandbox_results: UnboundedReceiver<SandboxDone>,
     /// The Desktop whose windows the viewer's app row lists. A local runtime
     /// has none unless `DXD_DESKTOP` names one (tests).
     desktop_paths: Option<desktop::DesktopPaths>,
@@ -229,6 +233,18 @@ impl Daemon {
                 log_directory: PathBuf::from(crate::STATE_DIR).join("plugins"),
             },
         });
+        let (sandbox, sandbox_results) = Sandbox::new(match &config.local_runtime {
+            Some(local) => SandboxPaths {
+                state: PathBuf::from(&local.state_directory).join("sandbox"),
+                home: PathBuf::from(&local.home_directory),
+                user: std::env::var("USER").unwrap_or_else(|_| "user".into()),
+            },
+            None => SandboxPaths {
+                state: PathBuf::from(crate::STATE_DIR).join("sandbox"),
+                home: PathBuf::from(crate::GUEST_HOME),
+                user: "user".into(),
+            },
+        });
         let desktop_paths = match &config.local_runtime {
             None => Some(desktop::DesktopPaths::default()),
             Some(local) => std::env::var_os("DXD_DESKTOP")
@@ -266,6 +282,8 @@ impl Daemon {
             disk,
             mcp,
             plugins,
+            sandbox,
+            sandbox_results,
             desktop_paths,
         })
     }
@@ -586,6 +604,10 @@ impl Daemon {
                         Some(Ok(Message::Binary(bytes))) => {
                             last_activity = Instant::now();
                             last_feature_activity = last_activity;
+                            if sandbox::is_write_frame(&bytes) {
+                                self.submit_sandbox_write(&bytes, &generation)?;
+                                continue;
+                            }
                             if proxy::is_frame(&bytes) {
                                 // Only a malformed header ends the session;
                                 // a stream that overruns its window fails alone.
@@ -677,6 +699,13 @@ impl Daemon {
 
                 _ = tokio::time::sleep_until(lease_deadline) => {
                     return Err(SessionExit::HeartbeatLease);
+                }
+
+                Some(done) = self.sandbox_results.recv() => {
+                    last_feature_activity = Instant::now();
+                    let delivered = deliver_sandbox_result(done, &generation, &bulk);
+                    self.sandbox.delivered();
+                    delivered?;
                 }
 
                 Some(completed) = self.files_results.recv() => {
@@ -802,6 +831,7 @@ impl Daemon {
             && last_feature_activity.elapsed() >= update::QUIET
             && self.pending_file_refreshes.is_empty()
             && !self.changes_scheduler.busy()
+            && !self.sandbox.busy()
     }
 
     /// Report the swap and put the verified binary in place. Returns false,
@@ -1165,6 +1195,11 @@ impl Daemon {
                             }
                         });
                     }
+                    // A write's bytes arrive in a `DXW1` frame; this JSON
+                    // one has none, and is answered `invalid`.
+                    RequestOperation::Sandbox(operation) => {
+                        self.sandbox.submit(request_id, operation, None);
+                    }
                     RequestOperation::Mcp(McpOperation::Request {
                         server,
                         method,
@@ -1431,6 +1466,30 @@ impl Daemon {
         Ok(())
     }
 
+    /// A `DXW1` frame: one `sandbox.write` or `sandbox.stage` request with
+    /// its raw bytes. A malformed frame ends the session, as a malformed
+    /// request does.
+    fn submit_sandbox_write(&mut self, bytes: &[u8], generation: &str) -> Result<(), SessionExit> {
+        let (text, payload) = sandbox::split_write_frame(bytes)
+            .ok_or(SessionExit::Protocol("invalid sandbox write frame"))?;
+        match decode_server(text)? {
+            ServerMessage::Request {
+                generation: seen,
+                request_id,
+                operation: RequestOperation::Sandbox(operation),
+            } if seen == generation
+                && !request_id.is_empty()
+                && request_id.len() <= 128
+                && operation.takes_payload() =>
+            {
+                self.sandbox
+                    .submit(request_id, operation, Some(payload.to_vec()));
+                Ok(())
+            }
+            _ => Err(SessionExit::Protocol("unexpected sandbox write frame")),
+        }
+    }
+
     async fn deliver_files_result(
         &mut self,
         completed: FilesDone,
@@ -1496,6 +1555,60 @@ impl Daemon {
         }
         Ok(())
     }
+}
+
+/// Hand one sandbox result to Core on the bulk lane: file bytes as windowed
+/// `DXF1` frames, everything else as one JSON answer (up to 3.5 MiB). A
+/// result that finished during an earlier session goes out on this one.
+fn deliver_sandbox_result(
+    done: SandboxDone,
+    generation: &str,
+    bulk: &UnboundedSender<BulkFrame>,
+) -> Result<(), SessionExit> {
+    match done.outcome {
+        SandboxOutcome::Chunk {
+            version,
+            size_bytes,
+            offset,
+            bytes,
+        } => {
+            let frames = files_sandbox::chunk_frames(
+                generation,
+                &done.request_id,
+                &version,
+                size_bytes,
+                offset,
+                &bytes,
+            )
+            .map_err(SessionExit::Encode)?;
+            for frame in frames {
+                bulk.send(BulkFrame {
+                    message: Message::Binary(Bytes::from(frame)),
+                    windowed: true,
+                    _admission: None,
+                })
+                .map_err(|_| SessionExit::Socket)?;
+            }
+        }
+        SandboxOutcome::Json(result) => {
+            let text = serde_json::to_string(&ClientMessage::Response {
+                generation,
+                request_id: &done.request_id,
+                result: OperationResult::Sandbox(result),
+            })
+            .map_err(SessionExit::Encode)?;
+            if text.len() > MAX_CLIENT_FRAME_BYTES {
+                return Err(SessionExit::Protocol("sandbox answer too large"));
+            }
+            bulk.send(BulkFrame {
+                message: Message::Text(text.into()),
+                windowed: false,
+                _admission: None,
+            })
+            .map_err(|_| SessionExit::Socket)?;
+        }
+    }
+    Ok(())
 }
 
 struct AbortOnDrop(tokio::task::AbortHandle);

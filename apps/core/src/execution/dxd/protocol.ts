@@ -151,6 +151,12 @@ export const DxdTerminalCapability = Schema.Struct({
    * process’s capability calls as `plugin.capability`.
    */
   pluginHost: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may send the `sandbox.*` operations (the agent's
+   * commands and file access, the dxd workspace route) and `DXW1` frames
+   * carrying write bytes.
+   */
+  sandbox: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
 });
 
 export const DxdTerminalHeartbeat = Schema.Union([
@@ -1167,6 +1173,217 @@ export const DxdMcpResult = Schema.Union([
 ]);
 export type DxdMcpResult = typeof DxdMcpResult.Type;
 
+// ─── The agent's workspace route ───
+/**
+ * Raw bytes per `sandbox.read` or `sandbox.output` request, answered as
+ * `DXF1` chunks; the same bound as a Files sandbox read.
+ */
+export const DXD_SANDBOX_MAX_READ_BYTES = THREAD_SANDBOX_FILE_MAX_CHUNK_BYTES;
+/** Raw bytes one `DXW1` frame carries (`sandbox.write`, `sandbox.stage`). */
+export const DXD_SANDBOX_MAX_WRITE_BYTES = 1024 * 1024;
+const DXD_SANDBOX_MAX_WRITE_JSON_BYTES = 64 * 1024;
+export const DXD_SANDBOX_MAX_TIMEOUT_MS = 86_400_000;
+/** `DXW1` magic: one sandbox write request and its raw bytes. */
+export const DXD_SANDBOX_WRITE_MAGIC = [0x44, 0x58, 0x57, 0x31] as const;
+
+const SandboxPath = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(4_096),
+  Schema.isPattern(/^\/[^\0]*$/),
+);
+export const DxdSandboxExecId = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{16,64}$/),
+);
+const SandboxOffset = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+);
+const SandboxReadLength = Schema.Int.check(
+  Schema.isBetween({ minimum: 1, maximum: DXD_SANDBOX_MAX_READ_BYTES }),
+);
+
+/**
+ * One agent command. dxd keeps its state by `execId`, so a resend after a
+ * reconnect or a daemon restart attaches to the same run instead of running
+ * it again. `staged` names a spec sent first as `sandbox.stage` chunks, for
+ * a command whose frame would pass the request bound.
+ */
+export const DxdSandboxExecOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.exec"),
+  execId: DxdSandboxExecId,
+  command: Schema.optional(Schema.String),
+  cwd: Schema.optional(SandboxPath),
+  env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  timeoutMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: DXD_SANDBOX_MAX_TIMEOUT_MS }),
+  ),
+  staged: Schema.optional(Schema.Literal(true)),
+});
+export type DxdSandboxExecOperation = typeof DxdSandboxExecOperation.Type;
+
+/** One chunk of a staged exec spec (`{command, cwd?, env?}` as JSON). */
+export const DxdSandboxStageOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.stage"),
+  execId: DxdSandboxExecId,
+  offset: SandboxOffset,
+  last: Schema.Boolean,
+});
+export type DxdSandboxStageOperation = typeof DxdSandboxStageOperation.Type;
+
+/** The agent's Stop: end a running command's process group. */
+export const DxdSandboxCancelOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.cancel"),
+  execId: DxdSandboxExecId,
+});
+export type DxdSandboxCancelOperation = typeof DxdSandboxCancelOperation.Type;
+
+/** A range of a finished command's output too large to answer inline. */
+export const DxdSandboxOutputOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.output"),
+  execId: DxdSandboxExecId,
+  stream: Schema.Literals(["stdout", "stderr"]),
+  offset: SandboxOffset,
+  length: SandboxReadLength,
+});
+export type DxdSandboxOutputOperation = typeof DxdSandboxOutputOperation.Type;
+
+/** A byte range of any file the workspace user can read; follows links. */
+export const DxdSandboxReadOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.read"),
+  path: SandboxPath,
+  offset: SandboxOffset,
+  length: SandboxReadLength,
+});
+export type DxdSandboxReadOperation = typeof DxdSandboxReadOperation.Type;
+
+/**
+ * One chunk of a file write, staged beside the target; the last renames it
+ * into place.
+ */
+export const DxdSandboxWriteOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.write"),
+  path: SandboxPath,
+  upload: Schema.String.check(Schema.isPattern(/^[0-9a-f]{32}$/)),
+  offset: SandboxOffset,
+  sizeBytes: SandboxOffset,
+  last: Schema.Boolean,
+});
+export type DxdSandboxWriteOperation = typeof DxdSandboxWriteOperation.Type;
+
+export const DxdSandboxPathOperation = Schema.Struct({
+  operation: Schema.Literals([
+    "sandbox.stat",
+    "sandbox.readdir",
+    "sandbox.mkdir",
+  ]),
+  path: SandboxPath,
+});
+export type DxdSandboxPathOperation = typeof DxdSandboxPathOperation.Type;
+
+export const DxdSandboxRmOperation = Schema.Struct({
+  operation: Schema.Literal("sandbox.rm"),
+  path: SandboxPath,
+  recursive: Schema.Boolean,
+  force: Schema.Boolean,
+});
+export type DxdSandboxRmOperation = typeof DxdSandboxRmOperation.Type;
+
+export const DxdSandboxOperation = Schema.Union([
+  DxdSandboxExecOperation,
+  DxdSandboxStageOperation,
+  DxdSandboxCancelOperation,
+  DxdSandboxOutputOperation,
+  DxdSandboxReadOperation,
+  DxdSandboxWriteOperation,
+  DxdSandboxPathOperation,
+  DxdSandboxRmOperation,
+]);
+export type DxdSandboxOperation = typeof DxdSandboxOperation.Type;
+
+/** Operations whose bytes cross in a `DXW1` frame. */
+export const dxdSandboxTakesPayload = (operation: DxdOperation) =>
+  operation.operation === "sandbox.write" ||
+  operation.operation === "sandbox.stage";
+
+/** Operations answered with `DXF1` chunk frames rather than JSON. */
+export const dxdOperationAnswersChunks = (operation: DxdOperation) =>
+  operation.operation === "files.readSandbox" ||
+  operation.operation === "sandbox.read" ||
+  operation.operation === "sandbox.output";
+
+const SandboxBytes = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+);
+
+export const DxdSandboxResult = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("exec"),
+    exitCode: Schema.Int,
+    timedOut: Schema.Boolean,
+    /** `null` when too large to answer inline: read it with `sandbox.output`. */
+    stdout: Schema.NullOr(Schema.String),
+    stderr: Schema.NullOr(Schema.String),
+    stdoutBytes: SandboxBytes,
+    stderrBytes: SandboxBytes,
+  }),
+  Schema.Struct({ kind: Schema.Literals(["staged", "written", "done"]) }),
+  Schema.Struct({
+    kind: Schema.Literal("stat"),
+    isFile: Schema.Boolean,
+    isDirectory: Schema.Boolean,
+    isSymbolicLink: Schema.Boolean,
+    sizeBytes: SandboxBytes,
+  }),
+  Schema.Struct({ kind: Schema.Literal("missing") }),
+  Schema.Struct({
+    kind: Schema.Literal("entries"),
+    names: Schema.Array(Schema.String),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("failure"),
+    code: Schema.Literals([
+      "invalid",
+      "not-found",
+      "not-directory",
+      "is-directory",
+      "exists",
+      "not-empty",
+      "permission-denied",
+      "too-large",
+      "busy",
+      "upload-missing",
+      "not-started",
+      "lost",
+      "io",
+    ]),
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
+  }),
+]);
+export type DxdSandboxResult = typeof DxdSandboxResult.Type;
+
+/**
+ * `DXW1 | u32 BE JSON length | JSON request frame | raw bytes`: one
+ * `sandbox.write` or `sandbox.stage` request with its bytes, so file content
+ * never crosses as base64 inside JSON.
+ */
+export const encodeDxdSandboxWriteFrame = (
+  requestFrame: string,
+  payload: Uint8Array,
+): Uint8Array<ArrayBuffer> => {
+  const json = new TextEncoder().encode(requestFrame);
+  if (
+    json.byteLength < 2 ||
+    json.byteLength > DXD_SANDBOX_MAX_WRITE_JSON_BYTES ||
+    payload.byteLength > DXD_SANDBOX_MAX_WRITE_BYTES
+  )
+    throw new Error("Invalid DXW1 frame.");
+  const frame = new Uint8Array(8 + json.byteLength + payload.byteLength);
+  frame.set(DXD_SANDBOX_WRITE_MAGIC);
+  new DataView(frame.buffer).setUint32(4, json.byteLength);
+  frame.set(json, 8);
+  frame.set(payload, 8 + json.byteLength);
+  return frame;
+};
+
 // ─── The Orb host ───
 /** A call may run this long once its process is ready. */
 export const DXD_PLUGIN_MAX_CALL_TIMEOUT_MS = 300_000;
@@ -1322,6 +1539,7 @@ export const DxdOperation = Schema.Union([
   DxdPluginInvokeOperation,
   DxdPluginStatusOperation,
   DxdPluginStopOperation,
+  DxdSandboxOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;
 

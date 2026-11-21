@@ -185,6 +185,14 @@ pub struct TerminalSessionsCapability {
     pub version: u8,
 }
 
+/// Version 1: Core may send the `sandbox.*` operations (the agent's shell
+/// commands and file access) and `DXW1` frames carrying write bytes; see
+/// [`crate::sandbox`].
+#[derive(Serialize)]
+pub struct SandboxCapability {
+    pub version: u8,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capabilities {
@@ -199,6 +207,7 @@ pub struct Capabilities {
     pub mcp: McpCapability,
     pub desktop: DesktopCapability,
     pub plugin_host: PluginHostCapability,
+    pub sandbox: SandboxCapability,
 }
 
 impl Capabilities {
@@ -217,6 +226,7 @@ impl Capabilities {
             mcp: McpCapability { version: 1 },
             desktop: DesktopCapability { version: 1 },
             plugin_host: PluginHostCapability { version: 1 },
+            sandbox: SandboxCapability { version: 1 },
         }
     }
 }
@@ -489,6 +499,7 @@ pub enum OperationResult {
     Storage(crate::storage::TransferResult),
     Mcp(crate::mcp::McpResult),
     Plugin(crate::plugin_host::PluginResult),
+    Sandbox(crate::sandbox::SandboxResult),
 }
 
 /// Requests that serve Portals and the Desktop rather than one stream.
@@ -621,6 +632,7 @@ pub enum RequestOperation {
     Storage(StorageOperation),
     Mcp(McpOperation),
     Plugin(PluginOperation),
+    Sandbox(crate::sandbox::SandboxOperation),
 }
 
 #[derive(Deserialize)]
@@ -642,7 +654,8 @@ impl RequestOperation {
             | Self::Disk(_)
             | Self::Storage(_)
             | Self::Mcp(_)
-            | Self::Plugin(_) => None,
+            | Self::Plugin(_)
+            | Self::Sandbox(_) => None,
         }
     }
 }

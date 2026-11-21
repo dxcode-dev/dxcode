@@ -854,6 +854,15 @@ fn untracked_paths(root: &Path) -> CaptureResult<Vec<String>> {
         .collect::<CaptureResult<Vec<_>>>()?
         .into_iter()
         .filter(|path| safe_path(path))
+        // dx's own temporaries: a Files or agent upload not yet renamed
+        // into place, which the Files tree hides too.
+        .filter(|path| {
+            !path
+                .rsplit('/')
+                .next()
+                .unwrap_or(path)
+                .starts_with(".dx-files-")
+        })
         .map(str::to_owned)
         .collect::<Vec<_>>();
     paths.sort();
@@ -1379,6 +1388,20 @@ mod tests {
         git_ok(&root, &["commit", "-q", "-m", "init"]);
         let baseline = git_ok(&root, &["rev-parse", "HEAD"]);
         (directory, root, baseline)
+    }
+
+    #[test]
+    fn changes_never_list_dx_upload_temporaries() {
+        let (_directory, root, _baseline) = repository();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/new.txt"), "new\n").unwrap();
+        fs::write(
+            root.join("src/.dx-files-sandbox-0123456789abcdef0123456789abcdef"),
+            "staging\n",
+        )
+        .unwrap();
+        fs::write(root.join(".dx-files-upload-1"), "staging\n").unwrap();
+        assert_eq!(untracked_paths(&root).unwrap(), vec!["src/new.txt"]);
     }
 
     fn request(baseline: &str, expected: Option<&str>) -> RefreshRequest {

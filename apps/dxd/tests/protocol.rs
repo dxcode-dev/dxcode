@@ -308,6 +308,7 @@ async fn register(socket: &mut Socket) -> String {
     assert_eq!(register["capabilities"]["files"]["version"], 1);
     assert_eq!(register["capabilities"]["terminalSessions"]["version"], 1);
     assert_eq!(register["capabilities"]["desktop"]["version"], 1);
+    assert_eq!(register["capabilities"]["sandbox"]["version"], 1);
     assert!(register["capabilities"].get("environment").is_none());
     let generation = format!("gen-{}", rand::random::<u32>());
     socket
@@ -4674,4 +4675,918 @@ async fn real_daemon_runs_a_plugins_orb_process() {
             .contains("fetched-tool"),
         "{refused}"
     );
+}
+
+// The agent's workspace route (capability `sandbox`). Ways it could fail,
+// written before the code (tasks/dxd-workspace-route.md lists them all):
+// - a command's exit code, stdout, stderr, env, or cwd differ from what the
+//   providers' `bash -l -c` gives; dxd's own environment or umask (077)
+//   leaks into the command; a missing cwd fails the request instead of
+//   exiting 1 like a shell;
+// - a timeout leaves the command's process group running, or kills what it
+//   moved to its own session (`setsid nohup … &`, Claude Code's runner), or
+//   such a background process holds the command open;
+// - a 200 KB command hits Linux's 128 KiB argument limit; a command larger
+//   than a request frame cannot be sent at all;
+// - large output overflows the answer frame or arrives truncated;
+// - a resent command runs twice, or a command whose daemon restarted is
+//   lost although it finished;
+// - file bytes are corrupted, truncated at a frame boundary, or written
+//   in place without staging; a rewrite drops `+x`; a write through a link
+//   replaces the link; a write into a missing folder fails; a resent last
+//   chunk reports failure for a write that happened;
+// - `stat`, `exists`, `readdir`, `mkdir`, and `rm` disagree with the
+//   providers' shell semantics (links, dangling links, `-r`, `-f`);
+// - a malformed `DXW1` frame is accepted.
+
+fn write_frame(generation: &str, id: &str, operation: Value, bytes: &[u8]) -> Vec<u8> {
+    let json = json!({"type": "request", "generation": generation, "requestId": id, "operation": operation})
+        .to_string();
+    let mut frame = b"DXW1".to_vec();
+    frame.extend_from_slice(&(json.len() as u32).to_be_bytes());
+    frame.extend_from_slice(json.as_bytes());
+    frame.extend_from_slice(bytes);
+    frame
+}
+
+async fn write_request(
+    socket: &mut Socket,
+    generation: &str,
+    id: &str,
+    operation: Value,
+    bytes: &[u8],
+) -> Value {
+    socket
+        .send(Message::Binary(
+            write_frame(generation, id, operation, bytes).into(),
+        ))
+        .await
+        .unwrap();
+    wait_for(socket, |value| {
+        value["type"] == "response" && value["requestId"] == id
+    })
+    .await["result"]
+        .clone()
+}
+
+/// A chunked read: the `DXF1` frames of one request, each acknowledged as
+/// Core does, joined; or the JSON failure.
+async fn read_chunk(
+    socket: &mut Socket,
+    generation: &str,
+    id: &str,
+    operation: Value,
+) -> Result<(Value, Vec<u8>), Value> {
+    let length = operation["length"].as_u64().unwrap();
+    let offset = operation["offset"].as_u64().unwrap();
+    send(
+        socket,
+        json!({"type": "request", "generation": generation, "requestId": id, "operation": operation}),
+    )
+    .await;
+    let mut bytes = Vec::new();
+    loop {
+        match next_frame(socket).await {
+            Message::Binary(frame) if frame.starts_with(b"DXF1") => {
+                let header_length = u32::from_be_bytes(frame[4..8].try_into().unwrap()) as usize;
+                let header: Value = serde_json::from_slice(&frame[8..8 + header_length]).unwrap();
+                assert_eq!(header["requestId"], id);
+                assert_eq!(header["generation"], generation);
+                assert_eq!(header["offset"], offset + bytes.len() as u64);
+                bytes.extend_from_slice(&frame[8 + header_length..]);
+                send(socket, json!({"type": "chunk-ack"})).await;
+                let size = header["sizeBytes"].as_u64().unwrap();
+                if bytes.len() as u64 >= length.min(size - offset) {
+                    return Ok((header, bytes));
+                }
+            }
+            Message::Text(text) => {
+                let value: Value = serde_json::from_str(text.as_str()).unwrap();
+                if value["type"] == "response" && value["requestId"] == id {
+                    return Err(value["result"].clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Alive and not a zombie waiting for its parent.
+fn running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+        stat.rsplit_once(") ")
+            .is_some_and(|(_, rest)| !rest.starts_with('Z'))
+    })
+}
+
+fn exec(id: &str, command: &str) -> Value {
+    json!({"operation": "sandbox.exec", "execId": id, "command": command, "timeoutMs": 60_000})
+}
+
+/// Bytes no text codec preserves: every value, unaligned to any frame.
+fn binary(length: usize) -> Vec<u8> {
+    let mut state = 0x2545_f491_u32;
+    (0..length)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            state as u8
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_runs_the_agents_commands_and_file_operations() {
+    use std::os::unix::fs::PermissionsExt;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let mut daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let mut generation = register(&mut socket).await;
+    let home = fixture.home.to_str().unwrap().to_owned();
+    let repo = fixture.repo.to_str().unwrap().to_owned();
+
+    // A command as the providers run it: exit code, both streams, the
+    // request's env and cwd, the base environment and nothing of dxd's.
+    let started = Instant::now();
+    let result = request(
+        &mut socket,
+        &generation,
+        "exec-basic",
+        json!({
+            "operation": "sandbox.exec",
+            "execId": "exec-basic-0000001",
+            // `sh -c 'exit 3'` rather than `exit`: the `exit` builtin runs a
+            // login shell's ~/.bash_logout, which on a Debian home clears
+            // the console into stdout, as on every provider.
+            "command": "echo out; echo err >&2; printf '%s|%s|%s\\n' \"$DX_TEST_VALUE\" \"${DXD_TMUX-unset}\" \"$(pwd)\"; sh -c 'exit 3'",
+            "cwd": repo,
+            "env": {"DX_TEST_VALUE": "from request"},
+            "timeoutMs": 60_000,
+        }),
+    )
+    .await;
+    eprintln!(
+        "measured: sandbox.exec round trip {} ms",
+        started.elapsed().as_millis()
+    );
+    assert_eq!(result["kind"], "exec", "{result}");
+    assert_eq!(result["exitCode"], 3);
+    assert_eq!(result["timedOut"], false);
+    assert_eq!(
+        result["stdout"],
+        format!("out\nfrom request|unset|{repo}\n")
+    );
+    assert_eq!(result["stderr"], "err\n");
+    assert_eq!(
+        result["stdoutBytes"],
+        result["stdout"].as_str().unwrap().len()
+    );
+
+    // A missing cwd is the shell's failure, not the request's.
+    let missing_cwd = request(
+        &mut socket,
+        &generation,
+        "exec-cwd",
+        json!({"operation": "sandbox.exec", "execId": "exec-missing-cwd-01", "command": "echo never", "cwd": format!("{home}/absent"), "timeoutMs": 60_000}),
+    )
+    .await;
+    assert_eq!(missing_cwd["exitCode"], 1, "{missing_cwd}");
+    assert_eq!(missing_cwd["stdout"], "");
+    assert!(
+        missing_cwd["stderr"].as_str().unwrap().contains("absent"),
+        "{missing_cwd}"
+    );
+
+    // A command starts from umask 022, not dxd's 077; the login profile
+    // may set its own (dx's Terminal profile on an Orb does), as it does for
+    // a provider's `bash -l`.
+    let umask = request(
+        &mut socket,
+        &generation,
+        "exec-umask",
+        exec("exec-umask-000000001", "umask"),
+    )
+    .await;
+    let login_shell = Command::new("/bin/sh")
+        .args(["-c", "umask 022; exec bash -l -c umask"])
+        .env_clear()
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("HOME", &fixture.home)
+        .env("USER", "user")
+        .output()
+        .unwrap();
+    assert_eq!(
+        umask["stdout"],
+        String::from_utf8(login_shell.stdout).unwrap(),
+        "{umask}"
+    );
+
+    // A background process in its own session neither holds the command
+    // open (output is a file, not a pipe) nor dies with it.
+    let started = Instant::now();
+    let background = request(
+        &mut socket,
+        &generation,
+        "exec-background",
+        exec(
+            "exec-background-0001",
+            &format!("setsid sleep 30 & echo $! > {home}/background.pid; echo started"),
+        ),
+    )
+    .await;
+    assert_eq!(background["stdout"], "started\n", "{background}");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "a background process held the command open"
+    );
+    let background_pid: u32 = std::fs::read_to_string(fixture.home.join("background.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(running(background_pid));
+
+    // A timeout ends the command's whole process group, reports 124, and
+    // spares what moved to its own session.
+    let started = Instant::now();
+    let timed_out = request(
+        &mut socket,
+        &generation,
+        "exec-timeout",
+        json!({
+            "operation": "sandbox.exec",
+            "execId": "exec-timeout-0000001",
+            "command": format!("setsid nohup sleep 30 >/dev/null 2>&1 & echo $! > {home}/kept.pid; sleep 30 & echo $! > {home}/group.pid; echo before; sleep 30"),
+            "timeoutMs": 1_000,
+        }),
+    )
+    .await;
+    let elapsed = started.elapsed();
+    assert_eq!(timed_out["exitCode"], 124, "{timed_out}");
+    assert_eq!(timed_out["timedOut"], true);
+    assert_eq!(timed_out["stdout"], "before\n");
+    assert!(
+        elapsed >= Duration::from_millis(900) && elapsed < Duration::from_secs(8),
+        "{elapsed:?}"
+    );
+    let pid = |name: &str| -> u32 {
+        std::fs::read_to_string(fixture.home.join(name))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    let (kept, group) = (pid("kept.pid"), pid("group.pid"));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while running(group) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(!running(group), "the command's group was killed");
+    assert!(running(kept), "a setsid process survived the timeout");
+    for pid in [kept, background_pid] {
+        // SAFETY: ending the test's own background sleeps.
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    }
+
+    // A 200 KB command exceeds one argument (128 KiB): it runs from a file.
+    let long = format!("x='{}'; echo ${{#x}}", "a".repeat(200_000));
+    let long_result = request(
+        &mut socket,
+        &generation,
+        "exec-long",
+        exec("exec-long-command-01", &long),
+    )
+    .await;
+    assert_eq!(long_result["exitCode"], 0, "{}", long_result["stderr"]);
+    assert_eq!(long_result["stdout"], "200000\n");
+
+    // Output beyond 1 MiB is not inline: Core reads it in chunks.
+    let large = request(
+        &mut socket,
+        &generation,
+        "exec-large",
+        exec(
+            "exec-large-output-01",
+            "head -c 3000000 /dev/zero | tr '\\0' a; printf done >&2",
+        ),
+    )
+    .await;
+    assert_eq!(large["stdout"], Value::Null, "large stdout is not inline");
+    assert_eq!(large["stdoutBytes"], 3_000_000);
+    assert_eq!(large["stderr"], "done");
+    let (header, first) = read_chunk(
+        &mut socket,
+        &generation,
+        "output-1",
+        json!({"operation": "sandbox.output", "execId": "exec-large-output-01", "stream": "stdout", "offset": 0, "length": 2_000_000}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(header["sizeBytes"], 3_000_000);
+    let (later, rest) = read_chunk(
+        &mut socket,
+        &generation,
+        "output-2",
+        json!({"operation": "sandbox.output", "execId": "exec-large-output-01", "stream": "stdout", "offset": 2_000_000, "length": 4_194_304}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(header["version"], later["version"], "output is frozen");
+    assert_eq!(first.len() + rest.len(), 3_000_000);
+    assert!(first.iter().chain(rest.iter()).all(|byte| *byte == b'a'));
+
+    // A command larger than a request frame crosses as staged chunks.
+    let staged = json!({
+        "command": format!("x='{}'; echo ${{#x}} \"$STAGED\"", "b".repeat(2_500_000)),
+        "env": {"STAGED": "yes"},
+    })
+    .to_string();
+    let chunks = staged.as_bytes().chunks(1024 * 1024).collect::<Vec<_>>();
+    for (index, chunk) in chunks.iter().enumerate() {
+        let staged_chunk = write_request(
+            &mut socket,
+            &generation,
+            &format!("stage-{index}"),
+            json!({"operation": "sandbox.stage", "execId": "exec-staged-spec-01", "offset": index * 1024 * 1024, "last": index + 1 == chunks.len()}),
+            chunk,
+        )
+        .await;
+        assert_eq!(staged_chunk["kind"], "staged", "{staged_chunk}");
+    }
+    let staged_result = request(
+        &mut socket,
+        &generation,
+        "exec-staged",
+        json!({"operation": "sandbox.exec", "execId": "exec-staged-spec-01", "staged": true, "timeoutMs": 60_000}),
+    )
+    .await;
+    assert_eq!(staged_result["stdout"], "2500000 yes\n", "{staged_result}");
+
+    // A resend while it runs and after it finished answers the same run.
+    let counted = exec(
+        "exec-idempotent-001",
+        &format!("echo run >> {home}/count; sleep 1; echo once"),
+    );
+    send(
+        &mut socket,
+        json!({"type": "request", "generation": generation, "requestId": "once-1", "operation": counted}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let second = request(&mut socket, &generation, "once-2", counted.clone()).await;
+    let third = request(&mut socket, &generation, "once-3", counted.clone()).await;
+    assert_eq!(second["stdout"], "once\n", "{second}");
+    assert_eq!(second, third);
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("count")).unwrap(),
+        "run\n",
+        "the command ran once"
+    );
+
+    // Files: binary bytes through a link, in 4 MiB ranges.
+    let content = binary(5_000_003);
+    std::fs::write(fixture.home.join("data.bin"), &content).unwrap();
+    std::os::unix::fs::symlink(
+        fixture.home.join("data.bin"),
+        fixture.home.join("data.link"),
+    )
+    .unwrap();
+    let started = Instant::now();
+    let (header, head) = read_chunk(
+        &mut socket,
+        &generation,
+        "read-1",
+        json!({"operation": "sandbox.read", "path": format!("{home}/data.link"), "offset": 0, "length": 4_194_304}),
+    )
+    .await
+    .unwrap();
+    eprintln!(
+        "measured: sandbox.read 4 MiB {} ms",
+        started.elapsed().as_millis()
+    );
+    assert_eq!(header["sizeBytes"], 5_000_003);
+    let (tail_header, tail) = read_chunk(
+        &mut socket,
+        &generation,
+        "read-2",
+        json!({"operation": "sandbox.read", "path": format!("{home}/data.link"), "offset": 4_194_304, "length": 4_194_304}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(header["version"], tail_header["version"]);
+    assert_eq!([head, tail].concat(), content);
+    let missing = read_chunk(
+        &mut socket,
+        &generation,
+        "read-missing",
+        json!({"operation": "sandbox.read", "path": format!("{home}/absent"), "offset": 0, "length": 10}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(missing["code"], "not-found", "{missing}");
+    let directory = read_chunk(
+        &mut socket,
+        &generation,
+        "read-dir",
+        json!({"operation": "sandbox.read", "path": home, "offset": 0, "length": 10}),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(directory["code"], "is-directory", "{directory}");
+
+    // A write in 1 MiB chunks into a folder that does not exist yet.
+    let written = binary(2_500_000);
+    let target = format!("{home}/new/nested/out.bin");
+    let upload = "0123456789abcdef0123456789abcdef";
+    let pieces = written.chunks(1024 * 1024).collect::<Vec<_>>();
+    for (index, piece) in pieces.iter().enumerate() {
+        let last = index + 1 == pieces.len();
+        let answer = write_request(
+            &mut socket,
+            &generation,
+            &format!("write-{index}"),
+            json!({"operation": "sandbox.write", "path": target, "upload": upload, "offset": index * 1024 * 1024, "sizeBytes": written.len(), "last": last}),
+            piece,
+        )
+        .await;
+        assert_eq!(
+            answer["kind"],
+            if last { "written" } else { "staged" },
+            "{answer}"
+        );
+        if !last {
+            assert!(
+                !Path::new(&target).exists(),
+                "nothing is in place before the last chunk"
+            );
+        }
+    }
+    assert_eq!(std::fs::read(&target).unwrap(), written);
+    let metadata = std::fs::metadata(&target).unwrap();
+    assert_eq!(metadata.permissions().mode() & 0o777, 0o644);
+    assert_eq!(
+        std::fs::metadata(fixture.home.join("new"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o755
+    );
+    // The resent last chunk after its rename: still written.
+    let resent = write_request(
+        &mut socket,
+        &generation,
+        "write-resent",
+        json!({"operation": "sandbox.write", "path": target, "upload": upload, "offset": 2 * 1024 * 1024, "sizeBytes": written.len(), "last": true}),
+        pieces[2],
+    )
+    .await;
+    assert_eq!(resent["kind"], "written", "{resent}");
+    assert_eq!(
+        std::fs::read_dir(fixture.home.join("new/nested"))
+            .unwrap()
+            .count(),
+        1,
+        "no staging file is left"
+    );
+    // A later chunk of an upload dxd never staged.
+    let orphan = write_request(
+        &mut socket,
+        &generation,
+        "write-orphan",
+        json!({"operation": "sandbox.write", "path": target, "upload": "ffffffffffffffffffffffffffffffff", "offset": 10, "sizeBytes": 20, "last": true}),
+        b"0123456789",
+    )
+    .await;
+    assert_eq!(orphan["code"], "upload-missing", "{orphan}");
+    // A write's bytes never travel as JSON.
+    let unframed = request(
+        &mut socket,
+        &generation,
+        "write-json",
+        json!({"operation": "sandbox.write", "path": target, "upload": upload, "offset": 0, "sizeBytes": 0, "last": true}),
+    )
+    .await;
+    assert_eq!(unframed["code"], "invalid", "{unframed}");
+    // A rewrite keeps the mode; a write through a link keeps the link.
+    let script = fixture.home.join("script.sh");
+    std::fs::write(&script, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o750)).unwrap();
+    std::os::unix::fs::symlink("script.sh", fixture.home.join("script.link")).unwrap();
+    let rewritten = write_request(
+        &mut socket,
+        &generation,
+        "write-link",
+        json!({"operation": "sandbox.write", "path": format!("{home}/script.link"), "upload": "abcdefabcdefabcdefabcdefabcdef01", "offset": 0, "sizeBytes": 18, "last": true}),
+        b"#!/bin/sh\necho hi\n",
+    )
+    .await;
+    assert_eq!(rewritten["kind"], "written", "{rewritten}");
+    assert_eq!(std::fs::read(&script).unwrap(), b"#!/bin/sh\necho hi\n");
+    assert_eq!(
+        std::fs::metadata(&script).unwrap().permissions().mode() & 0o777,
+        0o750
+    );
+    assert!(
+        std::fs::symlink_metadata(fixture.home.join("script.link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+
+    // stat follows a link for its type; a dangling link exists but is
+    // neither a file nor a folder.
+    std::os::unix::fs::symlink(fixture.home.join("absent"), fixture.home.join("dangling")).unwrap();
+    let stat = |name: &str| json!({"operation": "sandbox.stat", "path": format!("{home}/{name}")});
+    let file = request(&mut socket, &generation, "stat-file", stat("data.bin")).await;
+    assert_eq!(
+        file,
+        json!({"kind": "stat", "isFile": true, "isDirectory": false, "isSymbolicLink": false, "sizeBytes": 5_000_003})
+    );
+    let link = request(&mut socket, &generation, "stat-link", stat("data.link")).await;
+    assert_eq!(link["isFile"], true);
+    assert_eq!(link["isSymbolicLink"], true);
+    let folder = request(&mut socket, &generation, "stat-dir", stat("new")).await;
+    assert_eq!(folder["isDirectory"], true);
+    let dangling = request(&mut socket, &generation, "stat-dangling", stat("dangling")).await;
+    assert_eq!(
+        dangling,
+        json!({"kind": "stat", "isFile": false, "isDirectory": false, "isSymbolicLink": true, "sizeBytes": 0})
+    );
+    let absent = request(
+        &mut socket,
+        &generation,
+        "stat-absent",
+        stat("absent/deeper"),
+    )
+    .await;
+    assert_eq!(absent, json!({"kind": "missing"}));
+
+    // readdir, mkdir -p, and rm with the shell's semantics.
+    let listing = request(
+        &mut socket,
+        &generation,
+        "readdir",
+        json!({"operation": "sandbox.readdir", "path": format!("{home}/new")}),
+    )
+    .await;
+    assert_eq!(listing, json!({"kind": "entries", "names": ["nested"]}));
+    let not_directory = request(
+        &mut socket,
+        &generation,
+        "readdir-file",
+        json!({"operation": "sandbox.readdir", "path": format!("{home}/data.bin")}),
+    )
+    .await;
+    assert_eq!(not_directory["code"], "not-directory", "{not_directory}");
+    let made = request(
+        &mut socket,
+        &generation,
+        "mkdir",
+        json!({"operation": "sandbox.mkdir", "path": format!("{home}/made/a/b")}),
+    )
+    .await;
+    assert_eq!(made, json!({"kind": "done"}));
+    assert!(fixture.home.join("made/a/b").is_dir());
+    let again = request(
+        &mut socket,
+        &generation,
+        "mkdir-again",
+        json!({"operation": "sandbox.mkdir", "path": format!("{home}/made/a/b")}),
+    )
+    .await;
+    assert_eq!(again, json!({"kind": "done"}));
+    let over_file = request(
+        &mut socket,
+        &generation,
+        "mkdir-file",
+        json!({"operation": "sandbox.mkdir", "path": format!("{home}/data.bin")}),
+    )
+    .await;
+    assert_eq!(over_file["code"], "exists", "{over_file}");
+    let rm = |name: &str, recursive: bool, force: bool| json!({"operation": "sandbox.rm", "path": format!("{home}/{name}"), "recursive": recursive, "force": force});
+    std::os::unix::fs::symlink(fixture.home.join("made"), fixture.home.join("made.link")).unwrap();
+    let link_removed = request(
+        &mut socket,
+        &generation,
+        "rm-link",
+        rm("made.link", true, false),
+    )
+    .await;
+    assert_eq!(link_removed, json!({"kind": "done"}));
+    assert!(
+        fixture.home.join("made/a/b").is_dir(),
+        "rm deletes the link only"
+    );
+    let folder = request(&mut socket, &generation, "rm-dir", rm("made", false, false)).await;
+    assert_eq!(folder["code"], "is-directory", "{folder}");
+    let tree = request(&mut socket, &generation, "rm-tree", rm("made", true, false)).await;
+    assert_eq!(tree, json!({"kind": "done"}));
+    assert!(!fixture.home.join("made").exists());
+    let gone = request(
+        &mut socket,
+        &generation,
+        "rm-gone",
+        rm("made", false, false),
+    )
+    .await;
+    assert_eq!(gone["code"], "not-found", "{gone}");
+    let forced = request(
+        &mut socket,
+        &generation,
+        "rm-forced",
+        rm("made", false, true),
+    )
+    .await;
+    assert_eq!(forced, json!({"kind": "done"}));
+    let file_removed = request(
+        &mut socket,
+        &generation,
+        "rm-file",
+        rm("data.bin", false, false),
+    )
+    .await;
+    assert_eq!(file_removed, json!({"kind": "done"}));
+    assert!(!fixture.home.join("data.bin").exists());
+
+    // The daemon dies mid-command (crash, `kill -9`): the command keeps
+    // running, and the next daemon answers the resend with its real result.
+    let survivor = exec(
+        "exec-survives-dxd-01",
+        &format!("echo run >> {home}/survivor; sleep 2; echo late; sh -c 'exit 7'"),
+    );
+    send(
+        &mut socket,
+        json!({"type": "request", "generation": generation, "requestId": "survivor-1", "operation": survivor}),
+    )
+    .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    daemon.0.kill().unwrap();
+    daemon.0.wait().unwrap();
+    drop(socket);
+    daemon = DaemonGuard(spawn_daemon(&fixture));
+    socket = accept(&listener).await;
+    generation = register(&mut socket).await;
+    let started = Instant::now();
+    let attached = request(&mut socket, &generation, "survivor-2", survivor.clone()).await;
+    assert_eq!(attached["exitCode"], 7, "{attached}");
+    assert_eq!(attached["stdout"], "late\n");
+    assert!(started.elapsed() < Duration::from_secs(5));
+    assert_eq!(
+        std::fs::read_to_string(fixture.home.join("survivor")).unwrap(),
+        "run\n",
+        "the resend did not run it again"
+    );
+
+    // A malformed DXW1 header ends the session.
+    let mut malformed = write_frame(
+        &generation,
+        "bad",
+        json!({"operation": "sandbox.stat", "path": "/"}),
+        b"",
+    );
+    malformed[4..8].copy_from_slice(&0_u32.to_be_bytes());
+    socket
+        .send(Message::Binary(malformed.into()))
+        .await
+        .unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match socket.next().await {
+                None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return,
+                _ => {}
+            }
+        }
+    })
+    .await;
+    assert!(closed.is_ok(), "the daemon closed the session");
+    drop(daemon);
+}
+
+// Review of the agent's workspace route (PR #2305). Ways it could fail:
+// - a `pkill -f` or `pgrep -f` pattern taken from the command matches dxd's
+//   own supervisor, which dies without recording an exit code (`lost`);
+// - output has no bound: `yes` until the timeout, or a background process
+//   that kept the command's output, fills dxd's state, or the cap kills the
+//   writer with SIGPIPE instead of dropping its bytes;
+// - a command that never started (dxd's state cannot be written, as on a
+//   full disk) is answered like one that ran, so Core cannot run it
+//   elsewhere;
+// - a stale staging file a restarted daemon abandoned stays beside the
+//   user's file forever;
+// - Stop leaves the command running until its timeout.
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_keeps_the_agents_commands_apart_from_its_own_supervision() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    let home = fixture.home.to_str().unwrap().to_owned();
+    let exec_root = fixture.state.join("sandbox/exec");
+
+    // `pkill -f` on a pattern in the command's own text reaches only the
+    // process it names, as on a provider.
+    let started = request(
+        &mut socket,
+        &generation,
+        "pkill-start",
+        exec(
+            "exec-pkill-start-001",
+            "setsid sh -c 'sleep 300; : dx-pkill-marker-7' >/dev/null 2>&1 & echo $!",
+        ),
+    )
+    .await;
+    let target: u32 = started["stdout"].as_str().unwrap().trim().parse().unwrap();
+    assert!(running(target), "{started}");
+    let killed = request(
+        &mut socket,
+        &generation,
+        "pkill",
+        exec("exec-pkill-run-00001", "pkill -f dx-pkill-marker-7"),
+    )
+    .await;
+    assert_eq!(killed["kind"], "exec", "{killed}");
+    assert_eq!(killed["exitCode"], 0, "{killed}");
+    assert!(exits_soon(target).await, "the named process survived");
+
+    // The output copiers are not processes named `dxd`: stopping the daemon
+    // by name never cuts a running command's output.
+    let names = request(
+        &mut socket,
+        &generation,
+        "copier-names",
+        exec(
+            "exec-copier-names-01",
+            "echo \"copiers=$(pgrep -s 0 -x dxd-output | wc -l) daemons=$(pgrep -s 0 -x dxd | wc -l)\"",
+        ),
+    )
+    .await;
+    assert_eq!(names["stdout"], "copiers=2 daemons=0\n", "{names}");
+
+    // Output keeps 16 MiB per stream and drains the rest without killing
+    // the writer.
+    let capped = request(
+        &mut socket,
+        &generation,
+        "cap",
+        exec(
+            "exec-output-cap-0001",
+            "head -c 20000000 /dev/zero | tr '\\0' a; echo status=$? >&2",
+        ),
+    )
+    .await;
+    assert_eq!(capped["exitCode"], 0, "{capped}");
+    assert_eq!(capped["stdoutBytes"], 16 * 1024 * 1024, "{capped}");
+    assert_eq!(capped["stderr"], "status=0\n", "{capped}");
+
+    // A background process that kept the output cannot grow it past the cap.
+    let spam = request(
+        &mut socket,
+        &generation,
+        "spam",
+        exec(
+            "exec-background-spam",
+            &format!("setsid yes spam & echo $! > {home}/spam.pid"),
+        ),
+    )
+    .await;
+    assert_eq!(spam["kind"], "exec", "{}", spam["kind"]);
+    let spammer: u32 = std::fs::read_to_string(fixture.home.join("spam.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Core answers heartbeats; this test's long waits renew the lease.
+    send(
+        &mut socket,
+        json!({"type": "heartbeat-ack", "generation": generation}),
+    )
+    .await;
+    let size = std::fs::metadata(exec_root.join("exec-background-spam/stdout"))
+        .unwrap()
+        .len();
+    assert!(size <= 16 * 1024 * 1024, "{size}");
+    assert!(running(spammer), "the cap killed the writer");
+    // SAFETY: ending the test's own background process.
+    unsafe { libc::kill(spammer as i32, libc::SIGKILL) };
+
+    // Core answers heartbeats; this test's long waits renew the lease.
+    send(
+        &mut socket,
+        json!({"type": "heartbeat-ack", "generation": generation}),
+    )
+    .await;
+    // A command dxd could not prepare never started, and says so.
+    // A regular file where its state folder goes: no folder can be made
+    // there, whatever the test's privileges.
+    let parked = fixture.state.join("sandbox/exec-parked");
+    std::fs::rename(&exec_root, &parked).unwrap();
+    std::fs::write(&exec_root, b"").unwrap();
+    let refused = request(
+        &mut socket,
+        &generation,
+        "not-started",
+        exec(
+            "exec-not-started-001",
+            &format!("touch {home}/must-not-exist"),
+        ),
+    )
+    .await;
+    std::fs::remove_file(&exec_root).unwrap();
+    std::fs::rename(&parked, &exec_root).unwrap();
+    assert_eq!(refused["kind"], "failure", "{refused}");
+    assert_eq!(refused["code"], "not-started", "{refused}");
+    assert!(!fixture.home.join("must-not-exist").exists());
+
+    // An upload's start sweeps staging files older than ten minutes from
+    // its folder and keeps fresh ones (another upload in progress).
+    let folder = fixture.home.join("sweep");
+    std::fs::create_dir_all(&folder).unwrap();
+    let stale = folder.join(format!(".dx-files-sandbox-{}", "a".repeat(32)));
+    let fresh = folder.join(format!(".dx-files-sandbox-{}", "b".repeat(32)));
+    std::fs::write(&stale, b"old").unwrap();
+    std::fs::write(&fresh, b"new").unwrap();
+    assert!(
+        Command::new("touch")
+            .args(["-d", "20 minutes ago"])
+            .arg(&stale)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let written = write_request(
+        &mut socket,
+        &generation,
+        "sweep",
+        json!({
+            "operation": "sandbox.write",
+            "path": folder.join("file.txt").to_str().unwrap(),
+            "upload": "c".repeat(32),
+            "offset": 0,
+            "sizeBytes": 2,
+            "last": true,
+        }),
+        b"ok",
+    )
+    .await;
+    assert_eq!(written["kind"], "written", "{written}");
+    assert!(!stale.exists(), "the stale staging file stayed");
+    assert!(fresh.exists(), "a fresh upload's staging file was swept");
+
+    // Core answers heartbeats; this test's long waits renew the lease.
+    send(
+        &mut socket,
+        json!({"type": "heartbeat-ack", "generation": generation}),
+    )
+    .await;
+    // Stop: `sandbox.cancel` ends a running command's process group at
+    // once, sparing what it moved to its own session.
+    let began = Instant::now();
+    send(
+        &mut socket,
+        json!({"type": "request", "generation": generation, "requestId": "cancelled-run", "operation": exec("exec-cancel-run-0001", &format!("setsid nohup sleep 60 >/dev/null 2>&1 & echo $! > {home}/kept-after-cancel.pid; sleep 60"))}),
+    )
+    .await;
+    // Cancel once the command is running (it wrote its background pid).
+    while !fixture.home.join("kept-after-cancel.pid").exists() {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    send(
+        &mut socket,
+        json!({"type": "request", "generation": generation, "requestId": "cancel", "operation": {"operation": "sandbox.cancel", "execId": "exec-cancel-run-0001"}}),
+    )
+    .await;
+    // Both answers, in whichever order they come.
+    let (mut cancel, mut ended) = (Value::Null, Value::Null);
+    while cancel.is_null() || ended.is_null() {
+        let value = wait_for(&mut socket, |value| value["type"] == "response").await;
+        match value["requestId"].as_str() {
+            Some("cancel") => cancel = value["result"].clone(),
+            Some("cancelled-run") => ended = value["result"].clone(),
+            _ => {}
+        }
+    }
+    assert_eq!(cancel["kind"], "done", "{cancel}");
+    assert_eq!(ended["kind"], "exec", "{ended}");
+    assert_eq!(ended["exitCode"], 143, "{ended}");
+    assert!(
+        began.elapsed() < Duration::from_secs(15),
+        "{:?}",
+        began.elapsed()
+    );
+    let kept: u32 = std::fs::read_to_string(fixture.home.join("kept-after-cancel.pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(running(kept), "cancel ended a process in its own session");
+    // SAFETY: ending the test's own background process.
+    unsafe { libc::kill(kept as i32, libc::SIGKILL) };
+    drop(daemon);
 }

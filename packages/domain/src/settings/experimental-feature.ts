@@ -253,6 +253,13 @@ export const createExperimentalFeatureRegistry = (
 /** The personal flag that turns the dx Mail on (wiki/agent-mail.md). */
 export const MAILBOX_FEATURE_ID = "mailbox";
 
+/**
+ * The personal flag that routes the agent's commands and file access in a
+ * Thread's Orb through dxd instead of the Orb provider's API
+ * (wiki/runtime-architecture.md, "Agent workspace route").
+ */
+export const DXD_WORKSPACE_ROUTE_FEATURE_ID = "dxd-workspace-route";
+
 export const productionExperimentalFeatureRegistry =
   createExperimentalFeatureRegistry({
     version: 1,
@@ -355,6 +362,28 @@ export const productionExperimentalFeatureRegistry =
             "Once the Mail has run on staging and production without incident, retire this flag as graduated: a deployment's mail domain alone turns it on.",
           removal:
             "Retire the flag as removed and drop the mail tables, routes, tools, and the Mail page.",
+        },
+      },
+      {
+        id: DXD_WORKSPACE_ROUTE_FEATURE_ID,
+        title: "Agent workspace through dxd",
+        description:
+          "Experimental: agents run commands and file access in the Orb through dx's daemon instead of the provider's API. Next turn on.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/execution" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "high",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "immediate",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration: "Nothing stored; off reverts on the next turn.",
+          graduation: "Default once clean on every provider.",
+          removal: "Drop the dxd sandbox route.",
         },
       },
     ],

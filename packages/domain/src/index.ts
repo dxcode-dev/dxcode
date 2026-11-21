@@ -300,6 +300,7 @@ export {
 } from "./settings/errors.js";
 export {
   createExperimentalFeatureRegistry,
+  DXD_WORKSPACE_ROUTE_FEATURE_ID,
   ExperimentalFeatureActivation,
   ExperimentalFeatureId,
   ExperimentalFeatureKind,

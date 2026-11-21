@@ -74,8 +74,23 @@ const mocks = vi.hoisted(() => {
       ? {
           bind: vi.fn(() => ({ first: firstWorkspaceReadiness })),
         }
-      : sql.includes("JOIN github_user_authorization a")
-        ? { bind: vi.fn(() => ({ first: firstGithubConnection })) }
+      : sql.includes("github_user_authorization a")
+        ? {
+            // The bootstrap's own read and activation's owner read, which
+            // also carries the owner's experimental features.
+            bind: vi.fn(() => ({
+              first: async () => {
+                const row = await firstGithubConnection();
+                return row === null
+                  ? null
+                  : {
+                      ...row,
+                      github_connected: row.connected,
+                      preferences: null,
+                    };
+              },
+            })),
+          }
         : sql.includes("thread_source_snapshot") &&
             !sql.includes("project_binding_revision")
           ? {

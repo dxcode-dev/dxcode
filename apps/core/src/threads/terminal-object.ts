@@ -62,6 +62,7 @@ import {
   DXD_PROXY_MAX_STREAM_ID,
   DXD_RELEASE,
   DXD_SANDBOX_CHUNK_HEADER,
+  DXD_SANDBOX_MAX_WRITE_BYTES,
   DXD_TERMINAL_MAX_FRAME_BYTES,
   DXD_TERMINAL_SEND_BUFFER_BYTES,
   DXD_TERMINAL_VERSION,
@@ -89,6 +90,7 @@ import {
   DxdProxyClientMessage,
   DxdProxyPortsResult,
   DxdResponseEnvelope,
+  DxdSandboxOperation,
   DxdServicesEnsureResult,
   DxdStorageOperation,
   type DxdTerminalHeartbeat,
@@ -100,6 +102,9 @@ import {
   dxdAcceptsCoAuthor,
   dxdAcceptsCurrentEnvironment,
   dxdAcceptsLowercaseEnvironmentNames,
+  dxdOperationAnswersChunks,
+  dxdSandboxTakesPayload,
+  encodeDxdSandboxWriteFrame,
   environmentActivationDigest,
   isDxdProxyFrame,
   isDxdSandboxChunkFrame,
@@ -190,6 +195,7 @@ import {
   daemonFailureResponse,
   FILES_ROOT_SNAPSHOT_HEADER,
   residentThreadDaemonEndpoint,
+  SANDBOX_OPERATION_HEADER,
 } from "./daemon-client.js";
 import { WARM_PATH, warmResponse } from "./initial-objects.js";
 import {
@@ -242,6 +248,16 @@ const TERMINAL_LIVENESS_GRACE_MS = 500;
  */
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 500;
 const MAX_PENDING_DAEMON_REQUESTS = 32;
+/** The longest a caller may wait for the dxd workspace route to be ready. */
+const SANDBOX_READY_MAX_WAIT_MS = 30_000;
+/** A sandbox file operation, or one 4 MiB range of a read. */
+const SANDBOX_REQUEST_TIMEOUT_MS = 60_000;
+/**
+ * Beyond a command's own limit: dxd kills its process group at the limit
+ * and five seconds later with SIGKILL, then answers.
+ */
+const SANDBOX_EXEC_MARGIN_MS = 30_000;
+
 /** How long an `applying` report keeps the next loss and registration quiet. */
 const PLANNED_HANDOFF_MS = 10_000;
 const gitCommitIdentity = /^(.+) <([^<>\r\n]+)> \d+ [+-]\d{4}$/;
@@ -428,6 +444,8 @@ interface DaemonAuthority {
   readonly desktop?: boolean;
   /** The connected daemon runs plugins’ Orb processes (`plugin.*`). */
   readonly pluginHost?: boolean;
+  /** The connected daemon serves the agent's workspace route (`sandbox.*`). */
+  readonly sandbox?: boolean;
 }
 
 interface DaemonAttachment {
@@ -468,6 +486,8 @@ type SocketAttachment =
 interface PendingDaemonRequest {
   readonly authority: Pick<DaemonAuthority, "threadId" | "generation">;
   readonly operation: DxdOperation;
+  /** Raw bytes a `sandbox.write` or `sandbox.stage` carries in `DXW1`. */
+  readonly payload?: Uint8Array;
   readonly maximumBytes: number;
   readonly resumable: boolean;
   readonly deadline: number;
@@ -1082,6 +1102,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     }
     if (path === "/storage/transfer") return this.#transferStorage(request);
     if (path === "/mcp/request") return this.#requestMcp(request);
+    if (path === "/sandbox/ready") return this.#sandboxReadiness(request);
+    if (path === "/sandbox/request") return this.#requestSandbox(request);
     if (path === "/terminal/close") return this.#closeTerminal(request);
     if (path === "/diagnostics") return this.#diagnostics(request);
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket")
@@ -1521,6 +1543,141 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     } finally {
       clearInterval(activity);
     }
+  }
+
+  /** A transport that answers now: registered, current, and heard lately. */
+  #sandboxTransportLive(threadId: ThreadId) {
+    return (
+      this.#authority?.threadId === threadId &&
+      this.#isTransportReady() &&
+      this.#isHeartbeatFresh()
+    );
+  }
+
+  /**
+   * Whether the agent's next sandbox may take the dxd workspace route
+   * (`execution/guest/dxd-guest-client.ts`): wakes the transport and waits
+   * up to the caller's bound for a daemon with the `sandbox` capability,
+   * including an older one updating itself. Never waits for the
+   * environment or `.agents/resume`.
+   */
+  async #sandboxReadiness(request: Request): Promise<Response> {
+    if (
+      request.method !== "POST" ||
+      request.headers.get("x-dx-sandbox-ready") !== "1"
+    )
+      return new Response(null, { status: 404 });
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    const waitMs = Math.min(
+      Math.max(Number(request.headers.get("x-dx-sandbox-wait-ms")) || 0, 0),
+      SANDBOX_READY_MAX_WAIT_MS,
+    );
+    const deadline = Date.now() + waitMs;
+    const remaining = () => Math.max(deadline - Date.now(), 0);
+    if (!this.#sandboxTransportLive(threadId.value)) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        this.#activateForFilesRead(threadId.value).catch(() => false),
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, remaining());
+        }),
+      ]);
+      clearTimeout(timer);
+      if (!this.#sandboxTransportLive(threadId.value))
+        return Response.json({ ready: false, reason: "not-ready" });
+    }
+    // An older daemon was admitted and asked to update itself; its
+    // successor registers with the capability.
+    while (
+      this.#authority?.threadId === threadId.value &&
+      this.#authority.sandbox !== true &&
+      remaining() > 0
+    )
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.min(500, remaining())),
+      );
+    if (!this.#sandboxTransportLive(threadId.value))
+      return Response.json({ ready: false, reason: "not-ready" });
+    if (this.#authority?.sandbox !== true)
+      return Response.json({ ready: false, reason: "outdated" });
+    return Response.json({
+      ready: true,
+      release: this.#authority.daemonRelease ?? null,
+    });
+  }
+
+  /**
+   * One operation of the agent's sandbox on the dxd workspace route, for a
+   * caller the agent's own command authorization already admitted. A ready
+   * daemon heard lately gets it at once; otherwise this wakes the transport
+   * and waits for it, never for the environment. Every sandbox operation is
+   * resumable: across a reconnect it is resent, and dxd answers a resend
+   * without repeating the work. `sandbox.write` and `sandbox.stage` carry
+   * their raw bytes as the body, with the operation in a header.
+   */
+  async #requestSandbox(request: Request): Promise<Response> {
+    if (
+      request.method !== "POST" ||
+      request.headers.get("x-dx-sandbox-request") !== "1"
+    )
+      return new Response(null, { status: 404 });
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      request.headers.get("x-dx-thread-id"),
+    );
+    if (Option.isNone(threadId)) return new Response(null, { status: 404 });
+    let operation: DxdSandboxOperation;
+    let payload: Uint8Array | undefined;
+    try {
+      const header = request.headers.get(SANDBOX_OPERATION_HEADER);
+      if (header === null) {
+        const body = await request.text();
+        if (utf8ExceedsBytes(body, DXD_MAX_REQUEST_FRAME_BYTES))
+          return new Response(null, { status: 400 });
+        operation = Schema.decodeUnknownSync(DxdSandboxOperation)(
+          JSON.parse(body),
+          { onExcessProperty: "error" },
+        );
+      } else {
+        operation = Schema.decodeUnknownSync(DxdSandboxOperation)(
+          JSON.parse(header),
+          { onExcessProperty: "error" },
+        );
+        payload = new Uint8Array(await request.arrayBuffer());
+      }
+    } catch {
+      return new Response(null, { status: 400 });
+    }
+    if (
+      dxdSandboxTakesPayload(operation) !== (payload !== undefined) ||
+      (payload?.byteLength ?? 0) > DXD_SANDBOX_MAX_WRITE_BYTES
+    )
+      return new Response(null, { status: 400 });
+    if (
+      !this.#sandboxTransportLive(threadId.value) &&
+      !(await this.#activateForFilesRead(threadId.value).catch(() => false))
+    )
+      return daemonFailureResponse("known");
+    const authority = this.#authority;
+    if (authority?.threadId !== threadId.value)
+      return daemonFailureResponse("known");
+    if (authority.sandbox !== true)
+      return Response.json(
+        { kind: "unavailable", reason: "outdated" },
+        { status: 409 },
+      );
+    return this.#dispatchDaemonOperation(
+      authority,
+      operation,
+      DXD_MAX_REQUEST_FRAME_BYTES,
+      operation.operation === "sandbox.exec"
+        ? operation.timeoutMs + SANDBOX_EXEC_MARGIN_MS
+        : SANDBOX_REQUEST_TIMEOUT_MS,
+      undefined,
+      payload,
+    );
   }
 
   /**
@@ -3334,6 +3491,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     maximumBytes: number,
     timeoutMs: number,
     requestId = randomBase64Url(18),
+    payload?: Uint8Array,
   ): Promise<Response> {
     if (
       !this.#sameDaemonAuthority(authority) ||
@@ -3365,8 +3523,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           generation: authority.generation,
         },
         operation,
+        ...(payload === undefined ? {} : { payload }),
         maximumBytes,
         resumable:
+          // dxd answers a resent sandbox operation without repeating it:
+          // a command attaches to its run by `execId`.
+          operation.operation.startsWith("sandbox.") ||
           operation.operation === "environment.activate" ||
           operation.operation === "environment.check" ||
           operation.operation === "files.list" ||
@@ -3424,16 +3586,28 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           pending.operation.operation !== "memory.stop" &&
           pending.operation.operation !== "disk.snapshot" &&
           pending.operation.operation !== "disk.delete" &&
+          // The agent's commands never wait for `.agents/resume`.
+          !pending.operation.operation.startsWith("sandbox.") &&
           !this.#isReady())
       )
         continue;
-      const frame = JSON.stringify({
+      const json = JSON.stringify({
         type: "request",
         generation: pending.authority.generation,
         requestId,
         operation: pending.operation,
       });
-      if (utf8ExceedsBytes(frame, pending.maximumBytes)) {
+      if (utf8ExceedsBytes(json, pending.maximumBytes)) {
+        this.#settlePending(requestId, new Response(null, { status: 400 }));
+        continue;
+      }
+      let frame: string | Uint8Array<ArrayBuffer>;
+      try {
+        frame =
+          pending.payload === undefined
+            ? json
+            : encodeDxdSandboxWriteFrame(json, pending.payload);
+      } catch {
         this.#settlePending(requestId, new Response(null, { status: 400 }));
         continue;
       }
@@ -4903,6 +5077,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           control.value.capabilities.terminalSessions !== undefined,
         desktop: control.value.capabilities.desktop !== undefined,
         pluginHost: control.value.capabilities.pluginHost !== undefined,
+        sandbox: control.value.capabilities.sandbox !== undefined,
       };
       this.#orbMemory.reset();
       this.#orbDisk.reset();
@@ -5352,10 +5527,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (
       pending?.socket !== socket ||
       header.generation !== authority.generation ||
-      pending.operation.operation !== "files.readSandbox"
+      !dxdOperationAnswersChunks(pending.operation)
     )
       return;
-    const requested = pending.operation;
+    const requested = pending.operation as {
+      readonly offset: number;
+      readonly length: number;
+    };
     const assembly = pending.sandboxChunk;
     const received = (assembly?.received ?? 0) + bytes.byteLength;
     const total = Math.min(

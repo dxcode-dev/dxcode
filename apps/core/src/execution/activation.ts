@@ -70,6 +70,17 @@ import {
 } from "./command-preflight.js";
 import { rememberDxFilesSandbox } from "./dx-files-sandbox.js";
 import {
+  dxdGuestClient,
+  dxdRoutedSandbox,
+  threadSandboxTransport,
+  type WorkspaceSandboxRoute,
+} from "./guest/dxd-guest-client.js";
+import { withSandboxTiming } from "./guest/sandbox-timing.js";
+import {
+  chooseWorkspaceSandboxRoute,
+  readOwnerActivationSettings,
+} from "./guest/workspace-route.js";
+import {
   noOrbBilling,
   type OrbBillingPolicy,
   withOrbBilling,
@@ -83,7 +94,6 @@ import {
   activateSourceWorkspace,
   cloneAdditionalRepositories,
   ensureGithubCliWrapper,
-  githubCliConnected,
   installSourceWorkspaceAssets,
   readAdditionalRepositories,
   readSourceWorkspace,
@@ -717,8 +727,16 @@ const activationFor =
         );
       // The reads of the preparation after source activation start now, so
       // their round trips overlap the checks and the workspace open.
-      const githubConnected = githubCliConnected(db, id);
+      // One read of the owner: their GitHub connection and their flag.
+      const ownerSettings = readOwnerActivationSettings(db, id);
+      const githubConnected = ownerSettings.then(
+        (settings) => settings.githubConnected,
+      );
       githubConnected.catch(() => undefined);
+      const routeFlag = ownerSettings.then(
+        (settings) => settings.dxdWorkspaceRoute,
+      );
+      routeFlag.catch(() => undefined);
       const additionalRepositories = readAdditionalRepositories(db, id);
       const timing = stepTiming(
         executionWorkspaceLogger,
@@ -1010,8 +1028,61 @@ const activationFor =
             ),
           );
         kickDaemonActivation(bindings, threadId, activeSubmissionId(id));
+        const workspace = handle;
+        const providerSandbox = () => workspace.sandbox(sourceCwd);
+        let routeChoice: Promise<WorkspaceSandboxRoute> | undefined;
         const factory: SandboxFactory = {
-          createSandbox: () => handle.sandbox(sourceCwd),
+          // The dxd workspace route, when the owner turned it on and the
+          // Thread's daemon serves it; else the provider's own API.
+          createSandbox: async () => {
+            const startedAt = Date.now();
+            routeChoice ??= chooseWorkspaceSandboxRoute({
+              bindings,
+              threadId,
+              provider: context.profile.adapter,
+              flag: routeFlag,
+            });
+            const route = await routeChoice;
+            executionWorkspaceLogger.info("The agent's sandbox route.", {
+              event: "workspace_sandbox_route",
+              threadId,
+              provider: context.profile.adapter,
+              ...route,
+              waitedMs: Date.now() - startedAt,
+            });
+            const timed = (sandbox: FlueSandbox) =>
+              withSandboxTiming(sandbox, (summary) =>
+                executionWorkspaceLogger.info("The agent's sandbox timings.", {
+                  event: "workspace_sandbox_timing",
+                  threadId,
+                  provider: context.profile.adapter,
+                  route: route.route,
+                  ...summary,
+                }),
+              );
+            if (route.route === "provider")
+              return timed(await providerSandbox());
+            return timed(
+              dxdRoutedSandbox({
+                client: dxdGuestClient(
+                  threadSandboxTransport(bindings, threadId),
+                ),
+                cwd: sourceCwd,
+                provider: providerSandbox,
+                onFallback: (operation, cause) =>
+                  executionWorkspaceLogger.warn(
+                    "A sandbox operation took the provider route.",
+                    {
+                      event: "workspace_sandbox_route_fallback",
+                      threadId,
+                      provider: context.profile.adapter,
+                      operation,
+                      reason: cause.reason,
+                    },
+                  ),
+              }),
+            );
+          },
           tools: executionWorkspaceTools,
         };
         rememberDxFilesSandbox(

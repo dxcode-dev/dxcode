@@ -17,6 +17,12 @@ export interface OrbExecOptions {
   readonly cwd?: string;
   readonly env?: Record<string, string>;
   readonly timeoutMs?: number;
+  /**
+   * The agent's Stop, given only to a client that ends the command on it
+   * (dxd, as E2B does; see `orbGuestSandbox`). A provider client may be a
+   * Durable Object stub, which cannot carry a signal.
+   */
+  readonly signal?: AbortSignal;
 }
 
 export interface OrbExecResult {
@@ -79,7 +85,10 @@ const bytes = (content: string | Uint8Array | ArrayBuffer) =>
  * Freestyle REST request).
  */
 class OrbGuestSandboxDriver implements SandboxDriver {
-  constructor(private readonly client: OrbGuestClient) {}
+  constructor(
+    private readonly client: OrbGuestClient,
+    private readonly passSignal = false,
+  ) {}
 
   async snapshotWorkspaceContext(
     root: string,
@@ -157,8 +166,12 @@ class OrbGuestSandboxDriver implements SandboxDriver {
       signal?: AbortSignal;
     },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    // `signal` is Flue's to honor (sandboxFromDriver); the deadline is ours.
+    // Flue rejects an aborted call itself (sandboxFromDriver); the client
+    // may also end the command. The deadline is ours.
     const result = await run(this.client, command, {
+      ...(options?.signal === undefined || !this.passSignal
+        ? {}
+        : { signal: options.signal }),
       ...(options?.cwd === undefined ? {} : { cwd: options.cwd }),
       ...(options?.env === undefined ? {} : { env: options.env }),
       ...(options?.timeoutMs === undefined
@@ -174,8 +187,16 @@ class OrbGuestSandboxDriver implements SandboxDriver {
 }
 
 /** The agent's Flue sandbox over an Orb guest client. */
-export const orbGuestSandbox = (client: OrbGuestClient, cwd: string): Sandbox =>
-  sandboxFromDriver(new OrbGuestSandboxDriver(client), cwd);
+export const orbGuestSandbox = (
+  client: OrbGuestClient,
+  cwd: string,
+  /** The client ends a command on the agent's Stop (`OrbExecOptions`). */
+  options: { readonly cancellable?: boolean } = {},
+): Sandbox =>
+  sandboxFromDriver(
+    new OrbGuestSandboxDriver(client, options.cancellable === true),
+    cwd,
+  );
 
 /** The raw guest Core's activation pipeline prepares. */
 export const orbGuest = (

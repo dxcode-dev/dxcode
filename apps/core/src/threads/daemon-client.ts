@@ -20,6 +20,10 @@ import {
   type DxdMcpRequestOperation,
   DxdMcpResult,
   DxdSandboxChunkHeader,
+  DxdSandboxOperation,
+  type DxdSandboxOutputOperation,
+  type DxdSandboxReadOperation,
+  DxdSandboxResult,
   type DxdStorageExportOperation,
   DxdStorageExportResult,
   type DxdStorageImportOperation,
@@ -460,3 +464,172 @@ export class McpDaemonOutdated extends Data.TaggedError("McpDaemonOutdated") {}
 export class StorageTransferOutdated extends Data.TaggedError(
   "StorageTransferOutdated",
 ) {}
+
+/** Names a sandbox write's operation; the body is its raw bytes. */
+export const SANDBOX_OPERATION_HEADER = "x-dx-sandbox-operation";
+
+/** The Thread's daemon cannot serve the workspace route (`sandbox.*`). */
+export class SandboxDaemonOutdated extends Data.TaggedError(
+  "SandboxDaemonOutdated",
+) {}
+
+export const SandboxReadiness = Schema.Union([
+  Schema.Struct({
+    ready: Schema.Literal(true),
+    release: Schema.NullOr(Schema.String),
+  }),
+  Schema.Struct({
+    ready: Schema.Literal(false),
+    reason: Schema.Literals(["not-ready", "outdated"]),
+  }),
+]);
+export type SandboxReadiness = typeof SandboxReadiness.Type;
+
+/**
+ * Whether the Thread's dxd serves the workspace route now: the execution
+ * object wakes the transport and waits up to `waitMs` for a daemon with the
+ * `sandbox` capability. Never throws; an unreachable object is `not-ready`.
+ */
+export const threadSandboxReadiness = async (
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  waitMs: number,
+): Promise<SandboxReadiness> => {
+  try {
+    const namespace = bindings.THREAD_EXECUTION;
+    if (namespace === undefined) throw new Error("binding unavailable");
+    const response = await namespace
+      .get(namespace.idFromName(threadId))
+      .fetch("https://thread.internal/sandbox/ready", {
+        method: "POST",
+        headers: {
+          "x-dx-sandbox-ready": "1",
+          "x-dx-thread-id": threadId,
+          "x-dx-sandbox-wait-ms": String(waitMs),
+        },
+      });
+    if (!response.ok) throw new Error("readiness failed");
+    return Schema.decodeUnknownSync(SandboxReadiness)(await response.json());
+  } catch {
+    return { ready: false, reason: "not-ready" };
+  }
+};
+
+/** A `DXF1` answer: one byte range of a file or a command's output. */
+export interface SandboxChunk {
+  readonly kind: "sandbox-chunk";
+  readonly version: string;
+  readonly sizeBytes: number;
+  readonly offset: number;
+  readonly bytes: Uint8Array;
+}
+
+/**
+ * One operation of the agent's sandbox on the dxd workspace route. Reads
+ * answer raw bytes; everything else JSON. Throws `DaemonUnavailable` (its
+ * `outcome` says whether dxd may have received it) or
+ * `SandboxDaemonOutdated`.
+ */
+export async function requestThreadSandbox(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdSandboxReadOperation | DxdSandboxOutputOperation,
+): Promise<SandboxChunk | DxdSandboxResult>;
+export async function requestThreadSandbox(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdSandboxOperation,
+  payload?: Uint8Array,
+): Promise<DxdSandboxResult>;
+export async function requestThreadSandbox(
+  bindings: Pick<Bindings, "THREAD_EXECUTION">,
+  threadId: ThreadId,
+  operation: DxdSandboxOperation,
+  payload?: Uint8Array,
+): Promise<SandboxChunk | DxdSandboxResult> {
+  const namespace = bindings.THREAD_EXECUTION;
+  if (namespace === undefined) throw unavailable("known");
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(
+      Schema.encodeUnknownSync(DxdSandboxOperation)(operation),
+    );
+  } catch (cause) {
+    throw new SandboxRequestInvalid({
+      detail: `the operation is not valid: ${cause instanceof Error ? cause.message.slice(0, 300) : String(cause)}`,
+    });
+  }
+  let response: Response;
+  try {
+    response = await namespace
+      .get(namespace.idFromName(threadId))
+      .fetch("https://thread.internal/sandbox/request", {
+        method: "POST",
+        headers: {
+          "x-dx-sandbox-request": "1",
+          "x-dx-thread-id": threadId,
+          ...(payload === undefined
+            ? { "content-type": "application/json" }
+            : {
+                "content-type": "application/octet-stream",
+                [SANDBOX_OPERATION_HEADER]: encoded,
+              }),
+        },
+        body:
+          payload === undefined
+            ? encoded
+            : (payload as Uint8Array<ArrayBuffer>),
+      });
+  } catch {
+    // The object never answered: it may have dispatched the operation.
+    throw unavailable("unknown");
+  }
+  try {
+    if (response.status === 409) {
+      await response.body?.cancel();
+      throw new SandboxDaemonOutdated();
+    }
+    // The object refused the request before sending it (a malformed
+    // operation, a frame past its bound).
+    if (response.status === 400) {
+      await response.body?.cancel();
+      throw new SandboxRequestInvalid({
+        detail: "the Thread's execution object refused the request",
+      });
+    }
+    if (!response.ok) {
+      const failure = Schema.decodeUnknownOption(DaemonFailureResponse)(
+        await response.json().catch(() => undefined),
+      );
+      throw unavailable(
+        Option.isSome(failure) ? failure.value.outcome : "unknown",
+      );
+    }
+    const metadata = response.headers.get(DXD_SANDBOX_CHUNK_HEADER);
+    if (metadata !== null) {
+      const header = Schema.decodeUnknownSync(SandboxChunkMetadata)(
+        JSON.parse(metadata),
+        { onExcessProperty: "error" },
+      );
+      return {
+        kind: "sandbox-chunk",
+        ...header,
+        bytes: new Uint8Array(await response.arrayBuffer()),
+      };
+    }
+    return Schema.decodeUnknownSync(DxdSandboxResult)(await response.json());
+  } catch (cause) {
+    if (
+      cause instanceof DaemonUnavailable ||
+      cause instanceof SandboxDaemonOutdated ||
+      cause instanceof SandboxRequestInvalid
+    )
+      throw cause;
+    throw unavailable("unknown");
+  }
+}
+
+/** dx refused a sandbox request as malformed; resending changes nothing. */
+export class SandboxRequestInvalid extends Data.TaggedError(
+  "SandboxRequestInvalid",
+)<{ readonly detail: string }> {}
