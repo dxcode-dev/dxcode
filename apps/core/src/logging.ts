@@ -111,3 +111,4 @@ export const sourceControlAuditLogger = getLogger([
 ]);
 export const automationLogger = getLogger(["dx", "automations"]);
 export const spaceLogger = getLogger(["dx", "spaces"]);
+export const onboardingLogger = getLogger(["dx", "onboarding"]);

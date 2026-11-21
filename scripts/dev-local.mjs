@@ -405,8 +405,36 @@ const ensureLocalAccount = async () => {
   throw lastFailure ?? new Error("Local account setup failed.");
 };
 
+// The local login is the developer's own account, not a new person's: setup,
+// the thread tour, and home's checklist count as done, so it opens on home.
+// A fresh sign-up still sees onboarding. Best effort: a failure here only
+// means the local login opens on /welcome.
+const finishLocalOnboarding = async () => {
+  try {
+    const signIn = await authRequest("sign-in/email");
+    const cookie = signIn.headers
+      .getSetCookie()
+      .map((value) => value.split(";")[0])
+      .join("; ");
+    if (!signIn.ok || cookie === "") return;
+    for (const done of ["setup", "tour", "checklist"])
+      await fetch(`${coreOrigin}/v1/onboarding`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          origin: webOrigin,
+          cookie,
+        },
+        body: JSON.stringify({ done }),
+      });
+  } catch (cause) {
+    console.warn("Could not mark the local login's onboarding done.", cause);
+  }
+};
+
 try {
   const accountStatus = await ensureLocalAccount();
+  await finishLocalOnboarding();
   console.log(`\nLocal dx is available at ${webOrigin}`);
   console.log(
     `Portals: http://t-<thread uuid>-p<port>.localhost:${ports.core}/`,

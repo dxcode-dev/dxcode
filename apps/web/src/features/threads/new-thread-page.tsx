@@ -96,6 +96,7 @@ export function NewThreadPage() {
       <DocumentTitle name="New Thread" />
       <NewThreadModal
         initialProjectId={search.project}
+        initialPrompt={search.prompt}
         {...(search.type === undefined
           ? {}
           : { initialPluginThreadType: search.type })}

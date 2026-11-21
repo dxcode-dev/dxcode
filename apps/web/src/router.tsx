@@ -126,6 +126,15 @@ const page = {
     () => import("./features/settings/members/join-workspace-page.js"),
     "JoinWorkspacePage",
   ),
+  // A new account's setup, and the thread tour.
+  welcome: lazyRouteComponent(
+    () => import("./welcome-route.js"),
+    "WelcomePage",
+  ),
+  threadTour: lazyRouteComponent(
+    () => import("./features/onboarding/thread-tour-page.js"),
+    "ThreadTourPage",
+  ),
 };
 
 const settingsPage = (
@@ -193,6 +202,19 @@ const productRoute = createRoute({
 const indexRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/",
+  // A new account that hasn't finished or skipped setup starts there. If
+  // its progress can't be read, home opens as usual.
+  // Loaded here, not with the shell, so other pages' first load stays small.
+  beforeLoad: async ({ context }) => {
+    const { onboardingQueryOptions, setupPending } = await import(
+      "./features/onboarding/onboarding-queries.js"
+    );
+    const progress = await context.queryClient
+      .ensureQueryData(onboardingQueryOptions(context.userId))
+      .catch(() => undefined);
+    if (setupPending(progress))
+      throw redirect({ to: "/welcome", replace: true });
+  },
   component: page.home,
 });
 
@@ -411,6 +433,10 @@ const newThreadRoute = createRoute({
     // Start as a plugin Thread type, `<plugin>/<type>`.
     // The server checks it when the Thread is created.
     ...(typeof search.type === "string" ? { type: search.type } : {}),
+    // A prompt the composer starts with, such as onboarding's starter task.
+    ...(typeof search.prompt === "string" && search.prompt.length <= 4_000
+      ? { prompt: search.prompt }
+      : {}),
   }),
   loader: ({ context }) =>
     context.queryClient.prefetchQuery(
@@ -753,6 +779,28 @@ const joinWorkspaceRoute = createRoute({
   component: page.joinWorkspace,
 });
 
+const welcomeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/welcome",
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { readonly step?: "model" | "code" } =>
+    search.step === "model" || search.step === "code"
+      ? { step: search.step }
+      : {},
+  loader: ({ context }) =>
+    context.queryClient.prefetchQuery(
+      settingsContextQueryOptions(context.userId),
+    ),
+  component: page.welcome,
+});
+
+const threadTourRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/welcome/tour",
+  component: page.threadTour,
+});
+
 // Signing in lands on the sign-in page with a session; continue to `next`,
 // which safeNextPath limits to a same-origin path.
 const signedInRedirect = ({ search }: { search: { next?: string } }) => {
@@ -807,6 +855,8 @@ const routeTree = rootRoute.addChildren([
   workspaceSettingsRoute,
   workspaceSettingsSectionRoute,
   joinWorkspaceRoute,
+  welcomeRoute,
+  threadTourRoute,
   signInRoute,
   signUpRoute,
 ]);

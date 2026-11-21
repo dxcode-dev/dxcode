@@ -8,10 +8,13 @@ import { NewThreadModal } from "./new-thread-page.js";
  */
 export function InlineNewThread({
   initialProjectId,
+  initialPrompt,
   initialPluginThreadType,
 }: {
   /** /new's `project`: the Project the composer starts in. */
   readonly initialProjectId?: ProjectId;
+  /** /new's `prompt`: text the composer starts with, after any draft. */
+  readonly initialPrompt?: string;
   /** /new's `type`: a plugin Thread type, `<plugin>/<type>`, to start as. */
   readonly initialPluginThreadType?: string;
 }) {
@@ -19,6 +22,7 @@ export function InlineNewThread({
     <NewThreadModal
       presentation="inline"
       initialProjectId={initialProjectId}
+      initialPrompt={initialPrompt}
       {...(initialPluginThreadType === undefined
         ? {}
         : { initialPluginThreadType })}

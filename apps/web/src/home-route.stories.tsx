@@ -18,6 +18,7 @@ import {
 import * as React from "react";
 import { expect, fn, screen, userEvent, waitFor, within } from "storybook/test";
 import { HomeScreen } from "./features/home/home-screen.js";
+import { SetupChecklist } from "./features/home/setup-checklist.js";
 import {
   newThreadOrbProvidersQueryOptions,
   type OrbProviderListData,
@@ -117,6 +118,11 @@ type StoryArgs = {
   readonly onOpenDialog: () => void;
   /** The picked Project has no Orb setup, so Set up Orbs frames the composer. */
   readonly setupMissing: boolean;
+  /**
+   * A new account's setup checklist under the composer: hidden (accounts
+   * from before onboarding, or after Hide), just signed up, or halfway.
+   */
+  readonly checklist: "none" | "new" | "halfway";
 };
 
 /** The real composer on fixture data, as the home page frames it. */
@@ -204,6 +210,15 @@ function Home(args: StoryArgs) {
 function HomeLayout(args: StoryArgs) {
   const phone = useMobile();
   const { openNewThread } = useNewThreadSurface();
+  const checklist =
+    args.checklist === "none" ? undefined : (
+      <SetupChecklist
+        done={args.checklist === "new" ? [] : ["model", "code"]}
+        onAction={(key) => {
+          if (key === "thread") openNewThread();
+        }}
+      />
+    );
   return (
     <div
       style={{ display: "grid", gridTemplateRows: "auto 1fr", height: "100vh" }}
@@ -218,9 +233,14 @@ function HomeLayout(args: StoryArgs) {
           layout="phone"
           still
           onStartNewThread={() => openNewThread()}
+          checklist={checklist}
         />
       ) : (
-        <HomeScreen layout="wide" composer={<FixtureComposer {...args} />} />
+        <HomeScreen
+          layout="wide"
+          composer={<FixtureComposer {...args} />}
+          checklist={checklist}
+        />
       )}
     </div>
   );
@@ -305,6 +325,7 @@ const meta = {
     hasProjects: true,
     orbReady: true,
     setupMissing: false,
+    checklist: "none",
     onOpenDialog: fn(),
   },
   argTypes: {
@@ -313,6 +334,12 @@ const meta = {
     setupMissing: {
       control: "boolean",
       description: "The picked Project has no Orb setup: Set up Orbs shows.",
+    },
+    checklist: {
+      control: "inline-radio",
+      options: ["none", "new", "halfway"],
+      description:
+        "A new account's setup checklist under the composer (Features/Onboarding).",
     },
   },
   render: (args: StoryArgs) => (
@@ -482,6 +509,45 @@ export const Phone: Story = {
     // The shortcut opens the dialog too: a phone has no inline composer.
     await userEvent.keyboard("{Alt>}{Enter}{/Alt}");
     await expect(args.onOpenDialog).toHaveBeenCalledTimes(2);
+  },
+};
+
+/**
+ * A new account's home after setup: the composer, and under it the setup
+ * checklist. Start a thread focuses the composer in the page, as the New
+ * Thread button does.
+ */
+export const WideNewAccount: Story = {
+  args: { checklist: "halfway", hasProjects: true },
+  globals: { viewport: { value: "desktop" } },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const checklist = await canvas.findByRole("region", {
+      name: "Finish setting up",
+    });
+    await expect(within(checklist).getByText("2 of 4")).toBeVisible();
+    await userEvent.click(
+      within(checklist).getByRole("button", {
+        name: "Start: Start a thread",
+      }),
+    );
+    await waitFor(() =>
+      expect(canvas.getByRole("textbox", { name: "Prompt" })).toHaveFocus(),
+    );
+    await expect(args.onOpenDialog).not.toHaveBeenCalled();
+  },
+};
+
+/** A new account's phone home: the checklist under Start new thread. */
+export const PhoneNewAccount: Story = {
+  args: { checklist: "new" },
+  globals: { viewport: { value: "phone" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const checklist = await canvas.findByRole("region", {
+      name: "Finish setting up",
+    });
+    await expect(within(checklist).getByText("0 of 4")).toBeVisible();
   },
 };
 

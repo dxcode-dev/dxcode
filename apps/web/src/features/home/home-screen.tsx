@@ -15,12 +15,16 @@ export function HomeScreen(
         readonly layout: "wide";
         /** The new-Thread composer, inline (`InlineNewThread`). */
         readonly composer: React.ReactNode;
+        /** A new account's setup checklist, under the composer. */
+        readonly checklist?: React.ReactNode;
       }
     | {
         readonly layout: "phone";
         readonly onStartNewThread: () => void;
         /** Draws one static frame of the mark, as for reduced motion. */
         readonly still?: boolean;
+        /** A new account's setup checklist, under the button. */
+        readonly checklist?: React.ReactNode;
       },
 ) {
   if (props.layout === "wide")
@@ -30,7 +34,14 @@ export function HomeScreen(
         data-layout="wide"
         aria-label="DX home"
       >
-        {props.composer}
+        {props.checklist === undefined ? (
+          props.composer
+        ) : (
+          <div className="home-with-checklist">
+            {props.composer}
+            {props.checklist}
+          </div>
+        )}
       </section>
     );
   return (
@@ -45,6 +56,7 @@ export function HomeScreen(
           <SquarePen aria-hidden="true" />
           Start new thread
         </Button>
+        {props.checklist}
       </div>
     </section>
   );

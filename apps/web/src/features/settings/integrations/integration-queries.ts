@@ -1,5 +1,5 @@
 import type { UserId } from "@dx/domain";
-import { queryOptions } from "@tanstack/react-query";
+import { type QueryClient, queryOptions } from "@tanstack/react-query";
 import { getGitHubIntegrationStatus } from "../../../shared/api/client.js";
 import { settingsKeys } from "../settings-context-queries.js";
 
@@ -19,3 +19,13 @@ export const githubIntegrationQueryOptions = (userId: UserId) =>
     staleTime: 30_000,
     retry: false,
   });
+
+/**
+ * Reads the person's GitHub and Bitbucket status again, as after they
+ * connected one in another tab.
+ */
+export const invalidatePersonalIntegrations = (
+  queryClient: QueryClient,
+  userId: UserId,
+) =>
+  queryClient.invalidateQueries({ queryKey: integrationKeys.personal(userId) });

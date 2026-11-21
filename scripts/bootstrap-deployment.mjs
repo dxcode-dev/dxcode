@@ -177,6 +177,9 @@ export const bootstrapDeployment = async ({
     email: credentials.email,
     now,
   });
+  // The reviewer is the deployment's own account, not a new person's: it
+  // opens on home, not new-account onboarding.
+  await database.finishOnboarding?.({ userId: user.id, now });
   return { userId: user.id, projectId: credentials.projectId };
 };
 
@@ -372,6 +375,13 @@ export const createCloudflareD1BootstrapDatabase = ({
       query(
         'UPDATE "user" SET emailVerified = 1, updatedAt = ? WHERE email = ? AND emailVerified = 0',
         [now, email],
+      ),
+    finishOnboarding: ({ userId, now }) =>
+      query(
+        `INSERT INTO user_onboarding (user_id, setup_finished_at, tour_finished_at, checklist_hidden_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO NOTHING`,
+        [userId, now, now, now, now],
       ),
     approveAuthenticationEmail: ({ email, now }) =>
       query(

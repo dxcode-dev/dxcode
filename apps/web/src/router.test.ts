@@ -12,6 +12,7 @@ import { createMemoryHistory } from "@tanstack/react-router";
 import { Schema } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sidebarLayoutKeys } from "./features/navigation/sidebar-layout-queries.js";
+import { onboardingKeys } from "./features/onboarding/onboarding-queries.js";
 import {
   projectKeys,
   projectQueryOptions,
@@ -300,6 +301,17 @@ describe("Project routes", routeLoading, () => {
   );
 });
 
+/**
+ * Home checks a new account's onboarding first; these routers open home for
+ * a person who finished it, as the shell already knows.
+ */
+const seedOnboarded = (queryClient: ReturnType<typeof createQueryClient>) =>
+  queryClient.setQueryData(onboardingKeys.progress(userId), {
+    setupFinishedAt: "2026-11-01T00:00:00.000Z",
+    tourFinishedAt: "2026-11-01T00:00:00.000Z",
+    checklistHiddenAt: "2026-11-01T00:00:00.000Z",
+  });
+
 describe("Router Query coordination", routeLoading, () => {
   it("shares intent-preloaded project data with warm route loading", async () => {
     const network = new FrontendNetworkHarness(() =>
@@ -307,6 +319,7 @@ describe("Router Query coordination", routeLoading, () => {
     );
     vi.stubGlobal("fetch", network.fetch);
     const queryClient = createQueryClient();
+    seedOnboarded(queryClient);
     const router = createAppRouter(
       { queryClient, userId },
       createMemoryHistory({ initialEntries: ["/"] }),
@@ -343,6 +356,7 @@ describe("Router Query coordination", routeLoading, () => {
     );
     vi.stubGlobal("fetch", network.fetch);
     const queryClient = createQueryClient();
+    seedOnboarded(queryClient);
     const router = createAppRouter(
       { queryClient, userId },
       createMemoryHistory({ initialEntries: ["/"] }),
@@ -368,6 +382,7 @@ describe("Router Query coordination", routeLoading, () => {
     );
     vi.stubGlobal("fetch", network.fetch);
     const queryClient = createQueryClient();
+    seedOnboarded(queryClient);
     const router = createAppRouter(
       { queryClient, userId },
       createMemoryHistory({ initialEntries: ["/"] }),
@@ -409,6 +424,7 @@ describe("Router Query coordination", routeLoading, () => {
     );
     vi.stubGlobal("fetch", network.fetch);
     const queryClient = createQueryClient();
+    seedOnboarded(queryClient);
     const router = createAppRouter(
       { queryClient, userId },
       createMemoryHistory({ initialEntries: ["/"] }),

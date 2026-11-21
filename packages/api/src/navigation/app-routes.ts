@@ -11,6 +11,8 @@ export const APP_ROUTE_PATHS = [
   "/signin",
   "/signup",
   "/join/$token",
+  "/welcome",
+  "/welcome/tour",
   "/huddle/$workspace/$code",
   "/projects",
   "/projects/$projectId",

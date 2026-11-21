@@ -7,6 +7,10 @@ import {
 } from "../../../shared/invite-unavailable.js";
 import { AppFrame } from "../../../shared/layout/app-frame.js";
 import { Button } from "../../../shared/ui/button.js";
+import {
+  onboardingQueryOptions,
+  setupPending,
+} from "../../onboarding/onboarding-queries.js";
 import { settingsContextQueryOptions } from "../settings-context-queries.js";
 import {
   acceptInviteMutationOptions,
@@ -22,11 +26,18 @@ export function JoinWorkspacePage() {
   const invite = useQuery(workspaceInviteQueryOptions(token));
   // The user's own workspace, to tell whether they are already in this one.
   const settings = useQuery(settingsContextQueryOptions(identity.id));
+  // A new account goes on to setup after joining.
+  const progress = useQuery(onboardingQueryOptions(identity.id));
   const join = useMutation({
     ...acceptInviteMutationOptions(token),
     onSuccess: async (result) => {
       // Projects, settings, and Threads now include the workspace.
       await queryClient.invalidateQueries();
+      // A new account continues to setup, which opens on the workspace.
+      if (setupPending(progress.data)) {
+        await navigate({ to: "/welcome", replace: true });
+        return;
+      }
       await navigate({
         to: "/workspaces/$workspaceSlug",
         params: { workspaceSlug: result.workspace.shortName },

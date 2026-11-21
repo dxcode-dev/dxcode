@@ -30,6 +30,7 @@ export function NewThreadRoute() {
           <React.Suspense fallback={<InlineNewThreadFrame loading />}>
             <InlineNewThread
               initialProjectId={search.project}
+              initialPrompt={search.prompt}
               {...(search.type === undefined
                 ? {}
                 : { initialPluginThreadType: search.type })}

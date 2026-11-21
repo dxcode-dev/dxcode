@@ -50,6 +50,7 @@ import {
 } from "./notifications/routes.js";
 import { installFlueObservation } from "./observability/flue.js";
 import { installRuntimeTracing } from "./observability/platform-tracing.js";
+import { onboardingRoutes } from "./onboarding/routes.js";
 import { threadOrbDiskRoutes } from "./orb-disk/routes.js";
 import { threadOrbMemoryRoutes } from "./orb-memory/routes.js";
 import { confirmMissesAtPrimary, d1Session } from "./persistence/d1-session.js";
@@ -191,6 +192,7 @@ app.route("/v1/projects", projectRepositoryBrowseRoutes);
 app.route("/v1/projects", projectMailRoutes);
 // The person's dx Mail: theirs alone, never an API key's or an app's.
 app.route("/v1/mailbox", mailboxRoutes);
+app.route("/v1/onboarding", onboardingRoutes);
 app.route("/v1/realtime", realtimeRoutes);
 app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);

@@ -2338,6 +2338,7 @@ getLogger([
 ]);
 getLogger(["dx", "automations"]);
 getLogger(["dx", "spaces"]);
+getLogger(["dx", "onboarding"]);
 //#endregion
 //#region apps/core/src/execution/disk-cleanup-script.ts
 var KIB = 1024;
