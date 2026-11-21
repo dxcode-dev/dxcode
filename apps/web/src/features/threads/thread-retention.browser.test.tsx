@@ -94,6 +94,7 @@ vi.mock("@flue/react", async (importOriginal) => ({
       abort: async () => undefined,
       retrySend: async () => undefined,
       resendPrompt: async () => undefined,
+      forgetSend: () => undefined,
       refresh: () => undefined,
       loadOlder: async () => undefined,
     };

@@ -18,6 +18,8 @@ interface InstanceState {
   holding: boolean;
   readonly orphanWaiters: Set<() => void>;
   settleDelayedExec?: () => void;
+  /** Ends a `hold-until-released` command, as if it finished. */
+  releaseHold?: () => void;
   sandbox?: Sandbox;
   /** How often each `fixture-count <name>` command ran. */
   commandRuns: Map<string, number>;
@@ -110,6 +112,8 @@ class FixtureSandboxDriver implements SandboxDriver {
     options?: { readonly signal?: AbortSignal },
   ): Promise<ShellResult> {
     if (command === "hold-turn") return this.holdUntilStopped(options?.signal);
+    if (command === "hold-until-released")
+      return this.holdUntilReleased(options?.signal);
     // A command that ignores Stop and never ends, as a wedged Orb's did.
     if (command === "deaf-hold") {
       this.state.holding = true;
@@ -136,6 +140,28 @@ class FixtureSandboxDriver implements SandboxDriver {
         this.state.settleDelayedExec = undefined;
         resolve({ stdout: ORPHAN_RESULT, stderr: "", exitCode: 0 });
       };
+    });
+  }
+
+  /** Keeps the turn running until the test releases it, or Stop. */
+  private holdUntilReleased(signal?: AbortSignal): Promise<ShellResult> {
+    this.state.holding = true;
+    return new Promise((resolve) => {
+      const end = (result: ShellResult) => {
+        this.state.holding = false;
+        this.state.releaseHold = undefined;
+        resolve(result);
+      };
+      this.state.releaseHold = () =>
+        end({ stdout: "released", stderr: "", exitCode: 0 });
+      if (signal?.aborted)
+        end({ stdout: "", stderr: "stopped", exitCode: 130 });
+      else
+        signal?.addEventListener(
+          "abort",
+          () => end({ stdout: "", stderr: "stopped", exitCode: 130 }),
+          { once: true },
+        );
     });
   }
 
@@ -192,6 +218,13 @@ export const settleDelayedCommand = (id: string) => {
 };
 
 export const isHoldingTurn = (id: string) => stateFor(id).holding;
+
+/** Ends the instance's `hold-until-released` command; false when none runs. */
+export const releaseHeldTurn = (id: string) => {
+  const release = stateFor(id).releaseHold;
+  release?.();
+  return release !== undefined;
+};
 
 /** How often each `fixture-count <name>` command ran in the instance. */
 export const commandRuns = (id: string) =>

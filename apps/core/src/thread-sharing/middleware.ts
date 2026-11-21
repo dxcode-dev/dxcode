@@ -26,6 +26,7 @@ import {
 } from "../realtime/publication.js";
 import { admitSpaceMessage } from "../spaces/posts/admission.js";
 import { joinSpace } from "../spaces/repository-d1.js";
+import { clearThreadRewind } from "../threads/message-rewind-flag.js";
 import { ThreadRepositoryD1 } from "../threads/repository-d1.js";
 import { threadDetailData } from "../threads/routes.js";
 import { wakeSnoozedThread } from "../threads/snooze.js";
@@ -41,7 +42,7 @@ import {
   sharedThreadConversation,
   switchConversationMode,
 } from "./members.js";
-import { recordParticipant, userIdentity } from "./service.js";
+import { recordParticipant, senderIdentityAndRewind } from "./service.js";
 
 /**
  * Thread detail and readiness reads for a member of a shared Thread run as the
@@ -219,19 +220,22 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   let space = false;
   let attachments: ResolvedMessageAttachments | undefined;
   let afterSpaceMessage: ((response: Response) => Promise<void>) | undefined;
+  /** A delete rewound the Thread since the agent's last message. */
+  let rewoundAt: number | undefined;
   if (userMessage !== undefined) {
-    const [identity, initialData, shared] = await Promise.all([
-      userIdentity(db, actor.userId as UserId),
-      access !== "owner" && "initialData" in userMessage
-        ? ownerAgentInitialization(
-            context.env,
-            db,
-            threadId.value,
-            context.get("threadOwnerUserId") as UserId,
-          ).then((owner) => ({ initialData: owner }))
-        : Promise.resolve({}),
-      sharedThreadConversation(db, threadId.value),
-    ]);
+    const [{ identity, rewoundAt: rewind }, initialData, shared] =
+      await Promise.all([
+        senderIdentityAndRewind(db, actor.userId as UserId, threadId.value),
+        access !== "owner" && "initialData" in userMessage
+          ? ownerAgentInitialization(
+              context.env,
+              db,
+              threadId.value,
+              context.get("threadOwnerUserId") as UserId,
+            ).then((owner) => ({ initialData: owner }))
+          : Promise.resolve({}),
+        sharedThreadConversation(db, threadId.value),
+      ]);
     const { members } = shared;
     // Members are listed only while the Thread is shared; a private Thread
     // is always in agent mode. Tags count only in the text the message
@@ -276,6 +280,9 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     // A plugin's note is recorded for everyone without a model call, as
     // chat is, in any Thread.
     const chat = !edit && (posted?.note === true || mode === "chat");
+    // Chat runs nothing, so the next message the agent answers carries it.
+    // An edit's own mark already says the conversation went back.
+    if (!chat) rewoundAt = rewind;
     if (
       chat &&
       (parseMessageAttachments(userMessage.body).attachments.length > 0 ||
@@ -360,6 +367,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
         ...(messageId === undefined ? {} : { messageId }),
         ...(commentOn === undefined ? {} : { commentOn }),
         ...(edit ? { edited: true } : {}),
+        ...(!edit && rewoundAt !== undefined ? { rewound: true } : {}),
         // Set only by a plugin's in-process thread access.
         ...(posted === undefined ? {} : { plugin: posted.plugin }),
       },
@@ -400,6 +408,8 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     }),
   );
   if (context.res.status !== 202) return;
+  if (rewoundAt !== undefined)
+    await clearThreadRewind(db, threadId.value, rewoundAt);
   // Awaited, so the 202 means every reader of the Thread can open the files
   // and the next message is classified in the mode this one chose.
   if (attachments !== undefined)

@@ -8,7 +8,7 @@ import {
   MenuTrigger,
 } from "../../shared/ui/menu.js";
 import { copyFocusedMessage, type MessageMenuKind } from "./message-copy.js";
-import { canEditMessage, MessageEditContext } from "./message-edit.js";
+import { canEditMessage, MessageEditContext } from "./message-edit-model.js";
 import { MessageMenuItems } from "./message-menu-items.js";
 import { MessageReactionAction } from "./sharing/message-reactions.js";
 import type { TranscriptRow } from "./transcript-view-model.js";

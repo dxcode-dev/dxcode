@@ -828,10 +828,14 @@ it("hides the left sidebar with its own toggle and shows it again", async () => 
       ".product-navigation-panel [data-command-action='toggle-sidebar']",
     ) as HTMLElement,
   );
-  await until(() => sidebarWidth() < 1);
-  const open = document.querySelector<HTMLElement>(
-    "[data-command-action='toggle-sidebar'][aria-label='Open sidebar']",
-  );
+  const openButton = () =>
+    document.querySelector<HTMLElement>(
+      "[data-command-action='toggle-sidebar'][aria-label='Open sidebar']",
+    );
+  // The width reaches 0 when the closing animation ends; the panel reports
+  // itself collapsed, and the page shows its open button, a moment later.
+  await until(() => sidebarWidth() < 1 && openButton() !== null);
+  const open = openButton();
   expect(open).not.toBeNull();
   await v2Shot("sidebar-hidden-1440");
   await userEvent.click(open as HTMLElement);

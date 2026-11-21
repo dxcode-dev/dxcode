@@ -2342,8 +2342,9 @@
   color: var(--foreground);
   font-size: var(--text-xs);
 }
-/* What the edit removes dims while the person edits. */
-.transcript-turn > [data-editing] ~ *,
+/* What the edit removes dims while the person edits. Editing a message
+   the agent has not read replaces it and removes nothing. */
+.transcript-turn > [data-editing]:not([data-editing="waiting"]) ~ *,
 .transcript-virtual-item[data-edit-removes] {
   opacity: 0.45;
   transition: opacity 150ms;

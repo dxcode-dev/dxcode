@@ -85,6 +85,12 @@ export const SpacePostSchema = Schema.Struct({
   /** In the order they were first given. */
   reactions: Schema.Array(SpacePostReactionCountSchema),
   comments: SpacePostCommentsSchema,
+  /**
+   * The Space's agent has not read it yet: its message still waits in the
+   * agent's queue, so an edit replaces it and a delete withdraws it unseen.
+   * Absent once read, and while the Space's agent is idle.
+   */
+  waiting: Schema.optional(Schema.Boolean),
 });
 export type SpacePost = typeof SpacePostSchema.Type;
 
@@ -156,6 +162,20 @@ export const SpacePostResponseSchema = successResponse(
 );
 export type SpacePostResponse = typeof SpacePostResponseSchema.Encoded;
 
+/**
+ * `DELETE /v1/spaces/:threadId/posts/:postId`: its author deleted it, and it
+ * left the Space for everyone. `withdrawn`: the agent had not read it and
+ * never will; `noted`: the agent had read it and was told it was deleted.
+ */
+export const DeleteSpacePostResponseSchema = successResponse(
+  Schema.Struct({
+    postId: SpacePostIdSchema,
+    outcome: Schema.Literals(["withdrawn", "noted"]),
+  }),
+);
+export type DeleteSpacePostResponse =
+  typeof DeleteSpacePostResponseSchema.Encoded;
+
 /** The tag that names a person's post for the agent. */
 export const spacePostTag = (postId: string) => `<post id="${postId}" />`;
 
@@ -170,6 +190,13 @@ export const spacePostEditForAgent = (
   previous: string,
 ) =>
   `${text}\n\n<edited_post id="${postId}">\n${previous.replaceAll("</edited_post>", "<\\/edited_post>")}\n</edited_post>`;
+
+/**
+ * A post its author deleted after the agent read it, as the agent receives
+ * it: the text it no longer asks for.
+ */
+export const spacePostDeleteForAgent = (postId: string, previous: string) =>
+  `<deleted_post id="${postId}">\n${previous.replaceAll("</deleted_post>", "<\\/deleted_post>")}\n</deleted_post>`;
 
 /** The `<post id="…" />` tags in a message the agent received. */
 export const spacePostIdsIn = (body: string): ReadonlyArray<string> =>

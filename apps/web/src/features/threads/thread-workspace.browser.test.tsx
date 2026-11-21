@@ -34,6 +34,7 @@ vi.mock("@flue/react", async (importOriginal) => ({
     abort: vi.fn(),
     retrySend: vi.fn(),
     resendPrompt: vi.fn(),
+    forgetSend: vi.fn(),
     refresh: vi.fn(),
     loadOlder: vi.fn(),
   }),

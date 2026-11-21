@@ -90,7 +90,7 @@ function ProgressRing({ fraction }: { readonly fraction: number }) {
   );
 }
 
-function AttachmentMedia({
+export function AttachmentMedia({
   kind,
   url,
   name,
@@ -122,7 +122,7 @@ function AttachmentMedia({
  * A file's preview in the shared viewer: the media (or a file icon), its
  * name, type, and size, and Download and Remove.
  */
-function AttachmentPreviewDialog({
+export function AttachmentPreviewDialog({
   name,
   mimeType,
   size,

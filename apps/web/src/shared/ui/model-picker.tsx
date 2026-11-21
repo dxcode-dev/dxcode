@@ -144,6 +144,7 @@ export function ModelPicker({
   open,
   defaultOpen,
   onOpenChange,
+  finalFocus,
   disabled = false,
   loading = false,
   shortcut,
@@ -176,6 +177,10 @@ export function ModelPicker({
   readonly open?: boolean;
   readonly defaultOpen?: boolean;
   readonly onOpenChange?: (open: boolean) => void;
+  /** Where focus goes when the list closes; see ChoiceSelectPopup. */
+  readonly finalFocus?: React.ComponentProps<
+    typeof ChoiceSelectPopup
+  >["finalFocus"];
   readonly disabled?: boolean;
   /** The models are still loading. */
   readonly loading?: boolean;
@@ -280,6 +285,7 @@ export function ModelPicker({
         aria-label={`Choose ${label.toLowerCase()}`}
         sideOffset={6}
         collisionPadding={8}
+        finalFocus={finalFocus}
       >
         <div className="dx-model-picker-search">
           <ChoiceSelectSearch

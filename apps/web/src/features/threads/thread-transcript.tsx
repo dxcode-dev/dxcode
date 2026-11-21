@@ -10,7 +10,11 @@ import { lazyComponent } from "../../shared/stale-chunk.js";
 import { Button } from "../../shared/ui/button.js";
 import { MessageActions } from "./message-actions.js";
 import { MessageImageTiles } from "./message-attachments-ui.js";
-import { MessageEditContext } from "./message-edit.js";
+import {
+  isEditedRow,
+  MessageEditContext,
+  rowWaitingSubmission,
+} from "./message-edit-model.js";
 import { messageLinkRow } from "./message-link.js";
 import { TranscriptRowContent } from "./message-parts.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
@@ -183,7 +187,8 @@ function TranscriptRowShellContent({
     user ? row.admitted : true,
     user ? row.sentAt : undefined,
   );
-  const editing = React.use(MessageEditContext)?.editingRowId === row.id;
+  const editContext = React.use(MessageEditContext);
+  const editing = isEditedRow(row, editContext);
   // What people and the agent wrote has a menu; tool work does not.
   // The viewer's own prompts sit on the right; replies, other people's
   // messages, and messages from other Threads on the left.
@@ -292,7 +297,13 @@ function TranscriptRowShellContent({
         user && author !== undefined && !author.mine ? "other" : undefined
       }
       data-continued={user && row.continued ? "" : undefined}
-      data-editing={editing ? "" : undefined}
+      data-editing={
+        editing
+          ? rowWaitingSubmission(row, editContext) === undefined
+            ? ""
+            : "waiting"
+          : undefined
+      }
       ref={measureElement}
       tabIndex={-1}
       className={`transcript-row conversation-message ${user ? "user-message" : "agent-message"}`}
@@ -1290,11 +1301,17 @@ export function TranscriptViewport(
   const processingTurnId = transcriptProgress(model, rowsByTurn);
   // Editing a message previews what the edit removes: every turn after the
   // edited message's turn dims (the rest of that turn dims in CSS).
-  const editingRowId = React.use(MessageEditContext)?.editingRowId;
-  const editingTurnId =
-    editingRowId === undefined
+  // A message that waits for the agent is replaced, and removes nothing.
+  const editContext = React.use(MessageEditContext);
+  const editedRow =
+    editContext?.editingRowId === undefined
       ? undefined
-      : model.rows.find((row) => row.id === editingRowId)?.turnId;
+      : model.rows.find((row) => isEditedRow(row, editContext));
+  const editingTurnId =
+    editedRow === undefined ||
+    rowWaitingSubmission(editedRow, editContext) !== undefined
+      ? undefined
+      : editedRow.turnId;
   const editingTurnIndex =
     editingTurnId === undefined
       ? -1

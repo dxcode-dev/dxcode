@@ -4,6 +4,7 @@ import {
   type ThreadDetailData,
   ThreadFilesPath,
   type ThreadPaneFileTarget,
+  type ThreadQueuedMessage,
 } from "@dx/api";
 import {
   PROJECTLESS_PROJECT_NAME,
@@ -54,9 +55,16 @@ import { useDictationSlot } from "./dictation/use-dictation.js";
 import type { CenterFileTab } from "./files/file-tab.js";
 import type { ThreadFileLocation } from "./files/files-panel.js";
 import type { PendingAttachment } from "./image-attachments.js";
-import type { MessageEditOptions } from "./message-edit.js";
+import type { MessageEditOptions } from "./message-edit-model.js";
 import { editThreadMessageMutationOptions } from "./message-edit-mutations.js";
 import { isMessageLinkId } from "./message-link.js";
+import {
+  deleteThreadMessageMutationOptions,
+  editQueuedThreadMessageMutationOptions,
+  refreshThreadQueuedMessages,
+  threadQueuedMessagesKey,
+  threadQueuedMessagesQueryOptions,
+} from "./message-queue-queries.js";
 import type { PluginPaneTab } from "./panes/pane-layout.js";
 import {
   fileTargetKey,
@@ -649,25 +657,62 @@ function useComposerMentions(
     : undefined;
 }
 
+/** How often the queue is read while the agent works and the tab shows. */
+const QUEUED_MESSAGES_REFRESH_MS = 3_000;
+
 /**
- * Editing an earlier message, in ordinary Threads the viewer can write to:
- * a Space's posts edit in place, and archived Threads and viewers send
- * nothing.
+ * Editing and deleting the viewer's messages, in ordinary Threads the viewer
+ * can write to: a Space's posts edit in place, and archived Threads and
+ * viewers send nothing. While the agent works, the viewer's own messages
+ * that wait for it are read too, so ones sent from another tab or device
+ * show and can be changed before the agent reads them.
  */
 function useMessageEdit(
   thread: ThreadDetailData,
   viewerId: UserId,
 ): MessageEditOptions | undefined {
+  const queryClient = useQueryClient();
+  const offered =
+    thread.kind !== "space" &&
+    thread.lifecycleState === "active" &&
+    thread.access !== "view";
+  const working = offered && thread.activityStatus === "working";
+  // Read again every few seconds while the agent works and the tab shows,
+  // so a message queued, edited, or deleted on another device shows here.
+  const queued = useQuery({
+    ...threadQueuedMessagesQueryOptions(viewerId, thread.id),
+    enabled: working,
+    refetchInterval: working ? QUEUED_MESSAGES_REFRESH_MS : false,
+  });
   const edit = useMutation(
     editThreadMessageMutationOptions(viewerId, thread.id),
   );
-  if (
-    thread.kind === "space" ||
-    thread.lifecycleState !== "active" ||
-    thread.access === "view"
-  )
-    return undefined;
-  return { viewerId, send: edit.mutateAsync, pending: edit.isPending };
+  const editQueued = useMutation(
+    editQueuedThreadMessageMutationOptions(viewerId, thread.id),
+  );
+  const remove = useMutation(
+    deleteThreadMessageMutationOptions(viewerId, thread.id),
+  );
+  if (!offered) return undefined;
+  return {
+    viewerId,
+    send: edit.mutateAsync,
+    editQueued: editQueued.mutateAsync,
+    remove: remove.mutateAsync,
+    pending: edit.isPending || editQueued.isPending,
+    removing: remove.isPending,
+    ...(working && queued.data !== undefined
+      ? { queuedMessages: queued.data }
+      : {}),
+    updateQueued: (update) =>
+      queryClient.setQueryData(
+        threadQueuedMessagesKey(viewerId, thread.id),
+        (current: ReadonlyArray<ThreadQueuedMessage> | undefined) =>
+          update(current ?? []),
+      ),
+    onQueueChanged: () =>
+      void refreshThreadQueuedMessages(queryClient, viewerId, thread.id),
+  };
 }
 
 /** Opening another member's shared Thread follows it. */

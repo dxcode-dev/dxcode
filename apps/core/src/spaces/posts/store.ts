@@ -107,6 +107,38 @@ export const readSpacePost = (
     .bind(postId, spaceThreadId)
     .first<SpacePostRow>();
 
+/** One of this Space's posts, deleted or not, or null. */
+export const readSpacePostIncludingDeleted = (
+  db: D1Database,
+  spaceThreadId: string,
+  postId: string,
+) =>
+  db
+    .prepare(
+      `SELECT ${COLUMNS}, deleted_at FROM space_post
+        WHERE id = ?1 AND space_thread_id = ?2`,
+    )
+    .bind(postId, spaceThreadId)
+    .first<SpacePostRow & { readonly deleted_at: number | null }>();
+
+/**
+ * Its author deleted a post: every read leaves it out from now on, its
+ * comments and reactions with it. False when it was deleted already.
+ */
+export const softDeleteSpacePost = async (
+  db: D1Database,
+  postId: string,
+  now = Date.now(),
+) =>
+  (
+    await db
+      .prepare(
+        "UPDATE space_post SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+      )
+      .bind(postId, now)
+      .run()
+  ).meta.changes > 0;
+
 /** Forgets a post nobody's agent received. */
 export const deleteSpacePost = async (db: D1Database, postId: string) => {
   await db.prepare("DELETE FROM space_post WHERE id = ?").bind(postId).run();
@@ -126,8 +158,10 @@ export const editSpacePost = async (
     db
       .prepare(
         `INSERT INTO space_post_revision (post_id, revision, text, created_at)
-         SELECT ?1, count(*) + 1, ?2, ?3 FROM space_post_revision
-          WHERE post_id = ?1`,
+         SELECT ?1,
+                (SELECT count(*) FROM space_post_revision WHERE post_id = ?1) + 1,
+                ?2, ?3
+          WHERE EXISTS (SELECT 1 FROM space_post WHERE id = ?1 AND text = ?2)`,
       )
       .bind(post.id, post.text, post.edited_at ?? post.created_at),
     db
@@ -138,6 +172,32 @@ export const editSpacePost = async (
       .bind(post.id, text, Math.max(now, post.created_at), post.text),
   ]);
   return (updated?.meta.changes ?? 0) > 0;
+};
+
+/**
+ * Undoes `editSpacePost(db, post, text)` when the agent never got the edit:
+ * the post's text and edit time go back, and the revision it added goes.
+ */
+export const revertSpacePostEdit = async (
+  db: D1Database,
+  post: SpacePostRow,
+  text: string,
+) => {
+  await db.batch([
+    db
+      .prepare(
+        `UPDATE space_post SET text = ?2, edited_at = ?3
+          WHERE id = ?1 AND text = ?4`,
+      )
+      .bind(post.id, post.text, post.edited_at, text),
+    db
+      .prepare(
+        `DELETE FROM space_post_revision
+          WHERE post_id = ?1 AND revision = (
+            SELECT max(revision) FROM space_post_revision WHERE post_id = ?1)`,
+      )
+      .bind(post.id),
+  ]);
 };
 
 /** Every version of a post, oldest first; the last is its current text. */
@@ -417,7 +477,11 @@ export const spacePostDetails = async (
 const timestamp = (value: number) => DateTime.makeUnsafe(new Date(value));
 
 /** A post as `GET /v1/spaces/:threadId/posts` returns it. */
-export const spacePostData = (details: SpacePostDetails): SpacePost => ({
+export const spacePostData = (
+  details: SpacePostDetails,
+  /** The agent's queue holds the post's message: it has not read it. */
+  waiting = false,
+): SpacePost => ({
   id: details.row.id,
   author: details.author,
   text: details.row.text,
@@ -439,4 +503,5 @@ export const spacePostData = (details: SpacePostDetails): SpacePost => ({
       : { lastAt: timestamp(details.comments.lastAt) }),
     commenters: details.comments.commenters,
   },
+  ...(waiting ? { waiting: true } : {}),
 });

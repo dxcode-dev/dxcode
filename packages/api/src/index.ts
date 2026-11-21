@@ -124,6 +124,7 @@ export * from "./threads/list-threads.js";
 export * from "./threads/mark-thread-seen.js";
 export * from "./threads/mcp-apps.js";
 export * from "./threads/message-author.js";
+export * from "./threads/message-queue.js";
 export * from "./threads/message-reactions.js";
 export * from "./threads/orb-disk.js";
 export * from "./threads/orb-memory.js";

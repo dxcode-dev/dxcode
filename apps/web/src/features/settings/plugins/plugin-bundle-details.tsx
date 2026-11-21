@@ -1,25 +1,20 @@
 import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import { useMutation } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import * as React from "react";
 import type { PluginsTarget } from "../../../shared/api/client.js";
 import { settle } from "../../../shared/settle.js";
 import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
-import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
-import { SettingsRow, SettingsToggle } from "../../../shared/ui/settings.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import { PluginBundleHotReload } from "./plugin-bundle-hot-reload.js";
 import { BundleItems } from "./plugin-bundle-items.js";
 import { McpSettingsLink } from "./plugin-bundle-mcp-link.js";
 import { pluginBundleSignedExportMutationOptions } from "./plugin-bundle-mutations.js";
-import {
-  type BundleRun,
-  errorMessage,
-  plural,
-} from "./plugin-bundle-presentation.js";
+import { type BundleRun, errorMessage } from "./plugin-bundle-presentation.js";
+import { PluginBundleRemove } from "./plugin-bundle-remove.js";
 import { PluginBundleSettingsForm } from "./plugin-bundle-settings-form.js";
 import { PluginBundleShare } from "./plugin-bundle-share.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
@@ -32,26 +27,6 @@ const PluginBundleHostCost = lazyComponent(() =>
     default: module.PluginBundleHostCost,
   })),
 );
-
-/** What removing a bundle also removes, for the confirmation. */
-const removalSummary = (bundle: PluginBundleData) =>
-  [
-    bundle.skills.length > 0
-      ? plural(bundle.skills.length, "skill", "skills")
-      : undefined,
-    bundle.mcpServers.length + bundle.localMcpServers.length > 0
-      ? plural(
-          bundle.mcpServers.length + bundle.localMcpServers.length,
-          "MCP server",
-          "MCP servers",
-        )
-      : undefined,
-  ]
-    .filter((part) => part !== undefined)
-    .join(" and ");
-
-const HOT_RELOAD_RISK =
-  "Code in this Thread's Orb can replace this plugin's code while hot reload is on. Turn it off when you're done.";
 
 export function PluginBundleDetails({
   bundle,
@@ -87,8 +62,6 @@ export function PluginBundleDetails({
       : workspace === undefined
         ? undefined
         : { scope: "workspace", workspaceSlug: workspace.shortName as never };
-  const [confirming, setConfirming] = React.useState(false);
-  const [removeFailed, setRemoveFailed] = React.useState(false);
   const [update, setUpdate] = React.useState<
     | {
         readonly data: PluginBundleUpdatePreviewData;
@@ -99,7 +72,6 @@ export function PluginBundleDetails({
   const [checking, setChecking] = React.useState(false);
   const [error, setError] = React.useState<string>();
   const fileInput = React.useRef<HTMLInputElement>(null);
-  const removes = removalSummary(bundle);
   // A plain download: the browser saves the route's ZIP with the session.
   const exportHref = `${
     bundle.scope === "workspace" && workspace !== undefined
@@ -180,51 +152,12 @@ export function PluginBundleDetails({
       {bundle.scope === "personal" &&
       bundle.code !== undefined &&
       bundle.source.type === "zip" ? (
-        <SettingsRow
-          title="Hot reload"
-          description={
-            bundle.dev !== undefined ? (
-              <>
-                On for{" "}
-                <Link
-                  to="/threads/$threadId"
-                  params={{ threadId: bundle.dev.threadId }}
-                >
-                  {bundle.dev.threadTitle ?? "one of your Threads"}
-                </Link>
-                . {HOT_RELOAD_RISK} Reloads apply in all your Threads, and hot
-                reload turns off after 24 hours unused.
-              </>
-            ) : hotReloadThreadId !== undefined ? (
-              `${HOT_RELOAD_RISK} It turns on for the Thread whose link you opened.`
-            ) : (
-              "Run dxd plugin dev <folder> in the Thread you build in; it prints a link that turns hot reload on for that Thread."
-            )
-          }
-          control={
-            <SettingsToggle
-              checked={bundle.dev !== undefined}
-              disabled={
-                !canMutate ||
-                busy ||
-                (bundle.dev === undefined && hotReloadThreadId === undefined)
-              }
-              label={`Hot reload ${bundle.displayName}`}
-              onCheckedChange={(enabled) =>
-                void run(
-                  {
-                    type: "dev",
-                    pluginId: bundle.id,
-                    enabled,
-                    ...(enabled && hotReloadThreadId !== undefined
-                      ? { threadId: hotReloadThreadId }
-                      : {}),
-                  },
-                  `Hot reload ${enabled ? "on" : "off"} for ${bundle.displayName}.`,
-                )
-              }
-            />
-          }
+        <PluginBundleHotReload
+          bundle={bundle}
+          canMutate={canMutate}
+          busy={busy}
+          run={run}
+          hotReloadThreadId={hotReloadThreadId}
         />
       ) : null}
       {(bundle.code?.settings.length ?? 0) === 0 ||
@@ -268,47 +201,14 @@ export function PluginBundleDetails({
           if (file !== undefined) void check(file);
         }}
       />
-      <ConfirmDialog
-        open={confirming}
-        onOpenChange={(open) => {
-          setRemoveFailed(false);
-          setConfirming(open);
-        }}
-        title={`Remove ${bundle.displayName}?`}
-        {...(removeFailed
-          ? { error: `${bundle.displayName} wasn't removed. Try again.` }
-          : {})}
-        description={
-          removes === ""
-            ? "New Threads stop loading it."
-            : `This also removes its ${removes}. New Threads stop loading them.`
-        }
-        confirmLabel={busy ? "Removing…" : "Remove"}
-        destructive
-        pending={busy}
-        onConfirm={async () => {
-          setRemoveFailed(false);
-          const removed = await run(
-            { type: "remove", pluginId: bundle.id },
-            `${bundle.displayName} removed.`,
-          );
-          // A failure stays in the dialog, where the person is looking.
-          if (!removed) return setRemoveFailed(true);
-          setConfirming(false);
-          onDone();
-        }}
-      />
       <footer className="plugin-bundle-actions">
         {canMutate ? (
-          <Button
-            size="xs"
-            variant="danger"
-            className="plugin-bundle-remove"
-            disabled={busy}
-            onClick={() => setConfirming(true)}
-          >
-            Remove
-          </Button>
+          <PluginBundleRemove
+            bundle={bundle}
+            busy={busy}
+            run={run}
+            onDone={onDone}
+          />
         ) : null}
         {canMutate ? (
           <Button

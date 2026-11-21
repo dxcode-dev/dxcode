@@ -1,4 +1,5 @@
 import {
+  DeleteSpacePostResponseSchema,
   ListSpacePostsResponseSchema,
   SPACE_POSTS_DEFAULT_LIMIT,
   type SpacePost,
@@ -87,6 +88,15 @@ const editPost = async (
       { method: "PATCH", body: JSON.stringify({ text }) },
     )
   ).data.post;
+
+const deletePost = async (spaceThreadId: ThreadId, postId: string) =>
+  (
+    await request(
+      postsPath(spaceThreadId, `/${encodeURIComponent(postId)}`),
+      DeleteSpacePostResponseSchema,
+      { method: "DELETE" },
+    )
+  ).data;
 
 const setReaction = async (
   spaceThreadId: ThreadId,
@@ -283,6 +293,31 @@ export const useEditSpacePost = (userId: UserId, spaceThreadId: ThreadId) => {
         queryKey: spacePostKeys.revisions(userId, spaceThreadId, post.id),
       });
     },
+  });
+};
+
+/**
+ * A person deletes their own post; it leaves the chat once the server
+ * confirms, and stays with the error when it does not.
+ */
+export const useDeleteSpacePost = (userId: UserId, spaceThreadId: ThreadId) => {
+  const client = useQueryClient();
+  const key = spacePostKeys.posts(userId, spaceThreadId);
+  return useMutation({
+    mutationKey: [...key, "delete"],
+    mutationFn: (postId: string) => deletePost(spaceThreadId, postId),
+    onSuccess: ({ postId }) =>
+      client.setQueryData<PostsCache>(key, (current) =>
+        current === undefined
+          ? current
+          : {
+              ...current,
+              pages: current.pages.map((page) => ({
+                ...page,
+                items: page.items.filter(({ id }) => id !== postId),
+              })),
+            },
+      ),
   });
 };
 

@@ -5,7 +5,7 @@ import {
 } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { MessagesSquare, Pencil } from "lucide-react";
+import { MessagesSquare, Pencil, Trash2 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
@@ -21,6 +21,7 @@ import {
 } from "../../../shared/reactions/reactions.js";
 import { Avatar, ParticipantStack } from "../../../shared/ui/avatar.js";
 import { Button } from "../../../shared/ui/button.js";
+import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
   PopoverContent,
   PopoverRoot,
@@ -40,6 +41,7 @@ import {
   type SpacePost,
   type SpacePostReaction,
   spacePostRevisionsQueryOptions,
+  useDeleteSpacePost,
   useEditSpacePost,
   useSetSpacePostReaction,
 } from "./space-posts-queries.js";
@@ -309,6 +311,8 @@ function SpacePostRow({
   const react = useSetSpacePostReaction(identity.id, spaceThreadId);
   const openComments = useOpenMessageComments(spaceThreadId);
   const [editing, setEditing] = React.useState(false);
+  const [deleting, setDeleting] = React.useState(false);
+  const remove = useDeleteSpacePost(identity.id, spaceThreadId);
   const agent = post.author.kind === "agent";
   const mine = !agent && post.author.userId === identity.id;
   const side = mine ? "right" : "left";
@@ -408,8 +412,46 @@ function SpacePostRow({
                 <Pencil aria-hidden="true" />
               </Button>
             ) : null}
+            {mine && permissions.react ? (
+              <Button
+                variant="subtle"
+                size="icon-xs"
+                className="space-post-action"
+                aria-label="Delete"
+                title="Delete"
+                onClick={() => {
+                  remove.reset();
+                  setDeleting(true);
+                }}
+              >
+                <Trash2 aria-hidden="true" />
+              </Button>
+            ) : null}
           </div>
         )}
+        {mine ? (
+          <ConfirmDialog
+            open={deleting}
+            onOpenChange={(open) => {
+              if (!open) setDeleting(false);
+            }}
+            title="Delete post?"
+            description={
+              post.waiting === true
+                ? "It leaves the Space for everyone. dx hasn't read it yet and won't see it."
+                : "It leaves the Space for everyone. dx is told you deleted it and stops acting on it."
+            }
+            confirmLabel="Delete"
+            destructive
+            pending={remove.isPending}
+            {...(remove.isError
+              ? { error: postFailureText(remove.error, "delete") }
+              : {})}
+            onConfirm={() =>
+              remove.mutate(post.id, { onSuccess: () => setDeleting(false) })
+            }
+          />
+        ) : null}
       </div>
       {edited || reactions.length > 0 ? (
         <div className="space-post-meta" data-side={side}>

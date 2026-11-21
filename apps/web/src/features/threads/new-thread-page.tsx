@@ -21,7 +21,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { Option, Schema } from "effect";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
@@ -63,18 +63,23 @@ import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useWorkspaceDraftText } from "./composer-draft-queries.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import { attachmentsUploading } from "./image-attachments.js";
-import { InsertCurrentThreadButton } from "./insert-current-thread.js";
+import {
+  InlineNewThreadFrame,
+  useInlineNewThread,
+} from "./inline-new-thread-frame.js";
 import {
   modeSlot,
   RECOMMENDED_MODE,
   resolvedPick,
 } from "./model-picker-options.js";
 import { NewThreadComposer } from "./new-thread-composer.js";
+import { NewThreadDialog } from "./new-thread-dialog.js";
 import { useDraftImages } from "./new-thread-draft-images.js";
 import {
   getBrowserEmailThreadDraftStore,
   getBrowserNewThreadDraftStore,
 } from "./new-thread-draft-store.js";
+import { newThreadLabel } from "./new-thread-label.js";
 import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { submitNewThread } from "./new-thread-submission.js";
 import { NewThreadToasts } from "./new-thread-toasts.js";
@@ -101,6 +106,7 @@ export function NewThreadPage() {
 }
 
 export function NewThreadModal({
+  presentation = "dialog",
   initialProjectId,
   initialPluginThreadType,
   initialPrompt,
@@ -109,6 +115,8 @@ export function NewThreadModal({
   onClose,
   onAccepted,
 }: {
+  /** A dialog over the page, or `inline` in the page (InlineNewThread). */
+  readonly presentation?: "dialog" | "inline";
   readonly initialProjectId?: ProjectId;
   /** A plugin Thread type, `<plugin>/<type>`, to start as. */
   readonly initialPluginThreadType?: string;
@@ -165,12 +173,24 @@ export function NewThreadModal({
     projectsLoading ||
     (rememberedProjectId !== undefined && rememberedProjectQuery.isPending)
   )
-    return (
+    return presentation === "inline" ? (
+      <InlineNewThreadFrame loading />
+    ) : (
       <div className="new-thread-backdrop">
         <span className="sr-only" role="status">
           Loading New Thread draft…
         </span>
       </div>
+    );
+  if (settingsQuery.isError && presentation === "inline")
+    return (
+      <InlineNewThreadFrame>
+        <div className="notice error-notice" role="alert">
+          {settingsQuery.error instanceof Error
+            ? settingsQuery.error.message
+            : "Settings could not be loaded."}
+        </div>
+      </InlineNewThreadFrame>
     );
   if (settingsQuery.isError)
     return (
@@ -193,6 +213,7 @@ export function NewThreadModal({
     );
   return (
     <ScopedNewThreadModal
+      presentation={presentation}
       initialProjectId={initialProjectId}
       {...(initialPluginThreadType === undefined
         ? {}
@@ -216,9 +237,6 @@ export function NewThreadModal({
 }
 
 const NO_TYPES: ReadonlyArray<PluginThreadTypeOption> = [];
-
-const newThreadLabel = (email: ComposerEmail | undefined) =>
-  email === undefined ? "New thread" : "New thread from email";
 
 /** Used when remembered composer choices cannot be loaded. */
 const NO_COMPOSER_DEFAULTS: PersonalComposerDefaultsData = {
@@ -255,30 +273,6 @@ const useNewThreadDraft = (
     ),
   };
 };
-
-/** Close, and over an open Thread, Insert Current Thread. */
-function NewThreadModalHeader(
-  props: Omit<
-    React.ComponentProps<typeof InsertCurrentThreadButton>,
-    "threadId"
-  >,
-) {
-  // The Thread open behind the dialog, if any: its URL can go in the prompt.
-  const threadId = useRouterState({
-    select: (state) =>
-      state.matches
-        .map(({ params }) => (params as { threadId?: string }).threadId)
-        .find((id) => id !== undefined),
-  });
-  return (
-    <ModalSurfaceHeader>
-      <ModalSurfaceClose />
-      {threadId === undefined ? null : (
-        <InsertCurrentThreadButton threadId={threadId} {...props} />
-      )}
-    </ModalSurfaceHeader>
-  );
-}
 
 /** The first failure's message, in the order the composer reports them. */
 const firstErrorMessage = (errors: ReadonlyArray<unknown>) =>
@@ -506,7 +500,8 @@ function usePluginThreadTypeChoice(initial: string | undefined) {
 /**
  * Adds the opener's prompt to the saved draft, and tracks whether the
  * composer is still open: a send outlives it when the user leaves the page
- * mid-create.
+ * mid-create. Leaving saves the draft at once, so the composer on the page
+ * (which has no Close) keeps the last words typed before navigating away.
  */
 function useComposerOpening(
   draftStore: ReturnType<typeof useNewThreadDraft>["store"],
@@ -521,12 +516,51 @@ function useComposerOpening(
     composerOpen.current = true;
     return () => {
       composerOpen.current = false;
+      draftStore.flush();
     };
   });
   return composerOpen;
 }
 
+/**
+ * The composer's Project, and the Orb size picked in it. The starting
+ * Project is fixed when the composer opens, so later project pages or
+ * refetches never move a Thread to a Project the person did not pick.
+ * Choosing a Project drops the size picked for the last one.
+ */
+function useComposerProjectChoice(
+  initialProjectId: ProjectId | undefined,
+  remembered: PersonalComposerDefaultsData,
+  projects: ReadonlyArray<ProjectData>,
+) {
+  const [selectedProjectId, setSelectedProjectId] = React.useState<
+    ProjectId | ""
+  >(() =>
+    startingProjectId({
+      explicit: initialProjectId,
+      remembered: remembered.project,
+      listedProjectIds: projects.flatMap((project) =>
+        canStartThreadsIn(project) ? [project.id] : [],
+      ),
+    }),
+  );
+  const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
+    RunnerProfileId | undefined
+  >();
+  const chooseProject = (projectId: ProjectId | "") => {
+    setSelectedProjectId(projectId);
+    setRunnerProfileOverride(undefined);
+  };
+  return {
+    selectedProjectId,
+    chooseProject,
+    runnerProfileOverride,
+    setRunnerProfileOverride,
+  };
+}
+
 function ScopedNewThreadModal({
+  presentation,
   initialProjectId,
   initialPluginThreadType,
   initialPrompt,
@@ -540,6 +574,7 @@ function ScopedNewThreadModal({
   remembered,
   rememberedProject,
 }: {
+  readonly presentation: "dialog" | "inline";
   readonly initialProjectId?: ProjectId;
   /** Text the composer opens with, after any draft the person already has. */
   readonly initialPrompt?: string;
@@ -572,19 +607,12 @@ function ScopedNewThreadModal({
   const rememberComposer = useMutation(
     updateComposerDefaultsMutationOptions(queryClient, identity.id),
   ).mutate;
-  // The starting Project is fixed when the composer opens, so later project
-  // pages or refetches never move a thread to a Project the user did not pick.
-  const [selectedProjectId, setSelectedProjectId] = React.useState<
-    ProjectId | ""
-  >(() =>
-    startingProjectId({
-      explicit: initialProjectId,
-      remembered: remembered.project,
-      listedProjectIds: projects.flatMap((project) =>
-        canStartThreadsIn(project) ? [project.id] : [],
-      ),
-    }),
-  );
+  const {
+    selectedProjectId,
+    chooseProject,
+    runnerProfileOverride,
+    setRunnerProfileOverride,
+  } = useComposerProjectChoice(initialProjectId, remembered, projects);
   const {
     choicesQuery,
     profile,
@@ -607,9 +635,6 @@ function ScopedNewThreadModal({
     creation,
   } = useNewThreadDraft(identity.id, workspaceId, email);
   const prompt = draft.text;
-  const [runnerProfileOverride, setRunnerProfileOverride] = React.useState<
-    RunnerProfileId | undefined
-  >();
   // Only a workspace member can share; elsewhere the Thread stays private.
   const [chosenVisibility, setVisibility] =
     React.useState<ThreadVisibility>("private");
@@ -713,109 +738,142 @@ function ScopedNewThreadModal({
     onClose();
   };
 
+  useInlineComposerFocus(
+    presentation === "inline",
+    textareaRef,
+    draftStore,
+    chooseProject,
+  );
+
+  const composer = (
+    <>
+      <NewThreadComposer
+        prompt={prompt}
+        images={images}
+        textareaRef={textareaRef}
+        submitting={submitting}
+        onPromptChange={draftStore.setText}
+        onSubmit={() => {
+          if (!dictation.interceptSubmit()) void submit();
+        }}
+        onRemoveImage={(image) => setImages(imageCollection.remove(image.id))}
+        onFiles={(files) => void addFiles(files)}
+        onScreenshot={() => void takeScreenshot()}
+        projects={projects}
+        hasMoreProjects={projectsQuery.hasNextPage}
+        loadingMoreProjects={projectsQuery.isFetchingNextPage}
+        onLoadMoreProjects={() => void projectsQuery.fetchNextPage()}
+        projectId={effectiveProjectId}
+        model={model}
+        effort={effort}
+        choices={choicesQuery.data}
+        routingGraph={routingGraphQuery.data}
+        onProjectChange={(projectId) => {
+          chooseProject(projectId);
+          rememberComposer({
+            project: projectId === "" ? "none" : projectId,
+          });
+        }}
+        runnerProfiles={defaultsQuery.data?.catalog.profiles}
+        runnerProviders={defaultsQuery.data?.catalog.providers}
+        runnerOrbs={orbProvidersQuery.data?.resolved}
+        runnerProfileId={effectiveRunnerProfileId}
+        runnerProfileLoading={
+          defaultsQuery.isFetching && defaultsQuery.data === undefined
+        }
+        allowedRunnerProfileIds={
+          defaultsQuery.data?.restrictions.allowedRunnerProfileIds
+        }
+        onRunnerProfileChange={(runnerProfileId) => {
+          setRunnerProfileOverride(runnerProfileId);
+          rememberComposer({ runnerProfileId });
+        }}
+        onRunnerProfileRetry={
+          defaultsTarget === undefined
+            ? undefined
+            : () => void defaultsQuery.refetch()
+        }
+        onConnectOrbProvider={() =>
+          void navigate({
+            to: "/settings/$section",
+            params: { section: "orb-providers" },
+          })
+        }
+        onModelChange={chooseModel}
+        onEffortChange={chooseEffort}
+        claudePlan={claudePlan}
+        onClaudePlanChange={chooseClaudePlan}
+        pluginAgentModes={pluginAgentModes}
+        pluginAgentMode={pluginAgentMode}
+        onPluginAgentModeChange={choosePluginAgentMode}
+        pluginThreadTypes={pluginThreadTypes}
+        pluginThreadType={pluginThreadType}
+        onPluginThreadTypeChange={choosePluginThreadType}
+        dictationControls={dictation.controls}
+        dictationActive={dictation.active}
+        dictationHideSubmit={dictation.hideSubmit}
+        visibility={visibility}
+        onVisibilityChange={workspace === undefined ? undefined : setVisibility}
+        mentionMembers={mentionMembers}
+        email={email}
+      />
+      <NewThreadToasts
+        warning={draft.warning}
+        onRetryStalled={creation.stalled ? creation.retry : undefined}
+        projectsFailure={
+          projectsQuery.isError && projectsQuery.data === undefined
+            ? {
+                count: projectsQuery.errorUpdateCount,
+                retry: () => void projectsQuery.refetch(),
+              }
+            : undefined
+        }
+        error={visibleError}
+        acceptedThreadId={acceptedNavigationTarget}
+        onAccepted={onAccepted}
+      />
+    </>
+  );
+  if (presentation === "inline")
+    return <InlineNewThreadFrame>{composer}</InlineNewThreadFrame>;
   return (
-    <DialogRoot open onOpenChange={(open) => !open && close()}>
-      <ModalSurface
-        className="new-thread-dialog"
-        ariaLabel={newThreadLabel(email)}
-        initialFocus={textareaRef}
-        finalFocus={finalFocus}
-      >
-        <NewThreadModalHeader
-          prompt={prompt}
-          textareaRef={textareaRef}
-          disabled={submitting}
-          onPromptChange={draftStore.setText}
-        />
-        <NewThreadComposer
-          prompt={prompt}
-          images={images}
-          textareaRef={textareaRef}
-          submitting={submitting}
-          onPromptChange={draftStore.setText}
-          onSubmit={() => {
-            if (!dictation.interceptSubmit()) void submit();
-          }}
-          onRemoveImage={(image) => setImages(imageCollection.remove(image.id))}
-          onFiles={(files) => void addFiles(files)}
-          onScreenshot={() => void takeScreenshot()}
-          projects={projects}
-          hasMoreProjects={projectsQuery.hasNextPage}
-          loadingMoreProjects={projectsQuery.isFetchingNextPage}
-          onLoadMoreProjects={() => void projectsQuery.fetchNextPage()}
-          projectId={effectiveProjectId}
-          model={model}
-          effort={effort}
-          choices={choicesQuery.data}
-          routingGraph={routingGraphQuery.data}
-          onProjectChange={(projectId) => {
-            setSelectedProjectId(projectId);
-            setRunnerProfileOverride(undefined);
-            rememberComposer({
-              project: projectId === "" ? "none" : projectId,
-            });
-          }}
-          runnerProfiles={defaultsQuery.data?.catalog.profiles}
-          runnerProviders={defaultsQuery.data?.catalog.providers}
-          runnerOrbs={orbProvidersQuery.data?.resolved}
-          runnerProfileId={effectiveRunnerProfileId}
-          runnerProfileLoading={
-            defaultsQuery.isFetching && defaultsQuery.data === undefined
-          }
-          allowedRunnerProfileIds={
-            defaultsQuery.data?.restrictions.allowedRunnerProfileIds
-          }
-          onRunnerProfileChange={(runnerProfileId) => {
-            setRunnerProfileOverride(runnerProfileId);
-            rememberComposer({ runnerProfileId });
-          }}
-          onRunnerProfileRetry={
-            defaultsTarget === undefined
-              ? undefined
-              : () => void defaultsQuery.refetch()
-          }
-          onConnectOrbProvider={() =>
-            void navigate({
-              to: "/settings/$section",
-              params: { section: "orb-providers" },
-            })
-          }
-          onModelChange={chooseModel}
-          onEffortChange={chooseEffort}
-          claudePlan={claudePlan}
-          onClaudePlanChange={chooseClaudePlan}
-          pluginAgentModes={pluginAgentModes}
-          pluginAgentMode={pluginAgentMode}
-          onPluginAgentModeChange={choosePluginAgentMode}
-          pluginThreadTypes={pluginThreadTypes}
-          pluginThreadType={pluginThreadType}
-          onPluginThreadTypeChange={choosePluginThreadType}
-          dictationControls={dictation.controls}
-          dictationActive={dictation.active}
-          dictationHideSubmit={dictation.hideSubmit}
-          visibility={visibility}
-          onVisibilityChange={
-            workspace === undefined ? undefined : setVisibility
-          }
-          mentionMembers={mentionMembers}
-          email={email}
-        />
-        <NewThreadToasts
-          warning={draft.warning}
-          onRetryStalled={creation.stalled ? creation.retry : undefined}
-          projectsFailure={
-            projectsQuery.isError && projectsQuery.data === undefined
-              ? {
-                  count: projectsQuery.errorUpdateCount,
-                  retry: () => void projectsQuery.refetch(),
-                }
-              : undefined
-          }
-          error={visibleError}
-          acceptedThreadId={acceptedNavigationTarget}
-          onAccepted={onAccepted}
-        />
-      </ModalSurface>
-    </DialogRoot>
+    <NewThreadDialog
+      email={email}
+      textareaRef={textareaRef}
+      finalFocus={finalFocus}
+      onClose={close}
+      prompt={prompt}
+      submitting={submitting}
+      onPromptChange={draftStore.setText}
+    >
+      {composer}
+    </NewThreadDialog>
+  );
+}
+
+/**
+ * Inline, "new Thread" focuses this composer: in a Project when it names
+ * one, with its prompt added to the draft, the caret at the end.
+ */
+function useInlineComposerFocus(
+  enabled: boolean,
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>,
+  draftStore: { readonly appendPrompt: (prompt: string) => void },
+  chooseProject: (projectId: ProjectId) => void,
+) {
+  useInlineNewThread(
+    enabled
+      ? (projectId, addedPrompt) => {
+          if (projectId !== undefined) chooseProject(projectId);
+          if (addedPrompt !== undefined) draftStore.appendPrompt(addedPrompt);
+          const textarea = textareaRef.current;
+          if (textarea === null) return;
+          textarea.focus();
+          textarea.setSelectionRange(
+            textarea.value.length,
+            textarea.value.length,
+          );
+        }
+      : undefined,
   );
 }

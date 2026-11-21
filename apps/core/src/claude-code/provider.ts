@@ -447,11 +447,14 @@ const firstText = (message: Context["messages"][number]) =>
       : message.content.find((block) => block.type === "text")?.text;
 
 /**
- * A message a person edited into the place of an earlier one: dx rewound
- * the conversation to it, so Claude's session remembers turns that are gone.
+ * A message a person edited into the place of an earlier one, or the first
+ * after they deleted one: dx rewound the conversation, so Claude's session
+ * remembers turns that are gone.
  */
-const isEditedMessage = (message: Context["messages"][number]) =>
-  parseMessageAuthor(firstText(message) ?? "").edited === true;
+const isEditedMessage = (message: Context["messages"][number]) => {
+  const tag = parseMessageAuthor(firstText(message) ?? "");
+  return tag.edited === true || tag.rewound === true;
+};
 
 /**
  * The Thread changed its model and another model answered after Claude Code

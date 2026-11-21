@@ -1,6 +1,7 @@
 import type { ChoicesData, GraphData, PluginAgentModeData } from "@dx/api";
 import { claudeCodeEffort, type ThinkingLevel } from "@dx/domain";
 import { Settings2 } from "lucide-react";
+import type * as React from "react";
 import { getBrowserCommandRegistry } from "../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { modelDisplayName } from "../../shared/model-display-name.js";
@@ -94,6 +95,7 @@ export function ModelPicker({
   current,
   note,
   claudePlan,
+  finalFocus,
 }: {
   /**
    * `new-thread` is the New Thread strip's pill with the Ctrl+S keycaps;
@@ -118,6 +120,10 @@ export function ModelPicker({
   readonly locked: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
+  /** Where focus goes when the list closes; the chip by default. */
+  readonly finalFocus?: React.ComponentProps<
+    typeof SharedModelPicker
+  >["finalFocus"];
   readonly onModelChange: (model: string | undefined) => void;
   readonly onEffortChange: (effort: ThinkingLevel) => void;
   readonly pluginAgentModes?: ReadonlyArray<PluginAgentModeData>;
@@ -219,6 +225,7 @@ export function ModelPicker({
       loading={pick === undefined && current === undefined}
       open={open}
       onOpenChange={onOpenChange}
+      finalFocus={finalFocus}
       {...(note === undefined ? {} : { note })}
       {...(surface === "thread"
         ? {}

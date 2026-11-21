@@ -16,14 +16,25 @@ import {
   RouterProvider,
 } from "@tanstack/react-router";
 import * as React from "react";
-import { expect, fn, userEvent, within } from "storybook/test";
-import { HomeNewThreadFrame, HomeScreen } from "./features/home/home-screen.js";
+import { expect, fn, screen, userEvent, waitFor, within } from "storybook/test";
+import { HomeScreen } from "./features/home/home-screen.js";
 import {
   newThreadOrbProvidersQueryOptions,
   type OrbProviderListData,
 } from "./features/settings/orb-providers/orb-providers-queries.js";
+import {
+  InlineNewThreadFrame,
+  useInlineNewThread,
+} from "./features/threads/inline-new-thread-frame.js";
 import { NewThreadComposer } from "./features/threads/new-thread-composer.js";
 import { AuthContext } from "./shared/auth/auth-context.js";
+import { CommandProvider } from "./shared/commands/command-provider.js";
+import {
+  NewThreadSurfaceContext,
+  useInlineNewThreadRouting,
+  useNewThreadSurface,
+} from "./shared/new-thread-surface.js";
+import { Button } from "./shared/ui/button.js";
 import { useMobile } from "./shared/use-mobile.js";
 import { StoryQueryProvider } from "./testing/story-query-provider.js";
 
@@ -98,8 +109,8 @@ type StoryArgs = {
   readonly hasProjects: boolean;
   /** Whether an Orb provider is set up; a new workspace has none. */
   readonly orbReady: boolean;
-  /** Called when the phone's Start new thread button is pressed. */
-  readonly onStartNewThread: () => void;
+  /** The New Thread dialog opening: everywhere but the wide home page. */
+  readonly onOpenDialog: () => void;
 };
 
 /** The real composer on fixture data, as the home page frames it. */
@@ -108,23 +119,25 @@ function FixtureComposer({
   draft,
   hasProjects,
   orbReady,
-}: Omit<StoryArgs, "onStartNewThread">) {
+}: Omit<StoryArgs, "onOpenDialog">) {
   const [prompt, setPrompt] = React.useState(draft);
   const [chosenProject, setChosenProject] = React.useState<ProjectId | "">(
     hasProjects ? projectId : "",
   );
   const textareaRef = React.useRef<HTMLTextAreaElement>(null);
-  if (state === "loading") return <HomeNewThreadFrame loading />;
+  // As the app's InlineNewThread does: "new Thread" focuses this composer.
+  useInlineNewThread(() => textareaRef.current?.focus());
+  if (state === "loading") return <InlineNewThreadFrame loading />;
   if (state === "error")
     return (
-      <HomeNewThreadFrame>
+      <InlineNewThreadFrame>
         <div className="notice error-notice" role="alert">
           Settings could not be loaded.
         </div>
-      </HomeNewThreadFrame>
+      </InlineNewThreadFrame>
     );
   return (
-    <HomeNewThreadFrame>
+    <InlineNewThreadFrame>
       <NewThreadComposer
         prompt={prompt}
         images={[]}
@@ -150,20 +163,44 @@ function FixtureComposer({
         dictationActive={false}
         dictationHideSubmit={false}
       />
-    </HomeNewThreadFrame>
+    </InlineNewThreadFrame>
   );
 }
 
-/** Picks the layout from the width, as the app does. */
+/**
+ * Picks the layout from the width, as the app's HomeRoute does. "New
+ * Thread" goes through the app's routing and the real shortcut handler: it
+ * focuses the inline composer when there is one and otherwise opens the
+ * dialog. The New thread button stands in for the sidebar's.
+ */
 function Home(args: StoryArgs) {
-  const phone = useMobile();
+  const routing = useInlineNewThreadRouting(args.onOpenDialog);
   return (
-    <div style={{ height: "100vh" }}>
+    <NewThreadSurfaceContext.Provider value={routing}>
+      <CommandProvider onOpenNewThread={routing.openNewThread}>
+        <HomeLayout {...args} />
+      </CommandProvider>
+    </NewThreadSurfaceContext.Provider>
+  );
+}
+
+function HomeLayout(args: StoryArgs) {
+  const phone = useMobile();
+  const { openNewThread } = useNewThreadSurface();
+  return (
+    <div
+      style={{ display: "grid", gridTemplateRows: "auto 1fr", height: "100vh" }}
+    >
+      <div style={{ padding: "var(--space-2)" }}>
+        <Button variant="ghost" size="sm" onClick={() => openNewThread()}>
+          New thread
+        </Button>
+      </div>
       {phone ? (
         <HomeScreen
           layout="phone"
           still
-          onStartNewThread={args.onStartNewThread}
+          onStartNewThread={() => openNewThread()}
         />
       ) : (
         <HomeScreen layout="wide" composer={<FixtureComposer {...args} />} />
@@ -250,17 +287,14 @@ const meta = {
     draft: "",
     hasProjects: true,
     orbReady: true,
-    onStartNewThread: fn(),
+    onOpenDialog: fn(),
   },
   argTypes: {
     state: { control: "inline-radio", options: ["ready", "loading", "error"] },
     draft: { control: "text" },
   },
   render: (args: StoryArgs) => (
-    <HomeStory
-      key={JSON.stringify({ ...args, onStartNewThread: 0 })}
-      {...args}
-    />
+    <HomeStory key={JSON.stringify({ ...args, onOpenDialog: 0 })} {...args} />
   ),
 } satisfies Meta<StoryArgs>;
 export default meta;
@@ -281,8 +315,8 @@ export const Wide: Story = {
 };
 
 /**
- * Focused, as after the New Thread button or Alt+Enter on `/`: the frame's
- * outline turns to the focus color.
+ * Focused, as after the New Thread button or Alt+Enter on `/`. The card
+ * keeps its border: the caret shows where focus is.
  */
 export const WideFocused: Story = {
   globals: { viewport: { value: "desktop" } },
@@ -292,6 +326,58 @@ export const WideFocused: Story = {
     await expect(textbox).toHaveFocus();
     await userEvent.keyboard("Fix the flaky login test");
     await expect(textbox).toHaveValue("Fix the flaky login test");
+  },
+};
+
+/**
+ * Choosing a model with the pointer returns focus to the prompt: no focus
+ * ring stays on the chip, and the card's border never turns blue.
+ */
+export const WideChoosingASetting: Story = {
+  globals: { viewport: { value: "desktop" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = canvasElement.querySelector(".inline-new-thread");
+    if (!(card instanceof HTMLElement)) throw new Error("Expected the card.");
+    const border = getComputedStyle(card).boxShadow;
+    await userEvent.click(
+      await canvas.findByRole("combobox", { name: /^Model:/ }),
+    );
+    const [model] = await screen.findAllByRole("option");
+    if (model === undefined) throw new Error("Expected a model to choose.");
+    await userEvent.click(model);
+    // Focus moves once the list has finished closing.
+    const textbox = await prompt(canvasElement);
+    await waitFor(() => expect(textbox).toHaveFocus());
+    await expect(getComputedStyle(card).boxShadow).toBe(border);
+  },
+};
+
+/**
+ * The New thread button on `/` focuses the composer in the page and opens
+ * no dialog.
+ */
+export const WideNewThreadButtonFocuses: Story = {
+  globals: { viewport: { value: "desktop" } },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const textbox = await prompt(canvasElement);
+    await expect(textbox).not.toHaveFocus();
+    await userEvent.click(canvas.getByRole("button", { name: "New thread" }));
+    await expect(textbox).toHaveFocus();
+    await expect(args.onOpenDialog).not.toHaveBeenCalled();
+  },
+};
+
+/** Alt+Enter, the new-Thread shortcut, does the same on `/`. */
+export const WideShortcutFocuses: Story = {
+  globals: { viewport: { value: "desktop" } },
+  play: async ({ args, canvasElement }) => {
+    const textbox = await prompt(canvasElement);
+    await expect(textbox).not.toHaveFocus();
+    await userEvent.keyboard("{Alt>}{Enter}{/Alt}");
+    await expect(textbox).toHaveFocus();
+    await expect(args.onOpenDialog).not.toHaveBeenCalled();
   },
 };
 
@@ -351,7 +437,10 @@ export const Phone: Story = {
     await userEvent.click(
       await canvas.findByRole("button", { name: "Start new thread" }),
     );
-    await expect(args.onStartNewThread).toHaveBeenCalledOnce();
+    await expect(args.onOpenDialog).toHaveBeenCalledOnce();
+    // The shortcut opens the dialog too: a phone has no inline composer.
+    await userEvent.keyboard("{Alt>}{Enter}{/Alt}");
+    await expect(args.onOpenDialog).toHaveBeenCalledTimes(2);
   },
 };
 

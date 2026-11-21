@@ -293,7 +293,50 @@ const sendSetupMessage = async (
 export const createSpaceRoutes = (
   suggest: SpaceSuggester = workersAiSpaceSuggester,
 ) => {
-  const posts = spacePostHandlers({ readSpace, deliver: deliverFrom });
+  const posts = spacePostHandlers({
+    readSpace,
+    deliver: deliverFrom,
+    // Lazily, as `deliverToSpaceAgent` loads DxAgent's routes.
+    withdraw: async (spaceThreadId, submissionId, expectBody, bindings) => {
+      const { withdrawThreadMessage } = await import("../agents/routes.js");
+      return (
+        await withdrawThreadMessage(
+          spaceThreadId,
+          submissionId,
+          expectBody,
+          bindings,
+        )
+      ).withdrawn;
+    },
+    replace: async (
+      spaceThreadId,
+      submissionId,
+      expectBody,
+      body,
+      bindings,
+    ) => {
+      const { replaceQueuedThreadMessage } = await import(
+        "../agents/routes.js"
+      );
+      return (
+        await replaceQueuedThreadMessage(
+          spaceThreadId,
+          submissionId,
+          expectBody,
+          body,
+          bindings,
+        )
+      ).replaced;
+    },
+    queued: async (spaceThreadId, bindings) => {
+      const { listQueuedThreadMessages } = await import("../agents/routes.js");
+      return new Map(
+        (await listQueuedThreadMessages(spaceThreadId, bindings)).map(
+          ({ submissionId, body }) => [submissionId, body],
+        ),
+      );
+    },
+  });
   return (
     new Hono<AppEnv>()
       .post("/", (context) =>
@@ -711,6 +754,11 @@ export const createSpaceRoutes = (
       .patch("/:threadId/posts/:postId", (context) =>
         handle(context, (db, principal) =>
           posts.edit(context, db, principal, threadIdParam(context)),
+        ),
+      )
+      .delete("/:threadId/posts/:postId", (context) =>
+        handle(context, (db, principal) =>
+          posts.remove(context, db, principal, threadIdParam(context)),
         ),
       )
       .put("/:threadId/posts/:postId/reactions/:reaction", (context) =>

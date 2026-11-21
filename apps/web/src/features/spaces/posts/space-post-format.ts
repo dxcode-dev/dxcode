@@ -37,7 +37,10 @@ export const postTime = epochOf;
  * Why a post or an edit did not save, in plain words, by the server's code.
  * Anything else may pass on a retry.
  */
-export const postFailureText = (error: unknown, action: "post" | "edit") => {
+export const postFailureText = (
+  error: unknown,
+  action: "post" | "edit" | "delete",
+) => {
   const code =
     error instanceof Error && "code" in error ? error.code : undefined;
   switch (code) {
@@ -48,11 +51,15 @@ export const postFailureText = (error: unknown, action: "post" | "edit") => {
     case "SPACE_AGENT_UNAVAILABLE":
       return `dx couldn't take your ${action} just now. Try again in a moment.`;
     case "POST_NOT_YOURS":
-      return "Only its author can edit this post.";
+      return `Only its author can ${action === "delete" ? "delete" : "edit"} this post.`;
+    case "POST_CHANGED":
+      return "This post changed meanwhile. Reload it and edit again.";
     default:
       return action === "post"
         ? "Couldn't post. Try again."
-        : "Couldn't save the edit. Try again.";
+        : action === "delete"
+          ? "Couldn't delete the post. Try again."
+          : "Couldn't save the edit. Try again.";
   }
 };
 

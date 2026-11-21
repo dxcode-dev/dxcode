@@ -3,8 +3,8 @@ import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vitest";
 import { ThemeProvider } from "../../../shared/theme/theme-provider.js";
-import { codeThemeNames } from "../../../shared/ui/code-theme.js";
 import type { Appearance } from "../../../shared/theme/theme-store.js";
+import { codeThemeNames } from "../../../shared/ui/code-theme.js";
 
 let props: FileProps<undefined, undefined>;
 vi.mock("@pierre/diffs/edit", async (importOriginal) => ({

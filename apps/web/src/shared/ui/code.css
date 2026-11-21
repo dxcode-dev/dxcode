@@ -20,6 +20,16 @@ diffs-container {
   --diffs-font-family: var(--font-code);
   --diffs-font-size: var(--text-code);
   --diffs-line-height: var(--leading-code);
+  /* A changed word's highlight over its line's tint: lighter than the
+     library's (15% light, 20% dark) so the code colors keep 4.5:1 on it. */
+  --diffs-bg-addition-emphasis-override: light-dark(
+    color-mix(in srgb, var(--code-addition) 6%, transparent),
+    color-mix(in srgb, var(--code-addition) 8%, transparent)
+  );
+  --diffs-bg-deletion-emphasis-override: light-dark(
+    color-mix(in srgb, var(--code-deletion) 6%, transparent),
+    color-mix(in srgb, var(--code-deletion) 8%, transparent)
+  );
 }
 
 /* highlight.js classes, grouped as code-theme.ts groups TextMate scopes. */

@@ -402,6 +402,10 @@ const serve = ({
       return ok({ post });
     }
     const edited = new RegExp(`^${postsBase}/([^/]+)$`).exec(path)?.[1];
+    if (edited !== undefined && method === "DELETE") {
+      state.posts = state.posts.filter(({ id }) => id !== edited);
+      return ok({ postId: edited, outcome: "noted" });
+    }
     if (edited !== undefined && method === "PATCH") {
       const post = state.posts.find(({ id }) => id === edited) as Post;
       post.text = body.text;
@@ -925,6 +929,34 @@ it("posts from the composer and edits the viewer's own post", async () => {
   expect(q(".space-post-edited", post(2) as HTMLElement)?.textContent).toBe(
     "edited",
   );
+});
+
+it("deletes the viewer's own post after asking, and offers Delete on no one else's", async () => {
+  const server = serve();
+  await mount(1440, 900);
+  await until(loaded);
+  await userEvent.hover(post(4) as HTMLElement);
+  expect(has("Delete", post(4) as HTMLElement)).toBe(false);
+  await userEvent.hover(post(2) as HTMLElement);
+  await userEvent.click(button("Delete", post(2) as HTMLElement));
+  await until(() => q("[role='dialog']") !== null);
+  const dialog = q("[role='dialog']") as HTMLElement;
+  expect(dialog.textContent).toContain("Delete post?");
+  expect(dialog.textContent).toContain("It leaves the Space for everyone.");
+  // Nothing goes until the person confirms.
+  expect(server.requests.some(({ method }) => method === "DELETE")).toBe(false);
+  await shot("space-delete-post-1440");
+  await userEvent.click(button("Delete", dialog));
+  await until(() => post(2) === null && q("[role='dialog']") === null);
+  expect(server.requests.filter(({ method }) => method === "DELETE")).toEqual([
+    {
+      method: "DELETE",
+      path: `/v1/spaces/${SPACE}/posts/${postId(2)}`,
+      body: undefined,
+    },
+  ]);
+  // The rest of the chat stays.
+  expect(post(4)).not.toBeNull();
 });
 
 it("opens threads as tabs beside the Space chat from a card, a chip, or the Threads tab, and closes them", async () => {

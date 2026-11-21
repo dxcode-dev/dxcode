@@ -1,15 +1,19 @@
-import { ClipboardType, Copy, Link2, Pencil } from "lucide-react";
+import { ClipboardType, Copy, Link2, Pencil, Trash2 } from "lucide-react";
 import * as React from "react";
 import { getBrowserCommandRegistry } from "../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
-import { MenuItem } from "../../shared/ui/menu.js";
+import { MenuItem, MenuSeparator } from "../../shared/ui/menu.js";
 import type { MessageMenuRow } from "./message-actions.js";
 import {
   copyMessageLink,
   copyMessageText,
   copyWithStyling,
 } from "./message-copy.js";
-import { canEditMessage, MessageEditContext } from "./message-edit.js";
+import {
+  canDeleteMessage,
+  canEditMessage,
+  MessageEditContext,
+} from "./message-edit-model.js";
 import { messageLinkId, messageLinkUrl } from "./message-link.js";
 
 const timeFormat = new Intl.DateTimeFormat(undefined, {
@@ -77,6 +81,15 @@ export function MessageMenuItems({
           <span>Copy Link</span>
         </MenuItem>
       )}
+      {canDeleteMessage(row, editing) ? (
+        <>
+          <MenuSeparator />
+          <MenuItem tone="danger" onClick={() => editing?.remove?.(row)}>
+            <Trash2 />
+            <span>Delete</span>
+          </MenuItem>
+        </>
+      ) : null}
     </>
   );
 }

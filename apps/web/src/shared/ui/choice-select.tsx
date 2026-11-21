@@ -53,6 +53,7 @@ export function ChoiceSelectPopup({
   align = "start",
   sideOffset = 4,
   collisionPadding = 8,
+  finalFocus,
   "aria-label": ariaLabel,
 }: {
   readonly children: React.ReactNode;
@@ -63,6 +64,13 @@ export function ChoiceSelectPopup({
   readonly align?: PositionerProps["align"];
   readonly sideOffset?: PositionerProps["sideOffset"];
   readonly collisionPadding?: PositionerProps["collisionPadding"];
+  /**
+   * Where focus goes when the list closes; the trigger by default. Gets how
+   * it closed (`keyboard`, `mouse`, `touch`).
+   */
+  readonly finalFocus?: React.ComponentProps<
+    typeof BaseSelect.Popup
+  >["finalFocus"];
   readonly "aria-label"?: string;
 }) {
   return (
@@ -79,6 +87,7 @@ export function ChoiceSelectPopup({
           className={cn("dx-picker", className)}
           data-width={width}
           aria-label={ariaLabel}
+          {...(finalFocus === undefined ? {} : { finalFocus })}
         >
           {children}
         </BaseSelect.Popup>

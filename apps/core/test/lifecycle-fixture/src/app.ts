@@ -28,6 +28,7 @@ import { projectRoutes } from "../../../src/projects/routes.js";
 import { settingsRoutes } from "../../../src/settings/routes.js";
 import { attributeSubmission } from "../../../src/thread-sharing/middleware.js";
 import { createThreadMessageEditRoutes } from "../../../src/threads/message-edit-route.js";
+import { createThreadMessageQueueRoutes } from "../../../src/threads/message-queue-routes.js";
 import { createThreadRoutes } from "../../../src/threads/routes.js";
 import { FixtureClaudeCodeAgent } from "./agents/fixture-claude-code-agent.js";
 import { FixtureDxHistoryAgent } from "./agents/fixture-dx-history-agent.js";
@@ -44,6 +45,7 @@ import {
   failNextActivation,
   hangNextActivation,
   isHoldingTurn,
+  releaseHeldTurn,
   settleDelayedCommand,
 } from "./sandbox.js";
 
@@ -173,6 +175,17 @@ const RECOVERY_HISTORY_CALLS = 260;
 
 // Model steps for scenarios that run after the scripted lifecycle above.
 const scenarioResponses = {
+  // Messages sent while the turn holds wait in the queue, where they are
+  // edited and withdrawn; the turn's next step reads what is left.
+  "queue-edit": () => [
+    fauxAssistantMessage(
+      [fauxToolCall("bash", { command: "hold-until-released" })],
+      { stopReason: "toolUse" },
+    ),
+    seenMessages,
+    seenMessages,
+    seenMessages,
+  ],
   "stop-queue": () => [
     fauxAssistantMessage([fauxToolCall("bash", { command: "hold-turn" })], {
       stopReason: "toolUse",
@@ -278,6 +291,19 @@ const scenarioResponses = {
     fauxAssistantMessage([fauxToolCall("bash", { command: "hold-turn" })], {
       stopReason: "toolUse",
     }),
+    seenMessages,
+  ],
+  // Deleting a read message: as editing, but nothing replaces it; the
+  // second turn's command is a side effect the delete does not undo.
+  "delete-rewind": () => [
+    seenMessages,
+    fauxAssistantMessage(
+      [fauxToolCall("bash", { command: "fixture-count delete-side-effect" })],
+      { stopReason: "toolUse" },
+    ),
+    seenMessages,
+    seenMessages,
+    seenMessages,
     seenMessages,
   ],
 };
@@ -483,6 +509,12 @@ app.get("/__fixture/dx-history-calls", (context) =>
 app.get("/__fixture/command-runs/:threadId", (context) =>
   context.json(commandRuns(context.req.param("threadId"))),
 );
+app.post("/__fixture/release/:threadId", (context) =>
+  context.body(
+    null,
+    releaseHeldTurn(context.req.param("threadId")) ? 204 : 409,
+  ),
+);
 app.get("/__fixture/holding/:threadId", (context) =>
   context.json({ holding: isHoldingTurn(context.req.param("threadId")) }),
 );
@@ -605,30 +637,86 @@ attributedAgentRoutes.use("/:threadId", attributeSubmission);
 attributedAgentRoutes.route("/", fixtureAgentRouter);
 app.route("/v1/agents/dx-attributed", attributedAgentRoutes);
 app.use("/v1/threads/:threadId/messages/*", authorizeThread);
-app.route(
-  "/v1/threads",
-  createThreadMessageEditRoutes({
-    stop: async (threadId, env) => {
-      const response = await fixtureAgentRouter.request(
-        `/${threadId}/abort`,
-        { method: "POST" },
-        env,
-      );
-      if (!response.ok) throw new Error(`Abort failed (${response.status}).`);
-    },
-    rewind: (threadId, input, env) =>
-      fixtureAgentRouter.request(
-        `/${encodeURIComponent(threadId)}`,
-        {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ kind: "rewind", ...input }),
-        },
-        env,
-      ),
-    routes: async () => attributedAgentRoutes,
-  }),
-);
+const fixtureMessageAgent = {
+  stop: async (threadId: string, env: AppEnv["Bindings"]) => {
+    const response = await fixtureAgentRouter.request(
+      `/${threadId}/abort`,
+      { method: "POST" },
+      env,
+    );
+    if (!response.ok) throw new Error(`Abort failed (${response.status}).`);
+  },
+  rewind: (
+    threadId: string,
+    input: { entryId: string; idempotencyKey: string; expectText: string },
+    env: AppEnv["Bindings"],
+  ) =>
+    fixtureAgentRouter.request(
+      `/${encodeURIComponent(threadId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "rewind", ...input }),
+      },
+      env,
+    ),
+  routes: async () => attributedAgentRoutes,
+  withdraw: async (
+    threadId: string,
+    submissionId: string,
+    expectBody: string,
+    env: AppEnv["Bindings"],
+  ) => {
+    const response = await fixtureAgentRouter.request(
+      `/${encodeURIComponent(threadId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "withdraw", submissionId, expectBody }),
+      },
+      env,
+    );
+    if (response.status === 404)
+      return { withdrawn: false as const, status: "absent" as const };
+    return (await response.json()) as never;
+  },
+  replace: async (
+    threadId: string,
+    submissionId: string,
+    expectBody: string,
+    body: string,
+    env: AppEnv["Bindings"],
+  ) => {
+    const response = await fixtureAgentRouter.request(
+      `/${encodeURIComponent(threadId)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "replace",
+          submissionId,
+          expectBody,
+          body,
+        }),
+      },
+      env,
+    );
+    if (response.status === 404)
+      return { replaced: false as const, status: "absent" as const };
+    return (await response.json()) as never;
+  },
+  queued: async (threadId: string, env: AppEnv["Bindings"]) => {
+    const response = await fixtureAgentRouter.request(
+      `/${encodeURIComponent(threadId)}?view=queued`,
+      { method: "GET" },
+      env,
+    );
+    if (!response.ok) return [];
+    return ((await response.json()) as { submissions: never[] }).submissions;
+  },
+};
+app.route("/v1/threads", createThreadMessageEditRoutes(fixtureMessageAgent));
+app.route("/v1/threads", createThreadMessageQueueRoutes(fixtureMessageAgent));
 app.use("/v1/agents/dx/:threadId", authorizeThread);
 app.use("/v1/agents/dx/:threadId/:subpath{.+}", authorizeThread);
 app.route("/v1/agents/dx", createAgentRouter(FixtureLifecycleAgent));

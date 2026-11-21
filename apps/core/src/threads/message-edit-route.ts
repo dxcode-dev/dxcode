@@ -75,17 +75,18 @@ export interface MessageEditAgent {
 }
 
 /**
- * Sends the edited message through the agent's own routes behind dx's
- * admission, signed in as the editor, so it is authorized, attributed, and
- * admitted like any message they send; `messageEdit` marks its author tag.
+ * Sends a message through the agent's own routes behind dx's admission,
+ * signed in as the person, so it is authorized, attributed, and admitted
+ * like any message they send. `edit` marks its author tag as an edit.
  */
-const sendEditedMessage = async (
-  agent: MessageEditAgent,
+export const sendThreadMessageAs = async (
+  agent: Pick<MessageEditAgent, "routes">,
   context: Context<AppEnv>,
   input: {
     readonly threadId: string;
     readonly body: string;
     readonly idempotencyKey: string;
+    readonly edit: boolean;
   },
 ) => {
   const dxAgentRoutes = await agent.routes();
@@ -95,7 +96,7 @@ const sendEditedMessage = async (
     inner.set("principal", actor);
     inner.set("requestId", context.get("requestId"));
     inner.set("requestStartedAt", Date.now());
-    inner.set("messageEdit", true);
+    if (input.edit) inner.set("messageEdit", true);
     await next();
   });
   app.route("/v1/agents/dx", dxAgentRoutes);
@@ -123,6 +124,90 @@ const sendEditedMessage = async (
         ? payload.submissionId
         : undefined,
   };
+};
+
+/** How a stop-then-rewind ended; anything else throws. */
+export type RewindOutcome = "rewound" | "busy" | "changed";
+
+/**
+ * Stops the running turn and everything queued, then takes the agent back
+ * to just before `entryId`, waiting for the stopped turn to settle. A
+ * retry with the same key converges: Flue records the rewind once.
+ */
+export const stopAndRewind = async (
+  agent: Pick<MessageEditAgent, "stop" | "rewind">,
+  env: Bindings,
+  threadId: string,
+  input: {
+    readonly entryId: string;
+    readonly idempotencyKey: string;
+    readonly expectText: string;
+  },
+): Promise<RewindOutcome> => {
+  // An idle agent, or a retry whose rewind this key already recorded, needs
+  // no Stop: Stop would end whatever runs now, which the person never saw.
+  const first = await agent.rewind(threadId, input, env);
+  await first.body?.cancel();
+  if (first.ok) return "rewound";
+  if (first.status === 400) return "changed";
+  if (first.status !== 409)
+    throw new Error(`Rewinding the Thread's agent failed (${first.status}).`);
+  await agent.stop(threadId, env);
+  const deadline = Date.now() + SETTLE_WAIT_MS;
+  for (;;) {
+    const rewound = await agent.rewind(threadId, input, env);
+    await rewound.body?.cancel();
+    if (rewound.ok) return "rewound";
+    if (rewound.status === 409 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
+      continue;
+    }
+    if (rewound.status === 409) return "busy";
+    if (rewound.status === 400) return "changed";
+    throw new Error(`Rewinding the Thread's agent failed (${rewound.status}).`);
+  }
+};
+
+/**
+ * The turns a rewind removed leave search too: drop the Thread's indexed
+ * text and read its history again, after the response.
+ */
+export const reindexAfterRewind = (
+  context: Context<AppEnv>,
+  threadId: string,
+) =>
+  context.executionCtx.waitUntil(
+    (async () => {
+      try {
+        await ownerSearchIndex(
+          context.env,
+          context.get("threadOwnerUserId"),
+        )?.dropThread(threadId);
+      } catch (cause) {
+        threadPersistenceLogger.warn(
+          "An edited Thread's search text could not be dropped.",
+          { event: "thread_search_drop_failed", threadId, cause },
+        );
+      }
+      await enqueueThreadSearchIndex(context.env, threadId);
+    })(),
+  );
+
+/**
+ * Whether `original` (a message as Flue holds it) is one the actor typed
+ * themselves: not chat, nor one an automation, another Thread, a comment,
+ * or a plugin sent.
+ */
+export const sentByActor = (original: string, actorUserId: string) => {
+  const sent = parseMessageAuthor(original);
+  return (
+    sent.author?.userId === actorUserId &&
+    sent.chat !== true &&
+    sent.automation === undefined &&
+    sent.sourceThreadId === undefined &&
+    sent.commentOn === undefined &&
+    sent.plugin === undefined
+  );
 };
 
 /**
@@ -163,69 +248,27 @@ export const createThreadMessageEditRoutes = (agent: MessageEditAgent) =>
         return refuse(context, "SPACE_POSTS_EDIT_IN_PLACE", 409);
       if (context.get("threadLifecycleState") === "archived")
         return refuse(context, "THREAD_ARCHIVED", 409);
-      const sent = parseMessageAuthor(request.value.original);
-      if (
-        sent.author?.userId !== context.get("actor").userId ||
-        sent.chat === true ||
-        sent.automation !== undefined ||
-        sent.sourceThreadId !== undefined ||
-        sent.commentOn !== undefined ||
-        sent.plugin !== undefined
-      )
+      if (!sentByActor(request.value.original, context.get("actor").userId))
         return refuse(context, "MESSAGE_NOT_YOURS", 403);
 
       const key = await sha256Hex(
         `message-edit\n${threadId.value}\n${request.value.idempotencyKey}`,
       );
-      await agent.stop(threadId.value, context.env);
-      const deadline = Date.now() + SETTLE_WAIT_MS;
-      for (;;) {
-        const rewound = await agent.rewind(
-          threadId.value,
-          { entryId, idempotencyKey: key, expectText: request.value.original },
-          context.env,
-        );
-        await rewound.body?.cancel();
-        if (rewound.ok) break;
-        if (rewound.status === 409 && Date.now() < deadline) {
-          await new Promise((resolve) => setTimeout(resolve, SETTLE_POLL_MS));
-          continue;
-        }
-        if (rewound.status === 409) return refuse(context, "AGENT_BUSY", 409);
-        if (rewound.status === 400)
-          return refuse(context, "MESSAGE_CHANGED", 409);
-        throw new Error(
-          `Rewinding the Thread's agent failed (${rewound.status}).`,
-        );
-      }
+      const rewound = await stopAndRewind(agent, context.env, threadId.value, {
+        entryId,
+        idempotencyKey: key,
+        expectText: request.value.original,
+      });
+      if (rewound === "busy") return refuse(context, "AGENT_BUSY", 409);
+      if (rewound === "changed") return refuse(context, "MESSAGE_CHANGED", 409);
 
-      const delivered = await sendEditedMessage(agent, context, {
+      const delivered = await sendThreadMessageAs(agent, context, {
         threadId: threadId.value,
         body: request.value.body,
         idempotencyKey: key,
+        edit: true,
       });
-      // The removed turns leave search too: drop the Thread's indexed text and
-      // read its history again.
-      context.executionCtx.waitUntil(
-        (async () => {
-          try {
-            await ownerSearchIndex(
-              context.env,
-              context.get("threadOwnerUserId"),
-            )?.dropThread(threadId.value);
-          } catch (cause) {
-            threadPersistenceLogger.warn(
-              "An edited Thread's search text could not be dropped.",
-              {
-                event: "thread_search_drop_failed",
-                threadId: threadId.value,
-                cause,
-              },
-            );
-          }
-          await enqueueThreadSearchIndex(context.env, threadId.value);
-        })(),
-      );
+      reindexAfterRewind(context, threadId.value);
       if (delivered.status !== 202 || delivered.submissionId === undefined)
         return refuse(context, "EDIT_NOT_SENT", 502);
       return context.json(

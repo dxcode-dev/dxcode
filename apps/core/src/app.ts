@@ -1,8 +1,11 @@
 import { Hono } from "hono";
 import {
   dxAgentRoutes,
+  listQueuedThreadMessages,
+  replaceQueuedThreadMessage,
   rewindThreadAgent,
   stopThreadAgent,
+  withdrawThreadMessage,
 } from "./agents/routes.js";
 import { artifactLibraryRoutes } from "./artifact-library/routes.js";
 import { LOCAL_R2_BUCKET, localR2Routes } from "./attachments/local-r2.js";
@@ -33,7 +36,7 @@ import { errorHandler, notFoundHandler } from "./http/http-errors.js";
 import { withStoredIds } from "./http/public-ids.js";
 import { requestId } from "./http/request-id.js";
 import { requestLogging } from "./http/request-logging.js";
-import type { AppEnv } from "./http/types.js";
+import type { AppEnv, Bindings } from "./http/types.js";
 import { huddleLinkRoutes } from "./huddles/links.js";
 import { threadHuddleRoutes } from "./huddles/routes.js";
 import {
@@ -107,6 +110,7 @@ import { threadStorageRoutes } from "./thread-storage/routes.js";
 import { threadUsageRoutes } from "./thread-usage/routes.js";
 import { threadDaemonRoutes } from "./threads/daemon-route.js";
 import { createThreadMessageEditRoutes } from "./threads/message-edit-route.js";
+import { createThreadMessageQueueRoutes } from "./threads/message-queue-routes.js";
 import { threadPaneLayoutRoutes } from "./threads/pane-layout-route.js";
 import { threadRoutes } from "./threads/routes.js";
 import { threadTerminalRoutes } from "./threads/terminal-route.js";
@@ -252,17 +256,37 @@ app.route("/v1/threads", threadOrbFaultRoutes);
 // `/automations/*` also matches `/automations`; see Portals above.
 app.use("/v1/threads/:threadId/automations/*", authorizeThread);
 app.route("/v1/threads", threadAutomationRoutes);
-// A person edits one of their earlier messages: the agent goes back to it.
+// A person edits or deletes one of their messages: a waiting one changes in
+// the queue; for one the agent read, the agent goes back to it.
 app.use("/v1/threads/:threadId/messages/*", authorizeThread);
-app.route(
-  "/v1/threads",
-  createThreadMessageEditRoutes({
-    // Read at call time: worker tests replace the agent routes module.
-    stop: (threadId, env) => stopThreadAgent(threadId, env),
-    rewind: (threadId, input, env) => rewindThreadAgent(threadId, input, env),
-    routes: async () => dxAgentRoutes,
-  }),
-);
+const threadMessageAgent = {
+  // Read at call time: worker tests replace the agent routes module.
+  stop: (threadId: string, env: Bindings) => stopThreadAgent(threadId, env),
+  rewind: (
+    threadId: string,
+    input: Parameters<typeof rewindThreadAgent>[1],
+    env: Bindings,
+  ) => rewindThreadAgent(threadId, input, env),
+  routes: async () => dxAgentRoutes,
+  withdraw: (
+    threadId: string,
+    submissionId: string,
+    expectBody: string,
+    env: Bindings,
+  ) => withdrawThreadMessage(threadId, submissionId, expectBody, env),
+  replace: (
+    threadId: string,
+    submissionId: string,
+    expectBody: string,
+    body: string,
+    env: Bindings,
+  ) =>
+    replaceQueuedThreadMessage(threadId, submissionId, expectBody, body, env),
+  queued: (threadId: string, env: Bindings) =>
+    listQueuedThreadMessages(threadId, env),
+};
+app.route("/v1/threads", createThreadMessageEditRoutes(threadMessageAgent));
+app.route("/v1/threads", createThreadMessageQueueRoutes(threadMessageAgent));
 // Installed plugins' prompts, notices, quick actions, and commands; the
 // list is `/plugin-ui`, everything else is under it.
 app.use("/v1/threads/:threadId/plugin-ui", authorizeThread);

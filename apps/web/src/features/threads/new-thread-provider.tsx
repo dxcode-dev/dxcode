@@ -8,6 +8,7 @@ import {
   type ComposerEmail,
   NewThreadSurfaceContext,
   type NewThreadSurfaceValue,
+  useInlineNewThreadRouting,
 } from "../../shared/new-thread-surface.js";
 import { composerDefaultsQueryOptions } from "../settings/composer/composer-defaults-queries.js";
 import { projectDefaultsQueryOptions } from "../settings/project-defaults/project-defaults-queries.js";
@@ -60,18 +61,21 @@ export function NewThreadProvider({
       ? document.querySelector<HTMLElement>('[aria-label="Open sidebar"]')
       : null;
   };
+  // On a page with the composer inline, "new Thread" focuses it instead.
+  const routing = useInlineNewThreadRouting((projectId, prompt, email) => {
+    const element =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    returnFocus.current = {
+      element: element === document.body ? null : element,
+      mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
+    };
+    setInvocation({ key: Date.now(), projectId, prompt, email });
+  });
   const value: NewThreadSurfaceValue = {
-    openNewThread: (projectId, prompt, email) => {
-      const element =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
-      returnFocus.current = {
-        element: element === document.body ? null : element,
-        mobileDrawer: element?.closest(".mobile-sidebar-drawer") !== null,
-      };
-      setInvocation({ key: Date.now(), projectId, prompt, email });
-    },
+    openNewThread: routing.openNewThread,
+    registerInlineNewThread: routing.registerInlineNewThread,
     pendingCreations: registry?.pendingCreations,
     subscribePendingCreations: registry?.subscribeCreations,
   };

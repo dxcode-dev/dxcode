@@ -63,6 +63,12 @@ export interface MessageAuthorTag {
    */
   readonly edited?: boolean;
   /**
+   * The person deleted messages before this one: the conversation went back
+   * to before them, and what their turns changed in files, artifacts, and
+   * other Threads stays. Only the server sets it.
+   */
+  readonly rewound?: boolean;
+  /**
    * The installed plugin whose code posted this message on the owner's
    * behalf with `ctx.thread.append` or `note`. Only the server sets it;
    * clients show the message as the plugin's, not the person's.
@@ -132,6 +138,7 @@ export const formatMessageAuthor = ({
   automation,
   commentOn,
   edited,
+  rewound,
   plugin,
 }: MessageAuthorTag) =>
   `<${TAG} role="${author.role}" user_id="${escapeAttribute(author.userId)}" identifier="${escapeAttribute(author.name)}"${
@@ -151,6 +158,8 @@ export const formatMessageAuthor = ({
   }${automation === undefined ? "" : ` automation="${automation}"`}${
     commentOn === undefined ? "" : ` comment_on="${escapeAttribute(commentOn)}"`
   }${edited === true ? ' edited="true"' : ""}${
+    rewound === true ? ' rewound="true"' : ""
+  }${
     plugin === undefined
       ? ""
       : ` plugin="${escapeAttribute(plugin.name)}" plugin_id="${escapeAttribute(plugin.id)}" plugin_scope="${plugin.scope}"${
@@ -214,6 +223,7 @@ export const parseMessageAuthor = (
   readonly automation?: MessageAutomation;
   readonly commentOn?: string;
   readonly edited?: true;
+  readonly rewound?: true;
   readonly plugin?: MessagePlugin;
   readonly text: string;
 } => {
@@ -265,6 +275,7 @@ export const parseMessageAuthor = (
       ? { commentOn: fields.get("comment_on") }
       : {}),
     ...(fields.get("edited") === "true" ? { edited: true as const } : {}),
+    ...(fields.get("rewound") === "true" ? { rewound: true as const } : {}),
     ...(pluginOf(fields) === undefined ? {} : { plugin: pluginOf(fields) }),
     text: rest,
   };

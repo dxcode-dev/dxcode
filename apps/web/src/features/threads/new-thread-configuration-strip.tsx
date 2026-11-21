@@ -86,6 +86,19 @@ const unavailableHint = (project: ProjectData) => {
     : `No ${provider} access`;
 };
 
+/** Where focus goes when one of the strip's lists closes, by how it closed. */
+type FinalFocus = (closeType: string) => boolean | HTMLElement;
+
+/**
+ * Back to the prompt after a pointer choice, so writing goes on and no
+ * focus ring lingers on the chip; to the chip after a keyboard one, as
+ * menus do. `strip` is the strip's element when the list closes.
+ */
+const promptAfterPointer = (closeType: string, strip: HTMLElement | null) =>
+  closeType === "keyboard"
+    ? true
+    : (strip?.closest("form")?.querySelector("textarea") ?? true);
+
 function ProjectOption({ project }: { readonly project: ProjectData }) {
   const hint = unavailableHint(project);
   return (
@@ -127,7 +140,9 @@ function ProjectPicker({
   onLoadMoreProjects,
   onProjectChange,
   projectTriggerRef,
+  finalFocus,
 }: {
+  readonly finalFocus?: FinalFocus;
   readonly projects: ReadonlyArray<ProjectData>;
   readonly projectId: ProjectId | "";
   readonly locked: boolean;
@@ -206,6 +221,7 @@ function ProjectPicker({
         className="project-picker-popup"
         sideOffset={8}
         collisionPadding={12}
+        finalFocus={finalFocus}
       >
         <ChoiceSelectSearch
           aria-label="Filter projects"
@@ -390,7 +406,9 @@ function OrbPicker({
   disabled,
   isProfileAllowed,
   onSelect,
+  finalFocus,
 }: {
+  readonly finalFocus?: FinalFocus;
   readonly groups: ReturnType<typeof runnerProfileGroups> | undefined;
   readonly selectedProfile: RunnerProfile;
   readonly selectedName: string;
@@ -437,6 +455,7 @@ function OrbPicker({
         align="start"
         sideOffset={8}
         collisionPadding={12}
+        finalFocus={finalFocus}
       >
         {groups?.map((group) => {
           const hint = orbProviderHint(group.orb);
@@ -529,7 +548,9 @@ function NewThreadOrbSlot({
   onRunnerProfileChange,
   onRunnerProfileRetry,
   onConnectOrbProvider,
+  finalFocus,
 }: {
+  readonly finalFocus?: FinalFocus;
   readonly locked: boolean;
   readonly runnerProfiles: ReadonlyArray<RunnerProfile>;
   readonly runnerProviders: ReadonlyArray<RunnerProviderPresentation>;
@@ -641,6 +662,7 @@ function NewThreadOrbSlot({
         allowedRunnerProfileIdSet.has(runnerProfile.id)
       }
       onSelect={(value) => onRunnerProfileChange?.(value)}
+      finalFocus={finalFocus}
     />
   );
 }
@@ -770,9 +792,13 @@ export function NewThreadConfigurationStrip({
     shortcutSnapshot,
   );
 
+  const strip = React.useRef<HTMLElement>(null);
+  const finalFocus: FinalFocus = (closeType) =>
+    promptAfterPointer(closeType, strip.current);
   return (
-    <footer className="new-thread-config-strip">
+    <footer className="new-thread-config-strip" ref={strip}>
       <NewThreadOrbSlot
+        finalFocus={finalFocus}
         locked={locked}
         runnerProfiles={runnerProfiles}
         runnerProviders={runnerProviders}
@@ -795,8 +821,10 @@ export function NewThreadConfigurationStrip({
         onLoadMoreProjects={onLoadMoreProjects}
         onProjectChange={onProjectChange}
         projectTriggerRef={projectTriggerRef}
+        finalFocus={finalFocus}
       />
       <ModelPicker
+        finalFocus={finalFocus}
         model={model}
         choices={choices}
         routingGraph={routingGraph}

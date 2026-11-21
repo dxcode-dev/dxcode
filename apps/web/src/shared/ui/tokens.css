@@ -192,22 +192,58 @@
   --mode-ultra: light-dark(var(--thread-color-purple), var(--mode-ultra-glow));
   /* Code colors: every highlighter maps its tokens onto these (see
      shared/ui/code.css and shared/ui/code-theme.ts), so a keyword is one
-     color in a reply, a diff, Changes, Files, and the editor. */
+     color in a reply, a diff, Changes, Files, and the editor. Each takes its
+     thread color's hue, mixed toward --foreground just enough to read at
+     4.5:1 on the darkest surface code sits on: a diff line's tint under its
+     changed-word highlight (code.css). */
   --code-surface: color-mix(in srgb, var(--foreground) 4%, var(--card));
   --code-foreground: var(--foreground);
-  --code-keyword: var(--thread-color-pink);
-  --code-string: color-mix(
-    in srgb,
-    var(--thread-color-yellow) 60%,
+  --code-keyword: light-dark(
+    color-mix(in srgb, var(--thread-color-pink) 78%, var(--foreground)),
+    color-mix(in srgb, var(--thread-color-pink) 76%, var(--foreground))
+  );
+  --code-string: light-dark(
+    color-mix(
+      in srgb,
+      color-mix(
+          in srgb,
+          var(--thread-color-yellow) 60%,
+          var(--thread-color-green)
+        )
+        75%,
+      var(--foreground)
+    ),
+    color-mix(
+      in srgb,
+      var(--thread-color-yellow) 60%,
+      var(--thread-color-green)
+    )
+  );
+  --code-number: light-dark(
+    color-mix(in srgb, var(--thread-color-purple) 84%, var(--foreground)),
+    color-mix(in srgb, var(--thread-color-purple) 72%, var(--foreground))
+  );
+  --code-title: light-dark(
+    color-mix(in srgb, var(--thread-color-cyan) 72%, var(--foreground)),
+    var(--thread-color-cyan)
+  );
+  --code-property: light-dark(
+    color-mix(in srgb, var(--thread-color-blue) 78%, var(--foreground)),
+    color-mix(in srgb, var(--thread-color-blue) 80%, var(--foreground))
+  );
+  --code-comment: light-dark(
+    color-mix(in srgb, var(--muted-foreground) 97%, var(--foreground)),
+    color-mix(in srgb, var(--muted-foreground) 58%, var(--foreground))
+  );
+  --code-addition: light-dark(
+    color-mix(in srgb, var(--thread-color-green) 73%, var(--foreground)),
     var(--thread-color-green)
   );
-  --code-number: var(--thread-color-purple);
-  --code-title: var(--thread-color-cyan);
-  --code-property: var(--thread-color-blue);
-  --code-comment: var(--muted-foreground);
-  --code-addition: var(--thread-color-green);
-  --code-deletion: var(--thread-color-red);
-  --code-modified: var(--thread-color-blue);
+  --code-deletion: light-dark(
+    color-mix(in srgb, var(--thread-color-red) 79%, var(--foreground)),
+    color-mix(in srgb, var(--thread-color-red) 67%, var(--foreground))
+  );
+  --code-modified: var(--code-property);
   --editor-background: color-mix(in srgb, var(--foreground) 3%, var(--card));
   --diff-dark-base: color-mix(
     in srgb,

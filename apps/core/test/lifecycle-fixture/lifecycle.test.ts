@@ -942,6 +942,254 @@ describe("generated Flue Worker lifecycle", () => {
     });
   });
 
+  // Deleting a message the agent read (dx Thread delete and rewind). Ways it
+  // could fail: the deleted message or the turns after it stay in the
+  // transcript or the model's context; something is sent in its place;
+  // another person deletes it; the next message reaches the agent without
+  // the rewound mark, or every later message keeps it; the delete undoes
+  // side effects it must keep.
+  // Editing and deleting messages the agent has not read, through dx's queue
+  // routes and the real Flue runtime. Ways it could go wrong: an edit moves
+  // the message to the back of the queue or stops the turn; a withdrawn
+  // message still reaches the model; someone else's message, or one whose
+  // text changed, is touched; a retry changes anything twice; the history
+  // keeps the old text or the withdrawn message.
+  it("edits a waiting message in place and withdraws another; the turn reads only what is left, in order", async () => {
+    const threadId = await startScenarioThread(
+      "queue-edit",
+      "Hold this turn open.",
+    );
+    await waitUntil(
+      async () =>
+        (
+          await (
+            await fixtureRequest(`/__fixture/holding/${threadId}`)
+          ).json<{ holding: boolean }>()
+        ).holding,
+      "the first turn to hold",
+    );
+    const call = (path: string, body?: unknown) =>
+      fixtureRequest(`/v1/threads/${threadId}/messages${path}`, {
+        method: body === undefined ? "GET" : "POST",
+        headers: { ...authorization, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    for (const [index, body] of ["first", "second", "third"].entries()) {
+      const sent = await fixtureRequest(
+        `/v1/agents/dx-attributed/${threadId}`,
+        {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/json" },
+          body: JSON.stringify({
+            kind: "user",
+            body,
+            idempotencyKey: `queue-edit-${index}`,
+          }),
+        },
+      );
+      expect(sent.status).toBe(202);
+    }
+    type Queued = { submissionId: string; text: string };
+    const queued = async () =>
+      (await (await call("/queued")).json<{ data: { messages: Queued[] } }>())
+        .data.messages;
+    const waiting = await queued();
+    expect(waiting.map(({ text }) => text)).toEqual([
+      "first",
+      "second",
+      "third",
+    ]);
+    const [first, second] = waiting as [Queued, Queued, Queued];
+
+    const edit = { body: "first, edited", idempotencyKey: "queue-edit-k1" };
+    const edited = await call(`/queued/${first.submissionId}/edit`, edit);
+    expect(edited.status).toBe(200);
+    expect((await edited.json<{ data: unknown }>()).data).toEqual({
+      outcome: "replaced",
+      submissionId: first.submissionId,
+    });
+    // A retry converges on the same text and the same place.
+    expect(
+      (await call(`/queued/${first.submissionId}/edit`, edit)).status,
+    ).toBe(200);
+    const removed = await call(`/queued/${second.submissionId}/delete`, {
+      idempotencyKey: "queue-edit-d1",
+    });
+    expect(removed.status).toBe(200);
+    expect((await removed.json<{ data: unknown }>()).data).toEqual({
+      outcome: "withdrawn",
+    });
+    expect(
+      (
+        await call(`/queued/${second.submissionId}/delete`, {
+          idempotencyKey: "queue-edit-d1",
+        })
+      ).status,
+    ).toBe(200);
+    const left = await queued();
+    expect(left.map(({ text }) => text)).toEqual(["first, edited", "third"]);
+    expect(left[0]?.submissionId).toBe(first.submissionId);
+    // The turn held through all of it: nothing stopped it.
+    expect(
+      (
+        await (
+          await fixtureRequest(`/__fixture/holding/${threadId}`)
+        ).json<{ holding: boolean }>()
+      ).holding,
+    ).toBe(true);
+
+    expect(
+      (
+        await fixtureRequest(`/__fixture/release/${threadId}`, {
+          method: "POST",
+        })
+      ).status,
+    ).toBe(204);
+    await waitUntil(
+      async () =>
+        (await queued()).length === 0 &&
+        textsOf(await threadClient(threadId).history(), "assistant").length > 0,
+      "the turn to read what was left",
+      20_000,
+    );
+    const history = await threadClient(threadId).history();
+    expect(textsOf(history, "user")).toEqual([
+      "Hold this turn open.",
+      "first, edited",
+      "third",
+    ]);
+    expect(textsOf(history, "assistant").join(" ")).not.toMatch(/second/);
+    expect(
+      history.settlements.find(
+        ({ submissionId }) => submissionId === second.submissionId,
+      )?.outcome,
+    ).toBe("aborted");
+    writeProof("queue-edit", {
+      threadId,
+      queuedBefore: waiting.map(({ text }) => text),
+      queuedAfter: left.map(({ text }) => text),
+      userMessages: textsOf(history, "user"),
+      assistantMessages: textsOf(history, "assistant"),
+      settlements: history.settlements,
+    });
+  });
+
+  it("deletes a read message: it and the later turns leave the transcript and the model, the next message is marked", async () => {
+    const threadId = await startScenarioThread("delete-rewind", "one");
+    const settled = async (count: number) =>
+      waitUntil(
+        async () =>
+          (
+            await (
+              await fixtureRequest(`/__fixture/settlements/${threadId}`)
+            ).json<unknown[]>()
+          ).length >= count,
+        `${count} settled turns`,
+        20_000,
+      );
+    await settled(1);
+    const sendAttributed = async (body: string, key: string) => {
+      const response = await fixtureRequest(
+        `/v1/agents/dx-attributed/${threadId}`,
+        {
+          method: "POST",
+          headers: { ...authorization, "content-type": "application/json" },
+          body: JSON.stringify({ kind: "user", body, idempotencyKey: key }),
+        },
+      );
+      expect(response.status).toBe(202);
+    };
+    await sendAttributed("two", "delete-two");
+    await settled(2);
+    await sendAttributed("three", "delete-three");
+    await settled(3);
+    const before = await threadClient(threadId).history();
+    const two = before.messages.find(
+      (candidate) =>
+        candidate.role === "user" &&
+        candidate.parts.some(
+          (part) =>
+            part.type === "text" &&
+            parseMessageAuthor(part.text).text === "two",
+        ),
+    );
+    const original = two?.parts.find((part) => part.type === "text");
+    if (two === undefined || original?.type !== "text")
+      throw new Error('No message "two".');
+    const remove = (body: { original: string; idempotencyKey: string }) =>
+      fixtureRequest(`/v1/threads/${threadId}/messages/${two.id}/delete`, {
+        method: "POST",
+        headers: { ...authorization, "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    const notYours = await remove({
+      original: original.text.replace(
+        /user_id="[^"]*"/,
+        'user_id="usr_someone-else"',
+      ),
+      idempotencyKey: "delete-not-yours",
+    });
+    expect(notYours.status).toBe(403);
+    const deleted = await remove({
+      original: original.text,
+      idempotencyKey: "delete-two-once",
+    });
+    expect(deleted.status).toBe(200);
+    const after = await threadClient(threadId).history();
+    expect(textsOf(after, "user")).toEqual(["one"]);
+    expect(textsOf(after, "assistant")).toEqual(["seen: one"]);
+    // The removed turn's command ran, and stays run.
+    const runs = await (
+      await fixtureRequest(`/__fixture/command-runs/${threadId}`)
+    ).json<Record<string, number>>();
+    expect(runs["delete-side-effect"]).toBe(1);
+    // Retrying converges: nothing more leaves.
+    const retried = await remove({
+      original: original.text,
+      idempotencyKey: "delete-two-once",
+    });
+    expect(retried.status).toBe(200);
+    expect(textsOf(await threadClient(threadId).history(), "user")).toEqual([
+      "one",
+    ]);
+
+    // The next message follows "one", marked; the one after is not.
+    await sendAttributed("four", "delete-four");
+    await settled(4);
+    await sendAttributed("five", "delete-five");
+    await settled(5);
+    const final = await threadClient(threadId).history();
+    expect(textsOf(final, "user")).toEqual(["one", "four", "five"]);
+    expect(textsOf(final, "assistant")).toEqual([
+      "seen: one",
+      "seen: one | four",
+      "seen: one | four | five",
+    ]);
+    const tags = final.messages.flatMap((message) =>
+      message.role !== "user"
+        ? []
+        : message.parts.flatMap((part) =>
+            part.type === "text" ? [parseMessageAuthor(part.text)] : [],
+          ),
+    );
+    expect(tags.find((tag) => tag.text === "four")).toMatchObject({
+      rewound: true,
+    });
+    expect(tags.find((tag) => tag.text === "five")?.rewound).toBeUndefined();
+    writeProof("delete-rewind", {
+      threadId,
+      before: textsOf(before, "user"),
+      afterDelete: textsOf(after, "user"),
+      final: {
+        user: textsOf(final, "user"),
+        assistant: textsOf(final, "assistant"),
+      },
+      commandRuns: runs,
+      refused: { notYours: notYours.status },
+    });
+  });
+
   // An edit's first model call must repeat what the replaced turn sent up to
   // the edited message, byte for byte, so the provider's prompt cache still
   // holds the conversation the edit keeps. Ways it could fail: the rewind

@@ -1,6 +1,8 @@
 import {
   type ThreadDetailData,
+  type ThreadQueuedMessage,
   threadSettlementProvenance,
+  withMessageAttachments,
   withMessageAuthor,
 } from "@dx/api";
 import {
@@ -34,6 +36,7 @@ import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
 import { Textarea } from "../../shared/ui/textarea.js";
+import { observeComposerDock } from "./composer-dock.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
 import { useDictation } from "./dictation/use-dictation.js";
 import {
@@ -52,11 +55,13 @@ import {
   useAttachmentsUploading,
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
+import { useMessageDeleting } from "./message-delete.js";
+import { useMessageEditing } from "./message-edit.js";
 import {
   MessageEditContext,
   type MessageEditOptions,
-  useMessageEditing,
-} from "./message-edit.js";
+  type UserPromptRow,
+} from "./message-edit-model.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import { sendRefusal } from "./send-failure.js";
 import {
@@ -94,6 +99,7 @@ import {
   useThreadPresentation,
   useThreadPresentationValue,
 } from "./use-thread-presentation.js";
+import { isWithdrawnSettlement } from "./withdrawn-sends.js";
 
 /**
  * The quick-action row's code loads when a row first shows, after the
@@ -810,7 +816,10 @@ function AgentThreadErrorCard({
   const agentError = useAgentSelection(
     source,
     (agent) =>
-      threadErrorPresentation(keptSends(agent, discardedSends), dismissed),
+      threadErrorPresentation(
+        withoutWithdrawn(keptSends(agent, discardedSends)),
+        dismissed,
+      ),
     sameErrorPresentation,
   );
   // A send that Flue retained as a failed send carries its own Retry. The
@@ -870,42 +879,6 @@ function AgentThreadErrorCard({
   );
 }
 
-const observeComposerDock = (node: HTMLDivElement) => {
-  const pane = node.closest<HTMLElement>(".agent-pane");
-  const composer = node.querySelector<HTMLElement>(".agent-composer");
-  if (pane === null || composer === null) return;
-  const updateHeight = () => {
-    // Read both before writing, so one layout serves both. A hidden pane
-    // measures zero; keep its heights so showing it changes nothing.
-    const dockHeight = node.offsetHeight;
-    // The editing bar or the quick-action chips sit on the box; the
-    // transcript's controls clear them too. Measured from the top of what
-    // shows (a chip, not the row's scroll padding).
-    const above =
-      node.querySelector<HTMLElement>(".composer-editing-bar") ??
-      node.querySelector<HTMLElement>(".thread-quick-action");
-    const composerHeight =
-      above === null
-        ? composer.offsetHeight
-        : Math.round(
-            composer.getBoundingClientRect().bottom -
-              above.getBoundingClientRect().top,
-          );
-    if (dockHeight === 0 && composerHeight === 0) return;
-    pane.style.setProperty("--agent-composer-dock-height", `${dockHeight}px`);
-    pane.style.setProperty("--agent-composer-height", `${composerHeight}px`);
-  };
-  updateHeight();
-  const observer = new ResizeObserver(updateHeight);
-  observer.observe(node);
-  observer.observe(composer);
-  return () => {
-    observer.disconnect();
-    pane.style.removeProperty("--agent-composer-dock-height");
-    pane.style.removeProperty("--agent-composer-height");
-  };
-};
-
 function AgentComposer({
   editing,
   focusRef,
@@ -930,10 +903,13 @@ function AgentComposer({
 }: {
   /**
    * Editing an earlier message: the bar above the box, and Cancel, which
-   * Esc in the box also chooses. Attachments stay as the message had them.
+   * Esc in the box also chooses. The message's files show with Remove.
    */
   readonly editing?: {
     readonly bar: React.ReactNode;
+    /** The message's files, each with Remove; the edit sends the rest. */
+    readonly attachments?: React.ReactNode;
+    readonly keptAttachments?: number;
     readonly onCancel: () => void;
   };
   /** Focuses the box with the caret at the end, as starting an edit does. */
@@ -1038,7 +1014,10 @@ function AgentComposer({
   // mic keeps its place. A message on its way (a dictation sent while
   // recording, or a send not yet admitted) shows no Stop: it sends anyway.
   const composing =
-    dictation.active || draft.trim() !== "" || images.length > 0;
+    dictation.active ||
+    draft.trim() !== "" ||
+    images.length > 0 ||
+    (editing?.keptAttachments ?? 0) > 0;
   const showStop = stopAvailable && !draftLocked && !composing;
   const showSend = !dictation.hideSubmit && !showStop;
   return (
@@ -1115,11 +1094,13 @@ function AgentComposer({
             onFiles={onAddImages}
             onScreenshot={onTakeScreenshot}
           />
-          <ImagePreviews
-            images={images}
-            onRemove={onRemoveImage}
-            disabled={draftLocked}
-          />
+          {editing?.attachments ?? (
+            <ImagePreviews
+              images={images}
+              onRemove={onRemoveImage}
+              disabled={draftLocked}
+            />
+          )}
           {editing === undefined ? modelControl : null}
           <span className="composer-spacer" />
           {dictation.controls}
@@ -1582,6 +1563,145 @@ const withInboundMessages = (
 };
 
 /**
+ * A message the viewer sent from another tab or device that waits for the
+ * agent: Flue's history gets it only when the agent reads it, so until then
+ * a row shows it from the server's queue, after the history, where this
+ * tab's own echoes wait too. Its id names its submission.
+ */
+export const QUEUED_MESSAGE_PREFIX = "queued:";
+
+const queuedMessageRows = new WeakMap<
+  ThreadQueuedMessage,
+  PanelAgent["messages"][number]
+>();
+
+const queuedMessage = (queued: ThreadQueuedMessage) => {
+  const cached = queuedMessageRows.get(queued);
+  if (cached !== undefined) return cached;
+  const message = {
+    id: `${QUEUED_MESSAGE_PREFIX}${queued.submissionId}`,
+    role: "user",
+    purpose: "user",
+    display: "visible",
+    parts: [{ type: "text", text: queued.original, state: "done" }],
+  } as PanelAgent["messages"][number];
+  queuedMessageRows.set(queued, message);
+  return message;
+};
+
+const NO_LOCAL_SUBMISSIONS: NonNullable<
+  UseFlueAgentResult["localSubmissions"]
+> = [];
+
+/**
+ * This tab's echo of a waiting message, showing its text as the server's
+ * queue holds it now: an edit replaces the text in place, from this tab or
+ * another, while the echo keeps what was first sent.
+ */
+const queuedEchoes = new WeakMap<
+  PanelAgent["messages"][number],
+  {
+    readonly queued: ThreadQueuedMessage;
+    readonly message: PanelAgent["messages"][number];
+  }
+>();
+
+const queuedEcho = (
+  echo: PanelAgent["messages"][number],
+  queued: ThreadQueuedMessage,
+) => {
+  const cached = queuedEchoes.get(echo);
+  if (cached?.queued === queued) return cached.message;
+  const text = withMessageAttachments(queued.text, queued.attachments);
+  const current = echo.parts.find((part) => part.type === "text");
+  const message =
+    current?.type === "text" && current.text === text
+      ? echo
+      : ({
+          ...echo,
+          parts: [
+            { type: "text", text, state: "done" },
+            ...echo.parts.filter((part) => part.type !== "text"),
+          ],
+        } as PanelAgent["messages"][number]);
+  queuedEchoes.set(echo, { queued, message });
+  return message;
+};
+
+const withQueuedMessages = (
+  messages: PanelAgent["messages"],
+  queued: ReadonlyArray<ThreadQueuedMessage> | undefined,
+  localSubmissions: UseFlueAgentResult["localSubmissions"],
+): PanelAgent["messages"] => {
+  if (queued === undefined || queued.length === 0) return messages;
+  const waitingBySubmission = new Map(
+    queued.map((message) => [message.submissionId, message] as const),
+  );
+  const echoSubmission = new Map(
+    (localSubmissions ?? []).map(
+      ({ localId, submissionId }) => [localId, submissionId] as const,
+    ),
+  );
+  // Shown already: read into Flue's history, or this tab's own echo.
+  const shown = new Set(echoSubmission.values());
+  let changed = false;
+  const current = messages.map((message) => {
+    if (message.submissionId !== undefined) {
+      shown.add(message.submissionId);
+      return message;
+    }
+    const submissionId = echoSubmission.get(message.id);
+    const waiting =
+      submissionId === undefined
+        ? undefined
+        : waitingBySubmission.get(submissionId);
+    if (waiting === undefined) return message;
+    const echo = queuedEcho(message, waiting);
+    if (echo !== message) changed = true;
+    return echo;
+  });
+  const waiting = queued.filter(({ submissionId }) => !shown.has(submissionId));
+  if (waiting.length === 0) return changed ? current : messages;
+  return [...current, ...waiting.map(queuedMessage)];
+};
+
+/** A message withdrawn from the queue settles aborted; no turn failed. */
+const withoutWithdrawn = <Agent extends UseFlueAgentResult>(
+  agent: Agent,
+): Agent =>
+  agent.settlements.some(isWithdrawnSettlement)
+    ? {
+        ...agent,
+        settlements: agent.settlements.filter(
+          (settlement) => !isWithdrawnSettlement(settlement),
+        ),
+      }
+    : agent;
+
+/** The submission a row waits under: this tab's echo, or a queued row. */
+const waitingSubmissionOf =
+  (localSubmissions: NonNullable<UseFlueAgentResult["localSubmissions"]>) =>
+  (row: UserPromptRow) => {
+    if (row.admitted) return undefined;
+    if (row.messageId.startsWith(QUEUED_MESSAGE_PREFIX))
+      return row.messageId.slice(QUEUED_MESSAGE_PREFIX.length);
+    return localSubmissions.find(({ localId }) => localId === row.messageId)
+      ?.submissionId;
+  };
+
+const sameLocalSubmissions = (
+  previous: NonNullable<UseFlueAgentResult["localSubmissions"]>,
+  next: NonNullable<UseFlueAgentResult["localSubmissions"]>,
+) =>
+  previous === next ||
+  (previous.length === next.length &&
+    previous.every(
+      (entry, index) =>
+        entry.localId === next[index]?.localId &&
+        entry.submissionId === next[index]?.submissionId,
+    ));
+
+/**
  * Flue keeps a failed echo for every rejected send and offers no discard. A
  * refused send is in the composer with its reason, and one an edited message
  * replaced is gone, so both leave the Retry card and the session error.
@@ -1653,6 +1773,8 @@ interface TranscriptView {
   /** The latest send is not confirmed; its echo stays in the composer. */
   readonly unconfirmed: boolean;
   readonly inboundMessages: AgentPanelOptions["inboundMessages"];
+  /** The viewer's own messages waiting in the queue, from the server. */
+  readonly queuedMessages: ReadonlyArray<ThreadQueuedMessage> | undefined;
   readonly chatEcho: ((text: string) => boolean) | undefined;
   readonly admittedMessageId:
     | ((submissionId: string) => string | undefined)
@@ -1689,6 +1811,7 @@ const createTranscriptDerivation = () => {
     previous.discardedSends === next.discardedSends &&
     previous.unconfirmed === next.unconfirmed &&
     previous.inboundMessages === next.inboundMessages &&
+    previous.queuedMessages === next.queuedMessages &&
     previous.chatEcho === next.chatEcho &&
     previous.admittedMessageId === next.admittedMessageId;
   const derive = (observed: PanelAgent, view: TranscriptView) => {
@@ -1709,6 +1832,8 @@ const createTranscriptDerivation = () => {
       agent.historyReady,
       agent.hasMore,
       view.inboundMessages,
+      view.queuedMessages,
+      agent.localSubmissions,
       view.chatEcho,
       view.admittedMessageId,
     ];
@@ -1721,13 +1846,18 @@ const createTranscriptDerivation = () => {
           // After history loads: a pending message ahead of it would move
           // once history arrives.
           messages: agent.historyReady
-            ? withInboundMessages(
-                agent.messages,
-                view.inboundMessages,
-                agent.hasMore === true,
+            ? withQueuedMessages(
+                withInboundMessages(
+                  agent.messages,
+                  view.inboundMessages,
+                  agent.hasMore === true,
+                ),
+                view.queuedMessages,
+                agent.localSubmissions,
               )
             : agent.messages,
-          settlements: agent.settlements,
+          // A withdrawn message ran nothing; it shows no stopped turn.
+          settlements: withoutWithdrawn(agent).settlements,
           finalOutputs: agent.finalOutputs,
           chatEcho: view.chatEcho,
           admittedMessageId: view.admittedMessageId,
@@ -1848,6 +1978,7 @@ function AgentConversation({
             discardedSends: NO_DISCARDED_SENDS,
             unconfirmed: false,
             inboundMessages: undefined,
+            queuedMessages: undefined,
             chatEcho: view.chatEcho,
             admittedMessageId: view.admittedMessageId,
           },
@@ -1940,6 +2071,68 @@ function AgentConversation({
     />
   );
   return transcript;
+}
+
+/**
+ * Editing and deleting the viewer's messages in the agent panel: the
+ * messages this tab sent that the agent has not read can change in place;
+ * the composer holds an edit's own draft, so the person's unsent draft waits
+ * untouched until the edit ends.
+ */
+function useMessageChanges({
+  options,
+  source,
+  draftValue,
+  transcript,
+  working,
+  setActionError,
+}: {
+  readonly options: MessageEditOptions | undefined;
+  readonly source: AgentSource<UseFlueAgentResult>;
+  readonly draftValue: Parameters<typeof useMessageEditing>[0]["draftValue"];
+  readonly transcript: () => TranscriptViewModel;
+  readonly working: boolean;
+  readonly setActionError: React.Dispatch<
+    React.SetStateAction<ThreadErrorPresentation | undefined>
+  >;
+}) {
+  // This tab's messages the agent has not read, by the submission they
+  // wait under; they can be edited and deleted in place.
+  const localSubmissions = useAgentSelection(
+    source,
+    (agent) => agent.localSubmissions ?? NO_LOCAL_SUBMISSIONS,
+    sameLocalSubmissions,
+  );
+  const waitingSubmission =
+    options?.editQueued === undefined
+      ? undefined
+      : waitingSubmissionOf(localSubmissions);
+  const messageDeleting = useMessageDeleting({
+    options,
+    source,
+    transcript,
+    waitingSubmission,
+    working,
+  });
+  // Editing an earlier message: the composer holds the edit's own draft, so
+  // the person's unsent draft waits untouched until the edit ends.
+  const messageEditing = useMessageEditing({
+    options,
+    source,
+    draftValue,
+    transcript,
+    waitingSubmission,
+    remove: messageDeleting.start,
+    onError: (error) =>
+      setActionError((current) =>
+        error !== undefined
+          ? { id: "action:edit", ...error, action: "none" }
+          : current?.id === "action:edit"
+            ? undefined
+            : current,
+      ),
+  });
+  return { messageDeleting, messageEditing };
 }
 
 const composerDockRef = (node: HTMLDivElement | null) =>
@@ -2050,10 +2243,13 @@ export function AgentPanel({
     if (node === null) return;
     transcriptAccess?.provide(transcripts.current);
   };
+  const editOptions =
+    archived || readOnlyNotice !== undefined ? undefined : messageEdit;
   const view: TranscriptView = {
     discardedSends,
     unconfirmed: admissionPending || submissionPending || sendFailed,
     inboundMessages,
+    queuedMessages: editOptions?.queuedMessages,
     chatEcho,
     // A message sent from this page is commented on under Flue's id.
     admittedMessageId: retainedThread?.client.admittedMessageId,
@@ -2079,20 +2275,13 @@ export function AgentPanel({
       ? "Preparing workspace…"
       : undefined);
 
-  // Editing an earlier message: the composer holds the edit's own draft, so
-  // the person's unsent draft waits untouched until the edit ends.
-  const messageEditing = useMessageEditing({
-    options: archived || readOnlyNotice !== undefined ? undefined : messageEdit,
+  const { messageDeleting, messageEditing } = useMessageChanges({
+    options: editOptions,
     source,
     draftValue,
-    onError: (error) =>
-      setActionError((current) =>
-        error !== undefined
-          ? { id: "action:edit", ...error, action: "none" }
-          : current?.id === "action:edit"
-            ? undefined
-            : current,
-      ),
+    transcript: transcripts.current,
+    working: agentActive,
+    setActionError,
   });
   const isEditing = messageEditing.editing;
 
@@ -2226,15 +2415,19 @@ export function AgentPanel({
             }}
             onSubmit={(submittedDraft) => {
               followOnSend.get()?.();
-              void (isEditing
-                ? messageEditing.submit(submittedDraft)
-                : submit(submittedDraft));
+              if (isEditing) void messageEditing.submit(submittedDraft);
+              else
+                void submit(submittedDraft).then(() => {
+                  // A message sent while the agent works waits in its queue.
+                  if (agentActive) editOptions?.onQueueChanged?.();
+                });
             }}
             onTakeScreenshot={() => void takeScreenshot()}
             ref={composerLifetimeRef}
           />
         )}
       </section>
+      {messageDeleting.dialog}
       {additionalPanels}
     </div>
   );

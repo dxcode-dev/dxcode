@@ -1708,6 +1708,68 @@ exec /bin/mkdir "$@"
     expect(guest.file(`${STATE}/session`)).toBe("session-3");
   });
 
+  // Deleting a message the agent read rewinds Flue's history and sends
+  // nothing; the next message carries rewound="true". Ways it could fail:
+  // that message resumes the session that still holds the deleted turns;
+  // it sends the earlier turn again as text.
+  it("forks Claude's session at the last message a delete keeps, for the next message", async () => {
+    const guest = await createGuest();
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const argsOf = () => guest.home("claude-args").split("\n");
+    await guest.script([
+      init("session-1"),
+      ...response("m1", [{ text: "APPLE kept." }]),
+      complete("m1", "uuid-apple", "APPLE kept."),
+      result("APPLE kept."),
+    ]);
+    const first = user("Remember APPLE", 70);
+    const firstAnswer = assistant(
+      [{ type: "text", text: "APPLE kept." }],
+      "stop",
+    );
+    await claude.answer({ messages: [first] });
+    guest.write(sessionTranscript("session-1"), "{}\n");
+    await guest.script([
+      init("session-1"),
+      ...response("m2", [{ text: "BANANA kept." }]),
+      complete("m2", "uuid-banana", "BANANA kept."),
+      result("BANANA kept."),
+    ]);
+    await claude.answer({
+      messages: [first, firstAnswer, user("Remember BANANA", 80)],
+    });
+
+    // The person deleted "Remember BANANA": Flue's history is the first turn,
+    // and their next message follows it.
+    const next = user(
+      `${formatMessageAuthor({
+        author: { role: "owner", userId: "usr_owner", name: "Ada" },
+        rewound: true,
+      })}List the code words`,
+      90,
+    );
+    await guest.script([
+      init("session-2"),
+      ...response("m3", [{ text: "APPLE." }]),
+      complete("m3", "uuid-list", "APPLE."),
+      result("APPLE."),
+    ]);
+    await claude.answer({ messages: [first, firstAnswer, next] });
+    const forked = argsOf();
+    expect(forked[forked.indexOf("--resume") + 1]).toBe("session-1");
+    expect(forked[forked.indexOf("--resume-session-at") + 1]).toBe(
+      "uuid-apple",
+    );
+    expect(forked).toContain("--fork-session");
+    const input = (
+      JSON.parse(guest.home("claude-stdin.jsonl")) as {
+        message: { content: Array<{ type: string; text: string }> };
+      }
+    ).message.content;
+    expect(input).toHaveLength(1);
+    expect(input[0]?.text).not.toContain("earlier_conversation");
+  });
+
   // The fork is the fast path; a new session that is told the conversation
   // is the fallback. Ways it could fail: the edit resumes the whole old
   // session; the CLI's refusal fails the turn; the fallback starts with no

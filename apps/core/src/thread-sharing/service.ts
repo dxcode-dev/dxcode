@@ -89,22 +89,57 @@ export const displayNameSql = (user: string, account: string) =>
  * username. Never their email: both travel to the model and to every member
  * of a Thread.
  */
-export const userIdentity = async (db: D1Database, userId: UserId) => {
+const identityOf = (
+  row: { name: string | null; handle?: string | null } | null,
+) => ({
+  name: (row?.name?.trim() || "Member").slice(0, 256),
+  ...(typeof row?.handle === "string" && row.handle !== ""
+    ? { handle: row.handle.slice(0, 64) }
+    : {}),
+});
+
+export const userIdentity = async (db: D1Database, userId: UserId) =>
+  identityOf(
+    await db
+      .prepare(
+        `SELECT ${displayNameSql('"user"', "account")} AS name,
+                account.username AS handle
+           FROM "user"
+           LEFT JOIN personal_account AS account ON account.user_id = "user".id
+          WHERE "user".id = ?`,
+      )
+      .bind(userId)
+      .first<{ name: string | null; handle?: string | null }>(),
+  );
+
+/**
+ * The sender's identity and the Thread's rewind mark (`markThreadRewound`),
+ * in the one round trip a message's admission already makes for the sender.
+ */
+export const senderIdentityAndRewind = async (
+  db: D1Database,
+  userId: UserId,
+  threadId: string,
+) => {
   const row = await db
     .prepare(
       `SELECT ${displayNameSql('"user"', "account")} AS name,
-              account.username AS handle
+              account.username AS handle,
+              (SELECT history_rewound_at FROM threads WHERE id = ?2)
+                AS rewound_at
          FROM "user"
          LEFT JOIN personal_account AS account ON account.user_id = "user".id
-        WHERE "user".id = ?`,
+        WHERE "user".id = ?1`,
     )
-    .bind(userId)
-    .first<{ name: string | null; handle?: string | null }>();
+    .bind(userId, threadId)
+    .first<{
+      name: string | null;
+      handle?: string | null;
+      rewound_at: number | null;
+    }>();
   return {
-    name: (row?.name?.trim() || "Member").slice(0, 256),
-    ...(typeof row?.handle === "string" && row.handle !== ""
-      ? { handle: row.handle.slice(0, 64) }
-      : {}),
+    identity: identityOf(row),
+    rewoundAt: row?.rewound_at ?? undefined,
   };
 };
 

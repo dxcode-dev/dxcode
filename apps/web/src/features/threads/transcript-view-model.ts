@@ -40,6 +40,8 @@ export type TranscriptRow =
       readonly author?: MessageAuthor;
       /** False for a local echo Flue has not admitted yet. */
       readonly admitted: boolean;
+      /** The Flue submission it came in, once Flue holds it. */
+      readonly submissionId?: string;
       /** Members it tagged, by the handle written. */
       readonly mentions?: ReadonlyArray<MessageMention>;
       /** When Flue recorded it. */
@@ -317,6 +319,9 @@ const messageRows = (
             ? {}
             : { flueMessageId }),
           admitted: message.submissionId !== undefined,
+          ...(message.submissionId === undefined
+            ? {}
+            : { submissionId: message.submissionId }),
           ...(sentAt === undefined ? {} : { sentAt }),
           ...(chat ? { chat: true as const } : {}),
         });

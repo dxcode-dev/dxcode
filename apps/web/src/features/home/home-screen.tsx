@@ -13,7 +13,7 @@ export function HomeScreen(
   props:
     | {
         readonly layout: "wide";
-        /** The new-Thread composer, framed by `HomeNewThreadFrame`. */
+        /** The new-Thread composer, inline (`InlineNewThread`). */
         readonly composer: React.ReactNode;
       }
     | {
@@ -46,35 +46,6 @@ export function HomeScreen(
           Start new thread
         </Button>
       </div>
-    </section>
-  );
-}
-
-/**
- * The home page's frame for the new-Thread composer: the New Thread
- * dialog's surface, in the page. While the composer loads it keeps the
- * composer's height, so nothing moves when it appears.
- */
-export function HomeNewThreadFrame({
-  loading = false,
-  children,
-}: {
-  readonly loading?: boolean;
-  readonly children?: React.ReactNode;
-}) {
-  return (
-    <section
-      className="new-thread-surface home-new-thread"
-      aria-label="New thread"
-      aria-busy={loading || undefined}
-    >
-      {loading ? (
-        <span className="sr-only" role="status">
-          Loading New Thread draft…
-        </span>
-      ) : (
-        children
-      )}
     </section>
   );
 }

@@ -1,4 +1,5 @@
 import { env } from "cloudflare:test";
+import { parseMessageAuthor } from "@dx/api";
 import {
   Principal,
   ProjectRepository,
@@ -26,6 +27,7 @@ import {
   SourceAuthorityRepositoryD1,
 } from "../../src/source-control/runtime-authority.js";
 import { TEST_RUNNER_PROFILE_CATALOG } from "../../src/testing/bindings.js";
+import { markThreadRewound } from "../../src/threads/message-rewind-flag.js";
 import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
 
@@ -60,6 +62,8 @@ const bindings: Bindings = {
 
 /** What reached Flue's router behind the admission stack. */
 const forwarded: string[] = [];
+/** The bodies of the messages Flue admitted, as admission rewrote them. */
+const admittedBodies: string[] = [];
 
 const app = () => {
   const routes = new Hono<AppEnv>();
@@ -84,8 +88,10 @@ const app = () => {
     forwarded.push("GET history");
     return context.json({ entries: [] }, 200);
   });
-  flue.post("/:threadId", (context) => {
+  flue.post("/:threadId", async (context) => {
     forwarded.push("POST message");
+    const delivered = (await context.req.json()) as { body?: unknown };
+    if (typeof delivered.body === "string") admittedBodies.push(delivered.body);
     return context.json({ submissionId: "sub-1" }, 202);
   });
   routes.route(
@@ -317,6 +323,28 @@ beforeEach(async () => {
 });
 
 describe("Agent admission, in workerd with real D1", () => {
+  // A person deleted a message the agent had read. Ways it could go wrong:
+  // the next message reaches the agent without the mark (Claude Code then
+  // resumes a session that remembers deleted turns), or every later message
+  // keeps it.
+  it("tags only the first message after a delete as rewound", async () => {
+    admittedBodies.length = 0;
+    await markThreadRewound(env.DB, sourceThread.id);
+    expect((await send("After the delete")).status).toBe(202);
+    expect((await send("And then")).status).toBe(202);
+    expect(admittedBodies.map((body) => parseMessageAuthor(body))).toEqual([
+      expect.objectContaining({ rewound: true, text: "After the delete" }),
+      expect.not.objectContaining({ rewound: true }),
+    ]);
+    expect(
+      await env.DB.prepare(
+        "SELECT history_rewound_at FROM threads WHERE id = ?",
+      )
+        .bind(sourceThread.id)
+        .first(),
+    ).toEqual({ history_rewound_at: null });
+  });
+
   it("admits messages and Stop while GitHub is unreachable or the source grant is revoked; the run's source work is refused", async () => {
     // Every GitHub request fails: the test network blocks external hosts.
     await expect(sourceAuthority()).resolves.toMatchObject({

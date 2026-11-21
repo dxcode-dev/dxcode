@@ -71,10 +71,7 @@ export interface RouterContext {
 // Each page loads as its own chunk, so the first visit downloads only the
 // shell and the page it lands on; links preload a page's chunk on intent.
 const page = {
-  home: lazyRouteComponent(
-    () => import("./features/home/home-page.js"),
-    "HomePage",
-  ),
+  home: lazyRouteComponent(() => import("./home-route.js"), "HomeRoute"),
   projects: lazyRouteComponent(
     () => import("./features/projects/projects-page.js"),
     "ProjectsPage",
@@ -88,8 +85,8 @@ const page = {
     "ProjectSettingsRoute",
   ),
   newThread: lazyRouteComponent(
-    () => import("./features/threads/new-thread-page.js"),
-    "NewThreadPage",
+    () => import("./new-thread-route.js"),
+    "NewThreadRoute",
   ),
   thread: lazyRouteComponent(() => import("./thread-route.js"), "ThreadRoute"),
   artifactLibrary: lazyRouteComponent(

@@ -1,14 +1,19 @@
 import {
+  DeleteSpacePostResponseSchema,
   ListSpacePostsQuerySchema,
   ListSpacePostsResponseSchema,
   parseMessageAttachments,
+  parseMessageAuthor,
   SPACE_POSTS_DEFAULT_LIMIT,
   SpacePostReactionSchema,
   SpacePostResponseSchema,
   SpacePostRevisionsResponseSchema,
   SpacePostTextRequestSchema,
+  spacePostDeleteForAgent,
   spacePostEditForAgent,
   spacePostForAgent,
+  spacePostTag,
+  stripMessageAuthorTags,
   withMessageAttachments,
 } from "@dx/api";
 import type { Principal, ThreadId, UserId } from "@dx/domain";
@@ -21,7 +26,7 @@ import {
   resolveMessageAttachments,
 } from "../../attachments/message.js";
 import { readBoundedJson } from "../../http/bounded-body.js";
-import type { AppEnv } from "../../http/types.js";
+import type { AppEnv, Bindings } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
 import { ownerAgentInitialization } from "../../thread-sharing/middleware.js";
 import type {
@@ -39,8 +44,12 @@ import {
   listSpacePostRows,
   newSpacePostId,
   readSpacePost,
+  readSpacePostIncludingDeleted,
+  revertSpacePostEdit,
+  type SpacePostDetails,
   type SpacePostRow,
   setSpacePostReaction,
+  softDeleteSpacePost,
   spacePostData,
   spacePostDetails,
 } from "./store.js";
@@ -60,6 +69,37 @@ export interface SpacePostRouteDeps {
     threadId: ThreadId,
   ) => Promise<SpaceRow>;
   readonly deliver: (context: Context<AppEnv>) => DeliverToSpaceAgent;
+  /**
+   * Takes a post's message out of the agent's queue while it is still
+   * waiting there with `expectBody` (`withdrawThreadMessage`): true when it
+   * now never reaches the agent.
+   */
+  readonly withdraw: (
+    threadId: string,
+    submissionId: string,
+    expectBody: string,
+    env: Bindings,
+  ) => Promise<boolean>;
+  /**
+   * Rewrites a waiting message's text in place, keeping its place in the
+   * queue, while it still holds `expectBody` (`replaceQueuedThreadMessage`):
+   * true when the agent will read `body` instead.
+   */
+  readonly replace: (
+    threadId: string,
+    submissionId: string,
+    expectBody: string,
+    body: string,
+    env: Bindings,
+  ) => Promise<boolean>;
+  /**
+   * The messages waiting in the agent's queue, by submission, as the agent
+   * will get them (`listQueuedThreadMessages`).
+   */
+  readonly queued: (
+    threadId: string,
+    env: Bindings,
+  ) => Promise<ReadonlyMap<string, string>>;
 }
 
 const invalid = () =>
@@ -203,6 +243,100 @@ const agentUnavailable = (status: number) => {
   );
 };
 
+/**
+ * The people's posts on this page the agent has not read yet. Only a post
+ * with dx's `eyes` can be waiting (the agent's turn is running), so an idle
+ * Space asks the agent nothing. Best effort: unknown counts as read.
+ */
+const waitingPosts = async (
+  context: Context<AppEnv>,
+  deps: SpacePostRouteDeps,
+  space: SpaceRow,
+  details: ReadonlyArray<SpacePostDetails>,
+): Promise<ReadonlySet<string>> => {
+  const candidates = details.filter(
+    ({ row, reactions }) =>
+      row.author_kind === "user" &&
+      row.submission_id !== null &&
+      reactions.some(({ reaction, agent }) => reaction === "eyes" && agent),
+  );
+  if (candidates.length === 0) return new Set();
+  try {
+    const queued = await deps.queued(space.id, context.env);
+    return new Set(
+      candidates.flatMap(({ row }) =>
+        isPostItself(queued.get(row.submission_id ?? ""), row.id)
+          ? [row.id]
+          : [],
+      ),
+    );
+  } catch (cause) {
+    spaceLogger.warn("A Space's waiting posts could not be read.", {
+      event: "space_posts_waiting_failed",
+      spaceThreadId: space.id,
+      cause,
+    });
+    return new Set();
+  }
+};
+
+const notYours = (verb: "edit" | "delete") =>
+  new SpaceError("POST_NOT_YOURS", 403, `Only a post's author can ${verb} it.`);
+
+/**
+ * Whether a queued message is the post itself, not a later note about it:
+ * `submission_id` names the last message the post sent, an edit's note
+ * included, and only the post itself is one the agent has not read.
+ */
+const isPostItself = (body: string | undefined, postId: string) =>
+  body?.includes(spacePostTag(postId)) === true &&
+  !body.includes(`<edited_post id="${postId}">`);
+
+/**
+ * The post's own message while it still waits in the agent's queue, as the
+ * agent will get it; undefined once the agent read it, or when the agent
+ * does not answer (best effort: unknown counts as read).
+ */
+const waitingPostBody = async (
+  context: Context<AppEnv>,
+  deps: SpacePostRouteDeps,
+  space: SpaceRow,
+  post: SpacePostRow,
+) => {
+  if (post.submission_id === null) return undefined;
+  try {
+    const body = (await deps.queued(space.id, context.env)).get(
+      post.submission_id,
+    );
+    return isPostItself(body, post.id) ? body : undefined;
+  } catch (cause) {
+    spaceLogger.warn("A Space post's queued message was not read.", {
+      event: "space_post_queue_read_failed",
+      spaceThreadId: space.id,
+      cause,
+    });
+    return undefined;
+  }
+};
+
+/** Best effort: a refused or failed change leaves the message as it was. */
+const queueChange = (
+  space: SpaceRow,
+  change: () => Promise<boolean>,
+): Promise<boolean> =>
+  change().catch((cause) => {
+    spaceLogger.warn("A Space post's queued message was not changed.", {
+      event: "space_post_queue_change_failed",
+      spaceThreadId: space.id,
+      cause,
+    });
+    return false;
+  });
+
+/** The new text in place of `original`'s, behind its author tag. */
+const retagged = (original: string, body: string) =>
+  `${original.slice(0, original.length - parseMessageAuthor(original).text.length)}${stripMessageAuthorTags(body)}`;
+
 export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
   list: async (
     context: Context<AppEnv>,
@@ -222,11 +356,14 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
       limit: query.limit ?? SPACE_POSTS_DEFAULT_LIMIT,
     });
     const details = await spacePostDetails(db, rows, principal.userId);
+    const waiting = await waitingPosts(context, deps, space, details);
     return context.json(
       Schema.encodeUnknownSync(ListSpacePostsResponseSchema)({
         status: "success",
         data: {
-          items: details.map(spacePostData),
+          items: details.map((item) =>
+            spacePostData(item, waiting.has(item.row.id)),
+          ),
           ...(more && rows[0] !== undefined ? { nextBefore: rows[0].id } : {}),
         },
       }),
@@ -328,11 +465,7 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
     writable(space);
     const post = await postOf(db, space, context.req.param("postId") ?? "");
     if (post.author_kind !== "user" || post.author_user_id !== principal.userId)
-      throw new SpaceError(
-        "POST_NOT_YOURS",
-        403,
-        "Only a post's author can edit it.",
-      );
+      throw notYours("edit");
     const { text, forAgent } = await postBody(
       context,
       db,
@@ -342,21 +475,52 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
     );
     if (post.text !== text) {
       const revision = (await listSpacePostRevisions(db, post)).length;
-      const delivered = await deliverCreating(context, deps, db, space, {
-        actor: principal,
-        threadId: space.id,
-        body: forAgent((words) =>
-          spacePostEditForAgent(
-            post.id,
-            words,
-            parseMessageAttachments(post.text).text,
+      // Stored first, so the agent never hears of an edit a concurrent one
+      // replaced; taken back if the agent does not get it.
+      if (!(await editSpacePost(db, post, text)))
+        throw new SpaceError(
+          "POST_CHANGED",
+          409,
+          "This post changed meanwhile. Reload it and edit again.",
+        );
+      // Not read yet: the agent reads the new text in its place, as if it
+      // were posted so, from the same place in its queue. Read already: it
+      // gets the change.
+      const waiting = await waitingPostBody(context, deps, space, post);
+      const replaced =
+        waiting !== undefined &&
+        post.submission_id !== null &&
+        (await queueChange(space, () =>
+          deps.replace(
+            space.id,
+            post.submission_id ?? "",
+            waiting,
+            retagged(
+              waiting,
+              forAgent((words) => spacePostForAgent(post.id, words)),
+            ),
+            context.env,
           ),
-        ),
-        key: `space-post-edit:${post.id}:${revision}`,
-        variables: { spacePost: { id: post.id, kind: "edit" } },
-      });
-      if (delivered.status !== 202) throw agentUnavailable(delivered.status);
-      await editSpacePost(db, post, text);
+        ));
+      if (!replaced) {
+        const delivered = await deliverCreating(context, deps, db, space, {
+          actor: principal,
+          threadId: space.id,
+          body: forAgent((words) =>
+            spacePostEditForAgent(
+              post.id,
+              words,
+              parseMessageAttachments(post.text).text,
+            ),
+          ),
+          key: `space-post-edit:${post.id}:${revision}`,
+          variables: { spacePost: { id: post.id, kind: "edit" } },
+        }).catch(() => ({ status: 503 }));
+        if (delivered.status !== 202) {
+          await revertSpacePostEdit(db, post, text);
+          throw agentUnavailable(delivered.status);
+        }
+      }
       await announcePosts(context.env, space.id);
       await notifyPostMentions(context.env, {
         spaceThreadId: space.id,
@@ -367,6 +531,63 @@ export const spacePostHandlers = (deps: SpacePostRouteDeps) => ({
       });
     }
     return postResponse(context, db, principal, post.id, space.id);
+  },
+
+  /**
+   * Its author deletes a post; it leaves the Space for everyone. One the
+   * agent has not read leaves its queue unseen; one it read reaches it as a
+   * `<deleted_post>` note, so it stops acting on it. A repeat succeeds.
+   */
+  remove: async (
+    context: Context<AppEnv>,
+    db: D1Database,
+    principal: Principal,
+    threadId: ThreadId,
+  ) => {
+    const space = await deps.readSpace(db, principal, threadId);
+    writable(space);
+    const post = await readSpacePostIncludingDeleted(
+      db,
+      space.id,
+      context.req.param("postId") ?? "",
+    );
+    if (post === null) throw postNotFound();
+    if (post.author_kind !== "user" || post.author_user_id !== principal.userId)
+      throw notYours("delete");
+    const answer = (outcome: "withdrawn" | "noted") =>
+      context.json(
+        Schema.encodeUnknownSync(DeleteSpacePostResponseSchema)({
+          status: "success",
+          data: { postId: post.id, outcome },
+        }),
+        200,
+      );
+    if (post.deleted_at !== null) return answer("noted");
+    // Only the post itself leaves the queue unseen. Once the agent read any
+    // version of it, the note follows whatever it has yet to read.
+    const waiting = await waitingPostBody(context, deps, space, post);
+    const withdrawn =
+      waiting !== undefined &&
+      post.submission_id !== null &&
+      (await queueChange(space, () =>
+        deps.withdraw(space.id, post.submission_id ?? "", waiting, context.env),
+      ));
+    if (!withdrawn) {
+      const delivered = await deliverCreating(context, deps, db, space, {
+        actor: principal,
+        threadId: space.id,
+        body: spacePostDeleteForAgent(
+          post.id,
+          parseMessageAttachments(post.text).text,
+        ),
+        key: `space-post-delete:${post.id}`,
+        variables: { spacePost: { id: post.id, kind: "delete" } },
+      });
+      if (delivered.status !== 202) throw agentUnavailable(delivered.status);
+    }
+    await softDeleteSpacePost(db, post.id);
+    await announcePosts(context.env, space.id);
+    return answer(withdrawn ? "withdrawn" : "noted");
   },
 
   react: async (

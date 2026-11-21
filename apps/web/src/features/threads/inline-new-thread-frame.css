@@ -1,0 +1,21 @@
+/* The New Thread composer in the page: part of the page's surface, not a
+   raised dialog. A 1px border, and no shadow, marks it. Focus does not
+   recolor it: the prompt's caret and the chips' own focus rings show
+   where focus is. */
+.inline-new-thread {
+  display: flex;
+  flex-direction: column;
+  width: min(832px, 100%);
+  min-height: 173px;
+  overflow: hidden;
+  border-radius: var(--radius-3xl);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--border);
+}
+/* No dialog header above the prompt, so the prompt keeps its own room. */
+.inline-new-thread .new-thread-composer-body {
+  padding-top: var(--space-4);
+}
+.inline-new-thread > .error-notice {
+  margin: var(--space-4);
+}

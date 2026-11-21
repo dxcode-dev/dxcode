@@ -1,0 +1,15 @@
+/* Notes under the delete confirmation's description: what else goes, and
+   that the agent read the message while the dialog was open. */
+.message-delete-notes {
+  display: grid;
+  gap: var(--space-1);
+}
+.message-delete-note {
+  margin: 0;
+  color: var(--foreground);
+  font-size: var(--text-sm);
+  line-height: var(--leading-4);
+}
+.message-delete-note[data-tone="warning"] {
+  color: var(--warning);
+}

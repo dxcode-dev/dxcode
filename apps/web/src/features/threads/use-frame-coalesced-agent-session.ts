@@ -102,6 +102,7 @@ export const frameCoalescedAgentSource = (
     abort: session.abort.bind(session),
     retrySend: session.retrySend.bind(session),
     resendPrompt: session.resendPrompt.bind(session),
+    forgetSend: session.forgetSend.bind(session),
     refresh: session.refresh,
     loadOlder: session.loadOlder,
     openHistoryWindow: session.openHistoryWindow,

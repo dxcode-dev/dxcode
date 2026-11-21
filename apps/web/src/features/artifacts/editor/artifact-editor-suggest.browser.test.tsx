@@ -380,10 +380,24 @@ describe("the / Project chip", () => {
 
   it("searches the reader's Projects, picks one with the keys, and saves its chip", async () => {
     const { prose } = await mount("");
+    // The server answers each save, so an early one (such as "Ship " while
+    // the picker is open on a slow machine) does not hold back the later
+    // ones; other reads never settle.
     const saves: string[] = [];
+    let revision = 1;
     vi.stubGlobal("fetch", (_url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") saves.push(String(init.body));
-      return new Promise<Response>(() => {});
+      if (init?.method !== "PUT") return new Promise<Response>(() => {});
+      const { markdown } = JSON.parse(String(init.body)) as {
+        markdown: string;
+      };
+      saves.push(markdown);
+      revision += 1;
+      return Promise.resolve(
+        Response.json({
+          status: "success",
+          data: { artifact: { ...artifact(), revision }, markdown },
+        }),
+      );
     });
     await type("Ship ");
     await type("/proj");
@@ -415,13 +429,9 @@ describe("the / Project chip", () => {
     // Typing goes on after the chip.
     expect(document.activeElement).toBe(prose);
     await type("next");
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    const saved = saves.map(
-      (body) => (JSON.parse(body) as { markdown: string }).markdown,
-    );
-    expect(saved.at(-1)).toBe(
-      `Ship {{project:${PROJECTS[2]?.id}|Website builder}} next\n`,
-    );
+    await expect
+      .poll(() => saves.at(-1), { timeout: 5000 })
+      .toBe(`Ship {{project:${PROJECTS[2]?.id}|Website builder}} next\n`);
   });
 
   it("closes on Escape without a chip, back in the text", async () => {

@@ -144,8 +144,14 @@ describe("a gallery video handed to the viewer", () => {
     it(`resumes inline from the viewer's moment after closing by ${how}`, async () => {
       const container = await render(gallery);
       const inline = inlineVideo(container);
+      await seek(inline, 3);
       await play(inline);
       const shown = await openViewer();
+      // The viewer takes over at the inline moment once its file's length is
+      // known; a seek before then would be overwritten by that takeover.
+      await expect
+        .poll(() => shown.currentTime, { timeout: 5000 })
+        .toBeGreaterThanOrEqual(3);
       await seek(shown, 6);
       await expect.poll(() => shown.paused).toBe(false);
       await closeViewer(how);
