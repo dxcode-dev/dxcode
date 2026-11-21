@@ -65,14 +65,21 @@ var decodeRpcValue = (value) => typeof value === "object" && value !== null && "
 */
 /**
 * Cloudflare locations (IATA codes) in places Anthropic refuses, and the
-* hint for the nearest place it serves. Only the colo decides: a Worker's
-* or Durable Object's trace and `request.cf` name the country of its
-* egress IP, not where it runs (on a preview, `colo=SIN` came with
-* `loc=US`), so a country would miss Hong Kong.
+* hint for a region Anthropic serves. Only the colo decides: a Worker's or
+* Durable Object's trace and `request.cf` name the country of its egress
+* IP, not where it runs (on a preview, `colo=SIN` came with `loc=US`), so a
+* country would miss Hong Kong.
+*
+* The hint must name a region without Hong Kong. With `apac-se`, Orbs
+* created from HKG still started in hkg01 and hkg12 (thr_a7a9fe16,
+* thr_071dd105, v0.2.147): the nearest data center to Hong Kong counted. A
+* preview created from SIN with `oc` started its containers in syd08 and
+* mel01, and with `weur` in ams19 and mad06, so a hint moves the container
+* too. Oceania is the nearest such region to Hong Kong.
 */
 var SERVED_NEAR = {
-	HKG: "apac-se",
-	MFM: "apac-se"
+	HKG: "oc",
+	MFM: "oc"
 };
 /** The hint for a new object first called from `at`, if it needs one. */
 var anthropicServedHint = (at) => at.colo === void 0 ? void 0 : SERVED_NEAR[at.colo.toUpperCase()];

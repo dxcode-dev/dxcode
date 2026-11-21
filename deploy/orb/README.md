@@ -306,7 +306,8 @@ claude.ai's "unavailable in region" page for the installer and HTTP 403
 from the API (thr_05ddbf21). So when Core creates a Thread's first object,
 or a stalled wake's next one, from such a place (the colo in Cloudflare's trace,
 `colo=HKG`; its `loc` names the egress IP's country, not where Core runs), it passes a location hint for the nearest place Anthropic
-serves (`apac-se` for Hong Kong); elsewhere it passes none, so the Orb
+serves (`oc` for Hong Kong: with `apac-se`, Cloudflare still started them in
+Hong Kong); elsewhere it passes none, so the Orb
 stays near the person. A connected account's Orb Worker does the same from
 `request.cf`. A hint only places a new object: an Orb already in such a
 place stays there, and its Claude Code launch says where it runs instead of

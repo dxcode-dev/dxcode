@@ -218,7 +218,7 @@ describe("Cloudflare Containers Orb provider", () => {
           { threadId },
           { authorize: async () => undefined },
         );
-        expect(hintsFor(namespace, threadId)).toContain("apac-se");
+        expect(hintsFor(namespace, threadId)).toContain("oc");
         expect(row.provider_sandbox_id).toBe("orb-object-id");
         // A wake reads no location: the object already exists.
         trace.mockClear();
@@ -1048,7 +1048,7 @@ describe("Cloudflare Containers Orb provider", () => {
         { authorize: async () => undefined },
       );
       expect(world.object(`${threadId}~1`).adopt).toHaveBeenCalled();
-      expect(hintsFor(world.namespace, `${threadId}~1`)).toContain("apac-se");
+      expect(hintsFor(world.namespace, `${threadId}~1`)).toContain("oc");
     } finally {
       vi.unstubAllGlobals();
     }
