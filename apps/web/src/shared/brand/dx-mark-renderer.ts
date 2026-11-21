@@ -95,10 +95,15 @@ export function mountDxMark(
       context.textAlign = "center";
       context.textBaseline = "middle";
       context.letterSpacing = `${fontSize * -0.145}px`;
+      // Center the ink, not the advance box: the italic's overhang and the
+      // trailing letter spacing would put the glyph right of the middle.
+      const ink = context.measureText("dx");
       context.fillText(
         "dx",
-        textureWidth / 2,
-        textureHeight / 2 + fontSize * 0.03,
+        textureWidth / 2 +
+          (ink.actualBoundingBoxLeft - ink.actualBoundingBoxRight) / 2,
+        textureHeight / 2 +
+          (ink.actualBoundingBoxAscent - ink.actualBoundingBoxDescent) / 2,
       );
       const pixels = context.getImageData(
         0,

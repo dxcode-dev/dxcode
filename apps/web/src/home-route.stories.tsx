@@ -496,12 +496,38 @@ export const Tablet: Story = {
   globals: { viewport: { value: "tablet" } },
 };
 
-/** A phone: the dx mark, and under it the button that opens the composer. */
+/**
+ * Checks the phone layout: the mark and the button share one vertical axis,
+ * and the mark's trimmed box, which reaches over the button, leaves the
+ * button's top edge tappable.
+ */
+async function expectPhoneLayout(canvasElement: HTMLElement) {
+  const canvas = within(canvasElement);
+  const button = await canvas.findByRole("button", {
+    name: "Start new thread",
+  });
+  const mark = canvas.getByRole("img", { name: "dx" }).getBoundingClientRect();
+  const start = button.getBoundingClientRect();
+  await expect(
+    Math.abs(mark.left + mark.width / 2 - (start.left + start.width / 2)),
+  ).toBeLessThan(1);
+  const atTopEdge = document.elementFromPoint(
+    start.left + start.width / 2,
+    start.top + 2,
+  );
+  await expect(atTopEdge !== null && button.contains(atTopEdge)).toBe(true);
+}
+
+/**
+ * A phone: the dx mark, and under it the button that opens the composer,
+ * centered on one axis with a --space-6 gap from the ink to the button.
+ */
 export const Phone: Story = {
   globals: { viewport: { value: "phone" } },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.queryByRole("textbox", { name: "Prompt" })).toBeNull();
+    await expectPhoneLayout(canvasElement);
     await userEvent.click(
       await canvas.findByRole("button", { name: "Start new thread" }),
     );
@@ -548,10 +574,19 @@ export const PhoneNewAccount: Story = {
       name: "Finish setting up",
     });
     await expect(within(checklist).getByText("0 of 4")).toBeVisible();
+    await expectPhoneLayout(canvasElement);
   },
 };
 
 /** The smallest phone dx is checked at. */
 export const SmallPhone: Story = {
   globals: { viewport: { value: "smallPhone" } },
+  play: async ({ canvasElement }) => expectPhoneLayout(canvasElement),
+};
+
+/** A new account on the smallest phone: mark, button, and checklist. */
+export const SmallPhoneNewAccount: Story = {
+  args: { checklist: "new" },
+  globals: { viewport: { value: "smallPhone" } },
+  play: async ({ canvasElement }) => expectPhoneLayout(canvasElement),
 };

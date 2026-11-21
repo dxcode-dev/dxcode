@@ -1,9 +1,22 @@
-/* A phone: the dx mark, and under it the button that opens the composer. */
+/* A phone: the dx mark, and under it the button that opens the composer,
+   on one vertical axis. */
 .home-phone-start {
+  --home-mark-width: min(72vw, 640px);
   display: flex;
   align-items: center;
   flex-direction: column;
   gap: var(--space-6);
+}
+/* The mark's box is 1.55:1 but "dx" fills only its middle 38% of height:
+   trim the empty bands so the gap runs from the ink to the button. */
+.home-phone-start > .dx-brand-mark {
+  width: var(--home-mark-width);
+  margin-block: calc(var(--home-mark-width) * -0.195);
+}
+/* The trimmed mark's box reaches over the button; keep the button on top
+   so a tap there still lands on it. */
+.home-phone-start-button {
+  position: relative;
 }
 
 /* A wide screen: the composer, a little above the middle of the page. */

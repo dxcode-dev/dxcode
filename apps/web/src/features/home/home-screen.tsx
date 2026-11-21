@@ -52,7 +52,12 @@ export function HomeScreen(
     >
       <div className="home-phone-start">
         <DxMark state="idle" interactive still={props.still} />
-        <Button size="lg" shape="round" onClick={props.onStartNewThread}>
+        <Button
+          className="home-phone-start-button"
+          size="lg"
+          shape="round"
+          onClick={props.onStartNewThread}
+        >
           <SquarePen aria-hidden="true" />
           Start new thread
         </Button>

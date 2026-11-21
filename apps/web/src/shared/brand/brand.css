@@ -38,7 +38,9 @@
 .dx-brand-mark-fallback {
   display: grid;
   place-items: center;
-  padding-right: 0.145em;
+  /* Centers the ink as the renderer does: the italic's overhang and the
+     trailing letter spacing would put "dx" right of (and above) the middle. */
+  padding: 0.04em 0.218em 0 0;
   color: currentcolor;
   font:
     italic 700 34cqw / 1 "DM Sans",
