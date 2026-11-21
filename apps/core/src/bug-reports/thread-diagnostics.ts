@@ -1,4 +1,4 @@
-import { ThreadFilesPath } from "@dx/api";
+import { ThreadFilesPath, ThreadSandboxFilePath } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import { Effect, Redacted, Result, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
@@ -6,19 +6,28 @@ import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 import { resolveExecutionEnvironment } from "../settings/environment-variables/execution.js";
 import { readThreadFileThroughDaemon } from "../thread-files/service.js";
 import { readHistory } from "../thread-search/history.js";
+import { requestThreadDaemon } from "../threads/daemon-client.js";
 import { readThreadWorkerLogs } from "./worker-logs.js";
 
 /** Each source gets this long, so one slow source cannot stall a report. */
 const SOURCE_TIMEOUT_MS = 8_000;
 /** The prompts whose settlements a report lists. */
 const AGENT_PROMPT_LIMIT = 20;
-/** The Orb's own setup files, as the orb-setup skill names them. */
-const ORB_SETUP_FILES = [
-  ".agents/setup",
-  ".agents/resume",
-  ".dx/services.yaml",
-];
+/** The Orb's own setup files in the repository. */
+const ORB_SETUP_FILES = [".dx/services.yaml"];
+/**
+ * The Project's scripts as the Orb holds them: source activation's guest
+ * program keeps resume and desktop-resume in sync, and writes setup each time
+ * it runs it (apps/core/src/source-control/workspace-assets.ts).
+ */
+const PROJECT_SCRIPTS_DIRECTORY = "/home/user/.local/state/dx/project-scripts";
+const PROJECT_SCRIPT_FILES = ["setup", "resume", "desktop-resume"];
 const ORB_SETUP_MAX_CHARACTERS = 64 * 1024;
+
+const capped = (content: string) =>
+  content.length > ORB_SETUP_MAX_CHARACTERS
+    ? `${content.slice(0, ORB_SETUP_MAX_CHARACTERS)}\n[cut at ${ORB_SETUP_MAX_CHARACTERS} characters]`
+    : content;
 
 type Source<A> =
   | { readonly ok: true; readonly value: A }
@@ -122,12 +131,26 @@ const orbSetupScripts = async (bindings: Bindings, threadId: ThreadId) => {
         threadId,
         Schema.decodeUnknownSync(ThreadFilesPath)(name),
       );
-      files[name] =
-        file.content.length > ORB_SETUP_MAX_CHARACTERS
-          ? `${file.content.slice(0, ORB_SETUP_MAX_CHARACTERS)}\n[cut at ${ORB_SETUP_MAX_CHARACTERS} characters]`
-          : file.content;
+      files[name] = capped(file.content);
     } catch {
       files[name] = null;
+    }
+  }
+  for (const name of PROJECT_SCRIPT_FILES) {
+    const path = `${PROJECT_SCRIPTS_DIRECTORY}/${name}`;
+    try {
+      const result = await requestThreadDaemon(bindings, threadId, {
+        operation: "files.readSandbox",
+        path: Schema.decodeUnknownSync(ThreadSandboxFilePath)(path),
+        offset: 0,
+        length: ORB_SETUP_MAX_CHARACTERS,
+      });
+      files[path] =
+        result.kind === "sandbox-chunk"
+          ? capped(new TextDecoder().decode(result.bytes))
+          : null;
+    } catch {
+      files[path] = null;
     }
   }
   return files;

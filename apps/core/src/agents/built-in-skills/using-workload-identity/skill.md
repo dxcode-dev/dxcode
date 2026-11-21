@@ -123,9 +123,8 @@ the person confirms the variables are saved, or declines.
 
 Configure the provider's credential helper from its reference, then use the cloud's normal CLI or
 SDK. Keep configuration files outside the repository unless the person asks to commit them. To set
-the helper up in every new Thread of a Project, write the configuration from the Project's
-`.agents/setup` (see `orb-setup`); tokens are minted when the CLI needs credentials, never during
-setup.
+the helper up in every new Thread of a Project, write the configuration from the Project's setup
+script (see `orb-setup`); tokens are minted when the CLI needs credentials, never during setup.
 
 ## Diagnose a connection
 

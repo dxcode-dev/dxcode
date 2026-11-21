@@ -35,8 +35,10 @@ const SourceRow = Schema.Struct({
   policy_revision: Schema.NullOr(Schema.Number),
   private_submodule_repository_ids_json: Schema.NullOr(Schema.String),
   pre_clone_script: Schema.optional(Schema.NullOr(Schema.String)),
-  pre_setup_script: Schema.optional(Schema.NullOr(Schema.String)),
+  setup_script: Schema.optional(Schema.NullOr(Schema.String)),
+  resume_script: Schema.optional(Schema.NullOr(Schema.String)),
   desktop_resume_script: Schema.optional(Schema.NullOr(Schema.String)),
+  orb_import_pending: Schema.optional(Schema.NullOr(Schema.Number)),
 });
 
 const unavailable = (operation: string) => (cause: unknown) =>
@@ -72,11 +74,19 @@ const load = async (db: D1Database, threadId: string) => {
                WHERE project_id = thread.project_id AND kind = 'pre-clone')
                AS pre_clone_script,
              (SELECT body FROM project_orb_script
-               WHERE project_id = thread.project_id AND kind = 'pre-setup')
-               AS pre_setup_script,
+               WHERE project_id = thread.project_id AND kind = 'setup')
+               AS setup_script,
+             (SELECT body FROM project_orb_script
+               WHERE project_id = thread.project_id AND kind = 'resume')
+               AS resume_script,
              (SELECT body FROM project_orb_script
                WHERE project_id = thread.project_id AND kind = 'desktop-resume')
-               AS desktop_resume_script
+               AS desktop_resume_script,
+             (EXISTS (SELECT 1 FROM project_repository
+                       WHERE project_id = thread.project_id)
+               AND NOT EXISTS (SELECT 1 FROM project_orb_import
+                                WHERE project_id = thread.project_id))
+               AS orb_import_pending
         FROM threads AS thread
         LEFT JOIN thread_source_snapshot AS snapshot ON snapshot.thread_id = thread.id
         LEFT JOIN thread_source_intent AS intent ON intent.thread_id = thread.id
@@ -153,7 +163,8 @@ const load = async (db: D1Database, threadId: string) => {
     });
   }
   const preClone = row.pre_clone_script ?? undefined;
-  const preSetup = row.pre_setup_script ?? undefined;
+  const setup = row.setup_script ?? undefined;
+  const resume = row.resume_script ?? undefined;
   const desktopResume = row.desktop_resume_script ?? undefined;
   return {
     actorUserId: row.owner_user_id,
@@ -161,14 +172,19 @@ const load = async (db: D1Database, threadId: string) => {
     ...(intent === undefined ? {} : { intent }),
     ...(authority === undefined ? {} : { authority }),
     privateSubmodules,
+    ...(row.orb_import_pending === 1
+      ? { orbImportPending: true as const }
+      : {}),
     ...(preClone === undefined &&
-    preSetup === undefined &&
+    setup === undefined &&
+    resume === undefined &&
     desktopResume === undefined
       ? {}
       : {
           orbScripts: {
             ...(preClone === undefined ? {} : { preClone }),
-            ...(preSetup === undefined ? {} : { preSetup }),
+            ...(setup === undefined ? {} : { setup }),
+            ...(resume === undefined ? {} : { resume }),
             ...(desktopResume === undefined ? {} : { desktopResume }),
           },
         }),

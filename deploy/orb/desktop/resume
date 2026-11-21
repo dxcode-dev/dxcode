@@ -1,8 +1,8 @@
 #!/bin/bash
 # Runs the Desktop resume script when ./session starts, in place of the
-# default browser window: the repository's executable .agents/desktop/resume,
-# or else the project's Desktop Resume script from Project Settings, which dx
-# keeps at ~/.local/state/dx/project-scripts/desktop-resume. It runs from the
+# default browser window: the project's Desktop Resume script from Project
+# Settings, which dx keeps at ~/.local/state/dx/project-scripts/desktop-resume.
+# The repository's .agents/desktop/resume is not read. It runs from the
 # repository root with the desktop's environment, and what it starts keeps
 # running with the desktop. Without a script, or when the script fails, the
 # Desktop opens Chromium at about:blank. Output: desktop-resume.log in the
@@ -25,11 +25,7 @@ default_browser() {
   exec "$desktop/chromium" --foreground about:blank >>"$state/chromium.log" 2>&1 </dev/null
 }
 
-repository_script="$repo/.agents/desktop/resume"
-if [ -f "$repository_script" ] && [ ! -L "$repository_script" ] && [ -x "$repository_script" ]; then
-  name=".agents/desktop/resume"
-  command=("$repository_script")
-elif [ -f "$project" ] && [ ! -L "$project" ] && [ -s "$project" ]; then
+if [ -f "$project" ] && [ ! -L "$project" ] && [ -s "$project" ]; then
   name="the project's Desktop Resume script"
   # Without a shebang the script is Bash, as in the settings editor.
   if [ "$(head -c 2 "$project")" = "#!" ]; then

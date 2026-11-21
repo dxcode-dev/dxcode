@@ -1,6 +1,6 @@
 //! Environment activation: one canonical, mode-0600 `~/.env` fragment, the Git
 //! configuration and helper hooks, the interactive-shell profile, and the
-//! optional `.agents/resume` hook.
+//! Project's optional resume script.
 //!
 //! Core sends `environment.check {generation, digest}` first; only when the
 //! daemon does not hold that exact activation does Core send the full
@@ -31,6 +31,13 @@ pub const MAX_VALUE_BYTES: usize = 32_768;
 pub const MAX_TOTAL_VALUE_BYTES: usize = 9_830_400;
 pub const MAX_FRAGMENT_BYTES: usize = 40 * 1_024 * 1_024;
 pub const RESUME_TIMEOUT: Duration = Duration::from_secs(120);
+/// The Project's resume script, relative to the home directory
+/// (`/home/user/.local/state/dx/project-scripts/resume` in the guest). Source
+/// activation's guest program (`apps/core/src/source-control/workspace-assets.ts`,
+/// `syncProjectScript`) keeps it at `<dirname(STATE)>/project-scripts/resume`,
+/// mode 0700, and removes it when the Project clears the script. Keep both in
+/// sync. The repository's `.agents/resume` is never run.
+pub const PROJECT_RESUME_SCRIPT: &str = ".local/state/dx/project-scripts/resume";
 
 pub const PROFILE_HOOK: &str = include_str!("../assets/dx-terminal-profile.sh");
 #[cfg(test)]
@@ -159,7 +166,7 @@ pub enum EnvironmentOutcome {
     Unavailable,
     /// `environment.check` did not match the applied activation; send it.
     Missing,
-    /// The `.agents/resume` hook exceeded its time bound.
+    /// The Project's resume script exceeded its time bound.
     ResumeTimeout,
 }
 
@@ -223,7 +230,7 @@ pub struct Materialized {
     pub outcome: EnvironmentOutcome,
     /// Hash of the `.env` and Git configuration bytes as written, when known.
     files: Option<String>,
-    /// When this materialization started `.agents/resume`, if it did.
+    /// When this materialization started the resume script, if it did.
     resumed_at: Option<ClockMark>,
 }
 
@@ -235,7 +242,7 @@ pub struct EnvironmentRuntime {
     applied_files: Option<String>,
     pending_generation: Option<u64>,
     pending_changed: bool,
-    /// When `.agents/resume` last started, to tell a wake from a reconnect.
+    /// When the resume script last started, to tell a wake from a reconnect.
     resumed_at: Option<ClockMark>,
 }
 
@@ -282,7 +289,7 @@ impl EnvironmentRuntime {
         }
     }
 
-    /// The guest was suspended since `.agents/resume` last started, so this
+    /// The guest was suspended since the resume script last started, so this
     /// activation follows a wake and runs it again.
     fn woke(&self) -> bool {
         self.resumed_at
@@ -465,7 +472,7 @@ fn materialize(
         sync_dir(&home)?;
     }
     remove_legacy_fragment(&state_directory)?;
-    // dxd is the only runner of `.agents/resume`: on this process's first
+    // dxd is the only runner of the Project's resume script: on this process's first
     // activation, after a wake, and when the environment it sees changed.
     let should_resume =
         changed || admitted.applied_generation == 0 || admitted.retrying_pending || admitted.woke;
@@ -1160,16 +1167,23 @@ fn run_resume(
     values: &BTreeMap<String, String>,
     paths: &EnvironmentPaths,
 ) -> Result<(), ResumeError> {
-    let hook = root.join(".agents/resume");
+    let script = paths.home.join(PROJECT_RESUME_SCRIPT);
     // Like setup, resume is a convenience the agent can finish by hand: a
-    // missing, unrunnable, or failing hook never blocks the environment.
-    match fs::symlink_metadata(&hook) {
+    // missing, unrunnable, or failing script never blocks the environment.
+    match fs::symlink_metadata(&script) {
         Ok(metadata)
-            if metadata.is_file()
-                && !metadata.file_type().is_symlink()
-                && is_executable(&metadata) => {}
+            if metadata.is_file() && !metadata.file_type().is_symlink() && metadata.len() > 0 => {}
         _ => return Ok(()),
     }
+    // Without a shebang the script is Bash, as in the settings editor and
+    // the guest program's project scripts.
+    let mut command = if starts_with_shebang(&script) {
+        Command::new(&script)
+    } else {
+        let mut bash = Command::new("/bin/bash");
+        bash.arg(&script);
+        bash
+    };
     let (stdout, stderr) = match resume_log(&paths.home) {
         Ok(log) => (Stdio::from(log.try_clone()?), Stdio::from(log)),
         Err(error) => {
@@ -1177,7 +1191,7 @@ fn run_resume(
             (Stdio::null(), Stdio::null())
         }
     };
-    let mut child = match Command::new(&hook)
+    let mut child = match command
         .current_dir(root)
         .env_clear()
         .envs(base_environment_for(values, &paths.home, &paths.user))
@@ -1188,7 +1202,7 @@ fn run_resume(
     {
         Ok(child) => child,
         Err(error) => {
-            eprintln!("dxd could not start .agents/resume: {error}");
+            eprintln!("dxd could not start the resume script: {error}");
             return Ok(());
         }
     };
@@ -1197,7 +1211,7 @@ fn run_resume(
         match child.try_wait()? {
             Some(status) if status.success() => return Ok(()),
             Some(status) => {
-                eprintln!("dxd: .agents/resume failed ({status})");
+                eprintln!("dxd: the resume script failed ({status})");
                 return Ok(());
             }
             None if std::time::Instant::now() >= deadline => {
@@ -1208,6 +1222,14 @@ fn run_resume(
             None => std::thread::sleep(Duration::from_millis(20)),
         }
     }
+}
+
+fn starts_with_shebang(path: &Path) -> bool {
+    let mut start = [0u8; 2];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut start))
+        .is_ok()
+        && &start == b"#!"
 }
 
 /// `~/.cache/dx/logs/resume.log`, replaced on each run, beside the setup log
@@ -1226,11 +1248,6 @@ fn resume_log(home: &Path) -> io::Result<fs::File> {
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
         .open(directory.join("resume.log"))
-}
-
-fn is_executable(metadata: &fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    metadata.permissions().mode() & 0o111 != 0
 }
 
 fn invalid() -> io::Error {
@@ -1268,6 +1285,15 @@ mod tests {
         fs::create_dir_all(&paths.home).unwrap();
         set_mode(&paths.home, 0o700).unwrap();
         paths
+    }
+
+    /// Writes the Project's resume script where the guest program syncs it.
+    fn write_resume(paths: &EnvironmentPaths, body: &str) -> PathBuf {
+        let script = paths.home.join(PROJECT_RESUME_SCRIPT);
+        fs::create_dir_all(script.parent().unwrap()).unwrap();
+        fs::write(&script, body).unwrap();
+        set_mode(&script, 0o700).unwrap();
+        script
     }
 
     #[test]
@@ -1682,18 +1708,26 @@ mod tests {
     }
 
     #[test]
-    fn resume_hook_runs_with_the_environment_and_is_bounded() {
+    fn resume_script_runs_from_the_repository_with_the_environment() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("repo");
-        fs::create_dir_all(workspace.join(".agents")).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
         let marker = root.path().join("marker");
+        let paths = prepare(root.path());
+        // Without a shebang the script is Bash.
+        write_resume(
+            &paths,
+            &format!("printf '%s|%s' \"$A\" \"$PWD\" > '{}'\n", marker.display()),
+        );
+        // The repository's own `.agents/resume` is never run.
+        fs::create_dir_all(workspace.join(".agents")).unwrap();
+        let repository_marker = root.path().join("repository-marker");
         fs::write(
             workspace.join(".agents/resume"),
-            format!("#!/bin/sh\nprintf '%s' \"$A\" > '{}'\n", marker.display()),
+            format!("#!/bin/sh\ntouch '{}'\n", repository_marker.display()),
         )
         .unwrap();
         set_mode(&workspace.join(".agents/resume"), 0o755).unwrap();
-        let paths = prepare(root.path());
         let mut runtime = EnvironmentRuntime::new(paths);
         let operation = EnvironmentActivate {
             generation: 1,
@@ -1706,26 +1740,29 @@ mod tests {
             .unwrap()
             .materialize(&workspace);
         assert_eq!(materialized.outcome, EnvironmentOutcome::Applied);
-        assert_eq!(fs::read_to_string(&marker).unwrap(), "resumed");
+        assert_eq!(
+            fs::read_to_string(&marker).unwrap(),
+            format!("resumed|{}", workspace.display())
+        );
+        assert!(!repository_marker.exists());
     }
 
     /// Core activates the environment on every daemon registration: the
     /// first, each plain reconnect, and the one after a wake. dxd is the only
-    /// runner of `.agents/resume` (#1266), so it must run once on the first
+    /// runner of the Project's resume script (#1266), so it must run once on the first
     /// activation and once after each wake, never on a reconnect.
     #[test]
     fn resume_runs_once_on_the_first_activation_and_once_per_wake() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("repo");
-        fs::create_dir_all(workspace.join(".agents")).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
         let runs_file = root.path().join("resume-runs");
-        fs::write(
-            workspace.join(".agents/resume"),
-            format!("#!/bin/sh\necho resumed >> '{}'\n", runs_file.display()),
-        )
-        .unwrap();
-        set_mode(&workspace.join(".agents/resume"), 0o755).unwrap();
-        let mut runtime = EnvironmentRuntime::new(prepare(root.path()));
+        let paths = prepare(root.path());
+        write_resume(
+            &paths,
+            &format!("#!/bin/sh\necho resumed >> '{}'\n", runs_file.display()),
+        );
+        let mut runtime = EnvironmentRuntime::new(paths);
         let runs = || {
             fs::read_to_string(&runs_file)
                 .unwrap_or_default()
@@ -1779,19 +1816,17 @@ mod tests {
         assert_eq!(runs(), 3, "a second, short wake");
     }
 
-    /// Like `.agents/setup`, resume is a convenience: a failing or
-    /// unrunnable hook never makes the environment unavailable, is not
+    /// Like setup, resume is a convenience: a failing or
+    /// unrunnable script never makes the environment unavailable, is not
     /// retried until the next wake, and leaves its output in
     /// `~/.cache/dx/logs/resume.log`.
     #[test]
     fn a_failing_resume_is_logged_and_never_blocks_the_environment() {
         let root = tempfile::tempdir().unwrap();
         let workspace = root.path().join("repo");
-        fs::create_dir_all(workspace.join(".agents")).unwrap();
-        let hook = workspace.join(".agents/resume");
-        fs::write(&hook, "#!/bin/sh\necho out-$A\necho err >&2\nexit 3\n").unwrap();
-        set_mode(&hook, 0o755).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
         let paths = prepare(root.path());
+        let script = write_resume(&paths, "#!/bin/sh\necho out-$A\necho err >&2\nexit 3\n");
         let log = paths.home.join(".cache/dx/logs/resume.log");
         let mut runtime = EnvironmentRuntime::new(paths);
         let operation = |generation, value| EnvironmentActivate {
@@ -1817,15 +1852,40 @@ mod tests {
             EnvironmentOutcome::Unchanged
         );
 
-        // A hook that is not executable is not run.
-        set_mode(&hook, 0o644).unwrap();
+        // A script with a shebang that is not executable cannot start; the
+        // environment still applies.
+        set_mode(&script, 0o600).unwrap();
         let materialized = runtime
             .admit(&operation(3, "two"))
             .ok()
             .unwrap()
             .materialize(&workspace);
         assert_eq!(materialized.outcome, EnvironmentOutcome::Applied);
-        assert_eq!(fs::read_to_string(&log).unwrap(), "out-one\nerr\n");
+        runtime.complete(&materialized);
+
+        // A symlink in its place, or a script the Project cleared, is not run.
+        fs::remove_file(&script).unwrap();
+        let target = root.path().join("elsewhere");
+        fs::write(&target, "#!/bin/sh\necho symlinked\n").unwrap();
+        set_mode(&target, 0o755).unwrap();
+        std::os::unix::fs::symlink(&target, &script).unwrap();
+        fs::write(&log, "before\n").unwrap();
+        let materialized = runtime
+            .admit(&operation(4, "three"))
+            .ok()
+            .unwrap()
+            .materialize(&workspace);
+        assert_eq!(materialized.outcome, EnvironmentOutcome::Applied);
+        runtime.complete(&materialized);
+        assert_eq!(fs::read_to_string(&log).unwrap(), "before\n");
+        fs::remove_file(&script).unwrap();
+        let materialized = runtime
+            .admit(&operation(5, "four"))
+            .ok()
+            .unwrap()
+            .materialize(&workspace);
+        assert_eq!(materialized.outcome, EnvironmentOutcome::Applied);
+        assert_eq!(fs::read_to_string(&log).unwrap(), "before\n");
     }
 
     #[test]

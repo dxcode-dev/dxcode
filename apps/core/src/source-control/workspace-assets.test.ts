@@ -89,7 +89,13 @@ interface HarnessFixture {
   };
   readonly source: string;
   readonly upstream: string;
+  /** The Project's setup script that Core sends, unless saved without one. */
+  readonly setupScript?: string;
 }
+
+/** A Project script as Core sends it in a command's environment. */
+const projectScript = (body: string) =>
+  Buffer.from(body, "utf8").toString("base64");
 
 const startGitHttpServer = async (repository: string) => {
   const server = spawn(
@@ -421,8 +427,8 @@ const makeHarness = async (input?: {
   readonly missingLfsObject?: boolean;
   /** Thousands of directories, each with its own LFS `.gitattributes`. */
   readonly manyLfsAttributes?: number;
-  /** Commit no `.agents/setup` or `.agents/resume`. */
-  readonly withoutHooks?: boolean;
+  /** A Project with no setup script saved. */
+  readonly withoutSetupScript?: boolean;
 }): Promise<HarnessFixture> => {
   const base = await mkdtemp(
     join(realpathSync(tmpdir()), "dx-workspace-harness-"),
@@ -471,19 +477,23 @@ const makeHarness = async (input?: {
   }
   if (input?.lfsAttributes === true)
     writeFileSync(join(source, ".gitattributes"), "*.bin filter=lfs\n");
-  if (input?.withoutHooks !== true) {
-    mkdirSync(join(source, ".agents"));
-    writeFileSync(
-      join(source, ".agents", "setup"),
-      `#!/bin/sh\n${input?.requiresFullHistory === true ? "# dx-requires: full-history\n" : ""}[ ! -f "$HOME/fail-setup" ] || exit 7\nprintf "setup\\n" >> "$HOME/hook-order"\n`,
-      { mode: 0o755 },
-    );
-    writeFileSync(
-      join(source, ".agents", "resume"),
-      '#!/bin/sh\nprintf "resume\\n" >> "$HOME/hook-order"\n',
-      { mode: 0o755 },
-    );
-  }
+  // The deprecated repository hooks. dx never runs them, so a run would show
+  // up in hook-order, which every test that runs setup checks.
+  mkdirSync(join(source, ".agents"));
+  writeFileSync(
+    join(source, ".agents", "setup"),
+    '#!/bin/sh\nprintf "repository-setup\\n" >> "$HOME/hook-order"\n',
+    { mode: 0o755 },
+  );
+  writeFileSync(
+    join(source, ".agents", "resume"),
+    '#!/bin/sh\nprintf "repository-resume\\n" >> "$HOME/hook-order"\n',
+    { mode: 0o755 },
+  );
+  const setupScript =
+    input?.withoutSetupScript === true
+      ? undefined
+      : `#!/bin/sh\n${input?.requiresFullHistory === true ? "# dx-requires: full-history\n" : ""}[ ! -f "$HOME/fail-setup" ] || exit 7\nprintf "setup\\n" >> "$HOME/hook-order"\n`;
   git(source, "add", ".");
   git(source, "commit", "-m", "fixture");
   const sourceSha = git(source, "rev-parse", "HEAD");
@@ -574,6 +584,13 @@ const makeHarness = async (input?: {
       DX_BINDING_REVISION: "1",
       DX_INVOCATION_ID: crypto.randomUUID(),
       DX_SOURCE_CONFIG_DIGEST: "config-116",
+      // What Core derives from the Project's scripts (source-workspace.ts).
+      ...(setupScript === undefined
+        ? {}
+        : { DX_SETUP_SCRIPT: projectScript(setupScript) }),
+      ...(input?.requiresFullHistory === true
+        ? { DX_FULL_HISTORY_REQUIRED: "true" }
+        : {}),
       ...(gateway === undefined
         ? {}
         : {
@@ -588,6 +605,7 @@ const makeHarness = async (input?: {
     gateway,
     source,
     upstream,
+    ...(setupScript === undefined ? {} : { setupScript }),
   };
 };
 
@@ -1015,7 +1033,7 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     ).toBe("false");
   });
 
-  it("reports the exact full-history hook directive from a shallow snapshot", async () => {
+  it("reports that the Project's scripts need full history from a shallow snapshot", async () => {
     const fixture = await makeHarness({
       shallowClone: true,
       requiresFullHistory: true,
@@ -1162,12 +1180,8 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     writeFileSync(join(fixture.paths.home, "fail-setup"), "fail\n");
     // A failing setup leaves the workspace ready.
     expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
-    const immutableSetup = readFileSync(
-      join(fixture.paths.root, ".agents", "setup"),
-      "utf8",
-    );
     const setupDigest = createHash("sha256")
-      .update(`${fixture.sourceSha}\0config-116\0${immutableSetup}`)
+      .update(`${fixture.sourceSha}\0config-116\0${fixture.setupScript}`)
       .digest("hex");
     expect(JSON.parse(readFileSync(fixture.paths.state, "utf8")).setup).toEqual(
       { status: "failed", digest: setupDigest },
@@ -1180,18 +1194,26 @@ describe("generated source workspace harness", { timeout: 30000 }, () => {
     );
   });
 
-  // dxd's environment activation runs `.agents/resume` on the first
-  // activation and after every wake, with the Project's environment. Source
-  // activation running it too made a first activation run it twice (#1266).
-  it("never runs .agents/resume, on a first activation or a wake", async () => {
+  // dxd's environment activation runs the Project's resume script on the
+  // first activation and after every wake, with the Project's environment.
+  // Source activation running it too made a first activation run it twice
+  // (#1266). The repository's `.agents/resume` never runs.
+  it("never runs a resume script, the Project's or the repository's, on a first activation or a wake", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
+    const resume = {
+      DX_RUN_RESUME: "true",
+      DX_RESUME_SYNC: "true",
+      DX_RESUME_SCRIPT: projectScript(
+        'printf "project-resume\\n" >> "$HOME/hook-order"\n',
+      ),
+    };
     // A first agent activation, then an agent turn that wakes a paused Orb.
     for (let activation = 0; activation < 2; activation += 1)
-      expect(activationState(fixture, { DX_RUN_RESUME: "true" })).toMatchObject(
-        { hooks: { status: "ready" } },
-      );
-    expect(hooksState(fixture, { DX_RUN_RESUME: "true" })).toEqual({
+      expect(activationState(fixture, resume)).toMatchObject({
+        hooks: { status: "ready" },
+      });
+    expect(hooksState(fixture, resume)).toEqual({
       status: "ready",
     });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
@@ -1223,19 +1245,21 @@ printf "\\nsetup finished\\n"
 printf "setup\\n" >> "$HOME/hook-order"
 exit ${exitCode}
 `;
-    const setup = join(fixture.paths.root, ".agents", "setup");
+    const setup = (body: string) => ({ DX_SETUP_SCRIPT: projectScript(body) });
     const log = () =>
       readFileSync(join(fixture.paths.logDirectory, "setup.log"), "utf8");
 
-    writeFileSync(setup, chatty(3), { mode: 0o755 });
-    expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
+    expect(hooksState(fixture, setup(chatty(3)))).toEqual({
+      status: "ready",
+      failed: ["setup"],
+    });
     expect(log().length).toBeGreaterThanOrEqual(1_048_576);
     // A shorter run replaces the log instead of appending to it.
-    writeFileSync(setup, "#!/bin/sh\necho short\nexit 3\n", { mode: 0o755 });
-    expect(hooksState(fixture)).toEqual({ status: "ready", failed: ["setup"] });
+    expect(
+      hooksState(fixture, setup("#!/bin/sh\necho short\nexit 3\n")),
+    ).toEqual({ status: "ready", failed: ["setup"] });
     expect(log()).toBe("short\n");
-    writeFileSync(setup, chatty(0), { mode: 0o755 });
-    expect(hooksState(fixture)).toEqual({ status: "ready" });
+    expect(hooksState(fixture, setup(chatty(0)))).toEqual({ status: "ready" });
     expect(
       JSON.parse(readFileSync(fixture.paths.state, "utf8")).setup.status,
     ).toBe("success");
@@ -1258,8 +1282,6 @@ exit ${exitCode}
     ).toThrow();
   });
 
-  const projectScript = (body: string) =>
-    Buffer.from(body, "utf8").toString("base64");
   // Each probe records where it ran, whether the checkout existed, and
   // whether dx's own credential leaked into the person's script.
   const probe = (name: string) =>
@@ -1315,113 +1337,97 @@ exit ${exitCode}
     expect(malformed.stderr).toContain("invalid-input");
   });
 
-  it("runs the project's pre-setup script before setup and reruns setup only when the script changes", async () => {
+  it("runs the project's setup script from the repository root without dx's credentials, and reruns it only when the script changes", async () => {
     const fixture = await makeHarness();
     initialize(fixture);
-    const first = projectScript(probe("pre-setup"));
+    const first = projectScript(probe("setup"));
 
-    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: first })).toEqual({
+    expect(hooksState(fixture, { DX_SETUP_SCRIPT: first })).toEqual({
       status: "ready",
     });
-    expect(readFileSync(join(fixture.paths.home, "pre-setup"), "utf8")).toBe(
+    expect(readFileSync(join(fixture.paths.home, "setup"), "utf8")).toBe(
       `${fixture.paths.root}|absent|none\n`,
     );
-    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: first })).toEqual({
+    expect(hooksState(fixture, { DX_SETUP_SCRIPT: first })).toEqual({
       status: "ready",
     });
     expect(
       hooksState(fixture, {
-        DX_PRE_SETUP_SCRIPT: projectScript(`${probe("pre-setup")}# edited\n`),
+        DX_SETUP_SCRIPT: projectScript(`${probe("setup")}# edited\n`),
       }),
     ).toEqual({ status: "ready" });
     expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-setup\nsetup\npre-setup\nsetup\n",
+      "setup\nsetup\n",
     );
   });
 
-  it("runs pre-setup in a repository without setup hooks and keeps the resume hook it writes uncommitted", async () => {
-    const fixture = await makeHarness({ withoutHooks: true });
+  it("skips setup when the project has no setup script, whatever the repository holds", async () => {
+    const fixture = await makeHarness({ withoutSetupScript: true });
     initialize(fixture);
-    const preSetup = projectScript(
-      [
-        'printf "pre-setup\\n" >> "$HOME/hook-order"',
-        "mkdir -p .agents",
-        `printf '#!/bin/sh\\nprintf "resume\\\\n" >> "$HOME/hook-order"\\n' > .agents/resume`,
-        "chmod +x .agents/resume",
-        "mkdir -p .git/info",
-        "printf '.agents/resume\\n' >> .git/info/exclude",
-        "",
-      ].join("\n"),
-    );
 
-    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: preSetup })).toEqual({
-      status: "ready",
+    expect(hooksState(fixture)).toEqual({ status: "ready" });
+    expect(activationState(fixture)).toMatchObject({
+      hooks: { status: "ready" },
     });
-    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: preSetup })).toEqual({
-      status: "ready",
+    expect(existsSync(join(fixture.paths.home, "hook-order"))).toBe(false);
+
+    const malformed = runHarness(fixture, "hooks", {
+      DX_SETUP_SCRIPT: "not base64!",
     });
-    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-setup\n",
-    );
-    expect(git(fixture.paths.root, "status", "--porcelain")).toBe("");
+    expect(malformed.status, malformed.stderr).toBe(0);
+    expect(JSON.parse(malformed.stdout)).toEqual({ status: "failed" });
+    expect(malformed.stderr).toContain("invalid-input");
   });
 
-  it("keeps the workspace ready when pre-setup fails, still runs setup, and retries both", async () => {
-    const fixture = await makeHarness();
-    initialize(fixture);
-    const failing = projectScript(
-      '#!/bin/sh\nprintf "pre-setup\\n" >> "$HOME/hook-order"\n[ -f "$HOME/pre-setup-ok" ] || exit 3\n',
-    );
+  it.each([
+    {
+      name: "resume",
+      sync: "DX_RESUME_SYNC",
+      script: "DX_RESUME_SCRIPT",
+      body: "pnpm install --frozen-lockfile\n",
+    },
+    {
+      name: "desktop-resume",
+      sync: "DX_DESKTOP_RESUME_SYNC",
+      script: "DX_DESKTOP_RESUME_SCRIPT",
+      body: '/opt/dx/desktop/chromium "http://localhost:3000"\n',
+    },
+  ])(
+    "keeps the project's $name script where its runner reads it, and removes it once cleared",
+    async ({ name, sync, script, body }) => {
+      const fixture = await makeHarness();
+      initialize(fixture);
+      // dxd (resume) and /opt/dx/desktop/resume (desktop-resume) read it here.
+      const stored = join(
+        dirname(fixture.paths.state),
+        "project-scripts",
+        name,
+      );
 
-    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: failing })).toEqual({
-      status: "ready",
-      failed: ["pre-setup"],
-    });
-    expect(
-      JSON.parse(readFileSync(fixture.paths.state, "utf8")).setup.status,
-    ).toBe("failed");
-    writeFileSync(join(fixture.paths.home, "pre-setup-ok"), "");
-    expect(hooksState(fixture, { DX_PRE_SETUP_SCRIPT: failing })).toEqual({
-      status: "ready",
-    });
-    expect(readFileSync(join(fixture.paths.home, "hook-order"), "utf8")).toBe(
-      "pre-setup\nsetup\npre-setup\nsetup\n",
-    );
-  });
+      // Only a command that carries the sync flag touches the file.
+      expect(
+        checkoutState(fixture, { [script]: projectScript(body) }),
+      ).toMatchObject({ status: "ready" });
+      expect(existsSync(stored)).toBe(false);
 
-  it("keeps the project's Desktop resume script where the Desktop reads it, and removes it once cleared", async () => {
-    const fixture = await makeHarness();
-    initialize(fixture);
-    const stored = join(
-      dirname(fixture.paths.state),
-      "project-scripts",
-      "desktop-resume",
-    );
-    const body = '/opt/dx/desktop/chromium "http://localhost:3000"\n';
+      expect(
+        checkoutState(fixture, {
+          [sync]: "true",
+          [script]: projectScript(body),
+        }),
+      ).toMatchObject({ status: "ready" });
+      expect(readFileSync(stored, "utf8")).toBe(body);
+      expect(lstatSync(stored).mode & 0o777).toBe(0o700);
 
-    // Only a command that carries the sync flag touches the file.
-    expect(
-      checkoutState(fixture, { DX_DESKTOP_RESUME_SCRIPT: projectScript(body) }),
-    ).toMatchObject({ status: "ready" });
-    expect(existsSync(stored)).toBe(false);
-
-    expect(
-      checkoutState(fixture, {
-        DX_DESKTOP_RESUME_SYNC: "true",
-        DX_DESKTOP_RESUME_SCRIPT: projectScript(body),
-      }),
-    ).toMatchObject({ status: "ready" });
-    expect(readFileSync(stored, "utf8")).toBe(body);
-    expect(lstatSync(stored).mode & 0o777).toBe(0o700);
-
-    expect(
-      checkoutState(fixture, {
-        DX_DESKTOP_RESUME_SYNC: "true",
-        DX_DESKTOP_RESUME_SCRIPT: "",
-      }),
-    ).toMatchObject({ status: "ready" });
-    expect(existsSync(stored)).toBe(false);
-  });
+      expect(
+        checkoutState(fixture, {
+          [sync]: "true",
+          [script]: "",
+        }),
+      ).toMatchObject({ status: "ready" });
+      expect(existsSync(stored)).toBe(false);
+    },
+  );
 
   it("checks out a Bitbucket LFS repository through the dx gateway the way a laptop clone does", async () => {
     const fixture = await makeHarness({ bitbucketLfs: true });

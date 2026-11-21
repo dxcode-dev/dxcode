@@ -2,7 +2,6 @@ import {
   ProjectId,
   ProjectOrbScriptBody,
   ProjectOrbScriptKind,
-  ProjectRepositoryOrbFile,
   Timestamp,
 } from "@dx/domain";
 import { Schema } from "effect";
@@ -14,9 +13,14 @@ export const ProjectOrbScriptSchema = Schema.Struct({
   updatedAt: Timestamp,
 });
 
-/** The Project's saved scripts; a kind without a script is absent. */
+/**
+ * The Project's saved scripts; a kind without a script is absent.
+ * `canManage` says whether the requester may change them: the Project's
+ * creator or a workspace admin.
+ */
 export const ProjectOrbScriptsDataSchema = Schema.Struct({
   scripts: Schema.Array(ProjectOrbScriptSchema),
+  canManage: Schema.Boolean,
 });
 
 export const ProjectOrbScriptsParamsSchema = Schema.Struct({
@@ -62,40 +66,6 @@ export const ProjectOrbScriptsPersistenceUnavailableResponseSchema =
     "Persistence is temporarily unavailable.",
   );
 
-/** One repository Orb file on the default branch; `url` opens a file it has. */
-export const ProjectOrbFileSchema = Schema.Struct({
-  path: ProjectRepositoryOrbFile,
-  present: Schema.Boolean,
-  url: Schema.optional(Schema.String),
-});
-
-/**
- * The repository's Orb files as the default branch has them, read through the
- * Project's source connection without an Orb, or anonymously for a public
- * GitHub repository. Any other repository without a connection is
- * `not-connected`; one that cannot be read now is `unreadable`.
- */
-export const ProjectOrbFilesDataSchema = Schema.Union([
-  Schema.Struct({
-    state: Schema.Literal("checked"),
-    /** A public repository read without a connection has no branch name. */
-    repository: Schema.Struct({
-      fullName: Schema.String,
-      defaultBranch: Schema.optional(Schema.String),
-    }),
-    files: Schema.Array(ProjectOrbFileSchema),
-  }),
-  Schema.Struct({ state: Schema.Literal("not-connected") }),
-  Schema.Struct({ state: Schema.Literal("unreadable") }),
-]);
-
-export const GetProjectOrbFilesResponseSchema = successResponse(
-  ProjectOrbFilesDataSchema,
-);
-
-export type ProjectOrbFilesData = typeof ProjectOrbFilesDataSchema.Type;
-export type GetProjectOrbFilesResponse =
-  typeof GetProjectOrbFilesResponseSchema.Encoded;
 export type ProjectOrbScriptsData = typeof ProjectOrbScriptsDataSchema.Type;
 export type GetProjectOrbScriptsResponse =
   typeof GetProjectOrbScriptsResponseSchema.Encoded;

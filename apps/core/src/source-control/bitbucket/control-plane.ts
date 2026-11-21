@@ -19,7 +19,7 @@ import {
   createOAuthProof,
   hashOAuthState,
 } from "../../settings/integrations/provider-registry.js";
-import type { AuthorizedSource } from "../admission.js";
+import type { AuthorizedSource, ReadFilesRequest } from "../admission.js";
 import { type SourceOwner, sourceAccessDenied } from "../authority.js";
 import { loadBitbucketConfiguration } from "./configuration.js";
 import {
@@ -523,7 +523,7 @@ export const authorizeBitbucketSource = async (input: {
   grantId: string;
   repositoryId: string;
   workspaceId?: string;
-  readPaths?: ReadonlyArray<string>;
+  readFiles?: ReadFilesRequest;
   fetcher?: typeof fetch;
 }): Promise<AuthorizedSource> => {
   try {
@@ -562,15 +562,16 @@ export const authorizeBitbucketSource = async (input: {
         )
           throw sourceAccessDenied("stale-binding", "rebind");
         await service.cacheRepository(row, resolved.repository);
-        const presentPaths =
-          input.readPaths === undefined
+        const files =
+          input.readFiles === undefined
             ? undefined
-            : await provider.presentPaths(
+            : await provider.readFiles(
                 token,
                 workspaceId,
                 input.repositoryId,
                 resolved.commitSha,
-                input.readPaths,
+                input.readFiles.paths,
+                input.readFiles.maxBytes,
               );
         return {
           provider: "bitbucket",
@@ -587,7 +588,7 @@ export const authorizeBitbucketSource = async (input: {
           authorizationEpoch: row.authorization_epoch,
           installationEpoch: 0,
           policyRevision: 0,
-          ...(presentPaths === undefined ? {} : { presentPaths }),
+          ...(files === undefined ? {} : { files }),
         };
       },
       { replayable: true },

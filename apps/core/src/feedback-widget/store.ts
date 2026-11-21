@@ -1,5 +1,5 @@
 import { MAX_FEEDBACK_WIDGET_ORIGINS } from "@dx/domain";
-import { manageableSql } from "../projects/orb-scripts.js";
+import { manageableSql } from "../projects/orb-script-store.js";
 
 /**
  * D1 reads and writes for the Feedback Widget: one row per Project that has

@@ -1,137 +1,104 @@
 ---
 name: orb-setup
-description: "Prepare a repository to run in dx Orbs. Use when creating or updating .agents/setup or .agents/resume, declaring long-running services in .dx/services.yaml, or debugging Orb environment setup."
+description: "Prepares a Project to run in dx Orbs: works out the toolchains and dependencies the repository needs, then writes and saves its setup and resume scripts in dx with manage_dx. Use when asked to set up Orbs for a project, when writing or changing the Project's setup, resume, pre-clone, or Desktop resume scripts, when declaring long-running services in .dx/services.yaml, or when an Orb starts without the tools a project needs."
 ---
 
-# Orb Setup
+# Orb setup
 
-Prepares a repository to run well in dx Orbs (each Thread's Linux sandbox) by creating or updating
-its Orb lifecycle files.
+An Orb is the Linux sandbox each Thread works in. This skill makes a Project's Orbs ready to work the moment they start: it writes the Project's scripts, tests them in the current Orb, and saves them to the Project in dx. The request is often one line, such as "Set up Orbs for this project"; read everything else from the repository.
 
-## Lifecycle Files
+The goal: in a fresh Orb, once `setup` has run, the agent can install, build, test, and run the project without doing anything by hand.
 
-| File | When it runs | Purpose |
-|------|--------------|---------|
-| `.agents/setup` | Once for each new Thread's Orb, after dx checks out the repository and before the agent's first turn | Install toolchains, dependencies, databases, and other prerequisites |
-| `.agents/resume` | Once after setup on first activation, once each time a paused Orb wakes, and when the Project's environment variables change | Fast, idempotent authentication, reconnect, or repair steps |
-| `.dx/services.yaml` | When the user opens a Portal URL whose service is stopped | Start long-running dev servers and other services on demand |
+## How dx runs a Project's scripts
 
-Key invariants:
+dx keeps the scripts with the Project, not in the repository, and runs them in the Orb of every Thread in it. dx ignores `.agents/setup`, `.agents/resume`, and `.agents/desktop/resume` in a repository (it copied them into the Project once where they existed), so do not write or commit them.
 
-- Every Thread gets its own Orb from dx's base image, and dx does not reuse a configured Orb between
-  Threads. `.agents/setup` therefore runs for every new Thread, and the first turn waits for it.
-  Keep it fast: aim to finish in under 2 minutes.
-- dx runs `.agents/setup` only when the file is committed with the executable bit set
-  (`chmod +x`, Git mode `100755`) in the commit the Thread started from. It runs the file in the
-  current checkout.
-- dx records a successful setup against the Thread's source commit, its source configuration, and
-  the setup file's contents, and does not run it again for that Thread unless one of them changes.
-  A failed or timed-out setup is logged and retried on the next activation; it never blocks the
-  Thread. The workspace is usable without it, so the agent can finish setup work by hand.
-- Setup is limited to 5 minutes. The workspace daemon runs `.agents/resume` and stops it after
-  120 seconds; the agent's turn does not wait for it. A daemon restart also runs it, so keep it
-  idempotent and finish within seconds; never install dependencies there.
-- Hooks run at the repository root as `user`. Setup has a minimal environment: `PATH`, `HOME`,
-  `USER`, `LOGNAME`, `SHELL`, and `GIT_TERMINAL_PROMPT=0`. Setup gets no GitHub token, no source
-  credentials, and none of the Project's environment variables or secrets. Never authenticate a
-  user or service during setup. Install its client in setup and authenticate it during resume or
-  when the agent first needs it; resume receives the Project's environment variables.
-- Each hook's full output goes to its log under `~/.cache/dx/logs` (`setup.log`, `resume.log`),
-  replaced on each run. Only the exit code decides whether the hook succeeded.
-- Orbs are Debian sandboxes with passwordless `sudo`. The standard image has Node.js 24 with
-  corepack (pnpm, yarn), OpenJDK 21, Python 3 with pip and venv, `build-essential`, git, git-lfs,
-  GitHub CLI, ripgrep, jq, curl, wget, tmux, and Chromium; Orbs from older images can lack some of
-  them, so check with `command -v` before relying on one. Tune databases for speed over durability
-  (e.g. Postgres `fsync = off`, `synchronous_commit = off`).
+| Script | Runs | From | Use it to |
+|---|---|---|---|
+| `setup` | Once, when dx prepares a new Orb, before the agent's first turn | Repository root | Install toolchains and dependencies, start and seed databases |
+| `resume` | Every time the Orb starts or wakes, run by the workspace daemon | Repository root | Sign in, reconnect, or repair; quick and safe to repeat |
+| `pre-clone` | Before dx clones the repository; a failure stops the Orb before the clone | `/home/user/workspace` | Rarely: prepare something the clone itself needs |
+| `desktop-resume` | Every time the Desktop starts | Repository root | Open the app with `/opt/dx/desktop/chromium <url>` |
 
-## Workflow
+What to plan around:
 
-### 1. Investigate the repository
+- Each Thread starts a new Orb from dx's base image, so `setup` runs for every new Thread and that Thread's first turn waits for it. Keep it under 2 minutes; dx stops it at 5. A failed `setup` is logged and the Thread still starts.
+- dx stops `resume` after 120 seconds and never waits for it, and a daemon restart runs it again. Install nothing in it.
+- dx copies each script into its own state directory before running it, so `$0` and `BASH_SOURCE` point there, not into the repository. Use the working directory (`$PWD`), which is the repository root.
+- A script with no `#!` line runs in Bash. Each script holds at most 32 KB.
+- Scripts run as `user`, who has passwordless `sudo`. `setup` gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, and `GIT_TERMINAL_PROMPT=0`: no GitHub token and none of the Project's environment variables or secrets. So `setup` installs clients and `resume` signs them in; `resume` receives the Project's variables.
+- Output goes to `~/.cache/dx/logs/<script>.log`, replaced on each run. The exit code alone decides success.
+- Everyone who can open the Project can read its scripts. Put tokens and keys in the Project's environment variables and secrets, never in a script.
+- The base image is Debian with Node.js 24 and corepack (pnpm, yarn), OpenJDK 21, Python 3 with pip and venv, `build-essential`, git, git-lfs, the GitHub CLI, ripgrep, jq, curl, wget, tmux, and Chromium. Orbs from older images can miss some, so confirm with `command -v`.
 
-Before writing anything, determine what a fresh machine needs to build, test, and run this repo:
+## Reading and saving scripts
 
-- Package managers and lockfiles (`package.json`/`pnpm-lock.yaml`, `Cargo.toml`, `go.mod`,
-  `requirements.txt`/`pyproject.toml`, `Gemfile`, ...)
-- Toolchain version pins (`mise.toml`, `.tool-versions`, `.nvmrc`, `rust-toolchain.toml`,
-  `packageManager` field, corepack)
-- Environment files (`.env.example` and similar) and required secrets. Secrets belong in the
-  Project's environment variables in dx settings, not in the repository or the scripts.
-- Databases, caches, and other backing services the tests or dev server need
-- Shell-managed development environments (Nix flakes, devenv, direnv, etc.) and how their full
-  environment reaches the agent's non-interactive shell and service processes
-- Existing setup docs: README, CONTRIBUTING, AGENTS.md, CI workflows (CI install steps are a
-  reliable inventory of prerequisites)
-- Existing `.agents/setup` and `.agents/resume` — update rather than replace, and preserve
-  behavior you cannot verify
+Use `manage_dx` with topic `project_scripts`; `project_id` defaults to this Thread's Project. Changes apply at once, with no card.
 
-### 2. Write or update `.agents/setup`
+- `list`: which scripts exist, their size and last change, and `canManage` (whether this person may change them).
+- `read`, with `name` set to a script such as `setup`: its text.
+- `set`, with `name` and `value`: replaces the whole script. A blank `value` removes it.
+- `delete`, with `name`: removes it.
 
-A bash script starting with `#!/usr/bin/env bash` and `set -euo pipefail` that typically:
+Only the Project's creator or a workspace admin can save, and only in turns the Thread's owner wrote. If `canManage` is false or `set` is refused, keep the tested script out of the repository and give it to the person, saying who can save it (**Project Settings → Orb → Orb Scripts**, or a Thread of their own).
 
-- Installs missing system packages via `sudo apt-get`. Check packages first so a rerun does not
-  run `apt-get update` or reinstall packages it already has.
-- Installs the pinned toolchain (e.g. `mise install --locked`, `corepack enable`)
-- Sources an installer's profile script when the rest of setup needs a tool just installed; an
-  installer cannot update the environment of the already-running setup process
-- Installs dependencies from lockfiles (e.g. `pnpm install --frozen-lockfile`)
-- Starts and seeds databases the repo needs, tuned for speed over durability
-- Copies env templates without clobbering: `[ -f .env.local ] || cp -- .env.example .env.local`
-  (avoid `cp -n` in scripts; its exit status on skip varies across coreutils versions)
+Saved `setup` runs in new Orbs. A running Orb uses the new `resume` or `desktop-resume` the next time it starts, wakes, or opens the Desktop.
 
-Idempotence is required: run `.agents/setup` at least twice and verify that repeated runs converge
-without duplicating configuration, corrupting seeded data, or failing because resources already
-exist. Every command must terminate. Never run a foreground server, watcher, interactive prompt,
-or other long-lived process; setup must exit for the Thread to start. Define long-lived services
-in `.dx/services.yaml` instead. Print and time major steps so the log under `~/.cache/dx/logs`
-shows which command is slow or failed.
+## Steps
 
-Do not test persisted toolchain or profile changes by sourcing them into or otherwise modifying the
-current shell. Start a new non-interactive login shell with the repository root as its working
-directory and verify the environment there; that is the environment the agent and services
-receive later.
+### 1. Start from what exists
 
-### 3. Persist complete development environments
+`list` the Project's scripts and `read` each one. Change what is there instead of starting over, and keep any step you cannot test.
 
-Installing a tool or making the current setup process work is not enough: the agent's commands
-and dx services start afterward in separate shells. If the repository depends on a development
-shell, make its complete environment available there too (including variables such as
-`NODE_PATH` and build-tool paths), not just a few symlinked binaries.
+### 2. Take stock of the project
 
-Use an idempotent, repository-scoped, recursion-guarded hook in `~/.bash_profile` when the
-environment manager supports exporting its environment. Prefer injecting exports into the current
-login shell over wrapping every command or service in another supervisor process. For Nix, use
-`nix print-dev-env` rather than `nix develop` in the hook so activation does not spawn a nested
-shell or supervisor process. For example:
+Find out what a clean machine needs to work on this repository:
 
-```bash
-nix_profile="$HOME/.nix-profile"
-# The installer cannot update this running script's environment.
-# shellcheck disable=SC1091
-source "$nix_profile/etc/profile.d/nix.sh"
+- Languages, package managers, and lockfiles: `package.json` with its lockfile, `pyproject.toml` or `requirements*.txt`, `go.mod`, `Cargo.toml`, `Gemfile`, `pom.xml`, and the like.
+- Version pins: `.nvmrc`, `.tool-versions`, `mise.toml`, `rust-toolchain.toml`, `go.mod`'s `go` line, the `packageManager` field, versions in CI.
+- Services the tests or app expect, such as Postgres, Redis, or a queue, and example env files like `.env.example`.
+- Development shells (Nix, devenv, direnv) and what they export.
+- How the project is already built: CI workflows first, since they install everything from scratch, then README, CONTRIBUTING, AGENTS.md, and any old `.agents/*` files.
 
-repo_root="$(cd "$(dirname "$BASH_SOURCE")/.." && pwd)"
-profile_marker="# my-project Nix development shell"
-if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
-  cat >> "$HOME/.bash_profile" <<EOF
+Write down the commands that show the project works: install, build, and the fast tests, the way CI runs them. Check every tool those commands call with `command -v` and compare its version with the pins. `setup` installs what is missing or at the wrong version, and nothing more.
 
-$profile_marker
-if [[ -z "\${IN_NIX_SHELL:-}" && "\${PWD}" == "$repo_root" ]]; then
-  eval "\$("$nix_profile/bin/nix" print-dev-env "$repo_root")"
-fi
-EOF
-fi
-```
+### 3. Write `setup`
 
-### 4. Write or update `.agents/resume`
+Draft scripts outside the repository, for example in `~/.dx/work/orb-setup/`, so none of them can be committed. Start with `#!/usr/bin/env bash` and `set -euo pipefail`, then:
 
-Same bash preamble. Only fast, idempotent authentication, reconnect, or repair work: authenticate
-tunnels or CLIs with the Project's environment variables and re-check that databases are up.
-Target completion within 10 seconds. Keep work in the foreground so failures are logged; write
-progress to a log file if work may take longer.
+- Install system packages with `sudo apt-get install -y`, checking first (`dpkg -s`, `command -v`) so a second run skips `apt-get update`.
+- Install pinned toolchains, such as `corepack enable`, `mise install`, or an official release tarball of the pinned version.
+- When a later line needs a tool that an installer just added, extend `PATH` or source the installer's env file in the script; the installer cannot change the running script's environment.
+- Install dependencies the way CI does, from the lockfile (`npm ci`, `pnpm install --frozen-lockfile`, `uv sync`, `go mod download`).
+- Start and seed databases the tests need, configured for speed over safety (for Postgres, `fsync = off` and `synchronous_commit = off`).
+- Copy env templates only when the target is missing: `[ -f .env ] || cp -- .env.example .env`.
+- Print a line before each slow step and its duration after, so the log shows where time went.
 
-### 5. Declare long-running services in `.dx/services.yaml`
+Running `setup` again must give the same result: no duplicate config lines, no reseeding over existing data, no failure because something already exists. Every command must end. Leave out dev servers, watchers, and prompts, because `setup` has to exit before the Thread starts; declare servers in `.dx/services.yaml` (step 6).
 
-When the user will keep using a dev server, declare it so dx starts it again after the Orb wakes:
+### 4. Make tools reachable from later shells
+
+The agent's commands and dx services run later in fresh login shells, so a tool `setup` installed must be on their `PATH` too, together with any variables it needs. Choose the simplest option that works:
+
+- Put the binary or a symlink in `/usr/local/bin`, which every shell has on `PATH`.
+- Otherwise add one guarded block to `~/.bash_profile` that `setup` writes only once. For example, for a Go install:
+
+  ```bash
+  marker="# orb-setup: go toolchain"
+  grep -Fqx "$marker" "$HOME/.bash_profile" 2>/dev/null || printf '\n%s\nexport PATH="/usr/local/go/bin:$HOME/go/bin:$PATH"\n' "$marker" >> "$HOME/.bash_profile"
+  ```
+
+- For a development shell such as Nix, export its environment in that block (with `nix print-dev-env`) instead of starting a nested shell. Guard the block so it runs only in the repository and never inside itself.
+
+### 5. Write `resume` when the project needs one
+
+Many projects need none; libraries usually do not. Write it when something must happen on every start: sign in a CLI with the Project's variables, restart or check a database, refresh a tunnel. Use the same first two lines as `setup`, keep every step in the foreground so failures reach the log, and finish within about 10 seconds.
+
+Write `pre-clone` or `desktop-resume` only when asked or when the repository clearly calls for one.
+
+### 6. Declare dev servers in `.dx/services.yaml`
+
+When the person will keep using a dev server, declare it in the repository so dx can start it again after the Orb wakes:
 
 ```yaml
 services:
@@ -139,42 +106,32 @@ services:
     command: pnpm dev --host 127.0.0.1 --port $PORT
     port: 5173
     cwd: apps/web
-    env:
-      NODE_ENV: development
 ```
 
-The command must listen on `$PORT`. When Portals are on, the first Portal request that finds the
-service stopped starts it. A Vite dev server also needs the Portal domain in
-`server.allowedHosts`.
+The command must listen on `$PORT`. With Portals on, dx starts a stopped service when its Portal is opened. A Vite server also needs the Portal domain in `server.allowedHosts`.
 
-### 6. Make executable and verify
+### 7. Prove it in this Orb
 
-- `chmod +x .agents/setup .agents/resume`
-- Inside the Orb, run `.agents/setup` and `.agents/resume` directly from the repository root and
-  fix failures. Run setup twice and time both runs. The warm run should avoid package downloads
-  and unnecessary installs. Setup should finish in under 2 minutes; resume must finish in seconds.
-- Run setup the way dx does, without the Project's variables, to catch a hidden dependency on
-  them:
-  `env -i HOME="$HOME" USER=user LOGNAME=user SHELL=/bin/bash PATH="$PATH" GIT_TERMINAL_PROMPT=0 .agents/setup`
-- Inspect the logs under `~/.cache/dx/logs` when diagnosing an existing slow or failed setup. Add
-  per-command timing before adding cache logic so the change addresses the measured slow step.
-- Verify persisted shell environments from a clean non-interactive login shell started with the
-  repository root as its working directory. Start the new shell with a minimal environment, run
-  `/bin/bash -lc`, and check only the expected marker variables and `command -v` paths; do not dump
-  an environment that may contain secrets.
+Run every script here before saving it. The work is done when all of these hold:
 
-### 7. Finalize repository files
+- `setup` succeeds in the bare environment dx gives it, which catches any reliance on your shell or the Project's variables: `env -i HOME="$HOME" USER=user LOGNAME=user SHELL=/bin/bash PATH="$PATH" GIT_TERMINAL_PROMPT=0 bash ~/.dx/work/orb-setup/setup`, from the repository root.
+- A second, timed run of the same command finishes quickly and downloads nothing new. The first run takes under 2 minutes.
+- `resume`, if written, succeeds twice in a row within seconds.
+- The commands from step 2 pass in a fresh login shell from the repository root: `env -i HOME="$HOME" PATH=/usr/bin:/bin /bin/bash -lc '<command>'`. If one fails for a reason no environment can fix, such as a test that also fails on the default branch or a secret the Project lacks, say so in the report.
 
-- Commit both scripts with the executable bit set, and `.dx/services.yaml` when you added it. Ask
-  before committing `.dx/services.yaml` when the user did not request it.
-- A commit configures only Threads started from a commit that contains it. If the commit is not on
-  the Project's default branch, say that setup applies only to Threads started from this branch.
-  Ask whether to push it when a remote is available.
-- Link a commit only after confirming the remote contains it.
+Check the environment by starting that fresh shell, not by sourcing changes into the current one, which hides whether a later shell gets them. Print only the variables and `command -v` paths you expect; the full environment can hold secrets.
+
+For an existing setup that is slow or failing, read `~/.cache/dx/logs` first and time each command before adding caching.
+
+### 8. Save and report
+
+- `set` each tested script, then `read` it back.
+- Commit `.dx/services.yaml` if you added it, asking first unless the person asked for it.
+- Tell the person which scripts you saved, what the project needed, and that new Orbs in the Project run them.
 
 ## Examples
 
-- "Set up this repository for dx Orbs"
-- "Create .agents/setup and .agents/resume for this project"
-- "Why is my Orb missing dependencies when the Thread starts?"
+- "Set up Orbs for this project"
+- "Why does the agent have to install Go in every new Thread?"
+- "Add a resume script that signs in to our private registry"
 - "Make the dev server come back after the Orb wakes"

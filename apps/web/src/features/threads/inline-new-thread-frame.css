@@ -19,3 +19,8 @@
 .inline-new-thread > .error-notice {
   margin: var(--space-4);
 }
+/* Set up Orbs: the spotlight frames the composer and outlines it in ember. */
+.inline-new-thread[data-spotlight] {
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--spotlight-ink-ember) 45%, transparent);
+}

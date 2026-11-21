@@ -1,16 +1,22 @@
 import { Schema } from "effect";
 
 /**
- * Scripts a Project saves in its Orb settings. Pre-clone runs from
- * `/home/user/workspace` before dx clones the repository; pre-setup runs
- * from the repository root before `.agents/setup`; desktop-resume runs when
- * the Desktop starts, unless the repository has `.agents/desktop/resume`.
+ * Scripts a Project saves in dx and runs in the Orb of every Thread in it;
+ * the repository commits none of them. Pre-clone runs from
+ * `/home/user/workspace` before dx clones the repository. Setup runs once
+ * from the repository root when dx prepares a fresh Orb. Resume runs from
+ * the repository root each time the Orb starts or wakes. Desktop-resume runs
+ * when the Desktop starts.
  */
 export const PROJECT_ORB_SCRIPT_KINDS = [
   "pre-clone",
-  "pre-setup",
+  "setup",
+  "resume",
   "desktop-resume",
 ] as const;
+
+/** A Project with either script is set up for Orbs. */
+export const PROJECT_ORB_SETUP_KINDS = ["setup", "resume"] as const;
 
 export const ProjectOrbScriptKind = Schema.Literals(PROJECT_ORB_SCRIPT_KINDS);
 
@@ -31,23 +37,3 @@ export const ProjectOrbScriptBody = Schema.String.check(
     },
   ),
 );
-
-/**
- * Files a repository commits to prepare its own Orbs, which Project settings
- * check on the default branch. `.agents/setup` runs once when an Orb is
- * prepared, `.agents/resume` on every activation and wake, the Desktop session
- * runs `.agents/desktop/resume` in place of the Project's desktop-resume
- * script, and `.dx/services.yaml` declares the dev servers Portals start.
- */
-export const PROJECT_REPOSITORY_ORB_FILES = [
-  ".agents/setup",
-  ".agents/resume",
-  ".agents/desktop/resume",
-  ".dx/services.yaml",
-] as const;
-
-export const ProjectRepositoryOrbFile = Schema.Literals(
-  PROJECT_REPOSITORY_ORB_FILES,
-);
-
-export type ProjectRepositoryOrbFile = typeof ProjectRepositoryOrbFile.Type;

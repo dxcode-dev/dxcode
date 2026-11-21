@@ -5,10 +5,11 @@ import {
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import type { SandboxFactory } from "@flue/runtime";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Exit, Layer, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
 import { executionWorkspaceLogger } from "../logging.js";
 import { prepareWithDiskRecovery } from "../orb-disk/recovery.js";
+import { ensureThreadProjectOrbFilesImported } from "../projects/orb-script-import.js";
 import { SettingsAudit } from "../settings/audit.js";
 import { SettingsService } from "../settings/service.js";
 import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
@@ -229,9 +230,11 @@ export const readSourceWorkspace = (db: D1Database, threadId: string) =>
 /**
  * Prepares the Thread's source in its Orb and returns the turn's cwd. A full
  * disk is cleaned up and retried once, then starts the turn in recovery mode
- * (see orb-disk/recovery.ts).
+ * (see orb-disk/recovery.ts). The Project's repository Orb files are imported
+ * into its scripts first, once (`projects/orb-script-import.ts`); a failed
+ * import never holds the Orb back.
  */
-export const activateSourceWorkspace = (
+export const activateSourceWorkspace = async (
   bindings: Bindings,
   db: D1Database,
   threadId: string,
@@ -244,6 +247,19 @@ export const activateSourceWorkspace = (
   disk?: SourceWorkspaceDiskOptions,
   source?: ReturnType<typeof readSourceWorkspace>,
 ) => {
+  // The source read tells whether the Project's repository files still
+  // need importing, so an imported Project costs activation nothing more.
+  // A read from before an import that saved scripts lacks them: read again.
+  if (runThreadHooks) {
+    const read = source ?? readSourceWorkspace(db, threadId);
+    const exit = await read;
+    source =
+      Exit.isSuccess(exit) &&
+      exit.value.orbImportPending === true &&
+      (await ensureThreadProjectOrbFilesImported({ db, bindings, threadId }))
+        ? undefined
+        : read;
+  }
   const preparation = workspacePreparationFor(sandbox);
   return prepareWithDiskRecovery(threadId, preparation, disk, (attemptDisk) =>
     Effect.runPromise(

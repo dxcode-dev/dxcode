@@ -27,6 +27,10 @@ import {
   useInlineNewThread,
 } from "./features/threads/inline-new-thread-frame.js";
 import { NewThreadComposer } from "./features/threads/new-thread-composer.js";
+import {
+  PROJECT_SETUP_PROMPT,
+  ProjectSetupBanner,
+} from "./features/threads/project-setup-banner.js";
 import { AuthContext } from "./shared/auth/auth-context.js";
 import { CommandProvider } from "./shared/commands/command-provider.js";
 import {
@@ -111,6 +115,8 @@ type StoryArgs = {
   readonly orbReady: boolean;
   /** The New Thread dialog opening: everywhere but the wide home page. */
   readonly onOpenDialog: () => void;
+  /** The picked Project has no Orb setup, so Set up Orbs frames the composer. */
+  readonly setupMissing: boolean;
 };
 
 /** The real composer on fixture data, as the home page frames it. */
@@ -119,6 +125,7 @@ function FixtureComposer({
   draft,
   hasProjects,
   orbReady,
+  setupMissing,
 }: Omit<StoryArgs, "onOpenDialog">) {
   const [prompt, setPrompt] = React.useState(draft);
   const [chosenProject, setChosenProject] = React.useState<ProjectId | "">(
@@ -137,7 +144,17 @@ function FixtureComposer({
       </InlineNewThreadFrame>
     );
   return (
-    <InlineNewThreadFrame>
+    <InlineNewThreadFrame
+      spotlight={
+        setupMissing && chosenProject !== "" ? (
+          <ProjectSetupBanner
+            state="missing"
+            onSetUp={() => setPrompt(PROJECT_SETUP_PROMPT)}
+            onDismiss={() => undefined}
+          />
+        ) : undefined
+      }
+    >
       <NewThreadComposer
         prompt={prompt}
         images={[]}
@@ -287,11 +304,16 @@ const meta = {
     draft: "",
     hasProjects: true,
     orbReady: true,
+    setupMissing: false,
     onOpenDialog: fn(),
   },
   argTypes: {
     state: { control: "inline-radio", options: ["ready", "loading", "error"] },
     draft: { control: "text" },
+    setupMissing: {
+      control: "boolean",
+      description: "The picked Project has no Orb setup: Set up Orbs shows.",
+    },
   },
   render: (args: StoryArgs) => (
     <HomeStory key={JSON.stringify({ ...args, onOpenDialog: 0 })} {...args} />
@@ -302,6 +324,25 @@ type Story = StoryObj<typeof meta>;
 
 const prompt = (canvas: HTMLElement) =>
   within(canvas).findByRole("textbox", { name: "Prompt" });
+
+/**
+ * A Project without Orb setup on the home page: the Set up Orbs spotlight
+ * frames the composer in the page, as it does the dialog, and Set up with dx
+ * writes the one-line prompt.
+ */
+export const WideSetupOrbs: Story = {
+  args: { setupMissing: true },
+  globals: { viewport: { value: "desktop" } },
+  play: async ({ canvasElement }) => {
+    const band = await within(canvasElement).findByRole("status", {
+      name: "Set up Orbs",
+    });
+    await userEvent.click(
+      within(band).getByRole("button", { name: "Set up with dx" }),
+    );
+    await expect(await prompt(canvasElement)).toHaveValue(PROJECT_SETUP_PROMPT);
+  },
+};
 
 /** A wide screen: the composer where the dx mark was, empty. */
 export const Wide: Story = {

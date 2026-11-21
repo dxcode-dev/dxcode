@@ -169,14 +169,14 @@ person and the agent use on the desktop with the host's `PATH`:
   when it exits. The session ends when Xvfb exits; the next `start` begins a
   new one.
 - `resume` runs when the session starts, in place of the session's own
-  Chromium window: the repository's executable `.agents/desktop/resume`, or
-  else the project's Desktop Resume script from Project Settings, which
-  source preparation keeps at
-  `~/.local/state/dx/project-scripts/desktop-resume` (a symlink at either
-  path is ignored). It runs from `~/workspace/repo` with the desktop's
-  environment, logs to `desktop-resume.log`, and what it starts stays in the
-  session. Without a script, or when the script exits non-zero, it opens
-  Chromium at `about:blank` as before.
+  Chromium window: the project's Desktop Resume script from Project
+  Settings, which source preparation keeps at
+  `~/.local/state/dx/project-scripts/desktop-resume` (a symlink there is
+  ignored). The repository's `.agents/desktop/resume` is not read. It runs
+  from `~/workspace/repo` with the desktop's environment, logs to
+  `desktop-resume.log`, and what it starts stays in the session. Without a
+  script, or when the script exits non-zero, it opens Chromium at
+  `about:blank` as before.
 - `chromium` opens Chromium on X11 with DevTools on `127.0.0.1:9222` and a
   profile in the state directory, so an agent in the sandbox drives the
   browser the user watches. Run it with a URL to open a window in the

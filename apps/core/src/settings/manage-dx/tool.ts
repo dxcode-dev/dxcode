@@ -1,7 +1,11 @@
 import type { DxChangeItem } from "@dx/api";
 import {
+  MAX_PROJECT_ORB_SCRIPT_BYTES,
   MAX_SKILL_RESOURCE_FILES,
+  PROJECT_ORB_SCRIPT_KINDS,
   PROJECTLESS_PROJECT_NAME,
+  type ProjectId,
+  type ProjectOrbScriptKind,
   type UserId,
   type WorkspaceRole,
   workspaceRoleHasPermission,
@@ -13,6 +17,13 @@ import * as v from "valibot";
 import pluginApiSource from "../../agents/built-in-skills/building-plugins/reference/plugin-api.ts.txt?raw";
 import pluginUiReadme from "../../agents/built-in-skills/building-plugins/reference/plugin-ui.md?raw";
 import pluginReadme from "../../agents/built-in-skills/building-plugins/reference/README.md?raw";
+import { ensureRepositoryOrbFilesImported } from "../../projects/orb-script-import.js";
+import {
+  canManageProject,
+  projectReachable,
+  readProjectOrbScripts,
+  writeProjectOrbScript,
+} from "../../projects/orb-script-store.js";
 import type { ThreadToolsContext } from "../../threads/agent-tools.js";
 import { ownerRequest } from "../../threads/owner-request.js";
 import { readZipArchive } from "../plugins/bundles/zip.js";
@@ -40,6 +51,9 @@ import { unifiedDiff } from "./diff.js";
  *   (apply.ts), so permissions, limits, and audit match the Settings page.
  * - A secret is asked for on such a card: the owner types it there and it
  *   is stored directly, never passing through the model or tool input.
+ * - A Project's Orb scripts (`project_scripts`) change at once, without a
+ *   card, and only when the owner may manage the Project; the change is
+ *   audited like one saved in Project settings (projects/orb-script-store.ts).
  * - Only a message the owner wrote in this Thread can use it: not a
  *   teammate's, another Thread's, or an automation's (schedule, GitHub,
  *   webhook), so injected instructions cannot change settings.
@@ -54,6 +68,7 @@ const TOPICS = [
   "variables",
   "instructions",
   "mcp_servers",
+  "project_scripts",
 ] as const;
 type Topic = (typeof TOPICS)[number];
 
@@ -98,6 +113,7 @@ const ALLOWED: Record<Topic, ReadonlyArray<Operation>> = {
   variables: ["list", "set", "delete"],
   instructions: ["read", "set"],
   mcp_servers: ["list", "create", "enable", "disable", "delete"],
+  project_scripts: ["list", "read", "set", "delete"],
 };
 
 const SCOPES: Record<
@@ -110,6 +126,7 @@ const SCOPES: Record<
   variables: ["personal", "project", "workspace"],
   instructions: ["personal", "workspace"],
   mcp_servers: ["personal", "workspace"],
+  project_scripts: ["project"],
 };
 
 /** Plugin files the tool accepts: text only, like the settings import. */
@@ -122,18 +139,20 @@ const CARD_BUDGET = 400_000;
 const CARD_ITEM_BUDGET = 200_000;
 /** What `plugins read` returns at most, so the result stays readable. */
 const MAX_READ_BYTES = 200_000;
+/** The longest variable value manage_dx sets. */
+const MAX_VARIABLE_VALUE = 16_000;
 
 const Input = v.object({
   topic: v.pipe(
     v.picklist(TOPICS),
     v.description(
-      "skills | plugins | secrets | variables (non-secret environment variables) | instructions (the agent's personal or workspace instructions) | mcp_servers.",
+      "skills | plugins | secrets | variables (non-secret environment variables) | instructions (the agent's personal or workspace instructions) | mcp_servers | project_scripts (the Project's Orb setup scripts).",
     ),
   ),
   operation: v.pipe(
     v.picklist(OPERATIONS),
     v.description(
-      "skills, plugins: list, read, create, update, enable, disable, delete, propose (file it for review on the Settings page instead of a card; plugins: install from a public GitHub url or update a GitHub plugin to its latest commit). secrets: list, request (ask the owner to type it), delete. variables: list, set, delete. instructions: read, set. mcp_servers: list, create, enable, disable, delete. plugins docs: the full @dxcode/plugin reference (README and types), or with query only the parts that mention it.",
+      "skills, plugins: list, read, create, update, enable, disable, delete, propose (file it for review on the Settings page instead of a card; plugins: install from a public GitHub url or update a GitHub plugin to its latest commit). secrets: list, request (ask the owner to type it), delete. variables: list, set, delete. instructions: read, set. mcp_servers: list, create, enable, disable, delete. project_scripts: list, read, set, delete. plugins docs: the full @dxcode/plugin reference (README and types), or with query only the parts that mention it.",
     ),
   ),
   scope: v.optional(
@@ -149,7 +168,7 @@ const Input = v.object({
       v.string(),
       v.maxLength(200),
       v.description(
-        "The item's name: a skill's kebab-case name, a plugin's name from its plugin.json, a secret or variable such as OPENAI_API_KEY, or an MCP server's name.",
+        "The item's name: a skill's kebab-case name, a plugin's name from its plugin.json, a secret or variable such as OPENAI_API_KEY, an MCP server's name, or a project script's kind: pre-clone, setup, resume, or desktop-resume.",
       ),
     ),
   ),
@@ -198,9 +217,9 @@ const Input = v.object({
   value: v.optional(
     v.pipe(
       v.string(),
-      v.maxLength(16_000),
+      v.maxLength(MAX_PROJECT_ORB_SCRIPT_BYTES),
       v.description(
-        "variables set: the value. Never a secret: for keys, tokens, and passwords use secrets request.",
+        "variables set: the value, at most 16,000 characters. Never a secret: for keys, tokens, and passwords use secrets request. project_scripts set: the whole script, at most 32 KiB; a blank value removes it.",
       ),
     ),
   ),
@@ -245,7 +264,7 @@ const Input = v.object({
       v.string(),
       v.maxLength(128),
       v.description(
-        "scope project: another Project's ID, from list_orbs or the owner. Defaults to this Thread's Project.",
+        "scope project, project_scripts: another Project's ID, from list_orbs or the owner. Defaults to this Thread's Project.",
       ),
     ),
   ),
@@ -298,9 +317,10 @@ const withSkillFolder = (input: InputData): InputData => {
 };
 
 const DESCRIPTION = [
-  "Manage the owner's dx settings for them: skills, plugins, secrets, environment variables, agent instructions, and MCP servers. Use it when the owner asks you to add, change, or remove one, or to build them a skill or plugin.",
-  "Do what the owner asks without asking them to confirm in chat first. Reads (list, read) answer at once. A change to the owner's own personal settings applies at once: creating, updating, or turning on or off a skill; their personal instructions; updating a plugin without new permissions; turning a plugin or MCP server on or off. Its result says what changed; tell the owner in one line. Every other change shows the owner a card above the composer with exactly what changes and waits until they apply or cancel it, up to 10 minutes: anything at workspace scope (workspace admins only), setting a variable or secret, a new plugin, a plugin update that asks for new permissions, adding an MCP server, and every delete. The card is the confirmation. A change reaches new Threads, not this one.",
+  "Manage the owner's dx settings for them: skills, plugins, secrets, environment variables, agent instructions, MCP servers, and the Project's Orb setup scripts. Use it when the owner asks you to add, change, or remove one, to build them a skill or plugin, or to set up the Project's Orbs.",
+  "Do what the owner asks without asking them to confirm in chat first. Reads (list, read) answer at once. A change to the owner's own personal settings applies at once: creating, updating, or turning on or off a skill; their personal instructions; updating a plugin without new permissions; turning a plugin or MCP server on or off. Its result says what changed; tell the owner in one line. Every other change shows the owner a card above the composer with exactly what changes and waits until they apply or cancel it, up to 10 minutes: anything at workspace scope (workspace admins only), setting a variable or secret, a new plugin, a plugin update that asks for new permissions, adding an MCP server, and every delete outside project scripts. The card is the confirmation. A change reaches new Threads, not this one.",
   "Secrets: never put a secret value in any input or message. secrets request asks the owner to type it into a card above the composer; dx stores it directly (personal, project, or workspace) and you never see it. If the owner pastes a secret into chat, tell them to rotate it and use secrets request.",
+  "Project scripts: the Project's Orb setup, saved in dx and run in the Orb of every Thread in the Project. Kinds: pre-clone runs in /home/user/workspace before dx clones the repository; setup runs once from the repository root when dx prepares a fresh Orb; resume runs from the repository root each time the Orb starts or wakes; desktop-resume runs when the Desktop starts. They replace the repository's .agents/setup, .agents/resume, and .agents/desktop/resume, which dx no longer runs, so change them here, not by committing those files. set and delete apply at once, with no card, when the owner may manage the Project (its creator or a workspace admin); otherwise they fail and the owner can only list and read. set replaces the whole script: read it first to edit it.",
   "Plugins: create one from the owner's description by writing its files. Load the building-plugins skill first for the format, permissions, and code API; plugins docs returns the full @dxcode/plugin reference (query narrows it) when the skill does not settle a detail. update: read the plugin, edit its files, and send all of them. Plugins installed from GitHub update from their source in Settings instead.",
   "Only a message the owner wrote in this Thread can use this tool; turns started by automations, GitHub or webhook events, other Threads, or teammates are refused.",
 ].join("\n\n");
@@ -1421,6 +1441,8 @@ const variables = async (run: RunContext, input: InputData) => {
   }
   if (op === "set") {
     const value = required(input.value, "the variable's value");
+    if (value.length > MAX_VARIABLE_VALUE)
+      fail(`A variable's value is at most ${MAX_VARIABLE_VALUE} characters.`);
     const existingAny = (await listVariables(run, where)).find(
       (item) => item.name === name,
     );
@@ -1662,6 +1684,108 @@ const mcpServers = async (run: RunContext, input: InputData) => {
   );
 };
 
+// ─── Project scripts ─────────────────────────────────────────────────────────
+
+const SCRIPT_TIMING: Record<ProjectOrbScriptKind, string> = {
+  "pre-clone": "It runs before the clone in Orbs dx prepares from now on.",
+  setup: "It runs in Orbs dx prepares from now on; existing Orbs keep theirs.",
+  resume: "It runs the next time each Orb starts or wakes.",
+  "desktop-resume": "It runs the next time a Desktop starts.",
+};
+
+const scriptKind = (name: string | undefined) => {
+  const kind = required(name, "name: the script's kind").trim();
+  return (PROJECT_ORB_SCRIPT_KINDS as ReadonlyArray<string>).includes(kind)
+    ? (kind as ProjectOrbScriptKind)
+    : fail(
+        `${kind} is no project script. Kinds: ${PROJECT_ORB_SCRIPT_KINDS.join(", ")}.`,
+      );
+};
+
+/**
+ * A Project's Orb scripts, read by anyone who reaches the Project and
+ * changed at once, through the same store and audit as Project settings,
+ * only by someone who may manage it. The repository's deprecated Orb files
+ * are imported first, so the agent never edits around them.
+ */
+const projectScripts = async (run: RunContext, input: InputData) => {
+  if (input.project_id === undefined && run.projectless)
+    fail("This Thread has no Project. Give project_id.");
+  const projectId = input.project_id ?? run.projectId;
+  const project = await run.db
+    .prepare(
+      `SELECT project.name, owner.name AS owner_name FROM projects AS project
+         LEFT JOIN "user" AS owner ON owner.id = project.owner_user_id
+        WHERE project.id = ?`,
+    )
+    .bind(projectId)
+    .first<{ name: string; owner_name: string | null }>();
+  if (
+    project === null ||
+    !(await projectReachable(run.db, run.owner, projectId as ProjectId))
+  )
+    return fail(
+      `Project ${projectId} is not found, or the owner cannot open it.`,
+    );
+  await ensureRepositoryOrbFilesImported({
+    db: run.db,
+    bindings: run.bindings,
+    projectId,
+    userId: run.owner,
+  });
+  const canManage = await canManageProject(run.db, projectId, run.owner);
+  const whoManages = `Only ${project.name}'s creator${project.owner_name ? ` (${project.owner_name})` : ""} or a workspace admin can change its scripts`;
+  if (input.operation === "list") {
+    const scripts = await readProjectOrbScripts(run.db, projectId);
+    return JSON.stringify({
+      project: project.name,
+      canManage,
+      ...(canManage ? {} : { note: `${whoManages}; the owner cannot.` }),
+      scripts: scripts.map((script) => ({
+        kind: script.kind,
+        bytes: new TextEncoder().encode(script.body).length,
+        updatedAt: script.updatedAt,
+      })),
+    });
+  }
+  const kind = scriptKind(input.name);
+  if (input.operation === "read") {
+    const script = (await readProjectOrbScripts(run.db, projectId)).find(
+      (saved) => saved.kind === kind,
+    );
+    return script === undefined
+      ? `${project.name} has no ${kind} script.`
+      : JSON.stringify({ project: project.name, kind, body: script.body });
+  }
+  if (!canManage)
+    fail(
+      `${whoManages}; the owner cannot, so nothing changed. Give the owner the script to pass on to one of them.`,
+    );
+  const value = input.operation === "set" ? (input.value ?? "") : "";
+  if (value.includes("\0")) fail("A script cannot contain NUL characters.");
+  if (new TextEncoder().encode(value).length > MAX_PROJECT_ORB_SCRIPT_BYTES)
+    fail(`A script is at most ${MAX_PROJECT_ORB_SCRIPT_BYTES} bytes.`);
+  const body = value.trim() === "" ? undefined : value;
+  const written = await writeProjectOrbScript(run.db, {
+    projectId,
+    kind,
+    body,
+    userId: run.owner,
+    requestId: `manage_dx_${crypto.randomUUID()}`,
+  });
+  if (!written) fail(`${whoManages}; nothing changed.`);
+  logger.info("manage_dx changed a project script.", {
+    event: "manage_dx_project_script",
+    threadId: run.threadId,
+    projectId,
+    kind,
+    action: body === undefined ? "clear" : "set",
+  });
+  return body === undefined
+    ? `Removed ${project.name}'s ${kind} script.`
+    : `Saved ${project.name}'s ${kind} script. ${SCRIPT_TIMING[kind]}`;
+};
+
 // ─── Tool ────────────────────────────────────────────────────────────────────
 
 const refusal = (requesterUserId: UserId | undefined) =>
@@ -1766,6 +1890,8 @@ export const createManageDxTool = (
           return instructions(run, data);
         case "mcp_servers":
           return mcpServers(run, data);
+        case "project_scripts":
+          return projectScripts(run, data);
       }
     },
   });

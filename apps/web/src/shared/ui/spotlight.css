@@ -1,0 +1,88 @@
+/* A spotlight frame: a vivid band under a surface that calls out one next
+   step. The surface keeps its own background inside the frame. */
+.dx-spotlight-frame {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: inherit;
+  padding: var(--space-1-5) var(--space-1-5) 0;
+  background: var(--spotlight-background);
+}
+.dx-spotlight-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: calc(var(--radius-3xl) - var(--space-1-5));
+}
+.dx-spotlight-band {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-2) var(--space-2) var(--space-3);
+  color: var(--spotlight-foreground);
+  font-size: var(--text-md);
+  line-height: var(--leading-4-5);
+}
+.dx-spotlight-band-text {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-0-5) var(--space-3);
+  min-width: 0;
+  margin: 0;
+}
+.dx-spotlight-band-title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+.dx-spotlight-band-description {
+  color: var(--spotlight-muted);
+}
+.dx-spotlight-band-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+.dx-spotlight-action.dx-button {
+  border-radius: var(--radius-full);
+}
+.dx-spotlight-action--primary.dx-button {
+  color: var(--media-background);
+  background: var(--spotlight-foreground);
+  border-color: transparent;
+}
+.dx-spotlight-action--primary.dx-button:hover {
+  background: color-mix(in srgb, var(--spotlight-foreground) 88%, transparent);
+}
+.dx-spotlight-action--secondary.dx-button {
+  color: var(--spotlight-foreground);
+  background: color-mix(in srgb, var(--spotlight-foreground) 12%, transparent);
+  border: 1px solid
+    color-mix(in srgb, var(--spotlight-foreground) 28%, transparent);
+}
+.dx-spotlight-action--secondary.dx-button:hover {
+  background: color-mix(in srgb, var(--spotlight-foreground) 22%, transparent);
+}
+.dx-spotlight-action:focus-visible {
+  outline: 2px solid var(--spotlight-foreground);
+  outline-offset: 2px;
+}
+@media (max-width: 600px) {
+  .dx-spotlight-band {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2-5);
+    padding: var(--space-3);
+  }
+  .dx-spotlight-band-text {
+    flex-direction: column;
+    gap: var(--space-0-5);
+  }
+  .dx-spotlight-band-actions > * {
+    flex: 1;
+  }
+}

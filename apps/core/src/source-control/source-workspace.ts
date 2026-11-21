@@ -552,21 +552,41 @@ const encodedProjectScript = (body: string) => {
   return btoa(binary);
 };
 
-/** The pre-setup script for every command that can run setup. */
-const preSetupEnvironment = (
+/** The Project's setup script for every command that can run setup. */
+const setupEnvironment = (
   source: SourceWorkspaceRecord,
 ): Record<string, string> =>
-  source.orbScripts?.preSetup === undefined
+  source.orbScripts?.setup === undefined
     ? {}
-    : { DX_PRE_SETUP_SCRIPT: encodedProjectScript(source.orbScripts.preSetup) };
+    : { DX_SETUP_SCRIPT: encodedProjectScript(source.orbScripts.setup) };
+
+const FULL_HISTORY_DIRECTIVE = "# dx-requires: full-history";
+
+const requiresFullHistory = (body: string | undefined) =>
+  body?.split("\n").some((line) => line.trim() === FULL_HISTORY_DIRECTIVE) ===
+  true;
 
 /**
- * The Desktop resume script for /opt/dx/desktop/resume. Every source command
- * carries it, or an empty value that removes a copy an earlier start left.
+ * What every source command carries about the Project's scripts:
+ * - resume, which dxd runs on each activation and wake, and desktop-resume,
+ *   which /opt/dx/desktop/resume runs. The guest program keeps both in
+ *   `~/.local/state/dx/project-scripts`; an empty value removes a copy an
+ *   earlier start left.
+ * - Whether setup or resume asks for full history, so a shallow checkout is
+ *   unshallowed before they run.
  */
-const desktopResumeEnvironment = (
+const projectScriptsEnvironment = (
   source: SourceWorkspaceRecord,
 ): Record<string, string> => ({
+  ...(requiresFullHistory(source.orbScripts?.setup) ||
+  requiresFullHistory(source.orbScripts?.resume)
+    ? { DX_FULL_HISTORY_REQUIRED: "true" }
+    : {}),
+  DX_RESUME_SYNC: "true",
+  DX_RESUME_SCRIPT:
+    source.orbScripts?.resume === undefined
+      ? ""
+      : encodedProjectScript(source.orbScripts.resume),
   DX_DESKTOP_RESUME_SYNC: "true",
   DX_DESKTOP_RESUME_SCRIPT:
     source.orbScripts?.desktopResume === undefined
@@ -696,7 +716,7 @@ const CheckoutState = Schema.Struct({
   fullHistoryNeeded: Schema.Boolean,
 });
 
-const HookName = Schema.Literals(["pre-setup", "setup", "resume"]);
+const HookName = Schema.Literals(["setup", "resume"]);
 
 const HooksState = Schema.Struct({
   status: Schema.Literals([
@@ -978,7 +998,7 @@ const makeSourceWorkspaceService = (
                 configDigest,
                 shallowClone,
               ),
-              ...desktopResumeEnvironment(source),
+              ...projectScriptsEnvironment(source),
             };
       let setupPhasePublished = false;
       if (
@@ -1001,7 +1021,7 @@ const makeSourceWorkspaceService = (
                 action: runThreadHooks ? "activate" : "snapshot",
                 environment: {
                   ...prefetchedBase,
-                  ...(runThreadHooks ? preSetupEnvironment(source) : {}),
+                  ...(runThreadHooks ? setupEnvironment(source) : {}),
                 },
                 timeoutMs: runThreadHooks
                   ? HOOKS_TIMEOUT_MS
@@ -1047,7 +1067,7 @@ const makeSourceWorkspaceService = (
             configDigest,
             shallowClone,
           ),
-          ...desktopResumeEnvironment(source),
+          ...projectScriptsEnvironment(source),
         };
         stage = "pre-clone";
         yield* timing.stepEffect(
@@ -1082,7 +1102,7 @@ const makeSourceWorkspaceService = (
           configDigest,
           shallowClone,
         ),
-        ...desktopResumeEnvironment(source),
+        ...projectScriptsEnvironment(source),
       };
       stage = "read-checkout-state";
       let prefetchedHooks: typeof HooksState.Type | undefined;
@@ -1222,7 +1242,7 @@ const makeSourceWorkspaceService = (
                 "hooks",
                 {
                   ...base,
-                  ...preSetupEnvironment(source),
+                  ...setupEnvironment(source),
                 },
                 HOOKS_TIMEOUT_MS,
               ).pipe(

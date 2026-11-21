@@ -17,8 +17,8 @@ import {
 } from "./bitbucket/control-plane.js";
 import { readBitbucketRepository } from "./bitbucket/repository-reader.js";
 import { createGitHubAppJwt } from "./github/app-auth.js";
-import { syncGitHubCollaboratorGrants } from "./github/control-plane.js";
 import { loadGitHubAppConfiguration } from "./github/configuration.js";
+import { syncGitHubCollaboratorGrants } from "./github/control-plane.js";
 import {
   createGitHubProvider,
   GitHubProviderError,
@@ -52,8 +52,17 @@ export interface AuthorizedSource {
   readonly authorizationEpoch: number;
   readonly installationEpoch: number;
   readonly policyRevision: number;
-  /** Of the requested `readPaths`, those the commit has as files. */
-  readonly presentPaths?: ReadonlyArray<string>;
+  /** The requested `readFiles` the commit has, by path. */
+  readonly files?: Readonly<Record<string, string>>;
+}
+
+/**
+ * Repository files to read at the resolved commit with the same lease. Only
+ * regular UTF-8 files of at most `maxBytes` bytes are read.
+ */
+export interface ReadFilesRequest {
+  readonly paths: ReadonlyArray<string>;
+  readonly maxBytes: number;
 }
 
 const deny = (
@@ -125,8 +134,7 @@ export const authorizeSource = async (input: {
   readonly repositoryId: string;
   readonly provider?: "github" | "bitbucket";
   readonly workspaceId?: string;
-  /** Repository paths to look up at the resolved commit, with the same lease. */
-  readonly readPaths?: ReadonlyArray<string>;
+  readonly readFiles?: ReadFilesRequest;
   readonly fetcher?: typeof fetch;
   readonly waitUntil?: (promise: Promise<unknown>) => void;
 }): Promise<AuthorizedSource> => {
@@ -137,18 +145,19 @@ export const authorizeSource = async (input: {
   }
   try {
     let resolved: GitHubResolvedSource | undefined;
-    let presentPaths: ReadonlyArray<string> | undefined;
+    let files: Readonly<Record<string, string>> | undefined;
     const before = await withGitHubLease(input, async (provider, token) => {
       resolved = await provider.resolveRepositorySource(
         token,
         input.repositoryId,
       );
-      if (input.readPaths !== undefined)
-        presentPaths = await provider.presentPaths(
+      if (input.readFiles !== undefined)
+        files = await provider.readFiles(
           token,
           input.repositoryId,
           resolved.commitSha,
-          input.readPaths,
+          input.readFiles.paths,
+          input.readFiles.maxBytes,
         );
     });
     if (resolved === undefined) throw deny("stale-binding", "rebind");
@@ -167,7 +176,7 @@ export const authorizeSource = async (input: {
       authorizationEpoch: before.grant_epoch,
       installationEpoch: before.installation_epoch,
       policyRevision: before.policy_revision,
-      ...(presentPaths === undefined ? {} : { presentPaths }),
+      ...(files === undefined ? {} : { files }),
     };
   } catch (cause) {
     throw providerFailure(cause);
@@ -395,7 +404,7 @@ const resolveProjectSourceTarget = async (input: ProjectSourceInput) => {
 };
 
 const checkProjectSource = async (
-  input: ProjectSourceInput & { readonly readPaths?: ReadonlyArray<string> },
+  input: ProjectSourceInput & { readonly readFiles?: ReadFilesRequest },
 ) => {
   const target = await resolveProjectSourceTarget(input);
   if (target === undefined || target.kind === "anonymous") return target;
@@ -409,7 +418,7 @@ const checkProjectSource = async (
     ...(target.workspaceId === undefined
       ? {}
       : { workspaceId: target.workspaceId }),
-    ...(input.readPaths === undefined ? {} : { readPaths: input.readPaths }),
+    ...(input.readFiles === undefined ? {} : { readFiles: input.readFiles }),
     fetcher: input.fetcher,
     waitUntil: input.waitUntil,
   });

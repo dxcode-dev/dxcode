@@ -19,6 +19,7 @@ export function NewThreadDialog({
   prompt,
   submitting,
   onPromptChange,
+  spotlight,
   children,
 }: {
   readonly email?: ComposerEmail;
@@ -28,6 +29,8 @@ export function NewThreadDialog({
   readonly prompt: string;
   readonly submitting: boolean;
   readonly onPromptChange: (prompt: string) => void;
+  /** A `SpotlightBand` that frames the dialog, such as Set up Orbs. */
+  readonly spotlight?: React.ReactNode;
   readonly children: React.ReactNode;
 }) {
   return (
@@ -37,6 +40,7 @@ export function NewThreadDialog({
         ariaLabel={newThreadLabel(email)}
         initialFocus={textareaRef}
         finalFocus={finalFocus}
+        spotlight={spotlight}
       >
         <NewThreadModalHeader
           prompt={prompt}

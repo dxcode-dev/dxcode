@@ -23,6 +23,18 @@ export interface ComposerFixtureOptions {
   readonly noOrb?: boolean;
   /** Creates never answer: the composer stays sending. */
   readonly hangCreate?: boolean;
+  /**
+   * Where every Project's Orb setup stands: `configured` (the default) has a
+   * setup script, `missing` has none and the person may add one, `read-only`
+   * has none and only its creator or an admin may, `checking` never answers,
+   * and `mixed` sets up only the first Project.
+   */
+  readonly projectSetup?:
+    | "configured"
+    | "missing"
+    | "read-only"
+    | "checking"
+    | "mixed";
 }
 
 /** The Projects the composer lists, as the Mail fixture names them. */
@@ -308,6 +320,30 @@ export const installComposerApi = (options: ComposerFixtureOptions = {}) => {
       path === `/v1/settings/workspaces/${WORKSPACE.shortName}/projects`
     )
       return ok(projectDefaults(path !== "/v1/settings/personal/projects"));
+    const orbScripts = /^\/v1\/projects\/([^/]+)\/orb-scripts$/.exec(path);
+    if (orbScripts !== null) {
+      const chosen = options.projectSetup ?? "configured";
+      const setup =
+        chosen !== "mixed"
+          ? chosen
+          : decodeURIComponent(orbScripts[1] as string) === composerProjectId(1)
+            ? "configured"
+            : "missing";
+      if (setup === "checking") return never();
+      return ok({
+        canManage: setup !== "read-only",
+        scripts:
+          setup === "configured"
+            ? [
+                {
+                  kind: "setup",
+                  body: "#!/usr/bin/env bash\nset -euo pipefail\npnpm install --frozen-lockfile\n",
+                  updatedAt: "2026-11-20T10:00:00.000Z",
+                },
+              ]
+            : [],
+      });
+    }
     if (path === "/v1/settings/personal/orb-providers")
       return ok(orbProviders(options.noOrb === true));
     if (path === "/v1/settings/personal/model-routing/choices")

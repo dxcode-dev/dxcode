@@ -577,36 +577,61 @@ export const createBitbucketProvider = (
       return { repository: resolved, commitSha };
     },
     /**
-     * The paths that name a file at `commit`; a path the commit lacks is
-     * absent rather than an error.
+     * The text of each path that names a regular file of at most `maxBytes`
+     * UTF-8 bytes at `commit`. A path the commit lacks, a directory, a
+     * symlink, a binary or larger file is absent rather than an error.
      */
-    presentPaths: async (
+    readFiles: async (
       accessToken: string,
       workspaceId: string,
       repositoryId: string,
       commit: string,
       paths: ReadonlyArray<string>,
-    ): Promise<ReadonlyArray<string>> => {
+      maxBytes: number,
+    ): Promise<Readonly<Record<string, string>>> => {
       if (!/^[0-9a-f]{40}$/i.test(commit)) invalid();
-      const found = await Promise.all(
-        paths.map(async (path) => {
+      const read = await Promise.all(
+        paths.map(async (path): Promise<readonly [string, string?]> => {
+          const url = `${repoPath(workspaceId, repositoryId)}/src/${commit}/${path.split("/").map(pathPart).join("/")}`;
           try {
-            const value = (await json(
-              `${repoPath(workspaceId, repositoryId)}/src/${commit}/${path.split("/").map(pathPart).join("/")}?format=meta`,
-              { headers: headers(accessToken) },
-            )) as Record<string, unknown>;
-            return value?.type === "commit_file";
+            const meta = (await json(`${url}?format=meta`, {
+              headers: headers(accessToken),
+            })) as Record<string, unknown>;
+            const attributes = Array.isArray(meta?.attributes)
+              ? meta.attributes
+              : [];
+            if (
+              meta?.type !== "commit_file" ||
+              typeof meta.size !== "number" ||
+              meta.size > maxBytes ||
+              attributes.some((attribute) =>
+                ["link", "binary", "lfs", "subrepository"].includes(attribute),
+              )
+            )
+              return [path];
+            const response = await request(url, {
+              headers: { authorization: headers(accessToken).authorization },
+            });
+            const text = await readText(response);
+            return new TextEncoder().encode(text).length > maxBytes ||
+              text.includes("\uFFFD")
+              ? [path]
+              : [path, text];
           } catch (cause) {
             if (
               cause instanceof BitbucketProviderError &&
               cause.category === "not-found"
             )
-              return false;
+              return [path];
             throw cause;
           }
         }),
       );
-      return paths.filter((_, index) => found[index]);
+      return Object.fromEntries(
+        read.filter(
+          (entry): entry is readonly [string, string] => entry[1] !== undefined,
+        ),
+      );
     },
   };
 };

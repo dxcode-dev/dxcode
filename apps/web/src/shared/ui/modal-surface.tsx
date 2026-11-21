@@ -10,9 +10,15 @@ export function ModalSurface({
   ariaLabel,
   initialFocus,
   finalFocus,
+  spotlight,
 }: {
   readonly children: React.ReactNode;
   readonly className?: string;
+  /**
+   * A `SpotlightBand` under the surface: the popup becomes a vivid frame
+   * with the surface as a card inside it and the band below.
+   */
+  readonly spotlight?: React.ReactNode;
   readonly ariaLabel?: string;
   readonly initialFocus?: React.ComponentProps<
     typeof Dialog.Popup
@@ -24,12 +30,23 @@ export function ModalSurface({
       <Dialog.Backdrop className="modal-surface-backdrop" />
       <Dialog.Viewport className="modal-surface-viewport">
         <Dialog.Popup
-          className={cn("modal-surface-popup", className)}
+          className={cn(
+            "modal-surface-popup",
+            spotlight === undefined ? undefined : "modal-surface-spotlight",
+            className,
+          )}
           aria-label={ariaLabel}
           initialFocus={initialFocus}
           finalFocus={finalFocus}
         >
-          {children}
+          {spotlight === undefined ? (
+            children
+          ) : (
+            <>
+              <div className="modal-surface-card">{children}</div>
+              {spotlight}
+            </>
+          )}
         </Dialog.Popup>
       </Dialog.Viewport>
     </Dialog.Portal>

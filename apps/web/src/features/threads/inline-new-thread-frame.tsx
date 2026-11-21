@@ -4,6 +4,7 @@ import {
   type FocusNewThread,
   useNewThreadSurface,
 } from "../../shared/new-thread-surface.js";
+import { SpotlightFrame } from "../../shared/ui/spotlight.js";
 import "./inline-new-thread-frame.css";
 
 /**
@@ -25,23 +26,32 @@ export function useInlineNewThread(focus: FocusNewThread | undefined) {
  */
 export function InlineNewThreadFrame({
   loading = false,
+  spotlight,
   children,
 }: {
   readonly loading?: boolean;
+  /** A `SpotlightBand` that frames the composer, such as Set up Orbs. */
+  readonly spotlight?: React.ReactNode;
   readonly children?: React.ReactNode;
 }) {
+  const content = loading ? (
+    <span className="sr-only" role="status">
+      Loading New Thread draft…
+    </span>
+  ) : (
+    children
+  );
   return (
     <section
       className="new-thread-surface inline-new-thread"
       aria-label="New thread"
       aria-busy={loading || undefined}
+      data-spotlight={spotlight === undefined ? undefined : ""}
     >
-      {loading ? (
-        <span className="sr-only" role="status">
-          Loading New Thread draft…
-        </span>
+      {spotlight === undefined || loading ? (
+        content
       ) : (
-        children
+        <SpotlightFrame spotlight={spotlight}>{content}</SpotlightFrame>
       )}
     </section>
   );

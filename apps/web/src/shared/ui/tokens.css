@@ -123,6 +123,40 @@
   --on-accent: #fff;
   --on-media: #fff;
   --media-background: #000;
+  /* The spotlight: a vivid frame that calls out one next step beside a
+     surface, such as the composer's Set up Orbs. dx's own colors: the
+     Daydream near-black and forest green, lit by the brand ember and the
+     Working orange, with a trace of the Loading mint. Its inks are
+     constants, like the media inks, so light text reads in every theme. */
+  --spotlight-ink-deep: #0b120d;
+  --spotlight-ink-forest: #16261b;
+  --spotlight-ink-mint: #15855a;
+  --spotlight-ink-ember: var(--brand);
+  --spotlight-ink-flame: #f6833b;
+  --spotlight-background:
+    radial-gradient(
+      55% 140% at 100% 100%,
+      color-mix(in oklab, var(--spotlight-ink-ember) 85%, transparent),
+      transparent 70%
+    ),
+    radial-gradient(
+      40% 90% at 78% 0%,
+      color-mix(in oklab, var(--spotlight-ink-flame) 55%, transparent),
+      transparent 75%
+    ),
+    radial-gradient(
+      45% 110% at 0% 0%,
+      color-mix(in oklab, var(--spotlight-ink-mint) 45%, transparent),
+      transparent 75%
+    ),
+    linear-gradient(
+      100deg,
+      var(--spotlight-ink-deep) 0%,
+      var(--spotlight-ink-forest) 55%,
+      var(--spotlight-ink-deep) 100%
+    );
+  --spotlight-foreground: var(--on-media);
+  --spotlight-muted: color-mix(in srgb, var(--on-media) 78%, transparent);
   --page-canvas: #fff;
   --logo-plate: #fff;
   --logo-tile: #fafaf8;

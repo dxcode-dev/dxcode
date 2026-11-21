@@ -258,9 +258,15 @@ export interface SourceWorkspaceRecord {
   /** The Project's saved Orb scripts. */
   readonly orbScripts?: {
     readonly preClone?: string;
-    readonly preSetup?: string;
+    readonly setup?: string;
+    readonly resume?: string;
     readonly desktopResume?: string;
   };
+  /**
+   * The Project has a repository whose `.agents` files dx has not imported
+   * yet: activation imports them first (`projects/orb-script-import.ts`).
+   */
+  readonly orbImportPending?: true;
 }
 
 export interface AnonymousSourceFinalization {

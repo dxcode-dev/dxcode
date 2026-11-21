@@ -1,7 +1,5 @@
 import {
-  GetProjectOrbFilesResponseSchema,
   GetProjectOrbScriptsResponseSchema,
-  type ProjectOrbFilesData,
   type ProjectOrbScriptsData,
   UpdateProjectOrbScriptResponseSchema,
 } from "@dx/api";
@@ -53,22 +51,4 @@ export const updateProjectOrbScriptMutationOptions = (
       ).data,
     onSuccess: (data) =>
       queryClient.setQueryData(projectOrbScriptsKey(userId, projectId), data),
-  });
-
-/** The repository's Orb files on its default branch, read without an Orb. */
-export const projectOrbFilesQueryOptions = (
-  userId: UserId,
-  projectId: ProjectId,
-) =>
-  queryOptions({
-    queryKey: [...projectKeys.detail(userId, projectId), "orb-files"] as const,
-    queryFn: async ({ signal }): Promise<ProjectOrbFilesData> =>
-      (
-        await request(
-          `/v1/projects/${encodeURIComponent(projectId)}/orb-files`,
-          GetProjectOrbFilesResponseSchema,
-          { signal },
-        )
-      ).data,
-    staleTime: 60_000,
   });

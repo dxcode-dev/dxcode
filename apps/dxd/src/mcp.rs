@@ -18,10 +18,10 @@
 //!   them. dx sets the two names after the configured `env`.
 //!
 //! A server runs through a login shell (`bash -lc 'exec "$0" "$@"'`) so it
-//! finds what `.agents/setup` installed, in its own process group. Its
-//! stderr goes to `~/.local/state/dxd/mcp/<name>.log`. A server unused for
-//! fifteen minutes, or one that times out, is stopped; the next request
-//! starts it again.
+//! finds what the Project's setup script installed, in its own process
+//! group. Its stderr goes to `~/.local/state/dxd/mcp/<name>.log`. A server
+//! unused for fifteen minutes, or one that times out, is stopped; the next
+//! request starts it again.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

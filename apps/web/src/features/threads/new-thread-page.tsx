@@ -84,6 +84,7 @@ import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
 import { submitNewThread } from "./new-thread-submission.js";
 import { NewThreadToasts } from "./new-thread-toasts.js";
 import { pluginAgentModesQueryOptions } from "./plugin-agent-modes-queries.js";
+import { useSetupSpotlight } from "./project-setup-banner.js";
 import { createThreadMutationOptions } from "./thread-mutations.js";
 import { ThreadSessionRegistryContext } from "./thread-session-context.js";
 
@@ -745,6 +746,7 @@ function ScopedNewThreadModal({
     chooseProject,
   );
 
+  const setup = useSetupSpotlight(effectiveProjectId, draftStore, textareaRef);
   const composer = (
     <>
       <NewThreadComposer
@@ -835,7 +837,9 @@ function ScopedNewThreadModal({
     </>
   );
   if (presentation === "inline")
-    return <InlineNewThreadFrame>{composer}</InlineNewThreadFrame>;
+    return (
+      <InlineNewThreadFrame spotlight={setup}>{composer}</InlineNewThreadFrame>
+    );
   return (
     <NewThreadDialog
       email={email}
@@ -845,6 +849,7 @@ function ScopedNewThreadModal({
       prompt={prompt}
       submitting={submitting}
       onPromptChange={draftStore.setText}
+      spotlight={setup}
     >
       {composer}
     </NewThreadDialog>

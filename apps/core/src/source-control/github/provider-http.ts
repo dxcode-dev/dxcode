@@ -220,6 +220,31 @@ const checkInput = (value: string) => {
 };
 
 /**
+ * A contents API answer's text when it names a regular file of at most
+ * `maxBytes` bytes of UTF-8.
+ */
+const fileText = (value: unknown, maxBytes: number) => {
+  const item = value as Record<string, unknown> | null;
+  if (
+    item?.type !== "file" ||
+    item.encoding !== "base64" ||
+    typeof item.content !== "string" ||
+    typeof item.size !== "number" ||
+    item.size > maxBytes
+  )
+    return undefined;
+  try {
+    const bytes = Uint8Array.from(atob(item.content.replace(/\s/g, "")), (c) =>
+      c.charCodeAt(0),
+    );
+    if (bytes.length > maxBytes) return undefined;
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return undefined;
+  }
+};
+
+/**
  * GitHub's REST transport: bounded, redirect-refusing, timed requests whose
  * failures are typed `GitHubProviderError`s. A request without a token is
  * anonymous.
@@ -684,38 +709,43 @@ export const createGitHubProvider = (
       return { repository: resolvedRepository, commitSha };
     },
     /**
-     * The paths that name a file (or symlink) at `ref`; a path the commit
-     * lacks is absent rather than an error.
+     * The text of each path that names a regular file of at most `maxBytes`
+     * UTF-8 bytes at `ref`. A path the commit lacks, a directory, a symlink,
+     * a larger file, or one that is not UTF-8 is absent rather than an error.
      */
-    presentPaths: async (
+    readFiles: async (
       installationToken: string,
       repositoryId: string,
       ref: string,
       paths: ReadonlyArray<string>,
-    ): Promise<ReadonlyArray<string>> => {
+      maxBytes: number,
+    ): Promise<Readonly<Record<string, string>>> => {
       const valid = stableId(repositoryId);
       if (valid === undefined || !/^[a-f0-9]{40}$/.test(ref))
         throw new GitHubProviderError({ category: "invalid-response" });
-      const found = await Promise.all(
+      const read = await Promise.all(
         paths.map(async (path) => {
           try {
             const { value } = await json(
               `${API_ORIGIN}/repositories/${valid}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${ref}`,
               { headers: apiHeaders(installationToken) },
             );
-            const type = (value as Record<string, unknown>)?.type;
-            return type === "file" || type === "symlink";
+            return [path, fileText(value, maxBytes)] as const;
           } catch (cause) {
             if (
               cause instanceof GitHubProviderError &&
               cause.category === "not-found"
             )
-              return false;
+              return [path, undefined] as const;
             throw cause;
           }
         }),
       );
-      return paths.filter((_, index) => found[index]);
+      return Object.fromEntries(
+        read.filter(
+          (entry): entry is readonly [string, string] => entry[1] !== undefined,
+        ),
+      );
     },
   };
 };

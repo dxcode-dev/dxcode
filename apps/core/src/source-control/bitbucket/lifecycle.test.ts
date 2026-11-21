@@ -17,7 +17,7 @@ import {
 } from "vitest";
 import manifest from "../../../migration-manifest.json" with { type: "json" };
 import type { AppEnv } from "../../http/types.js";
-import { readProjectOrbFiles } from "../../projects/orb-files.js";
+import { ensureRepositoryOrbFilesImported } from "../../projects/orb-script-import.js";
 import { loadConfigEncryptionKeyring } from "../../settings/config-encryption.js";
 import {
   IntegrationCredentialVault,
@@ -938,9 +938,17 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
         .run(),
     ).toThrow("immutable");
   });
-  it.each([[[".agents/setup", ".dx/services.yaml"]], [[]]])(
-    "reads a private repository's Orb files %j through the connection's lease",
-    async (files) => {
+  it.each([
+    [
+      {
+        ".agents/setup": "#!/bin/bash\nnpm ci\n",
+        ".agents/resume": "echo up\n",
+      },
+    ],
+    [{}],
+  ])(
+    "imports a private repository's Orb files %j through the connection's lease",
+    async (files: Record<string, string>) => {
       const f = await fixture();
       const connection = await f.connect();
       seedThread(f.sqlite, connection.id);
@@ -957,13 +965,20 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
           auth: new Headers(init?.headers).get("authorization"),
         });
         const [path, query] = url.slice(at + src.length).split("?");
-        expect(query).toBe("format=meta");
-        return files.includes(decodeURIComponent(path ?? ""))
-          ? Response.json({ type: "commit_file", path })
-          : Response.json({ type: "error" }, { status: 404 });
+        const body = files[decodeURIComponent(path ?? "")];
+        if (body === undefined)
+          return Response.json({ type: "error" }, { status: 404 });
+        return query === "format=meta"
+          ? Response.json({
+              type: "commit_file",
+              path,
+              size: new TextEncoder().encode(body).length,
+              attributes: [],
+            })
+          : new Response(body);
       });
 
-      const result = await readProjectOrbFiles({
+      const result = await ensureRepositoryOrbFilesImported({
         db: f.db,
         bindings: { ...bindings, DB: f.db } as never,
         projectId,
@@ -971,25 +986,34 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
         fetcher: f.fetcher,
       });
 
+      const kinds = { ".agents/setup": "setup", ".agents/resume": "resume" };
       expect(result).toEqual({
-        state: "checked",
-        repository: { fullName: "space/repo", defaultBranch: "main" },
-        files: [
-          ".agents/setup",
-          ".agents/resume",
-          ".agents/desktop/resume",
-          ".dx/services.yaml",
-        ].map((path) =>
-          files.includes(path)
-            ? {
-                path,
-                present: true,
-                url: `https://bitbucket.org/space/repo/src/main/${path}`,
-              }
-            : { path, present: false },
+        state: "imported",
+        kinds: Object.keys(files).map(
+          (path) => kinds[path as keyof typeof kinds],
         ),
       });
-      expect(reads).toHaveLength(4);
+      expect(
+        f.sqlite
+          .prepare(
+            "SELECT kind, body FROM project_orb_script WHERE project_id = ? ORDER BY kind",
+          )
+          .all(projectId),
+      ).toEqual(
+        Object.entries(files)
+          .map(([path, body]) => ({
+            kind: kinds[path as keyof typeof kinds],
+            body,
+          }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)),
+      );
+      expect(
+        f.sqlite
+          .prepare("SELECT 1 FROM project_orb_import WHERE project_id = ?")
+          .all(projectId),
+      ).toHaveLength(1);
+      // Each of the three files' metadata, then each present file's text.
+      expect(reads).toHaveLength(3 + Object.keys(files).length);
       for (const read of reads)
         expect(read.auth).toMatch(/^Bearer access-secret-/);
     },

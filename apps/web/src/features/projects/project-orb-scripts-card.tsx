@@ -32,12 +32,24 @@ const SCRIPTS: ReadonlyArray<{
     ),
   },
   {
-    kind: "pre-setup",
-    title: "Pre-setup Script",
+    kind: "setup",
+    title: "Setup Script",
     description: (
       <>
-        Runs before <code>.agents/setup</code> and is not committed to the
-        repository.
+        Runs once from the repository root when dx prepares a fresh Orb. Install
+        tools and dependencies here. It gets none of the project's secrets or
+        environment variables.
+      </>
+    ),
+  },
+  {
+    kind: "resume",
+    title: "Resume Script",
+    description: (
+      <>
+        Runs from the repository root each time the Orb starts or wakes. Keep it
+        fast and safe to repeat: authenticate, reconnect, or restart local
+        services.
       </>
     ),
   },
@@ -47,8 +59,7 @@ const SCRIPTS: ReadonlyArray<{
     description: (
       <>
         Runs from the repository root each time the Desktop starts, in place of
-        the blank Chromium window, unless the repository contains{" "}
-        <code>.agents/desktop/resume</code>. Open a page with{" "}
+        the blank Chromium window. Open a page with{" "}
         <code>/opt/dx/desktop/chromium &lt;url&gt;</code>.
       </>
     ),
@@ -61,9 +72,9 @@ type Drafts = Partial<Record<ProjectOrbScriptKind, string>>;
 
 /**
  * The Project's Orb scripts, each with its own Save. They run in the Orb of
- * every Thread in the Project, so only people who manage it change them;
- * everyone else reads them. Unsaved drafts live here so one guard covers both
- * editors.
+ * every Thread in the Project, so only its creator or a workspace admin
+ * changes them (`canManage`); everyone else reads them. Unsaved drafts live
+ * here so one guard covers every editor.
  */
 export function ProjectOrbScriptsCard({
   projectId,
@@ -75,6 +86,7 @@ export function ProjectOrbScriptsCard({
   readonly readOnly: boolean;
 }) {
   const scripts = useQuery(projectOrbScriptsQueryOptions(userId, projectId));
+  const locked = readOnly || scripts.data?.canManage === false;
   const [drafts, setDrafts] = React.useState<Drafts>({});
   const saved = (kind: ProjectOrbScriptKind) =>
     scripts.data?.scripts.find((script) => script.kind === kind)?.body ?? "";
@@ -97,6 +109,9 @@ export function ProjectOrbScriptsCard({
             Secrets &amp; Env Vars
           </Link>
           .
+          {locked
+            ? " Only the project's creator or a workspace admin can change them."
+            : null}
         </>
       }
       variant="outline"
@@ -115,7 +130,7 @@ export function ProjectOrbScriptsCard({
             title={script.title}
             description={script.description}
             savedBody={saved(script.kind)}
-            readOnly={readOnly}
+            readOnly={locked}
             draft={drafts[script.kind] ?? saved(script.kind)}
             onDraftChange={(draft) =>
               setDrafts((current) => ({ ...current, [script.kind]: draft }))
@@ -177,7 +192,7 @@ function OrbScriptEditor({
       }}
     >
       <div className="project-orb-script-body">
-        <h4 id={`${id}-title`}>{title}</h4>
+        <h3 id={`${id}-title`}>{title}</h3>
         <p id={`${id}-description`}>{description}</p>
         <Textarea
           mono

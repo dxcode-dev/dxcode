@@ -77,6 +77,7 @@ const fixture = () => {
     root,
     repo,
     desktop,
+    projectScript,
     run,
     opened,
     log,
@@ -108,40 +109,32 @@ describe("Desktop resume launcher", () => {
     expect(desktop.log()).toContain(`project resume in ${desktop.repo}`);
   });
 
-  it("prefers the repository's executable .agents/desktop/resume over the project's script", () => {
-    const desktop = fixture();
-    desktop.writeProjectScript(opens("http://project.test"));
-    desktop.writeRepoScript(`#!/bin/sh\n${opens("http://repository.test")}`);
-
-    expect(desktop.run().status).toBe(0);
-    expect(desktop.opened()).toBe(`${desktop.repo}|http://repository.test\n`);
-  });
-
-  it("ignores a repository file that is not executable or is a symlink", () => {
-    for (const kind of ["not-executable", "symlink"]) {
+  it("ignores the repository's .agents/desktop/resume", () => {
+    for (const project of [true, false]) {
       const desktop = fixture();
-      desktop.writeProjectScript(opens("http://project.test"));
-      if (kind === "not-executable")
-        desktop.writeRepoScript(
-          `#!/bin/sh\n${opens("http://repository.test")}`,
-          0o644,
-        );
-      else {
-        const target = join(desktop.root, "elsewhere");
-        writeFileSync(target, `#!/bin/sh\n${opens("http://repository.test")}`, {
-          mode: 0o755,
-        });
-        mkdirSync(join(desktop.repo, ".agents", "desktop"), {
-          recursive: true,
-        });
-        symlinkSync(target, join(desktop.repo, ".agents", "desktop", "resume"));
-      }
+      if (project) desktop.writeProjectScript(opens("http://project.test"));
+      desktop.writeRepoScript(`#!/bin/sh\n${opens("http://repository.test")}`);
 
-      expect(desktop.run().status, kind).toBe(0);
-      expect(desktop.opened(), kind).toBe(
-        `${desktop.repo}|http://project.test\n`,
+      expect(desktop.run().status).toBe(0);
+      expect(desktop.opened()).toBe(
+        project
+          ? `${desktop.repo}|http://project.test\n`
+          : `${desktop.root}/home|--foreground about:blank\n`,
       );
     }
+  });
+
+  it("ignores a project script that is a symlink", () => {
+    const desktop = fixture();
+    const target = join(desktop.root, "elsewhere");
+    writeFileSync(target, opens("http://elsewhere.test"), { mode: 0o755 });
+    mkdirSync(dirname(desktop.projectScript), { recursive: true });
+    symlinkSync(target, desktop.projectScript);
+
+    expect(desktop.run().status).toBe(0);
+    expect(desktop.opened()).toBe(
+      `${desktop.root}/home|--foreground about:blank\n`,
+    );
   });
 
   it("logs a failing script and still opens the default browser", () => {

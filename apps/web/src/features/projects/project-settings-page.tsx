@@ -92,7 +92,6 @@ import {
   updateProjectMutationOptions,
   uploadProjectIconMutationOptions,
 } from "./project-mutations.js";
-import { ProjectOrbFilesCard } from "./project-orb-files-card.js";
 import { ProjectOrbScriptsCard } from "./project-orb-scripts-card.js";
 import { projectQueryOptions } from "./project-queries.js";
 import { ProjectRepositoryIcon } from "./project-repository-icon.js";
@@ -1608,7 +1607,6 @@ function ResolvedOrbProjectSettings({
         userId={userId}
         readOnly={readOnly}
       />
-      <ProjectOrbFilesCard projectId={project.id} userId={userId} />
     </div>
   );
 }

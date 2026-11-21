@@ -299,7 +299,8 @@ const serviceLayer = (input: {
   }>;
   readonly orbScripts?: {
     readonly preClone?: string;
-    readonly preSetup?: string;
+    readonly setup?: string;
+    readonly resume?: string;
     readonly desktopResume?: string;
   };
 }) => {
@@ -540,7 +541,7 @@ describe("SourceWorkspaceService", () => {
     Buffer.from(body, "utf8").toString("base64");
   const orbScripts = {
     preClone: "echo pré-clone\n",
-    preSetup: "echo pre-setup\n",
+    setup: "echo setup\n",
   };
 
   it("runs the project's pre-clone script before an absent checkout clones, and sends each script only where it runs", async () => {
@@ -564,12 +565,12 @@ describe("SourceWorkspaceService", () => {
       encoded(orbScripts.preClone),
     );
     expect(preClone[0]?.environment?.GH_TOKEN).toBeUndefined();
-    const preSetup = fake.calls.filter(
+    const setup = fake.calls.filter(
       ({ environment }) =>
-        environment?.DX_PRE_SETUP_SCRIPT === encoded(orbScripts.preSetup),
+        environment?.DX_SETUP_SCRIPT === encoded(orbScripts.setup),
     );
     expect(
-      preSetup.map(({ command, environment }) =>
+      setup.map(({ command, environment }) =>
         command.includes("DX_ASSET_HELPER_DIGEST")
           ? environment?.DX_ASSET_ACTION
           : command.split(" ").at(-1),
@@ -632,17 +633,20 @@ describe("SourceWorkspaceService", () => {
     ).toBe(false);
   });
 
-  it("sends the project's Desktop resume script, or its removal, with every source command", async () => {
+  it("sends the project's resume and Desktop resume scripts, or their removal, with every source command", async () => {
+    const resume = "pnpm install --frozen-lockfile\n";
     const desktopResume = '/opt/dx/desktop/chromium "http://localhost:3000"\n';
     const withScript = makeSandbox([10]);
     await activate(
       withScript.preparation,
-      serviceLayer({ source: snapshot, orbScripts: { desktopResume } }),
+      serviceLayer({ source: snapshot, orbScripts: { resume, desktopResume } }),
     );
     const sourceCommands = (calls: typeof withScript.calls) =>
       calls.filter(({ environment }) => environment?.DX_THREAD_ID === threadId);
     expect(sourceCommands(withScript.calls).length).toBeGreaterThanOrEqual(3);
     for (const { environment } of sourceCommands(withScript.calls)) {
+      expect(environment?.DX_RESUME_SYNC).toBe("true");
+      expect(environment?.DX_RESUME_SCRIPT).toBe(encoded(resume));
       expect(environment?.DX_DESKTOP_RESUME_SYNC).toBe("true");
       expect(environment?.DX_DESKTOP_RESUME_SCRIPT).toBe(
         encoded(desktopResume),
@@ -654,6 +658,8 @@ describe("SourceWorkspaceService", () => {
     await prepare(without.preparation, serviceLayer({ source: snapshot }));
     expect(sourceCommands(without.calls).length).toBeGreaterThanOrEqual(1);
     for (const { environment } of sourceCommands(without.calls)) {
+      expect(environment?.DX_RESUME_SYNC).toBe("true");
+      expect(environment?.DX_RESUME_SCRIPT).toBe("");
       expect(environment?.DX_DESKTOP_RESUME_SYNC).toBe("true");
       expect(environment?.DX_DESKTOP_RESUME_SCRIPT).toBe("");
     }

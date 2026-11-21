@@ -224,7 +224,7 @@ process.stdin.on("end", () => {
 
 const sourceWorkspaceTemplate = String.raw`#!/usr/bin/env node
 import { createHash } from "node:crypto";
-import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import nodeFs from "node:fs";
 import { dirname, join, parse, posix, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -294,7 +294,6 @@ const acquireLock = () => {
 };
 const MAX_GIT_OUTPUT = 16 * 1024 * 1024;
 const MAX_MARKER = 65536;
-const FULL_HISTORY_DIRECTIVE = "# dx-requires: full-history";
 const SHALLOW_CLONE = __SHALLOW_CLONE__ || process.env.DX_SOURCE_SHALLOW_CLONE === "true";
 class SourceWorkspaceFailure extends Error {
   constructor(kind, detail = "") {
@@ -563,14 +562,9 @@ const isShallow = (expected, verified = verify(expected)) => {
   if (value !== "true" && value !== "false") fail("conflict");
   return value === "true";
 };
-const hookRequiresFullHistory = (expected, name) => {
-  const path = ".agents/" + name;
-  const tree = git(ROOT, expected.repositoryName, ["ls-tree", expected.sourceSha, "--", path]).trim();
-  if (!tree.startsWith("100755 blob ")) return false;
-  const source = git(ROOT, expected.repositoryName, ["show", expected.sourceSha + ":" + path]);
-  return source.split("\n").some(line => line.trim() === FULL_HISTORY_DIRECTIVE);
-};
-const historyNeeded = (expected, shallow = isShallow(expected)) => shallow && ["setup", "resume"].some(name => hookRequiresFullHistory(expected, name));
+// Core sets DX_FULL_HISTORY_REQUIRED when the Project's setup or resume
+// script has a "# dx-requires: full-history" line.
+const historyNeeded = (expected, shallow = isShallow(expected)) => shallow && process.env.DX_FULL_HISTORY_REQUIRED === "true";
 const unshallow = (expected, credential) => {
   if (!isShallow(expected)) return;
   assertNetworkConfiguration(ROOT, expected.repositoryName);
@@ -751,7 +745,9 @@ const runLfs = expected => {
 };
 // Setup prepares the workspace for convenience; the agent can finish that
 // work itself. A failing hook is recorded and logged, never fatal. dxd's
-// environment activation, not this program, runs .agents/resume.
+// environment activation, not this program, runs the Project's resume
+// script, which this program keeps in sync (syncProjectScript). Nothing here
+// reads or runs the repository's .agents files.
 const failedHooks = [];
 const hooksReady = () => (failedHooks.length === 0 ? { status: "ready" } : { status: "ready", failed: failedHooks });
 // Runs a hook with its output streamed to its log, which each run replaces.
@@ -775,9 +771,9 @@ const runLogged = (name, command, args, cwd) => {
     });
   } finally { closeSync(descriptor); }
 };
-// The project's pre-clone and pre-setup scripts, saved in its settings, arrive
-// base64-encoded in this command's environment. They run like the
-// repository's hooks: as the user, with none of dx's credentials.
+// The project's Orb scripts, saved in dx, arrive base64-encoded in this
+// command's environment. Pre-clone and setup run here as the user, with none
+// of dx's credentials.
 const PROJECT_SCRIPT_MAX_BYTES = 32768;
 const PROJECT_SCRIPT_REPORTED_OUTPUT = 2000;
 const projectScript = name => {
@@ -816,13 +812,19 @@ const runProjectScript = (name, body, cwd) => {
     report: { ...(typeof result.status === "number" ? { exitCode: result.status } : {}), ...(timedOut ? { timedOut } : {}), output }
   };
 };
-// The project's Desktop resume script, which /opt/dx/desktop/resume runs when
-// the Desktop starts. Core sends it, or an empty value once it is cleared,
-// with every command that carries DX_DESKTOP_RESUME_SYNC.
-const syncDesktopResume = () => {
+// Copies a project script for another runner to
+// <dirname(STATE)>/project-scripts/<name>, mode 0700, or removes the copy
+// once the project clears the script. Core sends the script, or an empty
+// value, with every command that carries the matching sync flag:
+// - resume (DX_RESUME_SYNC, DX_RESUME_SCRIPT): dxd runs it on each
+//   environment activation and wake (apps/dxd/src/environment.rs,
+//   PROJECT_RESUME_SCRIPT, the same absolute path under /home/user).
+// - desktop-resume (DX_DESKTOP_RESUME_SYNC, DX_DESKTOP_RESUME_SCRIPT):
+//   /opt/dx/desktop/resume runs it when the Desktop starts.
+const syncProjectScript = (name, variable) => {
   const directory = join(dirname(STATE), "project-scripts");
-  const path = join(directory, "desktop-resume");
-  const body = projectScript("DX_DESKTOP_RESUME_SCRIPT");
+  const path = join(directory, name);
+  const body = projectScript(variable);
   const existing = lstat(path);
   if (body === undefined) {
     if (existing === undefined) return;
@@ -848,50 +850,19 @@ const preClone = () => {
   const run = runProjectScript("pre-clone", body, WORKSPACE_PARENT);
   return run.ok ? { status: "success" } : { status: "failed", ...run.report };
 };
-const hook = (expected, name, current) => {
-  const path = join(ROOT, ".agents", name);
-  let digest;
-  let preSetupFailed = false;
-  if (name === "setup") {
-    // Setup runs once per snapshot. The file that runs is whatever the user's
-    // current checkout holds; a missing snapshot commit or setup file skips
-    // it. The project's pre-setup script runs first, with or without one,
-    // and an edit to it runs setup again.
-    const preSetup = projectScript("DX_PRE_SETUP_SCRIPT");
-    let immutableSetup;
-    try {
-      const tree = git(ROOT, required("DX_REPOSITORY_NAME"), ["ls-tree", expected.sourceSha, "--", ".agents/setup"], false, 120000, [0], true).trim();
-      if (tree !== "" && tree.startsWith("100755 blob "))
-        immutableSetup = git(ROOT, required("DX_REPOSITORY_NAME"), ["show", expected.sourceSha + ":.agents/setup"], false, 120000, [0], true);
-    } catch { immutableSetup = undefined; }
-    if (immutableSetup === undefined && preSetup === undefined) return current;
-    digest = sha(expected.sourceSha + "\0" + required("DX_SOURCE_CONFIG_DIGEST") + "\0" + (immutableSetup ?? "") + (preSetup === undefined ? "" : "\0pre-setup\0" + preSetup));
-    if (current.setup?.status === "success" && current.setup?.digest === digest) return current;
-    if (preSetup !== undefined && !runProjectScript("pre-setup", preSetup, ROOT).ok) {
-      preSetupFailed = true;
-      failedHooks.push("pre-setup");
-    }
-    if (immutableSetup === undefined) {
-      const afterPreSetup = verify(expected);
-      atomicState({ ...afterPreSetup, setup: { status: preSetupFailed ? "failed" : "success", digest } });
-      return afterPreSetup;
-    }
-  }
-  let hookStat;
-  try { hookStat = statSync(path); } catch { hookStat = undefined; }
-  if (hookStat === undefined || !hookStat.isFile() || (hookStat.mode & 0o111) === 0) {
-    if (name === "setup" && preSetupFailed) atomicState({ ...current, setup: { status: "failed", digest } });
-    return current;
-  }
-  const result = runLogged(name, path, [], ROOT);
-  const afterHook = verify(expected);
-  if (result.status !== 0) {
-    if (name === "setup") atomicState({ ...afterHook, setup: { status: "failed", digest } });
-    failedHooks.push(name);
-    return afterHook;
-  }
-  if (name === "setup") atomicState({ ...afterHook, setup: { status: preSetupFailed ? "failed" : "success", digest } });
-  return afterHook;
+// The project's setup script runs once per snapshot, source configuration,
+// and script body; an edit to the script runs it again, and a failed run is
+// retried by the next activation. Without one, setup is skipped.
+const runSetup = (expected, current) => {
+  const body = projectScript("DX_SETUP_SCRIPT");
+  if (body === undefined) return current;
+  const digest = sha(expected.sourceSha + "\0" + required("DX_SOURCE_CONFIG_DIGEST") + "\0" + body);
+  if (current.setup?.status === "success" && current.setup?.digest === digest) return current;
+  const run = runProjectScript("setup", body, ROOT);
+  const afterSetup = verify(expected);
+  if (!run.ok) failedHooks.push("setup");
+  atomicState({ ...afterSetup, setup: { status: run.ok ? "success" : "failed", digest } });
+  return afterSetup;
 };
 
 const action = process.argv[2];
@@ -946,7 +917,8 @@ try {
   const sourceIdentity = identity();
   ensureDirectoryChain(dirname(STATE));
   acquireLock();
-  if (process.env.DX_DESKTOP_RESUME_SYNC === "true") syncDesktopResume();
+  if (process.env.DX_RESUME_SYNC === "true") syncProjectScript("resume", "DX_RESUME_SCRIPT");
+  if (process.env.DX_DESKTOP_RESUME_SYNC === "true") syncProjectScript("desktop-resume", "DX_DESKTOP_RESUME_SCRIPT");
   if (action === "initialize-anonymous") {
     const discovered = initializeAnonymous(sourceIdentity);
     process.stdout.write(JSON.stringify({ sourceRevision: discovered.sourceSha, defaultBranch: discovered.defaultBranch, initialRef: discovered.initialRef }));
@@ -961,7 +933,7 @@ try {
         process.stdout.write(JSON.stringify({ checkout: inspected.payload }));
       else {
         try {
-          hook(expected, "setup", markProvisioned(inspected.verified));
+          runSetup(expected, markProvisioned(inspected.verified));
           process.stdout.write(JSON.stringify({ checkout: inspected.payload, hooks: hooksReady() }));
         } catch (cause) {
           const failure = settledFailure(cause);
@@ -990,7 +962,7 @@ try {
     }
     else if (action === "mark-provisioned") markProvisioned(verify(expected));
     else if (action === "hooks") {
-      hook(expected, "setup", markProvisioned(verify(expected)));
+      runSetup(expected, markProvisioned(verify(expected)));
       process.stdout.write(JSON.stringify(hooksReady()));
     }
     else fail("invalid-input", "action");

@@ -6474,6 +6474,25 @@
   height: 48px;
   padding: 0 var(--space-4);
 }
+/* A surface with a spotlight: the popup is the vivid frame, the surface a
+   card inside it, and the SpotlightBand sits on the frame below. */
+.modal-surface-popup.modal-surface-spotlight {
+  padding: var(--space-1-5) var(--space-1-5) 0;
+  background: var(--spotlight-background);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--spotlight-ink-ember) 45%, transparent),
+    0 18px 48px -12px
+    color-mix(in srgb, var(--spotlight-ink-ember) 40%, transparent),
+    0 10px 24px -6px color-mix(in srgb, var(--shadow-ink) 70%, transparent);
+}
+.modal-surface-card {
+  display: flex;
+  flex-direction: column;
+  min-height: inherit;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: calc(var(--radius-3xl) - var(--space-1-5));
+}
 .custom-snooze-dialog {
   width: min(360px, 100%);
 }
@@ -12134,7 +12153,7 @@ body:has(.dx-app-shell) {
 }
 /* The settings rows' title and description sizes, so a script's heading
    reads at the same level as the card title, not above it. */
-.project-orb-script-body > h4 {
+.project-orb-script-body > h3 {
   margin: 0;
   font-size: var(--text-sm);
   font-weight: var(--weight-medium);
@@ -12161,72 +12180,6 @@ body:has(.dx-app-shell) {
   display: flex;
   align-items: flex-end;
   justify-content: flex-end;
-}
-/* Repository Files: the Orb Scripts rows, read-only, with the file's status
-   where Save sits. */
-.project-orb-files-card {
-  gap: 0;
-}
-.project-orb-files {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.project-orb-file {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-4);
-  padding: var(--space-3) 0;
-  border-top: 1px solid var(--border);
-}
-.project-orb-file:last-child {
-  border-bottom: 1px solid var(--border);
-}
-.project-orb-file-body {
-  display: grid;
-  gap: var(--space-1-5);
-  min-width: 0;
-}
-.project-orb-file-body > h4 {
-  margin: 0;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  line-height: var(--leading-4);
-}
-.project-orb-file-body > h4 a {
-  color: inherit;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
-.project-orb-file-body > p,
-.project-orb-files-note {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  line-height: 17.875px;
-}
-.project-orb-files-note[role="alert"] {
-  color: var(--destructive);
-}
-.project-orb-files-card > .project-orb-files-note,
-.project-orb-files-setup {
-  padding-top: var(--space-3);
-}
-.project-orb-file-status {
-  flex: none;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  line-height: var(--leading-4);
-}
-.project-orb-file-status[data-present="true"] {
-  color: var(--foreground);
-}
-.project-orb-files-setup {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
 }
 .project-settings-content .settings-form-actions > button,
 .project-settings-content .project-icon-control > button {
