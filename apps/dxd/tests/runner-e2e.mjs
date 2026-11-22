@@ -359,11 +359,21 @@ for (const dir of [
   ".config/dx",
   ".rustup",
   ".cargo",
+  ".local/bin",
 ])
   mkdirSync(join(ownHome, dir), { recursive: true });
 writeFileSync(join(ownHome, ".ssh/marker"), "own-ssh\n");
 writeFileSync(join(ownHome, ".gitconfig"), "[user]\n\tname = Own Person\n");
 writeFileSync(join(ownHome, ".env"), "OWN_SECRET=1\n");
+// The person's own Claude Code, which Claude Code mode runs from the
+// Thread's ~/.local/bin.
+writeFileSync(
+  join(ownHome, ".local/bin/claude"),
+  "#!/bin/sh\necho own-claude\n",
+  {
+    mode: 0o755,
+  },
+);
 const env = {
   ...process.env,
   HOME: ownHome,
@@ -551,6 +561,8 @@ try {
       !existsSync(join(threadHome, ".config/dx")) &&
       linkTo(".config") === undefined &&
       linkTo(".env") === undefined &&
+      linkTo(".local") === undefined &&
+      linkTo(".local/bin/claude") === join(ownHome, ".local/bin/claude") &&
       linkTo("workspace") === undefined,
     JSON.stringify(r.result),
   );
@@ -1415,12 +1427,66 @@ try {
       (await waitFor(() => !alive(started().at(-1).pid), 5000)),
     JSON.stringify(r),
   );
+  check(
+    "Screen Recording denied: permissions say which one is missing",
+    isDeepStrictEqual(r.result?.permissions, {
+      screenRecording: false,
+      accessibility: true,
+    }),
+    JSON.stringify(r.result?.permissions),
+  );
+  // Both denied: the viewer shows both rows.
+  voxlWrapper(
+    join(runnerDir, "voxl/bin/voxl"),
+    "--deny-capture",
+    "--deny-input",
+  );
+  r = await request("desktop.ensure", T, {}, 60000);
+  check(
+    "Screen Recording and Accessibility denied: both missing",
+    r.ok &&
+      r.result.status === "failed" &&
+      isDeepStrictEqual(r.result.permissions, {
+        screenRecording: false,
+        accessibility: false,
+      }),
+    JSON.stringify(r),
+  );
+  // System Settings opens only at the two privacy panes, and only on a Mac.
+  r = await request("desktop.settings", T, { pane: "general" });
+  const noPane = await request("desktop.settings", T, {});
+  check(
+    "desktop.settings refuses a pane other than screen-recording or accessibility",
+    !r.ok &&
+      r.error.code === "invalid" &&
+      !noPane.ok &&
+      noPane.error.code === "invalid",
+    JSON.stringify({ r, noPane }),
+  );
+  r = await request("desktop.settings", T, { pane: "screen-recording" });
+  const accessibilityPane = await request("desktop.settings", T, {
+    pane: "accessibility",
+  });
+  check(
+    "desktop.settings off a Mac: says it cannot open System Settings",
+    !r.ok &&
+      r.error.code === "failed" &&
+      /only on a Mac/.test(r.error.message) &&
+      !accessibilityPane.ok &&
+      accessibilityPane.error.code === "failed",
+    JSON.stringify({ r, accessibilityPane }),
+  );
   // A voxl without dx's window-mode patch (the upstream build).
   voxlWrapper(join(runnerDir, "voxl/bin/voxl"), "--no-windows");
   r = await request("desktop.ensure", T, {}, 60000);
   check(
     "once allowed, the next desktop.ensure starts voxl again",
-    r.ok && r.result.status === "running",
+    r.ok &&
+      r.result.status === "running" &&
+      isDeepStrictEqual(r.result.permissions, {
+        screenRecording: true,
+        accessibility: true,
+      }),
     JSON.stringify(r),
   );
   r = await request("desktop.windows", T, {});
@@ -1441,7 +1507,11 @@ try {
       r.result.status === "running" &&
       r.result.detail?.includes(
         "System Settings › Privacy & Security › Accessibility",
-      ),
+      ) &&
+      isDeepStrictEqual(r.result.permissions, {
+        screenRecording: true,
+        accessibility: false,
+      }),
     JSON.stringify(r),
   );
   runnerSocket.send({ type: "stream-open", stream: 45, path: "/ws" });

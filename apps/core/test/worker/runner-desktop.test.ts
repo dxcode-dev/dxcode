@@ -29,7 +29,11 @@ import { runRepositories } from "./runtime.js";
 // - frames are not relayed both ways, text and binary are confused, or a
 //   message over one Workers message (a keyframe) is not split and joined;
 // - a close on one side does not reach the other;
-// - a Thread on an Orb changes: it still goes through THREAD_EXECUTION.
+// - a Thread on an Orb changes: it still goes through THREAD_EXECUTION;
+// - the macOS permissions the runner reports are lost or malformed ones
+//   pass on;
+// - opening System Settings reaches a Mac for a contributor, sends a pane
+//   other than the two privacy panes, or hides that the Mac is offline.
 
 const appOrigin = "http://dx.test";
 const bindings = {
@@ -137,6 +141,7 @@ const connectRunner = async (
   token: string,
   ensure: () => Record<string, unknown>,
   windows?: () => Record<string, unknown>,
+  settings?: (body: unknown) => Record<string, unknown>,
 ) => {
   const response = await app.request(
     `${appOrigin}/v1/runner/connect`,
@@ -147,6 +152,7 @@ const connectRunner = async (
   const socket = response.webSocket as WebSocket;
   socket.accept();
   const ops: string[] = [];
+  const bodies: unknown[] = [];
   const opens: Array<Record<string, unknown>> = [];
   const frames: StreamFrame[] = [];
   // Binary messages decode asynchronously (Blob); keep their order.
@@ -170,6 +176,7 @@ const connectRunner = async (
     if (frame.type !== "request") return;
     const op = frame.op as string;
     ops.push(op);
+    bodies.push(frame.body);
     const result =
       op === "desktop.ensure"
         ? ensure()
@@ -177,16 +184,17 @@ const connectRunner = async (
           ? { ok: true, status: 200, body: "ok" }
           : op === "desktop.windows"
             ? windows?.()
-            : undefined;
+            : op === "desktop.settings"
+              ? settings?.(frame.body)
+              : undefined;
+    const error =
+      result === undefined
+        ? { code: "invalid", message: `unknown op ${op}` }
+        : result.error;
     socket.send(
       JSON.stringify(
-        result === undefined
-          ? {
-              type: "reply",
-              id: frame.id,
-              ok: false,
-              error: { code: "invalid", message: `unknown op ${op}` },
-            }
+        error !== undefined
+          ? { type: "reply", id: frame.id, ok: false, error }
           : { type: "reply", id: frame.id, ok: true, result },
       ),
     );
@@ -208,13 +216,33 @@ const connectRunner = async (
     frame.set(payload, 5);
     socket.send(frame);
   };
-  return { socket, ops, opens, frames, send };
+  return { socket, ops, bodies, opens, frames, send };
 };
 
 const checkDesktop = (threadId: string, cookie: string, extra?: Bindings) =>
   app.request(
     `${appOrigin}/v1/threads/${threadId}/desktop`,
     { headers: { cookie, accept: "application/json" } },
+    { ...bindings, ...extra },
+  );
+
+const openSettings = (
+  threadId: string,
+  cookie: string,
+  body: unknown,
+  extra?: Bindings,
+) =>
+  app.request(
+    `${appOrigin}/v1/threads/${threadId}/desktop/settings`,
+    {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: appOrigin,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
     { ...bindings, ...extra },
   );
 
@@ -342,6 +370,52 @@ describe("A runner Thread's Desktop", () => {
         desktop: "unavailable",
         detail: expect.stringContaining("Screen Recording"),
       },
+    });
+
+    // The runner's permissions pass on beside its words; Accessibility off
+    // still streams.
+    ensureReply = {
+      status: "failed",
+      detail: "macOS has not allowed dx to record this Mac's screen.",
+      permissions: { screenRecording: false, accessibility: false },
+    };
+    await expect(
+      (await checkDesktop(threadId, owner.cookie)).json(),
+    ).resolves.toEqual({
+      status: "success",
+      data: {
+        desktop: "unavailable",
+        detail: "macOS has not allowed dx to record this Mac's screen.",
+        permissions: { screenRecording: false, accessibility: false },
+      },
+    });
+    ensureReply = {
+      status: "running",
+      detail: "Clicks and typing are off.",
+      permissions: { screenRecording: true, accessibility: false },
+    };
+    await expect(
+      (await checkDesktop(threadId, owner.cookie)).json(),
+    ).resolves.toEqual({
+      status: "success",
+      data: {
+        desktop: "ready",
+        detail: "Clicks and typing are off.",
+        permissions: { screenRecording: true, accessibility: false },
+        startsViewOnly: true,
+      },
+    });
+    // A malformed report is dropped, never passed on.
+    ensureReply = {
+      status: "failed",
+      detail: "voxl stopped",
+      permissions: { screenRecording: "no" },
+    };
+    await expect(
+      (await checkDesktop(threadId, owner.cookie)).json(),
+    ).resolves.toEqual({
+      status: "success",
+      data: { desktop: "unavailable", detail: "voxl stopped" },
     });
 
     ensureReply = { status: "running" };
@@ -518,6 +592,7 @@ describe("A runner Thread's Desktop", () => {
     for (const response of [
       await checkDesktop(threadId, member.cookie),
       await openSocket(threadId, member.cookie),
+      await openSettings(threadId, member.cookie, { pane: "accessibility" }),
       await app.request(
         `${appOrigin}/v1/threads/${threadId}/desktop/windows`,
         { headers: { cookie: member.cookie } },
@@ -558,6 +633,97 @@ describe("A runner Thread's Desktop", () => {
     expect(runner.opens).toEqual([]);
     runner.socket.close(1000, "done");
   });
+
+  it("opens System Settings on the owner's Mac at a privacy pane", async () => {
+    const owner = await signUp("settings");
+    const threadId = await createThread(owner.userId);
+    const { token } = await pinToMachine(owner.userId, threadId);
+    let settingsReply: Record<string, unknown> = { opened: true };
+    const runner = await connectRunner(
+      token,
+      () => ({ status: "running" }),
+      undefined,
+      () => settingsReply,
+    );
+    const threadExecution = {
+      idFromName: () => {
+        throw new Error("The Thread's dxd was asked to open System Settings.");
+      },
+    } as unknown as DurableObjectNamespace;
+
+    for (const pane of ["screen-recording", "accessibility"]) {
+      const opened = await openSettings(
+        threadId,
+        owner.cookie,
+        { pane },
+        { THREAD_EXECUTION: threadExecution },
+      );
+      expect(opened.status).toBe(200);
+      expect(opened.headers.get("cache-control")).toBe("no-store");
+      await expect(opened.json()).resolves.toEqual({
+        status: "success",
+        data: { opened: true },
+      });
+    }
+    expect(runner.ops).toEqual(["desktop.settings", "desktop.settings"]);
+    expect(runner.bodies).toEqual([
+      { pane: "screen-recording" },
+      { pane: "accessibility" },
+    ]);
+
+    // Any other pane, or more than a pane, never reaches the Mac.
+    for (const body of [
+      { pane: "general" },
+      {},
+      { pane: "accessibility", url: "x-apple.systempreferences:other" },
+    ]) {
+      const refused = await openSettings(threadId, owner.cookie, body);
+      expect(refused.status).toBe(400);
+      await expect(refused.json()).resolves.toMatchObject({
+        data: { code: "INVALID_REQUEST" },
+      });
+    }
+    expect(runner.ops).toHaveLength(2);
+
+    // The runner's own refusal comes back in its words.
+    settingsReply = {
+      error: {
+        code: "failed",
+        message: "System Settings opens only on a Mac runner.",
+      },
+    };
+    await expect(
+      (
+        await openSettings(threadId, owner.cookie, { pane: "accessibility" })
+      ).json(),
+    ).resolves.toEqual({
+      status: "success",
+      data: {
+        opened: false,
+        detail: "System Settings opens only on a Mac runner.",
+      },
+    });
+    runner.socket.close(1000, "done");
+  });
+
+  it("says the Mac is offline when System Settings cannot open", async () => {
+    const owner = await signUp("settings-offline");
+    const threadId = await createThread(owner.userId);
+    await pinToMachine(owner.userId, threadId);
+    const response = await openSettings(threadId, owner.cookie, {
+      pane: "screen-recording",
+    });
+    await expect(response.json()).resolves.toEqual({
+      status: "success",
+      data: { opened: false, detail: "This machine's runner is offline." },
+    });
+    // A Thread on an Orb has no Mac to open.
+    const orbThread = await createThread(owner.userId);
+    expect(
+      (await openSettings(orbThread, owner.cookie, { pane: "accessibility" }))
+        .status,
+    ).toBe(404);
+  }, 30_000);
 
   it("reports an offline Mac without asking twice", async () => {
     const owner = await signUp("offline");

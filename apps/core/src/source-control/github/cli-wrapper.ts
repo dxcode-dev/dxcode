@@ -39,7 +39,9 @@ if [ "$authenticate" = 1 ] && [ -z "\${GH_TOKEN-}" ] && [ -z "\${GITHUB_TOKEN-}"
   token=$( { printf 'protocol=https\\nhost=github.com\\n\\n' |
     GIT_TERMINAL_PROMPT=0 GIT_CONFIG_GLOBAL=${DX_GIT_CONFIG_GLOBAL} git credential fill 2>&1 1>&3 3>&- |
     while IFS= read -r line; do
-      case $line in "dx: "*) printf '%s\\n' "$line" >&2 ;; esac
+      # The leading ( keeps bash 3.2 (macOS's /bin/sh, on a Mac runner)
+      # from reading the pattern's ) as the end of $( ).
+      case $line in ("dx: "*) printf '%s\\n' "$line" >&2 ;; esac
     done; } 3>&1 | sed -n 's/^password=//p' | head -n 1) || token=
   if [ -n "$token" ]; then
     GH_TOKEN=$token

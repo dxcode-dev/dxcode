@@ -1,5 +1,6 @@
+import type { MacDesktopPermissions, ThreadDesktopSettingsData } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
 import {
@@ -18,7 +19,12 @@ import {
 } from "./desktop-keyboard.js";
 import { DesktopKeys } from "./desktop-keys.js";
 import {
+  DesktopPermissions,
+  type SettingsRequest,
+} from "./desktop-permissions.js";
+import {
   desktopPath,
+  desktopSettingsMutation,
   desktopWindowInputHandlers,
   desktopWindowsQueryOptions,
   refreshDesktopWindowsAfterStart,
@@ -59,6 +65,11 @@ export const DESKTOP_IDLE_PAUSE_MS = 5 * 60_000;
  * back shows it at once instead of reconnecting.
  */
 export const DESKTOP_HIDDEN_GRACE_MS = 60_000;
+/**
+ * While a Mac has not allowed Screen Recording, the viewer checks again this
+ * often and streams by itself once it has.
+ */
+export const DESKTOP_PERMISSION_RECHECK_MS = 4_000;
 /** Consecutive sockets that close before opening, before checking again. */
 const SOCKET_FAILURE_LIMIT = 6;
 /** Status checks after socket failures before the viewer gives up. */
@@ -96,6 +107,12 @@ type DesktopStatus =
   | { readonly phase: "live" }
   | { readonly phase: "reconnecting" }
   | { readonly phase: "unsupported" }
+  /** A Mac runner waiting for macOS permissions; checked again by itself. */
+  | {
+      readonly phase: "permissions";
+      readonly permissions: MacDesktopPermissions;
+      readonly detail?: string;
+    }
   | {
       readonly phase: "failed";
       readonly message: string;
@@ -131,7 +148,56 @@ const checkDesktop = async (
     return "ready";
   }
   if (availability.kind === "unsupported") return { phase: "unsupported" };
+  if (availability.kind === "permissions")
+    return {
+      phase: "permissions",
+      permissions: availability.permissions,
+      ...(availability.detail === undefined
+        ? {}
+        : { detail: availability.detail }),
+    };
   return { phase: "failed", message: availability.message };
+};
+
+/** Resolves after `ms`, or at once when `signal` aborts. */
+const pause = (ms: number, signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
+
+/**
+ * Checks the desktop; while a Mac waits for Screen Recording, shows its
+ * permissions and checks again every few seconds (each check starts voxl
+ * again, so a new grant takes effect), then shows the starting cover once
+ * it is allowed.
+ */
+const awaitPermissions = async (
+  threadId: ThreadId,
+  signal: AbortSignal,
+  mode: Pick<WindowModeSession, "onReady">,
+  show: (status: DesktopStatus) => void,
+): Promise<"ready" | DesktopStatus> => {
+  let desktop = await checkDesktop(threadId, signal, mode);
+  while (
+    !signal.aborted &&
+    desktop !== "ready" &&
+    desktop.phase === "permissions"
+  ) {
+    show(desktop);
+    await pause(DESKTOP_PERMISSION_RECHECK_MS, signal);
+    if (signal.aborted) break;
+    desktop = await checkDesktop(threadId, signal, mode);
+    if (desktop === "ready") show({ phase: "starting" });
+  }
+  return desktop;
 };
 
 interface DesktopViewerProps {
@@ -226,6 +292,9 @@ function DesktopSession({
       }, delay);
     };
 
+    // Waits out a Mac's missing permissions, showing them meanwhile.
+    const check = () =>
+      awaitPermissions(threadId, controller.signal, mode, setStatus);
     const start = async () => {
       if (!("VideoDecoder" in window)) return setStatus(NO_VIDEO_DECODER);
       // Load the viewer while Core starts the desktop.
@@ -233,7 +302,7 @@ function DesktopSession({
         (module) => module,
         () => undefined,
       );
-      const desktop = await checkDesktop(threadId, controller.signal, mode);
+      const desktop = await check();
       if (disposed()) return;
       if (desktop !== "ready") {
         setStatus(desktop);
@@ -287,7 +356,7 @@ function DesktopSession({
         recovering = true;
         session?.disconnect();
         setStatus(drawn ? { phase: "reconnecting" } : { phase: "starting" });
-        const again = await checkDesktop(threadId, controller.signal, mode);
+        const again = await check();
         if (disposed()) return;
         if (again !== "ready") return stop(again);
         if (recoveries >= RECOVERY_LIMIT)
@@ -447,6 +516,7 @@ function DesktopSession({
         />
       ) : null}
       <DesktopStatusLayer
+        threadId={threadId}
         status={status}
         onRetry={onRetry}
         reloadPage={reloadPage}
@@ -508,10 +578,12 @@ function DesktopTopRow({
 
 /** The cover, notice, or message that shows the viewer's status. */
 function DesktopStatusLayer({
+  threadId,
   status,
   onRetry,
   reloadPage,
 }: {
+  readonly threadId: ThreadId;
   readonly status: DesktopStatus;
   readonly onRetry: () => void;
   readonly reloadPage: () => void;
@@ -541,6 +613,15 @@ function DesktopStatusLayer({
           </div>
         </div>
       ) : null}
+      {status.phase === "permissions" ? (
+        <div className="thread-desktop-state" role="status">
+          <DesktopPermissionsState
+            threadId={threadId}
+            permissions={status.permissions}
+            {...(status.detail === undefined ? {} : { detail: status.detail })}
+          />
+        </div>
+      ) : null}
       {status.phase === "failed" ? (
         <div className="thread-desktop-state" role="alert">
           <div className="thread-desktop-state-content">
@@ -562,6 +643,53 @@ function DesktopStatusLayer({
         </div>
       ) : null}
     </>
+  );
+}
+
+/** Where one "Open on your Mac" request stands, from its mutation. */
+const settingsRequest = (mutation: {
+  readonly isPending: boolean;
+  readonly isError: boolean;
+  readonly data: ThreadDesktopSettingsData | undefined;
+}): SettingsRequest => {
+  if (mutation.isPending) return { state: "pending" };
+  if (mutation.isError)
+    return { state: "failed", message: "Your Mac couldn't be reached." };
+  if (mutation.data === undefined) return { state: "idle" };
+  return mutation.data.opened
+    ? { state: "sent" }
+    : {
+        state: "failed",
+        message: mutation.data.detail ?? "System Settings didn't open.",
+      };
+};
+
+/** The permission rows, each opening System Settings on the Mac. */
+function DesktopPermissionsState({
+  threadId,
+  permissions,
+  detail,
+}: {
+  readonly threadId: ThreadId;
+  readonly permissions: MacDesktopPermissions;
+  readonly detail?: string;
+}) {
+  const screenRecording = useMutation(desktopSettingsMutation(threadId));
+  const accessibility = useMutation(desktopSettingsMutation(threadId));
+  return (
+    <DesktopPermissions
+      permissions={permissions}
+      {...(detail === undefined ? {} : { detail })}
+      requests={{
+        "screen-recording": settingsRequest(screenRecording),
+        accessibility: settingsRequest(accessibility),
+      }}
+      onOpenSettings={(pane) =>
+        (pane === "screen-recording" ? screenRecording : accessibility).mutate(
+          pane,
+        )
+      }
+    />
   );
 }
 

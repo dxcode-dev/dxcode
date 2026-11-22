@@ -37,9 +37,18 @@
 //   Linux app row, a choice does not reach voxl or switches nothing, the
 //   viewer still asks to resize the Mac while a window streams, a closed
 //   window leaves the picker stale, the Desktop sends input before the
-//   person turns Control on, or a notice covers the stream.
+//   person turns Control on, or a notice covers the stream;
+// - a Mac without Screen Recording for dx shows a bare log and a Retry the
+//   person has to keep pressing, its "Open on your Mac" reaches no route or
+//   the wrong pane, a Mac offline goes unsaid, it never notices the grant
+//   (or opens a socket before it), or a missing Accessibility blocks the
+//   stream.
 
-import type { DesktopWindow, MacDesktopWindow } from "@dx/api";
+import type {
+  DesktopWindow,
+  MacDesktopPermissions,
+  MacDesktopWindow,
+} from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -231,6 +240,7 @@ type DesktopAnswer =
   | {
       readonly desktop: "ready" | "unavailable";
       readonly detail?: string;
+      readonly permissions?: MacDesktopPermissions;
       readonly startsViewOnly?: boolean;
     };
 let desktopAnswers: DesktopAnswer[] = [];
@@ -241,6 +251,9 @@ let windowsAnswer: "ready" | "unsupported" = "ready";
 /** A Mac runner's windows (window mode); undefined on an Orb. */
 let macWindows: MacDesktopWindow[] | undefined;
 let windowRequests: Array<{ method: string; body?: unknown }> = [];
+/** `POST .../desktop/settings` bodies, and Core's answer to the next one. */
+let settingsRequests: unknown[] = [];
+let settingsAnswer: { opened: boolean; detail?: string } = { opened: true };
 /** What the guest does on `POST .../desktop/windows`. */
 const actOnWindows = (action: { app?: string; window?: number }) => {
   desktopWindows = desktopWindows.map((window) => ({
@@ -267,6 +280,13 @@ const actOnWindows = (action: { app?: string; window?: number }) => {
 /** dx Core's Desktop status check; answers in order, then `ready`. */
 const fakeCore = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = new URL(String(input), window.location.href);
+  if (url.pathname.endsWith("/desktop/settings")) {
+    settingsRequests.push({
+      method: init?.method,
+      body: JSON.parse(String(init?.body)),
+    });
+    return Response.json({ status: "success", data: settingsAnswer });
+  }
   if (url.pathname.endsWith("/desktop/windows")) {
     const method = init?.method ?? "GET";
     const body =
@@ -356,6 +376,8 @@ beforeEach(() => {
   windowsAnswer = "ready";
   macWindows = undefined;
   windowRequests = [];
+  settingsRequests = [];
+  settingsAnswer = { opened: true };
   vi.stubGlobal("fetch", vi.fn(fakeCore));
   vi.stubGlobal("WebSocket", FakeSocket);
   FakeVideoDecoder.decoded = [];
@@ -891,6 +913,155 @@ describe("DesktopViewer", () => {
     expect(FakeSocket.instances).toEqual([]);
     expect(button(container, "Retry")).toBeDefined();
     await React.act(() => root.unmount());
+  });
+
+  describe("macOS permissions on a Mac runner", () => {
+    const log =
+      "macOS has not allowed dx to record this Mac's screen.\nERROR voxl: Screen Recording permission is missing";
+    const refused = (accessibility: boolean) => ({
+      desktop: "unavailable" as const,
+      detail: log,
+      permissions: { screenRecording: false, accessibility },
+    });
+    const rows = (container: HTMLElement) =>
+      [
+        ...container.querySelectorAll<HTMLElement>(
+          '[aria-label="macOS permissions"] li',
+        ),
+      ].map((row) => row.textContent ?? "");
+    const openOnMac = (container: HTMLElement, permission: string) =>
+      [...container.querySelectorAll("button")].find(
+        (candidate) =>
+          candidate.textContent === `Open on your Mac for ${permission}`,
+      );
+
+    it("shows each permission, opens System Settings on the Mac, and streams by itself once allowed", async () => {
+      vi.useFakeTimers();
+      desktopAnswers = [
+        refused(false),
+        refused(false),
+        {
+          desktop: "ready",
+          detail: "Clicks and typing are off.",
+          permissions: { screenRecording: true, accessibility: false },
+          startsViewOnly: true,
+        },
+      ];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await vi.waitFor(() =>
+        expect(text(container)).toContain("Allow dx to show this Mac"),
+      );
+      expect(rows(container)).toEqual([
+        expect.stringMatching(/^Screen Recording\s*Needed/),
+        expect.stringMatching(/^Accessibility\s*Needed/),
+      ]);
+      expect(text(container)).toContain("~/.dx/runner/dx.app");
+      // No Retry to keep pressing, and voxl's log stays behind Details.
+      expect(button(container, "Retry")).toBeUndefined();
+      expect(text(container)).not.toContain("ERROR voxl");
+      await React.act(async () => button(container, "Details")?.click());
+      expect(
+        container.querySelector<HTMLTextAreaElement>(
+          'textarea[aria-label="Details"]',
+        )?.value,
+      ).toContain("ERROR voxl: Screen Recording permission is missing");
+      expect(FakeSocket.instances).toEqual([]);
+
+      await React.act(async () =>
+        openOnMac(container, "Screen Recording")?.click(),
+      );
+      await vi.waitFor(() =>
+        expect(text(container)).toContain(
+          "System Settings is open on your Mac.",
+        ),
+      );
+      settingsAnswer = {
+        opened: false,
+        detail: "This machine's runner is offline.",
+      };
+      await React.act(async () =>
+        openOnMac(container, "Accessibility")?.click(),
+      );
+      await vi.waitFor(() =>
+        expect(
+          container.querySelector('[role="alert"]')?.textContent,
+        ).toContain("This machine's runner is offline."),
+      );
+      expect(settingsRequests).toEqual([
+        {
+          method: "POST",
+          body: { pane: "screen-recording" },
+        },
+        { method: "POST", body: { pane: "accessibility" } },
+      ]);
+      expect(desktopChecks).toHaveLength(1);
+
+      // Checked again every few seconds: still refused, the rows stay
+      // (with what the person did there).
+      await React.act(() => vi.advanceTimersByTimeAsync(4_000));
+      await vi.waitFor(() => expect(desktopChecks).toHaveLength(2));
+      await settle();
+      expect(text(container)).toContain("Allow dx to show this Mac");
+      expect(text(container)).toContain("System Settings is open on your Mac.");
+      expect(FakeSocket.instances).toEqual([]);
+
+      // Allowed: the stream opens by itself; Accessibility alone does not
+      // hold it back.
+      await React.act(() => vi.advanceTimersByTimeAsync(4_000));
+      await connected();
+      expect(desktopChecks).toHaveLength(3);
+      expect(text(container)).not.toContain("Allow dx to show this Mac");
+      vi.useRealTimers();
+      await live();
+      expect(text(container)).not.toContain("Clicks and typing are off.");
+      await React.act(() => root.unmount());
+    });
+
+    it("streams at once when only Accessibility is missing", async () => {
+      desktopAnswers = [
+        {
+          desktop: "ready",
+          detail: "Clicks and typing are off.",
+          permissions: { screenRecording: true, accessibility: false },
+          startsViewOnly: true,
+        },
+      ];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      expect(text(container)).not.toContain("Allow dx to show this Mac");
+      expect(desktopChecks).toHaveLength(1);
+      await React.act(() => root.unmount());
+    });
+
+    it("stops checking once the Desktop leaves the screen", async () => {
+      vi.useFakeTimers();
+      desktopAnswers = Array.from({ length: 10 }, () => refused(true));
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await vi.waitFor(() =>
+        expect(text(container)).toContain("Allow dx to show this Mac"),
+      );
+      expect(rows(container)).toEqual([
+        expect.stringMatching(/^Screen Recording\s*Needed/),
+        expect.stringMatching(/^Accessibility\s*Allowed/),
+      ]);
+      await React.act(() =>
+        root.render(
+          withQueries(<DesktopViewer active={false} threadId={threadA} />),
+        ),
+      );
+      // The grace minute, then no more checks.
+      await React.act(() => vi.advanceTimersByTimeAsync(61_000));
+      const checks = desktopChecks.length;
+      await React.act(() => vi.advanceTimersByTimeAsync(20_000));
+      expect(desktopChecks).toHaveLength(checks);
+      await React.act(() => root.unmount());
+    });
   });
 
   it("asks once more when the desktop is still starting, as on an Orb just resumed", async () => {

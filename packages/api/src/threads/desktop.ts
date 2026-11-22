@@ -14,6 +14,17 @@ export const ThreadDesktopStateSchema = Schema.Literals([
 ]);
 export type ThreadDesktopState = typeof ThreadDesktopStateSchema.Type;
 
+/**
+ * What macOS allowed dx's Desktop helper on a Mac runner, as voxl reported
+ * when it started. Screen Recording is needed to stream; without
+ * Accessibility the Desktop streams but takes no clicks or keys.
+ */
+export const MacDesktopPermissionsSchema = Schema.Struct({
+  screenRecording: Schema.Boolean,
+  accessibility: Schema.Boolean,
+});
+export type MacDesktopPermissions = typeof MacDesktopPermissionsSchema.Type;
+
 export const ThreadDesktopDataSchema = Schema.Struct({
   desktop: ThreadDesktopStateSchema,
   /**
@@ -22,6 +33,11 @@ export const ThreadDesktopDataSchema = Schema.Struct({
    * a notice beside a ready one.
    */
   detail: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
+  /**
+   * A Mac runner's macOS permissions, when its voxl ran and reported them;
+   * absent elsewhere. `detail` keeps the runner's own words and voxl's log.
+   */
+  permissions: Schema.optional(MacDesktopPermissionsSchema),
   /**
    * A Mac runner's Desktop opens view-only: it shows a real Mac someone may
    * be using, maybe the very Mac running the viewer, so the person turns
@@ -36,6 +52,37 @@ export const GetThreadDesktopResponseSchema = successResponse(
 );
 export type GetThreadDesktopResponse =
   typeof GetThreadDesktopResponseSchema.Encoded;
+
+/** The macOS privacy panes a Mac runner opens in System Settings. */
+export const MacSettingsPaneSchema = Schema.Literals([
+  "screen-recording",
+  "accessibility",
+]);
+export type MacSettingsPane = typeof MacSettingsPaneSchema.Type;
+
+/** Open System Settings on the Thread's Mac at one privacy pane. */
+export const ThreadDesktopSettingsRequestSchema = Schema.Struct({
+  pane: MacSettingsPaneSchema,
+});
+export type ThreadDesktopSettingsRequest =
+  typeof ThreadDesktopSettingsRequestSchema.Type;
+
+/**
+ * `opened` once the Mac ran System Settings; otherwise `detail` says why
+ * (the Mac offline, a runner that predates the request).
+ */
+export const ThreadDesktopSettingsDataSchema = Schema.Struct({
+  opened: Schema.Boolean,
+  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ThreadDesktopSettingsData =
+  typeof ThreadDesktopSettingsDataSchema.Type;
+
+export const ThreadDesktopSettingsResponseSchema = successResponse(
+  ThreadDesktopSettingsDataSchema,
+);
+export type ThreadDesktopSettingsResponse =
+  typeof ThreadDesktopSettingsResponseSchema.Encoded;
 
 /** The Desktop carries keyboard and pointer input: Contribute access. */
 export const ThreadDesktopReadOnlyResponseSchema = errorResponse(

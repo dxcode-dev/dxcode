@@ -8,7 +8,8 @@
 //! - The Seatbelt profile (`sandbox.rs`) denies every Thread process a
 //!   connection to that port and a listener on it.
 //! - Core reaches voxl only through the supervisor's own connection:
-//!   `desktop.ensure`, `desktop.health`, and `desktop.windows` requests, and
+//!   `desktop.ensure`, `desktop.health`, `desktop.windows`, and
+//!   `desktop.settings` (opens System Settings at a privacy pane) requests, and
 //!   streams (Core sends
 //!   `{"type":"stream-open","stream":n,"path":"/ws"}`; data travels as binary
 //!   messages, see [`encode`]).
@@ -262,7 +263,7 @@ impl Desktop {
                         v.stop();
                         let tail = log_tail(&v.log);
                         state.voxl = None;
-                        return denied(&tail);
+                        return denied(&head, &tail);
                     }
                     // voxl checks Accessibility only as it starts: with
                     // nobody watching, start it again so a permission the
@@ -324,8 +325,9 @@ impl Desktop {
             if !voxl.alive() {
                 let _ = fs::remove_file(pid_file(paths));
                 let tail = log_tail(&log_path);
-                if tail.contains(CAPTURE_DENIED) {
-                    return denied(&tail);
+                let head = log_head(&log_path);
+                if head.contains(CAPTURE_DENIED) || tail.contains(CAPTURE_DENIED) {
+                    return denied(&head, &tail);
                 }
                 return status("failed", &format!("voxl stopped while starting:\n{tail}"));
             }
@@ -346,7 +348,7 @@ impl Desktop {
         if head.contains(CAPTURE_DENIED) {
             voxl.stop();
             let _ = fs::remove_file(pid_file(paths));
-            return denied(&log_tail(&log_path));
+            return denied(&head, &log_tail(&log_path));
         }
         let mut state = self.state.lock().unwrap();
         state.voxl = Some(voxl);
@@ -438,25 +440,84 @@ fn status(status: &str, detail: &str) -> Value {
     json!({ "status": status, "detail": detail })
 }
 
+/// What macOS allowed dx's Desktop, as voxl logged it when it started.
+fn permissions(head: &str) -> Value {
+    json!({
+        "screenRecording": !head.contains(CAPTURE_DENIED),
+        "accessibility": !head.contains(INPUT_DENIED),
+    })
+}
+
 /// Running; with the reason input is off when macOS has not allowed voxl
 /// Accessibility (Core shows it over the Desktop).
 fn running(head: &str) -> Value {
+    let mut out = json!({ "status": "running", "permissions": permissions(head) });
     if head.contains(INPUT_DENIED) {
-        return status(
-            "running",
-            "Clicks and typing are off: macOS hasn't allowed dx to control this Mac. Turn on dx in System Settings › Privacy & Security › Accessibility, then reopen the Desktop.",
+        out["detail"] = json!(
+            "Clicks and typing are off: macOS hasn't allowed dx to control this Mac. Turn on dx in System Settings › Privacy & Security › Accessibility, then reopen the Desktop."
         );
     }
-    json!({ "status": "running" })
+    out
 }
 
-fn denied(tail: &str) -> Value {
-    status(
+/// Screen Recording denied: `failed`, with the permissions and voxl's log
+/// tail (the viewer keeps the log behind its Details).
+fn denied(head: &str, tail: &str) -> Value {
+    let mut out = status(
         "failed",
         &format!(
             "macOS has not allowed dx to record this Mac's screen. Allow dx in System Settings › Privacy & Security › Screen Recording and Accessibility, then open the Desktop again. If dx is already listed and on, remove it with − first: each update of dx's Desktop needs a new grant.\n{tail}"
         ),
-    )
+    );
+    let mut granted = permissions(head);
+    granted["screenRecording"] = json!(false);
+    out["permissions"] = granted;
+    out
+}
+
+/// The System Settings privacy pane `desktop.settings` opens.
+fn settings_url(pane: &str) -> Option<&'static str> {
+    match pane {
+        "screen-recording" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+        }
+        "accessibility" => {
+            Some("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        }
+        _ => None,
+    }
+}
+
+/// `desktop.settings` `{ pane }`: opens System Settings on the Mac at the
+/// Screen Recording or Accessibility pane, where the person allows dx. The
+/// supervisor runs `/usr/bin/open` itself, outside every sandbox; any other
+/// pane is refused, and a machine that is not a Mac answers that it cannot.
+pub fn open_settings(body: &Value) -> Result<Value, crate::runner::ops::OpError> {
+    use crate::runner::ops::OpError;
+    let pane = body["pane"].as_str().unwrap_or("");
+    let Some(url) = settings_url(pane) else {
+        return Err(OpError::invalid(
+            "pane must be \"screen-recording\" or \"accessibility\"",
+        ));
+    };
+    if !cfg!(target_os = "macos") {
+        return Err(OpError::failed(
+            "System Settings opens only on a Mac runner.",
+        ));
+    }
+    let out = std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| OpError::failed(format!("open: {e}")))?;
+    if !out.status.success() {
+        return Err(OpError::failed(format!(
+            "open {url}: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    log(&format!("desktop: opened System Settings at {pane}"));
+    Ok(json!({ "opened": true }))
 }
 
 fn last_line(text: &str) -> &str {

@@ -1,0 +1,85 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's requirement list: see requirement-list.tsx. */
+@layer components {
+  .dx-requirements {
+    display: grid;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    background: var(--background);
+    list-style: none;
+    text-align: left;
+  }
+  .dx-requirement {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    column-gap: var(--space-3);
+    padding: var(--space-2-5) var(--space-3);
+  }
+  .dx-requirement + .dx-requirement {
+    border-top: 1px solid var(--divider);
+  }
+  .dx-requirement-icon {
+    display: grid;
+    width: var(--control-sm);
+    height: var(--control-sm);
+    place-items: center;
+    color: var(--muted-foreground);
+    border-radius: var(--radius-md);
+    background: var(--muted);
+  }
+  .dx-requirement-icon svg {
+    width: 15px;
+    height: 15px;
+  }
+  .dx-requirement-copy {
+    display: grid;
+    min-width: 0;
+    gap: var(--space-0-5);
+  }
+  /* Without an icon the copy starts the row. */
+  .dx-requirement-copy:first-child {
+    grid-column: 1 / 3;
+  }
+  .dx-requirement-label {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 var(--space-2);
+    color: var(--foreground);
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-5);
+  }
+  .dx-requirement-label > span:first-child {
+    white-space: nowrap;
+  }
+  .dx-requirement-description {
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    line-height: var(--leading-4);
+  }
+  .dx-requirement-action {
+    grid-column: 3;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .dx-requirement-note {
+    grid-column: 2 / 4;
+    margin: var(--space-1) 0 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    line-height: var(--leading-4);
+  }
+  .dx-requirement-copy:first-child ~ .dx-requirement-note {
+    grid-column: 1 / 4;
+  }
+  .dx-requirement-note[data-tone="error"] {
+    color: color-mix(in srgb, var(--destructive) 80%, var(--muted-foreground));
+  }
+}

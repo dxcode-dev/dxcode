@@ -187,6 +187,7 @@ pub fn handle(ctx: &Ctx, op: &str, thread: &str, body: &Value) -> OpResult {
         "desktop.ensure" => return Ok(ctx.desktop.ensure(&ctx.paths, &ctx.config)),
         "desktop.health" => return Ok(ctx.desktop.health()),
         "desktop.windows" => return Ok(ctx.desktop.windows()),
+        "desktop.settings" => return crate::runner::desktop::open_settings(body),
         _ => {}
     }
     let t = thread_paths(&ctx.paths, thread)?;
@@ -368,6 +369,35 @@ pub fn link_own_home(own: &Path, thread_home: &Path) {
         if fs::create_dir_all(&config).is_ok() {
             link_children(&own_config, &config, &["dx"]);
         }
+    }
+    link_own_claude(own, thread_home, &crate::runner::exec::base_path());
+}
+
+/// Claude Code mode runs `$HOME/.local/bin/claude` (Core's
+/// claude-code/workspace-run.ts) and installs it there when missing, which on
+/// a runner would install a copy into every Thread's folder. With full access
+/// the Thread uses the person's own: `~/.local/bin/claude` (where Anthropic's
+/// installer puts it), else the first `claude` on the machine's PATH.
+fn link_own_claude(own: &Path, thread_home: &Path, host_path: &str) {
+    let target = thread_home.join(".local/bin/claude");
+    if fs::symlink_metadata(&target).is_ok() {
+        return;
+    }
+    let found = std::iter::once(own.join(".local/bin/claude"))
+        .chain(
+            host_path
+                .split(':')
+                .filter(|dir| !dir.is_empty() && !dir.starts_with(&*thread_home.to_string_lossy()))
+                .map(|dir| Path::new(dir).join("claude")),
+        )
+        .find(|candidate| candidate.is_file());
+    let Some(claude) = found else {
+        return;
+    };
+    if let Some(bin) = target.parent()
+        && fs::create_dir_all(bin).is_ok()
+    {
+        let _ = std::os::unix::fs::symlink(claude, &target);
     }
 }
 

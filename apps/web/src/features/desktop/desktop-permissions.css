@@ -1,0 +1,37 @@
+/* A Mac runner's Desktop before macOS allowed dx: see desktop-permissions.tsx. */
+.desktop-permissions {
+  display: grid;
+  width: min(100%, 420px);
+  max-height: 100%;
+  gap: var(--space-3);
+  overflow-y: auto;
+  text-align: left;
+}
+.dx-empty.desktop-permissions-heading {
+  padding: 0 0 var(--space-1);
+}
+.desktop-permissions-hint {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  line-height: var(--leading-4-5);
+}
+.desktop-permissions-hint code {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.desktop-permissions-details {
+  display: grid;
+  gap: var(--space-1-5);
+}
+.desktop-permissions-details .dx-disclosure {
+  justify-self: start;
+  font-size: var(--text-sm);
+}
+/* voxl's log lines are long: wrap them rather than scroll sideways. */
+.desktop-permissions-details .dx-textarea {
+  font-size: var(--text-xs);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  resize: vertical;
+}

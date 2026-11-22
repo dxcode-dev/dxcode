@@ -749,9 +749,10 @@ if ! token_to_descriptor "$TOKEN"; then
 fi
 GUEST=/home/user
 # Paths as Claude sees them: inside the local runtime's namespace the
-# Thread's home is /home/user.
+# Thread's home is /home/user. A runner (DX_RUNNER, a person's own machine)
+# has no /home/user to mount over, so Claude sees the Thread's real paths.
 SEEN="$D"
-if [ "$HOME" != "$GUEST" ] && unshare --user --map-root-user --mount true 2>/dev/null; then
+if [ "$HOME" != "$GUEST" ] && [ -z "\${DX_RUNNER:-}" ] && unshare --user --map-root-user --mount true 2>/dev/null; then
   if [ ! -d "$GUEST" ]; then
     echo "Local Claude Code mode needs a $GUEST directory on this machine to mount the Thread's home." > "$D/stderr.log"
     echo 1 > "$D/exit.tmp" && mv "$D/exit.tmp" "$D/exit"

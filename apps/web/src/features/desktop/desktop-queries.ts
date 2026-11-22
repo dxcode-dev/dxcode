@@ -1,6 +1,10 @@
 import {
   GetThreadDesktopResponseSchema,
   GetThreadDesktopWindowsResponseSchema,
+  type MacDesktopPermissions,
+  type MacSettingsPane,
+  type ThreadDesktopSettingsData,
+  ThreadDesktopSettingsResponseSchema,
   type ThreadDesktopWindowsAction,
   type ThreadDesktopWindowsData,
 } from "@dx/api";
@@ -24,6 +28,15 @@ export type DesktopAvailability =
       readonly startsViewOnly?: boolean;
     }
   | { readonly kind: "unsupported" }
+  /**
+   * A Mac runner whose macOS has not allowed dx to record the screen yet:
+   * which permissions are missing, and the runner's words with voxl's log.
+   */
+  | {
+      readonly kind: "permissions";
+      readonly permissions: MacDesktopPermissions;
+      readonly detail?: string;
+    }
   | { readonly kind: "failed"; readonly message: string };
 
 /**
@@ -56,6 +69,12 @@ export const checkDesktop = async (
         ...(data.startsViewOnly === true ? { startsViewOnly: true } : {}),
       };
     if (data.desktop === "unsupported") return { kind: "unsupported" };
+    if (data.permissions?.screenRecording === false)
+      return {
+        kind: "permissions",
+        permissions: data.permissions,
+        ...(data.detail === undefined ? {} : { detail: data.detail }),
+      };
     // A Mac runner says why: voxl missing (with its build command), macOS
     // permissions, or the Mac offline.
     return {
@@ -76,6 +95,31 @@ export const checkDesktop = async (
     return { kind: "failed", message: "The desktop couldn't be reached." };
   }
 };
+
+/**
+ * Opens System Settings on a Mac runner at a privacy pane, so the person
+ * allows dx there. `opened: false` carries why (the Mac offline).
+ */
+export const openDesktopSettings = async (
+  threadId: ThreadId,
+  pane: MacSettingsPane,
+): Promise<ThreadDesktopSettingsData> =>
+  (
+    await request(
+      `${desktopPath(threadId)}/settings`,
+      ThreadDesktopSettingsResponseSchema,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ pane }),
+      },
+    )
+  ).data;
+
+export const desktopSettingsMutation = (threadId: ThreadId) =>
+  mutationOptions({
+    mutationFn: (pane: MacSettingsPane) => openDesktopSettings(threadId, pane),
+  });
 
 /**
  * The Desktop's windows, for the app row. Listing never starts the desktop

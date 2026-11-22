@@ -1,8 +1,13 @@
 import {
   GetThreadDesktopResponseSchema,
   GetThreadDesktopWindowsResponseSchema,
+  type MacDesktopPermissions,
+  MacDesktopPermissionsSchema,
   MacDesktopWindowSchema,
   ThreadDesktopReadOnlyResponseSchema,
+  type ThreadDesktopSettingsData,
+  ThreadDesktopSettingsRequestSchema,
+  ThreadDesktopSettingsResponseSchema,
   type ThreadDesktopState,
   ThreadDesktopWindowsActionSchema,
   type ThreadDesktopWindowsData,
@@ -103,29 +108,45 @@ const notMachineOwner = (context: Context<AppEnv>) => {
   );
 };
 
-/** Starts the Mac's voxl through its runner and checks it answers. */
+const decodePermissions = Schema.decodeUnknownOption(
+  MacDesktopPermissionsSchema,
+);
+
+/**
+ * Starts the Mac's voxl through its runner and checks it answers. The
+ * runner's macOS permissions (from voxl's log) pass on as `permissions`.
+ */
 const checkRunnerDesktop = async (
   env: AppEnv["Bindings"],
   machineId: string,
   threadId: ThreadId,
-): Promise<{ desktop: ThreadDesktopState; detail?: string }> => {
+): Promise<{
+  desktop: ThreadDesktopState;
+  detail?: string;
+  permissions?: MacDesktopPermissions;
+}> => {
   const words = (value: unknown) =>
     typeof value === "string" && value.length > 0
       ? { detail: value.slice(0, 2000) }
       : {};
   try {
-    const ensured = await runnerCall<{ status?: unknown; detail?: unknown }>(
-      env,
-      machineId,
-      "desktop.ensure",
-      threadId,
-      {},
-      RUNNER_ENSURE_MS,
-    );
+    const ensured = await runnerCall<{
+      status?: unknown;
+      detail?: unknown;
+      permissions?: unknown;
+    }>(env, machineId, "desktop.ensure", threadId, {}, RUNNER_ENSURE_MS);
+    const permissions = Option.match(decodePermissions(ensured.permissions), {
+      onNone: () => ({}),
+      onSome: (value) => ({ permissions: value }),
+    });
     if (ensured.status === "unsupported")
       return { desktop: "unsupported", ...words(ensured.detail) };
     if (ensured.status !== "running")
-      return { desktop: "unavailable", ...words(ensured.detail) };
+      return {
+        desktop: "unavailable",
+        ...words(ensured.detail),
+        ...permissions,
+      };
     const health = await runnerCall<{ ok?: unknown; detail?: unknown }>(
       env,
       machineId,
@@ -135,8 +156,8 @@ const checkRunnerDesktop = async (
       RUNNER_HEALTH_MS,
     );
     return health.ok === true
-      ? { desktop: "ready", ...words(ensured.detail) }
-      : { desktop: "unavailable", ...words(health.detail) };
+      ? { desktop: "ready", ...words(ensured.detail), ...permissions }
+      : { desktop: "unavailable", ...words(health.detail), ...permissions };
   } catch (cause) {
     const error = RunnerOperationError.from(cause);
     return {
@@ -147,6 +168,41 @@ const checkRunnerDesktop = async (
           : error.code === "invalid"
             ? "This machine's runner predates the Desktop; it updates itself when idle."
             : error.detail.slice(0, 2000),
+    };
+  }
+};
+
+/**
+ * Asks the Mac's runner to open System Settings at one privacy pane
+ * (`desktop.settings`), so the person allows dx there. The supervisor runs
+ * it outside every sandbox; the reply says whether it opened, or why not.
+ */
+const openRunnerSettings = async (
+  env: AppEnv["Bindings"],
+  machineId: string,
+  threadId: ThreadId,
+  pane: string,
+): Promise<ThreadDesktopSettingsData> => {
+  try {
+    await runnerCall(
+      env,
+      machineId,
+      "desktop.settings",
+      threadId,
+      { pane },
+      RUNNER_HEALTH_MS,
+    );
+    return { opened: true };
+  } catch (cause) {
+    const error = RunnerOperationError.from(cause);
+    return {
+      opened: false,
+      detail:
+        error.code === "offline"
+          ? "This machine's runner is offline."
+          : error.code === "invalid"
+            ? "This machine's runner predates opening System Settings; it updates itself when idle."
+            : error.detail.slice(0, 500),
     };
   }
 };
@@ -281,6 +337,7 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
     let data: {
       desktop: ThreadDesktopState;
       detail?: string;
+      permissions?: MacDesktopPermissions;
       startsViewOnly?: boolean;
     };
     if (runner !== undefined) {
@@ -313,6 +370,48 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
     );
   })
   .get("/:threadId/desktop/windows", (context) => desktopWindows(context))
+  // A Mac runner's Desktop: open System Settings at the Screen Recording or
+  // Accessibility pane on the Mac (the owner's only, like the Desktop).
+  .post("/:threadId/desktop/settings", async (context) => {
+    const threadId = Schema.decodeUnknownOption(ThreadId)(
+      context.req.param("threadId"),
+    );
+    if (Option.isNone(threadId)) return context.notFound();
+    const request = Schema.decodeUnknownOption(
+      ThreadDesktopSettingsRequestSchema,
+    )(await readBoundedJson(context.req.raw).catch(() => undefined), {
+      onExcessProperty: "error",
+    });
+    if (Option.isNone(request))
+      return context.json(
+        {
+          status: "error",
+          data: {
+            code: "INVALID_REQUEST",
+            message: "Name a pane: screen-recording or accessibility.",
+            requestId: context.get("requestId"),
+          },
+        },
+        400,
+      );
+    const runner = await runnerOf(context, threadId.value);
+    if (runner === undefined) return context.notFound();
+    if (!runner.owned) return notMachineOwner(context);
+    const data = await openRunnerSettings(
+      context.env,
+      runner.machineId,
+      threadId.value,
+      request.value.pane,
+    );
+    context.header("cache-control", "no-store");
+    return context.json(
+      Schema.encodeUnknownSync(ThreadDesktopSettingsResponseSchema)({
+        status: "success",
+        data,
+      }),
+      200,
+    );
+  })
   .post("/:threadId/desktop/windows", async (context) => {
     const action = Schema.decodeUnknownOption(ThreadDesktopWindowsActionSchema)(
       await readBoundedJson(context.req.raw).catch(() => undefined),

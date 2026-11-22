@@ -40,7 +40,8 @@ export type RunnerOperation =
   | "threads"
   | "desktop.ensure"
   | "desktop.health"
-  | "desktop.windows";
+  | "desktop.windows"
+  | "desktop.settings";
 
 export type RunnerErrorCode =
   | "not-found"

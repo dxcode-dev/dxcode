@@ -607,6 +607,11 @@ pub fn base_environment_for(
             workload_identity_socket,
         ),
     ]);
+    // A runner's Thread: scripts that differ on a person's own machine (such
+    // as Claude Code mode's) read DX_RUNNER, as the runner's own commands set.
+    if std::env::var("DXD_RUNNER").as_deref() == Ok("1") {
+        environment.insert("DX_RUNNER".into(), "1".into());
+    }
     environment.extend(values.clone());
     // Full access: the machine's own tools (gh, Homebrew) before the ones
     // the Thread's environment names.
