@@ -31,6 +31,7 @@ import {
 } from "../plugins/routes.js";
 import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
+import { personalRunnerRoutes } from "../runners/routes.js";
 import { spaceAgentModelRoutes } from "../spaces/agent-model.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
@@ -246,6 +247,7 @@ settingsRoutes.route(
   personalFirstPartyPluginRoutes,
 );
 settingsRoutes.route("/personal/orb-providers", personalOrbProviderRoutes);
+settingsRoutes.route("/personal/runners", personalRunnerRoutes);
 settingsRoutes.route("/personal/plugin-bundles", personalPluginBundleRoutes);
 settingsRoutes.route("/personal/plugin-catalogs", personalPluginCatalogRoutes);
 settingsRoutes.route("/personal/skills", personalSkillRoutes);

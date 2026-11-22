@@ -1,10 +1,13 @@
-import type {
-  ChoicesData,
-  GraphData,
-  OrbResolvedProvider,
-  PluginAgentModeData,
-  PluginThreadTypeOption,
-  ProjectData,
+import {
+  type ChoicesData,
+  type GraphData,
+  type OrbResolvedProvider,
+  type PluginAgentModeData,
+  type PluginThreadTypeOption,
+  type ProjectData,
+  RUNNER_PROFILE_ID,
+  RUNNER_PROVIDER_ID,
+  type RunnerMachine,
 } from "@dx/api";
 import {
   isClaudeCodeModel,
@@ -25,6 +28,7 @@ import { getBrowserCommandRegistry } from "../../shared/commands/command-registr
 import { physicalKeyEvent } from "../../shared/commands/physical-key.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
 import { useNewProjectSurface } from "../../shared/new-project-surface.js";
+import { describeRunner } from "../../shared/runner-format.js";
 import { Button } from "../../shared/ui/button.js";
 import { chipVariants } from "../../shared/ui/chip-variants.js";
 import {
@@ -41,12 +45,14 @@ import {
   ChoiceSelectValue,
 } from "../../shared/ui/choice-select.js";
 import {
+  MenuItem,
   MenuItemHint,
   MenuItemText,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
   MenuRoot,
+  MenuSeparator,
   MenuSubmenuRoot,
   MenuSubmenuTrigger,
   MenuTrigger,
@@ -391,6 +397,83 @@ const orbProviderName = (provider: RunnerProviderPresentation) =>
 const formatOrbResources = ({ resources }: RunnerProfile) =>
   `${resources.cpuCores} CPU · ${Number((resources.memoryMb / 1024).toFixed(1))} GiB`;
 
+/**
+ * The person's own machines in the Orb picker (the `runner` provider): which
+ * one a runner Thread starts on, and Add runner. Absent when the provider is
+ * off for the person.
+ */
+export interface RunnerMachinePicker {
+  /** Undefined while the list loads. */
+  readonly runners: ReadonlyArray<RunnerMachine> | undefined;
+  /** The machine a runner Thread would start on now. */
+  readonly selectedId: string | undefined;
+  readonly onSelect: (runner: RunnerMachine) => void;
+  readonly onAdd: () => void;
+  /** The Add runner dialog, rendered beside the picker while it is open. */
+  readonly dialog?: React.ReactNode;
+}
+
+/**
+ * The runner provider's submenu: one row per paired machine instead of
+ * sizes (the provider has one), then Add runner. An offline machine stays
+ * selectable; its Thread starts when the machine comes back.
+ */
+function RunnerMachineItems({
+  machines,
+  selected,
+  disabled,
+  onSelect,
+}: {
+  readonly machines: RunnerMachinePicker | undefined;
+  /** The selected machine's id while a runner size is the Thread's Orb. */
+  readonly selected: string | undefined;
+  readonly disabled: boolean;
+  readonly onSelect: (runner: RunnerMachine) => void;
+}) {
+  const runners = machines?.runners;
+  return (
+    <>
+      {runners === undefined ? (
+        <MenuItem disabled>Loading runners…</MenuItem>
+      ) : runners.length === 0 ? (
+        <MenuItem disabled>No runners yet</MenuItem>
+      ) : (
+        <MenuRadioGroup
+          value={selected ?? ""}
+          onValueChange={(id: string) => {
+            const runner = runners.find((candidate) => candidate.id === id);
+            if (runner !== undefined) onSelect(runner);
+          }}
+        >
+          {runners.map((runner) => (
+            <MenuRadioItem
+              key={runner.id}
+              className="orb-picker-size"
+              value={runner.id}
+              label={runner.name}
+              closeOnClick
+              disabled={disabled}
+            >
+              <MenuItemText
+                title={runner.name}
+                description={describeRunner(runner)}
+              />
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      )}
+      <MenuSeparator />
+      <MenuItem
+        disabled={machines === undefined}
+        onClick={() => machines?.onAdd()}
+      >
+        <Plus aria-hidden="true" />
+        Add runner…
+      </MenuItem>
+    </>
+  );
+}
+
 /** One empty list, so an absent prop keeps a stable identity. */
 const NO_THREAD_TYPES: ReadonlyArray<PluginThreadTypeOption> = [];
 /**
@@ -406,6 +489,7 @@ function OrbPicker({
   disabled,
   isProfileAllowed,
   onSelect,
+  machines,
   finalFocus,
 }: {
   readonly finalFocus?: FinalFocus;
@@ -415,7 +499,13 @@ function OrbPicker({
   readonly disabled: boolean;
   readonly isProfileAllowed: (profile: RunnerProfile) => boolean;
   readonly onSelect: (runnerProfileId: RunnerProfileId) => void;
+  readonly machines?: RunnerMachinePicker;
 }) {
+  const runnerSelected = selectedProfile.adapter === RUNNER_PROVIDER_ID;
+  // A runner Thread's pill names its machine; other Orbs name their size.
+  const selectedMachine = runnerSelected
+    ? machines?.runners?.find(({ id }) => id === machines.selectedId)
+    : undefined;
   return (
     <MenuRoot disabled={disabled || groups === undefined}>
       <MenuTrigger
@@ -446,7 +536,9 @@ function OrbPicker({
           />
         )}
         <span>
-          {groups === undefined ? "Loading Orbs…" : selectedProfile.label}
+          {groups === undefined
+            ? "Loading Orbs…"
+            : (selectedMachine?.name ?? selectedProfile.label)}
         </span>
       </MenuTrigger>
       <MenuPopup
@@ -492,30 +584,42 @@ function OrbPicker({
                 sideOffset={6}
                 collisionPadding={12}
               >
-                <MenuRadioGroup
-                  value={selectedProfile.id}
-                  onValueChange={(value: RunnerProfileId) => onSelect(value)}
-                >
-                  {group.profiles.map((runnerProfile) => (
-                    <MenuRadioItem
-                      key={runnerProfile.id}
-                      className="orb-picker-size"
-                      value={runnerProfile.id}
-                      label={runnerProfile.label}
-                      closeOnClick
-                      disabled={
-                        runnerProfile.availability !== "available" ||
-                        group.orb.status !== "ready" ||
-                        !isProfileAllowed(runnerProfile)
-                      }
-                    >
-                      <MenuItemText
-                        title={runnerProfile.label}
-                        description={formatOrbResources(runnerProfile)}
-                      />
-                    </MenuRadioItem>
-                  ))}
-                </MenuRadioGroup>
+                {group.adapter === RUNNER_PROVIDER_ID ? (
+                  <RunnerMachineItems
+                    machines={machines}
+                    selected={runnerSelected ? machines?.selectedId : undefined}
+                    disabled={group.orb.status !== "ready"}
+                    onSelect={(runner) => {
+                      onSelect(RUNNER_PROFILE_ID as RunnerProfileId);
+                      machines?.onSelect(runner);
+                    }}
+                  />
+                ) : (
+                  <MenuRadioGroup
+                    value={selectedProfile.id}
+                    onValueChange={(value: RunnerProfileId) => onSelect(value)}
+                  >
+                    {group.profiles.map((runnerProfile) => (
+                      <MenuRadioItem
+                        key={runnerProfile.id}
+                        className="orb-picker-size"
+                        value={runnerProfile.id}
+                        label={runnerProfile.label}
+                        closeOnClick
+                        disabled={
+                          runnerProfile.availability !== "available" ||
+                          group.orb.status !== "ready" ||
+                          !isProfileAllowed(runnerProfile)
+                        }
+                      >
+                        <MenuItemText
+                          title={runnerProfile.label}
+                          description={formatOrbResources(runnerProfile)}
+                        />
+                      </MenuRadioItem>
+                    ))}
+                  </MenuRadioGroup>
+                )}
               </MenuPopup>
             </MenuSubmenuRoot>
           );
@@ -548,6 +652,7 @@ function NewThreadOrbSlot({
   onRunnerProfileChange,
   onRunnerProfileRetry,
   onConnectOrbProvider,
+  runnerMachines,
   finalFocus,
 }: {
   readonly finalFocus?: FinalFocus;
@@ -568,6 +673,7 @@ function NewThreadOrbSlot({
     | undefined;
   readonly onRunnerProfileRetry: (() => void) | undefined;
   readonly onConnectOrbProvider: (() => void) | undefined;
+  readonly runnerMachines: RunnerMachinePicker | undefined;
 }) {
   const selectedRunnerProfile = runnerProfiles.find(
     ({ id }) => id === runnerProfileId,
@@ -592,10 +698,18 @@ function NewThreadOrbSlot({
     (selectedRunnerProvider === undefined
       ? undefined
       : orbProviderName(selectedRunnerProvider));
+  const selectedMachine =
+    selectedRunnerProfile?.adapter === RUNNER_PROVIDER_ID
+      ? runnerMachines?.runners?.find(
+          ({ id }) => id === runnerMachines.selectedId,
+        )
+      : undefined;
   const selectedOrbName =
     selectedRunnerProfile === undefined
       ? ""
-      : `Orb: ${selectedProviderName === undefined ? "" : `${selectedProviderName} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
+      : selectedMachine !== undefined
+        ? `Orb: runner ${selectedMachine.name}`
+        : `Orb: ${selectedProviderName === undefined ? "" : `${selectedProviderName} `}${selectedRunnerProfile.label}${selectedOrbOwner === undefined ? "" : `, ${selectedOrbOwner.toLowerCase()}`}`;
   const canRetryRunnerProfiles = onRunnerProfileRetry !== undefined;
   const allowedRunnerProfileIdSet =
     allowedRunnerProfileIds === null || allowedRunnerProfileIds === undefined
@@ -652,18 +766,22 @@ function NewThreadOrbSlot({
       <span>Retry Orbs</span>
     </button>
   ) : (
-    <OrbPicker
-      groups={runnerGroups}
-      selectedProfile={selectedRunnerProfile}
-      selectedName={selectedOrbName}
-      disabled={locked || onRunnerProfileChange === undefined}
-      isProfileAllowed={(runnerProfile) =>
-        allowedRunnerProfileIdSet === undefined ||
-        allowedRunnerProfileIdSet.has(runnerProfile.id)
-      }
-      onSelect={(value) => onRunnerProfileChange?.(value)}
-      finalFocus={finalFocus}
-    />
+    <>
+      <OrbPicker
+        groups={runnerGroups}
+        selectedProfile={selectedRunnerProfile}
+        selectedName={selectedOrbName}
+        disabled={locked || onRunnerProfileChange === undefined}
+        isProfileAllowed={(runnerProfile) =>
+          allowedRunnerProfileIdSet === undefined ||
+          allowedRunnerProfileIdSet.has(runnerProfile.id)
+        }
+        onSelect={(value) => onRunnerProfileChange?.(value)}
+        finalFocus={finalFocus}
+        {...(runnerMachines === undefined ? {} : { machines: runnerMachines })}
+      />
+      {runnerMachines?.dialog}
+    </>
   );
 }
 
@@ -694,6 +812,7 @@ export function NewThreadConfigurationStrip({
   onRunnerProfileChange,
   onRunnerProfileRetry,
   onConnectOrbProvider,
+  runnerMachines,
   onModelChange,
   claudePlan,
   onClaudePlanChange,
@@ -740,6 +859,8 @@ export function NewThreadConfigurationStrip({
   readonly onRunnerProfileRetry?: () => void;
   /** Opens Orb Providers settings, for a person with no provider. */
   readonly onConnectOrbProvider?: () => void;
+  /** The person's own machines, while the runner provider is on for them. */
+  readonly runnerMachines?: RunnerMachinePicker;
   readonly onModelChange: (model: string | undefined) => void;
   /** The Claude plan a Claude Code Thread is bound to; unset, dx picks one. */
   readonly claudePlan?: string;
@@ -811,6 +932,7 @@ export function NewThreadConfigurationStrip({
         onRunnerProfileChange={onRunnerProfileChange}
         onRunnerProfileRetry={onRunnerProfileRetry}
         onConnectOrbProvider={onConnectOrbProvider}
+        runnerMachines={runnerMachines}
       />
       <ProjectPicker
         projects={projects}

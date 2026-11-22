@@ -71,6 +71,7 @@ import { alchemyStage } from "./alchemy-stage.mjs";
 import { operatorR2Credentials } from "./attachment-deployment.mjs";
 import { buildTarget, GUEST_TARGET } from "./build-dxd.mjs";
 import { loadMigrationManifest } from "./migration-manifest.mjs";
+import { fetchPinnedDesktop, fetchPinnedVoxl } from "./runner-voxl.mjs";
 
 const workspaceRoot = resolve(import.meta.dirname, "..");
 const operation = process.argv[2];
@@ -542,7 +543,54 @@ const mail =
         return { domain: mailDomainSetting, zoneId };
       })();
 
+/**
+ * Builds dxd for the machines a runner can be (macOS on Apple silicon and
+ * Intel, Linux arm64) and copies the guest's Linux x64 build beside them.
+ * A target the toolchain cannot build is left out, and the package then
+ * offers no download for it; the deployment goes on.
+ */
+const buildRunnerBinaries = (guestBinary) => {
+  const directory = resolve(workspaceRoot, `.dx/alchemy/${stage}/runner`);
+  rmSync(directory, { recursive: true, force: true });
+  mkdirSync(directory, { recursive: true });
+  copyFileSync(guestBinary, resolve(directory, "dxd-linux-x64"));
+  const cacheDirectory = process.env.DX_DXD_BUILD_CACHE?.trim();
+  for (const [triple, asset] of [
+    ["aarch64-apple-darwin", "dxd-darwin-arm64"],
+    ["aarch64-unknown-linux-musl", "dxd-linux-arm64"],
+  ]) {
+    const cached =
+      cacheDirectory && resolve(workspaceRoot, cacheDirectory, "runner", asset);
+    try {
+      if (cached && existsSync(cached)) {
+        copyFileSync(cached, resolve(directory, asset));
+        continue;
+      }
+      const targetDirectory = resolve(
+        workspaceRoot,
+        `.dx/alchemy/${stage}/runner-target`,
+      );
+      const built = buildTarget(triple, {
+        targetDirectory,
+        environment: deploymentBuildEnvironment,
+      }).binary;
+      copyFileSync(built, resolve(directory, asset));
+      if (cached) {
+        mkdirSync(dirname(cached), { recursive: true });
+        copyFileSync(built, cached);
+      }
+    } catch (cause) {
+      console.warn(
+        `runner: no ${asset} in this deployment (${cause instanceof Error ? cause.message : cause}).`,
+      );
+    }
+  }
+  return directory;
+};
+
 let dxdBinary;
+/** The runner dxd builds the package serves at /runner (runners, beta). */
+let runnerBinaries;
 let dxdChecksum = "0".repeat(64);
 let dxdReleaseUrl = "https://destroy.invalid/dxd";
 if (operation === "deploy") {
@@ -608,6 +656,24 @@ if (operation === "deploy") {
     .update(readFileSync(dxdBinary))
     .digest("hex");
   dxdReleaseUrl = `https://${selection.domain}/dxd`;
+  if (target === "branch" || target === "staging") {
+    runnerBinaries = buildRunnerBinaries(dxdBinary);
+    // The Mac Desktop's voxl and its launcher, pinned in deploy/runner
+    // (never built here): downloaded with the workflow's token and
+    // SHA-256-checked.
+    const cacheDirectory = process.env.DX_DXD_BUILD_CACHE?.trim();
+    const pinned = {
+      directory: runnerBinaries,
+      ...(cacheDirectory
+        ? { cacheDirectory: resolve(workspaceRoot, cacheDirectory, "runner") }
+        : {}),
+    };
+    for (const { asset, sha256 } of [
+      ...(await fetchPinnedVoxl(pinned)),
+      ...(await fetchPinnedDesktop(pinned)),
+    ])
+      console.log(`runner: ${asset} ${sha256}`);
+  }
 }
 
 const authEmailFrom =
@@ -655,6 +721,9 @@ prepareDeploymentPackage({
         dxdChecksum,
         "--dxd-binary",
         dxdBinary,
+        ...(runnerBinaries === undefined
+          ? []
+          : ["--runner-binaries", runnerBinaries]),
         // The app's CSP frames this deployment's Portals and reaches its
         // R2 bucket, where attachments and stored files transfer.
         ...(portals === undefined ? [] : ["--portal-domain", portals.domain]),

@@ -233,6 +233,11 @@ export interface ExecutionWorkspaceHandle {
   readonly development?: {
     readonly source: () => Promise<SourceWorkspaceRuntimeOptions>;
   };
+  /**
+   * A person's own machine (a runner): dx clones the source there but runs
+   * none of the repository's setup hooks and installs no tools.
+   */
+  readonly hostMachine?: true;
 }
 
 /** `execution.workspace`: every provider implements it. */

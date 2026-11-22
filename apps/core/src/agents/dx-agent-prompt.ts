@@ -108,6 +108,20 @@ const repositoryLayoutPrompt =
   "The Project's repository is checked out in the working directory, where your commands start. Put every other checkout under ~/workspace/repos/<name>, both a repository you clone and a Git worktree you create, for example `git worktree add ~/workspace/repos/<repo>-<branch> -b <branch>`. The Files and Changes panes show each checkout there as its own tab, which is how the user sees your work in it. Clone a repository only when the task needs to read or change it, not in advance. To work in a checkout there, use its path, such as `cd ~/workspace/repos/<name>`, and read its AGENTS.md or CLAUDE.md when present.";
 
 /** A Project repository beyond the main one, as dx clones it. */
+/**
+ * A runner Thread's workspace: the person's own machine, not an Orb. The
+ * agent works there as the person does, with their tools and keys, so it
+ * learns what differs from the Orb the rest of the prompt describes.
+ */
+export const runnerPrompt = (runner: { readonly name: string } | undefined) =>
+  runner === undefined
+    ? ""
+    : `This Thread runs on ${runner.name}, the Thread owner's own machine (a dx runner), not on an Orb. Where this prompt describes the Orb, the machine differs:
+- Commands run as the owner, with their installed tools, network, SSH keys, and logins (Homebrew, rustup, gh). Install what the work needs, as the owner would in their own terminal.
+- Other Threads, and the owner's own apps, share this machine's CPU, memory, and disk. Keep builds and servers to what the task needs, stop what you started when done, and prefer the Thread's own folder for large files.
+- \`$HOME\` is this Thread's folder, not the owner's home. Change the owner's global setup (shell profiles, global packages, system settings) only when they ask.
+- The machine sleeps when the owner closes it: there is no Orb idle timeout, and work stops until it wakes.`;
+
 export interface AdditionalRepositoryPromptData {
   /** `owner/name` on its Git host. */
   readonly fullName: string;

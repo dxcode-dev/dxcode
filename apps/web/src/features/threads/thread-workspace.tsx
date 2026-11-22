@@ -1180,7 +1180,9 @@ function orbComposerNotice(
     source: AgentSource<UseFlueAgentResult>,
   ) => (
     <React.Fragment key={thread.id}>
-      {ready ? (
+      {/* A runner's disk and memory are its owner's machine's, not an Orb's
+          for the agent to free. */}
+      {ready && thread.runner === undefined ? (
         <React.Suspense fallback={null}>
           <OrbNotices
             threadId={thread.id}
@@ -1219,14 +1221,24 @@ function ThreadSessionContent({
   onOpenModelRouting,
   focus,
   onFocusHandled,
-  Terminal,
-  Desktop,
+  Terminal: OrbTerminal,
+  Desktop: OrbDesktop,
   renderTitleBar,
   agentSource,
 }: ThreadSessionProps & {
   readonly agentSource: ThreadAgentSource;
 }) {
   const { identity } = useAuthenticatedIdentity();
+  // A Thread on someone's own machine (a runner) opens its Terminal, confined
+  // to its sandbox and folder, and its Desktop, the whole machine's screen,
+  // for its owner only; a Linux runner has no Desktop.
+  const runnerOwner = (thread.access ?? "owner") === "owner";
+  const Terminal =
+    thread.runner === undefined || runnerOwner ? OrbTerminal : undefined;
+  const Desktop =
+    thread.runner === undefined || (runnerOwner && thread.runner.os !== "linux")
+      ? OrbDesktop
+      : undefined;
   const archived = thread.lifecycleState === "archived";
   // An archived Thread lists only the plugin panes and views (tabs, a
   // Thread type's main view) its plugins keep (`archivedThreads` "show" or

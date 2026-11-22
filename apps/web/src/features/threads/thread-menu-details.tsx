@@ -75,7 +75,14 @@ export default function ThreadMenuDetails({
       <MenuSeparator />
       <SelectionMenuItem thread={thread} />
       <PluginAgentMenuItem thread={thread} />
-      {canUseOrb(thread) ? <OrbMenuItem threadId={thread.id} /> : null}
+      {canUseOrb(thread) ? (
+        <OrbMenuItem
+          threadId={thread.id}
+          {...(thread.runner === undefined
+            ? {}
+            : { runnerName: thread.runner.name })}
+        />
+      ) : null}
       {own ? (
         <>
           <MenuSeparator />
@@ -106,7 +113,14 @@ function ThreadDetailItems({
       <MenuSeparator />
       <SelectionMenuItem thread={thread} />
       <PluginAgentMenuItem thread={thread} />
-      {canUseOrb(thread) ? <OrbMenuItem threadId={thread.id} /> : null}
+      {canUseOrb(thread) ? (
+        <OrbMenuItem
+          threadId={thread.id}
+          {...(thread.runner === undefined
+            ? {}
+            : { runnerName: thread.runner.name })}
+        />
+      ) : null}
       <MenuSeparator />
       <MenuItem
         title={projectName}
@@ -212,8 +226,11 @@ const ORB_STATE_LABELS = {
  */
 function OrbMenuItem({
   threadId,
+  runnerName,
 }: {
   readonly threadId: ThreadDetailData["id"];
+  /** The person's own machine the Thread runs on, if a runner. */
+  readonly runnerName?: string;
 }) {
   const client = useQueryClient();
   const { identity } = useAuthenticatedIdentity();
@@ -238,7 +255,9 @@ function OrbMenuItem({
     <MenuItem className="thread-menu-detail-item">
       <OrbIcon reducedMotion />
       <span className="thread-menu-detail-label">Orb</span>
-      <span className="thread-menu-detail-value">{state}</span>
+      <span className="thread-menu-detail-value">
+        {runnerName === undefined ? state : `${state} · ${runnerName}`}
+      </span>
     </MenuItem>
   );
 }

@@ -581,11 +581,87 @@ const packageFiles = (root) =>
       return { path, size: content.byteLength, sha256: sha256(content) };
     });
 
+/**
+ * Runner builds of dxd (`dxd runner` on a person's own machine), served at
+ * `/runner/<asset>` with `<asset>.sha256` and `/runner/manifest.json`, and
+ * the Mac Desktop's voxl (pinned in deploy/runner/voxl.json, see
+ * scripts/runner-voxl.mjs) with its launcher (`dx-desktop-darwin-<arch>`,
+ * pinned in deploy/runner/dx-desktop.json), listed under the keys `dxd
+ * runner` looks up. Optional: a package without them offers no runner
+ * download, or no voxl download (a Mac then needs a local voxl build).
+ */
+export const RUNNER_ASSETS = Object.freeze({
+  "dxd-darwin-arm64": { platform: "macos-aarch64", format: "macho" },
+  "dxd-linux-arm64": { platform: "linux-aarch64", format: "elf" },
+  "dxd-linux-x64": { platform: "linux-x86_64", format: "elf" },
+  "voxl-darwin-arm64": { platform: "voxl-darwin-aarch64", format: "macho" },
+  "dx-desktop-darwin-arm64": {
+    platform: "dx-desktop-darwin-aarch64",
+    format: "macho",
+  },
+});
+const RUNNER_PATH =
+  /^assets\/runner\/(?:manifest\.json|(?:dxd-(?:darwin|linux)-(?:arm64|x64)|voxl-darwin-arm64|dx-desktop-darwin-arm64)(?:\.sha256)?)$/;
+
+const runnerBinaryFormat = (binary) =>
+  binary.length >= 4 &&
+  binary.subarray(0, 4).equals(Buffer.from([0xcf, 0xfa, 0xed, 0xfe]))
+    ? "macho"
+    : binary.length >= 4 &&
+        binary.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+      ? "elf"
+      : undefined;
+
+/** Writes the runner assets and returns the manifest's `runner` entry. */
+export const packageRunnerAssets = (runnerBinaries, outputRoot, release) => {
+  if (runnerBinaries === undefined) return undefined;
+  const assets = {};
+  const paths = [];
+  for (const [asset, { platform, format }] of Object.entries(RUNNER_ASSETS)) {
+    const source = resolve(runnerBinaries, asset);
+    if (!existsSync(source)) continue;
+    const metadata = lstatSync(source);
+    if (
+      !metadata.isFile() ||
+      metadata.isSymbolicLink() ||
+      metadata.size < 1 ||
+      metadata.size > 32 * 1_024 * 1_024
+    )
+      throw new Error(`Packaged runner binary is invalid: ${asset}`);
+    const binary = readFileSync(source);
+    if (runnerBinaryFormat(binary) !== format)
+      throw new Error(`Packaged runner binary has the wrong format: ${asset}`);
+    mkdirSync(resolve(outputRoot, "assets/runner"), { recursive: true });
+    const hash = sha256(binary);
+    writeFileSync(resolve(outputRoot, "assets/runner", asset), binary, {
+      mode: 0o644,
+    });
+    writeFileSync(
+      resolve(outputRoot, "assets/runner", `${asset}.sha256`),
+      `${hash}  ${asset}\n`,
+      { mode: 0o644 },
+    );
+    assets[platform] = { path: `/runner/${asset}`, sha256: hash };
+    paths.push(`assets/runner/${asset}`, `assets/runner/${asset}.sha256`);
+  }
+  if (paths.length === 0) return undefined;
+  writeFileSync(
+    resolve(outputRoot, "assets/runner/manifest.json"),
+    `${JSON.stringify({ version: release, assets }, null, 2)}\n`,
+    { mode: 0o644 },
+  );
+  return {
+    version: release,
+    files: [...paths, "assets/runner/manifest.json"].sort(),
+  };
+};
+
 export const createProductionPackage = async ({
   coreBuildRoot,
   docsBuildRoot,
   dxdBinary,
   dxdSha256,
+  runnerBinaries,
   outputRoot,
   revision,
   stage,
@@ -703,6 +779,11 @@ export const createProductionPackage = async ({
     throw new Error("Packaged dxd checksum does not match.");
   const dxdPath = "assets/dxd";
   writeFileSync(resolve(outputRoot, dxdPath), binary, { mode: 0o644 });
+  const runner = packageRunnerAssets(
+    runnerBinaries,
+    outputRoot,
+    releaseMetadata.release,
+  );
   const dxd = {
     source: "packaged-revision",
     release: releaseMetadata.release,
@@ -808,6 +889,7 @@ export const createProductionPackage = async ({
       },
     ],
     dxd,
+    ...(runner === undefined ? {} : { runner }),
     sourceMaps: { policy: "forbidden", files: [] },
     artifact: {
       algorithm: "sha256",
@@ -824,6 +906,27 @@ export const createProductionPackage = async ({
     `${JSON.stringify(manifest, null, 2)}\n`,
   );
   return manifest;
+};
+
+/** The runner assets a package lists, checked against its files. */
+const runnerPackageFiles = (manifest, files) => {
+  if (manifest.runner === undefined) return [];
+  const listed = manifest.runner.files;
+  if (
+    !Array.isArray(listed) ||
+    listed.length === 0 ||
+    listed.some((path) => typeof path !== "string" || !RUNNER_PATH.test(path))
+  )
+    throw new Error("Production package runner assets are invalid.");
+  for (const path of listed.filter((candidate) =>
+    /\/(?:dxd|voxl|dx-desktop)-[a-z0-9-]+$/.test(candidate),
+  )) {
+    const binary = files.find((file) => file.path === path);
+    const recorded = files.find((file) => file.path === `${path}.sha256`);
+    if (binary === undefined || recorded === undefined)
+      throw new Error("Production package runner assets are incomplete.");
+  }
+  return listed;
 };
 
 export const validateProductionPackage = async (root) => {
@@ -1036,6 +1139,7 @@ export const validateProductionPackage = async (root) => {
     "assets/view-frame.html",
     "assets/view-frame-connected.html",
     "assets/dxd",
+    ...runnerPackageFiles(manifest, files),
   ]);
   const docsFiles = (manifest.graph?.docs ?? []).map((path) => {
     const file = files.find(

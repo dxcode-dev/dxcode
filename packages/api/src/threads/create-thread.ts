@@ -11,6 +11,7 @@ import {
 } from "@dx/domain";
 import { Schema } from "effect";
 import { errorResponse } from "../http/response.js";
+import { RunnerMachineId } from "../settings/runners.js";
 import { ThreadDetailDataSchema } from "./thread-data.js";
 
 // Mirrors Flue's public DeliveredAttachment contract. Flue applies this
@@ -83,6 +84,11 @@ export const InitialThreadMessageSchema = Schema.Struct({
 export const CreateThreadRequestSchema = /* @__PURE__ */ Schema.Struct({
   projectId: Schema.optional(ProjectId),
   runnerProfileId: Schema.optional(RunnerProfileId),
+  /**
+   * The person's paired machine a runner Thread (`rn.machine`) runs on;
+   * left out, their most recently seen machine.
+   */
+  runnerMachineId: Schema.optional(RunnerMachineId),
   title: Schema.optional(ThreadTitle),
   selection: Schema.optional(ThreadModelSelection),
   threadId: Schema.optional(ThreadId),
@@ -210,6 +216,8 @@ export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
      * refused it); other sizes may run.
      * `beta-provider-off`: the size is on a beta provider (#1924) the
      * person has not turned on in Experimental Features.
+     * `no-runner`: a runner Thread, and the person has no paired machine
+     * (or named one that is not theirs).
      */
     reason: Schema.Literals([
       "preparing",
@@ -217,6 +225,7 @@ export const CreateThreadOrbUnavailableResponseSchema = Schema.Struct({
       "no-provider",
       "size-unavailable",
       "beta-provider-off",
+      "no-runner",
     ]),
     /** What to do, for a reason the person can fix. */
     detail: Schema.optional(Schema.String),

@@ -340,6 +340,31 @@ export const productionExperimentalFeatureRegistry =
         },
       },
       {
+        id: "orb-provider-runner",
+        title: "Runners",
+        description:
+          "Beta: run Threads on your own Mac or Linux machine. Adds Runners to the New Thread Orb picker and Orb Providers, where one command installs and pairs the dx runner. Threads there run in their own sandboxed folder under ~/.dx, Terminal included; Desktop is off on them. Off, Threads already on a runner keep running.",
+        // Tracked in the private repository, so no public issue yet.
+        owner: { team: "dx/execution" },
+        status: "experimental",
+        defaultEnabled: false,
+        allowedScope: "personal",
+        kind: "capability",
+        risk: "high",
+        prerequisites: [],
+        incompatibilities: [],
+        activation: "new-thread",
+        reviewDate: "2027-02-15",
+        lifecyclePlan: {
+          migration:
+            "Paired machines stay in runner_machine; Threads pinned to a runner keep running when the flag is off.",
+          graduation:
+            "Once runners pass the deployed acceptance suite on macOS and Linux, remove betaFeature from the runner descriptor and retire this flag as graduated.",
+          removal:
+            "Retire the flag as removed, revoke every runner, and drop the runner descriptor and provider.",
+        },
+      },
+      {
         id: MAILBOX_FEATURE_ID,
         title: "dx Mail",
         description:

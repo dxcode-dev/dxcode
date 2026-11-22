@@ -1,7 +1,7 @@
 {
   "name": "@dx/core",
   "private": true,
-  "version": "0.2.151",
+  "version": "0.2.152",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -24,7 +24,7 @@
     "@flue/runtime": "file:../../third-party/flue/runtime-ea96490468932c82c2894dd9463b56a21b158dad.tgz",
     "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "@logtape/logtape": "2.3.1",
-    "@modelcontextprotocol/client": "2.0.0",
+    "@modelcontextprotocol/client": "2.3.0",
     "@opentelemetry/api": "1.9.0",
     "aws4fetch": "1.0.20",
     "better-auth": "1.7.7",
@@ -33,7 +33,7 @@
     "effect": "4.0.5",
     "fast-png": "8.0.0",
     "fflate": "0.8.3",
-    "hono": "4.12.32",
+    "hono": "4.13.16",
     "jose": "6.2.3",
     "jpeg-js": "0.4.4",
     "omggif": "1.0.10",
@@ -42,7 +42,7 @@
     "tldts": "7.4.11",
     "valibot": "1.4.2",
     "yaml": "2.9.0",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.53.0",
@@ -56,9 +56,9 @@
     "@types/ws": "8.18.1",
     "@valibot/to-json-schema": "1.7.1",
     "google-auth-library": "10.9.1",
-    "playwright-core": "1.55.0",
+    "playwright-core": "1.55.1",
     "tsx": "4.23.12",
-    "vite": "8.2.2",
+    "vite": "8.2.4",
     "wrangler": "4.124.0",
     "ws": "8.21.3"
   },

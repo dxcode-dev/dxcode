@@ -56,6 +56,7 @@ export interface InitialThreadCreationAttempt {
   readonly pluginAgentMode?: string;
   readonly pluginThreadType?: string;
   readonly runnerProfileId?: RunnerProfileId;
+  readonly runnerMachineId?: string;
   readonly visibility?: ThreadVisibility;
   readonly body: string;
   readonly attachmentIds: ReadonlyArray<string>;

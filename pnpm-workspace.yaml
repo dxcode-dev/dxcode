@@ -11,6 +11,45 @@ overrides:
   "@earendil-works/pi-agent-core": 1.1.0
   "@earendil-works/pi-telemetry": 1.1.0
   "@flue/runtime": file:third-party/flue/runtime-ea96490468932c82c2894dd9463b56a21b158dad.tgz
+  # Security fixes for transitive dependencies whose parents (vendored flue,
+  # pinned and patched alchemy and excalidraw, e2b, wrangler) still resolve a
+  # vulnerable version. Each selector matches only the vulnerable range.
+  # Drop an entry once every parent resolves the fixed version by itself.
+  # 2.x, because GHSA-rmxm-3fg6-px4f affects 1.19.10 to 2.1.2. Its parents
+  # (@prisma/dev, MCP sdk) only call serve(), which 2.x keeps.
+  "@hono/node-server@>=1 <2.1.6": 2.1.6
+  "@modelcontextprotocol/client@>=2 <2.3.0": 2.3.0
+  "@modelcontextprotocol/sdk@>=1 <1.32.0": 1.32.0
+  "@modelcontextprotocol/server@>=2 <2.3.0": 2.3.0
+  "body-parser@>=2 <2.4.0": 2.4.0
+  "brace-expansion@>=5 <5.0.12": 5.0.12
+  "fast-uri@>=3 <3.1.9": 3.1.9
+  "fast-xml-parser@>=5 <5.12.0": 5.12.0
+  "glob@>=13 <14.0.2": 14.0.2
+  "hono@>=4 <4.13.16": 4.13.16
+  "ip-address@>=10 <10.7.4": 10.7.4
+  "js-yaml@>=5 <5.4.1": 5.4.1
+  "katex@>=0.16 <0.18.2": 0.18.2
+  "lodash-es@<4.18.1": 4.18.1
+  "lodash@<4.18.1": 4.18.1
+  "minimatch@>=10 <11.0.1": 11.0.1
+  "nanoid@<3.3.18": 3.3.18
+  "nanoid@>=4 <5.1.16": 5.1.16
+  "postcss-selector-parser@>=6 <6.1.5": 6.1.5
+  "proxy-addr@<2.0.8": 2.0.8
+  "qs@>=6 <6.16.1": 6.16.1
+  "seroval-plugins@>=1 <1.6.11": 1.6.11
+  "seroval@>=1 <1.6.11": 1.6.11
+  "sharp@>=0.35 <0.35.5": 0.35.5
+  "source-map-js@<1.2.2": 1.2.2
+  "undici@>=7 <7.30.1": 7.30.1
+  "undici@>=8 <8.12.2": 8.12.2
+  "uuid@<11.1.1": 11.1.1
+  "valibot@>=1 <1.4.2": 1.4.2
+  "vite@>=8 <8.2.4": 8.2.4
+  "zod@>=4 <4.6.6": 4.6.6
+  # e2b pins this alias exactly, so the undici range above does not match it.
+  "e2b>undici8": npm:undici@8.12.2
 
 patchedDependencies:
   alchemy@2.0.0-beta.83: third-party/alchemy/alchemy@2.0.0-beta.83.patch

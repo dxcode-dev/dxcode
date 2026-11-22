@@ -522,6 +522,27 @@ const asSourceRunError = (cause: unknown): never => {
  */
 const asOrbStartRunError = (cause: unknown): never => {
   const message = cause instanceof Error ? cause.message : "";
+  // A runner Thread whose machine is not connected (asleep, off, or its
+  // runner stopped): say so instead of a generic provider error.
+  // A runner Thread whose machine was removed: it can never run again.
+  if (message.includes("runner:removed:"))
+    throw new FlueError({
+      type: "runner_removed",
+      message: "This Thread's runner was removed.",
+      details:
+        "Its machine was removed in Settings › Runners, so this Thread can't run again. Start a new Thread on another Orb or a paired machine.",
+      dev: "",
+      meta: { code: "RUNNER_REMOVED" },
+    });
+  if (message.includes("runner:offline:"))
+    throw new FlueError({
+      type: "runner_offline",
+      message: "This Thread's runner is offline.",
+      details:
+        "dx can't reach the machine this Thread runs on. Wake it or start its runner (on a Mac: launchctl kickstart -k gui/$(id -u)/dev.dx.runner), then Retry. Its files are safe on that machine.",
+      dev: "",
+      meta: { code: "RUNNER_OFFLINE" },
+    });
   if (!message.includes(":ORB_START_TIMED_OUT)")) throw cause;
   throw new FlueError({
     type: "orb_start_timed_out",
@@ -836,7 +857,8 @@ const activationFor =
                   db,
                   id,
                   handle.guest,
-                  true,
+                  // A runner runs none of the repository's setup hooks.
+                  handle.hostMachine !== true,
                   source,
                   // Only a first preparation has a status to show; a ready
                   // workspace's row no longer takes one.

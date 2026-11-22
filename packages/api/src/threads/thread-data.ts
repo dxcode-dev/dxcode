@@ -211,6 +211,15 @@ export const ThreadAgentInitializationDataSchema = Schema.Struct({
 export type ThreadAgentInitializationData =
   typeof ThreadAgentInitializationDataSchema.Type;
 
+export const ThreadRunnerDataSchema = Schema.Struct({
+  machineId: Schema.String,
+  name: Schema.String,
+  /** Only a Mac runner has a Desktop; absent from older servers. */
+  os: Schema.optional(Schema.Literals(["macos", "linux"])),
+});
+
+export type ThreadRunnerData = typeof ThreadRunnerDataSchema.Type;
+
 export const ThreadExecutionWorkspaceDataSchema = Schema.Struct({
   ready: Schema.Boolean,
   preparationStatus: Schema.NullOr(
@@ -292,6 +301,11 @@ export const ThreadDetailDataSchema = Schema.Struct({
   agentUrl: ThreadAgentUrlSchema,
   agentInitialization: ThreadAgentInitializationDataSchema,
   executionWorkspace: ThreadExecutionWorkspaceDataSchema,
+  /**
+   * The person's own machine the Thread runs on (the `runner` Orb provider).
+   * It has no Desktop yet; its Terminal opens for its owner only.
+   */
+  runner: Schema.optional(ThreadRunnerDataSchema),
   /** The requester's access; absent from older servers, meaning owner. */
   access: Schema.optional(ThreadViewerAccessSchema),
   /** Present while the Thread is shared with the owner's workspace. */

@@ -9,11 +9,20 @@ const PreparationStatus = Schema.String.check(
 const ExecutionWorkspaceReadinessRow = Schema.Struct({
   ready_at: Schema.NullOr(Schema.String),
   preparation_status: Schema.NullOr(PreparationStatus),
+  runner_id: Schema.optional(Schema.NullOr(Schema.String)),
+  runner_name: Schema.optional(Schema.NullOr(Schema.String)),
+  runner_os: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export interface ExecutionWorkspaceReadiness {
   readonly ready: boolean;
   readonly preparationStatus: string | null;
+  /** The person's own machine, for a Thread on the `runner` provider. */
+  readonly runner?: {
+    readonly machineId: string;
+    readonly name: string;
+    readonly os?: "macos" | "linux";
+  };
 }
 
 export const readExecutionWorkspaceReadiness = async (
@@ -22,8 +31,13 @@ export const readExecutionWorkspaceReadiness = async (
 ): Promise<ExecutionWorkspaceReadiness> => {
   const row = await db
     .prepare(
-      `SELECT ready_at, preparation_status
+      // A runner Thread also names its machine (migration 0290).
+      `SELECT ready_at, preparation_status,
+              m.id AS runner_id, m.name AS runner_name, m.os AS runner_os
          FROM execution_workspace
+         LEFT JOIN runner_machine AS m
+           ON execution_workspace.provider = 'runner'
+          AND m.id = execution_workspace.provider_template
         WHERE thread_id = ?`,
     )
     .bind(threadId)
@@ -34,6 +48,17 @@ export const readExecutionWorkspaceReadiness = async (
     ready: decoded.ready_at !== null,
     preparationStatus:
       decoded.ready_at === null ? decoded.preparation_status : null,
+    ...(decoded.runner_id == null || decoded.runner_name == null
+      ? {}
+      : {
+          runner: {
+            machineId: decoded.runner_id,
+            name: decoded.runner_name,
+            ...(decoded.runner_os === "macos" || decoded.runner_os === "linux"
+              ? { os: decoded.runner_os }
+              : {}),
+          },
+        }),
   };
 };
 

@@ -30,9 +30,14 @@ const WAIT_SLACK_MS = 5_000;
 // each byte, so no form of a secret matches the hex itself. Whether a read
 // before already reported the command's end says nothing is held back any
 // more.
+// Milliseconds since the epoch: GNU date's %3N, else whole seconds (a
+// runner on macOS, whose date prints %3N as a literal "3N").
+const nowMs = `now_ms() { local t; t=$(date +%s%3N); case $t in *[!0-9]*) t=$(( $(date +%s) * 1000 ));; esac; printf '%s' "$t"; }`;
+
 const readScript = (wait: number, context: number) => `
-deadline=$(( $(date +%s%3N) + ${wait} ))
-while [[ ! -f "$state/exit" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.1; done
+${nowMs}
+deadline=$(( $(now_ms) + ${wait} ))
+while [[ ! -f "$state/exit" && $(now_ms) -lt $deadline ]]; do sleep 0.1; done
 # Serialize readers so concurrent calls cannot return the same bytes. A
 # reader killed without its EXIT trap (SIGKILL after a deadline) leaves the
 # lock behind; one older than a minute is stale.
@@ -46,11 +51,11 @@ trap 'exit 130' INT
 cursor=$(cat "$state/cursor")
 running=true; code=
 if [[ -f "$state/exit" ]]; then running=false; code=$(cat "$state/exit"); fi
-size=$(stat -c %s "$state/output")
+size=$(wc -c < "$state/output")
 start=$cursor
 (( size - start > 51200 )) && start=$((size - 51200))
 dd if="$state/output" bs=1 skip="$start" count="$((size-start))" status=none | tail -n 2000 > "$state/read"
-kept=$(stat -c %s "$state/read")
+kept=$(wc -c < "$state/read")
 truncated=0
 (( kept < size - cursor )) && truncated=1
 from=$((size - kept)); before=$(( from < ${context} ? from : ${context} ))
@@ -98,8 +103,9 @@ state="$root/${state}"
 mkdir -p "$root"
 mkdir "$state" 2>/dev/null && exit 0
 : > "$state/stop"
-deadline=$(( $(date +%s%3N) + 5000 ))
-while [[ ! -f "$state/pid" && $(date +%s%3N) -lt $deadline ]]; do sleep 0.05; done
+${nowMs}
+deadline=$(( $(now_ms) + 5000 ))
+while [[ ! -f "$state/pid" && $(now_ms) -lt $deadline ]]; do sleep 0.05; done
 [[ -f "$state/pid" ]] || exit 0
 pid=$(cat "$state/pid")
 ${killGroup}`;
@@ -251,8 +257,17 @@ mkdir "$state" 2>/dev/null || { echo 'Stopped before the command started.' >&2; 
 printf '%s' ${quote(params.command)} > "$state/command"
 printf '%s' ${quote(runner)} > "$state/runner"
 : > "$state/output"; echo 0 > "$state/cursor"
-nohup setsid bash "$state/runner" "$state" </dev/null >/dev/null 2>&1 &
-while [[ ! -f "$state/pid" ]]; do sleep 0.01; done
+nohup setsid bash "$state/runner" "$state" </dev/null >"$state/launch" 2>&1 &
+# A runner that cannot start says why instead of leaving the start waiting.
+${nowMs}
+deadline=$(( $(now_ms) + ${START_BUDGET_MS - 5_000} ))
+while [[ ! -f "$state/pid" ]]; do
+  if (( $(now_ms) > deadline )); then
+    echo "The command's runner did not start: $(tail -c 400 "$state/launch" 2>/dev/null)" >&2
+    exit 1
+  fi
+  sleep 0.01
+done
 pid=$(cat "$state/pid")
 # The runner keeps its initial path; the public pid path is a durable alias.
 ln -s "$state" "$root/$pid" || exit 1

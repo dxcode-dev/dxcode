@@ -205,7 +205,9 @@ pub struct Capabilities {
     pub storage: StorageCapability,
     pub terminal_sessions: TerminalSessionsCapability,
     pub mcp: McpCapability,
-    pub desktop: DesktopCapability,
+    /// Absent where no Desktop can run (a runner, macOS).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub desktop: Option<DesktopCapability>,
     pub plugin_host: PluginHostCapability,
     pub sandbox: SandboxCapability,
 }
@@ -224,9 +226,18 @@ impl Capabilities {
             storage: StorageCapability { version: 1 },
             terminal_sessions: TerminalSessionsCapability { version: 1 },
             mcp: McpCapability { version: 1 },
-            desktop: DesktopCapability { version: 1 },
+            desktop: Some(DesktopCapability { version: 1 }),
             plugin_host: PluginHostCapability { version: 1 },
             sandbox: SandboxCapability { version: 1 },
+        }
+    }
+
+    /// What this daemon offers: every capability, less the Desktop when it
+    /// has none to serve.
+    pub fn for_daemon(desktop: bool) -> Self {
+        Self {
+            desktop: desktop.then_some(DesktopCapability { version: 1 }),
+            ..Self::current()
         }
     }
 }

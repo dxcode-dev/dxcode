@@ -16,6 +16,18 @@ export type ThreadDesktopState = typeof ThreadDesktopStateSchema.Type;
 
 export const ThreadDesktopDataSchema = Schema.Struct({
   desktop: ThreadDesktopStateSchema,
+  /**
+   * A Mac runner's own words when its Desktop is not ready (voxl missing,
+   * with its build command; macOS permissions denied; the Mac offline), or
+   * a notice beside a ready one.
+   */
+  detail: Schema.optional(Schema.String.check(Schema.isMaxLength(2000))),
+  /**
+   * A Mac runner's Desktop opens view-only: it shows a real Mac someone may
+   * be using, maybe the very Mac running the viewer, so the person turns
+   * control on before clicks and keys reach it.
+   */
+  startsViewOnly: Schema.optional(Schema.Boolean),
 });
 export type ThreadDesktopData = typeof ThreadDesktopDataSchema.Type;
 
@@ -50,14 +62,44 @@ export const DesktopWindowSchema = Schema.Struct({
 });
 export type DesktopWindow = typeof DesktopWindowSchema.Type;
 
+/** Where a Mac window sits, in points from the top left of the main display. */
+export const MacWindowFrameSchema = Schema.Struct({
+  x: Schema.Finite,
+  y: Schema.Finite,
+  w: Schema.Finite.check(Schema.isGreaterThan(0)),
+  h: Schema.Finite.check(Schema.isGreaterThan(0)),
+});
+
+/**
+ * One on-screen app window of a Mac runner (voxl's `GET /windows`, window
+ * mode): the viewer streams and controls it alone instead of the whole
+ * screen. `id` is its CGWindowID; `display` the CoreGraphics display it is on.
+ */
+export const MacDesktopWindowSchema = Schema.Struct({
+  id: DesktopWindowIdSchema,
+  app: Schema.String.check(Schema.isMaxLength(200)),
+  bundleId: Schema.String.check(Schema.isMaxLength(200)),
+  title: Schema.String.check(Schema.isMaxLength(200)),
+  frame: MacWindowFrameSchema,
+  display: Schema.Int.check(
+    Schema.isBetween({ minimum: 0, maximum: 0xffff_ffff }),
+  ),
+});
+export type MacDesktopWindow = typeof MacDesktopWindowSchema.Type;
+
 /**
  * The Desktop's windows, oldest first. Listing never starts the Desktop or
  * wakes a paused workspace: `unavailable` then, or when the Orb's daemon
- * predates the app row, with no windows.
+ * predates the app row, with no windows. A Mac runner's Desktop lists its
+ * Mac's app windows in `macWindows` instead (`unsupported` when its voxl
+ * predates window mode), and `windows` stays empty.
  */
 export const ThreadDesktopWindowsDataSchema = Schema.Struct({
   desktop: ThreadDesktopStateSchema,
   windows: Schema.Array(DesktopWindowSchema).check(Schema.isMaxLength(24)),
+  macWindows: Schema.optional(
+    Schema.Array(MacDesktopWindowSchema).check(Schema.isMaxLength(64)),
+  ),
 });
 export type ThreadDesktopWindowsData =
   typeof ThreadDesktopWindowsDataSchema.Type;

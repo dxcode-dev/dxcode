@@ -405,7 +405,9 @@ attempt=1
 while :; do
   if git "$@" clone --quiet -- "$DX_CLONE_URL" "$temporary" 2> "$errors"; then
     rm -f -- "$errors"
-    exec mv -T -- "$temporary" "$target"
+    # mv -T is GNU's; a runner on macOS renames into the free target plainly.
+    mv -T -- "$temporary" "$target" 2>/dev/null || { test ! -e "$target" && mv -- "$temporary" "$target"; }
+    exit $?
   fi
   status=$?
   rm -rf -- "$temporary"

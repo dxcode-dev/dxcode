@@ -93,10 +93,15 @@ pub fn usage_of(path: &Path) -> Option<DiskUsage> {
     if unsafe { libc::statvfs(path.as_ptr(), &mut stats) } != 0 {
         return None;
     }
-    // Every supported target (x64 and arm64 Linux) has 64-bit fields.
-    let unit = stats.f_frsize;
-    let total = stats.f_blocks.checked_mul(unit)?;
-    let available = stats.f_bavail.checked_mul(unit)?.min(total);
+    // 64-bit on Linux; macOS's block counts are 32-bit `fsblkcnt_t`.
+    #[allow(clippy::unnecessary_cast)]
+    let (unit, blocks, available) = (
+        stats.f_frsize as u64,
+        stats.f_blocks as u64,
+        stats.f_bavail as u64,
+    );
+    let total = blocks.checked_mul(unit)?;
+    let available = available.checked_mul(unit)?.min(total);
     (total > 0).then_some(DiskUsage {
         used_bytes: total - available,
         total_bytes: total,

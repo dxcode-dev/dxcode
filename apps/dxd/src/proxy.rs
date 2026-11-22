@@ -1166,6 +1166,49 @@ pub fn is_listening(port: u16) -> bool {
         .any(|listener| listener.port == port)
 }
 
+/// macOS has no `/proc/net/tcp`: ask `lsof` for this user's TCP listeners.
+#[cfg(target_os = "macos")]
+fn all_listening_ports() -> Vec<ListeningPort> {
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let Ok(output) = std::process::Command::new("/usr/sbin/lsof")
+        .args(["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-u"])
+        .arg(uid.to_string())
+        .arg("-Fn")
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut ports = parse_lsof_listeners(&String::from_utf8_lossy(&output.stdout));
+    ports.sort();
+    ports.dedup_by(|later, earlier| later.port == earlier.port);
+    ports
+}
+
+/// `lsof -Fn` name lines: `n*:3000`, `n127.0.0.1:5173`, `n[::1]:8080`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn parse_lsof_listeners(output: &str) -> Vec<ListeningPort> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let name = line.strip_prefix('n')?;
+            let (address, port) = name.rsplit_once(':')?;
+            let port = port.parse::<u16>().ok()?;
+            if port == 0 || INTERNAL_PORTS.contains(&port) {
+                return None;
+            }
+            let address = match address.trim_start_matches('[').trim_end_matches(']') {
+                "*" => "0.0.0.0".to_owned(),
+                other => other.to_owned(),
+            };
+            Some(ListeningPort { port, address })
+        })
+        .collect()
+}
+
+#[cfg(not(target_os = "macos"))]
 fn all_listening_ports() -> Vec<ListeningPort> {
     // SAFETY: geteuid has no preconditions.
     let uid = unsafe { libc::geteuid() };
@@ -1181,6 +1224,7 @@ fn all_listening_ports() -> Vec<ListeningPort> {
     ports
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn parse_listeners(table: &str, ipv6: bool, uid: u32) -> Vec<ListeningPort> {
     table
         .lines()
@@ -1207,6 +1251,7 @@ fn parse_listeners(table: &str, ipv6: bool, uid: u32) -> Vec<ListeningPort> {
 }
 
 /// `/proc/net/tcp6` prints four host-order 32-bit words.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn decode_ipv6(hex: &str) -> Option<Ipv6Addr> {
     if hex.len() != 32 {
         return None;
@@ -1281,6 +1326,18 @@ pub fn ensure_desktop(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parses_lsof_listeners() {
+        let ports = super::parse_lsof_listeners(
+            "p42\nf5\nn*:3000\nf6\nn127.0.0.1:5173\nn[::1]:8080\nnbogus\n",
+        );
+        let ports: Vec<_> = ports.iter().map(|p| (p.port, p.address.as_str())).collect();
+        assert_eq!(
+            ports,
+            vec![(3000, "0.0.0.0"), (5173, "127.0.0.1"), (8080, "::1")]
+        );
+    }
+
     use super::*;
 
     #[test]

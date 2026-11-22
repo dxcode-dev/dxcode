@@ -85,6 +85,10 @@
       {
         "name": "PLUGIN_DURABLE_HOST",
         "class_name": "PluginDurableHostObject"
+      },
+      {
+        "name": "RUNNER_SESSION",
+        "class_name": "RunnerSessionObject"
       }
     ]
   },
@@ -132,6 +136,10 @@
     {
       "tag": "v11-plugin-stream-relay",
       "new_sqlite_classes": ["PluginStreamRelay"]
+    },
+    {
+      "tag": "v12-runner-session",
+      "new_sqlite_classes": ["RunnerSessionObject"]
     }
   ]
 }

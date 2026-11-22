@@ -513,6 +513,18 @@ const orbStartDenial = (error: unknown) => {
       title: "The Orb stopped responding",
       message: typeof details === "string" ? details : "",
     };
+  // A runner Thread's machine was removed: nothing brings it back.
+  if (type === "runner_removed")
+    return {
+      title: typeof message === "string" ? message : "The runner was removed",
+      message: typeof details === "string" ? details : "",
+    };
+  // A runner Thread's machine is not connected: Retry once it is back.
+  if (type === "runner_offline")
+    return {
+      title: typeof message === "string" ? message : "The runner is offline",
+      message: typeof details === "string" ? details : "",
+    };
   // Core's 5-minute limit on an Orb start (#1956): Retry waits for it.
   if (type === "orb_start_timed_out")
     return {

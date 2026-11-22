@@ -73,7 +73,7 @@ if (( size > ${MAX_REPOSITORY_PLUGIN_ARCHIVE_BYTES} )); then
   printf "too-large"
   exit 0
 fi
-git archive --format=zip --prefix=repo/ HEAD -- "\${paths[@]}" | base64 -w0
+git archive --format=zip --prefix=repo/ HEAD -- "\${paths[@]}" | base64 | tr -d "\\n"
 `;
 
 if (guestScript.includes("'"))

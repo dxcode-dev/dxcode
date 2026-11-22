@@ -9,6 +9,7 @@ import { e2bOrbProvider } from "./e2b.js";
 import { freestyleOrbProvider } from "./freestyle.js";
 import { lizardOrbProvider } from "./lizard.js";
 import { localOrbProvider } from "./local.js";
+import { runnerOrbProvider } from "./runner.js";
 
 /**
  * Every Orb provider, in registry order (settings, the picker, and
@@ -23,6 +24,7 @@ export const ORB_PROVIDERS = [
   boatOrbProvider,
   lizardOrbProvider,
   agent37OrbProvider,
+  runnerOrbProvider,
   localOrbProvider,
 ] as const;
 

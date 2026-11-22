@@ -574,7 +574,11 @@ enum Ended {
 /// true when it exited. Uses a pidfd when the kernel has one, else polls.
 fn wait_exit(pid: i32, deadline_unix_ms: u64, reap: bool) -> bool {
     // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor.
+    #[cfg(target_os = "linux")]
     let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as i32;
+    // No pidfd off Linux (a runner on macOS): the loop polls instead.
+    #[cfg(not(target_os = "linux"))]
+    let pidfd = -1;
     let close = || {
         if pidfd >= 0 {
             // SAFETY: closing the descriptor opened above, once.
@@ -1290,7 +1294,10 @@ pub fn run_output_cli(arguments: &[String]) -> Result<(), ()> {
     // Not a process named `dxd`: whatever stops the daemon by name
     // (`pkill -x dxd`) must not cut a running command's output.
     // SAFETY: PR_SET_NAME reads a NUL-terminated name of at most 16 bytes.
-    unsafe { libc::prctl(libc::PR_SET_NAME, c"dxd-output".as_ptr()) };
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::prctl(libc::PR_SET_NAME, c"dxd-output".as_ptr())
+    };
     let mut remaining: u64 = cap.parse().map_err(|_| ())?;
     let mut file = OpenOptions::new()
         .append(true)

@@ -1,5 +1,5 @@
 import type { ThreadId } from "@dx/domain";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Monitor, Play, RefreshCw } from "lucide-react";
 import * as React from "react";
 import {
@@ -20,9 +20,18 @@ import { DesktopKeys } from "./desktop-keys.js";
 import {
   desktopPath,
   desktopWindowInputHandlers,
+  desktopWindowsQueryOptions,
   refreshDesktopWindowsAfterStart,
   checkDesktop as requestDesktop,
 } from "./desktop-queries.js";
+import {
+  useWindowMode,
+  type WindowModeSession,
+} from "./desktop-window-mode.js";
+import {
+  DesktopControlToggle,
+  DesktopWindowPicker,
+} from "./desktop-window-picker.js";
 import type { VoxlConnection, VoxlSession } from "./voxl/session.js";
 
 // The Thread's Linux desktop, streamed by voxl from the sandbox. The browser
@@ -106,13 +115,21 @@ const nextStatus = (
   return connection === "open" ? { phase: "live" } : { phase: "reconnecting" };
 };
 
-/** Starts the desktop through Core and says whether it can stream. */
+/**
+ * Starts the desktop through Core and says whether it can stream; a ready
+ * Desktop's notice (a Mac's Accessibility off) and whether it opens
+ * view-only (a Mac runner's) go to `onReady`.
+ */
 const checkDesktop = async (
   threadId: ThreadId,
   signal: AbortSignal,
+  { onReady }: Pick<WindowModeSession, "onReady">,
 ): Promise<"ready" | DesktopStatus> => {
   const availability = await requestDesktop(threadId, signal);
-  if (availability.kind === "ready") return "ready";
+  if (availability.kind === "ready") {
+    onReady(availability.notice, availability.startsViewOnly === true);
+    return "ready";
+  }
   if (availability.kind === "unsupported") return { phase: "unsupported" };
   return { phase: "failed", message: availability.message };
 };
@@ -132,6 +149,17 @@ interface DesktopInput {
   /** A key press or click. */
   lastGesture: number;
 }
+
+const NO_VIDEO_DECODER: DesktopStatus = {
+  phase: "failed",
+  message:
+    "This browser can't decode the desktop: it lacks the WebCodecs VideoDecoder API.",
+};
+const VIEWER_FAILED: DesktopStatus = {
+  phase: "failed",
+  message: "Desktop viewer failed to load.",
+  reload: true,
+};
 
 function DesktopSession({
   threadId,
@@ -167,6 +195,9 @@ function DesktopSession({
     onTextInputFocus,
     onTextInputBlur,
   } = usePhoneKeyboard(inputRef);
+  const windowMode = useWindowMode(remoteRef);
+  // The same every render, as the session's callback ref needs.
+  const mode = windowMode.session;
   const attach = (surface: HTMLDivElement | null) => {
     const display = canvas.current;
     if (surface === null || display === null) return;
@@ -196,20 +227,13 @@ function DesktopSession({
     };
 
     const start = async () => {
-      if (!("VideoDecoder" in window)) {
-        setStatus({
-          phase: "failed",
-          message:
-            "This browser can't decode the desktop: it lacks the WebCodecs VideoDecoder API.",
-        });
-        return;
-      }
+      if (!("VideoDecoder" in window)) return setStatus(NO_VIDEO_DECODER);
       // Load the viewer while Core starts the desktop.
       const client = loadClient().then(
         (module) => module,
         () => undefined,
       );
-      const desktop = await checkDesktop(threadId, controller.signal);
+      const desktop = await checkDesktop(threadId, controller.signal, mode);
       if (disposed()) return;
       if (desktop !== "ready") {
         setStatus(desktop);
@@ -217,14 +241,7 @@ function DesktopSession({
       }
       const voxl = await client;
       if (disposed()) return;
-      if (voxl === undefined) {
-        setStatus({
-          phase: "failed",
-          message: "Desktop viewer failed to load.",
-          reload: true,
-        });
-        return;
-      }
+      if (voxl === undefined) return setStatus(VIEWER_FAILED);
 
       // Core answers a refused upgrade (desktop or workspace unavailable)
       // with an error status, which the session sees as a dropped socket and
@@ -270,7 +287,7 @@ function DesktopSession({
         recovering = true;
         session?.disconnect();
         setStatus(drawn ? { phase: "reconnecting" } : { phase: "starting" });
-        const again = await checkDesktop(threadId, controller.signal);
+        const again = await checkDesktop(threadId, controller.signal, mode);
         if (disposed()) return;
         if (again !== "ready") return stop(again);
         if (recoveries >= RECOVERY_LIMIT)
@@ -348,8 +365,10 @@ function DesktopSession({
             return;
           writeLocalClipboard(content);
         },
+        ...mode.voxl,
       });
       session = current;
+      current.setViewOnly(mode.viewOnlyRef.current);
       stopFollowing = followPaneSize(surface, (w, h) => current.resize(w, h));
       remoteRef.current = current;
       inputRef.current.lastInput = Date.now();
@@ -361,6 +380,7 @@ function DesktopSession({
       controller.abort();
       clearTimeout(idleTimer);
       clearTimeout(pictureTimer);
+      mode.dispose();
       stopFollowing?.();
       remoteRef.current = undefined;
       session?.dispose();
@@ -378,9 +398,10 @@ function DesktopSession({
   const windowInput = desktopWindowInputHandlers(queryClient, threadId);
   return (
     <>
-      <DesktopAppRow
+      <DesktopTopRow
         threadId={threadId}
         live={status.phase === "live" || status.phase === "reconnecting"}
+        windowMode={windowMode}
         onDone={() => remoteRef.current?.focus()}
       />
       {/* Before the surface, so it exists when the surface attaches. */}
@@ -431,6 +452,57 @@ function DesktopSession({
         reloadPage={reloadPage}
       />
     </>
+  );
+}
+
+/**
+ * The row above a live Desktop: a Mac runner's window picker (window mode),
+ * or an Orb's Linux app row.
+ */
+function DesktopTopRow({
+  threadId,
+  live,
+  windowMode,
+  onDone,
+}: {
+  readonly threadId: ThreadId;
+  readonly live: boolean;
+  readonly windowMode: ReturnType<typeof useWindowMode>;
+  readonly onDone: () => void;
+}) {
+  const windows = useQuery(desktopWindowsQueryOptions(threadId, live)).data;
+  const macWindows =
+    live && windows?.desktop === "ready" && windowMode.target !== undefined
+      ? windows.macWindows
+      : undefined;
+  // A Mac whose voxl lists no windows still needs the control toggle.
+  if (macWindows === undefined && windowMode.startsViewOnly)
+    return live ? (
+      <div
+        className="desktop-apps desktop-windows"
+        role="toolbar"
+        aria-label="Stream a window"
+      >
+        <DesktopControlToggle
+          interactive={windowMode.interactive}
+          onInteractiveChange={windowMode.setInteractive}
+          divider={false}
+        />
+      </div>
+    ) : null;
+  if (macWindows === undefined)
+    return <DesktopAppRow threadId={threadId} live={live} onDone={onDone} />;
+  return (
+    <DesktopWindowPicker
+      windows={macWindows}
+      current={windowMode.target?.window}
+      open={windowMode.pickerOpen}
+      onOpenChange={windowMode.setPickerOpen}
+      onPick={windowMode.pick}
+      interactive={windowMode.interactive}
+      onInteractiveChange={windowMode.setInteractive}
+      pending={windowMode.pending}
+    />
   );
 }
 

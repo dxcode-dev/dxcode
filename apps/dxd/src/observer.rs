@@ -15,6 +15,8 @@
 //! When the watch budget or the kernel's watch limit is exhausted, parts of
 //! the tree go unwatched. That fallback compares the Changes fingerprint
 //! every few seconds and hints only when it moved.
+// Off Linux only the fingerprint fallback runs; the inotify half is unused.
+#![cfg_attr(not(target_os = "linux"), allow(unused_imports, dead_code))]
 
 use std::collections::{HashMap, HashSet};
 use std::ffi::CString;
@@ -42,16 +44,44 @@ const FALLBACK_REBUILD: Duration = Duration::from_secs(60);
 const MAX_WATCHES: usize = 8192;
 const GIT_IGNORE_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_GIT_IGNORE_BYTES: usize = 4 * 1024 * 1024;
-const WATCH_MASK: u32 = libc::IN_ATTRIB
-    | libc::IN_CREATE
-    | libc::IN_DELETE
-    | libc::IN_CLOSE_WRITE
-    | libc::IN_MODIFY
-    | libc::IN_MOVED_FROM
-    | libc::IN_MOVED_TO
-    | libc::IN_DELETE_SELF
-    | libc::IN_MOVE_SELF
-    | libc::IN_ONLYDIR;
+/// inotify's event bits: libc's on Linux; elsewhere the same values, so the
+/// event classification compiles where only the polling fallback runs.
+#[cfg(target_os = "linux")]
+mod sys {
+    pub use libc::{
+        IN_ATTRIB, IN_CLOEXEC, IN_CLOSE_WRITE, IN_CREATE, IN_DELETE, IN_DELETE_SELF, IN_IGNORED,
+        IN_ISDIR, IN_MODIFY, IN_MOVE_SELF, IN_MOVED_FROM, IN_MOVED_TO, IN_NONBLOCK, IN_ONLYDIR,
+        IN_Q_OVERFLOW,
+    };
+}
+#[cfg(not(target_os = "linux"))]
+#[allow(dead_code)]
+mod sys {
+    pub const IN_MODIFY: u32 = 0x2;
+    pub const IN_ATTRIB: u32 = 0x4;
+    pub const IN_CLOSE_WRITE: u32 = 0x8;
+    pub const IN_MOVED_FROM: u32 = 0x40;
+    pub const IN_MOVED_TO: u32 = 0x80;
+    pub const IN_CREATE: u32 = 0x100;
+    pub const IN_DELETE: u32 = 0x200;
+    pub const IN_DELETE_SELF: u32 = 0x400;
+    pub const IN_MOVE_SELF: u32 = 0x800;
+    pub const IN_Q_OVERFLOW: u32 = 0x4000;
+    pub const IN_IGNORED: u32 = 0x8000;
+    pub const IN_ONLYDIR: u32 = 0x0100_0000;
+    pub const IN_ISDIR: u32 = 0x4000_0000;
+}
+
+const WATCH_MASK: u32 = sys::IN_ATTRIB
+    | sys::IN_CREATE
+    | sys::IN_DELETE
+    | sys::IN_CLOSE_WRITE
+    | sys::IN_MODIFY
+    | sys::IN_MOVED_FROM
+    | sys::IN_MOVED_TO
+    | sys::IN_DELETE_SELF
+    | sys::IN_MOVE_SELF
+    | sys::IN_ONLYDIR;
 
 pub struct Observer {
     dirty: Receiver<()>,
@@ -108,9 +138,16 @@ impl Coalescer {
 struct Inotify(OwnedFd);
 
 impl Inotify {
+    #[cfg(not(target_os = "linux"))]
+    fn new() -> io::Result<Self> {
+        // No inotify off Linux: `observe` falls back to fingerprint polling.
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    #[cfg(target_os = "linux")]
     fn new() -> io::Result<Self> {
         // SAFETY: plain syscall; the descriptor is owned below.
-        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        let fd = unsafe { libc::inotify_init1(sys::IN_NONBLOCK | sys::IN_CLOEXEC) };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -118,6 +155,20 @@ impl Inotify {
         Ok(Self(unsafe { OwnedFd::from_raw_fd(fd) }))
     }
 
+    #[cfg(not(target_os = "linux"))]
+    fn add(&self, _path: &Path) -> io::Result<i32> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn remove(&self, _wd: i32) {}
+
+    #[cfg(not(target_os = "linux"))]
+    fn read(&self, _events: &mut Vec<(i32, u32, PathBuf)>) -> io::Result<()> {
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
     fn add(&self, path: &Path) -> io::Result<i32> {
         let path = CString::new(path.as_os_str().as_bytes())?;
         // SAFETY: valid descriptor and NUL-terminated path.
@@ -129,6 +180,7 @@ impl Inotify {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn remove(&self, wd: i32) {
         // SAFETY: valid descriptor; an unknown watch only fails with EINVAL.
         unsafe {
@@ -137,6 +189,7 @@ impl Inotify {
     }
 
     /// Every queued event as (watch, mask, name).
+    #[cfg(target_os = "linux")]
     fn read(&self, events: &mut Vec<(i32, u32, PathBuf)>) -> io::Result<()> {
         // Aligned for `inotify_event`; one read returns whole events only.
         let mut buffer = [0_u64; 8192];
@@ -184,6 +237,7 @@ impl Inotify {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn buffer_bytes(buffer: &[u64]) -> &[u8] {
     // SAFETY: any initialized u64 buffer is a valid byte buffer.
     unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast(), std::mem::size_of_val(buffer)) }
@@ -322,14 +376,14 @@ impl WatchSet {
         self.inotify.read(&mut raw)?;
         let mut events = Vec::with_capacity(raw.len());
         for (wd, mask, name) in raw {
-            if mask & libc::IN_Q_OVERFLOW != 0 {
+            if mask & sys::IN_Q_OVERFLOW != 0 {
                 events.push(Event {
                     path: self.root.clone(),
                     mask,
                 });
                 continue;
             }
-            if mask & libc::IN_IGNORED != 0 {
+            if mask & sys::IN_IGNORED != 0 {
                 // The kernel dropped this watch (directory gone or unwatched).
                 if let Some(path) = self.directories.remove(&wd) {
                     self.watched.remove(&path);
@@ -403,7 +457,7 @@ fn classify(set: &mut WatchSet, event: &Event, budget: usize) -> Vec<Outcome> {
     if set.arrivals {
         // Its parent's other entries, and anything inside a checkout (which
         // that checkout's own set reports), are not arrivals.
-        if event.mask & libc::IN_Q_OVERFLOW != 0
+        if event.mask & sys::IN_Q_OVERFLOW != 0
             || event.path == set.root
             || event.path.parent() == Some(set.root.as_path())
         {
@@ -412,18 +466,18 @@ fn classify(set: &mut WatchSet, event: &Event, budget: usize) -> Vec<Outcome> {
         }
         return outcomes;
     }
-    if event.mask & libc::IN_Q_OVERFLOW != 0 {
+    if event.mask & sys::IN_Q_OVERFLOW != 0 {
         outcomes.push(Outcome::Reconcile);
         outcomes.push(Outcome::Mutation);
         return outcomes;
     }
     let path = &event.path;
-    let arrived = event.mask & (libc::IN_CREATE | libc::IN_MOVED_TO) != 0;
-    let renamed = event.mask & (libc::IN_MOVED_FROM | libc::IN_MOVED_TO) != 0;
+    let arrived = event.mask & (sys::IN_CREATE | sys::IN_MOVED_TO) != 0;
+    let renamed = event.mask & (sys::IN_MOVED_FROM | sys::IN_MOVED_TO) != 0;
     let removed = event.mask
-        & (libc::IN_DELETE | libc::IN_MOVED_FROM | libc::IN_DELETE_SELF | libc::IN_MOVE_SELF)
+        & (sys::IN_DELETE | sys::IN_MOVED_FROM | sys::IN_DELETE_SELF | sys::IN_MOVE_SELF)
         != 0;
-    let is_directory = event.mask & libc::IN_ISDIR != 0;
+    let is_directory = event.mask & sys::IN_ISDIR != 0;
     if set.git_bookkeeping(path) {
         return outcomes;
     }

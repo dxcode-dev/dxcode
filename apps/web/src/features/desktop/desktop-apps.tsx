@@ -52,7 +52,13 @@ export function DesktopAppRow({
   const mutation = useMutation(
     desktopWindowsActionMutation(queryClient, threadId),
   );
-  if (!live || query.data?.desktop !== "ready") return null;
+  // A Mac runner's Desktop lists its windows for window mode instead.
+  if (
+    !live ||
+    query.data?.desktop !== "ready" ||
+    query.data.macWindows !== undefined
+  )
+    return null;
   return (
     <DesktopApps
       data={query.data}

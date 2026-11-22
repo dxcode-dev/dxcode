@@ -2,7 +2,7 @@
 // Compiler included) in headless Chromium. Name them `*.browser.test.tsx`.
 // Pure logic stays in the root node project.
 //
-// Chromium is the Playwright 1.55 headless shell (build 1187). Install it once
+// Chromium is the Playwright 1.55 headless shell (build 1193). Install it once
 // with `pnpm --filter @dx/web exec playwright install chromium-headless-shell`,
 // or point DX_TEST_CHROMIUM at another Chromium binary.
 import { createHash } from "node:crypto";

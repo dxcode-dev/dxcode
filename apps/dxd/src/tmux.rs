@@ -84,6 +84,10 @@ struct Pushed {
 impl Tmux {
     /// The bundled tmux, when this image has one.
     pub fn detect() -> Option<Self> {
+        // The bundled tmux exists only in the Linux Orb image.
+        if !cfg!(target_os = "linux") {
+            return None;
+        }
         let binary = match std::env::var_os(BINARY_VARIABLE) {
             Some(value) if value.is_empty() => return None,
             Some(value) => PathBuf::from(value),

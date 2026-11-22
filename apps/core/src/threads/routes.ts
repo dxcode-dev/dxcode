@@ -579,7 +579,14 @@ export const threadDetailData = Effect.fn("threadDetailData")(function* (
       plugins,
       skills,
     },
-    executionWorkspace,
+    executionWorkspace: {
+      ready: executionWorkspace.ready,
+      preparationStatus: executionWorkspace.preparationStatus,
+    },
+    ...("runner" in executionWorkspace &&
+    executionWorkspace.runner !== undefined
+      ? { runner: executionWorkspace.runner }
+      : {}),
   } satisfies ThreadDetailData;
 });
 
@@ -1224,6 +1231,9 @@ export const createThreadRoutes = (
                               ? project.projectId
                               : null,
                           runnerProfileId: requestedRunnerProfileId,
+                          ...(input.runnerMachineId === undefined
+                            ? {}
+                            : { runnerMachineId: input.runnerMachineId }),
                           connectors: orbProviderConnectors,
                           ...(project.kind === "projectless"
                             ? {
@@ -3382,7 +3392,13 @@ export const createThreadRoutes = (
       });
       return yield* Schema.encodeUnknownEffect(
         GetThreadReadinessResponseSchema,
-      )({ status: "success", data: readiness });
+      )({
+        status: "success",
+        data: {
+          ready: readiness.ready,
+          preparationStatus: readiness.preparationStatus,
+        },
+      });
     });
     const result = await Effect.runPromise(Effect.result(operation));
     if (Result.isSuccess(result)) return context.json(result.success, 200);

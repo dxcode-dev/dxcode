@@ -41,6 +41,7 @@ const sameRequest = (
   previous.pluginAgentMode === next.pluginAgentMode &&
   previous.pluginThreadType === next.pluginThreadType &&
   previous.runnerProfileId === next.runnerProfileId &&
+  previous.runnerMachineId === next.runnerMachineId &&
   previous.visibility === next.visibility &&
   previous.body === next.body &&
   previous.attachmentIds.length === next.attachmentIds.length &&
@@ -65,6 +66,7 @@ export async function submitNewThread({
   pluginAgentMode,
   pluginThreadType,
   runnerProfileId,
+  runnerMachineId,
   visibility,
   projects,
   imageCollection,
@@ -92,6 +94,8 @@ export async function submitNewThread({
   /** An installed plugin's Thread type the Thread starts as. */
   readonly pluginThreadType?: string;
   readonly runnerProfileId?: RunnerProfileId;
+  /** The person's machine a runner Thread starts on. */
+  readonly runnerMachineId?: string;
   /** `workspace` shares the Thread with the workspace from its start. */
   readonly visibility?: ThreadVisibility;
   readonly projects: ReadonlyArray<ProjectData>;
@@ -162,6 +166,7 @@ export async function submitNewThread({
       ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
       ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
       runnerProfileId,
+      ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
       ...(visibility === "workspace" ? { visibility } : {}),
       body,
       attachmentIds,
@@ -203,6 +208,7 @@ export async function submitNewThread({
               ...(claudeEffort === undefined ? {} : { thinking: claudeEffort }),
             },
       ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+      ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
       ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
       ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
       ...(pluginThreadType === undefined ? {} : { pluginThreadType }),

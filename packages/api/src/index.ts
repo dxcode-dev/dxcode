@@ -88,6 +88,7 @@ export * from "./settings/plugin-triggers.js";
 // Plugin views.
 export * from "./settings/plugin-views.js";
 export * from "./settings/project-defaults.js";
+export * from "./settings/runners.js";
 export * from "./settings/signing-keys.js";
 export * from "./settings/skills.js";
 export * from "./settings/workspace-agent-instructions.js";

@@ -5590,3 +5590,75 @@ async fn real_daemon_keeps_the_agents_commands_apart_from_its_own_supervision() 
     unsafe { libc::kill(kept as i32, libc::SIGKILL) };
     drop(daemon);
 }
+
+/// A runner's per-Thread daemon (`DXD_RUNNER`, `localRuntime.selfUpdate:
+/// false`): it registers without a Desktop, and Core's update never reaches
+/// the release URL, since the runner's supervisor owns the binary.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_daemon_on_a_runner_offers_no_desktop_and_ignores_core_updates() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let fixture = fixture(listener.local_addr().unwrap().port());
+    let mut config: Value =
+        serde_json::from_str(&std::fs::read_to_string(&fixture.config).unwrap()).unwrap();
+    config["localRuntime"]["selfUpdate"] = json!(false);
+    std::fs::write(&fixture.config, config.to_string()).unwrap();
+    let mut command = Command::new(DXD);
+    command
+        .arg("--config")
+        .arg(&fixture.config)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap())
+        .env("USER", "user")
+        .env("DXD_TMUX", "")
+        .env("DXD_RUNNER", "1")
+        .env(
+            "DX_WORKLOAD_IDENTITY_SOCKET",
+            fixture.state.join("workload-identity.sock"),
+        )
+        .stdin(Stdio::null());
+    let _daemon = DaemonGuard(command.spawn().unwrap());
+    let mut socket = accept(&listener).await;
+
+    let register = next_text(&mut socket).await;
+    assert_eq!(register["type"], "register");
+    assert_eq!(register["capabilities"]["terminal"]["version"], 1);
+    assert_eq!(register["capabilities"]["files"]["version"], 1);
+    assert_eq!(register["capabilities"]["proxy"]["version"], 1);
+    assert!(
+        register["capabilities"].get("desktop").is_none(),
+        "{register}"
+    );
+    let generation = random_generation();
+    send(
+        &mut socket,
+        json!({
+            "type": "registered", "generation": generation,
+            "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000,
+        }),
+    )
+    .await;
+    wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+
+    let releases = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!(
+        "https://127.0.0.1:{}/dxd",
+        releases.local_addr().unwrap().port()
+    );
+    send(
+        &mut socket,
+        json!({
+            "type": "update", "generation": generation, "url": url,
+            "sha256": "0".repeat(64), "release": "99.0.0",
+        }),
+    )
+    .await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), releases.accept())
+            .await
+            .is_err(),
+        "a runner's daemon must not fetch Core's release"
+    );
+    // Still serving: the next heartbeat arrives on the same session.
+    let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
+    assert_eq!(heartbeat["generation"], generation);
+}

@@ -145,6 +145,14 @@ fn apt_installed(package: &str) -> bool {
 }
 
 fn apt_install(packages: &[&str], deadline: Instant) -> Result<(), String> {
+    // System packages only ever install into a Linux Orb; a runner is
+    // someone's own machine, where dx installs nothing.
+    if !cfg!(target_os = "linux") || std::env::var_os("DXD_RUNNER").is_some() {
+        return Err(format!(
+            "{} must already be installed on this machine; dx does not install system packages here",
+            packages.join(", ")
+        ));
+    }
     let install = |deadline| {
         let mut command = Command::new("sudo");
         command

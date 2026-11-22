@@ -96,6 +96,8 @@ const preGitHubTokenCoordinatorBindingOmission = "GITHUB_TOKEN_COORDINATOR";
 const prePluginDurableHostBindingOmission = "PLUGIN_DURABLE_HOST";
 // Stages deployed before the plugin stream relay lack it.
 const prePluginStreamRelayBindingOmission = "PLUGIN_STREAM_RELAY";
+// Stages deployed before runners lack their session object.
+const preRunnerSessionBindingOmission = "RUNNER_SESSION";
 // Plugin code's Dynamic Worker loader. Stages deployed before it, and the
 // props Alchemy records for a worker_loader binding, lack it.
 const preWorkerLoaderBindingOmission = "LOADER";
@@ -140,6 +142,7 @@ const destroyWorkerBindingOmissions = new Set([
   "PLUGIN_DURABLE_HOST",
   "PLUGIN_STREAM_RELAY",
   "REALTIME_HUB",
+  "RUNNER_SESSION",
   "THREAD_SEARCH_INDEX",
 ]);
 const preBranchPreviewIdentityBindingOmissions = [
@@ -171,6 +174,7 @@ const workerDurableObjectBindings = [
   ["PLUGIN_STREAM_RELAY", "PluginStreamRelay"],
   ["PLUGIN_TRIGGER_DELIVERY", "PluginTriggerDeliveryObject"],
   ["REALTIME_HUB", "RealtimeHub"],
+  ["RUNNER_SESSION", "RunnerSessionObject"],
   [
     "SUBSCRIPTION_CREDENTIAL_COORDINATOR",
     "SubscriptionCredentialCoordinatorObject",
@@ -1466,6 +1470,13 @@ const validateWorkerProps = (
           representation === "prior" ||
           allowDestroyWorkerBindingOmissions) &&
         name === prePluginStreamRelayBindingOmission
+      ) &&
+      !(
+        !current &&
+        (representation === "persisted" ||
+          representation === "prior" ||
+          allowDestroyWorkerBindingOmissions) &&
+        name === preRunnerSessionBindingOmission
       ) &&
       !(
         !current &&

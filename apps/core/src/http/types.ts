@@ -198,6 +198,14 @@ export interface Bindings {
   readonly PLUGIN_STREAM_RELAY?: DurableObjectNamespace<
     import("../plugins/streams/relay.js").PluginStreamRelay
   >;
+  /**
+   * One object per paired machine (runners, `idFromName(machineId)`): the
+   * machine's outbound connection. Its presence offers the `runner` Orb
+   * provider, behind the `orb-provider-runner` experimental feature.
+   */
+  readonly RUNNER_SESSION?: DurableObjectNamespace<
+    import("../runners/session-object.js").RunnerSessionObject
+  >;
   readonly AI?: Ai;
   /** Starts the Dynamic Workers plugin code runs in (plugins/worker-host). */
   readonly LOADER?: WorkerLoader;

@@ -10,6 +10,7 @@ import {
   cmd,
   type Hello,
   type ServerMessage,
+  type StreamedWindow,
   WATCH_COMMANDS,
 } from "./protocol.js";
 import { createVideo } from "./video.js";
@@ -20,6 +21,12 @@ export const RECONNECT_DELAY_MS = 1_000;
 const RESIZE_DEBOUNCE_MS = 250;
 
 export type VoxlConnection = "connecting" | "open" | "closed";
+
+/** What a Mac's voxl streams: a display, or one window of it (window mode). */
+export interface VoxlTarget {
+  readonly display: number;
+  readonly window?: StreamedWindow;
+}
 
 export interface VoxlSessionOptions {
   readonly canvas: HTMLCanvasElement;
@@ -37,6 +44,10 @@ export interface VoxlSessionOptions {
   readonly onPicture?: () => void;
   /** The remote clipboard changed: text, or a PNG image. */
   readonly onClipboard?: (content: string | Blob) => void;
+  /** Each stream of a Mac's voxl says what it shows: its display or a window. */
+  readonly onTarget?: (target: VoxlTarget) => void;
+  /** The streamed window closed; voxl went back to the display. */
+  readonly onWindowClosed?: (id: number) => void;
 }
 
 export class VoxlSession {
@@ -50,12 +61,16 @@ export class VoxlSession {
   #disposed = false;
   #desk = { w: 0, h: 0 };
   #readOnly = false;
+  /** This viewer sends no input (a Mac viewing its own Desktop). */
+  #viewOnly = false;
   #resizable = false;
   #wantedSize: { readonly w: number; readonly h: number } | undefined;
   #sentSize = "";
   #resizeTimer: ReturnType<typeof setTimeout> | undefined;
   #lastLocalPaste: string | undefined;
   #videoOn = true;
+  /** A Mac's streamed display, once a hello named it. */
+  #display: number | undefined;
 
   constructor(options: VoxlSessionOptions) {
     this.#options = options;
@@ -72,7 +87,7 @@ export class VoxlSession {
       desk: () => this.#desk,
       send: (command) => this.#sendInput(command),
       sendBinary: (type, bytes) => {
-        if (!this.controlled || this.#readOnly) return;
+        if (!this.controlled || this.#readOnly || this.#viewOnly) return;
         const message = new Uint8Array(bytes.byteLength + 1);
         message[0] = type;
         message.set(bytes, 1);
@@ -125,6 +140,15 @@ export class VoxlSession {
     document.removeEventListener("visibilitychange", this.#onVisibility);
   }
 
+  /**
+   * Stops or resumes sending input. Turning it off releases whatever keys
+   * and buttons the desktop still holds down.
+   */
+  setViewOnly(viewOnly: boolean) {
+    if (viewOnly && !this.#viewOnly) this.#send(cmd.releaseAll);
+    this.#viewOnly = viewOnly;
+  }
+
   /** Takes control: focuses the surface. */
   focus() {
     this.#options.surface.focus({ preventScroll: true });
@@ -145,6 +169,22 @@ export class VoxlSession {
     this.#wantedSize = { w: width, h: height };
     clearTimeout(this.#resizeTimer);
     this.#resizeTimer = setTimeout(() => this.#sendSize(), RESIZE_DEBOUNCE_MS);
+  }
+
+  /**
+   * A Mac: streams one window instead of the display, for every viewer. The
+   * next hello says whether it took. False while the socket is closed or the
+   * viewer may only watch.
+   */
+  streamWindow(id: number) {
+    if (this.#readOnly) return false;
+    return this.#send(cmd.window(id));
+  }
+
+  /** A Mac: streams its whole display again. */
+  streamDisplay() {
+    if (this.#readOnly || this.#display === undefined) return false;
+    return this.#send(cmd.display(this.#display));
   }
 
   #scale() {
@@ -211,6 +251,9 @@ export class VoxlSession {
         if (message.d === this.#lastLocalPaste) break;
         this.#options.onClipboard?.(message.d);
         break;
+      case "windowClosed":
+        this.#options.onWindowClosed?.(message.id);
+        break;
     }
   }
 
@@ -223,6 +266,13 @@ export class VoxlSession {
     // Each hello starts a stream; a reconnected server forgets the size.
     this.#sentSize = "";
     this.#sendSize();
+    const displays = hello.displays;
+    this.#display = displays?.selected;
+    if (displays !== undefined)
+      this.#options.onTarget?.({
+        display: displays.selected,
+        ...(displays.window === undefined ? {} : { window: displays.window }),
+      });
   }
 
   #onBinary(buffer: ArrayBuffer) {
@@ -253,7 +303,7 @@ export class VoxlSession {
   };
 
   #sendInput(command: string) {
-    if (!this.controlled) return false;
+    if (!this.controlled || this.#viewOnly) return false;
     if (this.#readOnly && !WATCH_COMMANDS.has(command.split(",")[0] ?? ""))
       return false;
     return this.#send(command);

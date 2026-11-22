@@ -81,6 +81,7 @@ import {
 } from "./new-thread-draft-store.js";
 import { newThreadLabel } from "./new-thread-label.js";
 import { useWorkspaceMentionMembers } from "./new-thread-mentions.js";
+import { useNewThreadRunner } from "./new-thread-runner.js";
 import { submitNewThread } from "./new-thread-submission.js";
 import { NewThreadToasts } from "./new-thread-toasts.js";
 import { pluginAgentModesQueryOptions } from "./plugin-agent-modes-queries.js";
@@ -420,6 +421,7 @@ function useComposerOrb({
   workspace,
   remembered,
   override,
+  chooseRunnerProfile,
 }: {
   readonly userId: UserId;
   readonly project: ProjectData | undefined;
@@ -427,6 +429,8 @@ function useComposerOrb({
   readonly workspace: SettingsWorkspaceData | undefined;
   readonly remembered: PersonalComposerDefaultsData["runnerProfileId"];
   readonly override: RunnerProfileId | undefined;
+  /** Picks a size, as the Orb picker does; Add runner's new machine uses it. */
+  readonly chooseRunnerProfile: (runnerProfileId: RunnerProfileId) => void;
 }) {
   const defaultsTarget =
     project === undefined
@@ -480,11 +484,17 @@ function useComposerOrb({
           defaultsQuery.data?.catalog.profiles,
           orbProvidersQuery.data?.resolved,
         );
+  // The person's own machines in the Orb picker, while runners are on.
+  const runner = useNewThreadRunner(userId, effectiveRunnerProfileId, {
+    providers: orbProvidersQuery.data?.resolved,
+    chooseRunnerProfile,
+  });
   return {
     defaultsTarget,
     defaultsQuery,
     orbProvidersQuery,
     effectiveRunnerProfileId,
+    runner,
   };
 }
 
@@ -656,6 +666,7 @@ function ScopedNewThreadModal({
     defaultsQuery,
     orbProvidersQuery,
     effectiveRunnerProfileId,
+    runner,
   } = useComposerOrb({
     userId: identity.id,
     project: projects.find(({ id }) => id === effectiveProjectId),
@@ -663,6 +674,7 @@ function ScopedNewThreadModal({
     workspace,
     remembered: remembered.runnerProfileId,
     override: runnerProfileOverride,
+    chooseRunnerProfile: setRunnerProfileOverride,
   });
   // The draft store owns the send, so a composer reopened mid-send shows it.
   const submitting = creation.sending;
@@ -701,6 +713,7 @@ function ScopedNewThreadModal({
         ...(pluginAgentMode === undefined ? {} : { pluginAgentMode }),
         ...(pluginThreadType === undefined ? {} : { pluginThreadType }),
         runnerProfileId: effectiveRunnerProfileId,
+        ...runner.createProps,
         visibility,
         projects,
         imageCollection,
@@ -796,6 +809,7 @@ function ScopedNewThreadModal({
             ? undefined
             : () => void defaultsQuery.refetch()
         }
+        {...runner.pickerProps}
         onConnectOrbProvider={() =>
           void navigate({
             to: "/settings/$section",

@@ -4,7 +4,7 @@ export HOME="$__dx_home" USER="$__dx_user" LOGNAME="$__dx_user" SHELL=/bin/bash
 export PATH="$__dx_home/.local/bin:/usr/local/bin:/usr/bin:/bin"
 export LANG=C.UTF-8
 export GIT_CONFIG_GLOBAL="$__dx_state/gitconfig"
-if [ -f "$__dx_home/.env" ] && [ ! -L "$__dx_home/.env" ] && [ "$(stat -c '%u:%a' "$__dx_home/.env" 2>/dev/null)" = "$(id -u):600" ]; then
+if [ -f "$__dx_home/.env" ] && [ ! -L "$__dx_home/.env" ] && [ "$(stat -c '%u:%a' "$__dx_home/.env" 2>/dev/null || stat -f '%u:%Lp' "$__dx_home/.env" 2>/dev/null)" = "$(id -u):600" ]; then
   case $- in *a*) __dx_restore_allexport=0 ;; *) __dx_restore_allexport=1; set -a ;; esac
   . "$__dx_home/.env"
   if [ "$__dx_restore_allexport" = 1 ]; then set +a; fi

@@ -84,6 +84,7 @@ const createThread = async (
   pluginAgentMode?: string,
   pluginThreadType?: string,
   fromMailId?: string,
+  runnerMachineId?: string,
 ): Promise<typeof CreateThreadResponseSchema.Type> =>
   request(
     // Start thread on an email sends the same request to Mail, which puts
@@ -100,6 +101,7 @@ const createThread = async (
         title,
         ...(selection === undefined ? {} : { selection }),
         ...(runnerProfileId === undefined ? {} : { runnerProfileId }),
+        ...(runnerMachineId === undefined ? {} : { runnerMachineId }),
         ...(initialMessage === undefined ? {} : { initialMessage }),
         ...(threadId === undefined ? {} : { threadId }),
         ...(claudeConnectionId === undefined ? {} : { claudeConnectionId }),
@@ -271,6 +273,7 @@ export const createThreadMutationOptions = (
               input.pluginAgentMode,
               input.pluginThreadType,
               input.fromMailId,
+              input.runnerMachineId,
             )
           : await createThread(
               input.project?.id,
@@ -282,6 +285,10 @@ export const createThreadMutationOptions = (
               undefined,
               input.claudeConnectionId,
               input.visibility,
+              undefined,
+              undefined,
+              undefined,
+              input.runnerMachineId,
             );
       if ("initialMessage" in input && response.initialSubmission === undefined)
         throw new Error("The initial message receipt was missing.");
@@ -305,6 +312,8 @@ interface CreateBlankThreadMutationInput {
   readonly title: ThreadDetailData["title"];
   readonly selection?: ThreadModelSelection;
   readonly runnerProfileId?: RunnerProfileId;
+  /** The person's machine a runner Thread runs on. */
+  readonly runnerMachineId?: string;
   /** The Claude plan a Claude Code Thread is bound to for its life. */
   readonly claudeConnectionId?: string;
   /** `workspace` shares the Thread with the workspace as it is created. */

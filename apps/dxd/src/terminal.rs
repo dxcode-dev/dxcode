@@ -1367,20 +1367,28 @@ fn shell_command(
         .env_clear()
         .envs(environment)
         .env("TERM", "xterm-256color");
+    // macOS's /bin/bash prints a "default interactive shell is now zsh"
+    // notice at every start unless this is set.
+    if cfg!(target_os = "macos") {
+        command.env("BASH_SILENCE_DEPRECATION_WARNING", "1");
+    }
     command
 }
 
 /// A new PTY pair, both ends close-on-exec.
 fn open_pty(dimensions: Dimensions) -> io::Result<(OwnedFd, OwnedFd)> {
     let (mut master, mut slave) = (-1, -1);
+    let mut size = window_size(dimensions);
     // SAFETY: out-pointers to locals and a valid winsize; no name buffer.
+    // (macOS declares the termios and winsize pointers mutable.)
+    #[allow(clippy::unnecessary_mut_passed)]
     let opened = unsafe {
         libc::openpty(
             &mut master,
             &mut slave,
             std::ptr::null_mut(),
-            std::ptr::null(),
-            &window_size(dimensions),
+            std::ptr::null_mut(),
+            &mut size,
         )
     };
     if opened != 0 {
@@ -1428,7 +1436,9 @@ fn spawn_on_pty(mut command: Command, dimensions: Dimensions) -> io::Result<Resi
             }
             let empty: libc::sigset_t = std::mem::zeroed();
             libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());
-            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY, 0) == -1 {
+            // `TIOCSCTTY` is a `c_uint` on macOS; `ioctl` takes `c_ulong`.
+            #[allow(clippy::unnecessary_cast)]
+            if libc::setsid() == -1 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) == -1 {
                 return Err(io::Error::last_os_error());
             }
             Ok(())

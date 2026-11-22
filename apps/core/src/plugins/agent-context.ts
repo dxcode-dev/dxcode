@@ -11,6 +11,7 @@ import {
 } from "../execution/source-preparation.js";
 import type { Bindings } from "../http/types.js";
 import { resolveAgentMailbox as resolveMailboxScope } from "../mail/agent-tools.js";
+import { threadRunner } from "../runners/repository.js";
 import { markRunFailure } from "../runtime/run-failure.js";
 import {
   type McpAgentConnectionData,
@@ -167,6 +168,13 @@ export const resolveAgentSpace = async (threadId: string) => {
  */
 export const resolveAgentOrbThreadState = async (threadId: string) =>
   readOrbThreadState(agentPluginHostContext().db, threadId);
+
+/**
+ * The person's own machine a runner Thread runs on, for the prompt;
+ * undefined on an Orb.
+ */
+export const resolveAgentRunner = async (threadId: string) =>
+  threadRunner(agentPluginHostContext().db, threadId);
 
 /**
  * The Space that started this Thread, for the child's prompt; undefined

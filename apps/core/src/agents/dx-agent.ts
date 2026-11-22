@@ -92,6 +92,7 @@ import {
   resolveAgentOrbThreadState,
   resolveAgentPluginTools,
   resolveAgentRepositoryPlugins,
+  resolveAgentRunner,
   resolveAgentSpace,
   resolveAgentStartingSpace,
   resolveAgentWorkspaceInstructions,
@@ -161,6 +162,7 @@ import {
   composeClaudeCodePrompt,
   composeDxAgentPrompt,
   dxWorkspaceSkill,
+  runnerPrompt,
   type StartingSpacePromptData,
   settingsInstructions,
   settingsInstructionsPrompt,
@@ -201,6 +203,8 @@ interface DxAgentPromptData {
   readonly orbFree?: true;
   /** The Project's additional repositories, which the prompt lists. */
   readonly additionalRepositories?: ReadonlyArray<AdditionalRepositoryPromptData>;
+  /** The person's own machine the Thread runs on (a runner), not an Orb. */
+  readonly runner?: { readonly name: string };
   /**
    * Installed plugins with code, as of this submission: what each one's
    * Dynamic Worker handles and the tools it registered.
@@ -299,6 +303,7 @@ const workspaceNotes = (
     additionalRepositoriesPrompt(promptData?.additionalRepositories),
     threadPortalPrompt(threadId),
     mailPrompt(promptData?.mailbox),
+    runnerPrompt(promptData?.runner),
   ]
     .filter((part) => part.length > 0)
     .join("\n\n");
@@ -1117,6 +1122,7 @@ DxAgent.resolvePromptData = async (
     installedCodePlugins,
     repositoryPlugins,
     additionalRepositories,
+    runner,
   ] = await traceSpan(
     "agent.resolvePromptData",
     "phase",
@@ -1184,6 +1190,13 @@ DxAgent.resolvePromptData = async (
                 : resolveAgentAdditionalRepositories(context.instanceId),
             )
           : Promise.resolve([]),
+        agentRuntimeComposition.capabilities === "workspace"
+          ? threadState.then((state) =>
+              state.kind === "space" || runsWithoutOrb(state)
+                ? undefined
+                : resolveAgentRunner(context.instanceId),
+            )
+          : Promise.resolve(undefined),
       ]),
   ).catch(async (error: unknown) => {
     // A failed read leaves no started sandbox behind.
@@ -1253,6 +1266,7 @@ DxAgent.resolvePromptData = async (
     codePlugins === undefined &&
     repositoryPluginData === undefined &&
     additionalRepositories.length === 0 &&
+    runner === undefined &&
     !orbFree
   )
     return undefined;
@@ -1270,6 +1284,7 @@ DxAgent.resolvePromptData = async (
       ? {}
       : { repositoryPlugins: repositoryPluginData }),
     ...(additionalRepositories.length === 0 ? {} : { additionalRepositories }),
+    ...(runner === undefined ? {} : { runner: { name: runner.name } }),
   };
 };
 DxAgent.validateInput = (message: Readonly<DeliveredMessage>) => {

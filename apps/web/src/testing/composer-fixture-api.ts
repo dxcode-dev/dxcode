@@ -12,6 +12,8 @@ export interface SentCreate {
     readonly title?: string;
     readonly threadId?: string;
     readonly visibility?: string;
+    readonly runnerProfileId?: string;
+    readonly runnerMachineId?: string;
     readonly initialMessage?: { readonly body: string };
   };
 }
@@ -23,6 +25,11 @@ export interface ComposerFixtureOptions {
   readonly noOrb?: boolean;
   /** Creates never answer: the composer stays sending. */
   readonly hangCreate?: boolean;
+  /**
+   * The runner provider is on for the person, with these paired machines:
+   * one online and one offline, or none yet. Absent: runners are off.
+   */
+  readonly runners?: "paired" | "none";
   /**
    * Where every Project's Orb setup stands: `configured` (the default) has a
    * setup script, `missing` has none and the person may add one, `read-only`
@@ -36,6 +43,41 @@ export interface ComposerFixtureOptions {
     | "checking"
     | "mixed";
 }
+
+/** A paired machine, as `GET /v1/settings/personal/runners` lists it. */
+export const fixtureRunner = (
+  n: number,
+  name: string,
+  online: boolean,
+  os: "macos" | "linux" = "macos",
+) => ({
+  id: `rnm_${String(n).padStart(24, "0")}`,
+  name,
+  os,
+  arch: os === "macos" ? "aarch64" : "x86_64",
+  version: "0.1.0",
+  online,
+  lastSeenAt: online ? 1_795_000_000_000 : 1_794_000_000_000,
+  createdAt: 1_790_000_000_000 + n,
+});
+
+/** The machine that connects once the Add runner dialog's command runs. */
+export const NEW_FIXTURE_RUNNER = fixtureRunner(9, "build-box", true, "linux");
+
+const RUNNER_SIZE = {
+  id: "rn.machine",
+  label: "machine",
+  resources: { cpuCores: 1, memoryMb: 1024, diskGb: 1 },
+  isolation: "sandbox",
+  availability: "available",
+  capabilities: [
+    "git",
+    "environment-variables",
+    "internet-access",
+    "persistent-workspace",
+  ],
+  adapter: "runner",
+};
 
 /** The Projects the composer lists, as the Mail fixture names them. */
 export const composerProjectId = (n: number) =>
@@ -108,7 +150,7 @@ const SIZE = {
   resources: { cpuCores: 1, memoryMb: 4096, diskGb: 8 },
 };
 
-const projectDefaults = (workspace: boolean) => ({
+const projectDefaults = (workspace: boolean, runners: boolean) => ({
   scope: workspace ? "workspace" : "personal",
   revision: 0,
   overrides: {
@@ -137,8 +179,12 @@ const projectDefaults = (workspace: boolean) => ({
         capabilities: ["git", "environment-variables", "persistent-workspace"],
         adapter: "cloudflare",
       },
+      ...(runners ? [RUNNER_SIZE] : []),
     ],
-    adapterStates: [{ kind: "cloudflare", state: "available" }],
+    adapterStates: [
+      { kind: "cloudflare", state: "available" },
+      ...(runners ? [{ kind: "runner", state: "available" }] : []),
+    ],
     providers: [
       {
         adapter: "cloudflare",
@@ -146,6 +192,16 @@ const projectDefaults = (workspace: boolean) => ({
         shortName: "Cloudflare",
         pauseResume: "filesystem",
       },
+      ...(runners
+        ? [
+            {
+              adapter: "runner",
+              displayName: "Runners",
+              shortName: "Runner",
+              pauseResume: null,
+            },
+          ]
+        : []),
     ],
   },
   restrictions: {
@@ -157,7 +213,7 @@ const projectDefaults = (workspace: boolean) => ({
   canUpdate: true,
 });
 
-const orbProviders = (noOrb: boolean) => ({
+const orbProviders = (noOrb: boolean, runners: boolean) => ({
   scope: "personal",
   canUpdate: true,
   localRuntime: false,
@@ -173,6 +229,27 @@ const orbProviders = (noOrb: boolean) => ({
       connection: null,
       workspaceConnection: null,
     },
+    ...(runners
+      ? [
+          {
+            id: "runner",
+            displayName: "Runners",
+            description: "Runs Threads on your own machines.",
+            fields: [],
+            sizes: [
+              {
+                id: RUNNER_SIZE.id,
+                label: RUNNER_SIZE.label,
+                resources: RUNNER_SIZE.resources,
+              },
+            ],
+            pauseResume: null,
+            deployment: true,
+            connection: null,
+            workspaceConnection: null,
+          },
+        ]
+      : []),
   ],
   personalKeysOnWorkspaceProjects: null,
   resolved: noOrb
@@ -185,6 +262,17 @@ const orbProviders = (noOrb: boolean) => ({
           status: "ready",
           unavailableSizes: [],
         },
+        ...(runners
+          ? [
+              {
+                providerId: "runner",
+                scope: "deployment",
+                account: null,
+                status: "ready",
+                unavailableSizes: [],
+              },
+            ]
+          : []),
       ],
 });
 
@@ -256,6 +344,16 @@ const isCreate = (path: string) =>
 export const installComposerApi = (options: ComposerFixtureOptions = {}) => {
   const sent: SentCreate[] = [];
   const workspace = options.workspace === true;
+  const runnersOn = options.runners !== undefined;
+  let runners =
+    options.runners === "paired"
+      ? [
+          fixtureRunner(1, "studio-mac", true),
+          fixtureRunner(2, "old-laptop", false),
+        ]
+      : [];
+  // After a pairing, the new machine connects on the second list read.
+  let pairedReads: number | undefined;
   const original = window.fetch;
   let draft = "";
   const files = new Map<string, Record<string, unknown>>();
@@ -319,7 +417,9 @@ export const installComposerApi = (options: ComposerFixtureOptions = {}) => {
       path === "/v1/settings/personal/projects" ||
       path === `/v1/settings/workspaces/${WORKSPACE.shortName}/projects`
     )
-      return ok(projectDefaults(path !== "/v1/settings/personal/projects"));
+      return ok(
+        projectDefaults(path !== "/v1/settings/personal/projects", runnersOn),
+      );
     const orbScripts = /^\/v1\/projects\/([^/]+)\/orb-scripts$/.exec(path);
     if (orbScripts !== null) {
       const chosen = options.projectSetup ?? "configured";
@@ -345,7 +445,37 @@ export const installComposerApi = (options: ComposerFixtureOptions = {}) => {
       });
     }
     if (path === "/v1/settings/personal/orb-providers")
-      return ok(orbProviders(options.noOrb === true));
+      return ok(orbProviders(options.noOrb === true, runnersOn));
+    if (path === "/v1/settings/personal/runners") {
+      if (pairedReads !== undefined && ++pairedReads >= 2) {
+        runners = [...runners, NEW_FIXTURE_RUNNER];
+        pairedReads = undefined;
+      }
+      return ok({ runners });
+    }
+    if (
+      path === "/v1/settings/personal/runners/pairings" &&
+      method === "POST"
+    ) {
+      pairedReads = 0;
+      return ok({
+        code: "BCDF-GHJK",
+        expiresAt: 1_795_000_900_000,
+        // Display text Core builds; the install script checks the download's
+        // SHA-256 before running it.
+        command:
+          // react-doctor-disable-next-line react-doctor/plugin-update-trust-risk
+          "curl -fsSL https://dx.example.com/v1/runner/install.sh | sh -s -- --code BCDF-GHJK",
+      });
+    }
+    if (
+      path.startsWith("/v1/settings/personal/runners/") &&
+      method === "DELETE"
+    ) {
+      const id = decodeURIComponent(path.split("/").at(-1) ?? "");
+      runners = runners.filter((runner) => runner.id !== id);
+      return ok({ removed: true });
+    }
     if (path === "/v1/settings/personal/model-routing/choices")
       return ok(choices);
     if (path === "/v1/settings/personal/model-routing/graph") return ok(graph);

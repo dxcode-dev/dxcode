@@ -249,7 +249,7 @@ const installScript = (
   // refuses when ~/.agents/skills resolves anywhere else, such as through a
   // symbolic link into the repository, before writing anything.
   const guard = uncoordinated
-    ? `if [ "$(realpath -m -- "$root")" != "$root" ]; then
+    ? `if [ "$(canon "$root")" != "$root" ]; then
   echo "~/.agents/skills resolves elsewhere." >&2
   exit ${SKILLS_REDIRECTED_EXIT}
 fi
@@ -257,6 +257,7 @@ fi
     : "";
   const manifest = manifestOf(group);
   return `set -eu
+${PORTABLE_HELPERS}
 root="$HOME/.agents/skills"
 ${guard}stage="$root/.dx-stage.${group}.$$"
 rm -rf "$stage"
@@ -264,8 +265,8 @@ mkdir -p "$stage"
 ${writes}
 for name in ${names.join(" ")}; do
   old="$root/.dx-old.$name.$$"
-  if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then mv -T "$root/$name" "$old"; fi
-  mv -T "$stage/$name" "$root/$name"
+  if [ -e "$root/$name" ] || [ -L "$root/$name" ]; then mvt "$root/$name" "$old"; fi
+  mvt "$stage/$name" "$root/$name"
   rm -rf "$old"
 done
 rmdir "$stage"
@@ -277,12 +278,20 @@ if [ -f "$root/${manifest}" ]; then
   done
 fi
 printf '%s\\n' '${version}' ${names.join(" ")} > "$root/${manifest}.$$"
-mv -T "$root/${manifest}.$$" "$root/${manifest}"
+mvt "$root/${manifest}.$$" "$root/${manifest}"
 # Skills lived under ~/.local/share/dx before ~/.agents/skills.
 share="$HOME/.local/share/dx"
-if [ "$(realpath -m -- "$share")" = "$share" ]; then rm -rf "$share/skills" "$share/settings-skills"; fi
+if [ "$(canon "$share")" = "$share" ]; then rm -rf "$share/skills" "$share/settings-skills"; fi
 `;
 };
+
+/**
+ * GNU's \`realpath -m\` and \`mv -T\`, with a fallback where they are missing
+ * (a runner on macOS): \`canon\` resolves the deepest existing folder and
+ * keeps the rest; \`mvt\` renames, refusing to move into a real directory.
+ */
+const PORTABLE_HELPERS = `canon() { realpath -m -- "$1" 2>/dev/null && return 0; d=$1; t=; while [ -n "$d" ] && [ ! -d "$d" ]; do t="/\${d##*/}$t"; d=\${d%/*}; done; printf '%s%s\\n' "$(cd "\${d:-/}" && pwd -P)" "$t"; }
+mvt() { if mv -T -- "$1" "$2" 2>/dev/null; then return 0; fi; if [ -d "$2" ] && [ ! -L "$2" ]; then return 1; fi; mv -f -- "$1" "$2"; }`;
 
 /** The install script's exit when ~/.agents/skills resolves elsewhere. */
 const SKILLS_REDIRECTED_EXIT = 3;

@@ -16,7 +16,13 @@ export const desktopPath = (threadId: ThreadId) =>
   `/v1/threads/${encodeURIComponent(threadId)}/desktop`;
 
 export type DesktopAvailability =
-  | { readonly kind: "ready" }
+  /** `notice`: a Mac runner's Desktop streams but says what is off (input). */
+  | {
+      readonly kind: "ready";
+      readonly notice?: string;
+      /** A Mac runner's Desktop: view-only until control is turned on. */
+      readonly startsViewOnly?: boolean;
+    }
   | { readonly kind: "unsupported" }
   | { readonly kind: "failed"; readonly message: string };
 
@@ -39,10 +45,23 @@ export const checkDesktop = async (
         signal,
       });
     let { data } = await check();
-    if (data.desktop === "unavailable") ({ data } = await check());
-    if (data.desktop === "ready") return { kind: "ready" };
+    // A runner's answer is already its final one: asking again would only
+    // repeat it (and a missing voxl would be looked for twice).
+    if (data.desktop === "unavailable" && data.detail === undefined)
+      ({ data } = await check());
+    if (data.desktop === "ready")
+      return {
+        kind: "ready",
+        ...(data.detail === undefined ? {} : { notice: data.detail }),
+        ...(data.startsViewOnly === true ? { startsViewOnly: true } : {}),
+      };
     if (data.desktop === "unsupported") return { kind: "unsupported" };
-    return { kind: "failed", message: "The desktop didn't start." };
+    // A Mac runner says why: voxl missing (with its build command), macOS
+    // permissions, or the Mac offline.
+    return {
+      kind: "failed",
+      message: data.detail ?? "The desktop didn't start.",
+    };
   } catch (error) {
     if (error instanceof ApiError && error.status === 409)
       return {

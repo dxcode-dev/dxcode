@@ -1,0 +1,21 @@
+/* Window mode's row on a Mac runner's Desktop: the app row's frame
+   (desktop-apps.css) with one chip per choice. */
+.dx-chip.desktop-window-choice span {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dx-chip.desktop-window-control {
+  flex: none;
+}
+.desktop-windows-empty {
+  flex: none;
+  padding: 0 var(--space-1-5);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+.dx-button.desktop-windows-hide {
+  margin-left: auto;
+  flex: none;
+}

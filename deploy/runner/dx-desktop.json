@@ -1,0 +1,10 @@
+{
+  "version": "1.0.0",
+  "tag": "dx-desktop-v1.0.0",
+  "assets": {
+    "macos-aarch64": {
+      "asset": "dx-desktop-darwin-arm64",
+      "sha256": "2c3ec56d9317bfb3d7053b4189ce5804284cee702a96c53ca42b1402cf0769aa"
+    }
+  }
+}

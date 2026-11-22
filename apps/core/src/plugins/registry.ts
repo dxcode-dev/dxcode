@@ -37,7 +37,7 @@ export interface ProviderDefinition {
    * this binding is present. Cloudflare Containers runs in the deployer's own
    * account, so its Durable Object namespace binding is the installation.
    */
-  readonly deploymentBinding?: "ORB_CONTAINER";
+  readonly deploymentBinding?: "ORB_CONTAINER" | "RUNNER_SESSION";
   /**
    * What `execution.pause-resume` keeps across a pause; required exactly
    * when the provider claims that capability.

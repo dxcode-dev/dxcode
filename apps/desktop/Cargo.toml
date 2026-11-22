@@ -1,0 +1,20 @@
+[package]
+name = "dx-desktop"
+version = "1.0.0"
+edition = "2024"
+publish = false
+description = "dx.app's executable on a Mac runner: the stable process macOS grants Screen Recording and Accessibility to."
+
+[[bin]]
+name = "dx"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

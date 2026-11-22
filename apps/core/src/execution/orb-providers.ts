@@ -24,6 +24,7 @@ import { freestyleExecutionProvider } from "./freestyle/provider.js";
 import { makeLizardConnector } from "./lizard/connector.js";
 import { lizardExecutionProvider } from "./lizard/provider.js";
 import { localExecutionProvider } from "./local/provider.js";
+import { runnerExecutionProvider } from "./runner/provider.js";
 
 /**
  * One Orb provider's implementation: its `ExecutionProvider` (the workspace
@@ -106,6 +107,9 @@ export const ORB_PROVIDER_MODULES: Readonly<
     execution: agent37ExecutionProvider as ExecutionProvider,
     ...(agent37Connector === undefined ? {} : { connector: agent37Connector }),
   },
+  // A person's own machine; deployments that bind RUNNER_SESSION offer it
+  // to people who turn on `orb-provider-runner`. Nothing to connect.
+  runner: { execution: runnerExecutionProvider },
   local: { execution: localExecutionProvider },
 });
 

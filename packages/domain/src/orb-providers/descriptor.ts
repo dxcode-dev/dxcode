@@ -89,7 +89,7 @@ export interface OrbProviderDescriptor<
         readonly secret: "BOAT_API_KEY" | "AGENT37_API_KEY";
         readonly prepared: true;
       }
-    | { readonly binding: "ORB_CONTAINER" };
+    | { readonly binding: "ORB_CONTAINER" | "RUNNER_SESSION" };
   /** The runner-profile configuration for this adapter. */
   readonly profile: ProfileSchema;
   /** Profile traits the catalog requires (isolation and capabilities). */

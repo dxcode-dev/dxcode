@@ -891,9 +891,15 @@
   color: var(--muted-foreground);
 }
 .thread-desktop-state-content p {
+  max-height: 40vh;
   margin: 0;
+  overflow-y: auto;
   font-size: var(--text-sm);
   line-height: var(--leading-4-5);
+  /* A Mac runner's reason can name a command to copy and end with voxl's log. */
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+  user-select: text;
 }
 .thread-desktop-state-icon {
   width: 27px;

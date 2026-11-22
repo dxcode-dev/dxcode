@@ -32,9 +32,14 @@
 //   row is missing, does not say which apps are open, starts a second app
 //   instead of bringing the open one forward, leaves keyboard control off
 //   the desktop after a click, never notices a window closed on the
-//   desktop, or shows (and fails) on an Orb whose daemon predates it.
+//   desktop, or shows (and fails) on an Orb whose daemon predates it;
+// - a Mac runner's window mode: the window list is missing or shows the
+//   Linux app row, a choice does not reach voxl or switches nothing, the
+//   viewer still asks to resize the Mac while a window streams, a closed
+//   window leaves the picker stale, the Desktop sends input before the
+//   person turns Control on, or a notice covers the stream.
 
-import type { DesktopWindow } from "@dx/api";
+import type { DesktopWindow, MacDesktopWindow } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import * as React from "react";
@@ -52,6 +57,25 @@ import { userEvent } from "vitest/browser";
 import "../../styles.css";
 import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
 import { DesktopViewer } from "./desktop-viewer.js";
+
+// Toasts the viewer shows, in order (sonner renders nothing without its Toaster).
+const toasts = vi.hoisted(() => [] as string[]);
+vi.mock("sonner", async (importOriginal) => {
+  const original = await importOriginal<typeof import("sonner")>();
+  const record = (message: unknown) => {
+    toasts.push(String(message));
+    return 0;
+  };
+  return {
+    ...original,
+    toast: Object.assign(record, {
+      error: record,
+      warning: record,
+      success: record,
+      info: record,
+    }),
+  };
+});
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 
@@ -158,6 +182,25 @@ const hello = (w = 1280, h = 720, resize = true) => ({
   ...(resize ? { resize: { scale: 1 } } : {}),
 });
 
+/** A Mac's voxl hello: its display, or in window mode the window it streams. */
+const macHello = (window?: MacDesktopWindow) => ({
+  t: "hello",
+  w: window === undefined ? 1280 : window.frame.w * 2,
+  h: window === undefined ? 720 : window.frame.h * 2,
+  os: "macos",
+  audio: false,
+  stripes: [[0, window === undefined ? 720 : window.frame.h * 2]],
+  // Dynamic resolution is off while a window streams.
+  ...(window === undefined ? { resize: { scale: 1 } } : {}),
+  displays: {
+    selected: 1,
+    available: [{ id: 1, name: "Display 1 · Main" }],
+    ...(window === undefined
+      ? {}
+      : { window: { id: window.id, app: window.app, title: window.title } }),
+  },
+});
+
 /** One voxl video message: type byte, 15 header bytes, then H.264. */
 const videoFrame = (key: boolean, id: number) => {
   const bytes = new Uint8Array(16 + 8);
@@ -179,12 +222,24 @@ const sendPicture = (socket: FakeSocket, frames = 3, from = 1) => {
 let draws: ReturnType<typeof vi.fn>;
 const roots: ReturnType<typeof createRoot>[] = [];
 
-type DesktopAnswer = "ready" | "unsupported" | "unavailable" | number;
+type DesktopAnswer =
+  | "ready"
+  | "unsupported"
+  | "unavailable"
+  | number
+  /** A Mac runner's answer, with its own words. */
+  | {
+      readonly desktop: "ready" | "unavailable";
+      readonly detail?: string;
+      readonly startsViewOnly?: boolean;
+    };
 let desktopAnswers: DesktopAnswer[] = [];
 let desktopChecks: string[] = [];
 /** The Desktop's windows as dx Core lists them, or its answer for an old daemon. */
 let desktopWindows: DesktopWindow[] = [];
 let windowsAnswer: "ready" | "unsupported" = "ready";
+/** A Mac runner's windows (window mode); undefined on an Orb. */
+let macWindows: MacDesktopWindow[] | undefined;
 let windowRequests: Array<{ method: string; body?: unknown }> = [];
 /** What the guest does on `POST .../desktop/windows`. */
 const actOnWindows = (action: { app?: string; window?: number }) => {
@@ -221,16 +276,21 @@ const fakeCore = async (input: RequestInfo | URL, init?: RequestInit) => {
     return Response.json({
       status: "success",
       data:
-        windowsAnswer === "ready"
-          ? { desktop: "ready", windows: desktopWindows }
-          : { desktop: windowsAnswer, windows: [] },
+        macWindows !== undefined
+          ? { desktop: "ready", windows: [], macWindows }
+          : windowsAnswer === "ready"
+            ? { desktop: "ready", windows: desktopWindows }
+            : { desktop: windowsAnswer, windows: [] },
     });
   }
   desktopChecks.push(url.pathname);
   const answer = desktopAnswers.shift() ?? "ready";
   return typeof answer === "number"
     ? new Response(JSON.stringify({ status: "error" }), { status: answer })
-    : Response.json({ status: "success", data: { desktop: answer } });
+    : Response.json({
+        status: "success",
+        data: typeof answer === "string" ? { desktop: answer } : answer,
+      });
 };
 
 const threadA = "thr_00000000-0000-4000-8000-000000000201" as ThreadId;
@@ -280,6 +340,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+  toasts.length = 0;
   visibility = "visible";
   Object.defineProperty(document, "visibilityState", {
     configurable: true,
@@ -293,6 +354,7 @@ beforeEach(() => {
   desktopChecks = [];
   desktopWindows = [];
   windowsAnswer = "ready";
+  macWindows = undefined;
   windowRequests = [];
   vi.stubGlobal("fetch", vi.fn(fakeCore));
   vi.stubGlobal("WebSocket", FakeSocket);
@@ -817,6 +879,20 @@ describe("DesktopViewer", () => {
     },
   );
 
+  it("shows a Mac runner's reason its Desktop did not start, asking once", async () => {
+    const detail =
+      "voxl is not installed on this Mac. Build it there with `cargo install voxl-server --root ~/.dx/runner/voxl`, then open the Desktop again.";
+    desktopAnswers = [{ desktop: "unavailable", detail }];
+    const { container, root } = await render(
+      <DesktopViewer active threadId={threadA} />,
+    );
+    await vi.waitFor(() => expect(text(container)).toContain(detail));
+    expect(desktopChecks).toHaveLength(1);
+    expect(FakeSocket.instances).toEqual([]);
+    expect(button(container, "Retry")).toBeDefined();
+    await React.act(() => root.unmount());
+  });
+
   it("asks once more when the desktop is still starting, as on an Orb just resumed", async () => {
     desktopAnswers = ["unavailable"];
     const { container, root } = await render(
@@ -1036,6 +1112,232 @@ describe("DesktopViewer", () => {
     await React.act(() => vi.advanceTimersByTimeAsync(61_000));
     expect(openSockets()).toEqual([]);
     await React.act(() => root.unmount());
+  });
+
+  describe("window mode on a Mac runner", () => {
+    const simulator: MacDesktopWindow = {
+      id: 7101,
+      app: "Simulator",
+      bundleId: "com.apple.iphonesimulator",
+      title: "iPhone 16 Pro",
+      frame: { x: 120, y: 80, w: 402, h: 874 },
+      display: 1,
+    };
+    const emulator: MacDesktopWindow = {
+      id: 7102,
+      app: "qemu-system-aarch64",
+      bundleId: "",
+      title: "Android Emulator - Pixel_8:5554",
+      frame: { x: 700, y: 60, w: 412, h: 915 },
+      display: 1,
+    };
+    const picker = (container: HTMLElement) =>
+      container.querySelector<HTMLElement>(
+        '[role="toolbar"][aria-label="Stream a window"]',
+      );
+    const choice = (container: HTMLElement, label: string) =>
+      [...(picker(container)?.querySelectorAll("button") ?? [])].find(
+        (candidate) => candidate.getAttribute("aria-label")?.startsWith(label),
+      ) as HTMLButtonElement;
+    /** The Mac's screen: its hello and a full picture. */
+    const liveMac = async (window?: MacDesktopWindow) => {
+      const socket = desktopSocket();
+      await React.act(async () => {
+        socket.open();
+        socket.receive(macHello(window));
+        for (let index = 0; index < 3; index += 1)
+          socket.receiveBinary(videoFrame(index === 0, 1 + index));
+      });
+      await vi.waitFor(() => expect(draws).toHaveBeenCalled());
+      await settle();
+      return socket;
+    };
+    const click = (container: HTMLElement) =>
+      React.act(async () => {
+        const surface = surfaceOf(container);
+        surface.focus();
+        for (const type of ["pointerdown", "pointerup"])
+          surface.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              button: 0,
+              pointerType: "mouse",
+              clientX: 20,
+              clientY: 20,
+            }),
+          );
+      });
+    const buttons = (socket: FakeSocket) =>
+      socket.commands().filter((command) => command.startsWith("b,"));
+
+    it("streams the whole screen from another device, and switches to one window and back", async () => {
+      macWindows = [simulator, emulator];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      const socket = await liveMac();
+      await vi.waitFor(() => expect(picker(container)).not.toBeNull());
+      // The Linux app row is not offered on a Mac.
+      expect(
+        container.querySelector('[role="toolbar"][aria-label="Desktop apps"]'),
+      ).toBeNull();
+      // Closed: only what streams now.
+      const current = choice(container, "Streaming Whole screen");
+      expect(current.getAttribute("aria-expanded")).toBe("false");
+      await React.act(async () => current.click());
+      expect(
+        choice(container, "Whole screen").getAttribute("aria-pressed"),
+      ).toBe("true");
+      expect(
+        choice(container, "Simulator — iPhone 16 Pro").getAttribute(
+          "aria-pressed",
+        ),
+      ).toBe("false");
+      expect(choice(container, "qemu-system-aarch64 — Android")).toBeDefined();
+
+      // A window: voxl is asked, and its next stream is that window.
+      await React.act(async () =>
+        choice(container, "Simulator — iPhone 16 Pro").click(),
+      );
+      expect(socket.commands()).toContain("dw,7101");
+      const sent = socket.commands().length;
+      await React.act(async () => socket.receive(macHello(simulator)));
+      await settle();
+      expect(
+        choice(container, "Streaming Simulator — iPhone 16 Pro"),
+      ).toBeDefined();
+      // A window keeps its own size: no resize request for it.
+      expect(
+        socket
+          .commands()
+          .slice(sent)
+          .filter((command) => command.startsWith("sz,")),
+      ).toEqual([]);
+      // Control goes on to the window.
+      await click(container);
+      expect(buttons(socket).length).toBeGreaterThan(0);
+
+      // Back to the whole screen.
+      await React.act(async () =>
+        choice(container, "Streaming Simulator").click(),
+      );
+      await React.act(async () => choice(container, "Whole screen").click());
+      expect(socket.commands()).toContain("ds,1");
+      await React.act(async () => socket.receive(macHello()));
+      await settle();
+      expect(choice(container, "Streaming Whole screen")).toBeDefined();
+
+      // The streamed window closes: voxl says so and streams the screen.
+      await React.act(async () =>
+        choice(container, "Streaming Whole screen").click(),
+      );
+      await React.act(async () =>
+        choice(container, "qemu-system-aarch64").click(),
+      );
+      expect(socket.commands()).toContain("dw,7102");
+      await React.act(async () => socket.receive(macHello(emulator)));
+      await React.act(async () => {
+        socket.receive({ t: "windowClosed", id: 7102 });
+        socket.receive(macHello());
+      });
+      await settle();
+      expect(choice(container, "Streaming Whole screen")).toBeDefined();
+      await React.act(() => root.unmount());
+    });
+
+    it("keeps a Mac's input notice off the stream and tells it when control turns on", async () => {
+      const detail =
+        "Clicks and typing are off: macOS hasn't allowed dx to control this Mac. Turn on dx in System Settings › Privacy & Security › Accessibility, then reopen the Desktop.";
+      desktopAnswers = [{ desktop: "ready", detail, startsViewOnly: true }];
+      macWindows = [simulator];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      const socket = await liveMac();
+      await vi.waitFor(() =>
+        expect(
+          picker(container)?.querySelector<HTMLButtonElement>(
+            ".desktop-window-control",
+          ),
+        ).toBeDefined(),
+      );
+      // Nothing covers the stream.
+      expect(text(container)).not.toContain("Accessibility");
+      expect(toasts).toEqual([]);
+      await React.act(async () =>
+        picker(container)
+          ?.querySelector<HTMLButtonElement>(".desktop-window-control")
+          ?.click(),
+      );
+      expect(toasts).toEqual([detail]);
+      expect(text(container)).not.toContain("Accessibility");
+      await React.act(async () => socket.receive(macHello()));
+      await React.act(() => root.unmount());
+    });
+
+    it("opens view-only, lets windows stream without input, and sends input only while Control is on", async () => {
+      // A real Mac someone may be using, maybe the one running this browser.
+      desktopAnswers = [{ desktop: "ready", startsViewOnly: true }];
+      macWindows = [simulator, emulator];
+      const { container, root } = await render(
+        <DesktopViewer active threadId={threadA} />,
+      );
+      await connected();
+      const socket = await liveMac();
+      await vi.waitFor(() => expect(picker(container)).not.toBeNull());
+      const toggle = () =>
+        picker(container)?.querySelector<HTMLButtonElement>(
+          ".desktop-window-control",
+        ) as HTMLButtonElement;
+      expect(toggle().getAttribute("aria-pressed")).toBe("false");
+      expect(toggle().textContent).toContain("View only");
+      // Nothing covers the stream, and a click sends nothing.
+      expect(text(container)).not.toContain("Pick a window to stream");
+      await click(container);
+      expect(buttons(socket)).toEqual([]);
+
+      // Watching a window is allowed; it still sends no input.
+      await React.act(async () =>
+        choice(container, "Streaming Whole screen").click(),
+      );
+      await React.act(async () =>
+        choice(container, "Simulator — iPhone 16 Pro").click(),
+      );
+      expect(socket.commands()).toContain("dw,7101");
+      await React.act(async () => socket.receive(macHello(simulator)));
+      await settle();
+      await click(container);
+      expect(buttons(socket)).toEqual([]);
+
+      // Control on: clicks reach the Mac.
+      await React.act(async () => toggle().click());
+      expect(toggle().getAttribute("aria-pressed")).toBe("true");
+      expect(toggle().textContent).toContain("Control");
+      await click(container);
+      const pressed = buttons(socket).length;
+      expect(pressed).toBeGreaterThan(0);
+
+      // A new stream (voxl restarted) keeps control on.
+      await React.act(async () => socket.receive(macHello(simulator)));
+      await settle();
+      await click(container);
+      expect(buttons(socket).length).toBeGreaterThan(pressed);
+
+      // Control off: whatever is held is released, and input stops.
+      const released = socket.commands().filter((c) => c === "r").length;
+      await React.act(async () => toggle().click());
+      expect(socket.commands().filter((c) => c === "r").length).toBe(
+        released + 1,
+      );
+      const before = buttons(socket).length;
+      await click(container);
+      expect(buttons(socket)).toHaveLength(before);
+      // There is no background input any more.
+      expect(socket.commands().some((c) => c.startsWith("db,"))).toBe(false);
+      await React.act(() => root.unmount());
+    });
   });
 
   describe("app row", () => {

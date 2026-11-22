@@ -1,0 +1,12 @@
+{
+  "version": "0.4.0",
+  "upstreamCommit": "21f194f9e446e7073abd7bbd52e0b397c3800b42",
+  "patchLevel": 1,
+  "tag": "voxl-v0.4.0-dx1",
+  "assets": {
+    "macos-aarch64": {
+      "asset": "voxl-darwin-arm64",
+      "sha256": "b0785d81bdeb5e0d6639bac4a9ca1533db4e669f3eea08a2579043bc96d706e9"
+    }
+  }
+}

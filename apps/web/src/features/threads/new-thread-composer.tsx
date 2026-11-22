@@ -33,7 +33,10 @@ import {
 } from "./image-attachments-ui.js";
 import { useImageDropTarget } from "./image-drop-target.js";
 import { RECOMMENDED_MODE } from "./model-picker-options.js";
-import { NewThreadConfigurationStrip } from "./new-thread-configuration-strip.js";
+import {
+  NewThreadConfigurationStrip,
+  type RunnerMachinePicker,
+} from "./new-thread-configuration-strip.js";
 import { useNewThreadMentions } from "./new-thread-mentions.js";
 
 export function NewThreadComposer({
@@ -61,6 +64,7 @@ export function NewThreadComposer({
   onRunnerProfileChange,
   onRunnerProfileRetry,
   onConnectOrbProvider,
+  runnerMachines,
   model,
   onModelChange,
   effort,
@@ -107,6 +111,8 @@ export function NewThreadComposer({
   readonly onRunnerProfileChange: (runnerProfileId: RunnerProfileId) => void;
   readonly onRunnerProfileRetry?: () => void;
   readonly onConnectOrbProvider?: () => void;
+  /** The person's own machines, while the runner provider is on for them. */
+  readonly runnerMachines?: RunnerMachinePicker;
   /** The picked model; undefined is Recommended. */
   readonly model?: string;
   readonly onModelChange: (model: string | undefined) => void;
@@ -269,6 +275,7 @@ export function NewThreadComposer({
         onRunnerProfileChange={onRunnerProfileChange}
         onRunnerProfileRetry={onRunnerProfileRetry}
         onConnectOrbProvider={onConnectOrbProvider}
+        runnerMachines={runnerMachines}
         onModelChange={onModelChange}
         onEffortChange={onEffortChange}
         claudePlan={claudePlan}

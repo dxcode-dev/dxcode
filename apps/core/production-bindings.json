@@ -451,6 +451,11 @@
       "provenance": "authored-wrangler"
     },
     {
+      "name": "RUNNER_SESSION",
+      "type": "durable-object",
+      "provenance": "authored-wrangler"
+    },
+    {
       "name": "SARVAM_API_KEY",
       "type": "secret",
       "provenance": "alchemy",

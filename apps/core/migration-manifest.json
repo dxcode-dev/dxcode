@@ -299,6 +299,11 @@
       "filename": "0057_release_v0.2.146.sql",
       "sha256": "eb89edc6c595a7f6e7f0452711d45ed348b80f58356d9302c42ce31ee3ec826f",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0058_release_v0.2.152.sql",
+      "sha256": "b720c38e1e6e0a7b0cd142539f8fc0b4fbbd2da038e6976e10b3d4948e7664c2",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [
@@ -372,6 +377,12 @@
       "tag": "v11-plugin-stream-relay",
       "newSqliteClasses": ["PluginStreamRelay"],
       "sha256": "d827c85a3ae2456d3334f85e07402d2e055e7227618f45a9bf7868b262252694",
+      "classification": "non-destructive"
+    },
+    {
+      "tag": "v12-runner-session",
+      "newSqliteClasses": ["RunnerSessionObject"],
+      "sha256": "fb95f1fb7979e3801d64573c901bab222ecc0785a0350ad88c25234836eeaaba",
       "classification": "non-destructive"
     }
   ]

@@ -246,7 +246,9 @@ impl Daemon {
             },
         });
         let desktop_paths = match &config.local_runtime {
-            None => Some(desktop::DesktopPaths::default()),
+            // The Desktop is the Orb image's Xvfb stack: Linux guests only.
+            None if cfg!(target_os = "linux") => Some(desktop::DesktopPaths::default()),
+            None => None,
             Some(local) => std::env::var_os("DXD_DESKTOP")
                 .filter(|value| !value.is_empty())
                 .map(|value| desktop::DesktopPaths {
@@ -485,7 +487,10 @@ impl Daemon {
             &ClientMessage::Register {
                 protocol_major: PROTOCOL_MAJOR,
                 release: RELEASE,
-                capabilities: Capabilities::current(),
+                // A runner (or any macOS host) has no Desktop to offer.
+                capabilities: Capabilities::for_daemon(
+                    cfg!(target_os = "linux") && std::env::var_os("DXD_RUNNER").is_none(),
+                ),
             },
         )
         .await?;
@@ -1318,6 +1323,16 @@ impl Daemon {
             } if seen == generation && result.valid() => {
                 pending_workload_identity.respond(&request_id, result)?;
             }
+            // A runner's supervisor owns the binary for every Thread on the
+            // machine; Core's (Linux) release is not this daemon's to take.
+            ServerMessage::Update {
+                generation: seen, ..
+            } if seen == generation
+                && self
+                    .config
+                    .local_runtime
+                    .as_ref()
+                    .is_some_and(|local| !local.self_update) => {}
             ServerMessage::Update {
                 generation: seen,
                 url,
@@ -1870,6 +1885,22 @@ impl ClockStepSignal {
     }
 }
 
+/// Off Linux there is no timerfd: the signal never installs, and the
+/// heartbeat lease alone notices a host that slept.
+#[cfg(not(target_os = "linux"))]
+mod clock_step {
+    use std::os::fd::OwnedFd;
+
+    pub fn open() -> std::io::Result<OwnedFd> {
+        Err(std::io::ErrorKind::Unsupported.into())
+    }
+
+    pub fn consume(_timer: &OwnedFd) -> std::io::Result<bool> {
+        Ok(false)
+    }
+}
+
+#[cfg(target_os = "linux")]
 mod clock_step {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 

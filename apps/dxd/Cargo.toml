@@ -7,6 +7,7 @@ edition = "2024"
 base64 = "0.22"
 bytes = "1"
 cap-std = "3"
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 httparse = "1"
 libc = "0.2"
@@ -17,7 +18,11 @@ serde_json = "1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["rt", "macros", "net", "sync", "time", "signal"] }
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
-ureq = { version = "3", default-features = false, features = ["rustls"] }
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+
+# The Linux runner sandbox (`dxd __runner-sandbox`).
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

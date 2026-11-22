@@ -1,5 +1,9 @@
 import "./orb-providers.css";
-import type { OrbProviderData, OrbProviderListData } from "@dx/api";
+import {
+  type OrbProviderData,
+  type OrbProviderListData,
+  RUNNER_PROVIDER_ID,
+} from "@dx/api";
 import { orbProviderBetaFeature } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as React from "react";
@@ -34,6 +38,7 @@ import {
   orbProviderSource,
   preparationStep,
 } from "./orb-providers-status.js";
+import { RunnersSettings } from "./runners-settings.js";
 
 /** Resolves to the error message, or undefined when the action succeeded. */
 type Run = (
@@ -355,6 +360,14 @@ export function OrbProvidersSettings({
           ))}
         </SettingsCard>
       )}
+      {data !== undefined &&
+      target.scope === "personal" &&
+      (data.providers.some(({ id }) => id === RUNNER_PROVIDER_ID) ||
+        data.resolved.some(
+          ({ providerId }) => providerId === RUNNER_PROVIDER_ID,
+        )) ? (
+        <RunnersSettings userId={identity.id} />
+      ) : null}
       {data === undefined ||
       !connectable ||
       target.scope !== "workspace" ||

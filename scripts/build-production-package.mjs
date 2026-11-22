@@ -130,6 +130,8 @@ try {
       : undefined,
     deploymentLabel: required("deployment-label"),
     dxdBinary: values.get("dxd-binary"),
+    // A directory of runner dxd builds (production-package.mjs RUNNER_ASSETS).
+    runnerBinaries: values.get("runner-binaries"),
     dxdSha256: required("dxd-sha256"),
     outputRoot,
     portalDomain: values.get("portal-domain"),

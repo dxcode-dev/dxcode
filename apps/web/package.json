@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.151",
+  "version": "0.2.152",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -86,17 +86,17 @@
     "@ui-sdk/core": "0.1.0-beta.1",
     "@ui-sdk/web": "0.1.0-beta.1",
     "@vitejs/plugin-react": "6.1.2",
-    "@vitest/browser-playwright": "4.1.11",
+    "@vitest/browser-playwright": "4.1.12",
     "axe-core": "4.14.0",
     "oxc-transform-react": "0.152.0",
-    "playwright": "1.55.0",
-    "playwright-core": "1.55.0",
+    "playwright": "1.55.1",
+    "playwright-core": "1.55.1",
     "react-doctor": "0.9.12",
     "react-scan": "0.5.7",
     "rolldown": "1.2.5",
     "storybook": "10.6.5",
     "tailwindcss": "4.3.3",
-    "vite": "8.2.2"
+    "vite": "8.2.4"
   },
   "repository": {
     "type": "git",

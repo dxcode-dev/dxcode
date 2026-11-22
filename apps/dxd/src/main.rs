@@ -1,5 +1,7 @@
-#[cfg(not(target_os = "linux"))]
-compile_error!("dxd runs on Linux only; cross-build it from any host with `pnpm build:dxd`");
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+compile_error!(
+    "dxd runs on Linux (Orbs, runners) and macOS (runners) only; cross-build it with `pnpm build:dxd`"
+);
 
 mod attachments;
 mod changes;
@@ -19,6 +21,7 @@ mod plugin_dev;
 mod plugin_host;
 mod protocol;
 mod proxy;
+mod runner;
 mod sandbox;
 mod services;
 mod session;
@@ -69,6 +72,18 @@ pub struct Config {
 pub struct LocalRuntime {
     pub home_directory: String,
     pub state_directory: String,
+    /// False on a runner: its supervisor owns the dxd binary for every
+    /// Thread on the machine, so Core's (Linux) update is ignored.
+    #[serde(default = "self_update_default")]
+    pub self_update: bool,
+    /// False on a runner: dx runs no repository hooks on a person's own
+    /// machine, so `.agents/resume` never runs there.
+    #[serde(default = "self_update_default")]
+    pub resume_hooks: bool,
+}
+
+fn self_update_default() -> bool {
+    true
 }
 
 #[derive(Debug)]
@@ -103,6 +118,10 @@ impl std::fmt::Display for StartExit {
 }
 
 fn main() {
+    // Started as `setsid` or `flock` from a runner's shims folder.
+    if let Some(code) = runner::shims::dispatch() {
+        std::process::exit(code);
+    }
     if let Err(exit) = start() {
         eprintln!("dxd stopped: {exit}");
         std::process::exit(1);
@@ -116,6 +135,11 @@ fn start() -> Result<(), StartExit> {
             println!("dxd {RELEASE} protocol {PROTOCOL_MAJOR}");
             return Ok(());
         }
+        // A person's own machine: the supervisor (`dxd runner run`) and its
+        // CLI. Each Thread's dxd is this same binary with `--config`.
+        Some("runner") => runner::cli(&arguments[1..]),
+        // Linux runner sandbox: applies Landlock to itself, then execs.
+        Some("__runner-sandbox") => runner::sandbox::helper_main(&arguments[1..]),
         Some("files") => {
             return attachments::run_cli(&arguments[1..]).map_err(|()| StartExit::Command);
         }
@@ -174,7 +198,11 @@ fn start() -> Result<(), StartExit> {
             (
                 state.clone(),
                 TerminalRuntime::local(workspace_root.clone(), home.clone(), state.clone()),
-                EnvironmentRuntime::new(EnvironmentPaths::local(home.clone(), state)),
+                EnvironmentRuntime::new(EnvironmentPaths::local(
+                    home.clone(),
+                    state,
+                    local.resume_hooks,
+                )),
                 SandboxRoots::Local { home },
             )
         }

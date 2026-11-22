@@ -148,10 +148,10 @@ beforeEach(async () => {
 });
 
 describe("Beta Orb providers", () => {
-  it("offers Boat, Docker, and Freestyle only to a person who turned each on, and never hides E2B or Cloudflare", async () => {
+  it("offers Boat, Docker, Freestyle, and Runners only to a person who turned each on, and never hides E2B or Cloudflare", async () => {
     await setBetaOrbProviders(person, []);
     expect([...(await hiddenOrbProviders(bindings, principal))].sort()).toEqual(
-      ["boat", "docker", "freestyle"],
+      ["boat", "docker", "freestyle", "runner"],
     );
     const off = await page();
     expect(off.listed).not.toContain("boat");
@@ -161,7 +161,7 @@ describe("Beta Orb providers", () => {
 
     await setBetaOrbProviders(person, ["orb-provider-boat"]);
     expect([...(await hiddenOrbProviders(bindings, principal))].sort()).toEqual(
-      ["docker", "freestyle"],
+      ["docker", "freestyle", "runner"],
     );
     const on = await page();
     expect(on.listed).toContain("boat");

@@ -68,6 +68,7 @@ fn rename_noreplace(
     // SAFETY: both descriptors are open directories owned by `from` and `to`
     // for the call, and both names are NUL-terminated.
     // The raw system call: the static musl libc has no `renameat2` wrapper.
+    #[cfg(target_os = "linux")]
     let result = unsafe {
         libc::syscall(
             libc::SYS_renameat2,
@@ -76,6 +77,17 @@ fn rename_noreplace(
             to.as_raw_fd(),
             to_name.as_ptr(),
             libc::RENAME_NOREPLACE,
+        )
+    };
+    // macOS: the same no-replace rename; a taken destination is EEXIST.
+    #[cfg(target_os = "macos")]
+    let result = unsafe {
+        libc::renameatx_np(
+            from.as_raw_fd(),
+            from_name.as_ptr(),
+            to.as_raw_fd(),
+            to_name.as_ptr(),
+            libc::RENAME_EXCL,
         )
     };
     if result == 0 {

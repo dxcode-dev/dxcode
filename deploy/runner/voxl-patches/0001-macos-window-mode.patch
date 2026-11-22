@@ -1,0 +1,1335 @@
+From 1f819ff065795af920a61fdf493d18347791c7b7 Mon Sep 17 00:00:00 2001
+From: dx <dx@localhost>
+Date: Sat, 21 Nov 2026 09:26:09 +0000
+Subject: [PATCH] macOS window mode: stream and control one window
+
+GET /windows lists on-screen app windows; the dw,<id> command streams one window
+(SCContentFilter initWithDesktopIndependentWindow), following its resizes, and
+ds,<display> goes back to the display. hello.displays.window names the window;
+{"t":"windowClosed","id":N} tells viewers it closed and the stream fell back
+to the display. In window mode input maps onto the window's frame, clicks raise
+the window and restore the pointer afterwards, and hover and scroll go to the
+window's app without moving the pointer.
+---
+ README.md           |  13 ++
+ src/hub.rs          |   5 +
+ src/mac/capture.rs  | 142 ++++++++++++++----
+ src/mac/ffi.rs      |  35 +++++
+ src/mac/input.rs    | 120 ++++++++++++++-
+ src/mac/mod.rs      |  58 +++++++-
+ src/mac/stream.rs   |  42 +++++-
+ src/mac/windows.rs  | 346 ++++++++++++++++++++++++++++++++++++++++++++
+ src/server.rs       |  43 ++++++
+ src/video.rs        |  78 +++++++++-
+ web/src/protocol.ts |  15 +-
+ 11 files changed, 849 insertions(+), 48 deletions(-)
+ create mode 100644 src/mac/windows.rs
+
+diff --git a/README.md b/README.md
+index 067b618..d161b23 100644
+--- a/README.md
++++ b/README.md
+@@ -237,6 +237,19 @@ All viewers follow the selection and reconnect automatically; read-only viewers
+ cannot change it. `--display` still selects the initial monitor. The list refreshes
+ when capture rebuilds; restart voxl to discover newly attached displays.
+ 
++Window mode streams and controls one window instead of a whole display (an iOS
++Simulator or Android emulator, say, or any window when you view a Mac from that same
++Mac). `GET /windows` lists the on-screen app windows as `{"windows":[{id, app,
++bundleId, title, frame: {x, y, w, h}, display}]}` (window IDs are CGWindowIDs, frames
++in points). A viewer sends `dw,<id>` to stream a window and `ds,<display id>` to go
++back to a display; every viewer gets a new `hello` whose `displays.window` (`{id, app,
++title}`) names the window, and follows the window's resizes. If the window closes or
++leaves the screen (minimized, another Space), voxl sends `{"t":"windowClosed","id":N}`
++and goes back to the display. Clicks raise the window and put the Mac's pointer back
++where it was when the button is released; hovering and scrolling reach the window's app
++without moving the pointer; keys bring its app to the front. Dynamic resolution is off
++while a window streams.
++
+ ```sh
+ brew install x264 opus pkgconf esbuild
+ cargo build --release
+diff --git a/src/hub.rs b/src/hub.rs
+index 5fd9a68..9365db4 100644
+--- a/src/hub.rs
++++ b/src/hub.rs
+@@ -237,6 +237,9 @@ pub struct Stats {
+ pub struct Hub {
+     #[cfg(target_os = "macos")]
+     pub display_req: Mutex<Option<crate::mac::DisplayRequest>>,
++    /// A switch between the display and one window (window mode).
++    #[cfg(target_os = "macos")]
++    pub capture_req: Mutex<Option<crate::mac::CaptureRequest>>,
+     /// Connections older than this may no longer inject input after a display switch.
+     #[cfg(target_os = "macos")]
+     pub input_floor: AtomicU64,
+@@ -273,6 +276,8 @@ impl Hub {
+             #[cfg(target_os = "macos")]
+             display_req: Mutex::new(None),
+             #[cfg(target_os = "macos")]
++            capture_req: Mutex::new(None),
++            #[cfg(target_os = "macos")]
+             input_floor: AtomicU64::new(0),
+             clients: Mutex::new(Vec::new()),
+             next_id: AtomicU64::new(1),
+diff --git a/src/mac/capture.rs b/src/mac/capture.rs
+index bf15f92..c96b161 100644
+--- a/src/mac/capture.rs
++++ b/src/mac/capture.rs
+@@ -86,6 +86,8 @@ pub struct Capturer {
+     stream: stream::Stream,
+     last_check: Instant,
+     rebuild: bool,
++    /// Window mode: the window closed or left the screen.
++    window_gone: bool,
+ }
+ 
+ /// Number from a CFNumber value of a frame-info dictionary.
+@@ -99,11 +101,24 @@ unsafe fn dict_i64(dict: CFDictionaryRef, key: *const c_void) -> Option<i64> {
+ impl Capturer {
+     pub fn new(_display: Option<&str>) -> Result<Self, String> {
+         let display = super::display();
+-        let (width, height) = super::capture_size(display);
++        let window = super::window();
++        let (bounds, (width, height)) = match &window {
++            // Window mode: the window's frame at the display's scale.
++            Some(w) => {
++                let b = super::windows::bounds(w.id)
++                    .ok_or_else(|| format!("window {} is not on screen", w.id))?;
++                (b, super::window_size(&b))
++            }
++            None => (
++                unsafe { CGDisplayBounds(display) },
++                super::capture_size(display),
++            ),
++        };
+         let geometry = Geometry {
+             display,
+-            bounds: unsafe { CGDisplayBounds(display) },
++            bounds,
+             width,
++            window: window.as_ref().map(|w| (w.id, w.pid)),
+         };
+         *super::GEOMETRY.lock() = Some(geometry);
+         let fps = super::fps();
+@@ -166,34 +181,50 @@ impl Capturer {
+             }
+             let _ = write(&wake_w, &[1u8]);
+         };
+-        let stream = stream::start(
+-            display,
+-            "capture",
+-            &[OutputType::Screen],
+-            |cfg| unsafe {
+-                cfg.setWidth(width as usize);
+-                cfg.setHeight(height as usize);
+-                cfg.setMinimumFrameInterval(objc2_core_media::CMTime {
+-                    value: 1,
+-                    timescale: fps as i32,
+-                    flags: objc2_core_media::CMTimeFlags::Valid,
+-                    epoch: 0,
+-                });
+-                cfg.setPixelFormat(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
+-                cfg.setColorMatrix(&*(kCGDisplayStreamYCbCrMatrix_ITU_R_601_4 as *const CFString));
+-                // Convert to sRGB on the GPU: without this, wide-gamut displays (P3) are
+-                // captured in their native space and shown desaturated as BT.709/sRGB.
+-                cfg.setColorSpaceName(&*(kCGColorSpaceSRGB as *const CFString));
+-                // Clients draw the cursor themselves (see desktop.rs), so pointer motion
+-                // costs no encode and has no stream latency.
+-                // If the system cursor can't be read, or --show-cursor is set (e.g. for viewers),
+-                // it has to be in the video.
+-                cfg.setShowsCursor(super::show_cursor() || !super::desktop::cursor_readable());
+-                cfg.setCaptureResolution(SCCaptureResolutionType::Best);
+-                cfg.setQueueDepth(6);
+-            },
+-            on_frame,
+-        )?;
++        let configure = |cfg: &objc2_screen_capture_kit::SCStreamConfiguration| unsafe {
++            cfg.setWidth(width as usize);
++            cfg.setHeight(height as usize);
++            cfg.setMinimumFrameInterval(objc2_core_media::CMTime {
++                value: 1,
++                timescale: fps as i32,
++                flags: objc2_core_media::CMTimeFlags::Valid,
++                epoch: 0,
++            });
++            cfg.setPixelFormat(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange);
++            cfg.setColorMatrix(&*(kCGDisplayStreamYCbCrMatrix_ITU_R_601_4 as *const CFString));
++            // Convert to sRGB on the GPU: without this, wide-gamut displays (P3) are
++            // captured in their native space and shown desaturated as BT.709/sRGB.
++            cfg.setColorSpaceName(&*(kCGColorSpaceSRGB as *const CFString));
++            // Clients draw the cursor themselves (see desktop.rs), so pointer motion
++            // costs no encode and has no stream latency.
++            // If the system cursor can't be read, or --show-cursor is set (e.g. for viewers),
++            // it has to be in the video.
++            cfg.setShowsCursor(super::show_cursor() || !super::desktop::cursor_readable());
++            cfg.setCaptureResolution(SCCaptureResolutionType::Best);
++            cfg.setQueueDepth(6);
++            // A window's picture without its shadow, so it maps onto its frame
++            // (macOS 14 and later).
++            if window.is_some()
++                && objc2_foundation::NSObjectProtocol::respondsToSelector(
++                    cfg,
++                    objc2::sel!(setIgnoreShadowsSingleWindow:),
++                )
++            {
++                cfg.setIgnoreShadowsSingleWindow(true);
++            }
++        };
++        let stream = match &window {
++            Some(w) => {
++                stream::start_window(w.id, "capture", &[OutputType::Screen], configure, on_frame)?
++            }
++            None => stream::start(
++                display,
++                "capture",
++                &[OutputType::Screen],
++                configure,
++                on_frame,
++            )?,
++        };
+         let mut me = Capturer {
+             width,
+             height,
+@@ -211,6 +242,7 @@ impl Capturer {
+             stream,
+             last_check: Instant::now(),
+             rebuild: false,
++            window_gone: false,
+         };
+         // The stream opens with a full frame; have it before anything is converted.
+         let t = Instant::now();
+@@ -222,7 +254,16 @@ impl Capturer {
+             log::warn!("no frame from ScreenCaptureKit yet");
+         }
+         me.grab(me.full())?;
+-        log::info!("capturing display {display} with ScreenCaptureKit at {width}x{height}");
++        match &window {
++            Some(w) => log::info!(
++                "capturing window {} ({}) with ScreenCaptureKit at {width}x{height}",
++                w.id,
++                w.app
++            ),
++            None => {
++                log::info!("capturing display {display} with ScreenCaptureKit at {width}x{height}")
++            }
++        }
+         Ok(me)
+     }
+ 
+@@ -255,7 +296,33 @@ impl Capturer {
+             self.damaged = true;
+             self.damaged_at.get_or_insert_with(Instant::now);
+         }
+-        if self.last_check.elapsed() >= Duration::from_secs(1) {
++        // A window is followed closely (a person drags or resizes it); a display rarely
++        // changes.
++        let period = if self.geometry.window.is_some() {
++            Duration::from_millis(300)
++        } else {
++            Duration::from_secs(1)
++        };
++        if let (Some((id, _)), true) = (self.geometry.window, self.last_check.elapsed() >= period) {
++            self.last_check = Instant::now();
++            match super::windows::bounds(id) {
++                None => {
++                    log::info!("window {id} closed or left the screen; back to the display");
++                    self.window_gone = true;
++                    self.rebuild = true;
++                }
++                Some(b) if super::window_size(&b) != (self.width, self.height) => {
++                    log::info!("window {id} resized; restarting capture");
++                    self.rebuild = true;
++                }
++                Some(b) => {
++                    if b.origin != self.geometry.bounds.origin {
++                        self.geometry.bounds = b;
++                        *super::GEOMETRY.lock() = Some(self.geometry);
++                    }
++                }
++            }
++        } else if self.last_check.elapsed() >= period {
+             self.last_check = Instant::now();
+             // Resolution changed (System Settings, another display arrangement).
+             let b = unsafe { CGDisplayBounds(self.geometry.display) };
+@@ -369,6 +436,17 @@ impl Capturer {
+         None
+     }
+ 
++    /// Window mode: the window closed or left the screen, so capture goes back to the
++    /// display.
++    pub fn window_gone(&self) -> bool {
++        self.window_gone
++            || (self.stream.stopped.load(Ordering::Relaxed)
++                && self
++                    .geometry
++                    .window
++                    .is_some_and(|(id, _)| super::windows::bounds(id).is_none()))
++    }
++
+     /// The display changed or the stream ended: capture must be set up again.
+     pub fn needs_rebuild(&self) -> bool {
+         self.rebuild || self.stream.stopped.load(Ordering::Relaxed)
+diff --git a/src/mac/ffi.rs b/src/mac/ffi.rs
+index a1ac7d4..910ed96 100644
+--- a/src/mac/ffi.rs
++++ b/src/mac/ffi.rs
+@@ -20,6 +20,9 @@ pub type CGColorSpaceRef = *mut c_void;
+ pub type CVPixelBufferRef = *mut c_void;
+ pub type CMSampleBufferRef = *const c_void;
+ pub type OSStatus = i32;
++pub type AXUIElementRef = *const c_void;
++pub const kAXValueCGPointType: u32 = 1;
++pub const kAXValueCGSizeType: u32 = 2;
+ 
+ #[repr(C)]
+ #[derive(Clone, Copy, Debug, Default, PartialEq)]
+@@ -52,6 +55,7 @@ extern "C" {
+     pub fn CFDataGetLength(d: CFDataRef) -> isize;
+     pub fn CFStringGetCString(s: CFStringRef, buf: *mut c_char, size: isize, enc: u32) -> bool;
+     pub fn CFEqual(a: CFTypeRef, b: CFTypeRef) -> bool;
++    pub fn CFBooleanGetValue(b: CFTypeRef) -> bool;
+ }
+ pub const kCFNumberSInt64Type: isize = 4;
+ pub const kCFNumberDoubleType: isize = 13;
+@@ -135,6 +139,21 @@ extern "C" {
+     pub fn CGEventSetIntegerValueField(e: CGEventRef, field: u32, value: i64);
+     pub fn CGEventKeyboardSetUnicodeString(e: CGEventRef, len: usize, s: *const u16);
+     pub fn CGEventPost(tap: u32, e: CGEventRef);
++    pub fn CGEventPostToPid(pid: i32, e: CGEventRef);
++    pub fn CGEventCreate(source: CGEventSourceRef) -> CGEventRef;
++    pub fn CGEventGetLocation(e: CGEventRef) -> CGPoint;
++    pub fn CGEventSetLocation(e: CGEventRef, p: CGPoint);
++    pub fn CGWarpMouseCursorPosition(p: CGPoint) -> i32;
++    pub fn CGAssociateMouseAndMouseCursorPosition(connected: u32) -> i32;
++
++    pub fn CGWindowListCopyWindowInfo(option: u32, relative_to: u32) -> CFArrayRef;
++    pub static kCGWindowNumber: CFStringRef;
++    pub static kCGWindowBounds: CFStringRef;
++    pub static kCGWindowIsOnscreen: CFStringRef;
++    pub static kCGWindowLayer: CFStringRef;
++    pub static kCGWindowOwnerPID: CFStringRef;
++    pub static kCGWindowOwnerName: CFStringRef;
++    pub static kCGWindowName: CFStringRef;
+ 
+     pub fn CGColorSpaceCreateDeviceRGB() -> CGColorSpaceRef;
+     pub fn CGColorSpaceRelease(cs: CGColorSpaceRef);
+@@ -154,6 +173,7 @@ extern "C" {
+ pub const kCGEventSourceStateHIDSystemState: i32 = 1;
+ pub const kCGHIDEventTap: u32 = 0;
+ pub const kCGConfigureForAppOnly: u32 = 0;
++pub const kCGWindowListOptionIncludingWindow: u32 = 1 << 3;
+ 
+ pub const kCGEventLeftMouseDown: u32 = 1;
+ pub const kCGEventLeftMouseUp: u32 = 2;
+@@ -171,6 +191,8 @@ pub const kCGMouseEventClickState: u32 = 1;
+ pub const kCGMouseEventButtonNumber: u32 = 3;
+ pub const kCGKeyboardEventAutorepeat: u32 = 8;
+ pub const kCGScrollWheelEventIsContinuous: u32 = 88;
++pub const kCGMouseEventWindowUnderMousePointer: u32 = 91;
++pub const kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent: u32 = 92;
+ 
+ pub const kCGScrollEventUnitPixel: u32 = 0;
+ pub const kCGScrollEventUnitLine: u32 = 1;
+@@ -198,6 +220,19 @@ pub const kCGBitmapByteOrder32Big: u32 = 4 << 12;
+ extern "C" {
+     pub fn AXIsProcessTrusted() -> bool;
+     pub fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
++    pub fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
++    pub fn AXUIElementCopyAttributeValue(
++        el: AXUIElementRef,
++        attribute: CFStringRef,
++        value: *mut CFTypeRef,
++    ) -> i32;
++    pub fn AXUIElementSetAttributeValue(
++        el: AXUIElementRef,
++        attribute: CFStringRef,
++        value: CFTypeRef,
++    ) -> i32;
++    pub fn AXUIElementPerformAction(el: AXUIElementRef, action: CFStringRef) -> i32;
++    pub fn AXValueGetValue(value: CFTypeRef, ty: u32, out: *mut c_void) -> bool;
+ }
+ 
+ #[link(name = "CoreVideo", kind = "framework")]
+diff --git a/src/mac/input.rs b/src/mac/input.rs
+index 31f4ec6..749db9f 100644
+--- a/src/mac/input.rs
++++ b/src/mac/input.rs
+@@ -2,6 +2,12 @@
+ //! the Mac's current keyboard layout (so the right key and Shift/Option are pressed,
+ //! whatever the layout), named keys come from a table, and characters the layout
+ //! can't type are sent as Unicode text. Scrolling is pixel-precise.
++//!
++//! Window mode (windows.rs) leaves the Mac's own pointer alone where it can: hovering
++//! and scrolling go to the window's app alone (CGEventPostToPid, the pointer stays);
++//! a click or drag raises the window, moves the real pointer onto it for as long as a
++//! button is held, then puts the pointer back where it was. Keys bring the window's app
++//! to the front first.
+ 
+ use super::ffi::*;
+ use std::collections::HashMap;
+@@ -169,6 +175,8 @@ struct Injector {
+     clicks: i64,
+     scroll_acc: (f64, f64),
+     clipboard: Option<super::desktop::ClipboardHandle>,
++    /// Window mode: where the Mac's pointer was before a click or drag moved it.
++    restore_to: Option<CGPoint>,
+ }
+ 
+ unsafe impl Send for Injector {}
+@@ -199,6 +207,12 @@ impl Injector {
+     }
+ 
+     fn mouse(&self, ty: u32, button: u32) {
++        self.mouse_to(ty, button, None);
++    }
++
++    /// A mouse event at `self.pos`, posted for everyone or (window mode) to one window
++    /// of one app, which leaves the pointer where it is.
++    fn mouse_to(&self, ty: u32, button: u32, window: Option<(u32, i32)>) {
+         let e = unsafe { CGEventCreateMouseEvent(self.src, ty, self.pos, button) };
+         if e.is_null() {
+             return;
+@@ -210,7 +224,62 @@ impl Injector {
+             }
+             CGEventSetIntegerValueField(e, kCGMouseEventButtonNumber, button as i64);
+         }
+-        self.post(e);
++        match window {
++            Some(w) => self.post_to(e, w),
++            None => self.post(e),
++        }
++    }
++
++    /// Window mode: the streamed window and its app's process.
++    fn window(&self) -> Option<(u32, i32)> {
++        super::GEOMETRY.lock().and_then(|g| g.window)
++    }
++
++    /// Posts `e` to window `id` of process `pid` only.
++    fn post_to(&self, e: CGEventRef, (id, pid): (u32, i32)) {
++        if e.is_null() {
++            return;
++        }
++        unsafe {
++            CGEventSetIntegerValueField(e, kCGMouseEventWindowUnderMousePointer, id as i64);
++            CGEventSetIntegerValueField(
++                e,
++                kCGMouseEventWindowUnderMousePointerThatCanHandleThisEvent,
++                id as i64,
++            );
++            CGEventPostToPid(pid, e);
++            CFRelease(e as CFTypeRef);
++        }
++    }
++
++    /// Window mode: the window in front and its app active, so a click or key lands in
++    /// it. Activation is asynchronous; wait briefly for it.
++    fn bring_forward(&self, (id, pid): (u32, i32)) {
++        let was_active = super::windows::app_active(pid);
++        super::windows::raise(id, pid);
++        if was_active {
++            return;
++        }
++        let t = Instant::now();
++        while !super::windows::app_active(pid) && t.elapsed() < Duration::from_millis(250) {
++            std::thread::sleep(Duration::from_millis(10));
++        }
++    }
++
++    /// Puts the Mac's pointer back after a click or drag in window mode.
++    fn restore_pointer(&mut self) {
++        if self.buttons.iter().any(|&b| b) {
++            return;
++        }
++        if let Some(p) = self.restore_to.take() {
++            // Let the window server take the release at the window first.
++            std::thread::sleep(Duration::from_millis(10));
++            unsafe {
++                CGWarpMouseCursorPosition(p);
++                // A warp mutes the real mouse briefly; reconnect it at once.
++                CGAssociateMouseAndMouseCursorPosition(1);
++            }
++        }
+     }
+ 
+     fn key_event(&self, kc: u16, down: bool, flags: u64, repeat: bool) {
+@@ -247,6 +316,7 @@ impl Injector {
+         match ev {
+             InputEvent::Move { x, y } => {
+                 self.pos = self.to_point(x, y);
++                let window = self.window();
+                 let (ty, b) = if self.buttons[1] {
+                     (kCGEventLeftMouseDragged, 0)
+                 } else if self.buttons[3] {
+@@ -256,14 +326,33 @@ impl Injector {
+                 } else {
+                     (kCGEventMouseMoved, 0)
+                 };
+-                self.mouse(ty, b);
++                // Window mode: hovering reaches the app without moving the pointer;
++                // a drag moves the real one, as a click does.
++                if ty == kCGEventMouseMoved && window.is_some() {
++                    self.mouse_to(ty, b, window);
++                } else {
++                    self.mouse(ty, b);
++                }
+             }
+             InputEvent::Button { button, down } => {
+                 let b = button as usize;
+                 if b >= self.buttons.len() || self.buttons[b] == down {
+                     return;
+                 }
++                let first_press = down && !self.buttons.iter().any(|&held| held);
+                 self.buttons[b] = down;
++                if let (true, Some(window)) = (first_press, self.window()) {
++                    if self.restore_to.is_none() {
++                        let here = unsafe { CGEventCreate(std::ptr::null_mut()) };
++                        if !here.is_null() {
++                            self.restore_to = Some(unsafe { CGEventGetLocation(here) });
++                            unsafe { CFRelease(here as CFTypeRef) };
++                        }
++                    }
++                    self.bring_forward(window);
++                    // The real pointer onto the window, then the press.
++                    self.mouse(kCGEventMouseMoved, 0);
++                }
+                 if down {
+                     // macOS wants the click count on the events for double/triple clicks.
+                     let (t, p, last) = self.last_click;
+@@ -286,6 +375,9 @@ impl Injector {
+                     _ => return,
+                 };
+                 self.mouse(if down { dn } else { up }, mb);
++                if !down {
++                    self.restore_pointer();
++                }
+             }
+             InputEvent::Scroll { dx, dy } => {
+                 let e = unsafe {
+@@ -298,7 +390,7 @@ impl Injector {
+                         0,
+                     )
+                 };
+-                self.post(e);
++                self.post_scroll(e);
+             }
+             InputEvent::ScrollPx { dx, dy } => {
+                 // Desktop pixels -> points; macOS scrolls content down for positive values.
+@@ -327,7 +419,7 @@ impl Injector {
+                 if !e.is_null() {
+                     unsafe { CGEventSetIntegerValueField(e, kCGScrollWheelEventIsContinuous, 1) };
+                 }
+-                self.post(e);
++                self.post_scroll(e);
+             }
+             InputEvent::Key { keysym, down } => self.key(keysym, down),
+             InputEvent::Clipboard(content) => {
+@@ -343,7 +435,26 @@ impl Injector {
+         }
+     }
+ 
++    /// A scroll at the viewer's pointer: in window mode to the window's app alone.
++    fn post_scroll(&self, e: CGEventRef) {
++        match self.window() {
++            Some(window) if !e.is_null() => {
++                unsafe { CGEventSetLocation(e, self.pos) };
++                self.post_to(e, window);
++            }
++            _ => self.post(e),
++        }
++    }
++
+     fn key(&mut self, keysym: u32, down: bool) {
++        // Window mode: keys go to the front app, so bring the window's forward.
++        if down && !self.pressed.contains_key(&keysym) {
++            if let Some(window) = self.window() {
++                if !super::windows::app_active(window.1) {
++                    self.bring_forward(window);
++                }
++            }
++        }
+         if let Some((kc, flag)) = modifier(keysym) {
+             if down == self.mods.contains_key(&keysym) {
+                 return;
+@@ -464,6 +575,7 @@ pub fn spawn(
+         clicks: 1,
+         scroll_acc: (0.0, 0.0),
+         clipboard,
++        restore_to: None,
+     };
+     let (tx, rx) = mpsc::channel::<InputEvent>();
+     std::thread::Builder::new()
+diff --git a/src/mac/mod.rs b/src/mac/mod.rs
+index e6dfa19..47cf7a0 100644
+--- a/src/mac/mod.rs
++++ b/src/mac/mod.rs
+@@ -8,6 +8,7 @@
+ //! - audio: system audio from ScreenCaptureKit
+ //! - screen: dynamic resolution by switching display modes
+ //! - mic: browser microphone played into a loopback output device
++//! - windows: window mode, one window streamed and controlled instead of a display
+ 
+ pub mod audio;
+ pub mod capture;
+@@ -17,6 +18,7 @@ pub mod input;
+ pub mod mic;
+ pub mod screen;
+ pub mod stream;
++pub mod windows;
+ 
+ use ffi::*;
+ use parking_lot::Mutex;
+@@ -30,6 +32,9 @@ pub struct Geometry {
+     pub bounds: CGRect,
+     /// Streamed size in pixels.
+     pub width: u32,
++    /// Window mode: the streamed window's ID and its app's process; `bounds` is then
++    /// the window's frame.
++    pub window: Option<(u32, i32)>,
+ }
+ 
+ impl Geometry {
+@@ -51,6 +56,8 @@ struct Settings {
+     max_pixels: f64,
+     fps: u32,
+     show_cursor: bool,
++    /// Window mode: the window streamed instead of the display.
++    window: Option<windows::Target>,
+ }
+ 
+ static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
+@@ -61,6 +68,7 @@ static SETTINGS: Mutex<Settings> = Mutex::new(Settings {
+     max_pixels: 2560.0 * 1600.0,
+     fps: 60,
+     show_cursor: false,
++    window: None,
+ });
+ 
+ /// Reads the macOS options and checks the privacy permissions voxl needs.
+@@ -181,7 +189,13 @@ pub fn request_display(hub: &crate::hub::Hub, id: u32, client: u64) -> Result<bo
+         return Err("display is no longer connected".into());
+     }
+     if id == display() {
+-        return Ok(false);
++        // From window mode back to the whole display it is on.
++        if window().is_none() {
++            return Ok(false);
++        }
++        *hub.capture_req.lock() = Some(CaptureRequest::Display);
++        hub.wake();
++        return Ok(true);
+     }
+     let mut pending = hub.display_req.lock();
+     let request = hub
+@@ -199,6 +213,7 @@ pub fn select_display(id: u32) -> Result<(), String> {
+     let bounds = unsafe { CGDisplayBounds(id) };
+     let mut s = SETTINGS.lock();
+     s.display = id;
++    s.window = None;
+     if !s.explicit_scale {
+         s.scale = Some(auto_scale(
+             bounds.size.width,
+@@ -210,6 +225,35 @@ pub fn select_display(id: u32) -> Result<(), String> {
+     Ok(())
+ }
+ 
++/// What the capture thread should stream next, set by a viewer's `dw` (or `ds` back
++/// to the current display) and applied by the video thread like a resize.
++pub enum CaptureRequest {
++    Display,
++    Window(windows::Target),
++}
++
++/// `dw,<id>`: stream window `id` instead of the display.
++pub fn request_window(hub: &crate::hub::Hub, id: u32) -> Result<(), String> {
++    // From the window server, not ScreenCaptureKit: this runs on the socket's task.
++    let target = windows::target(id).ok_or_else(|| format!("window {id} is not on screen"))?;
++    if window().is_some_and(|w| w.id == id) {
++        return Ok(());
++    }
++    *hub.capture_req.lock() = Some(CaptureRequest::Window(target));
++    hub.wake();
++    Ok(())
++}
++
++/// The window streamed instead of the display, if any.
++pub fn window() -> Option<windows::Target> {
++    SETTINGS.lock().window.clone()
++}
++
++/// Window mode on (`Some`) or off; returns the window it replaces.
++pub fn set_window(w: Option<windows::Target>) -> Option<windows::Target> {
++    std::mem::replace(&mut SETTINGS.lock().window, w)
++}
++
+ pub fn display_info() -> serde_json::Value {
+     let displays: Vec<_> = active_displays()
+         .into_iter()
+@@ -223,7 +267,11 @@ pub fn display_info() -> serde_json::Value {
+             serde_json::json!({ "id": id, "name": format!("Display {}{suffix}", i + 1) })
+         })
+         .collect();
+-    serde_json::json!({ "selected": display(), "available": displays })
++    let mut info = serde_json::json!({ "selected": display(), "available": displays });
++    if let Some(w) = window() {
++        info["window"] = serde_json::json!({ "id": w.id, "app": w.app, "title": w.title });
++    }
++    info
+ }
+ 
+ pub fn fps() -> u32 {
+@@ -271,6 +319,12 @@ fn native_scale(display: u32) -> f64 {
+     }
+ }
+ 
++/// Streamed size of a window with frame `b` (window mode).
++pub fn window_size(b: &CGRect) -> (u32, u32) {
++    let (w, h) = size_for(b.size.width, b.size.height);
++    (w.max(16), h.max(16))
++}
++
+ /// Desktop pixels per point as streamed.
+ pub fn capture_scale() -> f64 {
+     scale()
+diff --git a/src/mac/stream.rs b/src/mac/stream.rs
+index 81e6821..8fe8456 100644
+--- a/src/mac/stream.rs
++++ b/src/mac/stream.rs
+@@ -1,5 +1,6 @@
+-//! ScreenCaptureKit streams: one display, with a Rust callback for every sample buffer
+-//! (video frames for capture, system audio for the audio module).
++//! ScreenCaptureKit streams: one display (or, in window mode, one window), with a Rust
++//! callback for every sample buffer (video frames for capture, system audio for the
++//! audio module).
+ 
+ use super::ffi::CMSampleBufferRef;
+ use dispatch2::DispatchQueue;
+@@ -105,15 +106,42 @@ pub fn start(
+     handler: impl Fn(CMSampleBufferRef, SCStreamOutputType) + Send + Sync + 'static,
+ ) -> Result<Stream, String> {
+     let d = shareable_display(display)?;
++    let filter = unsafe {
++        SCContentFilter::initWithDisplay_excludingWindows(
++            SCContentFilter::alloc(),
++            &d,
++            &NSArray::new(),
++        )
++    };
++    start_filter(filter, name, types, configure, handler)
++}
++
++/// Window mode: starts capturing window `id` alone, wherever it is and whatever
++/// covers it.
++pub fn start_window(
++    id: u32,
++    name: &str,
++    types: &[SCStreamOutputType],
++    configure: impl FnOnce(&SCStreamConfiguration),
++    handler: impl Fn(CMSampleBufferRef, SCStreamOutputType) + Send + Sync + 'static,
++) -> Result<Stream, String> {
++    let (w, _) = super::windows::find(id)?;
++    let filter =
++        unsafe { SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), &w) };
++    start_filter(filter, name, types, configure, handler)
++}
++
++fn start_filter(
++    filter: Retained<SCContentFilter>,
++    name: &str,
++    types: &[SCStreamOutputType],
++    configure: impl FnOnce(&SCStreamConfiguration),
++    handler: impl Fn(CMSampleBufferRef, SCStreamOutputType) + Send + Sync + 'static,
++) -> Result<Stream, String> {
+     let stopped = Arc::new(AtomicBool::new(false));
+     let output = Output::new(Box::new(handler), stopped.clone());
+     let queue = DispatchQueue::new(&format!("voxl.{name}"), None);
+     let stream = unsafe {
+-        let filter = SCContentFilter::initWithDisplay_excludingWindows(
+-            SCContentFilter::alloc(),
+-            &d,
+-            &NSArray::new(),
+-        );
+         let cfg = SCStreamConfiguration::new();
+         configure(&cfg);
+         let stream = SCStream::initWithFilter_configuration_delegate(
+diff --git a/src/mac/windows.rs b/src/mac/windows.rs
+new file mode 100644
+index 0000000..fba6bd3
+--- /dev/null
++++ b/src/mac/windows.rs
+@@ -0,0 +1,346 @@
++//! Window mode: one window of the Mac streamed and controlled instead of a whole display.
++//!
++//! - `GET /windows` lists the on-screen windows a viewer may pick (`list`).
++//! - A viewer picks one with the text command `dw,<window id>` and returns to a display
++//!   with `ds,<display id>` (see server.rs); `hello.displays.window` names the window
++//!   being streamed, and `{"t":"windowClosed","id":N}` tells viewers the window went
++//!   away and the stream is back on the display.
++//! - Capture uses `SCContentFilter initWithDesktopIndependentWindow` (stream.rs), sized
++//!   to the window's frame at the display's scale, and starts again when the window is
++//!   resized (capture.rs).
++//! - Input maps the viewer's pixels onto the window's frame on screen; clicks raise the
++//!   window first, and the pointer goes back where it was once a click or drag ends
++//!   (input.rs), so a person using the Mac keeps their own pointer.
++
++use super::ffi::*;
++use objc2::rc::Retained;
++use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
++use objc2_core_foundation::{CFBoolean, CFString};
++use objc2_foundation::NSError;
++use objc2_screen_capture_kit::{SCShareableContent, SCWindow};
++use std::ffi::c_void;
++use std::sync::mpsc;
++use std::time::Duration;
++
++/// Smallest window, in points, a viewer may pick (and that capture follows).
++pub const MIN_POINTS: f64 = 48.0;
++
++/// The window being streamed.
++#[derive(Clone, Debug, PartialEq)]
++pub struct Target {
++    pub id: u32,
++    pub pid: i32,
++    pub app: String,
++    pub title: String,
++}
++
++/// One window `GET /windows` lists.
++#[derive(Clone, Debug)]
++pub struct Info {
++    pub target: Target,
++    pub bundle_id: String,
++    /// Global points, top-left origin (as CGDisplayBounds).
++    pub frame: CGRect,
++    pub display: u32,
++}
++
++impl Info {
++    pub fn json(&self) -> serde_json::Value {
++        serde_json::json!({
++            "id": self.target.id,
++            "app": self.target.app,
++            "bundleId": self.bundle_id,
++            "title": self.target.title,
++            "frame": {
++                "x": self.frame.origin.x,
++                "y": self.frame.origin.y,
++                "w": self.frame.size.width,
++                "h": self.frame.size.height,
++            },
++            "display": self.display,
++        })
++    }
++}
++
++/// Objective-C objects handed between threads: ScreenCaptureKit objects may be used
++/// from any thread.
++struct SendBox<T>(T);
++unsafe impl<T> Send for SendBox<T> {}
++
++/// The shareable on-screen content, without desktop windows (wallpaper, icons).
++pub fn shareable() -> Result<Retained<SCShareableContent>, String> {
++    let (tx, rx) = mpsc::channel::<Result<SendBox<Retained<SCShareableContent>>, String>>();
++    let block = block2::RcBlock::new(move |content: *mut SCShareableContent, err: *mut NSError| {
++        let r = match unsafe { Retained::retain(content) } {
++            Some(c) => Ok(SendBox(c)),
++            None => Err(unsafe { err.as_ref() }
++                .map(|e| e.localizedDescription().to_string())
++                .unwrap_or_else(|| "no shareable content".into())),
++        };
++        let _ = tx.send(r);
++    });
++    unsafe {
++        SCShareableContent::getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler(
++            true, true, &block,
++        )
++    };
++    match rx.recv_timeout(Duration::from_secs(10)) {
++        Ok(r) => r.map(|b| b.0).map_err(|e| {
++            format!("{e} (is Screen Recording allowed in System Settings > Privacy & Security?)")
++        }),
++        Err(_) => Err("timed out listing windows".into()),
++    }
++}
++
++fn to_rect(r: objc2_core_foundation::CGRect) -> CGRect {
++    CGRect {
++        origin: CGPoint {
++            x: r.origin.x,
++            y: r.origin.y,
++        },
++        size: CGSize {
++            width: r.size.width,
++            height: r.size.height,
++        },
++    }
++}
++
++/// The display holding the middle of `frame` (the main display when none does).
++fn display_of(frame: &CGRect) -> u32 {
++    let (cx, cy) = (
++        frame.origin.x + frame.size.width / 2.0,
++        frame.origin.y + frame.size.height / 2.0,
++    );
++    super::active_displays()
++        .into_iter()
++        .find(|&id| {
++            let b = unsafe { CGDisplayBounds(id) };
++            cx >= b.origin.x
++                && cx < b.origin.x + b.size.width
++                && cy >= b.origin.y
++                && cy < b.origin.y + b.size.height
++        })
++        .unwrap_or_else(|| unsafe { CGMainDisplayID() })
++}
++
++/// A window a viewer may pick: a normal app window, on screen, not tiny, not voxl's.
++fn pickable(w: &SCWindow) -> Option<Info> {
++    unsafe {
++        if !w.isOnScreen() || w.windowLayer() != 0 {
++            return None;
++        }
++        let app = w.owningApplication()?;
++        let pid = app.processID();
++        if pid as u32 == std::process::id() {
++            return None;
++        }
++        let frame = to_rect(w.frame());
++        if frame.size.width < MIN_POINTS || frame.size.height < MIN_POINTS {
++            return None;
++        }
++        Some(Info {
++            target: Target {
++                id: w.windowID(),
++                pid,
++                app: app.applicationName().to_string(),
++                title: w.title().map(|t| t.to_string()).unwrap_or_default(),
++            },
++            bundle_id: app.bundleIdentifier().to_string(),
++            frame,
++            display: display_of(&frame),
++        })
++    }
++}
++
++/// The windows a viewer may stream, by app and title.
++pub fn list() -> Result<Vec<Info>, String> {
++    let content = shareable()?;
++    let mut out: Vec<Info> = unsafe { content.windows() }
++        .iter()
++        .filter_map(|w| pickable(&w))
++        .collect();
++    out.sort_by(|a, b| {
++        (a.target.app.to_lowercase(), &a.target.title, a.target.id).cmp(&(
++            b.target.app.to_lowercase(),
++            &b.target.title,
++            b.target.id,
++        ))
++    });
++    Ok(out)
++}
++
++/// `GET /windows`: `{"windows":[{id, app, bundleId, title, frame {x,y,w,h}, display}]}`.
++pub fn list_json() -> Result<serde_json::Value, String> {
++    let windows: Vec<_> = list()?.iter().map(Info::json).collect();
++    Ok(serde_json::json!({ "windows": windows }))
++}
++
++/// The pickable window `id` with its ScreenCaptureKit object, for capture.
++pub fn find(id: u32) -> Result<(Retained<SCWindow>, Info), String> {
++    let content = shareable()?;
++    let windows = unsafe { content.windows() };
++    windows
++        .iter()
++        .find(|w| unsafe { w.windowID() } == id)
++        .and_then(|w| pickable(&w).map(|info| (w, info)))
++        .ok_or_else(|| format!("window {id} is not on screen"))
++}
++
++/// Where window `id` is now (global points), or None once it closed or left the
++/// screen (minimized, hidden, another Space). Cheap enough to poll.
++pub fn bounds(id: u32) -> Option<CGRect> {
++    describe(id).map(|(frame, _)| frame)
++}
++
++/// Window `id` as a capture target, from the window server (fast, unlike
++/// SCShareableContent): None unless it is an on-screen, normal-layer window that is
++/// not tiny and not voxl's.
++pub fn target(id: u32) -> Option<Target> {
++    let (frame, target) = describe(id)?;
++    (frame.size.width >= MIN_POINTS
++        && frame.size.height >= MIN_POINTS
++        && target.pid as u32 != std::process::id())
++    .then_some(target)
++}
++
++unsafe fn dict_number(info: CFDictionaryRef, key: CFStringRef) -> Option<i64> {
++    let v = CFDictionaryGetValue(info, key);
++    let mut n = 0i64;
++    (!v.is_null() && CFNumberGetValue(v, kCFNumberSInt64Type, &mut n as *mut i64 as _)).then_some(n)
++}
++
++/// The window server's frame and owner of window `id`, while it is on screen at the
++/// normal layer.
++fn describe(id: u32) -> Option<(CGRect, Target)> {
++    unsafe {
++        let list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, id);
++        if list.is_null() {
++            return None;
++        }
++        let mut found = None;
++        for i in 0..CFArrayGetCount(list) {
++            let info = CFArrayGetValueAtIndex(list, i) as CFDictionaryRef;
++            if dict_number(info, kCGWindowNumber) != Some(id as i64) {
++                continue;
++            }
++            let onscreen = CFDictionaryGetValue(info, kCGWindowIsOnscreen);
++            if onscreen.is_null()
++                || !CFBooleanGetValue(onscreen)
++                || dict_number(info, kCGWindowLayer) != Some(0)
++            {
++                break;
++            }
++            let dict = CFDictionaryGetValue(info, kCGWindowBounds);
++            let mut r = CGRect::default();
++            if !dict.is_null() && CGRectMakeWithDictionaryRepresentation(dict, &mut r) {
++                found = Some((
++                    r,
++                    Target {
++                        id,
++                        pid: dict_number(info, kCGWindowOwnerPID).unwrap_or(0) as i32,
++                        app: cf_string(CFDictionaryGetValue(info, kCGWindowOwnerName)),
++                        title: cf_string(CFDictionaryGetValue(info, kCGWindowName)),
++                    },
++                ));
++            }
++            break;
++        }
++        CFRelease(list);
++        found
++    }
++}
++
++// ---------- bringing the window forward ----------
++
++type AXGetWindow = unsafe extern "C" fn(AXUIElementRef, *mut u32) -> i32;
++
++/// `_AXUIElementGetWindow`: the CGWindowID of an AX window. Private but long stable
++/// (window managers use it); looked up so the link never depends on it.
++fn ax_get_window() -> Option<AXGetWindow> {
++    let symbol = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"_AXUIElementGetWindow".as_ptr()) };
++    (!symbol.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, AXGetWindow>(symbol) })
++}
++
++unsafe fn ax_attr(el: AXUIElementRef, name: &'static str) -> CFTypeRef {
++    let key = CFString::from_static_str(name);
++    let mut out: CFTypeRef = std::ptr::null();
++    if AXUIElementCopyAttributeValue(el, &*key as *const CFString as CFStringRef, &mut out) != 0 {
++        return std::ptr::null();
++    }
++    out
++}
++
++/// The AX window's frame, to match a window when `_AXUIElementGetWindow` is missing.
++unsafe fn ax_frame(el: AXUIElementRef) -> Option<CGRect> {
++    let (pos, size) = (ax_attr(el, "AXPosition"), ax_attr(el, "AXSize"));
++    let mut r = CGRect::default();
++    let ok = !pos.is_null()
++        && !size.is_null()
++        && AXValueGetValue(pos, kAXValueCGPointType, &mut r.origin as *mut CGPoint as _)
++        && AXValueGetValue(size, kAXValueCGSizeType, &mut r.size as *mut CGSize as _);
++    for v in [pos, size] {
++        if !v.is_null() {
++            CFRelease(v);
++        }
++    }
++    ok.then_some(r)
++}
++
++/// Brings window `id` of process `pid` to the front and its app to the foreground, so injected
++/// clicks and keys land in it. Needs Accessibility, as all input does.
++pub fn raise(id: u32, pid: i32) {
++    if let Some(app) = NSRunningApplication::runningApplicationWithProcessIdentifier(pid) {
++        if !app.isActive() {
++            #[allow(deprecated)]
++            app.activateWithOptions(NSApplicationActivationOptions::ActivateIgnoringOtherApps);
++        }
++    }
++    unsafe {
++        let app = AXUIElementCreateApplication(pid);
++        if app.is_null() {
++            return;
++        }
++        // Frontmost through Accessibility too: macOS 14 may decline activateWithOptions
++        // from a background process.
++        let front = CFString::from_static_str("AXFrontmost");
++        AXUIElementSetAttributeValue(
++            app,
++            &*front as *const CFString as CFStringRef,
++            CFBoolean::new(true) as *const CFBoolean as CFTypeRef,
++        );
++        let windows = ax_attr(app, "AXWindows");
++        if !windows.is_null() {
++            let get_window = ax_get_window();
++            let expected = bounds(id);
++            for i in 0..CFArrayGetCount(windows) {
++                let w = CFArrayGetValueAtIndex(windows, i) as AXUIElementRef;
++                let matches = match get_window {
++                    Some(f) => {
++                        let mut found = 0u32;
++                        f(w, &mut found) == 0 && found == id
++                    }
++                    None => expected.is_some() && ax_frame(w) == expected,
++                };
++                if matches {
++                    let raise = CFString::from_static_str("AXRaise");
++                    AXUIElementPerformAction(w, &*raise as *const CFString as CFStringRef);
++                    let main = CFString::from_static_str("AXMain");
++                    AXUIElementSetAttributeValue(
++                        w,
++                        &*main as *const CFString as CFStringRef,
++                        CFBoolean::new(true) as *const CFBoolean as CFTypeRef,
++                    );
++                    break;
++                }
++            }
++            CFRelease(windows);
++        }
++        CFRelease(app as CFTypeRef);
++    }
++}
++
++/// Whether `pid`'s app is the frontmost one.
++pub fn app_active(pid: i32) -> bool {
++    NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
++        .is_some_and(|app| app.isActive())
++}
+diff --git a/src/server.rs b/src/server.rs
+index 7c3d91f..16cf9d7 100644
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -148,6 +148,9 @@ pub fn router(state: AppState) -> Router {
+     let wait_routes = Router::new()
+         .route("/wait", get(crate::wait::wait))
+         .with_state(state.hub.clone());
++    // Window mode: the windows a viewer may stream instead of the display.
++    #[cfg(target_os = "macos")]
++    let wait_routes = wait_routes.route("/windows", get(windows));
+     Router::new()
+         .route("/", get(index))
+         .route("/index.html", get(index))
+@@ -166,6 +169,32 @@ pub fn router(state: AppState) -> Router {
+         .merge(wait_routes)
+ }
+ 
++/// `GET /windows` (macOS): `{"windows":[{id, app, bundleId, title, frame, display}]}`,
++/// the on-screen app windows a viewer may stream with `dw,<id>`.
++#[cfg(target_os = "macos")]
++async fn windows() -> Response {
++    let listed = tokio::task::spawn_blocking(crate::mac::windows::list_json)
++        .await
++        .map_err(|e| e.to_string())
++        .and_then(|r| r);
++    match listed {
++        Ok(body) => (
++            [
++                (header::CONTENT_TYPE, "application/json"),
++                (header::CACHE_CONTROL, "no-store"),
++            ],
++            body.to_string(),
++        )
++            .into_response(),
++        Err(e) => (
++            axum::http::StatusCode::SERVICE_UNAVAILABLE,
++            [(header::CONTENT_TYPE, "application/json")],
++            serde_json::json!({ "error": e }).to_string(),
++        )
++            .into_response(),
++    }
++}
++
+ async fn stats(State(s): State<AppState>) -> Response {
+     let st = &s.hub.stats;
+     let clients: Vec<_> = s
+@@ -349,6 +378,20 @@ fn handle_text(s: &AppState, c: &Arc<Client>, t: &str, rtts: &mut std::collectio
+                 }
+             }
+         }
++        // Window mode: stream and control one window (see mac/windows.rs); `ds` with
++        // the current display goes back to it.
++        #[cfg(target_os = "macos")]
++        "dw" => {
++            if let Ok(id) = rest.parse::<u32>() {
++                if let Err(e) = crate::mac::request_window(&s.hub, id) {
++                    log::warn!("window capture: {e}");
++                    c.send(Out::Text(format!("{{\"t\":\"windowClosed\",\"id\":{id}}}")));
++                    c.needs_keyframe.store(true, Ordering::Relaxed);
++                    c.send(Out::Text(s.hub.hello()));
++                    s.hub.wake();
++                }
++            }
++        }
+         "a" => {
+             if let Some(id) = num::<u32>(&mut it) {
+                 c.on_ack(id);
+diff --git a/src/video.rs b/src/video.rs
+index eb2ae98..3ecd33a 100644
+--- a/src/video.rs
++++ b/src/video.rs
+@@ -97,6 +97,8 @@ pub fn spawn(
+                     std::process::exit(1);
+                 }
+             }
++            #[cfg(target_os = "macos")]
++            let window_gone = cap.window_gone();
+             drop(cap);
+             let _ = encode.join();
+             #[cfg(target_os = "macos")]
+@@ -111,6 +113,25 @@ pub fn spawn(
+                 });
+                 continue;
+             }
++            // Window mode: a viewer picked a window or the display, or the window closed.
++            #[cfg(target_os = "macos")]
++            {
++                let mut request = hub.capture_req.lock().take();
++                if request.is_none() && window_gone {
++                    if let Some(w) = crate::mac::window() {
++                        window_closed(&hub, w.id);
++                        request = Some(crate::mac::CaptureRequest::Display);
++                    }
++                }
++                if let Some(request) = request {
++                    hub.resize_req.lock().take();
++                    p = switch_capture(request, &cfg, &hub, &mut screen).unwrap_or_else(|e| {
++                        log::error!("capture switch failed: {e}");
++                        std::process::exit(1);
++                    });
++                    continue;
++                }
++            }
+             let req = hub.resize_req.lock().take();
+             if let (Some(s), Some((w, h))) = (screen.as_mut(), req) {
+                 if let Err(e) = s.resize(w, h) {
+@@ -119,6 +140,19 @@ pub fn spawn(
+             }
+             p = match build(&cfg, &hub) {
+                 Ok(p) => p,
++                // The window can no longer be captured: back to the display.
++                #[cfg(target_os = "macos")]
++                Err(e) if crate::mac::window().is_some() => {
++                    log::warn!("window capture failed: {e}");
++                    if let Some(w) = crate::mac::window() {
++                        window_closed(&hub, w.id);
++                    }
++                    let to_display = crate::mac::CaptureRequest::Display;
++                    switch_capture(to_display, &cfg, &hub, &mut screen).unwrap_or_else(|e| {
++                        log::error!("video restart failed: {e}");
++                        std::process::exit(1);
++                    })
++                }
+                 Err(e) => {
+                     log::error!("video restart failed: {e}");
+                     std::process::exit(1);
+@@ -170,6 +204,48 @@ fn switch_display(
+     Ok(pipeline)
+ }
+ 
++/// Tells viewers the streamed window went away; the next hello is the display's.
++#[cfg(target_os = "macos")]
++fn window_closed(hub: &Hub, id: u32) {
++    hub.broadcast(|| Out::Text(format!("{{\"t\":\"windowClosed\",\"id\":{id}}}")));
++}
++
++/// Window mode on or off. A window keeps its own size, so while one streams the
++/// display returns to its own mode and viewers do not resize it; back on the display,
++/// dynamic resolution applies again.
++#[cfg(target_os = "macos")]
++fn switch_capture(
++    request: crate::mac::CaptureRequest,
++    cfg: &VideoConfig,
++    hub: &Arc<Hub>,
++    screen: &mut Option<crate::screen::Screen>,
++) -> Result<Pipeline, String> {
++    // Keys and buttons held for the old picture are let go.
++    if let Some(tx) = hub.input.lock().as_ref() {
++        let _ = tx.send(crate::input::InputEvent::ReleaseAll);
++    }
++    if let crate::mac::CaptureRequest::Window(target) = request {
++        if let Some(s) = screen.as_mut() {
++            if let Err(e) = s.restore() {
++                log::warn!("could not restore the display mode: {e}");
++            }
++        }
++        *hub.resize_max.lock() = None;
++        let id = target.id;
++        crate::mac::set_window(Some(target));
++        match build(cfg, hub) {
++            Ok(p) => return Ok(p),
++            Err(e) => {
++                log::warn!("window {id} cannot be captured: {e}; staying on the display");
++                window_closed(hub, id);
++            }
++        }
++    }
++    crate::mac::set_window(None);
++    *hub.resize_max.lock() = screen.as_ref().map(|s| s.max());
++    build(cfg, hub)
++}
++
+ fn build(cfg: &VideoConfig, hub: &Arc<Hub>) -> Result<Pipeline, String> {
+     let cap = Capturer::new(cfg.display.as_deref())?;
+     let (w, h) = (cap.width, cap.height);
+@@ -555,7 +631,7 @@ fn capture_loop(
+ 
+     loop {
+         #[cfg(target_os = "macos")]
+-        if hub.display_req.lock().is_some() {
++        if hub.display_req.lock().is_some() || hub.capture_req.lock().is_some() {
+             return Ok(());
+         }
+         if hub.resize_req.lock().is_some() || cap.needs_rebuild() {
+diff --git a/web/src/protocol.ts b/web/src/protocol.ts
+index 0664c68..c24e90a 100644
+--- a/web/src/protocol.ts
++++ b/web/src/protocol.ts
+@@ -45,8 +45,15 @@ export interface Hello {
+ 	readOnly?: boolean;
+ 	/** Dynamic resolution: desktop pixels per CSS pixel of the viewer's window. */
+ 	resize?: { scale: number };
+-	/** macOS: one shared display, selected by its CoreGraphics ID. */
+-	displays?: { selected: number; available: { id: number; name: string }[] };
++	/**
++	 * macOS: one shared display, selected by its CoreGraphics ID; `window` while window
++	 * mode streams one window of it instead (`dw`).
++	 */
++	displays?: {
++		selected: number;
++		available: { id: number; name: string }[];
++		window?: { id: number; app: string; title: string };
++	};
+ }
+ 
+ /** JSON text messages from the server. */
+@@ -55,6 +62,8 @@ export type ServerMessage =
+ 	| { t: 'ping'; s: number }
+ 	| { t: 'clip'; d: string }
+ 	| { t: 'mic'; on: boolean }
++	/** macOS window mode: the streamed window closed; the stream is back on the display. */
++	| { t: 'windowClosed'; id: number }
+ 	| { t: 'close' };
+ 
+ /** Text commands to the server. */
+@@ -73,6 +82,8 @@ export const cmd = {
+ 	/** Ask for a desktop of this size (dynamic resolution). */
+ 	resize: (w: number, h: number) => `sz,${w},${h}`,
+ 	display: (id: number) => `ds,${id}`,
++	/** macOS window mode: stream window `id` (a CGWindowID from `GET /windows`). */
++	window: (id: number) => `dw,${id}`,
+ 	keyframe: 'kf',
+ 	pong: (sent: number) => `po,${sent}`,
+ } as const;
+-- 
+2.47.3
+

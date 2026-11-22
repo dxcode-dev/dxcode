@@ -11,6 +11,7 @@ import {
 } from "../../execution/deployment-orbs.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import type { Bindings } from "../../http/types.js";
+import { defaultMachine, ownsMachine } from "../../runners/repository.js";
 import { threadProjectReachableSql } from "../../settings/members/membership-sql.js";
 import { findPlugin, isLocalRuntime } from "../registry.js";
 import {
@@ -359,6 +360,7 @@ export class OrbUnavailable extends Schema.TaggedError<OrbUnavailable>()(
       "no-provider",
       "size-unavailable",
       "beta-provider-off",
+      "no-runner",
     ]),
     /** The size's provider, for `beta-provider-off`. */
     provider: Schema.optional(Schema.String),
@@ -389,6 +391,11 @@ export const resolveThreadExecutionPin = async (input: {
   readonly userId: string;
   readonly projectId: string | null;
   readonly runnerProfileId: string | undefined;
+  /**
+   * A runner Thread's machine (`rn.machine`); the person's most recently
+   * seen machine when absent.
+   */
+  readonly runnerMachineId?: string;
   /** A projectless Thread's project defaults to this size. */
   readonly projectlessRunnerProfileId?: string;
   /** The providers people and workspaces can connect (execution/orb-providers). */
@@ -442,6 +449,26 @@ export const resolveThreadExecutionPin = async (input: {
     credentialAccount: null,
     providerTemplate: null,
   };
+  // A runner Thread pins the person's own machine, not an account, in
+  // `pnpm dev` and deployments alike.
+  if (profile.adapter === "runner") {
+    if (!deploymentProviders.some(({ providerId }) => providerId === "runner"))
+      throw new OrbUnavailable({ reason: "no-provider", provider: "runner" });
+    if (hiddenProviders?.has("runner") === true)
+      throw new OrbUnavailable({
+        reason: "beta-provider-off",
+        provider: "runner",
+      });
+    const machine =
+      input.runnerMachineId === undefined
+        ? await defaultMachine(input.db, input.userId)
+        : (await ownsMachine(input.db, input.userId, input.runnerMachineId))
+          ? input.runnerMachineId
+          : undefined;
+    if (machine === undefined)
+      throw new OrbUnavailable({ reason: "no-runner", provider: "runner" });
+    return { ...deploymentPin, providerTemplate: machine };
+  }
   // `pnpm dev` keeps its local behavior: no pin unless the deployment
   // serves the size, and activation fails closed.
   if (localRuntime)

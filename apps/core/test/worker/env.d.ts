@@ -31,6 +31,9 @@ declare module "cloudflare:test" {
     readonly PLUGIN_STREAM_RELAY: DurableObjectNamespace<
       import("../../src/plugins/streams/relay.js").PluginStreamRelay
     >;
+    readonly RUNNER_SESSION: DurableObjectNamespace<
+      import("../../src/runners/session-object.js").RunnerSessionObject
+    >;
     readonly DX_STORAGE: R2Bucket;
     readonly LOADER: WorkerLoader;
     readonly TEST_MIGRATIONS: D1Migration[];

@@ -71,6 +71,11 @@ import { projectRoutes } from "./projects/routes.js";
 import { threadQuickActionsRoutes } from "./quick-actions/routes.js";
 import { readinessHandler } from "./readiness/handler.js";
 import { realtimeRoutes } from "./realtime/realtime-hub.js";
+import { runnerPublicRoutes } from "./runners/routes.js";
+import {
+  desktopOwnerOnlyOnRunner,
+  ownerOnlyOnRunner,
+} from "./runners/thread-gate.js";
 import { contentSecurityPolicy } from "./security/headers.js";
 import { cspReportRoutes } from "./security/reports.js";
 import {
@@ -156,6 +161,9 @@ app.route("/v1/integrations/github", githubWebhookRoutes);
 // signed-in routes below.
 app.route("/v1/deployment", registeredDeploymentHookRoutes);
 app.route("/v1", threadDaemonRoutes);
+// A person's own machine (`dxd runner`): pairing by one-time code, then its
+// own token; no session.
+app.route("/v1/runner", runnerPublicRoutes);
 // Plugin icons by the hash of their bytes; see plugins/icons/routes.ts.
 app.route("/v1/plugins/icons", pluginIconRoutes);
 // Navigated to, not fetched: it redirects to sign-in instead of answering 401.
@@ -237,6 +245,7 @@ app.route("/v1/threads", messageReactionRoutes);
 // `/terminal/*` also matches `/terminal`: the attach and its warm-up.
 app.use("/v1/threads/:threadId/terminal/*", authorizeThread);
 app.use("/v1/threads/:threadId/terminal/*", enforceThreadActive);
+app.use("/v1/threads/:threadId/terminal/*", ownerOnlyOnRunner);
 app.route("/v1/threads", threadTerminalRoutes);
 // `/portals/*` also matches `/portals`; authorizing twice would see the
 // owner a contributor is impersonating.
@@ -304,6 +313,7 @@ app.use("/v1/threads/:threadId/quick-actions", authorizeThread);
 app.route("/v1/threads", threadQuickActionsRoutes);
 app.use("/v1/threads/:threadId/desktop/*", authorizeThread);
 app.use("/v1/threads/:threadId/desktop/*", enforceThreadActive);
+app.use("/v1/threads/:threadId/desktop/*", desktopOwnerOnlyOnRunner);
 app.route("/v1/threads", threadDesktopRoutes);
 // Per person, not per Thread: a member's panes never replace the owner's.
 app.route("/v1/threads", threadPaneLayoutRoutes);

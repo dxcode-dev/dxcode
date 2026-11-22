@@ -1,6 +1,7 @@
 // voxl's wire protocol, ported from voxl's web client (web/src/protocol.ts at
 // tembo/voxl 176f8be, MIT, © 2026 Tembo; see THIRD_PARTY_NOTICES.md), less
-// the files, microphone, and audio messages dx does not use. One WebSocket
+// the files, microphone, and audio messages dx does not use, plus window
+// mode from dx's voxl patch (deploy/runner/voxl-patches). One WebSocket
 // carries everything: binary messages start with a type byte, text messages
 // are JSON from the server and short comma-separated commands from the
 // client.
@@ -29,6 +30,21 @@ export interface Hello {
   readonly readOnly?: boolean;
   /** Dynamic resolution is on: the viewer may ask for its own size. */
   readonly resize?: { readonly scale: number };
+  /**
+   * A Mac's voxl: the display it streams, by CoreGraphics ID, and in window
+   * mode the one window it streams instead (dx's voxl patch).
+   */
+  readonly displays?: {
+    readonly selected: number;
+    readonly window?: StreamedWindow;
+  };
+}
+
+/** The window a Mac's voxl streams in window mode. */
+export interface StreamedWindow {
+  readonly id: number;
+  readonly app: string;
+  readonly title: string;
 }
 
 /** JSON text messages from the server. */
@@ -36,6 +52,8 @@ export type ServerMessage =
   | Hello
   | { readonly t: "ping"; readonly s: number }
   | { readonly t: "clip"; readonly d: string }
+  /** Window mode: the streamed window closed; the stream is the display's. */
+  | { readonly t: "windowClosed"; readonly id: number }
   | { readonly t: "close" };
 
 /** Text commands to the server. */
@@ -51,6 +69,10 @@ export const cmd = {
   video: (on: boolean) => `v,${on ? 1 : 0}`,
   /** Ask for a desktop of this size (dynamic resolution). */
   resize: (w: number, h: number) => `sz,${w},${h}`,
+  /** A Mac: stream this whole display (leaves window mode). */
+  display: (id: number) => `ds,${id}`,
+  /** A Mac: stream this one window (a CGWindowID) instead of the display. */
+  window: (id: number) => `dw,${id}`,
   keyframe: "kf",
   pong: (sent: number) => `po,${sent}`,
 } as const;
