@@ -44,6 +44,7 @@ const generatedEnvironmentNames = [
   "HOME",
   "TZ",
   "CLOUDFLARE_VITE_WRANGLER_CONFIG_PATH",
+  "COREPACK_HOME",
 ];
 const packageIdentityGeneratorPath = "scripts/production-package.mjs";
 /** Where a package built without the docs site sends `/docs` and `/docs/*`. */
@@ -398,11 +399,29 @@ const loadGeneratorPackageProvenance = () =>
     ),
   });
 
-export const productionBuildEnvironment = (environment) => ({
-  CI: "1",
-  PATH: environment.PATH ?? "",
-  TZ: "UTC",
-});
+/**
+ * The build's own variables. HOME is a fresh folder (build-production-package
+ * .mjs), so Corepack would download the pinned pnpm again into it; a fresh
+ * download fails with some Node releases' Corepack (Node 22.23.4's expects
+ * `bin/pnpm.cjs`, which pnpm 12 no longer ships). COREPACK_HOME keeps the
+ * operator's Corepack cache, which already holds the pnpm that runs the
+ * deploy.
+ */
+export const productionBuildEnvironment = (environment) => {
+  const corepackHome =
+    environment.COREPACK_HOME ??
+    (environment.XDG_CACHE_HOME
+      ? `${environment.XDG_CACHE_HOME}/node/corepack`
+      : environment.HOME
+        ? `${environment.HOME}/.cache/node/corepack`
+        : undefined);
+  return {
+    CI: "1",
+    PATH: environment.PATH ?? "",
+    TZ: "UTC",
+    ...(corepackHome === undefined ? {} : { COREPACK_HOME: corepackHome }),
+  };
+};
 
 const filesUnder = (directory, root = directory) =>
   readdirSync(directory, { withFileTypes: true })
