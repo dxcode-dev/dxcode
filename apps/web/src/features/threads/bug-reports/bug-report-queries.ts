@@ -83,12 +83,16 @@ export type SendBugReportInput =
       readonly images: ReadonlyArray<File>;
       /** The dictation's audio, with Dictation Diagnostics. */
       readonly audio?: Blob;
+      /** The same on every try of one send, so a retry keeps it once. */
+      readonly sendKey?: string;
     }
   | {
       readonly threadId?: undefined;
       readonly report: CreateAppBugReportRequest;
       readonly images: ReadonlyArray<File>;
       readonly audio?: undefined;
+      /** The same on every try of one send, so a retry keeps it once. */
+      readonly sendKey?: string;
     };
 
 export const sendBugReport = async ({
@@ -96,6 +100,7 @@ export const sendBugReport = async ({
   report,
   images,
   audio,
+  sendKey,
 }: SendBugReportInput): Promise<BugReportData> => {
   const form = new FormData();
   form.set("report", JSON.stringify(report));
@@ -115,7 +120,10 @@ export const sendBugReport = async ({
         {
           method: "POST",
           body: form,
-          headers: { accept: "application/json" },
+          headers: {
+            accept: "application/json",
+            ...(sendKey === undefined ? {} : { "idempotency-key": sendKey }),
+          },
         },
       ),
       CreateBugReportResponseSchema,

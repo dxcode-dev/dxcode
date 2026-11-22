@@ -243,7 +243,10 @@ export function NewThreadComposer({
           />
         </div>
       </div>
-      <NewThreadSetupNotice gaps={setupGaps} />
+      <NewThreadSetupNotice
+        gaps={setupGaps}
+        orbNotice={orbProvidersQuery.data?.unavailableNotice}
+      />
       <NewThreadConfigurationStrip
         projects={projects}
         hasMoreProjects={hasMoreProjects}

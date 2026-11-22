@@ -48,17 +48,19 @@ export const recordMeteredCall = async (
 };
 
 /**
- * Records one metered call made for a user outside a Thread, such as composer
- * dictation. The row has no Thread or Project; the workspace is the owner's
- * membership, as for Thread calls.
+ * The row for one metered call made for a user outside a Thread, such as
+ * composer dictation. The row has no Thread or Project; the workspace is the
+ * owner's membership, as for Thread calls. `id` lets a caller batch a charge
+ * that names this row.
  */
-export const recordUserMeteredCall = async (
+export const userMeteredCallStatement = (
   db: D1Database,
   userId: string,
   call: MeteredPluginCall,
   occurredAt = new Date().toISOString(),
-): Promise<void> => {
-  await db
+  id = `pue_${crypto.randomUUID()}`,
+): D1PreparedStatement =>
+  db
     .prepare(
       `INSERT INTO plugin_usage_event (
          id, owner_user_id, workspace_id, thread_id, project_id, submission_id,
@@ -72,7 +74,7 @@ export const recordUserMeteredCall = async (
          strftime('%Y-%m-%dT%H:%M:%fZ', ?, '+${USAGE_EVENT_RETENTION_DAYS} days'))`,
     )
     .bind(
-      `pue_${crypto.randomUUID()}`,
+      id,
       userId,
       userId,
       call.submissionId,
@@ -86,8 +88,16 @@ export const recordUserMeteredCall = async (
       call.durationMs,
       occurredAt,
       occurredAt,
-    )
-    .run();
+    );
+
+/** Records one metered call made for a user outside a Thread. */
+export const recordUserMeteredCall = async (
+  db: D1Database,
+  userId: string,
+  call: MeteredPluginCall,
+  occurredAt = new Date().toISOString(),
+): Promise<void> => {
+  await userMeteredCallStatement(db, userId, call, occurredAt).run();
 };
 
 /** Metering never fails the call it describes; failures are logged. */

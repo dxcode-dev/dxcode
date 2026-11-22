@@ -21,13 +21,15 @@ import {
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import {
+  accountDeploymentProviders,
   type DeploymentOrbs,
+  loadDeploymentOrbs,
   namedSizeDeploymentProviders,
   presentedDeploymentProviders,
 } from "../../execution/deployment-orbs.js";
 import {
   registeredClosedOrbProviders,
-  registeredDeploymentOrbs,
+  registeredOrbsUnavailableNotice,
 } from "../../execution/deployment-orbs-registration.js";
 import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
@@ -103,7 +105,8 @@ const messages: Record<ErrorCode, string> = {
 };
 
 interface ScopeTarget {
-  readonly scope: OrbConnectionKey["scope"];
+  /** People's and workspaces' own; a deployment's accounts are its admin's. */
+  readonly scope: Exclude<OrbConnectionKey["scope"], "deployment">;
   readonly targetId: string;
   readonly canUpdate: boolean;
   readonly workspaceSlug?: WorkspaceSlug;
@@ -153,8 +156,8 @@ const workspaceTarget = async (
   };
 };
 
-const loadCatalog = (bindings: Bindings) =>
-  runEffect(loadRunnerProfileCatalog(bindings));
+const loadCatalog = (bindings: Bindings, deploymentOrbs: DeploymentOrbs) =>
+  runEffect(loadRunnerProfileCatalog(bindings, deploymentOrbs));
 
 const loadScope = async (
   db: D1Database,
@@ -221,13 +224,20 @@ const listData = async (
   hiddenProviders: ReadonlySet<string>,
   /** Deployment accounts closed to the person (`registeredClosedOrbProviders`). */
   closedProviders: ReadonlySet<string>,
+  /**
+   * What the deployment says when no Orb can start for the person and they
+   * have no own provider (`registeredOrbsUnavailableNotice`).
+   */
+  unavailableNotice: string | undefined,
 ): Promise<OrbProviderListData> => {
   const plugin = findPlugin("execution");
   const localRuntime = isLocalRuntime(bindings);
-  const catalog = await loadCatalog(bindings);
+  const catalog = await loadCatalog(bindings, deploymentOrbs);
   const profiles = catalog.configuration.profiles;
   const adapters = new Set<string>(profiles.map(({ adapter }) => adapter));
   const deploymentProviders = resolveExecutionProviders(bindings);
+  const envNamed = namedSizeDeploymentProviders(bindings, deploymentOrbs);
+  const accountNamed = accountDeploymentProviders(deploymentOrbs);
   const recipes = await orbProviderRecipes(connectors);
   const own = target.scope === "personal" ? scope.personal : scope.workspace;
   const providers: Array<OrbProviderData> = (plugin?.providers ?? []).flatMap(
@@ -243,10 +253,15 @@ const listData = async (
         return [];
       // A deployment account the deployment presents under its own name
       // is offered in the Orb picker, not listed under the provider here.
+      // Its named sizes run only under the deployment's own name; its own
+      // sizes on the deployment's secret are listed here, as `orbProviderSet`
+      // offers them.
       const deployment =
-        !closedProviders.has(id) &&
         deploymentProviders.some(({ providerId }) => providerId === id) &&
-        deploymentOrbs[id]?.displayName === undefined;
+        !envNamed.has(id) &&
+        !(
+          deploymentOrbs[id]?.displayName !== undefined && !accountNamed.has(id)
+        );
       // A deployment-only provider takes no one's own account: its connector
       // prepares the deployment's.
       const connector = isDeploymentOnlyOrbProvider(id)
@@ -308,6 +323,17 @@ const listData = async (
       ];
     },
   );
+  // What the deployment's admin can change about its own accounts, such as
+  // how long an unused Orb is kept; a failed read keeps the fixed text.
+  const loadedDescriptions = new Map<string, string>();
+  for (const [providerId, settings] of Object.entries(deploymentOrbs)) {
+    const description = await settings?.loadPresentation?.(bindings).then(
+      (presentation) => presentation.description,
+      () => undefined,
+    );
+    if (description !== undefined)
+      loadedDescriptions.set(providerId, description);
+  }
   const resolved = orbProviderSet({
     closedProviders,
     deploymentProviders,
@@ -321,12 +347,16 @@ const listData = async (
     recipes,
     hiddenProviders,
     presentedDeployment: presentedDeploymentProviders(bindings, deploymentOrbs),
-    namedSizeProviders: namedSizeDeploymentProviders(bindings, deploymentOrbs),
+    namedSizeProviders: envNamed,
+    accountProviders: accountNamed,
   });
   return {
     scope: target.scope,
     canUpdate: target.canUpdate,
     localRuntime,
+    ...(resolved.length === 0 && unavailableNotice !== undefined
+      ? { unavailableNotice }
+      : {}),
     providers,
     personalKeysOnWorkspaceProjects:
       scope.memberWorkspaceId === null
@@ -345,6 +375,11 @@ const listData = async (
         member.scope === "deployment"
           ? deploymentOrbs[member.providerId]
           : undefined;
+      const description =
+        member.scope === "deployment"
+          ? (loadedDescriptions.get(member.providerId) ??
+            presented?.description)
+          : undefined;
       return {
         providerId: member.providerId,
         scope: member.scope,
@@ -354,9 +389,7 @@ const listData = async (
         ...(presented?.displayName === undefined
           ? {}
           : { displayName: presented.displayName }),
-        ...(presented?.description === undefined
-          ? {}
-          : { description: presented.description }),
+        ...(description === undefined ? {} : { description }),
         unavailableSizes: unavailableSizes(
           member,
           profiles
@@ -520,7 +553,9 @@ const connectableProvider = async (
     // Only the deployment's own account runs it (`deploymentOnly`).
     isDeploymentOnlyOrbProvider(connector.providerId) ||
     (!isLocalRuntime(c.env) &&
-      !(await loadCatalog(c.env)).configuration.profiles.some(
+      !(
+        await runEffect(loadRunnerProfileCatalog(c.env))
+      ).configuration.profiles.some(
         ({ adapter }) => adapter === connector.providerId,
       ))
   )
@@ -581,7 +616,12 @@ const mount = (
   options: OrbProviderRouteOptions,
 ) => {
   const connectors = options.connectors ?? orbProviderConnectors;
-  const deploymentOrbs = options.deploymentOrbs ?? registeredDeploymentOrbs;
+  // How the deployment presents its accounts, read per request: its admin
+  // can change which accounts run its named sizes.
+  const presentation = (bindings: Bindings) =>
+    options.deploymentOrbs === undefined
+      ? loadDeploymentOrbs(bindings)
+      : Promise.resolve(options.deploymentOrbs);
   const closedOrbProviders =
     options.closedOrbProviders ?? registeredClosedOrbProviders;
 
@@ -615,9 +655,10 @@ const mount = (
         target,
         scope,
         connectors,
-        deploymentOrbs,
+        await presentation(c.env),
         await hiddenOrbProviders(c.env, c.get("principal")),
         await closedOrbProviders(c.env, c.get("principal").userId),
+        await registeredOrbsUnavailableNotice(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -709,9 +750,10 @@ const mount = (
         target,
         await loadScope(db, userId, null, target),
         connectors,
-        deploymentOrbs,
+        await presentation(c.env),
         await hiddenOrbProviders(c.env, c.get("principal")),
         await closedOrbProviders(c.env, c.get("principal").userId),
+        await registeredOrbsUnavailableNotice(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -750,9 +792,10 @@ const mount = (
         target,
         await loadScope(db, userId, null, target),
         connectors,
-        deploymentOrbs,
+        await presentation(c.env),
         await hiddenOrbProviders(c.env, c.get("principal")),
         await closedOrbProviders(c.env, c.get("principal").userId),
+        await registeredOrbsUnavailableNotice(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -781,9 +824,10 @@ const mount = (
         target,
         await loadScope(db, userId, null, target),
         connectors,
-        deploymentOrbs,
+        await presentation(c.env),
         await hiddenOrbProviders(c.env, c.get("principal")),
         await closedOrbProviders(c.env, c.get("principal").userId),
+        await registeredOrbsUnavailableNotice(c.env, c.get("principal").userId),
       );
     }),
   );
@@ -802,7 +846,12 @@ export const makeWorkspaceOrbProviderRoutes = (
 ) => {
   const router = new Hono<AppEnv>();
   const connectors = options.connectors ?? orbProviderConnectors;
-  const deploymentOrbs = options.deploymentOrbs ?? registeredDeploymentOrbs;
+  // How the deployment presents its accounts, read per request: its admin
+  // can change which accounts run its named sizes.
+  const presentation = (bindings: Bindings) =>
+    options.deploymentOrbs === undefined
+      ? loadDeploymentOrbs(bindings)
+      : Promise.resolve(options.deploymentOrbs);
   const closedOrbProviders =
     options.closedOrbProviders ?? registeredClosedOrbProviders;
   /**
@@ -849,9 +898,10 @@ export const makeWorkspaceOrbProviderRoutes = (
         target,
         await loadScope(db, principal.userId, null, target),
         connectors,
-        deploymentOrbs,
+        await presentation(c.env),
         await hiddenOrbProviders(c.env, c.get("principal")),
         await closedOrbProviders(c.env, c.get("principal").userId),
+        await registeredOrbsUnavailableNotice(c.env, c.get("principal").userId),
       );
     }),
   );

@@ -49,6 +49,11 @@ const render = async (markdown: string) => {
       </MarkdownImageSourceContext.Provider>,
     ),
   );
+  // The gallery and image opener load with the first media shown; let
+  // that chunk settle before the test reads the page.
+  await React.act(async () => {
+    await import("./markdown-media.js");
+  });
   return container;
 };
 

@@ -1350,7 +1350,7 @@ const orbBillingNote = (scope: PluginScope, providerName: string) =>
       } account, paused when inactive`;
 
 type OrbSizeGroupDraft = {
-  /** The provider, or `<provider>:named` for a deployment's named sizes. */
+  /** The provider, or `named` for the deployment's named sizes. */
   readonly key: string;
   readonly name: string;
   readonly hint?: string;

@@ -3,7 +3,10 @@ import {
   normalizeEmail,
   type SignInRejection,
 } from "@dx/domain";
+import { senderAddress } from "../email/sender.js";
+import { authenticationLogger } from "../logging.js";
 import { inviteSignupAdmission } from "../settings/members/service.js";
+import { waitlistJoinedEmail } from "./email-messages.js";
 import type { SignInConfiguration } from "./sign-in-configuration.js";
 import { waitlistAdmission, waitlistApproved } from "./waitlist.js";
 
@@ -31,7 +34,10 @@ export const userExists = async (db: D1Database, email: string) =>
  */
 export const admitNewIdentity = async (
   db: D1Database,
-  configuration: Pick<SignInConfiguration, "admission" | "allowedEmailDomains">,
+  configuration: Pick<
+    SignInConfiguration,
+    "admission" | "allowedEmailDomains" | "email"
+  >,
   input: { readonly email: string; readonly callbackURL: unknown },
 ): Promise<SignInRejection | undefined> => {
   if (await inviteSignupAdmission(db, input.callbackURL)) return undefined;
@@ -43,9 +49,36 @@ export const admitNewIdentity = async (
       return undefined;
     case "invite":
       return "signup_closed";
-    case "waitlist":
-      return (await waitlistAdmission(db)(input.email))
-        ? undefined
-        : "waitlisted";
+    case "waitlist": {
+      const outcome = await waitlistAdmission(db)(input.email);
+      if (outcome === "approved") return undefined;
+      if (outcome === "joined")
+        await sendWaitlistJoined(configuration.email, input.email);
+      return "waitlisted";
+    }
+  }
+};
+
+/**
+ * Tells a person once that they joined the waitlist. Without an email
+ * sender, or if sending fails, they still see the waitlist message on the
+ * sign-in page, so a failure is logged and never refuses the request.
+ */
+const sendWaitlistJoined = async (
+  sender: SignInConfiguration["email"],
+  to: string,
+) => {
+  if (sender === undefined) return;
+  try {
+    await sender.binding.send({
+      from: senderAddress(sender),
+      to: normalizeEmail(to),
+      ...waitlistJoinedEmail(),
+    });
+  } catch (error) {
+    authenticationLogger.warn("Waitlist email failed.", {
+      event: "waitlist_joined_email_failed",
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 };

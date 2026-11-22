@@ -6,7 +6,6 @@ import {
 import { Effect, Redacted, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { sourceControlLogger } from "../../logging.js";
-import { grantReachesRepositorySql } from "../authority.js";
 import {
   type ConfigEncryptionKeyring,
   loadConfigEncryptionKeyring,
@@ -20,6 +19,7 @@ import {
   createOAuthProof,
   hashOAuthState,
 } from "../../settings/integrations/provider-registry.js";
+import { grantReachesRepositorySql } from "../authority.js";
 import { createGitHubAppJwt } from "./app-auth.js";
 import {
   type GitHubAppConfiguration,

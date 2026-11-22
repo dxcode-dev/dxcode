@@ -486,6 +486,69 @@ describe("Bug reports", () => {
     expect(githubCalls).toEqual([]);
   });
 
+  it("answers a kept report as kept, keeps one report per send however often it is retried, and leaves no row when its files fail", async () => {
+    // The same send tried again (the dialog's retry after an error it
+    // could not read), with the key the dialog keeps for it.
+    const sendKeyed = (
+      key: string,
+      message: string,
+      bindings = deployedBindings(),
+      requestPrincipal = principal,
+    ) => {
+      const form = new FormData();
+      form.set(
+        "report",
+        JSON.stringify({ message, diagnostics: { app: appDiagnostics } }),
+      );
+      form.append("image", png(7));
+      return app(requestPrincipal).request(
+        "/bug-reports",
+        { method: "POST", body: form, headers: { "idempotency-key": key } },
+        bindings,
+      );
+    };
+    const reportsNamed = async (message: string) =>
+      (
+        await env.DB.prepare(
+          "SELECT id FROM bug_report WHERE reporter_user_id = ?1 AND message = ?2",
+        )
+          .bind(principal.userId, message)
+          .all<{ id: string }>()
+      ).results.map(({ id }) => id);
+
+    const key = crypto.randomUUID();
+    const first = await sent(await sendKeyed(key, "Retried once"));
+    const again = await sent(await sendKeyed(key, "Retried once"));
+    expect(again).toEqual(first);
+    expect(await reportsNamed("Retried once")).toEqual([first.id]);
+    // Another person's same key keeps their own report.
+    const other = await sent(
+      await sendKeyed(key, "Retried once", deployedBindings(), otherPrincipal),
+    );
+    expect(other.id).not.toBe(first.id);
+
+    // Storage refuses the files: 503, and no row is left behind.
+    const failing = deployedBindings({
+      DX_STORAGE: {
+        put: async () => {
+          throw new Error("R2 unavailable");
+        },
+        delete: async () => {},
+      } as unknown as R2Bucket,
+    });
+    const failedKey = crypto.randomUUID();
+    const failed = await sendKeyed(failedKey, "Storage failed", failing);
+    expect(failed.status).toBe(503);
+    expect(await reportsNamed("Storage failed")).toEqual([]);
+    // The retry keeps it, once, with its files.
+    const retried = await sent(await sendKeyed(failedKey, "Storage failed"));
+    expect(await reportsNamed("Storage failed")).toEqual([retried.id]);
+    expect(
+      (await (await open(`${retried.id}/files/image-1.png`)).arrayBuffer())
+        .byteLength,
+    ).toBe(5);
+  });
+
   it("refuses Thread diagnostics, audio, and invalid reports from Settings", async () => {
     const wav = new File([new Uint8Array([0x52, 0x49])], "dictation.wav", {
       type: "audio/wav",
@@ -569,6 +632,31 @@ describe("Bug reports", () => {
     ).toBe(200);
     // Without the setting the same person is refused.
     expect((await open(data.id, otherPrincipal)).status).toBe(404);
+  });
+
+  it("makes deployment administrators report readers, who triage reports in Admin", async () => {
+    const threadId = await createThread();
+    const admins = deployedBindings({
+      DX_DEPLOYMENT_ADMIN_EMAILS: "Product-Other@Example.com",
+    });
+    const data = await sent(
+      await send(threadId, { message: "Bug", diagnostics: {} }, [png(5)]),
+    );
+    expect((await open(data.id, otherPrincipal, admins)).status).toBe(200);
+    expect(
+      (await open(`${data.id}/files/image-1.png`, otherPrincipal, admins))
+        .status,
+    ).toBe(200);
+    expect((await open("all", otherPrincipal, admins)).status).toBe(200);
+    const access = await open("access", otherPrincipal, admins);
+    expect((await access.json<{ data: unknown }>()).data).toMatchObject({
+      reader: true,
+    });
+    // An unverified email is not an administrator's.
+    await env.DB.prepare(
+      `UPDATE "user" SET emailVerified = 0 WHERE email = 'product-other@example.com'`,
+    ).run();
+    expect((await open(data.id, otherPrincipal, admins)).status).toBe(404);
   });
 
   it("gives the bug report tools to report readers alone, who list and read every report", async () => {

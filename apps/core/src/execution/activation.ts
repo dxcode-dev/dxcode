@@ -777,6 +777,9 @@ const activationFor =
       timing.set("firstPreparation", needsFirstReadiness);
       if (needsFirstReadiness) reportPreparation("Preparing workspace…");
       let wakeStatusPublished = false;
+      // A refund for an Orb dx could not make usable covers only what this
+      // activation's start charged.
+      const activationStartedAt = Date.now();
       try {
         const openWorkspace = () =>
           (existingOnly
@@ -1203,13 +1206,16 @@ const activationFor =
         // revoked source) or a billing refusal is theirs.
         if (!personCaused(cause))
           await (hooks.orbBilling ?? noOrbBilling)
-            .startFailed?.({
-              threadId,
-              operation: existingOnly ? "connect" : "create",
-              account: context.account,
-              providerId: context.profile.adapter as ExecutionProviderId,
-              runnerProfileId: context.profile.id,
-            })
+            .startFailed?.(
+              {
+                threadId,
+                operation: existingOnly ? "connect" : "create",
+                account: context.account,
+                providerId: context.profile.adapter as ExecutionProviderId,
+                runnerProfileId: context.profile.id,
+              },
+              activationStartedAt,
+            )
             .catch((error: unknown) => {
               executionWorkspaceLogger.warn(
                 "An unusable Orb's charges could not be refunded.",

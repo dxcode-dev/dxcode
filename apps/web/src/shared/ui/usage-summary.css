@@ -1,0 +1,64 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* Usage summary parts: see usage-summary.tsx. */
+@layer components {
+  .dx-usage-total {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-1) var(--space-1-5);
+    padding: var(--space-3) var(--space-4);
+  }
+  .dx-usage-total h2 {
+    margin: 0;
+    font-size: var(--text-xl);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-6);
+    font-variant-numeric: tabular-nums;
+  }
+  .dx-usage-total span {
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+  }
+  .dx-usage-breakdown {
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--divider);
+  }
+  .dx-usage-breakdown > p {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-medium);
+  }
+  .dx-usage-breakdown dl {
+    display: grid;
+    gap: var(--space-1-5) var(--space-8);
+    margin: var(--space-2) 0 0;
+    font-size: var(--text-sm);
+    line-height: var(--leading-4);
+  }
+  .dx-usage-breakdown dl > div {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-width: 0;
+  }
+  .dx-usage-breakdown dt {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dx-usage-breakdown dd {
+    flex: none;
+    margin: 0;
+    color: var(--muted-foreground);
+    font-variant-numeric: tabular-nums;
+  }
+  @media (min-width: 640px) {
+    .dx-usage-breakdown dl {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+}

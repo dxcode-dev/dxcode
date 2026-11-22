@@ -3,7 +3,10 @@ import { isClaudeCodeModel } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
-import { modelDisplayName } from "../../shared/model-display-name.js";
+import {
+  choicesModelName,
+  modelDisplayName,
+} from "../../shared/model-display-name.js";
 import { effortLabel } from "../../shared/model-effort-label.js";
 import { lazyComponent } from "../../shared/stale-chunk.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
@@ -28,11 +31,7 @@ type ModelSelection = Extract<
 export function useThreadModelName(selection: ModelSelection) {
   const { identity } = useAuthenticatedIdentity();
   const choices = useQuery(modelRoutingChoicesQueryOptions(identity.id)).data;
-  const catalogName =
-    choices?.models.find(({ canonical }) => canonical === selection.model)
-      ?.name ??
-    choices?.modes.find(({ config }) => config.model === selection.model)
-      ?.modelName;
+  const catalogName = choicesModelName(choices, selection.model);
   const name = modelDisplayName(catalogName ?? selection.model);
   const claudeCode = isClaudeCodeModel(selection.model);
   const effort =

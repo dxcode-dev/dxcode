@@ -62,6 +62,7 @@ import {
 import { effectiveContextWindow } from "./context-window.js";
 import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
+import { DX_PROVIDER_ID, unservedDxModels } from "./deployment-models.js";
 import { validateAllowedModelEndpoint } from "./endpoint-policy.js";
 import { ModeProfileOverrideRepositoryD1 } from "./mode-profile-override-repository-d1.js";
 import {
@@ -86,6 +87,8 @@ export type UpdateConnectionInput = typeof UpdateConnectionRequestSchema.Type;
 
 const CLAUDE_CODE_MODEL_ONLY =
   "Claude Code models run only through a Claude Pro/Max connection.";
+
+const DX_MODEL_ONLY = "dx models run only on dx's own connection.";
 
 /** Field-level validation failure rendered as `fieldErrors` on 400s. */
 export class ModelRoutingValidationError extends Error {
@@ -299,6 +302,11 @@ const validateModels = (
       fieldErrors.push({
         field: `models.${index}.canonical`,
         message: CLAUDE_CODE_MODEL_ONLY,
+      });
+    } else if (model.canonical.startsWith(`${DX_PROVIDER_ID}/`)) {
+      fieldErrors.push({
+        field: `models.${index}.canonical`,
+        message: DX_MODEL_ONLY,
       });
     } else if (!canonicalModelKnown(model.canonical)) {
       fieldErrors.push({
@@ -969,10 +977,10 @@ export class ModelRoutingService {
     return {
       providers: pickerProviders(
         this.deploymentProviders,
-        this.extraConnections.some(
-          (connection) =>
-            connection.kind === "deployment" &&
-            connection.providerId === "cloudflare",
+        new Set(
+          this.extraConnections
+            .filter((connection) => connection.kind === "deployment")
+            .map((connection) => connection.providerId),
         ),
       )
         .filter(
@@ -1172,6 +1180,9 @@ export class ModelRoutingService {
     );
     return {
       claudePlans,
+      unservedModels: unservedDxModels().filter(
+        ({ canonical }) => !served.has(canonical),
+      ),
       modes: MODE_IDS.map((mode) => {
         const resolution = modeResolution(modes, mode);
         const match = findServingConnection(

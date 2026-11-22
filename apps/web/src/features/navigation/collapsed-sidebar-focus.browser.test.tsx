@@ -211,23 +211,33 @@ it("keeps focus in the sidebar when a frame measures the opening sidebar at 0%",
   await userEvent.click(button("Collapse sidebar"));
   await settle();
 
+  // Catch the opening animation as it is created and hold it at 0%, the
+  // frame this test is about. Polling for it raced a loaded machine: the
+  // 200 ms animation could start and finish between two polls.
+  const opening: Animation[] = [];
+  const animate = Element.prototype.animate;
+  const spy = vi
+    .spyOn(Element.prototype, "animate")
+    .mockImplementation(function (
+      this: Element,
+      ...args: Parameters<Element["animate"]>
+    ) {
+      const animation = animate.apply(this, args);
+      if (animation.id === "dx-panel-expand") {
+        animation.currentTime = 0;
+        animation.playbackRate = 1e-6;
+        opening.push(animation);
+      }
+      return animation;
+    });
   button("Open sidebar").focus();
   await userEvent.keyboard("{Enter}");
-  const openingAnimation = () =>
-    document
-      .querySelector<HTMLElement>(".product-panel-group > :first-child")
-      ?.getAnimations()
-      .at(-1);
   // The sidebar starts opening on React's next render, which a loaded
   // machine delays.
-  await expect.poll(() => openingAnimation()?.playState).toBe("running");
-  const opening = openingAnimation();
-  if (opening !== undefined) {
-    opening.currentTime = 0;
-    opening.playbackRate = 1e-6;
-  }
+  await expect.poll(() => opening.length).toBe(1);
+  spy.mockRestore();
   await settle();
-  if (opening !== undefined) opening.playbackRate = 1;
+  for (const animation of opening) animation.playbackRate = 1;
   await settle();
 
   expect(document.querySelector('button[aria-label="Open sidebar"]')).toBe(

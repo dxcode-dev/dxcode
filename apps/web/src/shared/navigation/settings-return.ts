@@ -10,7 +10,10 @@ type SettingsNavigationState = Extract<
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
 
+// Admin (a deployment's own area) closes back to where it opened, too.
 const isSettingsRoute = (pathname: string) =>
+  pathname === "/admin" ||
+  pathname.startsWith("/admin/") ||
   pathname === "/settings" ||
   pathname.startsWith("/settings/") ||
   pathname === "/workspaces" ||

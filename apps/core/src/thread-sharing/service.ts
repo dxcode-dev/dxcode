@@ -554,6 +554,7 @@ export const threadSharingDetail = async (
       .prepare(
         `SELECT project.name AS project_name,
                 project.deleted_at IS NOT NULL AS project_deleted,
+                thread.archive_locked_reason,
                 thread.conversation_mode,
                 EXISTS (SELECT 1 FROM thread_follower AS follower
                          WHERE follower.thread_id = thread.id
@@ -566,6 +567,7 @@ export const threadSharingDetail = async (
       .first<{
         project_name: string;
         project_deleted: number;
+        archive_locked_reason: "orb-removed" | null;
         conversation_mode: "agent" | "chat";
         following: number;
       }>(),
@@ -592,6 +594,9 @@ export const threadSharingDetail = async (
           projectName: thread.project_name.slice(0, 256),
           projectDeleted: true,
         }
+      : {}),
+    ...(thread?.archive_locked_reason === "orb-removed"
+      ? { archiveLocked: "orb-removed" as const }
       : {}),
     conversationMode:
       sharing === undefined ? "agent" : (thread?.conversation_mode ?? "agent"),

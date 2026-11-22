@@ -62,7 +62,13 @@ const accountOf = (row: WorkspaceRow): ExecutionAccount =>
           userId: row.account_owner_id ?? "",
           providerAccount: row.provider_account ?? "",
         }
-      : { scope: "deployment" };
+      : row.account_owner_id !== null && row.provider_account !== null
+        ? {
+            scope: "deployment-account",
+            accountId: row.account_owner_id,
+            providerAccount: row.provider_account,
+          }
+        : { scope: "deployment" };
 
 /**
  * Records one ended Orb run of a Thread (migration 0161's
@@ -114,13 +120,17 @@ export const recordOrbSession = async (
       ? 0
       : Math.round((list.usd * 1_000_000 * durationMs) / HOUR_MS));
   const billing: ThreadOrbBilling =
-    credits !== undefined ? "credits" : account.scope;
+    credits !== undefined
+      ? "credits"
+      : account.scope === "deployment-account"
+        ? "deployment"
+        : account.scope;
   await db
     .prepare(
       `INSERT OR IGNORE INTO thread_orb_session
          (thread_id, started_at, ended_at, provider, runner_profile_id,
-          billing, cost_micros)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          billing, cost_micros, deployment_account_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       run.threadId,
@@ -130,6 +140,9 @@ export const recordOrbSession = async (
       row.runner_profile_id,
       billing,
       Math.max(0, costMicros),
+      // The deployment Orb account the run used (migration 0225), so usage
+      // per account reads the run alone.
+      account.scope === "deployment-account" ? account.accountId : null,
     )
     .run();
 };

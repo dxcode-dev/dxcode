@@ -34,6 +34,13 @@ const REPLACED_DEFAULTS: Readonly<Record<string, string>> = {
     "cloudflare/@cf/zai-org/glm-4.7-flash",
 };
 
+/**
+ * The Workers AI model that replaced a retired one dx used as a default
+ * (an upstream id, without the `cloudflare/` prefix); undefined otherwise.
+ */
+export const workersAiReplacement = (upstreamId: string): string | undefined =>
+  REPLACED_DEFAULTS[`cloudflare/${upstreamId}`]?.slice("cloudflare/".length);
+
 /** `model`, or the default that replaced it when it is a retired default. */
 export const currentWorkersAiModel = <Model extends string>(
   model: Model,

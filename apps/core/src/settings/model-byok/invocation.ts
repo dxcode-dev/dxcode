@@ -5,6 +5,7 @@ import {
   claudePlanLimitText,
   type StoredModelConnection,
   ThreadModelSelection,
+  UsagePriceMetadata,
 } from "@dx/domain";
 import {
   type Api,
@@ -60,6 +61,19 @@ import {
   decryptConnectionCredential,
   loadConnectionCredential,
 } from "../model-routing/credential-access.js";
+import {
+  DX_PROVIDER_ID,
+  dxConnectionUpstreamId,
+  dxUpstreamModel,
+  findDxModel,
+  isDxConnection,
+  loadDeploymentModels,
+  scrubUpstreamText,
+} from "../model-routing/deployment-models.js";
+import {
+  registeredDeploymentModelBilling,
+  registeredDeploymentModelSource,
+} from "../model-routing/deployment-models-registration.js";
 import { validateAllowedModelEndpoint } from "../model-routing/endpoint-policy.js";
 import {
   ClaudePlanUnavailable,
@@ -75,7 +89,11 @@ import {
 } from "../model-subscriptions/github-copilot/provider.js";
 import { PersonalModelSubscriptionRepositoryD1 } from "../model-subscriptions/repository-d1.js";
 import { PersonalModelSubscriptionService } from "../model-subscriptions/service.js";
-import { recordPluginModelUsage } from "../usage/recorder.js";
+import { deploymentUsagePrice } from "../usage/pricing.js";
+import {
+  recordDxCompletionUsage,
+  recordPluginModelUsage,
+} from "../usage/recorder.js";
 import {
   pruneSubmissionUsageAttributions,
   readSubmissionUsageAttribution,
@@ -158,6 +176,19 @@ const runFailure = (
 });
 
 /** A classified failure that `#fetch` answers as `failureResponse`. */
+/**
+ * A dx route's deployment price when it is pinned. Its turns are charged at
+ * it when the live configuration no longer prices the model, such as one
+ * the admin disabled while the turn ran.
+ */
+const pinnedDxPrice = (route: {
+  readonly connection: StoredModelConnection;
+  readonly model: { readonly id: string };
+}) =>
+  isDxConnection(route.connection)
+    ? deploymentUsagePrice(DX_PROVIDER_ID, route.model.id)
+    : undefined;
+
 class CoordinatorFailure extends Error {
   constructor(readonly failure: RunFailure) {
     super(failure.code);
@@ -185,6 +216,29 @@ const PLAN_TOKEN_ELSEWHERE = runFailure(
   "CLAUDE_PLAN_TOKEN_ELSEWHERE",
   "A Claude plan token works only in a Claude Pro/Max connection. Replace this connection's key in Settings, then retry.",
 );
+
+/** The installation's own upstream refused dx's key or quota. */
+const DX_MODEL_UNAVAILABLE = runFailure(
+  "account",
+  "DX_MODEL_UNAVAILABLE",
+  "This dx model is unavailable right now. Try again later, or pick another model.",
+);
+
+/**
+ * A person never sees a dx model's upstream: its key, quota and billing
+ * failures become dx's own, and its name is scrubbed from the rest.
+ */
+const asDxFailure = (
+  connection: StoredModelConnection,
+  failure: RunFailure,
+): RunFailure => {
+  if (!isDxConnection(connection)) return failure;
+  if (failure.class === "account") return DX_MODEL_UNAVAILABLE;
+  return {
+    ...failure,
+    message: scrubUpstreamText(connection, failure.message),
+  };
+};
 
 const failureResponse = (failure: RunFailure, upstreamStatus?: number) =>
   jsonResponse(
@@ -751,7 +805,49 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     if (route.connection.credentialId !== undefined && credential === undefined)
       throw new Error("CREDENTIAL_UNAVAILABLE");
     await this.#refuseBlockedClaudePlan(route);
+    await this.#refuseUnpaidDxModel(route);
     return { ...route, credential };
+  }
+
+  /**
+   * A dx route pinned earlier stops, before its next model call, once the
+   * admin disables its upstream or model or the owner's balance falls to the
+   * model's floor. The configuration is cached per isolate for a few
+   * seconds; the balance is read on each call.
+   */
+  async #refuseStoppedDxRoute(pin: PinnedSubmission) {
+    if (!isDxConnection(pin.connection)) return;
+    await loadDeploymentModels(this.#db());
+    if (dxUpstreamModel(pin.connection, pin.model.id) === undefined)
+      throw new CoordinatorFailure(DX_MODEL_UNAVAILABLE);
+    await this.#refuseUnpaidDxModel(pin);
+  }
+
+  /**
+   * A new submission on a dx model starts only when the deployment's billing
+   * admits its owner, such as only while their model balance is above zero.
+   */
+  async #refuseUnpaidDxModel(route: SubmissionRoute) {
+    if (!isDxConnection(route.connection)) return;
+    const model = findDxModel(route.model.id);
+    const decision = await registeredDeploymentModelBilling.admit(
+      this.#db(),
+      route.ownerUserId,
+      {
+        minBalanceMicros: model?.minBalanceMicros ?? 0,
+        ...(model === undefined ? {} : { name: model.name }),
+      },
+    );
+    if ("reason" in decision)
+      throw new CoordinatorFailure(
+        runFailure(
+          "account",
+          decision.belowFloor === true
+            ? "DX_MODEL_BALANCE_LOW"
+            : "DX_MODEL_BALANCE_EMPTY",
+          decision.reason,
+        ),
+      );
   }
 
   #db() {
@@ -760,6 +856,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   }
 
   #storeUsageAttribution(pin: SubmissionRoute) {
+    const price = pinnedDxPrice(pin);
     return storeSubmissionUsageAttribution(
       this.ctx.storage,
       pin.threadId,
@@ -768,6 +865,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         connectionId: pin.connection.id,
         providerId: pin.model.provider,
         modelId: pin.model.id,
+        ...(price === undefined
+          ? {}
+          : { price: Schema.encodeSync(UsagePriceMetadata)(price) }),
       },
       new Date(),
     );
@@ -801,6 +901,22 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       throw error;
     });
     return this.#keyring;
+  }
+
+  /** A dx connection's upstream key, decrypted from the deployment's store. */
+  async #dxUpstreamKey(connection: StoredModelConnection) {
+    const upstreamId = dxConnectionUpstreamId(connection);
+    if (upstreamId === undefined) return undefined;
+    return registeredDeploymentModelSource
+      .upstreamKey(this.#db(), this.env, upstreamId)
+      .catch((error: unknown) => {
+        settingsPersistenceLogger.warn("dx model upstream key unreadable.", {
+          event: "dx_model_key_unreadable",
+          connectionId: connection.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return undefined;
+      });
   }
 
   #loadCopilotRuntime() {
@@ -902,6 +1018,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     // Only the primary can say a Thread or connection is gone.
     if (!nearby) await confirmed();
     this.#validateEndpoint(pin.connection);
+    await this.#refuseStoppedDxRoute(pin);
     await this.#renewPin(submissionId, pin.expiresAt);
     const live = nearby ? confirmed() : Promise.resolve();
     live.catch(() => undefined);
@@ -1160,21 +1277,31 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       }
     }
 
-    if (connection.kind === "deployment") {
+    const dx = isDxConnection(connection);
+    if (connection.kind === "deployment" && !dx) {
       return jsonResponse({ code: "DEPLOYMENT_VIA_BINDING" }, 400);
     }
 
-    const keyring = await this.#loadKeyring();
-    const apiKey = await decryptConnectionCredential(
-      keyring,
-      pin.credential,
-    ).catch((error: unknown) => {
-      settingsPersistenceLogger.warn("BYOK credential decrypt failed.", {
-        event: "byok_credential_decrypt_failed",
-        error: error instanceof Error ? error.message : String(error),
+    // A dx model's key is the installation's Worker secret, never stored.
+    const apiKey = dx
+      ? await this.#dxUpstreamKey(connection)
+      : await decryptConnectionCredential(
+          await this.#loadKeyring(),
+          pin.credential,
+        ).catch((error: unknown) => {
+          settingsPersistenceLogger.warn("BYOK credential decrypt failed.", {
+            event: "byok_credential_decrypt_failed",
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        });
+    if (apiKey === undefined && dx) {
+      settingsPersistenceLogger.warn("dx model upstream key unavailable.", {
+        event: "dx_model_key_unavailable",
+        connectionId: connection.id,
       });
-      return undefined;
-    });
+      return failureResponse(DX_MODEL_UNAVAILABLE);
+    }
     if (apiKey === undefined) {
       settingsPersistenceLogger.warn("BYOK credential unavailable.", {
         event: "byok_credential_unavailable",
@@ -1290,7 +1417,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       ...connection.headers.map(({ value }) => value),
     ]);
     this.#logRejection(pin, envelope.canonical, upstream.status, detail);
-    const failure = classifyUpstreamRejection(upstream.status, detail);
+    const failure = asDxFailure(
+      connection,
+      classifyUpstreamRejection(upstream.status, detail),
+    );
     this.#recordOutcome(connection, failure, upstream.status);
     return failureResponse(failure, upstream.status);
   }
@@ -1312,7 +1442,14 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     signal: AbortSignal,
   ) {
     const { connection } = pin;
-    if (connection.kind !== "provider" && connection.kind !== "deployment") {
+    // A dx model runs here only on the deployment's Workers AI binding.
+    const dxBinding =
+      isDxConnection(connection) && pin.model.api === "cloudflare-ai-binding";
+    if (
+      connection.kind !== "provider" &&
+      !(connection.kind === "deployment" && !isDxConnection(connection)) &&
+      !dxBinding
+    ) {
       return jsonResponse({ code: "UNSUPPORTED_IN_DO_CONNECTION" }, 400);
     }
     const { provider } = canonicalParts(envelope.canonical);
@@ -1334,12 +1471,31 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       this.#recordOutcome(connection, PLAN_TOKEN_ELSEWHERE);
       return failureResponse(PLAN_TOKEN_ELSEWHERE);
     }
-    const minted = entry;
+    // Workers AI knows a dx model by its upstream id; events go back as dx's.
+    const minted = dxBinding
+      ? ({
+          ...entry,
+          id: pin.upstreamModel,
+          provider: "cloudflare",
+        } as typeof entry)
+      : entry;
     if (
       connection.kind === "deployment" &&
-      !workersAiDeploymentEnabled(this.env)
+      (dxBinding
+        ? this.env.AI === undefined
+        : !workersAiDeploymentEnabled(this.env))
     )
       return jsonResponse({ code: "BINDING_MISSING" }, 400);
+    const asDx = (event: AssistantMessageEvent): AssistantMessageEvent => {
+      if (!dxBinding) return event;
+      const relabel = <T>(value: T): T =>
+        typeof value === "object" && value !== null && "model" in value
+          ? ({ ...value, provider: entry.provider, model: entry.id } as T)
+          : value;
+      return Object.fromEntries(
+        Object.entries(event).map(([key, value]) => [key, relabel(value)]),
+      ) as AssistantMessageEvent;
+    };
     const options = {
       ...envelope.options,
       maxRetries: 0,
@@ -1389,7 +1545,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
             if (event.type === "done") record();
             else if (event.type === "error" && event.reason === "error")
               record(event.error.errorMessage ?? "");
-            controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+            controller.enqueue(
+              encoder.encode(`${JSON.stringify(asDx(event))}\n`),
+            );
           }
           controller.close();
         } catch (error) {
@@ -1403,8 +1561,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
                   role: "assistant",
                   content: [],
                   api: minted.api,
-                  provider: minted.provider,
-                  model: minted.id,
+                  provider: entry.provider,
+                  model: entry.id,
                   usage: {
                     input: 0,
                     output: 0,
@@ -1523,6 +1681,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       `complete:${crypto.randomUUID()}`,
     );
     this.#validateEndpoint(route.connection);
+    // A title, media analysis, or plugin call on a dx model is charged like
+    // a turn, so it starts only while the owner's balance is above the floor.
+    await this.#refuseUnpaidDxModel(route);
+    const pinnedPrice = pinnedDxPrice(route);
     const credential = await loadConnectionCredential(
       this.#db(),
       route.connection,
@@ -1580,7 +1742,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     let rejected: { failure: RunFailure; upstreamStatus?: number } | undefined;
     if (
       IN_DO_APIS.has(route.model.api) ||
-      route.connection.kind === "deployment"
+      route.model.api === "cloudflare-ai-binding" ||
+      (route.connection.kind === "deployment" &&
+        !isDxConnection(route.connection))
     ) {
       const response = await this.#streamWithPin(
         pin,
@@ -1699,6 +1863,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         observedProviderName: pin.connection.name,
         usage: final.message.usage,
         durationMs,
+        pinnedPrice,
       }).catch((error: unknown) => {
         settingsPersistenceLogger.warn("Plugin model usage was not recorded.", {
           event: "plugin_model_usage_record_failed",
@@ -1706,6 +1871,27 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           pluginId: envelope.plugin?.id,
           error: error instanceof Error ? error.message : String(error),
         });
+      });
+    // dx's own title and media calls on a dx model are metered too.
+    if (envelope.plugin === undefined && isDxConnection(pin.connection))
+      await recordDxCompletionUsage(this.env as Bindings, {
+        threadId: pin.threadId,
+        ownerUserId: envelope.ownerUserId,
+        connectionId: pin.connection.id,
+        modelId: route.model.id,
+        kind: attachments.length === 0 ? "title" : "media",
+        usage: final.message.usage,
+        durationMs,
+        pinnedPrice,
+      }).catch((error: unknown) => {
+        settingsPersistenceLogger.warn(
+          "dx completion usage was not recorded.",
+          {
+            event: "dx_completion_usage_record_failed",
+            threadId: pin.threadId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
       });
     return jsonResponse(
       {

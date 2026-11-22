@@ -325,6 +325,11 @@ export const ThreadDetailDataSchema = Schema.Struct({
    */
   projectDeleted: Schema.optional(Schema.Literal(true)),
   /**
+   * Why the Thread stays archived and read-only for good, apart from a
+   * deleted Project: `orb-removed` when dx removed its unused Orb.
+   */
+  archiveLocked: Schema.optional(Schema.Literal("orb-removed")),
+  /**
    * The plugin agent the Thread runs as: its label and color, the plugin
    * that defined it, and the model it chose, when it chose one.
    */

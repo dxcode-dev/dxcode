@@ -7,7 +7,10 @@ import {
   type ModeId,
   type ThinkingLevel,
 } from "@dx/domain";
-import { modelDisplayName } from "../../shared/model-display-name.js";
+import {
+  choicesModelName,
+  modelDisplayName,
+} from "../../shared/model-display-name.js";
 
 /**
  * The New Thread model picker. A Thread starts on one model at one effort;
@@ -101,7 +104,7 @@ export const resolvedPick = ({
   return {
     recommended: false,
     model,
-    name: modelDisplayName(served?.name ?? model),
+    name: modelDisplayName(choicesModelName(choices, model) ?? model),
     effort: !reasoning
       ? undefined
       : (effort ??

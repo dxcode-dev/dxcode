@@ -1,3 +1,5 @@
+import type { ChoicesData } from "@dx/api";
+
 const MODEL_WORDS: Readonly<Record<string, string>> = {
   gpt: "GPT",
   claude: "Claude",
@@ -20,3 +22,17 @@ export function modelDisplayName(name: string): string {
     .join(" ")
     .replace(/^GPT (\d)/, "GPT-$1");
 }
+
+/**
+ * A model's catalog name from the routing choices: a served model's, else
+ * the name of one the deployment names but does not serve now (a dx model
+ * whose upstream is off), else a mode's. Undefined when none names it.
+ */
+export const choicesModelName = (
+  choices: ChoicesData | undefined,
+  canonical: string,
+): string | undefined =>
+  choices?.models.find((model) => model.canonical === canonical)?.name ??
+  choices?.unservedModels?.find((model) => model.canonical === canonical)
+    ?.name ??
+  choices?.modes.find(({ config }) => config.model === canonical)?.modelName;

@@ -75,13 +75,7 @@ const bugReportToolsActor = async (
   const calling = await readCallingThread(context.db, callingThreadId);
   if (calling.sharedFamilyRoot !== undefined) return undefined;
   const userId = calling.ownerUserId as string;
-  if (
-    await isBugReportReader(
-      context.db,
-      userId,
-      context.bindings.DX_BUG_REPORT_READERS,
-    )
-  )
+  if (await isBugReportReader(context.db, userId, context.bindings))
     return { userId, reader: true };
   const investigated = await reportInvestigatedBy(context.db, callingThreadId);
   const report =
@@ -249,7 +243,7 @@ export const createBugReportTools = (
           context.db,
           reader.userId,
           kept.reporterUserId,
-          context.bindings.DX_BUG_REPORT_READERS,
+          context.bindings,
         ))
       )
         throw new Error(`Bug report ${id} was not found.`);

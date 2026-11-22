@@ -24,7 +24,7 @@ const orbBillingNote = (
       } account, paused when inactive`;
 
 export type SetUpOrbSizeGroup = {
-  /** The provider, or `<provider>:named` for a deployment's named sizes. */
+  /** The provider, or `named` for the deployment's named sizes. */
   readonly key: string;
   /** The provider heading; absent when one set-up provider needs none. */
   readonly name?: string;

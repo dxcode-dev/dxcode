@@ -49,6 +49,11 @@ export const ArchiveThreadProjectDeletedResponseSchema = errorResponse(
   "THREAD_PROJECT_DELETED",
   "This thread's project was deleted, so the thread stays archived.",
 );
+/** Unarchiving a Thread whose unused Orb dx removed. */
+export const ArchiveThreadOrbRemovedResponseSchema = errorResponse(
+  "THREAD_ORB_REMOVED",
+  "This thread's Orb was removed after it went unused, so the thread stays archived.",
+);
 export const ThreadArchivedResponseSchema = errorResponse(
   "THREAD_ARCHIVED",
   "Thread is archived. Unarchive it before continuing.",

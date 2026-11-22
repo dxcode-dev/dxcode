@@ -36,6 +36,7 @@ import {
   threadsQueryOptions,
 } from "../threads/thread-queries.js";
 import { AppSidebar } from "./app-sidebar.js";
+import type { AccountMenuItems } from "./sidebar-account-menu.js";
 import { sidebarDrawerDrag } from "./sidebar-drawer-drag.js";
 import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
@@ -57,17 +58,47 @@ const whenIdle = (run: () => void) => {
   return () => window.clearTimeout(timer);
 };
 
+/**
+ * The sidebar's open button. When collapsing moved focus out of the sidebar
+ * (`focusNext`), the button takes it; when the button goes away while
+ * focused, the sidebar's own toggle takes it.
+ */
+const openTriggerAttacher =
+  (focusNext: React.RefObject<boolean>) => (node: HTMLButtonElement) => {
+    if (focusNext.current) {
+      focusNext.current = false;
+      node.focus();
+    }
+    return () => {
+      if (document.activeElement !== node) return;
+      // Runs after the commit that removes `inert` from the sidebar.
+      queueMicrotask(() =>
+        document
+          .querySelector<HTMLElement>(
+            ".product-navigation-panel [data-command-action='toggle-sidebar']",
+          )
+          ?.focus(),
+      );
+    };
+  };
+
 interface ProductShellProps {
   readonly notices?: React.ReactNode;
   /** The sidebar's Spaces section, given what closes the phone drawer. */
   readonly spacesSection?: (onNavigate: () => void) => React.ReactNode;
+  /** A deployment's own account menu items, such as Admin. */
+  readonly accountMenuItems?: AccountMenuItems;
 }
 
 /**
  * The signed-in layout. `notices` are full-width bars above the panels, such
  * as the new-version and install banners the application composes in.
  */
-export function ProductShell({ notices, spacesSection }: ProductShellProps) {
+export function ProductShell({
+  notices,
+  spacesSection,
+  accountMenuItems,
+}: ProductShellProps) {
   const navigate = useNavigate();
   const { identity } = useAuthenticatedIdentity();
   const queryClient = useQueryClient();
@@ -152,23 +183,7 @@ export function ProductShell({ notices, spacesSection }: ProductShellProps) {
   // body. Collapsing from inside the sidebar focuses the open button, and
   // opening from that button focuses the sidebar's own toggle.
   const focusOpenTriggerRef = React.useRef(false);
-  const attachOpenTrigger = (node: HTMLButtonElement) => {
-    if (focusOpenTriggerRef.current) {
-      focusOpenTriggerRef.current = false;
-      node.focus();
-    }
-    return () => {
-      if (document.activeElement !== node) return;
-      // Runs after the commit that removes `inert` from the sidebar.
-      queueMicrotask(() =>
-        document
-          .querySelector<HTMLElement>(
-            ".product-navigation-panel [data-command-action='toggle-sidebar']",
-          )
-          ?.focus(),
-      );
-    };
-  };
+  const attachOpenTrigger = openTriggerAttacher(focusOpenTriggerRef);
 
   const toggleSidebar = () => {
     if (mobile) {
@@ -252,6 +267,7 @@ export function ProductShell({ notices, spacesSection }: ProductShellProps) {
       pinningThreadId={editing?.pinningThreadId}
       extensionRegion={sidebarExtensionRegion}
       spacesSection={spacesSection?.(closeMobileSidebar)}
+      accountMenuItems={accountMenuItems}
     />
   );
 

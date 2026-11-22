@@ -1096,6 +1096,105 @@ describe("thread composer ownership", () => {
     await React.act(() => panel.root.unmount());
   });
 
+  it.each([
+    {
+      code: "DX_MODEL_BALANCE_EMPTY",
+      reason:
+        "Your dx model balance is used up. Add credit in Settings → Billing, or pick a model on your own key.",
+      title: "You're out of dx credit",
+      body: "your dx model balance is used up",
+      link: "Redeem a code",
+    },
+    {
+      code: "DX_MODEL_BALANCE_LOW",
+      reason:
+        "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39.",
+      title: "Not enough dx credit for this model",
+      body: "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39. Redeem a code, or pick a cheaper model below and retry.",
+      link: "Redeem a code",
+    },
+    {
+      // As #2313's preview delivered it: the error's type before the
+      // message, with no "failed:" prefix, which the card must not show.
+      code: "DX_MODEL_BALANCE_LOW",
+      type: "model_routing_failure",
+      prefix: "",
+      reason:
+        "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39.",
+      title: "Not enough dx credit for this model",
+      body: "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39. Redeem a code, or pick a cheaper model below and retry.",
+      link: "Redeem a code",
+    },
+    {
+      code: "DX_MODEL_UNAVAILABLE",
+      reason:
+        "This dx model is unavailable right now. Try again later, or pick another model.",
+      title: "This dx model is unavailable",
+      body: "Pick another model below",
+      link: undefined,
+    },
+  ])(
+    "explains a dx turn stopped by dx ($code) without Model Routing",
+    async ({
+      code,
+      reason,
+      title,
+      body,
+      link,
+      type = "operation_failed",
+      prefix = "direct(sub_1) failed: ",
+    }: {
+      code: string;
+      reason: string;
+      title: string;
+      body: string;
+      link: string | undefined;
+      type?: string;
+      prefix?: string;
+    }) => {
+      const panel = await mountPanel(
+        {
+          settlements: [
+            {
+              submissionId: `dx-${code}`,
+              outcome: "failed",
+              // The settlement error as #2269's preview delivered it.
+              error: {
+                name: "FlueError",
+                type,
+                message: `${prefix}${reason} (dx_failure:account:${code})`,
+                details: "",
+                meta: {
+                  operation: "direct(sub_1)",
+                  reason: `${reason} (dx_failure:account:${code})`,
+                },
+              },
+            },
+          ],
+        },
+        false,
+        {},
+        { onOpenModelRouting: vi.fn() },
+      );
+
+      const card = panel.container.querySelector(".thread-error-card");
+      expect(card?.textContent).toContain(title);
+      expect(card?.textContent).toContain(body);
+      expect(card?.textContent).toContain("Retry");
+      expect(card?.textContent).not.toContain("Model connection");
+      expect(card?.textContent).not.toContain("Open Model Routing");
+      expect(card?.textContent).not.toContain("dx_failure");
+      expect(card?.textContent).not.toContain(type);
+      const anchor = card?.querySelector("a");
+      if (link === undefined) expect(anchor).toBeNull();
+      else {
+        expect(anchor?.textContent).toBe(link);
+        expect(anchor?.getAttribute("href")).toBe("/settings/billing");
+      }
+      await React.act(() => panel.root.unmount());
+    },
+  );
+
   it("says a run that started on an archived Thread failed because the Thread is archived (#1849)", async () => {
     const panel = await mountPanel(
       {

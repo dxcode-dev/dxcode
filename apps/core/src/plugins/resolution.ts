@@ -32,6 +32,7 @@ import {
   pluginSettingsStatement,
   type StoredPluginSetting,
 } from "./settings-store-d1.js";
+import { registeredDeploymentSpeech } from "./speech/deployment-speech-registration.js";
 
 export interface ScopeSettingView {
   readonly enablement: PluginEnablement | null;
@@ -163,6 +164,12 @@ const readResolutionInputs = async (
       ? "(SELECT owner_user_id FROM threads WHERE id = ?1)"
       : "?1";
   const key = "threadId" in subject ? subject.threadId : subject.userId;
+  // Only Speech has a source-served provider; its source caches per isolate.
+  const sourced = plugins.some(({ providers }) =>
+    providers.some((provider) => provider.deploymentSource === true),
+  )
+    ? registeredDeploymentSpeech.load(db).catch(() => undefined)
+    : undefined;
   const [thread, membership, policy, settings] = await db.batch([
     "threadId" in subject
       ? db
@@ -202,8 +209,23 @@ const readResolutionInputs = async (
     workspaceId: workspace.workspaceId as string | undefined,
     allowed,
     settings: pluginSettingsFrom(settings),
+    sourceServes: (await sourced) !== undefined,
   };
 };
+
+/**
+ * The deployment provider: a source-served one (dx speech) while its
+ * source serves an upstream, else whatever the bindings install.
+ */
+const deploymentProviderFor = (
+  plugin: PluginDefinition,
+  bindings: Bindings,
+  sourceServes: boolean,
+): PluginProviderId | undefined =>
+  (sourceServes
+    ? plugin.providers.find((provider) => provider.deploymentSource === true)
+        ?.id
+    : undefined) ?? deploymentProvider(plugin, bindings);
 
 const scopeView = (setting: StoredPluginSetting | undefined) => ({
   enablement: setting?.enablement ?? null,
@@ -289,7 +311,11 @@ const resolvedFrom = (
                 setting.scope === "workspace" && setting.pluginId === plugin.id,
             );
       const personalOverridesAllowed = workspace.allowed.get(plugin.id) ?? true;
-      const deploymentProviderId = deploymentProvider(plugin, context.bindings);
+      const deploymentProviderId = deploymentProviderFor(
+        plugin,
+        context.bindings,
+        workspace.sourceServes,
+      );
       return {
         plugin,
         deploymentProviderId,

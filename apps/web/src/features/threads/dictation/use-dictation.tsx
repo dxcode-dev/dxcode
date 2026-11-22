@@ -5,10 +5,10 @@ import { createPortal } from "react-dom";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
+import { lazyComponent } from "../../../shared/stale-chunk.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
 import { playUiSound } from "../../../shared/ui/ui-sounds.js";
-import { Waveform } from "../../../shared/ui/waveform.js";
 import { settingsContextQueryOptions } from "../../settings/settings-context-queries.js";
 import { ThreadPresentationContext } from "../thread-session-context.js";
 import {
@@ -26,6 +26,13 @@ import {
   type LiveRecording,
   liveRecording,
 } from "./dictation-stream.js";
+
+/** The live waveform, loaded with the first recording. */
+const loadWaveform = () =>
+  import("../../../shared/ui/waveform.js").then(({ Waveform }) => ({
+    default: Waveform,
+  }));
+const Waveform = lazyComponent(loadWaveform);
 
 const CaretMarker = ({
   textarea,
@@ -328,6 +335,8 @@ export const useDictation = ({
   };
 
   const record = () => {
+    // The waveform shows once recording starts; fetch it with the capture.
+    void loadWaveform();
     if (uiSounds) playUiSound("start");
     recording.current?.take()?.close();
     const live = liveRecording();
@@ -471,11 +480,15 @@ export const useDictation = ({
       ref={lifetimeRef}
     >
       {snapshot.state === "recording" && processingIntent === undefined ? (
-        <Waveform
-          className="dictation-waveform"
-          data={snapshot.waveform}
-          barColor="currentColor"
-        />
+        <React.Suspense
+          fallback={<span className="dictation-waveform" aria-hidden="true" />}
+        >
+          <Waveform
+            className="dictation-waveform"
+            data={snapshot.waveform}
+            barColor="currentColor"
+          />
+        </React.Suspense>
       ) : null}
       <Button
         ref={sendRef}

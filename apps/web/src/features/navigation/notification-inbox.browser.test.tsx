@@ -78,6 +78,11 @@ const open = async (items: ReadonlyArray<NotificationData>) => {
   const trigger =
     container.querySelector<HTMLButtonElement>('[title="Mentions"]');
   await React.act(async () => trigger?.click());
+  // The rows load with the inbox's first open (notification-row.tsx).
+  if (items.length > 0)
+    await vi.waitUntil(
+      () => document.querySelector(".notification-row") !== null,
+    );
   return [...document.querySelectorAll<HTMLElement>(".notification-row")];
 };
 

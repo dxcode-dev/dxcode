@@ -29,6 +29,7 @@ import {
   runFailureText,
 } from "../../runtime/run-failure.js";
 import { catalogProviderModels, IN_DO_APIS } from "../model-routing/catalog.js";
+import { DX_PROVIDER_ID } from "../model-routing/deployment-models.js";
 import {
   encodeProxyEnvelope,
   PROXY_ENVELOPE_HEADER,
@@ -613,7 +614,11 @@ export const createDxModelRoutingProvider = (
   providerId: string,
   deps: DxModelRoutingTransportDeps,
 ): { provider: Provider; options: FlueProviderOptions } => {
-  const models = catalogProviderModels(providerId);
+  // dx's catalog changes with the deployment's configuration; others are fixed.
+  const fixedModels =
+    providerId === DX_PROVIDER_ID
+      ? undefined
+      : catalogProviderModels(providerId);
   const provider: Provider = {
     id: providerId,
     name: providerId,
@@ -623,7 +628,7 @@ export const createDxModelRoutingProvider = (
         resolve: async () => ({ auth: {} }),
       },
     },
-    getModels: () => models,
+    getModels: () => fixedModels ?? catalogProviderModels(providerId),
     stream: ((model: Model<Api>, rawContext: Context, options: never) => {
       const context = sendableContext(rawContext);
       if (IN_DO_APIS.has(model.api) || model.api === "cloudflare-ai-binding")

@@ -1,6 +1,10 @@
 // @vitest-environment happy-dom
 
-import { APP_ROUTE_PATHS, isAppRoutePath } from "@dx/api";
+import {
+  APP_ROUTE_PATHS,
+  DEPLOYMENT_PAGE_PATHS,
+  isAppRoutePath,
+} from "@dx/api";
 import { UserId } from "@dx/domain";
 import { createMemoryHistory } from "@tanstack/react-router";
 import { Schema } from "effect";
@@ -33,6 +37,9 @@ describe("App pages Core answers with 200", () => {
     for (const path of paths)
       expect(isAppRoutePath(path.replaceAll(/\$\w+/g, "x")), path).toBe(true);
     for (const path of APP_ROUTE_PATHS)
+      expect(paths.has(path), path).toBe(true);
+    // A deployment's own pages (its Admin area) are listed beside the app's.
+    for (const path of DEPLOYMENT_PAGE_PATHS)
       expect(paths.has(path), path).toBe(true);
   });
 

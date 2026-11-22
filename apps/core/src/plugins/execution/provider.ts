@@ -15,7 +15,10 @@ import type { Sandbox, SandboxFactory } from "@flue/runtime";
 import { Effect, Redacted, Schema } from "effect";
 import { readOrbThreadState, runsWithoutOrb } from "../../agents/orb-free.js";
 import type { DeploymentOrbs } from "../../execution/deployment-orbs.js";
-import { registeredDeploymentOrbs } from "../../execution/deployment-orbs-registration.js";
+import {
+  registeredDeploymentAccountInactivityMs,
+  registeredDeploymentOrbs,
+} from "../../execution/deployment-orbs-registration.js";
 import {
   rescueUnsavedWork,
   restoreUnsavedWork,
@@ -64,6 +67,17 @@ export type ExecutionProviderId = OrbProviderId;
  */
 export type ExecutionAccount =
   | { readonly scope: "deployment" }
+  /**
+   * One of the deployment's own accounts that its admin added (a
+   * deployment Orb account, `orb_connection` at scope `deployment`). The
+   * deployment pays, as on its own key, but the provider runs it like a
+   * connection: its credentials and the target its preparation made.
+   */
+  | {
+      readonly scope: "deployment-account";
+      readonly accountId: string;
+      readonly providerAccount: string;
+    }
   | {
       readonly scope: "workspace";
       readonly workspaceId: string;
@@ -869,10 +883,23 @@ export const composeExecutionWorkspaces = (
         ...(inactivityMs === undefined ? {} : { inactivityMs }),
       };
     }
-    // A person's or workspace's account runs only a provider they can
-    // connect.
+    // A person's, workspace's, or deployment account's connection runs only
+    // a provider that can be connected.
     if (!connectable(entry.provider.providerId))
       throw new ExecutionProviderUnavailable();
+    if (credential.scope === "deployment-account") {
+      const inactivityMs = registeredDeploymentAccountInactivityMs;
+      return {
+        account: {
+          scope: "deployment-account",
+          accountId: credential.ownerId,
+          providerAccount: credential.account,
+        },
+        credentials: credential.credentials,
+        profile,
+        ...(inactivityMs === undefined ? {} : { inactivityMs }),
+      };
+    }
     return {
       account:
         credential.scope === "personal"

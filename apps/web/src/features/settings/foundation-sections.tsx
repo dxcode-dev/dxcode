@@ -32,7 +32,6 @@ import {
   personalOrbProvidersSettingsSection,
   workspaceOrbProvidersSettingsSection,
 } from "./orb-providers/registration.js";
-import { personalPeopleAdminSettingsSection } from "./people-admin/registration.js";
 import {
   personalPluginsSettingsSection,
   workspacePluginsSettingsSection,
@@ -88,7 +87,6 @@ export const foundationSettingsSections: ReadonlyArray<SettingsSectionRegistrati
     personalNotificationsSettingsSection,
     personalSecuritySettingsSection,
     personalSigningKeysSettingsSection,
-    personalPeopleAdminSettingsSection,
     workspaceProfileSettingsSection,
     workspaceMembersSettingsSection,
     workspaceIntegrationsSettingsSection,

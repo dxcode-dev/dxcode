@@ -871,11 +871,14 @@ export const ThreadRepositoryD1 = Layer.effect(
                 AND owner_user_id = ${ownerUserId}
                 AND ${inReachableScope("threads", { userId: ownerUserId })}
                 AND lifecycle_state != 'deleted'
-                -- A Thread kept from a deleted Project stays archived.
-                AND (${lifecycleState} != 'active' OR NOT EXISTS (
-                  SELECT 1 FROM projects AS deleted_project
-                   WHERE deleted_project.id = threads.project_id
-                     AND deleted_project.deleted_at IS NOT NULL))
+                -- A Thread kept from a deleted Project, or one whose unused
+                -- Orb dx removed, stays archived.
+                AND (${lifecycleState} != 'active' OR (
+                  threads.archive_locked_reason IS NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM projects AS deleted_project
+                     WHERE deleted_project.id = threads.project_id
+                       AND deleted_project.deleted_at IS NOT NULL)))
               RETURNING id, title, project_id, owner_user_id, agent_instructions,
                 agent_instructions_revision, agent_instructions_version,
                 model_selection, runner_profile_id, plugin_snapshot_json, skill_snapshot_json,

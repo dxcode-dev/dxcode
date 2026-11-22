@@ -293,8 +293,10 @@ export function ThreadMenu({
           {own ? (
             <>
               <MenuSeparator />
-              {/* A Thread kept from a deleted project stays archived. */}
-              {thread.projectDeleted === true ? null : (
+              {/* A Thread kept from a deleted project, or whose unused
+                  Orb dx removed, stays archived. */}
+              {thread.projectDeleted === true ||
+              thread.archiveLocked !== undefined ? null : (
                 <MenuItem
                   disabled={
                     archive === undefined ||

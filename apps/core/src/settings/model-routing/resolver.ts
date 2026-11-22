@@ -21,6 +21,12 @@ import { catalogModelExists, findCatalogModel } from "./catalog.js";
 import { effectiveContextWindow } from "./context-window.js";
 import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
+import {
+  DX_PROVIDER_ID,
+  dxModelName,
+  dxUpstreamModel,
+  isDxConnection,
+} from "./deployment-models.js";
 import { currentWorkersAiModel } from "./retired-models.js";
 
 const canonicalParts = (canonical: string) => {
@@ -44,6 +50,7 @@ export const canonicalModelName = (canonical: string): string => {
   return (
     findCatalogModel(provider, model)?.name ??
     COPILOT_SERVED_MODELS.get(canonical)?.name ??
+    (provider === DX_PROVIDER_ID ? dxModelName(model) : undefined) ??
     model.split("/").at(-1) ??
     model
   );
@@ -92,8 +99,13 @@ export const connectionUpstreamFor = (
 ): string | undefined => {
   switch (connection.kind) {
     case "custom": {
-      // Only a Claude Pro/Max connection runs Claude Code models.
-      if (isClaudeCodeModel(canonical)) return undefined;
+      // Only a Claude Pro/Max connection runs Claude Code models, and only
+      // the deployment's dx connection serves (and charges) dx models.
+      if (
+        isClaudeCodeModel(canonical) ||
+        canonicalParts(canonical).provider === DX_PROVIDER_ID
+      )
+        return undefined;
       const declared = connection.models.find(
         ({ canonical: id }) => id === canonical,
       );
@@ -110,6 +122,10 @@ export const connectionUpstreamFor = (
     case "provider":
     case "deployment": {
       const { provider, model } = canonicalParts(canonical);
+      if (isDxConnection(connection))
+        return provider === DX_PROVIDER_ID
+          ? dxUpstreamModel(connection, model)
+          : undefined;
       if (
         connection.providerId !== provider ||
         findCatalogModel(provider, model) === undefined

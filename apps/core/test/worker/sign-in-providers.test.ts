@@ -367,7 +367,12 @@ describe("sign-in providers", () => {
       status: true,
       outcome: "waitlisted",
     });
-    expect(sentEmails).toHaveLength(0);
+    // Joining through Google sent the one waitlist email; the magic-link
+    // request while still waiting sends neither another one nor a link.
+    expect(sentEmails.map(({ subject }) => subject)).toEqual([
+      "You're on the dx waitlist",
+    ]);
+    sentEmails.length = 0;
 
     await env.DB.prepare(
       "UPDATE auth_waitlist SET status = 'approved' WHERE email = ?",
@@ -511,7 +516,11 @@ describe("sign-in providers", () => {
     });
     expect(await userEmail(email)).toBeNull();
     expect(await waitlistStatus(email)).toBe("pending");
-    expect(sentEmails).toHaveLength(0);
+    // The waitlist email, and no verification email for an account that
+    // does not exist.
+    expect(sentEmails.map(({ subject }) => subject)).toEqual([
+      "You're on the dx waitlist",
+    ]);
   });
 
   it("signs a Google user into the bootstrapped administrator's account with the same email", async () => {

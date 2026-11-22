@@ -430,6 +430,51 @@ const isModelRoutingError = (error: unknown) => {
  * I/O errors (`WORKSPACE_READ_ONLY`, #1843): the next turn's activation
  * restarts the Orb, so Retry repairs it.
  */
+/**
+ * A turn on a model the installation provides as dx, stopped by dx itself:
+ * the owner's dx balance is used up, is above zero but below the model's
+ * floor, or an admin took the model offline. Says what happened and what to do, never the upstream.
+ */
+const dxModelStopPresentation = (
+  id: string,
+  text: string,
+): ThreadErrorPresentation | undefined => {
+  if (/\(dx_failure:[a-z]+:DX_MODEL_BALANCE_EMPTY\)/.test(text))
+    return {
+      id,
+      title: "You're out of dx credit",
+      message:
+        "This turn stopped because your dx model balance is used up. Redeem a code or add credit, then retry. If your workspace admin gives you credit, ask them for more.",
+      action: "resume",
+      link: { actionLabel: "Redeem a code", actionHref: "/settings/billing" },
+    };
+  if (/\(dx_failure:[a-z]+:DX_MODEL_BALANCE_LOW\)/.test(text)) {
+    // Core's sentence, after whatever the error carries before it: "dx
+    // Flash needs at least $5.00 in your model balance to start a turn.
+    // You have $1.39."
+    const floor =
+      /(dx\s[^:()]*?|This dx model) needs at least \$[\d,.]+ in your model balance to start a turn\. You have -?\$[\d,.]+\./.exec(
+        text,
+      )?.[0] ?? "This dx model needs more in your model balance.";
+    return {
+      id,
+      title: "Not enough dx credit for this model",
+      message: `${floor} Redeem a code, or pick a cheaper model below and retry.`,
+      action: "resume",
+      link: { actionLabel: "Redeem a code", actionHref: "/settings/billing" },
+    };
+  }
+  if (/\(dx_failure:[a-z]+:DX_MODEL_UNAVAILABLE\)/.test(text))
+    return {
+      id,
+      title: "This dx model is unavailable",
+      message:
+        "This dx model is unavailable right now. Pick another model below, or retry later.",
+      action: "resume",
+    };
+  return undefined;
+};
+
 const diskFullPresentation = (
   id: string,
   text: string,
@@ -598,6 +643,13 @@ const threadErrorPresentation = (
         )
       : undefined;
     if (diskFull !== undefined) return diskFull;
+    const dxModelStop = latestSettlementFailed
+      ? dxModelStopPresentation(
+          `settlement:${latestSettlement.submissionId}`,
+          errorSearchText(latestSettlement.error),
+        )
+      : undefined;
+    if (dxModelStop !== undefined) return dxModelStop;
     const preCloneFailure = latestSettlementFailed
       ? preCloneFailurePresentation(
           `settlement:${latestSettlement.submissionId}`,
@@ -673,6 +725,8 @@ const threadErrorPresentation = (
       return claudePlanLimitPresentation(id, claudePlanLimit);
     const diskFull = diskFullPresentation(id, failureText);
     if (!dismissed.has(id) && diskFull !== undefined) return diskFull;
+    const dxModelStop = dxModelStopPresentation(id, failureText);
+    if (!dismissed.has(id) && dxModelStop !== undefined) return dxModelStop;
     const preCloneFailure = preCloneFailurePresentation(id, failureText);
     if (!dismissed.has(id) && preCloneFailure !== undefined)
       return preCloneFailure;
@@ -1389,6 +1443,8 @@ export interface AgentPanelOptions {
   readonly showArchivedNotice?: boolean;
   /** The Thread's Project was deleted, so it can never be unarchived. */
   readonly projectDeleted?: boolean;
+  /** dx removed the Thread's unused Orb, so it can never be unarchived. */
+  readonly orbRemoved?: boolean;
   readonly active?: boolean;
   readonly additionalPanels?: React.ReactNode;
   /** The header; `transcript` reads the shown transcript when asked. */
@@ -2156,6 +2212,7 @@ export function AgentPanel({
   archived = false,
   showArchivedNotice = false,
   projectDeleted = false,
+  orbRemoved = false,
   active = true,
   additionalPanels,
   renderHeader,
@@ -2341,7 +2398,9 @@ export function AgentPanel({
         <div className="archived-thread-warning" role="note">
           {projectDeleted
             ? "Archived. Its project was deleted, so this thread is read-only."
-            : "Archived. Unarchive to resume or run commands."}
+            : orbRemoved
+              ? "Archived: its Orb was removed after it went unused, so this thread is read-only."
+              : "Archived. Unarchive to resume or run commands."}
         </div>
       ) : null}
       <section

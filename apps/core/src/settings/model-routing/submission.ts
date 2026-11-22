@@ -13,11 +13,6 @@ import {
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { claudePlanAccess, loadClaudePlan } from "../../claude-code/plan.js";
 import type { Bindings } from "../../http/types.js";
-import {
-  DEV_PROFILE,
-  devWorkersAiConnection,
-  workersAiDeploymentEnabled,
-} from "../../runtime/model-routing-dev-defaults.js";
 import { catalogProviderModels } from "./catalog.js";
 import {
   bindThreadClaudeConnection,
@@ -33,7 +28,12 @@ import {
 } from "./connection-store-d1.js";
 import { effectiveContextWindow } from "./context-window.js";
 import { copilotModelForCanonical } from "./copilot-mapping.js";
-import { DEFAULT_PROFILE } from "./defaults.js";
+import {
+  DX_PROVIDER_ID,
+  dxConnectionUpstream,
+  findDxModel,
+} from "./deployment-models.js";
+import { deploymentRouting } from "./deployment-routing.js";
 import {
   type CopilotEntitlements,
   findServingConnection,
@@ -258,10 +258,8 @@ export const resolveSelectionForUser = async (
     loadRoutableConnections(db, userId),
     loadModeProfileOverrides(db, userId),
   ]);
-  const deployment = workersAiDeploymentEnabled(bindings);
-  const connections = deployment
-    ? [...stored, devWorkersAiConnection(new Date().toISOString() as never)]
-    : stored;
+  const deployment = await deploymentRouting(bindings);
+  const connections = [...stored, ...deployment.connections];
   const entitlements = new Map<string, ReadonlySet<string>>(
     await Promise.all(
       connections
@@ -278,7 +276,7 @@ export const resolveSelectionForUser = async (
         ),
     ),
   );
-  const defaultProfile = deployment ? DEV_PROFILE : DEFAULT_PROFILE;
+  const defaultProfile = deployment.profile;
   const model =
     selection.kind === "mode"
       ? (overrides.get(selection.mode) ?? defaultProfile.modes[selection.mode])
@@ -397,6 +395,14 @@ const servingModel = (
     }
   }
   if (entry === undefined) throw new Error("MODEL_NOT_SERVED");
+  if (connection.kind === "deployment" && provider === DX_PROVIDER_ID) {
+    // The dx catalog entry already carries its upstream's wire API, base
+    // URL and request traits; the upstream model id travels separately.
+    const upstream = dxConnectionUpstream(connection);
+    if (upstream === undefined || findDxModel(id)?.upstreamId !== upstream.id)
+      throw new Error("MODEL_NOT_SERVED");
+    return { ...entry, provider } as Model<Api>;
+  }
   if (connection.kind === "deployment") {
     return {
       ...entry,
@@ -475,11 +481,9 @@ export const resolveRouteSubmission = async (
     loadRoutableConnections(db, thread.ownerUserId),
     loadModeProfileOverrides(db, thread.ownerUserId),
   ]);
-  const deployment = workersAiDeploymentEnabled(bindings);
-  const connections = deployment
-    ? [...stored, devWorkersAiConnection(new Date().toISOString() as never)]
-    : stored;
-  const defaults = deployment ? DEV_PROFILE : DEFAULT_PROFILE;
+  const deployment = await deploymentRouting(bindings);
+  const connections = [...stored, ...deployment.connections];
+  const defaults = deployment.profile;
   const slot =
     thread.selection.kind === "mode"
       ? (

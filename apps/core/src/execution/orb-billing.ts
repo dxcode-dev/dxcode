@@ -34,9 +34,15 @@ export interface OrbBillingPolicy {
   readonly recordUsage: (usage: OrbUsage) => Promise<OrbUsageOutcome>;
   /**
    * A metered start's create or connect failed, so the policy can refund
-   * what it charged at admission. Its failures are logged, never thrown.
+   * what it charged at admission. `startedAt` (epoch ms) is when the failed
+   * attempt began, before its admission: a policy refunds only what it
+   * charged since then, never an earlier start that paid for an Orb this
+   * attempt merely reconnected to. Its failures are logged, never thrown.
    */
-  readonly startFailed?: (request: OrbStartRequest) => Promise<void>;
+  readonly startFailed?: (
+    request: OrbStartRequest,
+    startedAt: number,
+  ) => Promise<void>;
   /**
    * Until when (epoch ms) a Thread's Orb time is paid. When `recordUsage`
    * says `stop`, Core pins the Orb's deadline there, or stops the Orb when
@@ -256,6 +262,7 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
     // The decision is read beside the provider's own reads. Every provider
     // runs `authorize` before it starts or resumes an Orb, so the decision
     // still gates the start; it is awaited again after, for any that did not.
+    const startedAt = Date.now();
     const decision = policy.admitOrbStart(request).then((decided) => {
       if (decided.outcome === "refuse")
         throw orbStartRefused(decided.reason, decided.action);
@@ -269,13 +276,18 @@ export const withOrbBilling = <Handle extends ExecutionWorkspaceHandle>(
       const decided = await decision;
       // What the policy charged at admission comes back.
       if (decided.outcome === "meter")
-        await policy.startFailed?.(request).catch((error: unknown) => {
-          orbProvidersLogger.warn("A failed Orb start could not be refunded.", {
-            event: "orb_start_refund_failed",
-            threadId,
-            error: error instanceof Error ? error.message : String(error),
+        await policy
+          .startFailed?.(request, startedAt)
+          .catch((error: unknown) => {
+            orbProvidersLogger.warn(
+              "A failed Orb start could not be refunded.",
+              {
+                event: "orb_start_refund_failed",
+                threadId,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            );
           });
-        });
       throw cause;
     });
     if ((await decision).outcome === "allow") return handle;

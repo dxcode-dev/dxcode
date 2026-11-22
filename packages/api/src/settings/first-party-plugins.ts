@@ -14,12 +14,14 @@ import { errorResponse, successResponse } from "../http/response.js";
 /**
  * Providers a plugin lists (never `fixture`). Only providers with a
  * credential label can be configured by a person or workspace; QuickJS and
- * the Orb providers cannot (Orb providers connect on the Orb Providers page).
+ * the Orb providers cannot (Orb providers connect on the Orb Providers page),
+ * nor can `dx`, speech the deployment provides from its own upstreams.
  */
 export const ConfigurablePluginProviderId = Schema.Literals([
   "exa",
   "quickjs",
   "sarvam",
+  "dx",
   ...ORB_PROVIDER_IDS,
 ]);
 

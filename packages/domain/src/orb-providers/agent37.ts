@@ -86,9 +86,9 @@ export const agent37OrbProvider = defineOrbProvider({
   // request or start wakes it with every process where it was.
   pauseResumePreserves: "processes",
   remote: true,
-  // Optional: a deployment with AGENT37_API_KEY runs Agent37 on its own
-  // account, as a hosted offer does.
-  deployment: { secret: "AGENT37_API_KEY", prepared: true },
+  // No deployment secret: a person's or workspace's own key runs it, and a
+  // hosted offer runs it on the Orb accounts its admin adds in the Admin
+  // panel (owner, 2026-11-20: Orb providers come only from the panel).
   profile: Agent37RunnerProfileConfiguration,
   isolation: "sandbox",
   requiredCapabilities: ORB_RUNNER_CAPABILITIES,

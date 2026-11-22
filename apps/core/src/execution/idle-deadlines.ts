@@ -58,25 +58,20 @@ export const clearIdleDeadline = async (
 
 /**
  * The credentials an idle Orb runs on, for a pauser that knows only the
- * Thread: its pin's person's or workspace's connection, or the deployment's
- * key in `deploymentSecret`. Undefined when the pin has none.
+ * Thread: its pin's person's, workspace's, or deployment Orb account's
+ * connection. Undefined when the pin has none, or runs on a deployment
+ * secret (whose provider pauses itself).
  */
 export const idleOrbCredentials = async (
   bindings: Bindings,
   threadId: string,
-  deploymentSecret?: "AGENT37_API_KEY",
 ): Promise<OrbProviderCredentials | undefined> => {
   const { credential } = await Effect.runPromise(
     resolveExecutionTarget(bindings, threadId, { admission: false }),
   );
-  if (credential.scope === "unavailable") return undefined;
-  if (credential.scope !== "deployment")
-    return Redacted.value(credential.credentials);
-  const apiKey =
-    deploymentSecret === undefined
-      ? ""
-      : (bindings[deploymentSecret] ?? "").trim();
-  return apiKey === "" ? undefined : { apiKey };
+  if (credential.scope === "unavailable" || credential.scope === "deployment")
+    return undefined;
+  return Redacted.value(credential.credentials);
 };
 
 /** Pauses one idle sandbox of its provider. */

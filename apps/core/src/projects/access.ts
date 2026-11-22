@@ -1,8 +1,8 @@
 import type { ProjectViewerAccess } from "@dx/api";
 import type { Bindings } from "../http/types.js";
-import { syncGitHubCollaboratorGrants } from "../source-control/github/control-plane.js";
-import { grantReachesRepositorySql } from "../source-control/authority.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
+import { grantReachesRepositorySql } from "../source-control/authority.js";
+import { syncGitHubCollaboratorGrants } from "../source-control/github/control-plane.js";
 
 interface AccessRow {
   readonly id: string;

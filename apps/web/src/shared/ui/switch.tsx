@@ -13,6 +13,7 @@ export function Switch({
   disabled = false,
   pending = false,
   describedBy,
+  id,
   className,
 }: {
   readonly checked: boolean;
@@ -22,11 +23,14 @@ export function Switch({
   readonly pending?: boolean;
   /** Id of the hint that explains the switch's state. */
   readonly describedBy?: string;
+  /** Lets a `<label htmlFor>` beside it name and press it. */
+  readonly id?: string;
   readonly className?: string;
 }) {
   return (
     <button
       type="button"
+      id={id}
       className={cn("dx-switch", className)}
       data-checked={checked || undefined}
       data-pending={pending || undefined}

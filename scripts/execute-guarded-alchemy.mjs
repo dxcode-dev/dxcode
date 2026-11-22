@@ -65,6 +65,9 @@ const selection = {
   }),
   // The operator turned the dx Mail off: its resources may be deleted.
   mailRemoval: process.env.DX_DEPLOYMENT_MAIL_OFF === "1",
+  // The operator removed Orb providers on purpose: the resources of those
+  // this deploy no longer installs may be deleted.
+  orbRemoval: process.env.DX_DEPLOYMENT_ORB_REMOVAL === "1",
   ...(target === "selfhost"
     ? {
         adminEmail: required("DX_ADMIN_EMAIL"),

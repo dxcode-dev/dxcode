@@ -42,6 +42,8 @@ export interface Agent37World {
   missingDesktop: boolean;
   /** Sleeps that answer 503 before one succeeds. */
   failSleeps: number;
+  /** Deletes that answer 503 before one succeeds. */
+  failDeletes: number;
 }
 
 export const agent37World = (): Agent37World => ({
@@ -60,6 +62,7 @@ export const agent37World = (): Agent37World => ({
   broke: false,
   missingDesktop: false,
   failSleeps: 0,
+  failDeletes: 0,
 });
 
 const json = (body: unknown, status = 200) =>
@@ -341,6 +344,10 @@ export const fakeAgent37 =
     if (method === "GET" && action[2] === undefined)
       return json(instanceBody(instance));
     if (method === "DELETE" && action[2] === undefined) {
+      if (world.failDeletes > 0) {
+        world.failDeletes -= 1;
+        return error(503, "try_again", "Busy.");
+      }
       world.instances.delete(instance.id);
       world.deleted.push(instance);
       instance.status = "deleted";

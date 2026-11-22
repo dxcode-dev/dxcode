@@ -13,7 +13,10 @@ import {
 } from "./preparation.js";
 import type { ExecutionProviderId } from "./provider.js";
 
-/** A connection, or the deployment's own account of a provider. */
+/**
+ * A connection (a person's, a workspace's, or a deployment Orb account's),
+ * or the deployment's own account of a provider, which has no target.
+ */
 type PreparationKey =
   | OrbConnectionKey
   | { readonly scope: "deployment"; readonly providerId: ExecutionProviderId };
@@ -48,7 +51,10 @@ export class OrbProviderPreparationObject extends DurableObject<Bindings> {
     const failures =
       (await this.ctx.storage.get<number>("transientFailures")) ?? 0;
     const db = await Effect.runPromise(decodeD1Binding(this.env.DB));
-    const outcome = await (key.scope === "deployment"
+    // A connection names its target (a deployment Orb account's too, at
+    // scope `deployment`); the deployment's own account of a provider
+    // names none.
+    const outcome = await (!("targetId" in key)
       ? advanceDeploymentPreparation(
           this.env,
           db,

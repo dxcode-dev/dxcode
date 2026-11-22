@@ -1,6 +1,7 @@
 import {
   ArchiveThreadInvalidRequestResponseSchema,
   ArchiveThreadNotFoundResponseSchema,
+  ArchiveThreadOrbRemovedResponseSchema,
   ArchiveThreadParamsSchema,
   ArchiveThreadPersistenceUnavailableResponseSchema,
   ArchiveThreadProjectDeletedResponseSchema,
@@ -125,6 +126,7 @@ import {
   messageAttachmentBody,
   resolveMessageAttachments,
 } from "../attachments/message.js";
+import { deploymentOrbsFor } from "../execution/deployment-orbs.js";
 import { registeredClosedOrbProviders } from "../execution/deployment-orbs-registration.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import { orbProviderConnectors } from "../execution/orb-providers.js";
@@ -270,6 +272,12 @@ class ThreadModelLocked extends Schema.TaggedError<ThreadModelLocked>()(
 
 class ThreadProjectDeleted extends Schema.TaggedError<ThreadProjectDeleted>()(
   "ThreadProjectDeleted",
+  {},
+) {}
+
+/** dx removed the Thread's unused Orb and archived it for good. */
+class ThreadOrbRemoved extends Schema.TaggedError<ThreadOrbRemoved>()(
+  "ThreadOrbRemoved",
   {},
 ) {}
 
@@ -1054,7 +1062,12 @@ export const createThreadRoutes = (
       // message the Project's, which the Thread's Orb pin also uses.
       const admitRunnerProfile = (runnerProfileId: RunnerProfileId) =>
         Effect.gen(function* () {
-          const catalog = yield* loadRunnerProfileCatalog(context.env);
+          const catalog = yield* loadRunnerProfileCatalog(
+            context.env,
+            yield* Effect.promise(() =>
+              deploymentOrbsFor(context.env, runnerProfileId),
+            ),
+          );
           const profile = yield* selectRunnerProfile(catalog, runnerProfileId);
           const policy = yield* WorkspacePolicyService;
           yield* policy.evaluateForUser(principal.userId, {
@@ -2788,26 +2801,34 @@ export const createThreadRoutes = (
         return yield* new InvalidThreadRequest();
       const db = yield* decodeD1Binding(context.env.DB);
       const principal = context.get("principal");
-      // A Thread kept from a deleted Project stays archived for good.
+      // A Thread kept from a deleted Project, or one whose unused Orb dx
+      // removed, stays archived for good.
       if (!body.archived) {
-        const deleted = yield* Effect.tryPromise({
+        const locked = yield* Effect.tryPromise({
           try: () =>
             db
               .prepare(
-                `SELECT 1 AS deleted FROM threads
+                `SELECT projects.deleted_at IS NOT NULL AS project_deleted,
+                        threads.archive_locked_reason
+                   FROM threads
                    JOIN projects ON projects.id = threads.project_id
-                  WHERE threads.id = ?1 AND threads.owner_user_id = ?2
-                    AND projects.deleted_at IS NOT NULL`,
+                  WHERE threads.id = ?1 AND threads.owner_user_id = ?2`,
               )
               .bind(params.threadId, principal.userId)
-              .first(),
+              .first<{
+                project_deleted: number;
+                archive_locked_reason: string | null;
+              }>(),
           catch: (cause) =>
             PersistenceUnavailable.new(
               { operation: "thread.archive.projectDeleted" },
               cause,
             ),
         });
-        if (deleted !== null) return yield* new ThreadProjectDeleted();
+        if (locked?.project_deleted === 1)
+          return yield* new ThreadProjectDeleted();
+        if (locked?.archive_locked_reason === "orb-removed")
+          return yield* new ThreadOrbRemoved();
       }
       const [thread, children, childFailed] = yield* Effect.gen(function* () {
         const service = yield* ThreadService;
@@ -3072,6 +3093,19 @@ export const createThreadRoutes = (
                 },
               },
             ),
+            409,
+          ),
+        ThreadOrbRemoved: () =>
+          context.json(
+            Schema.encodeUnknownSync(ArchiveThreadOrbRemovedResponseSchema)({
+              status: "error",
+              data: {
+                code: "THREAD_ORB_REMOVED",
+                message:
+                  "This thread's Orb was removed after it went unused, so the thread stays archived.",
+                requestId,
+              },
+            }),
             409,
           ),
         PersistenceUnavailable: (error) => {

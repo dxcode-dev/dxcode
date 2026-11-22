@@ -24,6 +24,7 @@ import {
 } from "@dx/domain";
 import { Effect, Layer, Schema } from "effect";
 import { activeMemberSql } from "../members/membership-sql.js";
+import { loadDeploymentModels } from "../model-routing/deployment-models.js";
 import { usageModelName, usageProviderName } from "./display-names.js";
 import {
   decodePluginUsage,
@@ -766,6 +767,13 @@ const peakDailyUsersSql = (where: string) => `
     GROUP BY day
   )`;
 
+/**
+ * dx models are named by the deployment's configuration, which this isolate
+ * may not have read yet. A failed read leaves the alias as the name.
+ */
+const loadDxModelNames = (db: D1Database) =>
+  Effect.promise(() => loadDeploymentModels(db).catch(() => undefined));
+
 const modelFrom = (row: typeof ModelAggregateRow.Type) => ({
   providerId: row.provider_id,
   providerName: usageProviderName(row.provider_id),
@@ -1102,6 +1110,7 @@ const workspaceDashboardFrom =
               query.cursor,
               query.ranking,
             );
+      yield* loadDxModelNames(db);
       const results = yield* read(db, workspaceId, query, cursor);
       const summaryRows = yield* decodeRows(SummaryRow, results.summary);
       const dailyRows = yield* decodeRows(DailyRow, results.daily);
@@ -1302,6 +1311,7 @@ export const UsageRepositoryD1 = (db: D1Database) =>
           }),
         dashboard: (ownerUserId, query) =>
           Effect.gen(function* () {
+            yield* loadDxModelNames(db);
             for (const [table, id] of [
               ["projects", query.projectId],
               ["threads", query.threadId],

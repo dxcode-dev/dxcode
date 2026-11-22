@@ -1,0 +1,90 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* Notice: a tinted line the person should read before going on. */
+@layer components {
+  .dx-notice {
+    --notice-color: var(--unread);
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2-5);
+    padding: var(--space-2-5) var(--space-3);
+    border: 1px solid color-mix(in srgb, var(--notice-color) 35%, transparent);
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--notice-color) 9%, var(--card));
+    color: var(--foreground);
+  }
+  .dx-notice[data-tone="warning"] {
+    --notice-color: var(--warning);
+  }
+  .dx-notice[data-tone="danger"] {
+    --notice-color: var(--destructive);
+  }
+  .dx-notice[data-layout="bar"] {
+    flex: none;
+    align-items: center;
+    min-height: 44px;
+    padding: var(--space-1-5) var(--space-2) var(--space-1-5) var(--space-3);
+    border-width: 0 0 1px;
+    border-radius: 0;
+  }
+  .dx-notice-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    height: var(--leading-5);
+    color: color-mix(in srgb, var(--notice-color) 85%, var(--foreground));
+  }
+  .dx-notice-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .dx-notice-copy {
+    display: grid;
+    flex: 1;
+    gap: var(--space-0-5);
+    min-width: 0;
+  }
+  .dx-notice-title,
+  .dx-notice-description {
+    margin: 0;
+  }
+  .dx-notice-title {
+    font-size: var(--text-md);
+    font-weight: var(--weight-medium);
+    line-height: var(--leading-5);
+  }
+  .dx-notice-description {
+    color: var(--muted-foreground);
+    font-size: var(--text-sm);
+    line-height: var(--leading-normal);
+  }
+  .dx-notice[data-layout="bar"] .dx-notice-copy {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: var(--space-2);
+    align-items: baseline;
+  }
+  .dx-notice-actions {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    gap: var(--space-1-5);
+    align-items: center;
+  }
+  .dx-notice-dismiss {
+    flex: none;
+  }
+  @media (max-width: 640px) {
+    .dx-notice[data-layout="inline"] {
+      flex-wrap: wrap;
+    }
+    .dx-notice[data-layout="inline"] .dx-notice-actions {
+      width: 100%;
+      padding-left: calc(16px + var(--space-2-5));
+    }
+    .dx-notice[data-layout="bar"] .dx-notice-description {
+      display: none;
+    }
+  }
+}

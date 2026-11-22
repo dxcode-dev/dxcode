@@ -1,4 +1,5 @@
 import type { PersonalAccountData, SettingsContextData } from "@dx/api";
+import type { UserId } from "@dx/domain";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import {
   Bug,
@@ -10,6 +11,7 @@ import {
   Settings,
   UserRound,
 } from "lucide-react";
+import type { ComponentType, ReactNode } from "react";
 import { useIdentity } from "../../shared/auth/auth-context.js";
 import { useCommandPaletteSurface } from "../../shared/commands/command-provider.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
@@ -21,16 +23,25 @@ import {
   MenuTrigger,
 } from "../../shared/ui/menu.js";
 
+/** A deployment's own account menu items; each decides whether it shows. */
+export type AccountMenuItems = ComponentType<{
+  readonly userId: UserId;
+  readonly onNavigate: () => void;
+}>;
+
 export function SidebarAccountMenu({
   personalAccount,
   settingsContext,
   bugReportReader = false,
+  deploymentItems,
   onNavigate,
 }: {
   readonly personalAccount?: PersonalAccountData;
   readonly settingsContext?: SettingsContextData;
   /** One of the deployment's report readers, who see every report. */
   readonly bugReportReader?: boolean;
+  /** Above Personal Settings, such as Admin for the deployment's admins. */
+  readonly deploymentItems?: ReactNode;
   readonly onNavigate: () => void;
 }) {
   const auth = useIdentity();
@@ -122,6 +133,7 @@ export function SidebarAccountMenu({
               <span>{workspace.displayName} Settings</span>
             </MenuItem>
           )}
+          {deploymentItems}
           <MenuItem
             onClick={() => {
               onNavigate();

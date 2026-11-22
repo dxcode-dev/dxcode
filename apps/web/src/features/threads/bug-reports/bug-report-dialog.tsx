@@ -318,6 +318,9 @@ export function BugReportDialog({
   const [threadAndApp, setThreadAndApp] = React.useState(true);
   const [diff, setDiff] = React.useState(false);
   const [dictated, setDictated] = React.useState(false);
+  // One key for this dialog's report: a retry after an error the server
+  // answered once kept never keeps it twice.
+  const [sendKey] = React.useState(() => crypto.randomUUID());
   const fileInput = React.useRef<HTMLInputElement>(null);
   const sendKeycaps =
     getBrowserCommandRegistry().getDisplayedKeycaps("Mod+Enter");
@@ -367,6 +370,7 @@ export function BugReportDialog({
           diagnostics: threadAndApp ? { app: collectApp() } : {},
         },
         images: images.map(({ file }) => file),
+        sendKey,
       });
       return;
     }
@@ -389,6 +393,7 @@ export function BugReportDialog({
         },
       },
       images: images.map(({ file }) => file),
+      sendKey,
       ...(dictated && dictation !== undefined
         ? { audio: dictation.audio }
         : {}),

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { DxWordmark } from "../brand/dx-wordmark.js";
 
 /**
  * Brand marks for catalog providers in the Add a Provider dialog, sheet
@@ -194,6 +195,9 @@ export const ProviderMark = ({
   /** Drawn for a provider without a mark. */
   readonly fallback?: ReactNode;
 }) => {
+  // The installation's own models carry dx's wordmark, never a redrawing.
+  if (providerId === "dx")
+    return <DxWordmark size="small" className={className} />;
   const mark = marks[providerId];
   if (mark === undefined) return fallback;
   return (

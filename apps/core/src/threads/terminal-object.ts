@@ -187,6 +187,10 @@ import {
   SERVICES_MANIFEST_PATH,
 } from "../thread-services/manifest.js";
 import { serveDaemonStorage } from "../thread-storage/daemon.js";
+import {
+  clearOrbRunning,
+  markOrbRunning,
+} from "../thread-usage/orb-running.js";
 import { recordOrbSession } from "../thread-usage/orb-sessions.js";
 import { workloadIdentityBroker } from "../workload-identity/broker.js";
 import {
@@ -726,6 +730,39 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     return this.#orbMetricSamples;
   }
 
+  /** Writes to `orb_running`, in the order the runs changed. */
+  #orbRunningWrites: Promise<void> = Promise.resolve();
+
+  /**
+   * Mirrors the open run into D1's `orb_running`, which the deployment's
+   * admin lists: marked while a run is open, cleared once it ends. Off the
+   * request path; writes keep their order, so an end followed by a new start
+   * leaves the new start.
+   */
+  #syncOrbRunning(threadId: string) {
+    const db = this.env.DB;
+    if (db === undefined) return;
+    const since = this.#orbRuns.since;
+    const write = this.#orbRunningWrites
+      .then(() =>
+        since === undefined
+          ? clearOrbRunning(db, threadId)
+          : markOrbRunning(db, threadId, since),
+      )
+      .then(
+        () => undefined,
+        (error: unknown) => {
+          threadDaemonLogger.warn("Running Orb could not be recorded.", {
+            event: "orb_running_record_failed",
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        },
+      );
+    this.#orbRunningWrites = write;
+    this.ctx.waitUntil(write);
+  }
+
   /**
    * Ends the open Orb run at `at` and records it as one of the Thread's Orb
    * sessions (its Cost & Usage), after the response, off the request path.
@@ -734,6 +771,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     const since = this.#orbRuns.since;
     this.#orbRuns = orbRunEnded(this.#orbRuns, at, now);
     if (since === undefined || this.env.DB === undefined) return;
+    this.#syncOrbRunning(threadId);
     const db = this.env.DB;
     this.ctx.waitUntil(
       recordOrbSession(db, this.env.DX_RUNNER_PROFILE_CATALOG, {
@@ -1336,6 +1374,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (live && this.#orbRuns.since === undefined) {
       // Connected before this record existed: count from now.
       this.#orbRuns = orbRunStarted(this.#orbRuns, now);
+      if (this.#authority !== undefined)
+        this.#syncOrbRunning(this.#authority.threadId);
       await this.ctx.storage.put(ORB_RUNS_STORAGE_KEY, this.#orbRuns);
     }
     return Response.json(
@@ -3272,8 +3312,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
-   * A present browser's Terminal missed a heartbeat. The daemon heard within
-   * one interval (plus grace) is live and only the browser leg was late;
+   * A present browser's Terminal missed a heartbeat, or a restored Terminal
+   * asks whether it may attach without waking the Orb. A daemon whose socket
+   * is gone is fenced. One heard within one interval (plus grace) is live and
+   * only the browser leg was late;
    * otherwise one readiness round trip decides, and a silent daemon is fenced
    * here, on the browser's existing socket, instead of after the browser
    * reconnects through a cold Worker.
@@ -3285,15 +3327,17 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         ? undefined
         : startedAt - this.#lastHeartbeatAt;
     let outcome: "fresh" | "ready" | "fenced";
-    if (
+    // A daemon that left (its Orb paused) is not live however recent its
+    // last heartbeat: a Thread reopened right after a pause woke the Orb.
+    if (this.#currentDaemonSocket() === undefined) {
+      await this.#expireCurrentDaemonConnection();
+      outcome = "fenced";
+    } else if (
       silentMs !== undefined &&
       silentMs < DXD_HEARTBEAT_INTERVAL_MS + TERMINAL_LIVENESS_GRACE_MS
     )
       outcome = "fresh";
-    else if (this.#currentDaemonSocket() === undefined) {
-      await this.#expireCurrentDaemonConnection();
-      outcome = "fenced";
-    } else
+    else
       outcome =
         (await this.#probeReadiness(TERMINAL_LIVENESS_PROBE_TIMEOUT_MS)) ===
         "ready"
@@ -5106,6 +5150,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           registeredAt,
         );
       this.#orbRuns = orbRunStarted(this.#orbRuns, registeredAt);
+      this.#syncOrbRunning(authority.threadId);
       threadDaemonLogger.info("Thread daemon registered.", {
         event: "thread_daemon_registered",
         threadId: authority.threadId,

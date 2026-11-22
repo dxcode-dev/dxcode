@@ -1,6 +1,7 @@
 import {
   DICTATION_MAX_BYTES,
   DICTATION_STREAM_SUBPROTOCOL,
+  type DictationError,
   type DictationJob,
   type DictationStreamResult,
   type DictationUnavailable,
@@ -21,7 +22,10 @@ import {
 } from "../auth/session-sockets.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { dictationLogger } from "../logging.js";
-import type { AdmittedConfiguration } from "../plugins/host.js";
+import type {
+  AdmittedConfiguration,
+  PluginCallAdmission,
+} from "../plugins/host.js";
 import {
   admitSpeech,
   audioSeconds,
@@ -50,6 +54,18 @@ const unavailable = (c: Context<AppEnv>) =>
     { code: "DICTATION_UNAVAILABLE", error: unavailableError },
     409,
   );
+
+/**
+ * Speech resolves, but the deployment's billing refuses the call (dx speech
+ * with no credit left): say why, so the composer can show it.
+ */
+const refused = (
+  c: Context<AppEnv>,
+  admission: Extract<PluginCallAdmission, { admitted: false }>,
+) =>
+  admission.reason === "balance-exhausted"
+    ? c.json<DictationError>({ error: admission.message }, 402)
+    : unavailable(c);
 
 const noStore = (c: { header(name: string, value: string): void }) =>
   c.header("Cache-Control", "no-store");
@@ -240,7 +256,7 @@ dictationRoutes.get("/:id/stream", async (c) => {
     // Read alongside admission so the session opens no later; never rejects.
     const vocabularyRead = loadDictationVocabulary(db, owner);
     const admission = await admitSpeech({ db, bindings: c.env }, owner);
-    if (!admission.admitted) return unavailable(c);
+    if (!admission.admitted) return refused(c, admission);
     const { configuration } = admission;
     if (
       !(await reserve(
@@ -410,7 +426,7 @@ dictationRoutes.post("/:id", async (c) => {
     // Read alongside admission; never rejects.
     const vocabularyRead = loadDictationVocabulary(db, owner);
     const admission = await admitSpeech({ db, bindings: c.env }, owner);
-    if (!admission.admitted) return unavailable(c);
+    if (!admission.admitted) return refused(c, admission);
     const { configuration } = admission;
     if (
       !(await reserve(

@@ -17,8 +17,8 @@ import { type Agent37Api, Agent37ApiError, agent37Api } from "./api.js";
 import { AGENT37_MOUNT_PATH } from "./provider.js";
 
 /**
- * Agent37 in a person's or workspace's own Agent37 workspace, or the
- * deployment's (AGENT37_API_KEY). Agent37 runs any public amd64 image
+ * Agent37 in a person's or workspace's own Agent37 workspace, or a
+ * deployment Orb account its admin added in the panel. Agent37 runs any public amd64 image
  * registered as a workspace template, copied once into its private
  * storage and pinned by digest, so preparing an account registers the
  * public Orb image (`deploy/orb/public-image.json`) as the template

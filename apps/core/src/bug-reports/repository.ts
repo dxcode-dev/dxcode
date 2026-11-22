@@ -65,6 +65,23 @@ const kept = (row: BugReportRow): ReadonlyArray<KeptBugReport> =>
 export const newBugReportId = () =>
   `bug_${crypto.randomUUID().replaceAll("-", "")}` as BugReportId;
 
+/**
+ * The ID a person's report gets from the key their send carries, the same
+ * on every retry of one send, so a retry finds the report it already kept.
+ * The reporter is part of it: another person's key never names their report.
+ */
+export const bugReportIdFor = async (reporterUserId: string, key: string) => {
+  const digest = new Uint8Array(
+    await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${reporterUserId}\n${key}`),
+    ),
+  );
+  return `bug_${[...digest.slice(0, 16)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")}` as BugReportId;
+};
+
 export const insertBugReport = async (
   db: D1Database,
   report: {
@@ -77,24 +94,31 @@ export const insertBugReport = async (
     readonly diagnostics: ReadonlyArray<BugReportDiagnosticKind>;
   },
   now = new Date(),
-) => {
-  await db
-    .prepare(
-      `INSERT INTO bug_report
+): Promise<boolean> =>
+  (
+    await db
+      .prepare(
+        `INSERT INTO bug_report
          (id, reporter_user_id, thread_id, message, image_count, diagnostics,
           created_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`,
-    )
-    .bind(
-      report.id,
-      report.reporterUserId,
-      report.threadId ?? null,
-      report.message,
-      report.imageCount,
-      JSON.stringify(report.diagnostics),
-      now.toISOString(),
-    )
-    .run();
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+       ON CONFLICT (id) DO NOTHING`,
+      )
+      .bind(
+        report.id,
+        report.reporterUserId,
+        report.threadId ?? null,
+        report.message,
+        report.imageCount,
+        JSON.stringify(report.diagnostics),
+        now.toISOString(),
+      )
+      .run()
+  ).meta.changes > 0;
+
+/** Removes a report a send could not keep whole. */
+export const deleteBugReport = async (db: D1Database, id: BugReportId) => {
+  await db.prepare("DELETE FROM bug_report WHERE id = ?1").bind(id).run();
 };
 
 /**
@@ -182,20 +206,33 @@ export const readBugReport = async (
   return row === null ? undefined : kept(row)[0];
 };
 
+/** The bindings that name report readers. */
+export type BugReportReaderBindings = {
+  readonly DX_BUG_REPORT_READERS?: string | undefined;
+  readonly DX_DEPLOYMENT_ADMIN_EMAILS?: string | undefined;
+};
+
+const emailList = (value: string | undefined) =>
+  (value ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter((email) => email !== "");
+
 /**
  * Whether this person is one of the deployment's report readers: a person
- * whose verified email `DX_BUG_REPORT_READERS` lists. Readers open every
- * report; everyone else opens only their own.
+ * whose verified email `DX_BUG_REPORT_READERS` lists, or a deployment
+ * administrator (`DX_DEPLOYMENT_ADMIN_EMAILS`), who triages reports in
+ * Admin. Readers open every report; everyone else opens only their own.
  */
 export const isBugReportReader = async (
   db: D1Database,
   userId: string,
-  readers: string | undefined,
+  bindings: BugReportReaderBindings,
 ) => {
-  const emails = (readers ?? "")
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter((email) => email !== "");
+  const emails = [
+    ...emailList(bindings.DX_BUG_REPORT_READERS),
+    ...emailList(bindings.DX_DEPLOYMENT_ADMIN_EMAILS),
+  ];
   if (emails.length === 0) return false;
   const user = await db
     .prepare(`SELECT email, emailVerified FROM "user" WHERE id = ?1`)
@@ -213,9 +250,9 @@ export const mayReadBugReport = async (
   db: D1Database,
   userId: string,
   reporterUserId: string,
-  readers: string | undefined,
+  bindings: BugReportReaderBindings,
 ) =>
-  userId === reporterUserId || (await isBugReportReader(db, userId, readers));
+  userId === reporterUserId || (await isBugReportReader(db, userId, bindings));
 
 /**
  * Reports newest first: one reporter's, or with no reporter every report,

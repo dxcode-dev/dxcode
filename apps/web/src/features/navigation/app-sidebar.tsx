@@ -23,7 +23,10 @@ import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
 import { SharedRowContextMenu } from "../../shared/ui/row-context-menu.js";
 import { mailboxQueryOptions } from "../mailbox/mailbox-queries.js";
 import { NotificationInbox } from "./notification-inbox.js";
-import { SidebarAccountMenu } from "./sidebar-account-menu.js";
+import {
+  type AccountMenuItems,
+  SidebarAccountMenu,
+} from "./sidebar-account-menu.js";
 import { SidebarAccountMenuSlot } from "./sidebar-account-menu-slot.js";
 import { SidebarArchive } from "./sidebar-archive.js";
 import {
@@ -231,6 +234,8 @@ export interface AppSidebarProps {
   readonly extensionRegion?: React.ReactNode;
   /** The Spaces section, listed above the Threads. */
   readonly spacesSection?: React.ReactNode;
+  /** A deployment's own account menu items, such as Admin. */
+  readonly accountMenuItems?: AccountMenuItems;
   /** Each listed root's child Threads, loaded with the roots. */
   readonly childThreads?: ReadonlyMap<
     ThreadData["id"],
@@ -320,6 +325,7 @@ function AppSidebarContent({
   pinningThreadId,
   extensionRegion,
   spacesSection,
+  accountMenuItems,
   childThreads,
   layout,
 }: AppSidebarProps & { readonly layout: SidebarLayout }) {
@@ -513,6 +519,7 @@ function AppSidebarContent({
       ) : (
         <SidebarAccountMenuSlot
           userId={userId}
+          accountMenuItems={accountMenuItems}
           personalAccount={personalAccount}
           settingsContext={settingsContext}
           onNavigate={onNavigate}

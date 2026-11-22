@@ -283,6 +283,19 @@ export const ChoicesResponseSchema = successResponse(
     modes: Schema.Array(ModeChoiceDataSchema),
     models: Schema.Array(ServedModelChoiceDataSchema),
     claudePlans: Schema.Array(ClaudePlanChoiceDataSchema),
+    /**
+     * Models the deployment names but does not serve now, such as a dx
+     * model whose upstream an admin turned off, so a Thread on one still
+     * shows its name ("dx Flash", not "flash").
+     */
+    unservedModels: Schema.optional(
+      Schema.Array(
+        Schema.Struct({
+          canonical: CanonicalModelIdSchema,
+          name: Schema.String,
+        }),
+      ),
+    ),
   }),
 );
 

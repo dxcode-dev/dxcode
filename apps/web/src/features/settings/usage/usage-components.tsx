@@ -1,6 +1,11 @@
 import { DateTime } from "effect";
 import type * as React from "react";
 import { SegmentedControl } from "../../../shared/ui/segmented-control.js";
+import {
+  UsageBreakdown as SharedUsageBreakdown,
+  UsageRangeTabs as SharedUsageRangeTabs,
+  UsageTotalCard as SharedUsageTotalCard,
+} from "../../../shared/ui/usage-summary.js";
 import { SettingsCard } from "../settings-primitives.js";
 import { USAGE_LOCALE } from "./usage-format.js";
 import {
@@ -61,11 +66,10 @@ export function UsageRangeTabs({
   readonly onDaysChange: (days: UsageRange) => void;
 }) {
   return (
-    <SegmentedControl
-      label="Range"
-      value={String(days)}
-      onValueChange={(value) => onDaysChange(Number(value) as UsageRange)}
-      options={USAGE_RANGES.map((item) => [String(item), `${item}d`] as const)}
+    <SharedUsageRangeTabs
+      days={days}
+      onDaysChange={onDaysChange}
+      ranges={USAGE_RANGES}
     />
   );
 }
@@ -311,7 +315,7 @@ export function ThreadDotStrip({
   );
 }
 
-/** Name and amount pairs, two to a line on wide screens. */
+/** Name and amount pairs in the chosen measure. */
 export function UsageBreakdown({
   title,
   rows,
@@ -321,18 +325,15 @@ export function UsageBreakdown({
   readonly rows: ReadonlyArray<UsageBreakdownRow>;
   readonly mode: UsageMeasure;
 }) {
-  return rows.length === 0 ? null : (
-    <div className="usage-breakdown">
-      {title === undefined ? null : <p>{title}</p>}
-      <dl>
-        {rows.map((row) => (
-          <div key={row.key}>
-            <dt>{row.name}</dt>
-            <dd>{amountLabel(row, mode)}</dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+  return (
+    <SharedUsageBreakdown
+      title={title}
+      rows={rows.map((row) => ({
+        key: row.key,
+        name: row.name,
+        value: amountLabel(row, mode),
+      }))}
+    />
   );
 }
 
@@ -353,17 +354,15 @@ export function UsageTotalCard({
 }) {
   const unpriced = total.unknownCostEvents;
   return (
-    <SettingsCard className="usage-total-card">
-      <header className="usage-total">
-        <h2>{totalLabel(total, mode)}</h2>
-        <span>
-          in the last {days} days
-          {mode === "cost" && unpriced > 0
-            ? ` · ${formatCount(unpriced)} model ${unpriced === 1 ? "turn has" : "turns have"} no price`
-            : ""}
-        </span>
-      </header>
+    <SharedUsageTotalCard
+      total={totalLabel(total, mode)}
+      detail={`in the last ${days} days${
+        mode === "cost" && unpriced > 0
+          ? ` · ${formatCount(unpriced)} model ${unpriced === 1 ? "turn has" : "turns have"} no price`
+          : ""
+      }`}
+    >
       {children}
-    </SettingsCard>
+    </SharedUsageTotalCard>
   );
 }

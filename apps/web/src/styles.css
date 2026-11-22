@@ -3634,9 +3634,6 @@
   justify-content: flex-end;
   gap: var(--space-1-5);
 }
-.usage-breakdown {
-  border-bottom: 1px solid var(--divider);
-}
 .usage-table-scroll {
   overflow-x: auto;
 }
@@ -3994,61 +3991,8 @@
   color: var(--muted-foreground);
   font-size: var(--text-2xs);
 }
-.usage-total {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-1-5);
-  padding: var(--space-3) var(--space-4);
-}
-.usage-total h2 {
-  margin: 0;
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-6);
-}
-.usage-total span {
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
-.usage-breakdown {
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--divider);
-  border-bottom: 0;
-}
-.usage-breakdown-controls + .usage-breakdown {
+.usage-breakdown-controls + .dx-usage-breakdown {
   border-top: 0;
-}
-.usage-breakdown > p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-.usage-breakdown dl {
-  display: grid;
-  gap: var(--space-1-5) var(--space-8);
-  margin: var(--space-2) 0 0;
-  font-size: var(--text-sm);
-  line-height: var(--leading-4);
-}
-.usage-breakdown dl > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  min-width: 0;
-}
-.usage-breakdown dt {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.usage-breakdown dd {
-  flex: none;
-  margin: 0;
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
 }
 .usage-list {
   width: 100%;
@@ -4125,11 +4069,6 @@
   margin: 0;
   padding: var(--space-8) var(--space-4);
   font-size: var(--text-xs);
-}
-@media (min-width: 640px) {
-  .usage-breakdown dl {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @media (max-width: 639px) {
   .usage-track[data-half="start"] .usage-tooltip {
@@ -4560,9 +4499,6 @@
   justify-content: flex-end;
   gap: var(--space-1-5);
 }
-.usage-breakdown {
-  border-bottom: 1px solid var(--divider);
-}
 .usage-table-scroll {
   overflow-x: auto;
 }
@@ -4920,61 +4856,8 @@
   color: var(--muted-foreground);
   font-size: var(--text-2xs);
 }
-.usage-total {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: var(--space-1) var(--space-1-5);
-  padding: var(--space-3) var(--space-4);
-}
-.usage-total h2 {
-  margin: 0;
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-6);
-}
-.usage-total span {
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-}
-.usage-breakdown {
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--divider);
-  border-bottom: 0;
-}
-.usage-breakdown-controls + .usage-breakdown {
+.usage-breakdown-controls + .dx-usage-breakdown {
   border-top: 0;
-}
-.usage-breakdown > p {
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-.usage-breakdown dl {
-  display: grid;
-  gap: var(--space-1-5) var(--space-8);
-  margin: var(--space-2) 0 0;
-  font-size: var(--text-sm);
-  line-height: var(--leading-4);
-}
-.usage-breakdown dl > div {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-4);
-  min-width: 0;
-}
-.usage-breakdown dt {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.usage-breakdown dd {
-  flex: none;
-  margin: 0;
-  color: var(--muted-foreground);
-  font-variant-numeric: tabular-nums;
 }
 .usage-list {
   width: 100%;
@@ -5051,11 +4934,6 @@
   margin: 0;
   padding: var(--space-8) var(--space-4);
   font-size: var(--text-xs);
-}
-@media (min-width: 640px) {
-  .usage-breakdown dl {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @media (max-width: 639px) {
   .usage-track[data-half="start"] .usage-tooltip {
@@ -5343,9 +5221,20 @@
   max-width: var(--settings-content-width, 823px);
   margin: 0 auto;
 }
-.dialog-popup form label {
+/* A form field's label stacks over its control; a checkbox, radio, or
+   switch label is left to the rule below. `:where` keeps both rules'
+   specificity where it was, so feature rules still win. */
+.dialog-popup
+  form
+  label:not(:where(:has(> :is(.dx-checkbox, .dx-radio, .dx-switch)))) {
   display: grid;
   gap: var(--space-1-5);
+}
+/* In any dialog, a checkbox, radio, or switch sits beside its text. */
+.dialog-popup :where(label:has(> :is(.dx-checkbox, .dx-radio, .dx-switch))) {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 .settings-row-copy code {
   display: block;
@@ -7701,8 +7590,6 @@ img.orb-provider-logo {
   font-size: var(--text-3xs);
   font-weight: 700;
   line-height: var(--leading-4);
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 .mobile-pane-content .agent-transcript {
   padding: 16px 16px calc(var(--agent-composer-dock-height, 162px) + 16px);
@@ -12319,6 +12206,19 @@ body:has(.boot-screen) {
     align-items: stretch;
     grid-template-columns: 1fr;
     gap: var(--space-3);
+  }
+  /* A row whose control is one button or switch keeps it beside the
+     copy; only fields and choice lists take a line of their own. */
+  .settings-row:has(
+    > .settings-row-control > :is(.dx-button, .dx-switch):only-child
+  ) {
+    align-items: center;
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .settings-row[data-leading]:has(
+    > .settings-row-control > :is(.dx-button, .dx-switch):only-child
+  ) {
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
   .project-settings-content .settings-row-control {
     width: 100%;

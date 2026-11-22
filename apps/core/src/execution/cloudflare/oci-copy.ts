@@ -210,6 +210,40 @@ const fixedLength = (body: ReadableStream<Uint8Array>, length: number) => {
 };
 
 /**
+ * Where an upload stands on the registry (`GET` on its location answers
+ * 204 with `Range: 0-<last byte>`), for resuming after a refused chunk.
+ * Fails when the registry no longer knows the upload, or reports a range
+ * that does not move it forward, so a step never loops on one chunk.
+ */
+const uploadStatus = async (
+  send: Fetch,
+  auth: Readonly<Record<string, string>>,
+  upload: NonNullable<OciCopyState["upload"]>,
+  size: number,
+): Promise<NonNullable<OciCopyState["upload"]>> => {
+  const status = await send(upload.location, { method: "GET", headers: auth });
+  const range = /^(?:bytes=)?0-(\d+)$/.exec(status.headers.get("range") ?? "");
+  const offset = range === null ? Number.NaN : Number(range[1]) + 1;
+  if (
+    status.status !== 204 ||
+    !Number.isSafeInteger(offset) ||
+    offset <= upload.offset ||
+    offset > size
+  )
+    throw new OciCopyFailed(
+      `Your Cloudflare registry refused an image chunk (416) and its upload can't resume (${status.status}).`,
+    );
+  const location = status.headers.get("location");
+  return {
+    location:
+      location === null
+        ? upload.location
+        : new URL(location, upload.location).toString(),
+    offset,
+  };
+};
+
+/**
  * Copies blobs and finally pushes the manifest, until the copy is done or
  * this step's time is up. Returns the state to resume from.
  */
@@ -286,6 +320,14 @@ export const advanceOciCopy = async (
         body: fixedLength(chunk.body, length),
       });
       const location: string | null = patched.headers.get("location");
+      if (patched.status === 416) {
+        // The registry holds more of this upload than the state says: an
+        // earlier step's chunks landed but the step failed before its state
+        // was saved. Resume from what the registry reports it has.
+        upload = await uploadStatus(send, auth, upload, blob.size);
+        current = { ...current, upload };
+        continue;
+      }
       if (patched.status !== 202 || location === null)
         throw new OciCopyFailed(
           `Your Cloudflare registry refused an image chunk (${patched.status}).`,

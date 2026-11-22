@@ -30,8 +30,7 @@ export interface ProviderDefinition {
     | "EXA_API_KEY"
     | "SARVAM_API_KEY"
     | "E2B_API_KEY"
-    | "BOAT_API_KEY"
-    | "AGENT37_API_KEY";
+    | "BOAT_API_KEY";
   /**
    * A keyless provider the deployment installs explicitly: it resolves when
    * this binding is present. Cloudflare Containers runs in the deployer's own
@@ -54,6 +53,13 @@ export interface ProviderDefinition {
    * built in or otherwise.
    */
   readonly connectionOnly?: true;
+  /**
+   * Served by the deployment's own upstreams through a registered source
+   * (`speech/deployment-speech.ts`), never by a binding: it is the
+   * deployment provider exactly when that source serves an upstream, and
+   * takes precedence over a `deploymentSecret` provider then.
+   */
+  readonly deploymentSource?: true;
   /** What each call reports to `plugin_usage_event`; null when unmetered. */
   readonly unit: PluginMeteringUnit | null;
 }
@@ -103,6 +109,14 @@ export const FIRST_PARTY_PLUGINS: ReadonlyArray<PluginDefinition> = [
       "Turns speech recorded in the composer into text you can edit before sending.",
     capabilities: ["speech.transcribe"],
     providers: [
+      {
+        id: "dx",
+        displayName: "dx",
+        capabilities: ["speech.transcribe"],
+        credentialLabel: null,
+        deploymentSource: true,
+        unit: "audio_second",
+      },
       {
         id: "sarvam",
         displayName: "Sarvam",
@@ -230,7 +244,8 @@ export const deploymentProviders = (
       provider.deploymentSecret === undefined &&
       provider.deploymentBinding === undefined &&
       provider.development !== true &&
-      provider.connectionOnly !== true,
+      provider.connectionOnly !== true &&
+      provider.deploymentSource !== true,
   );
   if (builtIn !== undefined) return [builtIn.id];
   if (isLocalRuntime(bindings))

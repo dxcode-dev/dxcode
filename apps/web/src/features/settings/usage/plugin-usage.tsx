@@ -6,6 +6,10 @@ import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Button } from "../../../shared/ui/button.js";
 import { SettingsCard, SettingsHeading } from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
+import {
+  UsageBreakdown,
+  UsageTotalCard,
+} from "../../../shared/ui/usage-summary.js";
 import { UsageRangeTabs } from "./usage-components.js";
 import {
   personalUsageQueryOptions,
@@ -214,31 +218,24 @@ function PluginUsageTotals({
     },
   ];
   return (
-    <SettingsCard className="usage-total-card">
-      <header className="usage-total">
-        <h2>
-          {formatCount(calls)} {calls === 1 ? "Call" : "Calls"}
-        </h2>
-        <span>in the last {days} days</span>
-      </header>
+    <UsageTotalCard
+      total={`${formatCount(calls)} ${calls === 1 ? "call" : "calls"}`}
+      detail={`in the last ${days} days`}
+    >
       {rows.length === 0
         ? null
         : breakdowns.map((breakdown) => (
-            <div key={breakdown.title} className="usage-breakdown">
-              <p>{breakdown.title}</p>
-              <dl>
-                {breakdown.rows.map(([name, count]) => (
-                  <div key={name}>
-                    <dt>{name}</dt>
-                    <dd>
-                      {formatCount(count)} {count === 1 ? "call" : "calls"}
-                    </dd>
-                  </div>
-                ))}
-              </dl>
-            </div>
+            <UsageBreakdown
+              key={breakdown.title}
+              title={breakdown.title}
+              rows={breakdown.rows.map(([name, count]) => ({
+                key: name,
+                name,
+                value: `${formatCount(count)} ${count === 1 ? "call" : "calls"}`,
+              }))}
+            />
           ))}
-    </SettingsCard>
+    </UsageTotalCard>
   );
 }
 

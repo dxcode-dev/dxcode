@@ -258,6 +258,47 @@ export const scheduled = (
         }),
       ),
   );
+  // Grants past their date lapse, where a deployment registers expiring
+  // grants (public dx has none).
+  const expiryDatabase = bindings.DB;
+  if (expiryDatabase !== undefined)
+    context.waitUntil(
+      import("./execution/credit-expiry-registration.js")
+        .then(({ registeredCreditExpiry }) =>
+          registeredCreditExpiry(expiryDatabase, controller.scheduledTime),
+        )
+        .then((expired) => {
+          if (expired > 0)
+            orbProvidersLogger.info("Expired grants written off.", {
+              event: "credit_expiry_swept",
+              expired,
+            });
+        })
+        .catch((cause) =>
+          orbProvidersLogger.error("Credit expiry sweep failed.", {
+            event: "credit_expiry_sweep_failed",
+            cause,
+          }),
+        ),
+    );
+  // Orbs left unused past the deployment's retention go, and their Threads
+  // stay archived for good, where a deployment registers a retention
+  // (public dx keeps every Orb).
+  context.waitUntil(
+    import("./execution/orb-retention-registration.js")
+      .then(({ registeredOrbRetention }) =>
+        registeredOrbRetention(bindings, {
+          now: controller.scheduledTime,
+          waitUntil: (promise) => context.waitUntil(promise),
+        }),
+      )
+      .catch((cause) =>
+        orbProvidersLogger.error("Orb retention sweep failed.", {
+          event: "orb_retention_sweep_failed",
+          cause,
+        }),
+      ),
+  );
   scheduleWorkspaceUsageBackfill(bindings, context);
   if (controller.cron === THREAD_SWEEP_CRON) return;
   scheduleUsageRetention(controller, bindings, context);

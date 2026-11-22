@@ -5,7 +5,7 @@ import { attachmentPreviewKind } from "./attachment-presentation.js";
 import {
   AttachmentMedia,
   AttachmentPreviewDialog,
-} from "./image-attachments-ui.js";
+} from "./image-attachment-previews.js";
 
 /**
  * The files a sent message carries, while the person edits it: each with

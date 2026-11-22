@@ -336,11 +336,80 @@ const deploymentResourceTypes = ({
         ]
       : []),
   ]);
+/**
+ * What a deploy may delete when the operator removes Orb providers on
+ * purpose (`selection.orbRemoval`, DX_DEPLOYMENT_ORB_REMOVAL=1): the
+ * resources of each provider this deploy no longer installs. dxcode.dev runs
+ * with none (owner, 2026-11-20): its Orbs come from Admin → Orbs.
+ */
+export const orbRemovalResourceTypes = ({
+  target,
+  integrations = [],
+  orbProviders = ["e2b"],
+}) =>
+  new Map([
+    ...(orbProviders.includes("cloudflare")
+      ? []
+      : [["OrbContainers", "Dx.OrbContainers"]]),
+    ...(orbProviders.includes("e2b")
+      ? []
+      : [
+          ["E2BProfiles", "Dx.E2BProfiles"],
+          ...(target === "selfhost" ? [["E2BApiKey", "Dx.HeldSecret"]] : []),
+        ]),
+    ...(target === "selfhost" && !integrations.includes("boat")
+      ? [["BoatApiKey", "Dx.HeldSecret"]]
+      : []),
+  ]);
+
+/** The Worker bindings a removed Orb provider leaves, with their types. */
+const orbRemovalWorkerBindings = ({
+  target,
+  integrations = [],
+  orbProviders = ["e2b"],
+}) =>
+  new Map([
+    ...(orbProviders.includes("cloudflare")
+      ? []
+      : ["ORB_CONTAINER", "THREAD_EXECUTOR", "PLUGIN_CONTAINER"].map((name) => [
+          name,
+          "durable_object_namespace",
+        ])),
+    ...(orbProviders.includes("e2b")
+      ? []
+      : [
+          ["E2B_API_KEY", "secret_text"],
+          ["DX_E2B_TEMPLATE", "plain_text"],
+          ["DX_E2B_TEMPLATE_BUILD_ID", "plain_text"],
+          ["DX_E2B_TIMEOUT_MS", "plain_text"],
+        ]),
+    ...(target === "selfhost" && !integrations.includes("boat")
+      ? [["BOAT_API_KEY", "secret_text"]]
+      : []),
+  ]);
+
+const isOrbRemovalWorkerBindingDeletion = (binding, selection) => {
+  const expectedType = orbRemovalWorkerBindings(selection).get(binding.sid);
+  const bindings = binding.data?.bindings;
+  return (
+    selection.orbRemoval === true &&
+    binding.action === "delete" &&
+    expectedType !== undefined &&
+    Array.isArray(bindings) &&
+    bindings.length === 1 &&
+    bindings[0]?.name === binding.sid &&
+    bindings[0]?.type === expectedType
+  );
+};
+
 const retiredRandomResourceIds = new Set([
   "ModelInvocationKey",
   "ModelReplayKey",
 ]);
 const retiredWorkerBindings = new Map([
+  // No deploy binds an Agent37 key: Agent37 Orbs run on the accounts an
+  // admin adds in Admin → Orbs (owner, 2026-11-20).
+  ["AGENT37_API_KEY", "secret_text"],
   ["ACCOUNT_SHELL", "durable_object_namespace"],
   // A branch preview's experimental Claude host, before it became the
   // executor (THREAD_EXECUTOR).
@@ -3005,13 +3074,21 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     selection.mail === undefined &&
     mailResourceTypes.has(id) &&
     node.action === "delete";
+  // Removing an Orb provider on purpose deletes its resources on a deploy.
+  const orbRemoval =
+    operation === "deploy" &&
+    selection.orbRemoval === true &&
+    orbRemovalResourceTypes(selection).has(id) &&
+    node.action === "delete";
   if (
     !id ||
     fqn !== id ||
     nodeFqn !== id ||
     (mailRemoval
       ? mailResourceTypes.get(id)
-      : deploymentResourceTypes(selection).get(id)) !== type
+      : orbRemoval
+        ? orbRemovalResourceTypes(selection).get(id)
+        : deploymentResourceTypes(selection).get(id)) !== type
   )
     throw new Error(`Alchemy plan selected an unapproved resource: ${id}.`);
   if (cloudflareResourceIds.has(id) && node.mode !== "live")
@@ -3029,9 +3106,11 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     );
 
   const allowedActions =
-    operation === "deploy" && !mailRemoval
+    operation === "deploy" && !mailRemoval && !orbRemoval
       ? new Set(["create", "update", "noop"])
       : new Set(["delete", "noop"]);
+  // A removed provider's resource is checked as a destroy checks it.
+  const identityOperation = orbRemoval ? "destroy" : operation;
   if (!allowedActions.has(node.action))
     throw new Error(`${operation} rejects ${node.action} for ${id}.`);
   if (
@@ -3042,6 +3121,7 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
           operation === "deploy" &&
           id === "Worker" &&
           (isRetiredWorkerBindingDeletion(binding) ||
+            isOrbRemovalWorkerBindingDeletion(binding, selection) ||
             isDroppedBranchBinding(binding, node, selection))
         ),
     )
@@ -3089,11 +3169,16 @@ const validateResourceNode = (fqn, node, operation, selection, context) => {
     id === "BugReportDestinationKey" ||
     id === "BugReportIntakeSecret"
   )
-    assertExactHeldSecretIdentity(node, operation, id);
+    assertExactHeldSecretIdentity(node, identityOperation, id);
   if (id === "E2BProfiles")
-    assertExactE2BProfilesIdentity(node, operation, selection);
+    assertExactE2BProfilesIdentity(node, identityOperation, selection);
   if (id === "OrbContainers")
-    assertExactOrbContainersIdentity(node, operation, selection, context);
+    assertExactOrbContainersIdentity(
+      node,
+      identityOperation,
+      selection,
+      context,
+    );
   if (id === "Database" || id === "Storage")
     assertExactStorageIdentity(node, selection, id, operation);
   if (id === "AccessTurnstile") assertExactTurnstileIdentity(node, selection);
@@ -3134,10 +3219,25 @@ export const validateAlchemyPlan = (plan, operation, selection) => {
     throw new Error(
       "This stage runs the dx Mail; deploy it with its mail domain, or turn mail off on purpose: pnpm dx:deploy -- --mail for a self-host, or DX_DEPLOYMENT_MAIL_OFF=1.",
     );
+  // Removing an Orb provider deletes its resources: only on purpose.
+  if (
+    operation === "deploy" &&
+    selection.orbRemoval !== true &&
+    deletionIds.some((id) => orbRemovalResourceTypes(selection).has(id))
+  )
+    throw new Error(
+      `This deploy would remove Orb provider resources (${deletionIds
+        .filter((id) => orbRemovalResourceTypes(selection).has(id))
+        .join(
+          ", ",
+        )}), and with them every Orb on that provider: remove them on purpose with DX_DEPLOYMENT_ORB_REMOVAL=1, or deploy with the Orb providers the stage has.`,
+    );
   const onlyRetiredRandomDeletions = deletionIds.every(
     (id) =>
       retiredRandomResourceIds.has(id) ||
-      (selection.mail === undefined && mailResourceTypes.has(id)),
+      (selection.mail === undefined && mailResourceTypes.has(id)) ||
+      (selection.orbRemoval === true &&
+        orbRemovalResourceTypes(selection).has(id)),
   );
   if (
     plan.defaultMode !== "live" ||
@@ -3263,6 +3363,7 @@ export const isolatedAlchemyEnvironment = (inherited, deployment) => ({
           // The runner forwards validated Portal and mail settings itself.
           "DX_DEPLOYMENT_MAIL_DOMAIN",
           "DX_DEPLOYMENT_MAIL_OFF",
+          "DX_DEPLOYMENT_ORB_REMOVAL",
           "DX_DEPLOYMENT_MAIL_ZONE_ID",
           "DX_DEPLOYMENT_PORTAL_DOMAIN",
           "DX_DEPLOYMENT_PORTAL_WORKER_NAME",

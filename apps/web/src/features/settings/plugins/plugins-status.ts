@@ -41,5 +41,7 @@ export const credentialPlaceholder = (
     return "Local development uses a fixture";
   if (plugin.inherited.deployment.providerId === providerId)
     return "Using the deployment key";
+  if (plugin.inherited.deployment.providerId === "dx")
+    return "Included with dx. Paste a key to use your own";
   return "Paste an API key";
 };

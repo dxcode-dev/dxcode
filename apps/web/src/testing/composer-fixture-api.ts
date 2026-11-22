@@ -23,6 +23,11 @@ export interface ComposerFixtureOptions {
   readonly workspace?: boolean;
   /** No Orb can start, so the composer asks to set one up. */
   readonly noOrb?: boolean;
+  /**
+   * The deployment's own sentence when no Orb can start, as a hosted offer
+   * whose Orbs aren't set up yet sends it (with `noOrb`).
+   */
+  readonly orbNotice?: string;
   /** Creates never answer: the composer stays sending. */
   readonly hangCreate?: boolean;
   /**
@@ -213,10 +218,16 @@ const projectDefaults = (workspace: boolean, runners: boolean) => ({
   canUpdate: true,
 });
 
-const orbProviders = (noOrb: boolean, runners: boolean) => ({
+const orbProviders = (
+  noOrb: boolean,
+  orbNotice: string | undefined,
+  runners: boolean,
+) => ({
   scope: "personal",
   canUpdate: true,
   localRuntime: false,
+  ...(noOrb && orbNotice !== undefined ? { unavailableNotice: orbNotice } : {}),
+  ...(noOrb && orbNotice !== undefined ? { unavailableNotice: orbNotice } : {}),
   providers: [
     {
       id: "cloudflare",
@@ -445,7 +456,9 @@ export const installComposerApi = (options: ComposerFixtureOptions = {}) => {
       });
     }
     if (path === "/v1/settings/personal/orb-providers")
-      return ok(orbProviders(options.noOrb === true, runnersOn));
+      return ok(
+        orbProviders(options.noOrb === true, options.orbNotice, runnersOn),
+      );
     if (path === "/v1/settings/personal/runners") {
       if (pairedReads !== undefined && ++pairedReads >= 2) {
         runners = [...runners, NEW_FIXTURE_RUNNER];

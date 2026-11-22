@@ -318,7 +318,6 @@ export const smokeProductionPackage = async (packageRoot) => {
     SARVAM_API_KEY: "",
     EXA_API_KEY: "",
     BOAT_API_KEY: "",
-    AGENT37_API_KEY: "",
     DX_DEPLOYMENT_PRIVATE_CONFIG: "",
     DX_TURNSTILE_SITE_KEY: "package-smoke-not-a-site-key",
     DX_TURNSTILE_SECRET_KEY: "package-smoke-not-a-secret",

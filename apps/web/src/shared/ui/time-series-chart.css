@@ -1,0 +1,218 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's time-series chart: see time-series-chart.tsx. Series colors come
+   from the theme's thread colors, so every palette re-colors them. */
+@layer components {
+  .dx-chart {
+    --dx-chart-rule: color-mix(in srgb, var(--foreground) 8%, transparent);
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    column-gap: var(--space-2);
+    min-width: 0;
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+  }
+  .dx-chart [data-tone="blue"] {
+    --dx-chart-color: var(--thread-color-blue);
+  }
+  .dx-chart [data-tone="green"] {
+    --dx-chart-color: var(--thread-color-green);
+  }
+  .dx-chart [data-tone="orange"] {
+    --dx-chart-color: var(--thread-color-orange);
+  }
+  .dx-chart [data-tone="purple"] {
+    --dx-chart-color: var(--thread-color-purple);
+  }
+  .dx-chart [data-tone="cyan"] {
+    --dx-chart-color: var(--thread-color-cyan);
+  }
+  .dx-chart [data-tone="gray"] {
+    --dx-chart-color: var(--thread-color-gray);
+  }
+  .dx-chart-legend {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-1) var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+  .dx-chart-legend > span,
+  .dx-chart-tooltip > span > span:first-child {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1-5);
+  }
+  .dx-chart-legend > span::before,
+  .dx-chart-tooltip > span > span:first-child::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: var(--radius-full);
+    background: var(--dx-chart-color);
+  }
+  .dx-chart-axis-y {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    margin: calc(-1 * var(--leading-4) / 2) 0;
+    font-size: var(--text-2xs);
+    line-height: var(--leading-4);
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .dx-chart-plot {
+    position: relative;
+    min-width: 0;
+  }
+  .dx-chart-plot[data-state="empty"] {
+    grid-column: 1 / -1;
+    display: grid;
+    place-items: center;
+    border: 1px dashed var(--dx-chart-rule);
+    border-radius: var(--radius-md);
+  }
+  .dx-chart-loading {
+    width: 100%;
+    height: 100%;
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--foreground) 5%, transparent);
+    animation: dx-chart-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes dx-chart-pulse {
+    50% {
+      opacity: 0.5;
+    }
+  }
+  .dx-chart-rules {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+  .dx-chart-rules > span {
+    border-top: 1px solid var(--dx-chart-rule);
+  }
+  .dx-chart-rules > span:last-child {
+    border-top-color: var(--divider);
+  }
+  .dx-chart-svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .dx-chart-svg rect {
+    fill: var(--dx-chart-color);
+  }
+  .dx-chart-line {
+    fill: none;
+    stroke: var(--dx-chart-color);
+    stroke-width: 1.75px;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+  .dx-chart-area {
+    fill: color-mix(in srgb, var(--dx-chart-color) 16%, transparent);
+  }
+  .dx-chart-cursor {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: color-mix(in srgb, var(--foreground) 24%, transparent);
+    pointer-events: none;
+  }
+  .dx-chart-dot {
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    border: 2px solid var(--background);
+    border-radius: var(--radius-full);
+    background: var(--dx-chart-color);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  .dx-chart-columns {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    min-width: 0;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .dx-chart-columns button {
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: transparent;
+    cursor: default;
+  }
+  .dx-chart-columns button[data-selectable] {
+    cursor: pointer;
+  }
+  .dx-chart-columns button[data-active] {
+    background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  }
+  .dx-chart-columns button:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+  .dx-chart-tooltip {
+    position: absolute;
+    bottom: calc(100% + var(--space-1-5));
+    z-index: 1;
+    display: grid;
+    gap: var(--space-1);
+    min-width: 140px;
+    padding: var(--space-2) var(--space-2-5);
+    color: var(--popover-foreground);
+    font-size: var(--text-xs);
+    line-height: var(--leading-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--popover);
+    box-shadow: var(--shadow-md);
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .dx-chart-tooltip[data-side="start"] {
+    transform: translateX(calc(-1 * var(--space-3)));
+  }
+  .dx-chart-tooltip[data-side="end"] {
+    transform: translateX(calc(-100% + var(--space-3)));
+  }
+  .dx-chart-tooltip strong {
+    font-weight: var(--weight-medium);
+    white-space: nowrap;
+  }
+  .dx-chart-tooltip > span {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    white-space: nowrap;
+  }
+  .dx-chart-tooltip > span > span:last-child {
+    font-variant-numeric: tabular-nums;
+  }
+  .dx-chart-axis-x {
+    grid-column: 2;
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-top: var(--space-1-5);
+    font-size: var(--text-2xs);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dx-chart-loading {
+      animation: none;
+    }
+  }
+}

@@ -2,12 +2,13 @@ import type * as React from "react";
 import { cn } from "../utils.js";
 import "./avatar.css";
 
+/** Each word's first letter or digit, so "@priya" reads "P", not "@". */
 const initials = (name: string) =>
   name
     .trim()
     .split(/\s+/)
     .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() ?? "")
+    .map((word) => word.match(/[\p{L}\p{N}]/u)?.[0]?.toUpperCase() ?? "")
     .join("") || "?";
 
 /** A person's picture, or their initials on a color derived from their id. */

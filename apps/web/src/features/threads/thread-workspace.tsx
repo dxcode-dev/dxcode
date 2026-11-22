@@ -817,7 +817,8 @@ const canChangeModel = (thread: ThreadDetailData) =>
   (thread.access === undefined || thread.access === "owner") &&
   thread.lifecycleState === "active" &&
   thread.kind !== "space" &&
-  thread.projectDeleted !== true;
+  thread.projectDeleted !== true &&
+  thread.archiveLocked === undefined;
 
 function RetainedThreadSessionContent(props: ThreadSessionProps) {
   const entry = React.useContext(ThreadPresentationContext);
@@ -1380,6 +1381,7 @@ function ThreadSessionContent({
             archived={archived}
             showArchivedNotice={archived}
             projectDeleted={thread.projectDeleted === true}
+            orbRemoved={thread.archiveLocked === "orb-removed"}
             dictationAvailable={dictationAvailable}
             active={active}
             transcriptAccess={transcriptAccess}

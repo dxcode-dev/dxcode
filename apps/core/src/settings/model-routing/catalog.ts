@@ -5,6 +5,7 @@ import {
   getBuiltinProviders,
 } from "@earendil-works/pi-ai/providers/all";
 import { Schema } from "effect";
+import { DX_PROVIDER_ID, dxCatalogModels } from "./deployment-models.js";
 import { builtinModelsWithSuccessors } from "./newer-models.js";
 import { RETIRED_WORKERS_AI_MODELS } from "./retired-models.js";
 
@@ -87,6 +88,7 @@ const withDisplayName = (providerId: string, model: Model<Api>): Model<Api> => {
 
 export const catalogProviderModels = (providerId: string) => {
   if (providerId === CLAUDE_CODE_PROVIDER_ID) return [...claudeCodeModels];
+  if (providerId === DX_PROVIDER_ID) return [...dxCatalogModels()];
   const models = builtinModelsWithSuccessors(piCatalogProviderId(providerId));
   return (
     providerId === "cloudflare"
@@ -176,7 +178,8 @@ const provider = (
 
 /**
  * The 0.1.0 provider picker (decision 15). Official key providers plus the
- * Copilot subscription and the deployment Workers AI binding. Vertex,
+ * Copilot subscription, the deployment Workers AI binding, and the models
+ * the installation provides as "dx" (deployment-models.ts). Vertex,
  * `openai-codex` OAuth and pi-ai internal/token-plan providers stay hidden.
  */
 export const SUPPORTED_PROVIDERS: ReadonlyArray<SupportedProvider> = [
@@ -315,6 +318,12 @@ export const SUPPORTED_PROVIDERS: ReadonlyArray<SupportedProvider> = [
     description: "Mistral API.",
   }),
   provider({
+    id: DX_PROVIDER_ID,
+    name: "dx",
+    description: "Models included with dx.",
+    connectionKind: "deployment",
+  }),
+  provider({
     id: "cloudflare",
     name: "Workers AI (deployment)",
     description:
@@ -343,7 +352,8 @@ export const DEFAULT_DEPLOYMENT_PROVIDERS = SUPPORTED_PROVIDERS.filter(
  */
 export const pickerProviders = (
   deploymentProviders: string | undefined,
-  workersAiAvailable: boolean,
+  /** Deployment providers with a connection here, such as `dx` or `cloudflare`. */
+  deploymentConnections: ReadonlySet<string>,
 ): ReadonlyArray<SupportedProvider> => {
   const enabled = new Set(
     (deploymentProviders ?? "")
@@ -357,7 +367,8 @@ export const pickerProviders = (
       provider.id === CLAUDE_CODE_PROVIDER_ID
     )
       return true;
-    if (provider.connectionKind === "deployment") return workersAiAvailable;
+    if (provider.connectionKind === "deployment")
+      return deploymentConnections.has(provider.id);
     return enabled.has(provider.id);
   });
 };

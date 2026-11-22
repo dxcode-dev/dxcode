@@ -363,10 +363,15 @@ const runnerProfileGroups = (
         provider: providers.find(
           (provider) => provider.adapter === first.adapter,
         ),
-        profiles: members.filter(
-          (profile) =>
-            !orb.unavailableSizes.some(({ id }) => id === profile.id),
-        ),
+        // The deployment's named sizes may run on several providers; each
+        // size is offered while its own account can run it.
+        profiles: members.filter((profile) => {
+          const account = orbAccountForProfile(profile, orbs);
+          return (
+            account !== undefined &&
+            !account.unavailableSizes.some(({ id }) => id === profile.id)
+          );
+        }),
       },
     ];
   });

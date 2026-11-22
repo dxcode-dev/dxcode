@@ -1,13 +1,15 @@
 import type { DictationProviderData } from "@dx/api";
 import type { PluginProviderId, SpeechProvider } from "@dx/domain";
+import { settingsPersistenceLogger } from "../../logging.js";
 import {
   type AdmittedConfiguration,
   admitUserPluginCall,
   type PluginHostContext,
 } from "../host.js";
-import { recordUserMeteredCallSafely } from "../metering.js";
+import { userMeteredCallStatement } from "../metering.js";
 import { findPlugin, isLocalRuntime } from "../registry.js";
 import { resolveCapabilities } from "../resolution.js";
+import { registeredDeploymentSpeech } from "./deployment-speech-registration.js";
 import { createFixtureSpeechProvider } from "./providers/fixture.js";
 import { createSarvamSpeechProvider } from "./providers/sarvam.js";
 
@@ -71,6 +73,18 @@ export const speechProviderFor = (
               return transport(input, init);
             },
           );
+    // dx speech: the upstream the deployment serves it from.
+    case "dx":
+      return configuration.credential === undefined ||
+        configuration.upstream?.preset !== "sarvam"
+        ? unavailable
+        : createSarvamSpeechProvider(
+            configuration.credential,
+            (input, init) => {
+              onRequest();
+              return transport(input, init);
+            },
+          );
     // Search, Code, and every Orb provider transcribe nothing.
     default:
       return unavailable;
@@ -84,9 +98,12 @@ export const audioSeconds = (pcmBytes: number) =>
 /**
  * One row per transcription that reached the provider, recorded when it
  * settles: `success` with a transcript, `error` when it failed after
- * reaching the provider. Units are the audio seconds sent.
+ * reaching the provider. Units are the audio seconds sent. A successful
+ * dx transcription is charged in the same batch, at the serving upstream's
+ * price, once per row (`speech:<row id>`). Recording never fails the
+ * dictation; failures are logged.
  */
-export const recordTranscription = (
+export const recordTranscription = async (
   context: PluginHostContext,
   userId: string,
   configuration: AdmittedConfiguration,
@@ -95,18 +112,49 @@ export const recordTranscription = (
     readonly outcome: "success" | "error";
     readonly durationMs: number;
   },
-) =>
-  recordUserMeteredCallSafely(context.db, userId, {
-    pluginId: "speech",
-    providerId: effectiveSpeechProviderId(configuration, context.bindings),
-    capability: "speech.transcribe",
-    credentialScope: configuration.scope,
-    unit: "audio_second",
-    units: call.units,
-    outcome: call.outcome,
-    durationMs: Math.max(0, Math.round(call.durationMs)),
-    submissionId: null,
-  });
+): Promise<void> => {
+  const providerId = effectiveSpeechProviderId(configuration, context.bindings);
+  const id = `pue_${crypto.randomUUID()}`;
+  const usage = userMeteredCallStatement(
+    context.db,
+    userId,
+    {
+      pluginId: "speech",
+      providerId,
+      capability: "speech.transcribe",
+      credentialScope: configuration.scope,
+      unit: "audio_second",
+      units: call.units,
+      outcome: call.outcome,
+      durationMs: Math.max(0, Math.round(call.durationMs)),
+      submissionId: null,
+    },
+    new Date().toISOString(),
+    id,
+  );
+  const charge =
+    providerId === "dx" &&
+    call.outcome === "success" &&
+    configuration.upstream !== undefined
+      ? registeredDeploymentSpeech.charge(context.db, {
+          reference: `speech:${id}`,
+          userId,
+          micros: call.units * configuration.upstream.microsPerSecond,
+        })
+      : undefined;
+  await context.db
+    .batch(charge === undefined ? [usage] : [usage, charge])
+    .catch(() => {
+      settingsPersistenceLogger.error("Plugin usage could not be recorded.", {
+        event: "plugin_usage_record_failed",
+        pluginId: "speech",
+        providerId,
+        capability: "speech.transcribe",
+        credentialScope: configuration.scope,
+        charged: charge !== undefined,
+      });
+    });
+};
 
 /**
  * Whether dictation works for this user right now, and through which

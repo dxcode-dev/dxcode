@@ -21,6 +21,7 @@ import {
   ownerPolicyStatements,
 } from "../../settings/workspace-policy/repository-d1.js";
 import { workspacePolicyDenial } from "../../settings/workspace-policy/service.js";
+import { registeredDeploymentOrbs } from "../deployment-orbs-registration.js";
 import { loadRunnerProfileCatalog, selectRunnerProfile } from "./catalog.js";
 
 const NullableString = Schema.NullOr(Schema.String);
@@ -76,7 +77,12 @@ export type ExecutionCredentialUnavailableReason =
 export type ExecutionTargetCredential =
   | { readonly scope: "deployment" }
   | {
-      readonly scope: "personal" | "workspace";
+      /**
+       * One of the deployment's own accounts its admin added (a deployment
+       * Orb account), resolved like a connection: `ownerId` is the
+       * account's ID.
+       */
+      readonly scope: "personal" | "workspace" | "deployment-account";
       readonly ownerId: string;
       readonly account: string;
       readonly credentials: Redacted.Redacted<OrbProviderCredentials>;
@@ -89,7 +95,7 @@ export type ExecutionTargetCredential =
 type PinnedCredential =
   | { readonly scope: "deployment" }
   | {
-      readonly scope: "personal" | "workspace";
+      readonly scope: "personal" | "workspace" | "deployment-account";
       readonly ownerId: string;
       readonly account: string;
       readonly stored: StoredOrbCredentials;
@@ -122,7 +128,13 @@ export const pinnedCredential = (
   options: { readonly localRuntime: boolean },
 ): PinnedCredential => {
   const scope = row.account_scope;
-  if (scope === null || scope === "deployment") return { scope: "deployment" };
+  // The deployment's own secret or binding names no account; one of its
+  // admin's accounts names its ID, and resolves like a connection.
+  if (
+    scope === null ||
+    (scope === "deployment" && row.account_owner_id === null)
+  )
+    return { scope: "deployment" };
   if (options.localRuntime)
     return { scope: "unavailable", reason: "local-runtime" };
   const ownerId = row.account_owner_id;
@@ -153,7 +165,7 @@ export const pinnedCredential = (
   if (row.connection_account !== account)
     return { scope: "unavailable", reason: "account-changed" };
   return {
-    scope,
+    scope: scope === "deployment" ? "deployment-account" : scope,
     ownerId,
     account,
     stored: storedCredentialsFromRow({
@@ -238,9 +250,13 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
     const db = yield* decodeD1Binding(bindings.DB).pipe(
       Effect.mapError(() => new ExecutionRunnerProfileUnavailable()),
     );
-    const catalog = yield* loadRunnerProfileCatalog(bindings).pipe(
-      Effect.mapError(() => new ExecutionRunnerProfileUnavailable()),
-    );
+    // The deployment's registered presentation, not its admin's current
+    // one: a pinned Thread runs its pinned provider size, so activation
+    // needs no D1 read for which accounts run which named sizes.
+    const catalog = yield* loadRunnerProfileCatalog(
+      bindings,
+      registeredDeploymentOrbs,
+    ).pipe(Effect.mapError(() => new ExecutionRunnerProfileUnavailable()));
     // Admission also reads the owner's membership and its workspace policy
     // in the same batch, so the policy check costs no round trip of its own
     // (#1589). Releasing reads the target alone.

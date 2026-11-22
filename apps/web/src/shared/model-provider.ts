@@ -5,6 +5,8 @@
  * gemini-4" is Google's).
  */
 const PROVIDER_NAMES: Readonly<Record<string, string>> = {
+  // Models the installation provides: dx, whoever serves them upstream.
+  dx: "dx",
   anthropic: "Anthropic",
   openai: "OpenAI",
   google: "Google",

@@ -1,0 +1,14 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* OrbProviderLogo: a light plate behind every bundled logo, so dark marks
+   (Agent37, Freestyle) read on the dark theme wherever the logo appears. */
+@layer components {
+  img[data-orb-provider-logo] {
+    flex: none;
+    padding: 1px;
+    border-radius: var(--radius-xs);
+    background: var(--logo-plate);
+    object-fit: contain;
+  }
+}

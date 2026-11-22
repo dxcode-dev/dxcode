@@ -25,7 +25,6 @@ import {
   type ModelConnectionTarget,
   SettingsScopeForbidden,
   type StoredModelConnection,
-  Timestamp,
   workspaceRoleHasPermission,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
@@ -34,15 +33,11 @@ import { type Context, Hono } from "hono";
 import { readBoundedJson } from "../../http/bounded-body.js";
 import type { AppEnv, Bindings } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
-import {
-  DEV_PROFILE,
-  devWorkersAiConnection,
-  workersAiDeploymentEnabled,
-} from "../../runtime/model-routing-dev-defaults.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import { SettingsService } from "../service.js";
 import { WorkspaceRepositoryD1 } from "../workspace/repository-d1.js";
 import { DEFAULT_DEPLOYMENT_PROVIDERS } from "./catalog.js";
+import { deploymentRouting } from "./deployment-routing.js";
 import {
   ModelConnectionNotFoundError,
   ModelRoutingService,
@@ -162,19 +157,13 @@ const checkAccessProbe =
 const dependencies = async (c: Context<AppEnv>): Promise<Deps> => {
   const db = await Effect.runPromise(decodeD1Binding(c.env.DB));
   const keyring = await Effect.runPromise(loadConfigEncryptionKeyring(c.env));
-  const workersAiEnabled = workersAiDeploymentEnabled(c.env);
+  const deployment = await deploymentRouting(c.env);
   return {
     service: new ModelRoutingService(
       db,
       keyring,
-      workersAiEnabled ? DEV_PROFILE : undefined,
-      workersAiEnabled
-        ? [
-            devWorkersAiConnection(
-              Schema.decodeUnknownSync(Timestamp)(new Date().toISOString()),
-            ),
-          ]
-        : undefined,
+      deployment.profile,
+      deployment.connections,
       c.env.DX_MODEL_ENDPOINT_ALLOWLIST,
       // Unset offers every API-key provider; "" or "none" (no known ID)
       // offers none.

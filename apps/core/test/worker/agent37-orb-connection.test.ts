@@ -18,12 +18,16 @@ import { resolveExecutionTarget } from "../../src/execution/runner-profiles/exec
 import { errorHandler } from "../../src/http/http-errors.js";
 import { requestId } from "../../src/http/request-id.js";
 import type { AppEnv, Bindings } from "../../src/http/types.js";
+import {
+  encryptOrbCredentials,
+  putConnectionStatement,
+} from "../../src/plugins/execution/connections-d1.js";
 import type { OrbProviderConnectors } from "../../src/plugins/execution/connector.js";
-import { advanceDeploymentPreparation } from "../../src/plugins/execution/deployment-preparation.js";
 import { makePersonalOrbProviderRoutes } from "../../src/plugins/execution/orb-provider-routes.js";
 import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-providers.js";
 import { advanceConnection } from "../../src/plugins/execution/preparation.js";
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
+import { loadConfigEncryptionKeyring } from "../../src/settings/config-encryption.js";
 import { TEST_CONFIG_ENCRYPTION_KEYS } from "../../src/testing/bindings.js";
 import {
   type Agent37World,
@@ -469,26 +473,68 @@ describe("Agent37 in a person's own workspace", () => {
   }, 30_000);
 });
 
-describe("a deployment's named sizes on its own Agent37 account", () => {
+describe("a deployment's named sizes on an Agent37 account its admin added", () => {
   /**
-   * A hosted offer: the deployment's Agent37 account under its own name,
+   * A hosted offer: an Agent37 account the deployment's admin added (a
+   * deployment Orb account, `orb_connection` at scope `deployment`; no
+   * deployment secret installs Agent37), under the deployment's own name,
    * with its own sizes. Its ways to fail: a person's own Agent37 key hides
    * the offer, or the offer hides the key; a named size runs on the
    * person's key, or a provider size on the deployment's account (billed to
    * the deployment under the provider's name); a Thread pins the named
-   * size's ID instead of the provider size it runs as.
+   * size's ID instead of the provider size it runs as, or names no account.
    */
+  const ACCOUNT = "oac_00000000-0000-4000-8000-0000000a3701";
   const hosted: DeploymentOrbs = {
     agent37: {
       displayName: "Hosted Orb",
       description: "The deployment's own Orbs.",
       sizes: [
-        { id: "ho.small", label: "Small", runsAs: "a37.small" },
-        { id: "ho.large", label: "Large", runsAs: "a37.large" },
+        {
+          id: "ho.small",
+          label: "Small",
+          runsAs: "a37.small",
+          account: ACCOUNT,
+        },
+        {
+          id: "ho.large",
+          label: "Large",
+          runsAs: "a37.large",
+          account: ACCOUNT,
+        },
       ],
     },
   };
-  const deployed: Bindings = { ...bindings, AGENT37_API_KEY: "sk_live_two" };
+  const deployed: Bindings = bindings;
+  /** The admin adds the account: its key encrypted, then prepared. */
+  const addAccount = async () => {
+    const accountKey = {
+      scope: "deployment",
+      targetId: ACCOUNT,
+      providerId: "agent37",
+    } as const;
+    const agent37 = connectors.agent37;
+    if (agent37 === undefined) throw new Error("no Agent37 connector");
+    const ring = await Effect.runPromise(loadConfigEncryptionKeyring(deployed));
+    const credentials = { apiKey: "sk_live_two" };
+    const recipe = await agent37.recipe();
+    const configuredAt = new Date().toISOString();
+    await putConnectionStatement(env.DB, accountKey, {
+      envelope: await encryptOrbCredentials(ring, accountKey, credentials),
+      configuredAt,
+      recipe,
+      preparation: await agent37.start(credentials, recipe),
+    }).run();
+    for (let step = 0; step < 40; step += 1) {
+      const outcome = await advanceConnection(
+        deployed,
+        env.DB,
+        accountKey,
+        connectors,
+      );
+      if (outcome.nextStepInMs === undefined) break;
+    }
+  };
   const withHosted = async (
     path: string,
     method: "GET" | "PUT" = "GET",
@@ -544,15 +590,7 @@ describe("a deployment's named sizes on its own Agent37 account", () => {
     });
 
   it("offers the named sizes beside a person's own key, each on its own account", async () => {
-    for (let step = 0; step < 40; step += 1) {
-      const outcome = await advanceDeploymentPreparation(
-        deployed,
-        env.DB,
-        "agent37",
-        connectors,
-      );
-      if (outcome.nextStepInMs === undefined) break;
-    }
+    await addAccount();
     // The catalog lists the named sizes, each marked with the provider
     // size it runs as.
     const catalog = await Effect.runPromise(
@@ -606,7 +644,7 @@ describe("a deployment's named sizes on its own Agent37 account", () => {
       // the deployment later names its sizes after.
       runnerProfileId: "a37.small",
       credentialScope: "deployment",
-      credentialOwnerId: null,
+      credentialOwnerId: ACCOUNT,
     });
     expect(hostedPin?.providerTemplate).toMatch(/^dx-orb-/);
 
@@ -662,7 +700,7 @@ describe("a deployment's named sizes on its own Agent37 account", () => {
     expect(await pinOf("ho.large")).toMatchObject({
       runnerProfileId: "a37.large",
       credentialScope: "deployment",
-      credentialOwnerId: null,
+      credentialOwnerId: ACCOUNT,
     });
     // Agent37's own size runs on the person's own key.
     expect(await pinOf("a37.small")).toMatchObject({

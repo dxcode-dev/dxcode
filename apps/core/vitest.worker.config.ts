@@ -176,6 +176,10 @@ export default defineConfig({
         bindings: {
           TEST_MIGRATIONS: testMigrations,
           TEST_SCHEMA_SNAPSHOT: schemaSnapshot(testMigrations),
+          // Opt-in: a test that sends one real request with this key.
+          ...(process.env.DX_TEST_SARVAM_API_KEY
+            ? { DX_TEST_SARVAM_API_KEY: process.env.DX_TEST_SARVAM_API_KEY }
+            : {}),
         },
       },
     })),

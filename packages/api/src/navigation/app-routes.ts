@@ -1,3 +1,7 @@
+import { DEPLOYMENT_PAGE_PATHS } from "./deployment-page-paths.js";
+
+export { DEPLOYMENT_PAGE_PATHS };
+
 /**
  * Every page the web app serves, in its router's path syntax: a `$name`
  * segment matches any one segment, and a final `$` matches any rest, even
@@ -38,7 +42,10 @@ export const APP_ROUTE_PATHS = [
 const segmentsOf = (path: string) =>
   path.split("/").filter((segment) => segment !== "");
 
-const routeSegments = APP_ROUTE_PATHS.map(segmentsOf);
+// A deployment's own pages, such as its Admin area, are pages too.
+const routeSegments = [...APP_ROUTE_PATHS, ...DEPLOYMENT_PAGE_PATHS].map(
+  segmentsOf,
+);
 
 /** Whether a URL path, with or without a trailing slash, is an app page. */
 export const isAppRoutePath = (pathname: string): boolean => {

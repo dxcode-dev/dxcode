@@ -86,7 +86,7 @@ export interface OrbProviderDescriptor<
      * person's Threads.
      */
     | {
-        readonly secret: "BOAT_API_KEY" | "AGENT37_API_KEY";
+        readonly secret: "BOAT_API_KEY";
         readonly prepared: true;
       }
     | { readonly binding: "ORB_CONTAINER" | "RUNNER_SESSION" };

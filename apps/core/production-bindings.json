@@ -2,12 +2,6 @@
   "version": 1,
   "bindings": [
     {
-      "name": "AGENT37_API_KEY",
-      "type": "secret",
-      "provenance": "alchemy",
-      "optional": true
-    },
-    {
       "name": "AI",
       "type": "workers-ai",
       "provenance": "authored-wrangler"

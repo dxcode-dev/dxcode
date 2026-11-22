@@ -157,8 +157,10 @@ export const orbAccountForProfile = <
       (account.namedSizes === true) === (profile.runsAs !== undefined),
   );
 
-/** The group a size is offered in: its provider, or its named offer. */
+/**
+ * The group a size is offered in: its provider, or the deployment's named
+ * offer, one group whichever providers its sizes run on.
+ */
 export const orbSizeGroupKey = (
   profile: Pick<RunnerProfile, "adapter" | "runsAs">,
-) =>
-  profile.runsAs === undefined ? profile.adapter : `${profile.adapter}:named`;
+) => (profile.runsAs === undefined ? profile.adapter : "named");

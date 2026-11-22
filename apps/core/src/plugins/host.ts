@@ -16,6 +16,8 @@ import {
   resolveThreadCapabilities,
 } from "./resolution.js";
 import { decryptPluginCredential } from "./settings-store-d1.js";
+import type { DeploymentSpeechUpstream } from "./speech/deployment-speech.js";
+import { registeredDeploymentSpeech } from "./speech/deployment-speech-registration.js";
 
 export type ThreadPlugin = PluginToolSet[number];
 
@@ -31,6 +33,8 @@ export interface AdmittedConfiguration {
   readonly scope: PluginScope;
   /** Undefined for fixture and built-in providers. */
   readonly credential: Redacted.Redacted<string> | undefined;
+  /** For a source-served provider (dx speech): the upstream it calls. */
+  readonly upstream?: DeploymentSpeechUpstream;
 }
 
 export type PluginCallAdmission =
@@ -44,6 +48,12 @@ export type PluginCallAdmission =
         | "no-provider"
         | "capability-unavailable"
         | "credential-unavailable";
+    }
+  | {
+      readonly admitted: false;
+      /** The deployment's billing refused the call; `message` says why. */
+      readonly reason: "balance-exhausted";
+      readonly message: string;
     };
 
 export interface PluginHostContext {
@@ -121,6 +131,8 @@ const admitResolved = async (
         configuration: { providerId, scope, credential: undefined },
       };
     const provider = findProvider(state.plugin, providerId);
+    if (provider?.deploymentSource === true)
+      return admitSourced(context, resolved.userId, providerId);
     const secret =
       provider?.deploymentSecret !== undefined
         ? (context.bindings[provider.deploymentSecret] ?? "").trim()
@@ -160,6 +172,43 @@ const admitResolved = async (
   } catch {
     return { admitted: false, reason: "credential-unavailable" };
   }
+};
+
+/**
+ * A source-served deployment provider (dx speech): the serving upstream,
+ * its key, and the deployment's billing admission, read now, so a change
+ * an admin makes applies to the next call.
+ */
+const admitSourced = async (
+  context: PluginHostContext,
+  userId: string,
+  providerId: PluginProviderId,
+): Promise<PluginCallAdmission> => {
+  const source = registeredDeploymentSpeech;
+  const upstream = await source.load(context.db).catch(() => undefined);
+  if (upstream === undefined)
+    return { admitted: false, reason: "credential-unavailable" };
+  const admission = await source.admit(context.db, userId);
+  if ("reason" in admission)
+    return {
+      admitted: false,
+      reason: "balance-exhausted",
+      message: admission.reason,
+    };
+  const key = await source
+    .key(context.db, context.bindings, upstream.id)
+    .catch(() => undefined);
+  return key === undefined
+    ? { admitted: false, reason: "credential-unavailable" }
+    : {
+        admitted: true,
+        configuration: {
+          providerId,
+          scope: "deployment",
+          credential: Redacted.make(key),
+          upstream,
+        },
+      };
 };
 
 /** Counts provider requests for one call; providers report into it. */

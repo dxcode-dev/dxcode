@@ -96,9 +96,9 @@ const agent37Profile = (
 };
 
 /**
- * Agent37 runs on a person's or workspace's own account, or on the
- * deployment's (AGENT37_API_KEY), whose key the composition passes in the
- * context and which never leaves the Worker.
+ * Agent37 runs on a person's or workspace's own account, or on a
+ * deployment Orb account its admin added in the panel, whose key the
+ * composition passes in the context and which never leaves the Worker.
  */
 const apiFor = (context: ExecutionContext, send?: typeof fetch) => {
   const apiKey =
@@ -331,9 +331,7 @@ export const pauseIdleAgent37Instance = async (
   threadId: string,
   send?: typeof fetch,
 ) => {
-  const apiKey = (
-    await idleOrbCredentials(bindings, threadId, "AGENT37_API_KEY")
-  )?.apiKey;
+  const apiKey = (await idleOrbCredentials(bindings, threadId))?.apiKey;
   if (apiKey === undefined) throw unavailable("no Agent37 account");
   await sleepInstance(agent37Api(apiKey, send), instanceId);
 };

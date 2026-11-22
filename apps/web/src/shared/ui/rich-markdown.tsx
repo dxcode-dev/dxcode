@@ -9,6 +9,7 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { lazyComponent } from "../stale-chunk.js";
 import { useTheme } from "../theme/theme-provider.js";
 import {
   type CodeHighlighter,
@@ -26,8 +27,22 @@ import {
 } from "./markdown-file-link-context.js";
 import { galleryItems, remarkMediaGalleries } from "./markdown-galleries.js";
 import { loadKatex, normalizeMathDelimiters } from "./markdown-math.js";
-import { MarkdownImageOpener, MarkdownMediaGallery } from "./markdown-media.js";
 import { useMarkdownMediaSource } from "./markdown-media-source.js";
+
+// The image opener and the gallery (and their viewer) load when a message
+// first shows media, not with every Thread: until then an image shows as a
+// plain image and a gallery as the Markdown it was written as.
+const MarkdownImageOpener = lazyComponent(() =>
+  import("./markdown-media.js").then((module) => ({
+    default: module.MarkdownImageOpener,
+  })),
+);
+const MarkdownMediaGallery = lazyComponent(() =>
+  import("./markdown-media.js").then((module) => ({
+    default: module.MarkdownMediaGallery,
+  })),
+);
+
 import {
   MarkdownMentionContext,
   type MarkdownMentions,
@@ -739,7 +754,15 @@ function MarkdownImage({
   if (media?.kind === "image" && insideLink)
     return <img src={media.url} alt={name} title={title} loading="lazy" />;
   if (media?.kind === "image")
-    return <MarkdownImageOpener source={media} name={name} title={title} />;
+    return (
+      <React.Suspense
+        fallback={
+          <img src={media.url} alt={name} title={title} loading="lazy" />
+        }
+      >
+        <MarkdownImageOpener source={media} name={name} title={title} />
+      </React.Suspense>
+    );
   if (media === undefined && url !== undefined && sameOriginImage(url))
     return <img src={url} alt={name} title={title} loading="lazy" />;
   const label = (
@@ -816,14 +839,16 @@ const galleryComponents = {
     readonly "data-items"?: string;
     readonly children?: React.ReactNode;
   }) => (
-    <MarkdownMediaGallery
-      items={galleryItems(items).map((item) => ({
-        ...item,
-        src: urlTransform(item.src),
-      }))}
-    >
-      {content}
-    </MarkdownMediaGallery>
+    <React.Suspense fallback={content}>
+      <MarkdownMediaGallery
+        items={galleryItems(items).map((item) => ({
+          ...item,
+          src: urlTransform(item.src),
+        }))}
+      >
+        {content}
+      </MarkdownMediaGallery>
+    </React.Suspense>
   ),
 };
 

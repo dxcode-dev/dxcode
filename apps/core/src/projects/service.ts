@@ -11,10 +11,10 @@ import {
   type ProjectNameConflict,
   type ProjectNameInput,
   type ProjectNotFound,
+  type ProjectPresentationUpdate,
   ProjectRepository,
   type ProjectRepositoryIdentity,
   type ProjectSourceAuthority,
-  type ProjectPresentationUpdate,
   type ProjectUpdate,
   projectReaderOf,
 } from "@dx/domain";

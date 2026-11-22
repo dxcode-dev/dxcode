@@ -18,8 +18,8 @@ import {
 import {
   type DeploymentOrbs,
   deploymentOrbSettings,
+  loadDeploymentOrbs,
 } from "../deployment-orbs.js";
-import { registeredDeploymentOrbs } from "../deployment-orbs-registration.js";
 
 const unavailableAdapterStates = [
   { kind: "container", state: "unavailable" },
@@ -153,7 +153,8 @@ const catalogFrom = (
 export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
   function* (
     bindings: Bindings,
-    deploymentOrbs: DeploymentOrbs = registeredDeploymentOrbs,
+    /** Defaults to how the deployment presents its accounts now. */
+    presentation?: DeploymentOrbs,
   ) {
     const input = bindings.DX_RUNNER_PROFILE_CATALOG;
     const configured =
@@ -165,7 +166,10 @@ export const loadRunnerProfileCatalog = Effect.fn("loadRunnerProfileCatalog")(
         return yield* new RunnerProfileConfigurationUnavailable();
       return catalogFrom(configured);
     }
-    return withDeploymentPrices(
+    const deploymentOrbs =
+      presentation ??
+      (yield* Effect.promise(() => loadDeploymentOrbs(bindings)));
+    return yield* withDeploymentPrices(
       catalogFrom(
         withNamedSizes(
           withProviderProfiles(configured),
@@ -221,19 +225,41 @@ const withDeploymentPrices = (
   catalog: LoadedRunnerProfileCatalog,
   bindings: Bindings,
   deploymentOrbs: DeploymentOrbs,
-): LoadedRunnerProfileCatalog => ({
-  ...catalog,
-  publicCatalog: {
-    ...catalog.publicCatalog,
-    profiles: catalog.publicCatalog.profiles.map((profile) => {
-      const costLabel =
-        profile.costLabel ??
-        deploymentOrbSettings(bindings, profile.adapter, deploymentOrbs)
-          ?.costLabels?.[profile.id];
-      return costLabel === undefined ? profile : { ...profile, costLabel };
-    }),
-  },
-});
+) =>
+  Effect.gen(function* () {
+    // Labels the deployment reads when the catalog loads (prices its admin
+    // can change), once per provider; a failed read shows none.
+    const loaded = new Map<string, Readonly<Record<string, string>>>();
+    for (const adapter of new Set(
+      catalog.publicCatalog.profiles.map(({ adapter }) => adapter as string),
+    )) {
+      const load = deploymentOrbSettings(
+        bindings,
+        adapter,
+        deploymentOrbs,
+      )?.loadPresentation;
+      if (load === undefined) continue;
+      const labels = yield* Effect.tryPromise(() => load(bindings)).pipe(
+        Effect.map((presentation) => presentation.costLabels),
+        Effect.orElseSucceed(() => undefined),
+      );
+      if (labels !== undefined) loaded.set(adapter, labels);
+    }
+    return {
+      ...catalog,
+      publicCatalog: {
+        ...catalog.publicCatalog,
+        profiles: catalog.publicCatalog.profiles.map((profile) => {
+          const costLabel =
+            profile.costLabel ??
+            loaded.get(profile.adapter)?.[profile.id] ??
+            deploymentOrbSettings(bindings, profile.adapter, deploymentOrbs)
+              ?.costLabels?.[profile.id];
+          return costLabel === undefined ? profile : { ...profile, costLabel };
+        }),
+      },
+    } satisfies LoadedRunnerProfileCatalog;
+  });
 
 export const selectRunnerProfile = Effect.fn("selectRunnerProfile")(function* (
   catalog: LoadedRunnerProfileCatalog,

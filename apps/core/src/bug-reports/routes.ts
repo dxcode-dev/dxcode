@@ -44,6 +44,8 @@ import { redactBugReportText, redactBugReportValue } from "./redaction.js";
 import {
   BUG_REPORT_FILE_NAME,
   bugReportFileKey,
+  bugReportIdFor,
+  deleteBugReport,
   insertBugReport,
   isBugReportReader,
   listBugReportFiles,
@@ -179,6 +181,16 @@ const readForm = async <R extends { readonly message: string }>(
   };
 };
 
+/** A send's idempotency key: a UUID or another short token. */
+const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,64}$/;
+
+const persistenceFailed = (context: Context<AppEnv>, cause: unknown) =>
+  bugReportLogger.error("Bug report could not be kept.", {
+    event: "bug_report_persistence_failed",
+    requestId: context.get("requestId"),
+    errorName: cause instanceof Error ? cause.name : "UnknownError",
+  });
+
 /**
  * Keeps one redacted report: its row in `bug_report` and its files in
  * `DX_STORAGE` under `bug-reports/<id>/`. A deployment that names a central
@@ -226,32 +238,69 @@ const keepReport = async (
     ...input.images,
     ...input.audio,
   ];
-  const id = newBugReportId();
-  try {
-    await insertBugReport(db, {
+  // A send carries a key that stays the same on every retry of it, so a
+  // retry after a lost answer finds the report it kept instead of keeping
+  // it twice.
+  const key = context.req.header("idempotency-key");
+  const id =
+    key !== undefined && IDEMPOTENCY_KEY.test(key)
+      ? await bugReportIdFor(reporter.userId, key)
+      : newBugReportId();
+  const now = new Date();
+  const created = await insertBugReport(
+    db,
+    {
       id,
       reporterUserId: reporter.userId,
       ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
       message: input.message,
       imageCount: input.images.length,
       diagnostics: input.diagnostics,
-    });
-    const bucket = context.env.DX_STORAGE;
-    if (bucket !== undefined)
-      await Promise.all(
-        files.map((file) =>
-          bucket.put(bugReportFileKey(id, file.name), file.bytes, {
-            httpMetadata: { contentType: file.type },
-          }),
-        ),
-      );
-  } catch (cause) {
-    bugReportLogger.error("Bug report could not be kept.", {
-      event: "bug_report_persistence_failed",
-      requestId: context.get("requestId"),
-      errorName: cause instanceof Error ? cause.name : "UnknownError",
-    });
+    },
+    now,
+  ).catch((cause: unknown) => {
+    persistenceFailed(context, cause);
+    return undefined;
+  });
+  if (created === undefined)
     return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+  if (!created) {
+    // Kept by an earlier try of this send, whole: a report whose files
+    // failed is removed again below.
+    const earlier = await readBugReport(db, id);
+    if (earlier === undefined || earlier.reporterUserId !== reporter.userId)
+      return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    return context.json(
+      Schema.encodeUnknownSync(CreateBugReportResponseSchema)({
+        status: "success",
+        data: earlier.report,
+      }),
+      201,
+    );
+  }
+  const bucket = context.env.DX_STORAGE;
+  if (bucket !== undefined) {
+    const stored = await Promise.all(
+      files.map((file) =>
+        bucket.put(bugReportFileKey(id, file.name), file.bytes, {
+          httpMetadata: { contentType: file.type },
+        }),
+      ),
+    ).then(
+      () => true,
+      (cause: unknown) => {
+        persistenceFailed(context, cause);
+        return false;
+      },
+    );
+    if (!stored) {
+      // Not kept whole, so not kept: no row is left for a retry to repeat.
+      await deleteBugReport(db, id).catch(() => {});
+      await bucket
+        .delete(files.map((file) => bugReportFileKey(id, file.name)))
+        .catch(() => {});
+      return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    }
   }
   // Shared with the central deployment after it is kept here; the person's
   // report never waits for it or fails because of it.
@@ -275,13 +324,19 @@ const keepReport = async (
     imageCount: input.images.length,
     diagnostics: input.diagnostics,
   });
-  const report = await readBugReport(db, id);
-  if (report === undefined)
-    return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+  // Answered from what was kept, not read back: the report is kept, so the
+  // person is told so.
   return context.json(
     Schema.encodeUnknownSync(CreateBugReportResponseSchema)({
       status: "success",
-      data: report.report,
+      data: {
+        id,
+        ...(input.threadId === undefined ? {} : { threadId: input.threadId }),
+        message: input.message,
+        createdAt: now.toISOString(),
+        imageCount: input.images.length,
+        diagnostics: input.diagnostics,
+      },
     }),
     201,
   );
@@ -400,7 +455,7 @@ const readableReport = async (context: Context<AppEnv>, db: D1Database) => {
       db,
       context.get("principal").userId,
       kept.reporterUserId,
-      context.env.DX_BUG_REPORT_READERS,
+      context.env,
     ))
   )
     return undefined;
@@ -459,7 +514,7 @@ export const bugReportRoutes = new Hono<AppEnv>()
     const reader = await isBugReportReader(
       db,
       context.get("principal").userId,
-      context.env.DX_BUG_REPORT_READERS,
+      context.env,
     );
     const destination = forwardingDestination(context.env);
     context.header("Cache-Control", "no-store");
@@ -482,9 +537,7 @@ export const bugReportRoutes = new Hono<AppEnv>()
       return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
     const userId = context.get("principal").userId;
     // Everyone else is told there is nothing here.
-    if (
-      !(await isBugReportReader(db, userId, context.env.DX_BUG_REPORT_READERS))
-    )
+    if (!(await isBugReportReader(db, userId, context.env)))
       return failure(context, "NOT_FOUND", 404);
     const beforeId = context.req.query("before");
     const before =

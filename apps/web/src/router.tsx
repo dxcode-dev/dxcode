@@ -14,6 +14,12 @@ import {
 import { Option, Schema } from "effect";
 import * as React from "react";
 import {
+  DeploymentAccountMenuItems,
+  DeploymentNotices,
+  prefetchDeploymentShell,
+  registeredDeploymentRoutes,
+} from "./deployment-registration.js";
+import {
   isServerPath,
   safeNextPath,
   validateSignInSearch,
@@ -158,7 +164,12 @@ const settingsPage = (
     name,
   );
 
-const productNotices = <InstallAppBanner />;
+const productNotices = (
+  <>
+    <InstallAppBanner />
+    {DeploymentNotices === undefined ? null : <DeploymentNotices />}
+  </>
+);
 // The Spaces section loads beside the sidebar rather than in the Thread
 // page's first load.
 const SpaceSidebarSection = lazyRouteComponent(
@@ -191,8 +202,19 @@ const rootRoute = createRootRouteWithContext<RouterContext>()({
 const productRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: "_product",
+  // A deployment's notices start reading here, before the pages below run
+  // their beforeLoad (home's setup check), not in the loader after them:
+  // the first frame waits for them. Pages outside the product shell, such
+  // as Admin and Settings, show no notices and read nothing for them.
+  beforeLoad: ({ context }) => {
+    void prefetchDeploymentShell?.(context.queryClient);
+  },
   loader: ({ context }) =>
-    ensureProductShellData(context.queryClient, context.userId),
+    Promise.all([
+      ensureProductShellData(context.queryClient, context.userId),
+      // A deployment's notices, ready with the first frame (no layout shift).
+      prefetchDeploymentShell?.(context.queryClient),
+    ]).then(() => undefined),
   component: () => (
     <ThreadArchiveProvider>
       <ThreadSnoozeProvider>
@@ -200,6 +222,7 @@ const productRoute = createRoute({
           <ProductShell
             notices={productNotices}
             spacesSection={productSpacesSection}
+            accountMenuItems={DeploymentAccountMenuItems}
           />
         </ThreadEditingProvider>
       </ThreadSnoozeProvider>
@@ -916,6 +939,8 @@ const routeTree = rootRoute.addChildren([
   threadTourRoute,
   signInRoute,
   signUpRoute,
+  // A deployment's own pages beside Settings, such as Admin.
+  ...registeredDeploymentRoutes(rootRoute),
 ]);
 
 export const createAppRouter = (

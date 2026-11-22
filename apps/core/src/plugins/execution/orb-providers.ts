@@ -5,7 +5,10 @@ import {
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import {
+  accountDeploymentProviders,
   type DeploymentOrbs,
+  deploymentOrbsFor,
+  deploymentSizeAccount,
   namedSizeDeploymentProviders,
   presentedDeploymentProviders,
 } from "../../execution/deployment-orbs.js";
@@ -17,6 +20,7 @@ import { findPlugin, isLocalRuntime } from "../registry.js";
 import {
   CONNECTION_COLUMNS,
   connectionFromRow,
+  findConnection,
   type OrbConnection,
   type OrbConnectionRow,
 } from "./connections-d1.js";
@@ -26,7 +30,13 @@ import {
   deploymentTargets,
   scheduleDeploymentPreparation,
 } from "./deployment-preparation.js";
-import { connectionStatus, servedVersion } from "./preparation.js";
+import {
+  connectionStatus,
+  PREPARATION_STALL_MS,
+  restartPreparation,
+  schedulePreparation,
+  servedVersion,
+} from "./preparation.js";
 import {
   type ExecutionProviderId,
   type ResolvedExecutionProvider,
@@ -109,6 +119,12 @@ export interface OrbProviderSetInput {
    * sizes (`namedSizeDeploymentProviders`).
    */
   readonly namedSizeProviders?: ReadonlySet<string>;
+  /**
+   * Providers with a named size on one of the admin's deployment accounts
+   * (`accountDeploymentProviders`): offered on the deployment's account
+   * though no secret or binding installs them.
+   */
+  readonly accountProviders?: ReadonlySet<string>;
 }
 
 /**
@@ -204,17 +220,35 @@ export const orbProviderSet = (
   return plugin.providers.flatMap((provider): Array<OrbProviderMember> => {
     const providerId = provider.id as ExecutionProviderId;
     if (!input.profileAdapters.has(providerId)) return [];
-    // A closed deployment account is not offered; a person's or
-    // workspace's own key for the same provider still is.
+    // The deployment can offer two accounts of one provider: its own
+    // secret or binding with the provider's sizes (plain), and its named
+    // sizes (a hosted offer's), on that secret (`namedSizeProviders`) or on
+    // accounts its admin added (`accountProviders`). A closed offer hides
+    // the named sizes. A person's or workspace's own key for the provider
+    // is offered either way.
     const closed = input.closedProviders?.has(providerId) === true;
-    const named = input.namedSizeProviders?.has(providerId) === true;
+    const envNamed = input.namedSizeProviders?.has(providerId) === true;
+    const accountNamed = input.accountProviders?.has(providerId) === true;
     const hidden = input.hiddenProviders?.has(providerId) === true;
-    const deployment =
+    const installed = input.deploymentProviders.some(
+      (candidate) => candidate.providerId === providerId,
+    );
+    // A beta provider the person hasn't turned on is still offered on the
+    // deployment's account when the deployment presents it as its own.
+    const presented = input.presentedDeployment?.has(providerId) === true;
+    const namedOffered =
       !closed &&
-      input.deploymentProviders.some(
-        (candidate) => candidate.providerId === providerId,
-      ) &&
-      (!hidden || input.presentedDeployment?.has(providerId) === true);
+      ((installed && envNamed) || accountNamed) &&
+      (!hidden || presented);
+    // A closed offer closes the plain account only when the deployment
+    // presents that account as its own; one whose named sizes run on admin
+    // accounts presents them, not it.
+    const plainOffered =
+      installed &&
+      !envNamed &&
+      (!hidden || presented) &&
+      !(closed && presented && !accountNamed);
+    const named = namedOffered ? [deploymentMember(providerId, true)] : [];
     // Local runtime ignores personal and workspace connections: `pnpm dev`
     // never reaches a provider account.
     if (input.connectors[providerId] !== undefined && !input.localRuntime) {
@@ -234,12 +268,13 @@ export const orbProviderSet = (
         if (hidden) return [];
         // The deployment's named sizes stay offered beside the person's
         // own key: they are a different choice, on a different account.
-        return named && deployment
-          ? [connectionMember(own, input), deploymentMember(providerId, true)]
-          : [connectionMember(own, input)];
+        return [connectionMember(own, input), ...named];
       }
     }
-    return deployment ? [deploymentMember(providerId, named)] : [];
+    return [
+      ...(plainOffered ? [deploymentMember(providerId, false)] : []),
+      ...named,
+    ];
   });
 };
 
@@ -411,22 +446,26 @@ export const resolveThreadExecutionPin = async (input: {
    * a Thread on one is refused as if the deployment had no such provider.
    */
   readonly closedProviders?: () => Promise<ReadonlySet<string>>;
-  /** How the deployment presents its own accounts; defaults to the registered ones. */
+  /** How the deployment presents its own accounts; defaults to how it does now. */
   readonly deploymentOrbs?: DeploymentOrbs;
 }): Promise<ThreadExecutionPin | undefined> => {
   const connectors = input.connectors;
-  const catalog = await Effect.runPromise(
-    loadRunnerProfileCatalog(input.bindings, input.deploymentOrbs).pipe(
-      Effect.orElseSucceed(() => undefined),
-    ),
-  );
-  if (catalog === undefined) return undefined;
   const scope = await loadOrbScope(input.db, input.userId, input.projectId);
   const profileId =
     input.runnerProfileId ??
     (input.projectId === null
       ? input.projectlessRunnerProfileId
       : scope.projectRunnerProfileId);
+  // Only a named size reads which of the admin's accounts runs it.
+  const deploymentOrbs =
+    input.deploymentOrbs ??
+    (await deploymentOrbsFor(input.bindings, profileId ?? undefined));
+  const catalog = await Effect.runPromise(
+    loadRunnerProfileCatalog(input.bindings, deploymentOrbs).pipe(
+      Effect.orElseSucceed(() => undefined),
+    ),
+  );
+  if (catalog === undefined) return undefined;
   const profile = catalog.configuration.profiles.find(
     ({ id }) => id === profileId,
   );
@@ -478,6 +517,27 @@ export const resolveThreadExecutionPin = async (input: {
       ? deploymentPin
       : undefined;
   const closedProviders = await input.closedProviders?.();
+  // A named size one of the admin's deployment accounts runs pins that
+  // account, as a connection's Thread pins its connection.
+  const accountId =
+    profile.runsAs === undefined
+      ? undefined
+      : deploymentSizeAccount(deploymentOrbs, profile.adapter, profile.id);
+  if (accountId !== undefined) {
+    if (closedProviders?.has(profile.adapter) === true)
+      throw new OrbUnavailable({
+        reason: "no-provider",
+        provider: profile.adapter,
+      });
+    return deploymentAccountPin({
+      db: input.db,
+      bindings: input.bindings,
+      connectors,
+      accountId,
+      providerId: profile.adapter as ExecutionProviderId,
+      providerSize,
+    });
+  }
   const member = orbProviderSet({
     ...(closedProviders === undefined ? {} : { closedProviders }),
     deploymentProviders,
@@ -497,13 +557,14 @@ export const resolveThreadExecutionPin = async (input: {
           hiddenProviders,
           presentedDeployment: presentedDeploymentProviders(
             input.bindings,
-            input.deploymentOrbs,
+            deploymentOrbs,
           ),
         }),
     namedSizeProviders: namedSizeDeploymentProviders(
       input.bindings,
-      input.deploymentOrbs,
+      deploymentOrbs,
     ),
+    accountProviders: accountDeploymentProviders(deploymentOrbs),
     // A named size runs only on the deployment's account that names it;
     // a provider's own size never does.
   }).find(
@@ -564,6 +625,71 @@ export const resolveThreadExecutionPin = async (input: {
     runnerProfileId: profile.id,
     credentialScope: member.scope,
     credentialOwnerId: member.ownerId,
+    credentialAccount: member.account,
+    providerTemplate: target,
+  };
+};
+
+/**
+ * The pin of a Thread on one of the admin's deployment accounts: the
+ * account's connection, ready for this build, with the target its
+ * preparation made for the provider size. A connection preparing for an
+ * earlier recipe keeps serving the version it last made ready, and one left
+ * on an old recipe or stalled is started again here, so a new release never
+ * waits for an admin to open the panel.
+ */
+const deploymentAccountPin = async (input: {
+  readonly db: D1Database;
+  readonly bindings: Bindings;
+  readonly connectors: OrbProviderConnectors;
+  readonly accountId: string;
+  readonly providerId: ExecutionProviderId;
+  readonly providerSize: string;
+}): Promise<ThreadExecutionPin> => {
+  const connector = input.connectors[input.providerId];
+  const key = {
+    scope: "deployment" as const,
+    targetId: input.accountId,
+    providerId: input.providerId,
+  };
+  const found =
+    connector === undefined ? undefined : await findConnection(input.db, key);
+  if (connector === undefined || found === undefined)
+    throw new OrbUnavailable({
+      reason: "no-provider",
+      provider: input.providerId,
+    });
+  const { connection } = found;
+  const recipe = await connector.recipe();
+  // A null recipe is a restart whose first step is due.
+  const stalled =
+    (connection.recipe !== null && connection.recipe !== recipe) ||
+    (connection.status === "preparing" &&
+      Date.parse(connection.updatedAt) < Date.now() - PREPARATION_STALL_MS);
+  if (
+    stalled &&
+    connection.status !== "failed" &&
+    (await restartPreparation(input.db, connection, connector))
+  )
+    await schedulePreparation(input.bindings, key);
+  const member = connectionMember(connection, {
+    recipes: new Map([[input.providerId, recipe]]),
+    connectors: input.connectors,
+  });
+  if (member.status !== "ready")
+    throw new OrbUnavailable({
+      reason: member.status === "failed" ? "failed" : "preparing",
+    });
+  const target = member.targets?.get(input.providerSize);
+  if (target === undefined || member.account === null)
+    throw new OrbUnavailable({
+      reason: member.targets === undefined ? "preparing" : "size-unavailable",
+    });
+  return {
+    provider: input.providerId as ThreadExecutionPin["provider"],
+    runnerProfileId: input.providerSize,
+    credentialScope: "deployment",
+    credentialOwnerId: input.accountId,
     credentialAccount: member.account,
     providerTemplate: target,
   };

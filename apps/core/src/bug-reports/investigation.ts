@@ -274,7 +274,7 @@ export const investigateBugReport = async ({
       db,
       principal.userId,
       kept.reporterUserId,
-      bindings.DX_BUG_REPORT_READERS,
+      bindings,
     ))
   )
     return { kind: "not-found" };

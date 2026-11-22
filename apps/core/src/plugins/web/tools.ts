@@ -40,6 +40,7 @@ const unavailableMessages: Record<
   "capability-unavailable":
     "The current Search provider does not offer this tool.",
   "credential-unavailable": "The Search provider credential is unavailable.",
+  "balance-exhausted": "Search is out of credit.",
 };
 
 /**

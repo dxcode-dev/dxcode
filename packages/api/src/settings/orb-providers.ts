@@ -112,6 +112,12 @@ export const OrbProviderListDataSchema = Schema.Struct({
   canUpdate: Schema.Boolean,
   /** The local runtime ignores personal and workspace connections. */
   localRuntime: Schema.Boolean,
+  /**
+   * The deployment's own sentence when no Orb can start here (`resolved`
+   * is empty), such as a hosted offer whose Orbs aren't set up yet. Absent:
+   * the person connects their own provider.
+   */
+  unavailableNotice: Schema.optional(Schema.String),
   providers: Schema.Array(OrbProviderDataSchema),
   /**
    * Whether members' own connections apply on workspace projects: both the

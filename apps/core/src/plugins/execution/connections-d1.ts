@@ -12,7 +12,11 @@ import {
 import type { OrbPreparation, OrbPreparationState } from "./connector.js";
 import type { ExecutionProviderId } from "./provider.js";
 
-export type OrbConnectionScope = "personal" | "workspace";
+/**
+ * Whose account it is: a person's, a workspace's, or one the deployment's
+ * admin added (`deployment`, its target the account's own ID).
+ */
+export type OrbConnectionScope = "personal" | "workspace" | "deployment";
 
 export interface OrbConnectionKey {
   readonly scope: OrbConnectionScope;
@@ -148,7 +152,12 @@ export interface StoredOrbCredentials extends OrbConnectionKey {
  * target, or provider.
  */
 const additionalData = (key: OrbConnectionKey) => ({
-  kind: "plugin-credential",
+  // A deployment account's envelope has a kind of its own, so it can never
+  // stand in for a person's or workspace's key, or the reverse.
+  kind:
+    key.scope === "deployment"
+      ? "deployment-orb-account-credential"
+      : "plugin-credential",
   scope: key.scope,
   targetId: key.targetId,
   pluginId: "execution",

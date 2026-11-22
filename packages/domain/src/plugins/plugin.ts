@@ -29,6 +29,8 @@ export type PluginCapabilityId = typeof PluginCapabilityId.Type;
 
 /**
  * `fixture` is the local-runtime substitute; it is never configurable.
+ * `dx` is speech the deployment provides from its own upstreams
+ * (`plugins/speech/deployment-speech.ts`); people see only "dx".
  * Execution's providers are the Orb providers (`orb-providers/index.ts`),
  * `local` among them as the development provider.
  */
@@ -37,6 +39,7 @@ export const PluginProviderId = Schema.Literals([
   "fixture",
   "quickjs",
   "sarvam",
+  "dx",
   ...ORB_PROVIDER_IDS,
 ]);
 

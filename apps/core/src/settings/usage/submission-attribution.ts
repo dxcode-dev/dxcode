@@ -1,9 +1,17 @@
 import {
   USAGE_EVENT_RETENTION_DAYS,
+  type UsagePriceMetadata,
   type UsageRouteAttribution,
 } from "@dx/domain";
 
-type SubmissionUsageAttribution = UsageRouteAttribution;
+/**
+ * A submission's route, and for a dx model the deployment price it was
+ * pinned at (encoded), which prices its turns when the live configuration
+ * no longer does, such as a model the admin disabled mid-turn.
+ */
+type SubmissionUsageAttribution = UsageRouteAttribution & {
+  readonly price?: typeof UsagePriceMetadata.Encoded;
+};
 
 interface StoredSubmissionUsageAttribution extends SubmissionUsageAttribution {
   readonly threadId: string;
@@ -52,6 +60,7 @@ export const readSubmissionUsageAttribution = async (
     connectionId: stored.connectionId,
     providerId: stored.providerId,
     modelId: stored.modelId,
+    ...(stored.price === undefined ? {} : { price: stored.price }),
   };
 };
 

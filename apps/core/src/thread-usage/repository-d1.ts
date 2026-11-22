@@ -14,6 +14,11 @@ import {
   DEV_WORKERS_AI_CONNECTION_ID,
   devWorkersAiConnection,
 } from "../runtime/model-routing-dev-defaults.js";
+import {
+  DX_CONNECTION_NAME,
+  isDxConnectionId,
+  loadDeploymentModels,
+} from "../settings/model-routing/deployment-models.js";
 import { usageModelName } from "../settings/usage/display-names.js";
 import { backfillChunk, backfillRollups } from "../settings/usage/rollup-d1.js";
 import { orbSizeResources } from "./orb-sessions.js";
@@ -31,9 +36,19 @@ const CLAUDE_CODE_PROVIDER = "claude-code";
 
 /**
  * Connections the runtime composes without a model_connection row: the
- * deployment's own Workers AI binding in dev and preview stages.
+ * deployment's own Workers AI binding in dev and preview stages, and the
+ * dx connections that name no upstream (deployment-models.ts).
  */
-const SYNTHETIC_CONNECTIONS: Readonly<
+const syntheticConnection = (
+  id: string,
+):
+  | { readonly name: string; readonly kind: ThreadUsageRouteKind }
+  | undefined =>
+  isDxConnectionId(id)
+    ? { name: DX_CONNECTION_NAME, kind: "deployment" }
+    : DEV_CONNECTIONS[id];
+
+const DEV_CONNECTIONS: Readonly<
   Record<string, { readonly name: string; readonly kind: ThreadUsageRouteKind }>
 > = {
   [DEV_WORKERS_AI_CONNECTION_ID]: {
@@ -108,7 +123,7 @@ const routeKind = (row: ModelRow): ThreadUsageRouteKind => {
     row.connection_provider === CLAUDE_CODE_PROVIDER
   )
     return "claude-code";
-  const synthetic = SYNTHETIC_CONNECTIONS[row.connection_id];
+  const synthetic = syntheticConnection(row.connection_id);
   if (row.connection_kind === null && synthetic !== undefined)
     return synthetic.kind;
   switch (row.connection_kind) {
@@ -124,7 +139,7 @@ const routeKind = (row: ModelRow): ThreadUsageRouteKind => {
 
 const routeName = (row: ModelRow) =>
   row.connection_name ??
-  SYNTHETIC_CONNECTIONS[row.connection_id]?.name ??
+  syntheticConnection(row.connection_id)?.name ??
   (row.connection_id === "unresolved" ? "Unknown route" : "Removed connection");
 
 interface OrbUsageRow {
@@ -314,6 +329,8 @@ export const readThreadUsage = async (
   threadId: string,
   catalog: string | undefined,
 ): Promise<ThreadUsageData> => {
+  // dx models are named by the deployment's configuration.
+  await loadDeploymentModels(db).catch(() => undefined);
   const [ready, models, orb, context, thread] = await db.batch([
     db.prepare(
       "SELECT through_rowid >= end_rowid AS ready FROM usage_thread_rollup_backfill",
@@ -381,6 +398,7 @@ export const readThreadUsageRequests = async (
     readonly cursor?: string | undefined;
   },
 ) => {
+  await loadDeploymentModels(db).catch(() => undefined);
   const separator = query.cursor?.lastIndexOf(CURSOR_SEPARATOR) ?? -1;
   const after =
     query.cursor === undefined || separator <= 0

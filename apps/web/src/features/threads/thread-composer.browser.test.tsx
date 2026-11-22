@@ -49,6 +49,11 @@ const mountComposer = async (options?: {
       </QueryClientProvider>,
     ),
   );
+  // Attachment thumbnails load with the first file (image-attachment-previews.tsx).
+  if (options?.attachment)
+    await vi.waitUntil(
+      () => container.querySelector(".composer-attachments") !== null,
+    );
   return { container, onAbort, onRemoveAttachment, onSubmit, root };
 };
 

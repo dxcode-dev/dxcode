@@ -19,6 +19,7 @@ import { dxContextAttachments } from "./runtime/context-attachments.js";
 import { classifyRunFailure, runRetryDelayMs } from "./runtime/run-failure.js";
 import { scheduled } from "./scheduled.js";
 import { createDxModelRoutingProvider } from "./settings/model-byok/flue-provider.js";
+import { DX_PROVIDER_ID } from "./settings/model-routing/deployment-models.js";
 import {
   pendingTitleOwner,
   storeGeneratedTitle,
@@ -106,6 +107,7 @@ if (
     "cloudflare",
     "github-copilot",
     "azure-openai-responses",
+    DX_PROVIDER_ID,
   ]) {
     // dx's canonical ids for these pi providers are registered above.
     if (providerId === "cloudflare-workers-ai" || providerId === "azure")
