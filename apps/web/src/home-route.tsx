@@ -8,11 +8,11 @@ import { useNavigate } from "@tanstack/react-router";
 import * as React from "react";
 import { HomeScreen } from "./features/home/home-screen.js";
 import { MobilePullActions } from "./features/home/mobile-pull-actions.js";
+import { SetupChecklist } from "./features/home/setup-checklist.js";
 import {
   CHECKLIST,
   type ChecklistKey,
-  SetupChecklist,
-} from "./features/home/setup-checklist.js";
+} from "./features/home/setup-checklist-items.js";
 import {
   markOnboardingMutationOptions,
   onboardingQueryOptions,

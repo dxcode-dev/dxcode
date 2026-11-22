@@ -1,20 +1,13 @@
 import { UserId } from "@dx/domain";
-import { useQuery } from "@tanstack/react-query";
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { Schema } from "effect";
-import * as React from "react";
+import type * as React from "react";
 import { AuthContext } from "../../shared/auth/auth-context.js";
-import { lazyComponent } from "../../shared/stale-chunk.js";
+import { useBootQuery } from "../../shared/boot/boot-wait.js";
 import { sessionQueryOptions } from "./sign-in-queries.js";
 import { SignInUnavailable } from "./sign-in-unavailable.js";
 import { useSignOut } from "./sign-out-mutation.js";
 import { loadSignedOut } from "./signed-out-loader.js";
-
-const DxLoading = lazyComponent(() =>
-  import("../../shared/brand/dx-loading.js").then((module) => ({
-    default: module.DxLoading,
-  })),
-);
 
 // Signing out of a tab opened before a deploy asks for a chunk the deploy
 // replaced. TanStack's lazy route component, which the router's pages use,
@@ -22,15 +15,11 @@ const DxLoading = lazyComponent(() =>
 // meanwhile instead of unmounting the app.
 const SignedOut = lazyRouteComponent(loadSignedOut, "SignedOut");
 
-const loading = (
-  <React.Suspense fallback={null}>
-    <DxLoading label="Loading dx…" variant="screen" />
-  </React.Suspense>
-);
-
 /**
  * Shows the signed-out router until a session exists, then provides identity
  * to the product. A background session refetch never unmounts either side.
+ * Until the first session check answers it suspends, so the boot screen
+ * above it shows and nothing else does.
  */
 export function AuthGate({
   children,
@@ -39,7 +28,7 @@ export function AuthGate({
   readonly children: React.ReactNode;
   readonly onBeforeSignOut?: (userId: UserId) => void;
 }) {
-  const session = useQuery(sessionQueryOptions);
+  const session = useBootQuery(sessionQueryOptions);
   // Keyed on primitives: Better Auth revives the user's timestamps as Dates,
   // which structural sharing cannot reuse, so every focus refetch returns a
   // new user object even when nobody changed.
@@ -58,7 +47,6 @@ export function AuthGate({
   const context =
     identity === undefined ? undefined : { identity, logout: () => logout() };
 
-  if (session.isPending) return loading;
   if (session.isError && session.data === undefined)
     return (
       <SignInUnavailable
@@ -66,12 +54,7 @@ export function AuthGate({
         onRetry={() => void session.refetch()}
       />
     );
-  if (context === undefined)
-    return (
-      <React.Suspense fallback={loading}>
-        <SignedOut />
-      </React.Suspense>
-    );
+  if (context === undefined) return <SignedOut />;
   return (
     <AuthContext.Provider value={context}>{children}</AuthContext.Provider>
   );

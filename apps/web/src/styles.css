@@ -10793,6 +10793,29 @@ body:has(.dx-app-shell) {
 .dx-loading-screen .dx-brand-mark {
   width: min(42vw, 220px);
 }
+/* The launch's loading screen (shared/boot/boot-screen.tsx) fades in only
+   when the launch outlasts 1 s; a faster launch goes from the page background
+   straight to the page. Once shown it stays at least 500 ms (keep the delay
+   in step with BOOT_SCREEN_DELAY_MS in shared/boot/boot-wait.ts). */
+.boot-screen {
+  animation: boot-screen-in 400ms ease-in 1s both;
+}
+@keyframes boot-screen-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .boot-screen {
+    animation-duration: 1ms;
+  }
+}
+/* Until the first page paints, the body keeps the surface colour the launch
+   script painted, instead of the shell colour behind the app's frame. */
+body:has(#root:empty),
+body:has(.boot-screen) {
+  background: var(--surface);
+}
 .dx-loading-inline .dx-brand-mark {
   width: 132px;
 }

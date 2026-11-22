@@ -57,27 +57,94 @@ void details;
 );
 assert.equal(typedMatch.status, 0, `${typedMatch.stdout}${typedMatch.stderr}`);
 
-const directUseEffect = lint(
+const pluginMessages = (result, pattern) =>
+  `${result.stdout}${result.stderr}`.match(pattern)?.length ?? 0;
+
+const effectMessage = /Effects are for syncing with systems outside React/g;
+
+const directEffects = lint(
   reactFixturePath,
   `
 import * as React from "react";
-import { useEffect } from "react";
+import * as R from "react";
+import { useEffect, useInsertionEffect, useLayoutEffect as useLayout } from "react";
 export function InvalidEffects() {
-  React.useEffect(() => {}, []);
+  useEffect(() => {});
   useEffect(() => {}, []);
+  React.useEffect(() => {});
+  React.useLayoutEffect(() => {}, []);
+  R.useInsertionEffect(() => {});
+  useInsertionEffect(() => {});
+  useLayout(() => {});
   return null;
 }
 `,
 );
-assert.notEqual(directUseEffect.status, 0);
-const useEffectDiagnostics =
-  `${directUseEffect.stdout}${directUseEffect.stderr}`.match(
-    /Do not call useEffect directly in a React component/g,
-  );
-assert.equal(useEffectDiagnostics?.length, 2);
+assert.notEqual(directEffects.status, 0);
+// Three imported names, then six calls (an aliased call is caught at its import).
+assert.equal(pluginMessages(directEffects, effectMessage), 9);
 
-const pluginMessages = (result, pattern) =>
-  `${result.stdout}${result.stderr}`.match(pattern)?.length ?? 0;
+const effectInModule = lint(
+  effectFixturePath,
+  `
+import { useEffect } from "react";
+export const useTicker = (tick: () => void) => {
+  useEffect(() => {
+    const timer = setInterval(tick, 1_000);
+    return () => clearInterval(timer);
+  }, [tick]);
+};
+`,
+);
+assert.equal(pluginMessages(effectInModule, effectMessage), 2);
+
+const mountEffects = lint(
+  reactFixturePath,
+  `
+import { useState } from "react";
+declare const useMountEffect: (setup: () => void | (() => void)) => void;
+declare const navigate: (to: unknown) => Promise<void>;
+declare const router: { navigate: (to: unknown) => Promise<void> };
+declare const mutation: { mutate: () => void };
+export function DoesItsOwnWork() {
+  const [, setOpen] = useState(false);
+  useMountEffect(() => {
+    void navigate({ to: "/" });
+    void router.navigate({ to: "/" });
+    window.history.replaceState(null, "", "/");
+    history.pushState(null, "", "/");
+    void fetch("/v1/threads");
+    mutation.mutate();
+    setOpen(true);
+  });
+  useMountEffect(() => setOpen(true));
+  return null;
+}
+export function SyncsWithTheOutside() {
+  const [, setOpen] = useState(false);
+  useMountEffect(() => {
+    const onFocus = () => setOpen(true);
+    window.addEventListener("focus", onFocus);
+    const timer = setTimeout(() => void navigate({ to: "/" }), 10);
+    const observer = new ResizeObserver(function () {
+      setOpen(false);
+    });
+    return () => {
+      clearTimeout(timer);
+      observer.disconnect();
+      window.removeEventListener("focus", onFocus);
+    };
+  });
+  return <button type="button" onClick={() => setOpen(true)} />;
+}
+`,
+);
+assert.notEqual(mountEffects.status, 0);
+assert.equal(
+  pluginMessages(mountEffects, effectMessage),
+  8,
+  `${mountEffects.stdout}${mountEffects.stderr}`,
+);
 
 const manualMemo = lint(
   reactFixturePath,
@@ -154,5 +221,5 @@ for (const pattern of [
 }
 
 console.log(
-  "Biome plugins enforce typed Effect errors, no direct React useEffect, and no manual React memoization.",
+  "Biome plugins enforce typed Effect errors, no unreasoned React effects, and no manual React memoization.",
 );

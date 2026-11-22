@@ -1,11 +1,5 @@
-import {
-  type ComponentProps,
-  useId,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
-import { mountOrbRenderer } from "./orb-canvas.js";
+import { type ComponentProps, useId, useState } from "react";
+import { useOrbRenderer } from "../hooks/use-orb-renderer.js";
 import {
   ORB_IDLE_ARTWORK,
   ORB_IDLE_TRANSFORM,
@@ -91,21 +85,7 @@ export const OrbIcon = ({
   ...props
 }: OrbIconProps) => {
   const unreadMask = useId();
-  const renderer = useRef<ReturnType<typeof mountOrbRenderer>>(undefined);
-  const attach = (node: SVGGElement | null) => {
-    if (!node) return;
-    const motion = mountOrbRenderer(node);
-    renderer.current = motion;
-    return () => {
-      motion?.dispose();
-      renderer.current = undefined;
-    };
-  };
-  // Synchronize the persistent imperative SVG renderer before paint. Keeping
-  // its DOM node across status changes preserves angular position and velocity.
-  useLayoutEffect(() => {
-    renderer.current?.update({ activityStatus, reducedMotion, unread });
-  }, [activityStatus, reducedMotion, unread]);
+  const attach = useOrbRenderer({ activityStatus, reducedMotion, unread });
   const hidden = ariaHidden !== false && ariaHidden !== "false";
   // Once it works, the Orb keeps its animated artwork, so it settles back
   // to rest instead of snapping to the static image.

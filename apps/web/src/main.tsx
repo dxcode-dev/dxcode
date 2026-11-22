@@ -12,6 +12,8 @@ import {
 import { AccountThemeProvider } from "./features/settings/account/account-theme-provider.js";
 import { peekBootSessionRead } from "./shared/auth/boot-session.js";
 import { onSessionEnded } from "./shared/auth/session-ended.js";
+import { BootScreen } from "./shared/boot/boot-screen.js";
+import { forgetRouters } from "./shared/boot/boot-wait.js";
 import { installClientDiagnostics } from "./shared/diagnostics/client-diagnostics.js";
 import { queryClient } from "./shared/query/query-client.js";
 import { lazyComponent } from "./shared/stale-chunk.js";
@@ -59,6 +61,7 @@ const discardUnsavedThreadDrafts = () =>
   );
 
 const clearDraftsBeforeSignOut = (userId: UserId) => {
+  forgetRouters();
   forgetShellPrefetch();
   queryClient.clear();
   discardUnsavedThreadDrafts();
@@ -75,6 +78,7 @@ onSessionEnded(() => {
   const userId = queryClient.getQueryData(sessionQueryOptions.queryKey)?.user
     .id;
   if (userId === undefined) return;
+  forgetRouters();
   forgetShellPrefetch();
   queryClient.setQueryData(sessionQueryOptions.queryKey, null);
   discardUnsavedThreadDrafts();
@@ -88,18 +92,23 @@ onSessionEnded(() => {
   });
 });
 
-/** Composes the shared providers and session gate for the dx web client. */
+/**
+ * Composes the shared providers and session gate for the dx web client.
+ * Everything the first page waits for (the session, the account's theme, the
+ * signed-out or signed-in code, the router's first load) suspends into one
+ * boundary, so a launch shows one loading screen and then the right page.
+ */
 export function Application() {
   return (
     <QueryClientProvider client={queryClient}>
       <FallbackTitle />
-      <AuthGate onBeforeSignOut={clearDraftsBeforeSignOut}>
-        <Suspense fallback={null}>
+      <Suspense fallback={<BootScreen />}>
+        <AuthGate onBeforeSignOut={clearDraftsBeforeSignOut}>
           <AccountThemeProvider>
             <AuthenticatedApplication queryClient={queryClient} />
           </AccountThemeProvider>
-        </Suspense>
-      </AuthGate>
+        </AuthGate>
+      </Suspense>
     </QueryClientProvider>
   );
 }

@@ -1,9 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import { DxWordmark } from "../../shared/brand/dx-wordmark.js";
+import { Link2Off } from "lucide-react";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { cn } from "../../shared/utils.js";
-import "./sign-in.css";
+import { AuthLayout, AuthNotice } from "./auth-layout.js";
+import { AuthShowcase } from "./auth-showcase.js";
 
 /**
  * Signed-out `/join/<token>` when the invite cannot be used: it says why,
@@ -18,35 +19,35 @@ export function InviteUnavailablePage({
   readonly onRetry?: () => void;
 }) {
   return (
-    <main className="sign-in-page">
-      <div className="sign-in-column">
-        <DxWordmark />
-        <h1 className="sign-in-title">Invite unavailable</h1>
-        <p className="sign-in-subtitle" role={onRetry ? "alert" : undefined}>
-          {message}
-        </p>
-        <section className="sign-in-card" aria-label="Invite unavailable">
-          {onRetry === undefined ? null : (
-            <Button
-              size="lg"
-              block
-              className="sign-in-primary"
-              onClick={onRetry}
-            >
-              Try again
-            </Button>
-          )}
-          <Link
-            to="/"
-            className={cn(
-              buttonVariants({ variant: "outline", size: "lg", block: true }),
-              "sign-in-provider",
+    <AuthLayout
+      aside={<AuthShowcase />}
+      screen="invite-unavailable"
+      title="Invite unavailable"
+      icon={<Link2Off />}
+      tone="danger"
+    >
+      <AuthNotice
+        actions={
+          <>
+            {onRetry === undefined ? null : (
+              <Button size="lg" block className="auth-submit" onClick={onRetry}>
+                Try again
+              </Button>
             )}
-          >
-            Go to dx
-          </Link>
-        </section>
-      </div>
-    </main>
+            <Link
+              to="/"
+              className={cn(
+                buttonVariants({ variant: "outline", size: "lg", block: true }),
+                "auth-provider",
+              )}
+            >
+              Go to dx
+            </Link>
+          </>
+        }
+      >
+        <p role={onRetry ? "alert" : undefined}>{message}</p>
+      </AuthNotice>
+    </AuthLayout>
   );
 }

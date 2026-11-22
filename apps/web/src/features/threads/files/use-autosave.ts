@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useEventSubscription } from "../../../shared/hooks/use-event-subscription.js";
 
 /** How long typing must pause before Autosave Files writes the edit. */
 export const AUTOSAVE_DELAY_MS = 5_000;
@@ -14,13 +15,14 @@ class AutosaveTimer {
   cancel() {
     window.clearTimeout(this.timer);
   }
-  subscribe(listener: () => void) {
+  /** Bound, so it can be handed to `useEventSubscription` as it is. */
+  readonly subscribe = (listener: () => void) => {
     this.listener = listener;
     return () => {
       this.listener = undefined;
       this.cancel();
     };
-  }
+  };
 }
 
 /**
@@ -31,10 +33,9 @@ class AutosaveTimer {
  */
 export const useAutosave = (save: () => void, busy: () => boolean) => {
   const [timer] = React.useState(() => new AutosaveTimer());
-  const fire = React.useEffectEvent(() => {
+  useEventSubscription<void>(timer.subscribe, () => {
     if (busy()) timer.schedule();
     else save();
   });
-  React.useEffect(() => timer.subscribe(() => fire()), [timer]);
   return timer;
 };

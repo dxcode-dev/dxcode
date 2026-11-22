@@ -1,6 +1,7 @@
 import {
   DeleteSpacePostResponseSchema,
   ListSpacePostsResponseSchema,
+  SPACE_POST_ID_PATTERN,
   SPACE_POSTS_DEFAULT_LIMIT,
   type SpacePost,
   type SpacePostReaction,
@@ -8,7 +9,7 @@ import {
   type SpacePostRevision,
   SpacePostRevisionsResponseSchema,
 } from "@dx/api";
-import type { ThreadId, UserId } from "@dx/domain";
+import { ThreadId, type UserId } from "@dx/domain";
 import {
   type InfiniteData,
   infiniteQueryOptions,
@@ -18,6 +19,7 @@ import {
   useMutationState,
   useQueryClient,
 } from "@tanstack/react-query";
+import { Option, Schema } from "effect";
 import { request } from "../../../shared/api/client.js";
 import { toggledReactions } from "../../../shared/reactions/reaction-set.js";
 import { THREAD_FRESHNESS_SLO_MS } from "../../threads/thread-queries.js";
@@ -348,4 +350,52 @@ export const useSetSpacePostReaction = (
     onSuccess: (post) => updateCachedPost(client, key, post.id, () => post),
     onError: () => client.invalidateQueries({ queryKey: key }),
   });
+};
+
+/** At most this many older pages load to reach a linked post. */
+const LINKED_POST_PAGE_LIMIT = 50;
+
+/**
+ * Loads the Space's older posts until `postId` is among them, so a
+ * mention's link (`?message=pst_…`) can open the chat at its post. The
+ * Thread route starts it on entering the link (`spaceThread` and `postId`
+ * as the URL has them); the chat scrolls to the post once it is loaded.
+ */
+export const loadLinkedSpacePost = async (
+  client: QueryClient,
+  userId: UserId,
+  spaceThread: string,
+  postId: string,
+) => {
+  const spaceThreadId = Schema.decodeUnknownOption(ThreadId)(spaceThread);
+  if (Option.isNone(spaceThreadId) || !SPACE_POST_ID_PATTERN.test(postId))
+    return;
+  const options = spacePostsQueryOptions(userId, spaceThreadId.value);
+  let data: PostsCache | undefined = await client
+    .ensureInfiniteQueryData(options)
+    .catch(() => undefined);
+  for (
+    let page = 0;
+    data !== undefined &&
+    page < LINKED_POST_PAGE_LIMIT &&
+    !flattenSpacePosts(data).some(({ id }) => id === postId);
+    page++
+  ) {
+    // The next older page, as the chat's Earlier Posts reads it.
+    const before = data.pages.at(-1)?.nextBefore ?? undefined;
+    if (before === undefined) return;
+    const older = await listPosts(spaceThreadId.value, before).catch(
+      () => undefined,
+    );
+    if (older === undefined) return;
+    data = client.setQueryData<PostsCache>(options.queryKey, (current) =>
+      current === undefined ||
+      current.pageParams.at(-1) !== data?.pageParams.at(-1)
+        ? current
+        : {
+            pages: [...current.pages, older],
+            pageParams: [...current.pageParams, before],
+          },
+    );
+  }
 };

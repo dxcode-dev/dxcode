@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
-import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import { settle } from "../../../shared/settle.js";
 import { Button } from "../../../shared/ui/button.js";
 import {
@@ -23,6 +22,7 @@ import {
   beginMcpServerSignIn,
   mcpServersMutationOptions,
 } from "./mcp-mutations.js";
+import { mcpOAuthReturn } from "./mcp-oauth-return.js";
 import {
   type McpServerData,
   type McpServersTarget,
@@ -61,18 +61,6 @@ const matches = (entry: IntegrationEntry, query: string) =>
     .toLowerCase()
     .split(/\s+/)
     .every((word) => entry.search.toLowerCase().includes(word));
-
-/** What the OAuth callback left in the URL, read once and then removed. */
-const takeOAuthReturn = () => {
-  const params = new URLSearchParams(window.location.search);
-  const status = params.get("mcpStatus");
-  if (status === null) return undefined;
-  return {
-    serverId: params.get("mcp") ?? undefined,
-    connected: status === "connected",
-    message: params.get("mcpMessage") ?? undefined,
-  };
-};
 
 function ConnectDialog({
   template,
@@ -306,7 +294,8 @@ export function McpIntegrations({
   const mutation = useMutation(
     mcpServersMutationOptions(queryClient, identity.id, target),
   );
-  const [returned] = React.useState(takeOAuthReturn);
+  // Core's OAuth callback reported this; the route took it from the URL.
+  const [returned] = React.useState(mcpOAuthReturn);
   const [status, setStatus] = React.useState<string | undefined>(() =>
     returned === undefined
       ? undefined
@@ -320,13 +309,6 @@ export function McpIntegrations({
     readonly template?: McpTemplate;
   }>();
   const [openServerId, setOpenServerId] = React.useState(returned?.serverId);
-  useMountEffect(() => {
-    if (returned === undefined) return;
-    const url = new URL(window.location.href);
-    for (const key of ["mcp", "mcpStatus", "mcpMessage"])
-      url.searchParams.delete(key);
-    window.history.replaceState(window.history.state, "", url);
-  });
   const run: McpRun = async (action, message, onFieldErrors) => {
     setBusy(true);
     setStatus(undefined);

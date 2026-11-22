@@ -1,3 +1,6 @@
+// The wordmark is set in this face; without it the glyph falls back to the
+// system italic, as the sign-in page did.
+import "@fontsource/dm-sans/700-italic.css";
 import "./brand.css";
 
 const dxGlyph = <span className="dx-brand-wordmark-glyph">dx</span>;

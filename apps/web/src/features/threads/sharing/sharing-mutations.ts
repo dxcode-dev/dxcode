@@ -7,6 +7,7 @@ import type {
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
 import {
+  MutationObserver,
   type QueryClient,
   useMutation,
   useQueryClient,
@@ -16,7 +17,11 @@ import {
   setThreadFollowing,
   updateThreadSharing,
 } from "../../../shared/api/client.js";
-import { invalidateThreadQueries, threadKeys } from "../thread-queries.js";
+import {
+  invalidateThreadQueries,
+  threadKeys,
+  threadQueryOptions,
+} from "../thread-queries.js";
 
 const applySharing = (
   client: QueryClient,
@@ -64,22 +69,55 @@ export const useUpdateThreadSharing = (userId: UserId, threadId: ThreadId) => {
  * A member follows or unfollows a shared Thread: followed Threads show in
  * their sidebar under the Thread's Project.
  */
+const threadFollowingMutationOptions = (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => ({
+  mutationKey: ["threads", userId, "follow", threadId],
+  mutationFn: (following: boolean) => setThreadFollowing(threadId, following),
+  onSuccess: async ({ following }: { readonly following: boolean }) => {
+    client.setQueryData<ThreadDetailData>(
+      threadKeys.detail(userId, threadId),
+      (current) =>
+        current === undefined || current.access === "owner"
+          ? current
+          : { ...current, following },
+    );
+    await client.invalidateQueries({ queryKey: threadKeys.shared(userId) });
+  },
+});
+
 export const useSetThreadFollowing = (userId: UserId, threadId: ThreadId) => {
   const client = useQueryClient();
-  return useMutation({
-    mutationKey: ["threads", userId, "follow", threadId],
-    mutationFn: (following: boolean) => setThreadFollowing(threadId, following),
-    onSuccess: async ({ following }) => {
-      client.setQueryData<ThreadDetailData>(
-        threadKeys.detail(userId, threadId),
-        (current) =>
-          current === undefined || current.access === "owner"
-            ? current
-            : { ...current, following },
-      );
-      await client.invalidateQueries({ queryKey: threadKeys.shared(userId) });
-    },
-  });
+  return useMutation(threadFollowingMutationOptions(client, userId, threadId));
+};
+
+/**
+ * Opening another member's shared Thread follows it. The Thread route calls
+ * this on entering a Thread, once its detail says who it belongs to.
+ */
+export const followOpenedThread = async (
+  client: QueryClient,
+  userId: UserId,
+  threadId: ThreadId,
+) => {
+  const thread = await client
+    .ensureQueryData(threadQueryOptions(userId, threadId))
+    .catch(() => undefined);
+  if (
+    thread === undefined ||
+    thread.access === undefined ||
+    thread.access === "owner" ||
+    thread.following !== false
+  )
+    return;
+  await new MutationObserver(
+    client,
+    threadFollowingMutationOptions(client, userId, threadId),
+  )
+    .mutate(true)
+    .catch(() => undefined);
 };
 
 /** Shows the mode a message switched the Thread to before realtime does. */

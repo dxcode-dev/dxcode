@@ -56,6 +56,7 @@ import { ThreadArchiveContext } from "../../shared/thread-archive.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { useOpenViewCommands } from "../threads/panes/thread-page-layout.js";
 import { SlotComposer } from "../threads/slot-composer.js";
+import { openLinkedSpacePost } from "../threads/thread-route-links.js";
 import { invalidateSpaceArtifacts } from "./space-cache-queries.js";
 import { spaceDetailsStorageKey } from "./space-details-store.js";
 import {
@@ -610,6 +611,15 @@ const mount = async (
   const thread = createRoute({
     getParentRoute: () => product,
     path: "/threads/$threadId",
+    // As the app's Thread route: a mention's link loads older posts until
+    // its post arrives.
+    onEnter: ({ params, search }) =>
+      openLinkedSpacePost(
+        client,
+        owner,
+        params.threadId,
+        (search as { readonly message?: string }).message,
+      ),
     component: () => (
       <SpaceWorkspace
         renderThread={(slots) => {

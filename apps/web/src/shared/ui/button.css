@@ -129,6 +129,7 @@
   /* Busy: an action under way, such as sending or recording; muted fill,
      full strength even while disabled. */
   .dx-button[data-busy] {
+    color: var(--foreground);
     background: var(--muted);
     opacity: 1;
   }

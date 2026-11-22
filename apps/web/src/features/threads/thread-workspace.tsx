@@ -90,10 +90,7 @@ import {
 import type { ComposerMentions } from "./sharing/chat-composer.js";
 import { MessageAuthorsProvider } from "./sharing/message-authors.js";
 import { ThreadMessageReactions } from "./sharing/message-reactions.js";
-import {
-  setConversationMode,
-  useSetThreadFollowing,
-} from "./sharing/sharing-mutations.js";
+import { setConversationMode } from "./sharing/sharing-mutations.js";
 import { threadMembersQueryOptions } from "./sharing/thread-chat-queries.js";
 import { ShipOutcomeActions } from "./ship-outcome.js";
 import { useThreadDraftValue } from "./thread-draft-queries.js";
@@ -715,18 +712,6 @@ function useMessageEdit(
   };
 }
 
-/** Opening another member's shared Thread follows it. */
-function useFollowOnOpen(thread: ThreadDetailData, viewerId: UserId) {
-  const follow = useSetThreadFollowing(viewerId, thread.id);
-  const shouldFollow =
-    thread.access !== undefined &&
-    thread.access !== "owner" &&
-    thread.following === false;
-  useMountEffect(() => {
-    if (shouldFollow) follow.mutate(true);
-  });
-}
-
 /** Viewers of a shared Thread get a notice instead of the composer. */
 const sharedAgentPanelProps = (thread: ThreadDetailData) => {
   const access = thread.access ?? "owner";
@@ -1262,7 +1247,6 @@ function ThreadSessionContent({
   const openShare = () => setShareOpen(true);
   const mentions = useComposerMentions(thread, identity.id, openShare);
   const messageEdit = useMessageEdit(thread, identity.id);
-  useFollowOnOpen(thread, identity.id);
   const [transcriptAccess] = React.useState(createTranscriptAccess);
   const dispatch = usePaneLayoutDispatch(thread.id);
   const readLayout = usePaneLayoutReader(thread.id);

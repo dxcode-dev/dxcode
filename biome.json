@@ -97,8 +97,17 @@
       "plugins": ["./scripts/biome/no-manual-effect-error-tag.grit"]
     },
     {
-      "includes": ["apps/web/src/**/*.tsx", "scripts/fixtures/biome/*.tsx"],
-      "plugins": ["./scripts/biome/no-direct-react-use-effect.grit"]
+      "includes": [
+        "apps/web/src/**/*.ts",
+        "apps/web/src/**/*.tsx",
+        "!apps/web/src/**/*.test.ts",
+        "!apps/web/src/**/*.test.tsx",
+        "!apps/web/src/**/*.stories.tsx",
+        "!apps/web/src/shared/hooks/**",
+        "scripts/fixtures/biome/*.ts",
+        "scripts/fixtures/biome/*.tsx"
+      ],
+      "plugins": ["./scripts/biome/no-unreasoned-effect.grit"]
     },
     {
       "includes": [

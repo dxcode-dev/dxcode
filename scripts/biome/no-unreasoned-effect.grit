@@ -1,0 +1,68 @@
+engine biome(1.0)
+language js(typescript, jsx)
+
+// Effects outside src/shared/hooks, and useMountEffect setups that do a
+// component's own work (navigate, set state, fetch). biome.json scopes it.
+or {
+  or {
+    `useEffect($...)` as $match,
+    `useLayoutEffect($...)` as $match,
+    `useInsertionEffect($...)` as $match,
+    `$namespace.useEffect($...)` as $match,
+    `$namespace.useLayoutEffect($...)` as $match,
+    `$namespace.useInsertionEffect($...)` as $match
+  } where {
+    register_diagnostic(span=$match, message="Effects are for syncing with systems outside React. Derive the value while rendering; do user-triggered work in the event handler; reset state with `key`; read external stores with `useSyncExternalStore`; load data with a TanStack Query option or a route loader; redirect in `beforeLoad`. If this code really syncs with a system outside React (a DOM API, socket, timer, observer, or imperative library), use `useMountEffect` for one-time setup, or a hook in `src/shared/hooks/` whose doc comment names that system.", severity="error")
+  },
+  or {
+    JsShorthandNamedImportSpecifier() as $match where {
+      $match <: or {
+        r"useEffect",
+        r"useLayoutEffect",
+        r"useInsertionEffect"
+      }
+    },
+    JsNamedImportSpecifier() as $match where {
+      $match <: or {
+        r"useEffect\s+as\s+\w+",
+        r"useLayoutEffect\s+as\s+\w+",
+        r"useInsertionEffect\s+as\s+\w+"
+      }
+    }
+  } where {
+    $match <: within JsImport() as $import ,
+    $import <: contains `"react"`,
+    register_diagnostic(span=$match, message="Effects are for syncing with systems outside React. Derive the value while rendering; do user-triggered work in the event handler; reset state with `key`; read external stores with `useSyncExternalStore`; load data with a TanStack Query option or a route loader; redirect in `beforeLoad`. If this code really syncs with a system outside React (a DOM API, socket, timer, observer, or imperative library), use `useMountEffect` for one-time setup, or a hook in `src/shared/hooks/` whose doc comment names that system.", severity="error")
+  },
+  `useMountEffect($setup)` where {
+    $setup <: or {
+      `() => { $body }`,
+      `async () => { $body }`,
+      `() => $body`,
+      `async () => $body`
+    },
+    $body <: contains bubble or {
+      `navigate($...)`,
+      `$owner.navigate($...)`,
+      `history.replaceState($...)`,
+      `history.pushState($...)`,
+      `$owner.history.replaceState($...)`,
+      `$owner.history.pushState($...)`,
+      `fetch($...)`,
+      `$owner.mutate($...)`,
+      `$setter($...)` where {
+        $setter <: r"set[A-Z]\w*",
+        not $setter <: or {
+          `setTimeout`,
+          `setInterval`,
+          `setImmediate`
+        }
+      }
+    } as $work where {
+      register_diagnostic(span=$work, message="Effects are for syncing with systems outside React. Derive the value while rendering; do user-triggered work in the event handler; reset state with `key`; read external stores with `useSyncExternalStore`; load data with a TanStack Query option or a route loader; redirect in `beforeLoad`. If this code really syncs with a system outside React (a DOM API, socket, timer, observer, or imperative library), use `useMountEffect` for one-time setup, or a hook in `src/shared/hooks/` whose doc comment names that system.", severity="error")
+    } until or {
+      JsArrowFunctionExpression(),
+      JsFunctionExpression()
+    }
+  }
+}

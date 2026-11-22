@@ -1,16 +1,10 @@
 import type { SpaceData } from "@dx/api";
-import {
-  parseCommentLinkId,
-  parseMessageAttachments,
-  SPACE_POST_ID_PATTERN,
-} from "@dx/api";
-import type { ThreadId } from "@dx/domain";
+import { parseMessageAttachments, SPACE_POST_ID_PATTERN } from "@dx/api";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useSearch } from "@tanstack/react-router";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { ComposerSlot } from "../../shared/composer/composer-slot.js";
-import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { Button } from "../../shared/ui/button.js";
 import { SpaceCatchUpCard } from "./cards/catch-up-card.js";
 import type { CommentableMessage } from "./comments/message-comments.js";
@@ -43,42 +37,6 @@ const commentable = (
   sentAt: new Date(postTime(post.createdAt)).toISOString(),
 });
 
-/** Reads the next older page once, as the linked post is not loaded yet. */
-function LoadOlderPosts({ load }: { readonly load: () => void }) {
-  useMountEffect(load);
-  return null;
-}
-
-/**
- * Turns a comment's link into its post's open Comments panel, with the
- * comment to bring into view, once.
- */
-function OpenCommentLink({
-  spaceThreadId,
-  postId,
-  commentId,
-}: {
-  readonly spaceThreadId: ThreadId;
-  readonly postId: string;
-  readonly commentId: string;
-}) {
-  const navigate = useNavigate();
-  useMountEffect(() => {
-    void navigate({
-      to: "/threads/$threadId",
-      params: { threadId: spaceThreadId },
-      search: ({ message: _message, ...rest }: Record<string, unknown>) => ({
-        ...rest,
-        comments: postId,
-        comment: commentId,
-      }),
-      replace: true,
-    });
-  });
-  return null;
-}
-
-/** Opens comments over the chat; the Space route supplies who is typing. */
 export type RenderSpaceComments = (input: {
   readonly findMessage: (messageId: string) => CommentableMessage | undefined;
 }) => React.ReactNode;
@@ -110,8 +68,9 @@ export function SpaceChat({
   const archived = space.lifecycleState === "archived";
   const items = flattenSpacePosts(posts.data);
   const pending = stillSending(sending, items, identity.id);
-  // `?message=pst_…`, a mention's link: the chat opens at that post, loading
-  // older pages until it arrives, and flashes it once.
+  // `?message=pst_…`, a mention's link: the chat opens at that post and
+  // flashes it once. The Thread route loads older pages until it arrives,
+  // and turns a comment's link (`pst_….<hex>`) into its Comments panel.
   const linked = useSearch({
     strict: false,
     select: (search) => (search as { readonly message?: unknown }).message,
@@ -125,10 +84,6 @@ export function SpaceChat({
       : undefined;
   const linkLoaded =
     focusPostId === undefined || items.some(({ id }) => id === focusPostId);
-  // A comment's link (`pst_….<hex>`): that post's Comments panel, open at
-  // the comment.
-  const commentLink =
-    typeof linked === "string" ? parseCommentLinkId(linked) : undefined;
   const findMessage = (messageId: string) => {
     const post = items.find(({ id }) => id === messageId);
     return post === undefined ? undefined : commentable(space, post);
@@ -139,20 +94,6 @@ export function SpaceChat({
           posts arrive. */}
       <div className="space-chat-scroll">
         <div className="space-chat-content" aria-busy={posts.isPending}>
-          {commentLink === undefined ? null : (
-            <OpenCommentLink
-              key={`${commentLink.postId}:${commentLink.commentId}`}
-              spaceThreadId={space.threadId}
-              postId={commentLink.postId}
-              commentId={commentLink.commentId}
-            />
-          )}
-          {!linkLoaded && posts.hasNextPage && !posts.isFetchingNextPage ? (
-            <LoadOlderPosts
-              key={posts.data?.pages.length ?? 0}
-              load={() => void posts.fetchNextPage()}
-            />
-          ) : null}
           {posts.hasNextPage ? (
             <div className="space-chat-earlier">
               <Button

@@ -21,12 +21,14 @@ import {
   createRoute,
   createRouter,
   RouterProvider,
+  redirect,
 } from "@tanstack/react-router";
 import * as React from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.js";
+import { threadLinkRedirect } from "./features/threads/thread-link-redirect.js";
 import { AuthContext } from "./shared/auth/auth-context.js";
 import { createQueryClient } from "./shared/query/query-client.js";
 import { SpaceRoute } from "./space-route.js";
@@ -374,6 +376,15 @@ const mount = async (initialEntry = `/threads/${SPACE}`) => {
   const thread = createRoute({
     getParentRoute: () => product,
     path: "/threads/$threadId",
+    // As the app's Thread route: a comment's link opens its Comments panel.
+    beforeLoad: ({ location, preload, search }) => {
+      const href = threadLinkRedirect({
+        href: location.href,
+        message: (search as { readonly message?: string }).message,
+        preload,
+      });
+      if (href !== undefined) throw redirect({ href, replace: true });
+    },
     validateSearch: (search: Record<string, unknown>) => ({
       ...(typeof search.comments === "string"
         ? { comments: search.comments }

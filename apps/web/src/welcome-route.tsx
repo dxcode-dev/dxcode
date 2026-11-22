@@ -16,18 +16,20 @@ import {
   CodeStep,
   type CodeStepState,
   FirstThreadStep,
-  INVITED_STEPS,
   JoinStep,
   type ModelPick,
   ModelStep,
   type ModelStepState,
-  NEW_STEPS,
   OnboardingFrame,
   ProjectsStep,
   type ProviderStatus,
   WelcomeStep,
 } from "./features/onboarding/onboarding.js";
 import { markOnboardingMutationOptions } from "./features/onboarding/onboarding-queries.js";
+import {
+  INVITED_STEPS,
+  NEW_STEPS,
+} from "./features/onboarding/onboarding-steps.js";
 import { StarterTasks } from "./features/onboarding/onboarding-tour.js";
 import { projectsQueryOptions } from "./features/projects/project-queries.js";
 import { ProjectRepositoryIcon } from "./features/projects/project-repository-icon.js";
@@ -105,6 +107,140 @@ const allProjects = (
   pages: ReadonlyArray<{ items: ReadonlyArray<ProjectData> }> | undefined,
 ) => (pages ?? []).flatMap((page) => page.items);
 
+type WelcomeDialog = "claude" | "copilot" | "project";
+type ModelChoice = {
+  readonly connectionScope?: string;
+  readonly connectionKind?: string;
+  readonly connectionName: string;
+};
+
+/** Model: the person's own connection, else the workspace's, else dx's. */
+const modelStepState = (
+  models: ReadonlyArray<ModelChoice>,
+  workspace: { readonly displayName: string } | undefined,
+  dialog: WelcomeDialog | undefined,
+): ModelStepState => {
+  const own = models.find(
+    (model) =>
+      model.connectionScope !== "workspace" &&
+      model.connectionKind !== "deployment",
+  );
+  if (own !== undefined)
+    return { kind: "connected", connection: own.connectionName };
+  if (
+    workspace !== undefined &&
+    models.some((model) => model.connectionScope === "workspace")
+  )
+    return { kind: "workspace", workspace: workspace.displayName };
+  if (models.some((model) => model.connectionKind === "deployment"))
+    return { kind: "included" };
+  return {
+    kind: "choose",
+    picked: dialog === "claude" || dialog === "copilot" ? dialog : undefined,
+  };
+};
+
+const githubProviderStatus = (
+  github:
+    | {
+        readonly configured: boolean;
+        readonly grants: ReadonlyArray<{
+          readonly status: string;
+          readonly installationStatus?: string;
+          readonly account: { readonly login: string };
+        }>;
+      }
+    | undefined,
+): ProviderStatus | undefined => {
+  if (github === undefined) return undefined;
+  if (!github.configured) return { kind: "unconfigured" };
+  if (
+    github.grants.some(
+      (grant) =>
+        grant.status === "active" && grant.installationStatus === "active",
+    )
+  )
+    return {
+      kind: "connected",
+      account: `@${github.grants.find((grant) => grant.status === "active")?.account.login ?? ""}`,
+    };
+  return { kind: "available" };
+};
+
+const bitbucketProviderStatus = (
+  bitbucket:
+    | {
+        readonly configured: boolean;
+        readonly connection?: {
+          readonly status: string;
+          readonly accountName: string;
+        } | null;
+      }
+    | undefined,
+): ProviderStatus | undefined => {
+  if (bitbucket === undefined) return undefined;
+  if (!bitbucket.configured) return { kind: "unconfigured" };
+  if (bitbucket.connection?.status === "active")
+    return { kind: "connected", account: bitbucket.connection.accountName };
+  return { kind: "available" };
+};
+
+/** A step's buttons: the secondary ones, then the primary one. */
+const actions = (primary: React.ReactNode, secondary?: React.ReactNode) => (
+  <div className="onboarding-actions">
+    {secondary}
+    {primary}
+  </div>
+);
+
+/** The dialogs the steps open: Claude, Copilot, or a new project. */
+function WelcomeDialogs({
+  dialog,
+  onDialogChange,
+  onConnected,
+  onCreated,
+}: {
+  readonly dialog: WelcomeDialog | undefined;
+  readonly onDialogChange: (dialog: WelcomeDialog | undefined) => void;
+  readonly onConnected: () => void;
+  readonly onCreated: (project: ProjectData) => void;
+}) {
+  return (
+    <React.Suspense fallback={null}>
+      {dialog === "claude" ? (
+        <ClaudeConnectDialog
+          target={{ scope: "personal" }}
+          name="Claude Pro/Max"
+          onClose={() => onDialogChange(undefined)}
+        />
+      ) : dialog === "copilot" ? (
+        <CopilotConnectDialog
+          open
+          onClose={() => onDialogChange(undefined)}
+          onConnected={() => {
+            onConnected();
+            onDialogChange(undefined);
+          }}
+        />
+      ) : dialog === "project" ? (
+        // The dialog's own trigger button stays hidden; the steps open it.
+        <div className="onboarding-new-project">
+          <NewProject
+            open
+            onOpenChange={(open) =>
+              onDialogChange(open ? "project" : undefined)
+            }
+            onCreated={(project) => {
+              onCreated(project);
+              onDialogChange(undefined);
+            }}
+          />
+        </div>
+      ) : null}
+    </React.Suspense>
+  );
+}
+
 /**
  * `/welcome`: a new account's setup. A person who joined a workspace sees it
  * first, then Model (skipped when the workspace or deployment serves models),
@@ -131,9 +267,7 @@ export function WelcomePage() {
   );
 
   const [step, setStep] = React.useState<Step>(search.step ?? "intro");
-  const [dialog, setDialog] = React.useState<
-    "claude" | "copilot" | "project"
-  >();
+  const [dialog, setDialog] = React.useState<WelcomeDialog>();
   const [waiting, setWaiting] = React.useState<"github" | "bitbucket">();
   const [created, setCreated] = React.useState<ProjectData>();
   const [chosen, setChosen] = React.useState<string>();
@@ -155,28 +289,11 @@ export function WelcomePage() {
     thread: "First thread",
   };
 
-  // Model: the person's own connection, else the workspace's, else dx's.
-  const models = choices.data?.models ?? [];
-  const own = models.find(
-    (model) =>
-      model.connectionScope !== "workspace" &&
-      model.connectionKind !== "deployment",
+  const modelState = modelStepState(
+    choices.data?.models ?? [],
+    workspace,
+    dialog,
   );
-  const modelState: ModelStepState =
-    own !== undefined
-      ? { kind: "connected", connection: own.connectionName }
-      : workspace !== undefined &&
-          models.some((model) => model.connectionScope === "workspace")
-        ? { kind: "workspace", workspace: workspace.displayName }
-        : models.some((model) => model.connectionKind === "deployment")
-          ? { kind: "included" }
-          : {
-              kind: "choose",
-              picked:
-                dialog === "claude" || dialog === "copilot"
-                  ? dialog
-                  : undefined,
-            };
   const pickModel = (pick: ModelPick) => {
     if (pick === "api-key")
       void navigate({
@@ -195,32 +312,8 @@ export function WelcomePage() {
       : listed.filter((project) => project.workspaceId === workspace.id);
   const ownProject =
     created ?? listed.find((project) => project.workspaceId === undefined);
-  const githubStatus: ProviderStatus | undefined =
-    github.data === undefined
-      ? undefined
-      : !github.data.configured
-        ? { kind: "unconfigured" }
-        : github.data.grants.some(
-              (grant) =>
-                grant.status === "active" &&
-                grant.installationStatus === "active",
-            )
-          ? {
-              kind: "connected",
-              account: `@${github.data.grants.find((grant) => grant.status === "active")?.account.login ?? ""}`,
-            }
-          : { kind: "available" };
-  const bitbucketStatus: ProviderStatus | undefined =
-    bitbucket.data === undefined
-      ? undefined
-      : !bitbucket.data.configured
-        ? { kind: "unconfigured" }
-        : bitbucket.data.connection?.status === "active"
-          ? {
-              kind: "connected",
-              account: bitbucket.data.connection.accountName,
-            }
-          : { kind: "available" };
+  const githubStatus = githubProviderStatus(github.data);
+  const bitbucketStatus = bitbucketProviderStatus(bitbucket.data);
   const codeState: CodeStepState =
     ownProject !== undefined
       ? {
@@ -283,12 +376,6 @@ export function WelcomePage() {
     );
 
   const back = (to: Step) => () => setStep(to);
-  const actions = (primary: React.ReactNode, secondary?: React.ReactNode) => (
-    <div className="onboarding-actions">
-      {secondary}
-      {primary}
-    </div>
-  );
 
   let content: React.ReactNode;
   let footer: React.ReactNode;
@@ -386,36 +473,12 @@ export function WelcomePage() {
       >
         {content}
       </OnboardingFrame>
-      <React.Suspense fallback={null}>
-        {dialog === "claude" ? (
-          <ClaudeConnectDialog
-            target={{ scope: "personal" }}
-            name="Claude Pro/Max"
-            onClose={() => setDialog(undefined)}
-          />
-        ) : dialog === "copilot" ? (
-          <CopilotConnectDialog
-            open
-            onClose={() => setDialog(undefined)}
-            onConnected={() => {
-              invalidateAllModelRouting(queryClient);
-              setDialog(undefined);
-            }}
-          />
-        ) : dialog === "project" ? (
-          // The dialog's own trigger button stays hidden; the steps open it.
-          <div className="onboarding-new-project">
-            <NewProject
-              open
-              onOpenChange={(open) => setDialog(open ? "project" : undefined)}
-              onCreated={(project) => {
-                setCreated(project);
-                setDialog(undefined);
-              }}
-            />
-          </div>
-        ) : null}
-      </React.Suspense>
+      <WelcomeDialogs
+        dialog={dialog}
+        onDialogChange={setDialog}
+        onConnected={() => invalidateAllModelRouting(queryClient)}
+        onCreated={setCreated}
+      />
     </AppFrame>
   );
 }

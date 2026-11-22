@@ -43,6 +43,10 @@ import {
 } from "./features/projects/project-route-states.js";
 import { isProjectSettingsSection } from "./features/projects/project-settings-sections.js";
 import {
+  forgetMcpOAuthReturn,
+  takeMcpOAuthReturn,
+} from "./features/settings/integrations/mcp-oauth-return.js";
+import {
   isMissingWorkspaceError,
   settingsContextQueryOptions,
 } from "./features/settings/settings-context-queries.js";
@@ -57,6 +61,10 @@ import {
   prefetchThreadOpen,
   threadsQueryOptions,
 } from "./features/threads/thread-queries.js";
+import {
+  mayRedirectThreadLink,
+  openLinkedSpacePost,
+} from "./features/threads/thread-route-links.js";
 import { openThreadSeen } from "./features/threads/thread-seen-mutations.js";
 import { ThreadSnoozeProvider } from "./features/threads/thread-snooze.js";
 import { huddleJoinRequest } from "./shared/huddle/huddle-join-request.js";
@@ -451,6 +459,25 @@ const newThreadRoute = createRoute({
  */
 const SPACE_POST_LINK = /^pst_[0-9a-z]{26}(?:\.[0-9a-f]{32})?$/;
 
+/**
+ * Core's MCP sign-in callback lands on an integrations page with its
+ * outcome in the URL; the page keeps it, and the URL drops it.
+ */
+const takeMcpOAuthReturnFromUrl = ({
+  location,
+  preload,
+}: {
+  readonly location: {
+    readonly pathname: string;
+    readonly searchStr: string;
+    readonly hash: string;
+  };
+  readonly preload: boolean;
+}) => {
+  const href = takeMcpOAuthReturn(location, preload);
+  if (href !== undefined) throw redirect({ href, replace: true });
+};
+
 const seeOpenedThread = ({
   context,
   params,
@@ -458,18 +485,30 @@ const seeOpenedThread = ({
 }: {
   readonly context: RouterContext;
   readonly params: { readonly threadId: string };
-  readonly search: { readonly thread?: string };
+  readonly search: { readonly thread?: string; readonly message?: string };
 }) => {
   // A Space's page opens one of its threads beside the chat (`?thread=`):
-  // that thread is open too.
+  // that thread is open too. Opening another member's shared Thread
+  // follows it; the module loads with the Thread page.
   for (const opened of [params.threadId, search.thread]) {
     const threadId = Schema.decodeUnknownOption(ThreadId)(opened);
-    if (Option.isSome(threadId))
-      openThreadSeen(context.queryClient, context.userId, threadId.value);
+    if (Option.isNone(threadId)) continue;
+    openThreadSeen(context.queryClient, context.userId, threadId.value);
+    void import("./features/threads/sharing/sharing-mutations.js").then(
+      ({ followOpenedThread }) =>
+        followOpenedThread(context.queryClient, context.userId, threadId.value),
+    );
   }
+  // A mention's link (`?message=pst_…`) opens a Space's chat at its post.
+  openLinkedSpacePost(
+    context.queryClient,
+    context.userId,
+    params.threadId,
+    search.message,
+  );
+  const space = Schema.decodeUnknownOption(ThreadId)(params.threadId);
   // The Space remembers it, so it opens with it next time. Loaded only
   // here, so a page without `?thread=` does not load it first.
-  const space = Schema.decodeUnknownOption(ThreadId)(params.threadId);
   const opened = Schema.decodeUnknownOption(ThreadId)(search.thread);
   if (Option.isSome(space) && Option.isSome(opened))
     void import("./features/spaces/space-layout.js").then(
@@ -490,17 +529,29 @@ const threadRoute = createRoute({
   // its stored `thr_<uuid>`, so everything reading the URL (the sidebar's
   // active row, a Space's selection, caches) sees the one form. Anything
   // that is not a Thread ID stays as written for the usual not-found state.
-  beforeLoad: ({ location, params }) => {
+  beforeLoad: async ({ location, params, preload, search }) => {
     const threadId = Schema.decodeUnknownOption(ThreadId)(params.threadId);
-    if (Option.isNone(threadId) || threadId.value === params.threadId) return;
-    throw redirect({
-      to: "/threads/$threadId",
-      params: { threadId: threadId.value },
-      search: location.search,
-      hash: location.hash,
-      state: location.state,
-      replace: true,
+    if (Option.isSome(threadId) && threadId.value !== params.threadId)
+      throw redirect({
+        to: "/threads/$threadId",
+        params: { threadId: threadId.value },
+        search: location.search,
+        hash: location.hash,
+        state: location.state,
+        replace: true,
+      });
+    // A comment's link, or a notification's artifact on a wide page,
+    // belongs elsewhere (thread-link-redirect.ts).
+    if (!mayRedirectThreadLink(search)) return;
+    const { threadLinkRedirect } = await import(
+      "./features/threads/thread-link-redirect.js"
+    );
+    const href = threadLinkRedirect({
+      href: location.href,
+      message: search.message,
+      preload,
     });
+    if (href !== undefined) throw redirect({ href, replace: true });
   },
   // `message` opens the Thread at a message, for example a mention or a
   // copied message link;
@@ -716,6 +767,9 @@ const personalAdvancedSettingsRedirectRoute = createRoute({
 const personalSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/settings/$section",
+  // Core's MCP sign-in callback returns here with its outcome in the URL.
+  beforeLoad: takeMcpOAuthReturnFromUrl,
+  onLeave: forgetMcpOAuthReturn,
   loader: ({ params }) => registeredSettingsSection("personal", params.section),
   component: settingsPage("PersonalSettingsSection"),
   notFoundComponent: SettingsRouteNotFound,
@@ -752,6 +806,9 @@ const workspaceSettingsEmptyRoute = createRoute({
 const workspaceSettingsSectionRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/workspaces/$workspaceSlug/$section",
+  // Core's MCP sign-in callback returns here with its outcome in the URL.
+  beforeLoad: takeMcpOAuthReturnFromUrl,
+  onLeave: forgetMcpOAuthReturn,
   loader: async ({ context, location, params }) => {
     const registration = await registeredSettingsSection(
       "workspace",

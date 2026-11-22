@@ -26,15 +26,6 @@ import "./onboarding.css";
  * stories. Connecting a model or code opens the real Settings dialogs.
  */
 
-/** A new account's setup, and an invited person's. */
-export const NEW_STEPS = ["Model", "Code", "First thread"] as const;
-export const INVITED_STEPS = [
-  "Workspace",
-  "Model",
-  "Project",
-  "First thread",
-] as const;
-
 /** The page around every onboarding step: wordmark, progress, Skip, actions. */
 export function OnboardingFrame({
   steps,
@@ -169,7 +160,7 @@ function OptionCard({
 }
 
 /** One line of result under a step: done, working, or failed. */
-export function StatusLine({
+function StatusLine({
   tone,
   action,
   children,

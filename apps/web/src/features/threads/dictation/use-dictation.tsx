@@ -124,7 +124,11 @@ const CaretMarker = ({
     : null;
 };
 
-/** Render must not read the textarea ref, so the marker waits for mount. */
+/**
+ * Render must not read the textarea ref, so the marker waits for mount: an
+ * empty placeholder's ref callback, which runs as React attaches it, reads
+ * the textarea and shows the marker in its place.
+ */
 const DictationCaret = ({
   textareaRef,
 }: {
@@ -133,8 +137,15 @@ const DictationCaret = ({
   const [textarea, setTextarea] = React.useState<HTMLTextAreaElement | null>(
     null,
   );
-  useMountEffect(() => setTextarea(textareaRef.current));
-  return textarea === null ? null : <CaretMarker textarea={textarea} />;
+  if (textarea !== null) return <CaretMarker textarea={textarea} />;
+  return (
+    <span
+      hidden
+      ref={(node) => {
+        if (node !== null) setTextarea(textareaRef.current);
+      }}
+    />
+  );
 };
 
 /**

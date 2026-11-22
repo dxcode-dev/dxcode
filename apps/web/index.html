@@ -16,7 +16,17 @@
       // Paints the saved theme before any script or stylesheet loads, so the
       // installed app opens in its own colours instead of flashing white.
       // shared/theme/theme-store.ts writes it; anything unexpected is ignored.
+      // Without one this device has not shown dx signed in, so the visitor
+      // most likely sees the signed-out pages, which follow the system
+      // appearance: start in it, so they don't open dark and turn light.
       (() => {
+        const followSystem = () => {
+          document.documentElement.dataset.resolvedAppearance = matchMedia(
+            "(prefers-color-scheme: light)",
+          ).matches
+            ? "light"
+            : "dark";
+        };
         try {
           const saved = JSON.parse(localStorage.getItem("dx:boot-theme:v1"));
           const resolved =
@@ -32,7 +42,7 @@
             (saved.palette !== "daydream" && saved.palette !== "deadpan") ||
             !/^rgb\(\d{1,3}, \d{1,3}, \d{1,3}\)$/.test(colour)
           )
-            return;
+            return followSystem();
           const root = document.documentElement;
           root.dataset.appearance = saved.appearance;
           root.dataset.resolvedAppearance = resolved;
@@ -43,7 +53,8 @@
             .querySelector('meta[name="theme-color"]')
             .setAttribute("content", colour);
         } catch {
-          // No saved theme yet, or storage is blocked: keep the defaults.
+          // No saved theme yet, or storage is blocked.
+          followSystem();
         }
       })();
     </script>

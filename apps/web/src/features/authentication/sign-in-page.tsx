@@ -1,12 +1,21 @@
 import type { SignInOptionsResponse } from "@dx/api";
 import { Link } from "@tanstack/react-router";
 import * as React from "react";
-import { DxWordmark } from "../../shared/brand/dx-wordmark.js";
-import { Button } from "../../shared/ui/button.js";
-import { GoogleIcon } from "../../shared/ui/google-icon.js";
-import { WaitlistDialog } from "../../shared/ui/waitlist-dialog.js";
-import { CheckEmailPanel } from "./check-email-panel.js";
-import { type EmailMethod, SignInEmailForm } from "./sign-in-email-form.js";
+import { AuthLayout, type AuthScreen } from "./auth-layout.js";
+import {
+  AuthAlert,
+  AuthCheckEmail,
+  AuthConfirmEmail,
+  AuthDivider,
+  AuthEmailForm,
+  type AuthEmailMethod,
+  AuthLegalLinks,
+  AuthProviderButtons,
+  AuthSwitch,
+  AuthTerms,
+  AuthWaitlisted,
+} from "./auth-parts.js";
+import { AuthShowcase } from "./auth-showcase.js";
 import { signInErrorCode, signInErrorMessage } from "./sign-in-errors.js";
 import {
   useGoogleSignIn,
@@ -15,7 +24,6 @@ import {
   usePasswordSignUp,
 } from "./sign-in-mutations.js";
 import { signInHref } from "./sign-in-paths.js";
-import "./sign-in.css";
 
 export type SignInPageMode = "sign-in" | "sign-up";
 
@@ -45,6 +53,7 @@ export function SignInPage({
   const hasPassword = providers.has("email-password");
   const hasGoogle = providers.has("google");
   const signUpAllowed = options.admission !== "invite" || invite !== undefined;
+  const waitlist = options.admission === "waitlist" && invite === undefined;
   // An invite page has one URL for both: new people create an account,
   // existing ones sign in.
   const [inviteMode, setInviteMode] = React.useState<SignInPageMode>("sign-up");
@@ -52,9 +61,14 @@ export function SignInPage({
   const showPasswordSignUp =
     pageMode === "sign-up" && hasPassword && signUpAllowed;
 
-  const [method, setMethod] = React.useState<EmailMethod>(
+  const [method, setMethod] = React.useState<AuthEmailMethod>(
     hasLink ? "link" : "password",
   );
+  // Set once the person comes back to the form from a later step; the first
+  // screen paints without motion, and typing or submitting never replays it.
+  const [returned, setReturned] = React.useState(false);
+  // The address last submitted, kept for the form when the person comes back.
+  const [lastEmail, setLastEmail] = React.useState<string>();
   const challenge = React.useRef<HTMLDivElement>(null);
   const magicLink = useMagicLinkRequest();
   const resendLink = useMagicLinkRequest();
@@ -68,10 +82,8 @@ export function SignInPage({
   const returnPage = invite?.path ?? signInHref("/signin", next);
   const successURL = invite?.path ?? next ?? "/";
   const pending =
-    magicLink.isPending ||
-    passwordSignIn.isPending ||
-    passwordSignUp.isPending ||
-    google.isPending;
+    magicLink.isPending || passwordSignIn.isPending || passwordSignUp.isPending;
+  const busy = pending || google.isPending;
 
   const resetRequests = () => {
     magicLink.reset();
@@ -79,6 +91,11 @@ export function SignInPage({
     passwordSignIn.reset();
     passwordSignUp.reset();
     google.reset();
+  };
+  const startOver = () => {
+    onDismissRedirectError();
+    resetRequests();
+    setReturned(true);
   };
 
   const requestError =
@@ -92,7 +109,7 @@ export function SignInPage({
       : signInErrorCode(passwordSignUp.error) === "waitlisted"
         ? passwordSignUp.variables?.email
         : undefined;
-  const waitlistOpen =
+  const waitlisted =
     waitlistedEmail !== undefined || redirectError === "waitlisted";
   const verificationEmail =
     passwordSignUp.data?.result === "verify-email"
@@ -111,18 +128,24 @@ export function SignInPage({
         ? signInErrorMessage(redirectError, options)
         : undefined;
 
-  const title =
-    invite !== undefined
-      ? `Join ${invite.workspace} on dx`
-      : pageMode === "sign-up"
-        ? "Create your dx account"
-        : "Sign in to dx";
-  const subtitle =
-    invite !== undefined
-      ? "Sign in or create an account to accept the invite."
-      : options.admission === "waitlist" && pageMode === "sign-in" && hasLink
-        ? "New to dx? Enter your email to join the waitlist."
-        : undefined;
+  const step: AuthScreen = waitlisted
+    ? "waitlisted"
+    : sentLinkEmail !== undefined
+      ? "check-email"
+      : verificationEmail !== undefined
+        ? "verify-email"
+        : invite !== undefined
+          ? "join"
+          : pageMode === "sign-up"
+            ? "signup"
+            : "signin";
+  const formStep = step === "signin" || step === "signup" || step === "join";
+  const stepKey =
+    (formStep && !returned) ||
+    // A provider redirect lands straight on the waitlist: no motion.
+    (step === "waitlisted" && waitlistedEmail === undefined)
+      ? undefined
+      : step;
 
   const submitEmail = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -131,6 +154,7 @@ export function SignInPage({
     resetRequests();
     const data = new FormData(event.currentTarget);
     const email = String(data.get("email") ?? "").trim();
+    setLastEmail(email);
     const password = String(data.get("password") ?? "");
     if (method === "link") {
       magicLink.mutate({
@@ -154,164 +178,190 @@ export function SignInPage({
     }
   };
 
-  const closeWaitlist = () => {
-    onDismissRedirectError();
-    resetRequests();
-  };
+  const legal = { termsUrl: options.termsUrl, privacyUrl: options.privacyUrl };
+  // Outside the form so a resend from the check-email step can still render
+  // a Turnstile challenge.
+  const challengeSlot = <div ref={challenge} className="auth-challenge" />;
+
+  if (step === "waitlisted")
+    return (
+      <AuthWaitlisted
+        email={waitlistedEmail}
+        stepKey={stepKey}
+        onBack={startOver}
+      />
+    );
+
+  if (step === "check-email" && sentLinkEmail !== undefined)
+    return (
+      <AuthCheckEmail
+        email={sentLinkEmail}
+        stepKey={stepKey}
+        resend={
+          resendLink.isPending
+            ? "sending"
+            : resendLink.isSuccess
+              ? "sent"
+              : "idle"
+        }
+        resendError={
+          resendLink.error === null
+            ? undefined
+            : signInErrorMessage(resendLink.error, options)
+        }
+        onResend={() =>
+          magicLink.variables &&
+          resendLink.mutate({
+            ...magicLink.variables,
+            // The form is gone; the challenge lives beside it.
+            challenge: challenge.current,
+          })
+        }
+        onBack={startOver}
+      >
+        {challengeSlot}
+      </AuthCheckEmail>
+    );
+
+  if (step === "verify-email" && verificationEmail !== undefined)
+    return (
+      <AuthConfirmEmail
+        email={verificationEmail}
+        stepKey={stepKey}
+        onBack={startOver}
+      />
+    );
+
+  const { title, subtitle } = formCopy(pageMode, waitlist && hasLink, invite);
 
   return (
-    <main className="sign-in-page">
-      <div className="sign-in-column">
-        <DxWordmark />
-        <h1 className="sign-in-title">{title}</h1>
-        {subtitle === undefined ? null : (
-          <p className="sign-in-subtitle">{subtitle}</p>
-        )}
-        <section className="sign-in-card" aria-label={title}>
-          {sentLinkEmail !== undefined ? (
-            <CheckEmailPanel
-              icon="link"
-              title="Check your email"
-              email={sentLinkEmail}
-              detail="We sent a sign-in link to"
-              note="The link expires in 10 minutes and works once."
-              resendLabel={
-                resendLink.isPending
-                  ? "Sending…"
-                  : resendLink.isSuccess
-                    ? "Sent again"
-                    : "Resend link"
-              }
-              resendError={
-                resendLink.error === null
-                  ? undefined
-                  : signInErrorMessage(resendLink.error, options)
-              }
-              onResend={() =>
-                magicLink.variables &&
-                resendLink.mutate({
-                  ...magicLink.variables,
-                  // The form is gone; the challenge lives beside it.
-                  challenge: challenge.current,
-                })
-              }
-              onBack={resetRequests}
-            />
-          ) : verificationEmail !== undefined ? (
-            <CheckEmailPanel
-              icon="verify"
-              title="Confirm your email"
-              email={verificationEmail}
-              detail="We sent a confirmation link to"
-              note="Open it to finish setting up your account. The link expires in 1 hour. If this email already has a dx account, we sent a sign-in reminder instead."
-              onBack={resetRequests}
-            />
-          ) : (
-            <>
-              {hasLink || hasPassword ? (
-                <SignInEmailForm
-                  method={method}
-                  onMethodChange={(next) => {
-                    // A new method starts over, as a new submission does.
-                    onDismissRedirectError();
-                    resetRequests();
-                    setMethod(next);
-                  }}
-                  canSwitchMethod={hasLink && hasPassword}
-                  passwordSignUp={showPasswordSignUp}
-                  allowedEmailDomains={options.allowedEmailDomains}
-                  pending={pending}
-                  errorId={
-                    visibleError === undefined ? undefined : "sign-in-error"
-                  }
-                  onSubmit={submitEmail}
-                />
-              ) : null}
-              {(hasLink || hasPassword) && hasGoogle ? (
-                <div className="sign-in-divider" aria-hidden="true">
-                  <span>or</span>
-                </div>
-              ) : null}
-              {hasGoogle ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="lg"
-                  block
-                  className="sign-in-provider"
-                  disabled={pending}
-                  onClick={() => {
-                    onDismissRedirectError();
-                    resetRequests();
-                    google.mutate({
-                      callbackURL: successURL,
-                      errorCallbackURL: returnPage,
-                    });
-                  }}
-                >
-                  <GoogleIcon />
-                  {google.isPending
-                    ? "Opening Google…"
-                    : "Continue with Google"}
-                </Button>
-              ) : null}
-              {visibleError === undefined ? null : (
-                <p id="sign-in-error" className="sign-in-error" role="alert">
-                  {visibleError}
-                </p>
-              )}
-              {hasPassword && signUpAllowed ? (
-                <p className="sign-in-switch-page">
-                  {pageMode === "sign-in"
-                    ? "Don't have an account? "
-                    : "Already have an account? "}
-                  {invite !== undefined ? (
-                    <button
-                      type="button"
-                      className="sign-in-switch-page-action"
-                      onClick={() => {
-                        resetRequests();
-                        setInviteMode(
-                          inviteMode === "sign-in" ? "sign-up" : "sign-in",
-                        );
-                      }}
-                    >
-                      {pageMode === "sign-in" ? "Sign up" : "Sign in"}
-                    </button>
-                  ) : pageMode === "sign-in" ? (
-                    <Link to="/signup" search={{ next }}>
-                      Sign up
-                    </Link>
-                  ) : (
-                    <Link to="/signin" search={{ next }}>
-                      Sign in
-                    </Link>
-                  )}
-                </p>
-              ) : null}
-            </>
-          )}
-          {/* Outside the form so a resend from the check-email panel can still
-              render a Turnstile challenge. */}
-          <div ref={challenge} className="sign-in-challenge" />
-        </section>
-        {options.termsUrl === undefined &&
-        options.privacyUrl === undefined ? null : (
-          <footer className="sign-in-legal">
-            {options.termsUrl === undefined ? null : (
-              <a href={options.termsUrl}>Terms of Service</a>
-            )}
-            {options.privacyUrl === undefined ? null : (
-              <a href={options.privacyUrl}>Privacy Policy</a>
-            )}
-          </footer>
-        )}
-      </div>
-      <WaitlistDialog
-        open={waitlistOpen}
-        email={waitlistedEmail}
-        onClose={closeWaitlist}
-      />
-    </main>
+    <AuthLayout
+      aside={<AuthShowcase />}
+      screen={step}
+      title={title}
+      subtitle={subtitle}
+      stepKey={stepKey}
+      footer={
+        pageMode === "sign-in" ? <AuthLegalLinks {...legal} /> : undefined
+      }
+    >
+      {hasGoogle ? (
+        <>
+          <AuthProviderButtons
+            providers={["google"]}
+            opening={google.isPending ? "google" : undefined}
+            disabled={busy}
+            onSelect={() => {
+              onDismissRedirectError();
+              resetRequests();
+              google.mutate({
+                callbackURL: successURL,
+                errorCallbackURL: returnPage,
+              });
+            }}
+          />
+          {hasLink || hasPassword ? <AuthDivider /> : null}
+        </>
+      ) : null}
+      {hasLink || hasPassword ? (
+        <AuthEmailForm
+          method={method}
+          creating={showPasswordSignUp}
+          waitlist={waitlist && pageMode === "sign-up"}
+          allowedEmailDomains={options.allowedEmailDomains}
+          pending={pending}
+          disabled={google.isPending}
+          error={visibleError}
+          canSwitchMethod={hasLink && hasPassword}
+          onMethodChange={(nextMethod) => {
+            // A new method starts over, as a new submission does.
+            onDismissRedirectError();
+            resetRequests();
+            setMethod(nextMethod);
+          }}
+          onSubmit={submitEmail}
+          defaultEmail={lastEmail}
+        />
+      ) : visibleError === undefined ? null : (
+        <AuthAlert id="sign-in-error">{visibleError}</AuthAlert>
+      )}
+      {hasPassword && signUpAllowed ? (
+        <SwitchPage
+          to={pageMode === "sign-in" ? "sign-up" : "sign-in"}
+          next={next}
+          onSwitchInvite={
+            invite === undefined
+              ? undefined
+              : (target) => {
+                  resetRequests();
+                  setInviteMode(target);
+                }
+          }
+        />
+      ) : null}
+      {pageMode === "sign-up" ? <AuthTerms {...legal} /> : null}
+      {challengeSlot}
+    </AuthLayout>
+  );
+}
+
+/** The form step's heading and line under it. */
+function formCopy(
+  pageMode: SignInPageMode,
+  waitlist: boolean,
+  invite: SignInPageProps["invite"],
+) {
+  if (invite !== undefined)
+    return {
+      title: `Join ${invite.workspace} on dx`,
+      subtitle:
+        "You're invited to this workspace on dx. Sign in or create an account to accept.",
+    };
+  if (pageMode === "sign-up")
+    return waitlist
+      ? {
+          title: "Join the dx waitlist",
+          subtitle:
+            "Enter your email. We'll send an invite as soon as your account is ready.",
+        }
+      : {
+          title: "Create your dx account",
+          subtitle: "Start your trial and hand your first task to an agent.",
+        };
+  return {
+    title: "Sign in to dx",
+    subtitle: waitlist
+      ? "New to dx? Enter your email to join the waitlist."
+      : "Pick up where your agents left off.",
+  };
+}
+
+/**
+ * "New to dx? Create an account" or "Have an account? Sign in": a link
+ * between the two pages, or on an invite, which has one URL for both, a
+ * button that switches in place.
+ */
+function SwitchPage({
+  to,
+  next,
+  onSwitchInvite,
+}: {
+  readonly to: SignInPageMode;
+  readonly next: string | undefined;
+  readonly onSwitchInvite?: (to: SignInPageMode) => void;
+}) {
+  const label = to === "sign-up" ? "Create an account" : "Sign in";
+  return (
+    <AuthSwitch prompt={to === "sign-up" ? "New to dx?" : "Have an account?"}>
+      {onSwitchInvite !== undefined ? (
+        <button type="button" onClick={() => onSwitchInvite(to)}>
+          {label}
+        </button>
+      ) : (
+        <Link to={to === "sign-up" ? "/signup" : "/signin"} search={{ next }}>
+          {label}
+        </Link>
+      )}
+    </AuthSwitch>
   );
 }

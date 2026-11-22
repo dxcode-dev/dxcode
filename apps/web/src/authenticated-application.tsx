@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { RouterProvider, useRouterState } from "@tanstack/react-router";
-import { Suspense } from "react";
+import { Suspense, use } from "react";
 import { attachInAppNavigation } from "./features/install-app/in-app-navigation.js";
 import { FeedbackWidgetOnDx } from "./features/projects/feedback-widget-on-dx.js";
 import { recordBrowserTimeZone } from "./features/threads/automations/automations-queries.js";
@@ -8,6 +8,7 @@ import { RealtimeProvider } from "./features/threads/realtime/realtime-provider.
 import { ThreadSessionProvider } from "./features/threads/thread-session-provider.js";
 import { type AppRouter, createAppRouter } from "./router.js";
 import { useIdentity } from "./shared/auth/auth-context.js";
+import { keptRouter, routerLoaded } from "./shared/boot/boot-wait.js";
 import { ReportBugSlot } from "./shared/bug-reports/report-bug-slot.js";
 import { useMountEffect } from "./shared/hooks/use-mount-effect.js";
 import {
@@ -40,17 +41,10 @@ const AppBugReportDialog = lazyComponent(() =>
  * installed app, so each changes route in place instead of reloading dx.
  */
 function InAppNavigation({ router }: { readonly router: AppRouter }) {
-  useMountEffect(() => {
-    // A notification that opened dx: show its artifact where this screen
-    // shows artifacts.
-    const opened = new URL(window.location.href);
-    const here = artifactLinkHere(opened);
-    if (here !== opened)
-      void router.navigate({
-        href: here.pathname + here.search + here.hash,
-        replace: true,
-      });
-    return attachInAppNavigation((url) => {
+  // A notification that opened dx lands through the Thread route's
+  // `beforeLoad`, which shows its artifact where this screen shows them.
+  useMountEffect(() =>
+    attachInAppNavigation((url) => {
       // Paths the router has no page for, such as `/v1/…`, load as documents.
       if (router.getMatchedRoutes(url.pathname)[2] === undefined) return false;
       const target = artifactLinkHere(url);
@@ -58,8 +52,8 @@ function InAppNavigation({ router }: { readonly router: AppRouter }) {
         href: target.pathname + target.search + target.hash,
       });
       return true;
-    });
-  });
+    }),
+  );
   return null;
 }
 
@@ -112,6 +106,16 @@ function HuddleButtonSlot(props: HuddleSlotProps) {
   );
 }
 
+/**
+ * The router once its first page has loaded, so its first frame is that page
+ * and not an empty frame while the page's data and code arrive; until then
+ * the boot screen shows.
+ */
+function LoadedRouter({ router }: { readonly router: AppRouter }) {
+  use(routerLoaded(router));
+  return <RouterProvider router={router} />;
+}
+
 /** Builds the signed-in product router with the application-owned query client. */
 export function AuthenticatedApplication({
   queryClient,
@@ -123,10 +127,10 @@ export function AuthenticatedApplication({
     throw new Error(
       "AuthenticatedApplication must be rendered inside AuthGate.",
     );
-  const router = createAppRouter({
-    queryClient,
-    userId: auth.identity.id,
-  });
+  const userId = auth.identity.id;
+  const router = keptRouter(queryClient, `app:${userId}`, () =>
+    createAppRouter({ queryClient, userId }),
+  );
   return (
     <ThreadSessionProvider
       key={auth.identity.id}
@@ -136,7 +140,7 @@ export function AuthenticatedApplication({
       <RealtimeProvider queryClient={queryClient} userId={auth.identity.id}>
         <ReportBugSlot.Provider value={AppBugReportDialog}>
           <HuddleSlot.Provider value={HuddleButtonSlot}>
-            <RouterProvider router={router} />
+            <LoadedRouter router={router} />
           </HuddleSlot.Provider>
         </ReportBugSlot.Provider>
         <InAppNavigation key={auth.identity.id} router={router} />

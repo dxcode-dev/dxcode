@@ -10,17 +10,19 @@ import {
   CodeStep,
   type CodeStepState,
   FirstThreadStep,
-  INVITED_STEPS,
   type InvitedWorkspace,
   type JoinState,
   JoinStep,
   ModelStep,
   type ModelStepState,
-  NEW_STEPS,
   OnboardingFrame,
   ProjectsStep,
   WelcomeStep,
 } from "./features/onboarding/onboarding.js";
+import {
+  INVITED_STEPS,
+  NEW_STEPS,
+} from "./features/onboarding/onboarding-steps.js";
 import { NewProjectDialog } from "./features/projects/new-project-dialog.js";
 import { ProjectRepositoryIcon } from "./features/projects/project-repository-icon.js";
 import type { BitbucketRepository } from "./features/settings/integrations/bitbucket-queries.js";

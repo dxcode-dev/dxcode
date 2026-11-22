@@ -1,0 +1,407 @@
+/*
+ * The team panel beside the sign-in form (from 1024px; hidden below): a small
+ * dx thread drawn as the thread draws it (styles.css .user-message,
+ * .transcript-turn-work; thread-sharing.css .message-author), with
+ * teammates' pointers over it. Pointers move by transform, and scripted
+ * changes fill places already laid out, so nothing around them moves.
+ */
+
+.auth-demo-stage {
+  position: relative;
+  width: min(100%, 540px);
+  margin: 0 auto;
+}
+
+.auth-demo-stage[data-you] {
+  cursor: none;
+}
+
+.auth-demo-stage[data-you] * {
+  cursor: none;
+}
+
+.auth-demo {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+  color: var(--chat-foreground);
+  background: var(--background);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--text-md);
+}
+
+.auth-demo-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 40px;
+  padding: 0 var(--space-3-5);
+  border-bottom: 1px solid var(--divider);
+  background: var(--panel-header);
+}
+
+.auth-demo-orb {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted-foreground);
+}
+
+.auth-demo-title {
+  flex: 1;
+  overflow: hidden;
+  color: var(--foreground);
+  font-weight: var(--weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-demo-people {
+  display: flex;
+}
+
+.auth-demo-people .dx-avatar {
+  box-shadow: 0 0 0 2px var(--panel-header);
+}
+
+.auth-demo-people .dx-avatar + .dx-avatar {
+  margin-left: -4px;
+}
+
+/* The visitor's place is always there; it shows while they are here. */
+.auth-demo-people .auth-demo-you-avatar {
+  opacity: 0;
+  transition: opacity var(--duration-normal);
+}
+
+.auth-demo-stage[data-you] .auth-demo-you-avatar {
+  opacity: 1;
+}
+
+.auth-demo-feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+
+.auth-demo-author {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin-bottom: var(--space-1);
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
+.auth-demo-author .dx-avatar {
+  width: 16px;
+  height: 16px;
+  font-size: var(--text-avatar-sm);
+}
+
+.auth-demo-author > span {
+  color: var(--foreground);
+  font-weight: var(--weight-medium);
+}
+
+.auth-demo-message[data-author="mine"] .auth-demo-author {
+  justify-content: flex-end;
+}
+
+.auth-demo-bubble {
+  width: fit-content;
+  max-width: 88%;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xl);
+  color: var(--user-message-foreground);
+  background-color: var(--user-message-background);
+  background-image:
+    radial-gradient(
+      300px at 25% 20%,
+      color-mix(in srgb, var(--user-message-glow-green) 7%, transparent),
+      transparent 100%
+    ),
+    radial-gradient(
+      300px at 75% 35%,
+      color-mix(in srgb, var(--user-message-glow-blue) 6%, transparent),
+      transparent 100%
+    ),
+    radial-gradient(
+      300px at 55% 90%,
+      color-mix(in srgb, var(--user-message-glow-plum) 7%, transparent),
+      transparent 100%
+    );
+  box-shadow: inset 0 0 0 1px var(--user-message-edge);
+  line-height: var(--leading-normal);
+}
+
+.auth-demo-message[data-author="mine"] .auth-demo-bubble {
+  margin-left: auto;
+}
+
+.auth-demo-mention {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  color: var(--foreground);
+  background: color-mix(in srgb, var(--thread-color-purple) 22%, transparent);
+}
+
+.auth-demo-work {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 20px;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+
+.auth-demo-work::before,
+.auth-demo-work::after {
+  flex: 1;
+  height: 1px;
+  background: var(--divider);
+  content: "";
+}
+
+.auth-demo-work > span {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-0-5) var(--space-1-5);
+  border-radius: var(--radius-sm);
+  transition: background-color var(--duration-fast);
+}
+
+.auth-demo-work[data-hover] > span,
+.auth-demo-work:hover > span {
+  color: var(--chat-foreground);
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+}
+
+.auth-demo-work svg {
+  width: 12px;
+  height: 12px;
+}
+
+.auth-demo-reply p {
+  margin: 0 0 var(--space-2);
+  line-height: var(--leading-relaxed);
+}
+
+.auth-demo-reply code {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-xs);
+  background: var(--muted);
+  font-family: var(--font-code);
+  font-size: var(--text-sm);
+}
+
+.reaction-chip[data-hover] {
+  background: var(--accent);
+}
+
+/* Holds a message's place until someone sends one, so nothing moves. */
+.auth-demo-slot {
+  opacity: 0;
+  translate: 0 4px;
+  transition:
+    opacity 240ms ease-out,
+    translate 240ms ease-out;
+}
+
+.auth-demo-slot[data-shown] {
+  opacity: 1;
+  translate: 0 0;
+}
+
+.auth-demo-composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: var(--space-2) var(--space-3) var(--space-3);
+  padding: var(--space-2-5) var(--space-3) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2xl);
+  background: var(--card);
+  transition: border-color var(--duration-fast);
+}
+
+.auth-demo-composer[data-focus] {
+  border-color: var(--outline);
+}
+
+.auth-demo-composer input {
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  color: var(--foreground);
+  background: none;
+  font: inherit;
+}
+
+.auth-demo-composer input::placeholder {
+  color: var(--muted-foreground);
+}
+
+.auth-demo-composer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted-foreground);
+}
+
+.auth-demo-composer-row > svg {
+  width: 14px;
+  height: 14px;
+}
+
+.auth-demo-send {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  color: var(--background);
+  background: var(--muted-foreground);
+  transition: background-color var(--duration-fast);
+}
+
+.auth-demo-send[data-ready],
+.auth-demo-send[data-hover] {
+  background: var(--foreground);
+}
+
+.auth-demo-send svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Pointers: an arrow in the person's color and a name tag beside it. The
+   script and the visitor move them with transform from these places. */
+.auth-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  color: var(--cursor-color);
+  pointer-events: none;
+  transition: transform 900ms cubic-bezier(0.45, 0.05, 0.25, 1);
+  will-change: transform;
+}
+
+.auth-cursor[data-color="blue"] {
+  --cursor-color: var(--thread-color-blue);
+}
+
+.auth-cursor[data-color="red"] {
+  --cursor-color: var(--thread-color-red);
+}
+
+.auth-cursor[data-color="green"] {
+  --cursor-color: var(--thread-color-green);
+}
+
+.auth-cursor[data-color="purple"] {
+  --cursor-color: var(--thread-color-purple);
+}
+
+.auth-cursor svg {
+  width: 16px;
+  height: 20px;
+  fill: currentcolor;
+  stroke: var(--background);
+  stroke-width: 1.2;
+  stroke-linejoin: round;
+  transform-origin: 1px 1px;
+  filter: drop-shadow(
+    0 1px 1px color-mix(in srgb, var(--shadow-ink) 40%, transparent)
+  );
+}
+
+.auth-cursor-ripple {
+  position: absolute;
+  top: -11px;
+  left: -11px;
+  width: 24px;
+  height: 24px;
+  border: 2px solid currentcolor;
+  border-radius: var(--radius-full);
+  opacity: 0;
+}
+
+.auth-cursor-name {
+  margin: 14px 0 0 -2px;
+  padding: var(--space-0-5) var(--space-2);
+  border-radius: var(--radius-full);
+  color: var(--on-media);
+  background: var(--cursor-color);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  white-space: nowrap;
+}
+
+/* Where each teammate starts, before the script moves them. */
+.auth-cursor[data-person="maya"] {
+  top: 18%;
+  left: 70%;
+}
+
+.auth-cursor[data-person="leo"] {
+  top: 64%;
+  left: 62%;
+}
+
+.auth-cursor[data-person="sam"] {
+  top: 4%;
+  left: 88%;
+}
+
+/* The visitor's pointer follows theirs at once, and shows while they are here. */
+.auth-cursor[data-person="you"] {
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+}
+
+.auth-demo-stage[data-you] .auth-cursor[data-person="you"] {
+  opacity: 1;
+}
+
+.auth-panel-copy {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(100%, 540px);
+  margin: 0 auto;
+}
+
+.auth-tagline {
+  margin: 0;
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-semibold);
+  letter-spacing: -0.015em;
+}
+
+.auth-lede {
+  max-width: 46ch;
+  margin: 0;
+  color: var(--muted-foreground);
+  line-height: var(--leading-relaxed);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auth-cursor,
+  .auth-demo-slot {
+    transition: none;
+  }
+}
