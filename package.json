@@ -1,12 +1,12 @@
 {
   "name": "dx",
   "private": true,
-  "version": "0.2.152",
+  "version": "0.2.153",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "packageManager": "pnpm@12.14.0",
   "engines": {
-    "node": ">=22.19.0",
+    "node": ">=22.23.4",
     "pnpm": ">=12.14.0 <13"
   },
   "scripts": {

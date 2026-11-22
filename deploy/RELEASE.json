@@ -1,9 +1,27 @@
 {
   "version": 1,
-  "release": "v0.2.152",
+  "release": "v0.2.153",
   "dxd": "0.15.0",
   "platform": "linux-x64",
   "asset": "dxd-linux-x64",
-  "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.152/dxd-linux-x64",
-  "sha256": "bc54eac110fd1e23c03c4c89957f20883491c43790d24e6a074c54729006403e"
+  "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.153/dxd-linux-x64",
+  "sha256": "bc54eac110fd1e23c03c4c89957f20883491c43790d24e6a074c54729006403e",
+  "runner": {
+    "dxd-darwin-arm64": {
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.153/dxd-darwin-arm64",
+      "sha256": "cf5f6fd575c3f605ed6d58b343dffb271f0ea85de6ca7300f86d5e45305d83d5"
+    },
+    "dxd-linux-arm64": {
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.153/dxd-linux-arm64",
+      "sha256": "ac1ea79f77a707382d8f51f96be659d0cd114afbae11617490afafcc4b5ae2bb"
+    },
+    "voxl-darwin-arm64": {
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.153/voxl-darwin-arm64",
+      "sha256": "b0785d81bdeb5e0d6639bac4a9ca1533db4e669f3eea08a2579043bc96d706e9"
+    },
+    "dx-desktop-darwin-arm64": {
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.153/dx-desktop-darwin-arm64",
+      "sha256": "2c3ec56d9317bfb3d7053b4189ce5804284cee702a96c53ca42b1402cf0769aa"
+    }
+  }
 }

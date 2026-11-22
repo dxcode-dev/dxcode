@@ -39,6 +39,50 @@ dx's pane.
 - License: MIT, Copyright (c) 2026 Tembo
 - License text: <https://github.com/tembo/voxl/blob/176f8be/LICENSE>
 
+## voxl for Mac runners (release asset `voxl-darwin-arm64`)
+
+Every release attaches `voxl-darwin-arm64`, the Mac runner Desktop's
+screen server, which a deployment serves at `/runner/voxl-darwin-arm64`. It
+is voxl built from source by `scripts/build-voxl-runner.sh` at the version
+and upstream commit pinned in `deploy/runner/voxl.json`, with dx's patches
+from `deploy/runner/voxl-patches/` applied. It links x264 and opus
+statically, taken from Homebrew on the Mac that built it.
+
+- voxl source: <https://github.com/tembo/voxl> at the `upstreamCommit` in
+  `deploy/runner/voxl.json`, plus `deploy/runner/voxl-patches/*.patch`
+- voxl license: MIT, Copyright (c) 2026 Tembo
+  (<https://github.com/tembo/voxl/blob/main/LICENSE>)
+- x264 (<https://code.videolan.org/videolan/x264>): GPL-2.0-or-later, so the
+  binary as a whole is distributed under the GPL-2.0-or-later; its
+  corresponding source is the voxl source and patches above with x264's
+  and opus's own source
+- opus (<https://opus-codec.org>): BSD-3-Clause, Copyright (c) Xiph.Org
+  Foundation and contributors
+
+MIT License (voxl):
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+The release's other runner assets, `dxd-darwin-arm64`, `dxd-linux-arm64`,
+and `dx-desktop-darwin-arm64` (the launcher), are built from this
+repository's `apps/dxd` and `apps/desktop`, as `dxd-linux-x64` is.
+
 ## ElevenLabs UI waveform
 
 `apps/web/src/shared/ui/waveform.tsx` adapts the base canvas waveform from

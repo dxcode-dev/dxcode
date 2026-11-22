@@ -25,6 +25,7 @@ import {
 } from "../deploy/selfhost/cloudflare-auth.mjs";
 import {
   downloadDxdRelease,
+  downloadRunnerRelease,
   loadDxdRelease,
   verifyDxdBytes,
 } from "../deploy/selfhost/dxd-release.mjs";
@@ -544,8 +545,8 @@ const mail =
       })();
 
 /**
- * Builds dxd for the machines a runner can be (macOS on Apple silicon and
- * Intel, Linux arm64) and copies the guest's Linux x64 build beside them.
+ * Builds dxd for the machines a runner can be (macOS on Apple silicon,
+ * Linux arm64) and copies the guest's Linux x64 build beside them.
  * A target the toolchain cannot build is left out, and the package then
  * offers no download for it; the deployment goes on.
  */
@@ -618,6 +619,18 @@ if (operation === "deploy") {
     mkdirSync(releaseDirectory, { recursive: true, mode: 0o700 });
     dxdBinary = resolve(releaseDirectory, release.asset);
     writeFileSync(dxdBinary, bytes, { mode: 0o700 });
+    // Runners (beta): the release's runner assets, each SHA-256-checked. A
+    // release from before them records none and serves no /runner.
+    runnerBinaries = await downloadRunnerRelease(release, {
+      directory: resolve(workspaceRoot, `.dx/alchemy/${stage}/runner`),
+      guestBinary: dxdBinary,
+      githubToken: process.env.DX_DXD_GITHUB_TOKEN,
+    });
+    console.log(
+      runnerBinaries === undefined
+        ? `runner: ${release.release} publishes no runner assets; this deployment serves no /runner.`
+        : `runner: serving ${release.release}'s runner assets at /runner.`,
+    );
   } else {
     // DX_DXD_BUILD_CACHE: a directory the workflow restores and saves under
     // a key over every dxd build input (preview.yml, staging.yml). A branch

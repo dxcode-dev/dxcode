@@ -126,8 +126,9 @@ export const readDesktopPin = (path = DESKTOP_PIN) => {
 /**
  * Writes each pinned voxl to `<directory>/<asset>`. A missing pin entry, a
  * missing token, or a failed download leaves that platform out with a
- * warning (runners then use a local build); a SHA-256 mismatch fails the
- * deploy, since the pin and the release disagree.
+ * warning (runners then use a local build), or fails with `required` (the
+ * release, which must publish every runner asset); a SHA-256 mismatch
+ * always fails, since the pin and the release disagree.
  */
 export const fetchPinnedVoxl = ({ pinPath = VOXL_PIN, ...options }) =>
   fetchPinned({ ...options, pin: readVoxlPin(pinPath), pinPath, name: "voxl" });
@@ -154,8 +155,13 @@ const fetchPinned = async ({
   name,
   repository = deployingRepository(),
   fetchImpl = fetch,
-  warn = console.warn,
+  required = false,
+  warn: warnOnly = console.warn,
 }) => {
+  const warn = (message) => {
+    if (required) throw new Error(message.replace(/; skipping .*$/, "."));
+    warnOnly(message);
+  };
   const written = [];
   const entries = Object.entries(pin.assets);
   if (entries.length === 0) {
@@ -219,3 +225,32 @@ const fetchPinned = async ({
   }
   return written;
 };
+
+// The release job: `node scripts/runner-voxl.mjs --out <dir>` writes the
+// pinned voxl and launcher with `<asset>.sha256` beside each, and fails
+// unless every pinned asset downloads and matches its pin. `--voxl-pin` and
+// `--desktop-pin` read the pins from other files, such as the released
+// commit's.
+if (import.meta.filename === process.argv[1]) {
+  const args = process.argv.slice(2);
+  const value = (name) =>
+    args.includes(name)
+      ? resolve(args[args.indexOf(name) + 1] ?? "")
+      : undefined;
+  const out = value("--out");
+  if (out === undefined)
+    throw new Error(
+      "Usage: node scripts/runner-voxl.mjs --out <dir> [--voxl-pin <file>] [--desktop-pin <file>]",
+    );
+  const options = { directory: out, required: true };
+  for (const { asset, sha256: hash } of [
+    ...(await fetchPinnedVoxl({ ...options, pinPath: value("--voxl-pin") })),
+    ...(await fetchPinnedDesktop({
+      ...options,
+      pinPath: value("--desktop-pin"),
+    })),
+  ]) {
+    writeFileSync(resolve(out, `${asset}.sha256`), `${hash}  ${asset}\n`);
+    console.log(`${asset}: ${hash}`);
+  }
+}

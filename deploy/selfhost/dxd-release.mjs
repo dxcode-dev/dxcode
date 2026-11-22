@@ -1,6 +1,55 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { resolve } from "node:path";
+
+/**
+ * The runner assets a release publishes beside `dxd-linux-x64` and records
+ * in deploy/RELEASE.json's `runner` object (asset name to `{ url, sha256 }`):
+ * dxd for the other runner machines, and the Mac Desktop's voxl and its
+ * launcher. A Linux x64 runner uses the release's own `dxd-linux-x64`.
+ * Releases before these assets have no `runner` object.
+ */
+export const RUNNER_RELEASE_ASSETS = Object.freeze([
+  "dxd-darwin-arm64",
+  "dxd-linux-arm64",
+  "voxl-darwin-arm64",
+  "dx-desktop-darwin-arm64",
+]);
+
+const sha256Hex = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+const validRunnerRecord = (release) => {
+  const runner = release.runner;
+  if (runner === undefined) return true;
+  if (typeof runner !== "object" || runner === null || Array.isArray(runner))
+    return false;
+  const names = Object.keys(runner).sort();
+  return (
+    JSON.stringify(names) ===
+      JSON.stringify([...RUNNER_RELEASE_ASSETS].sort()) &&
+    names.every((asset) => {
+      const entry = runner[asset];
+      if (
+        typeof entry?.url !== "string" ||
+        !entry.url.startsWith("https://") ||
+        !/^[a-f0-9]{64}$/.test(entry.sha256 ?? "")
+      )
+        return false;
+      // The asset sits on the same release as dxd, under its own name.
+      return (
+        entry.url ===
+        release.url.replace(/\/dxd-linux-x64$/, `/${encodeURIComponent(asset)}`)
+      );
+    })
+  );
+};
 
 export const loadDxdRelease = (root = process.cwd()) => {
   const release = JSON.parse(
@@ -20,6 +69,10 @@ export const loadDxdRelease = (root = process.cwd()) => {
   )
     throw new Error(
       "deploy/RELEASE.json does not describe one exact Linux x64 dxd asset.",
+    );
+  if (!validRunnerRecord(release))
+    throw new Error(
+      `deploy/RELEASE.json's runner assets must be exactly ${RUNNER_RELEASE_ASSETS.join(", ")}, each with an https URL on the dxd release and a SHA-256.`,
     );
   // Core pins the dxd version it was built with; a guest must never get an
   // older daemon than the Core that manages it. `release` is the product
@@ -45,7 +98,9 @@ const githubReleaseAsset = (release) => {
     decodeURIComponent(part),
   );
   if (tag !== release.release || asset !== release.asset)
-    throw new Error("The dxd GitHub release URL does not match its metadata.");
+    throw new Error(
+      `The ${release.asset} GitHub release URL does not match its metadata.`,
+    );
   return { owner, repository, tag, asset };
 };
 
@@ -58,7 +113,7 @@ const githubHeaders = (token, accept = "application/vnd.github+json") => ({
 const responseBytes = async (response, release) => {
   if (!response.ok)
     throw new Error(
-      `Could not download the dxd ${release.release} release asset (${response.status}). No deployment changes were made.`,
+      `Could not download the ${release.asset} ${release.release} release asset (${response.status}). No deployment changes were made.`,
     );
   return Buffer.from(await response.arrayBuffer());
 };
@@ -82,7 +137,7 @@ export const downloadDxdRelease = async (
   );
   if (!releaseResponse.ok)
     throw new Error(
-      `Could not resolve the private dxd ${release.release} release (${releaseResponse.status}). No deployment changes were made.`,
+      `Could not resolve the private ${release.release} release (${releaseResponse.status}). No deployment changes were made.`,
     );
   const matchingAsset = (await releaseResponse.json()).assets?.find(
     (candidate) => candidate?.name === asset,
@@ -94,7 +149,7 @@ export const downloadDxdRelease = async (
     )
   )
     throw new Error(
-      `The private dxd ${release.release} release has no ${asset} asset. No deployment changes were made.`,
+      `The private ${release.release} release has no ${asset} asset. No deployment changes were made.`,
     );
   return responseBytes(
     await fetcher(matchingAsset.url, {
@@ -112,4 +167,37 @@ export const verifyDxdBytes = (bytes, release) => {
       `dxd checksum mismatch: expected ${release.sha256}, received ${actual}. No deployment changes were made.`,
     );
   return actual;
+};
+
+/**
+ * The runner assets a self-hosted deployment serves at /runner, from the
+ * release deploy/RELEASE.json records: `guestBinary` (the release's
+ * `dxd-linux-x64`) for Linux x64 runners, and each recorded runner asset,
+ * downloaded and checked against its SHA-256, written to `directory`.
+ * Returns the directory, or undefined for a release that records no runner
+ * assets (the deployment then serves no /runner). A failed download or a
+ * checksum mismatch fails before any deployment change.
+ */
+export const downloadRunnerRelease = async (
+  release,
+  { directory, guestBinary, fetcher = fetch, githubToken } = {},
+) => {
+  if (release.runner === undefined) return undefined;
+  rmSync(directory, { recursive: true, force: true });
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  copyFileSync(guestBinary, resolve(directory, "dxd-linux-x64"));
+  for (const asset of RUNNER_RELEASE_ASSETS) {
+    const { url, sha256 } = release.runner[asset];
+    const bytes = await downloadDxdRelease(
+      { release: release.release, asset, url },
+      { fetcher, githubToken },
+    );
+    const actual = sha256Hex(bytes);
+    if (actual !== sha256)
+      throw new Error(
+        `${asset} checksum mismatch: expected ${sha256}, received ${actual}. No deployment changes were made.`,
+      );
+    writeFileSync(resolve(directory, asset), bytes, { mode: 0o700 });
+  }
+  return directory;
 };

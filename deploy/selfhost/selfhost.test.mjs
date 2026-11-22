@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ProfileStore, ProfileStoreLive } from "alchemy/Auth/Profile";
@@ -16,7 +24,9 @@ import {
 import { validateSelfhostConfig } from "./config.mjs";
 import {
   downloadDxdRelease,
+  downloadRunnerRelease,
   loadDxdRelease,
+  RUNNER_RELEASE_ASSETS,
   verifyDxdBytes,
 } from "./dxd-release.mjs";
 import { hashE2BRecipe, reconcileE2BProfiles } from "./e2b.mjs";
@@ -643,6 +653,136 @@ describe("dxd release integrity", () => {
         sha256: "0".repeat(64),
       }),
     ).toThrow("No deployment changes were made");
+  });
+});
+
+/**
+ * A self-hosted deployment serves /runner from the runner assets its
+ * release records. Ways this could fail:
+ *  1. A record missing an asset, carrying an unknown one, or pointing at
+ *     another release is accepted, so a deployment serves a partial or
+ *     foreign set.
+ *  2. A downloaded asset whose bytes differ from the record is served.
+ *  3. A release from before runner assets fails to deploy.
+ *  4. The Linux x64 runner gets something other than the release's dxd.
+ */
+describe("runner assets from the release", () => {
+  const releaseUrl = "https://github.com/o/r/releases/download/v0.2.200";
+  const bytes = Object.fromEntries(
+    RUNNER_RELEASE_ASSETS.map((asset) => [
+      asset,
+      Buffer.from(`${asset} bytes`),
+    ]),
+  );
+  const sha = (content) => createHash("sha256").update(content).digest("hex");
+  const runner = Object.fromEntries(
+    RUNNER_RELEASE_ASSETS.map((asset) => [
+      asset,
+      { url: `${releaseUrl}/${asset}`, sha256: sha(bytes[asset]) },
+    ]),
+  );
+  const release = (fields) => ({
+    version: 1,
+    release: "v0.2.200",
+    dxd: "0.15.0",
+    platform: "linux-x64",
+    asset: "dxd-linux-x64",
+    url: `${releaseUrl}/dxd-linux-x64`,
+    sha256: "a".repeat(64),
+    ...fields,
+  });
+  const recorded = (fields) => {
+    const root = mkdtempSync(join(tmpdir(), "dxd-runner-release-"));
+    mkdirSync(join(root, "deploy"));
+    writeFileSync(
+      join(root, "deploy/RELEASE.json"),
+      JSON.stringify(release(fields)),
+    );
+    return loadDxdRelease(root);
+  };
+  const served = (content = bytes) =>
+    vi.fn(async (url) => {
+      const asset = url.slice(releaseUrl.length + 1);
+      return url.startsWith(`${releaseUrl}/`) && content[asset]
+        ? new Response(content[asset])
+        : new Response(null, { status: 404 });
+    });
+
+  it("accepts exactly the runner assets on the dxd release", () => {
+    expect(recorded({ runner }).runner).toEqual(runner);
+    expect(recorded({}).runner).toBeUndefined();
+    const { "voxl-darwin-arm64": _voxl, ...partial } = runner;
+    for (const invalid of [
+      partial,
+      { ...runner, "dxd-darwin-x64": runner["dxd-darwin-arm64"] },
+      {
+        ...runner,
+        "dxd-linux-arm64": {
+          ...runner["dxd-linux-arm64"],
+          url: "https://github.com/o/r/releases/download/v0.2.199/dxd-linux-arm64",
+        },
+      },
+      {
+        ...runner,
+        "dxd-linux-arm64": { ...runner["dxd-linux-arm64"], sha256: "x" },
+      },
+    ])
+      expect(() => recorded({ runner: invalid })).toThrow(
+        "runner assets must be exactly",
+      );
+  });
+
+  it("downloads and checks every recorded asset beside the release's dxd", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dxd-runner-download-"));
+    const guestBinary = join(root, "dxd");
+    writeFileSync(guestBinary, "the release's dxd-linux-x64");
+    const directory = join(root, "runner");
+    const fetcher = served();
+    await expect(
+      downloadRunnerRelease(recorded({ runner }), {
+        directory,
+        guestBinary,
+        fetcher,
+      }),
+    ).resolves.toBe(directory);
+    expect(readdirSync(directory).sort()).toEqual(
+      [...RUNNER_RELEASE_ASSETS, "dxd-linux-x64"].sort(),
+    );
+    expect(readFileSync(join(directory, "dxd-linux-x64"), "utf8")).toBe(
+      "the release's dxd-linux-x64",
+    );
+    for (const asset of RUNNER_RELEASE_ASSETS)
+      expect(readFileSync(join(directory, asset))).toEqual(bytes[asset]);
+    expect(fetcher).toHaveBeenCalledTimes(RUNNER_RELEASE_ASSETS.length);
+  });
+
+  it("fails on a changed asset and serves no /runner for an older release", async () => {
+    const root = mkdtempSync(join(tmpdir(), "dxd-runner-download-"));
+    const guestBinary = join(root, "dxd");
+    writeFileSync(guestBinary, "dxd");
+    const directory = join(root, "runner");
+    await expect(
+      downloadRunnerRelease(recorded({ runner }), {
+        directory,
+        guestBinary,
+        fetcher: served({
+          ...bytes,
+          "voxl-darwin-arm64": Buffer.from("other"),
+        }),
+      }),
+    ).rejects.toThrow("voxl-darwin-arm64 checksum mismatch: expected");
+    await expect(
+      downloadRunnerRelease(recorded({ runner }), {
+        directory,
+        guestBinary,
+        fetcher: served({ ...bytes, "dxd-linux-arm64": undefined }),
+      }),
+    ).rejects.toThrow("No deployment changes were made");
+    const fetcher = served();
+    await expect(
+      downloadRunnerRelease(recorded({}), { directory, guestBinary, fetcher }),
+    ).resolves.toBeUndefined();
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });
 
