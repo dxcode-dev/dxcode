@@ -118,7 +118,7 @@ const spaceToolText = {
   },
   add_thread_to_space: {
     description:
-      "Brings an existing thread into this Space, provided the person asking owns it. Once added, it is listed among the Space's threads with its live status, and any threads it started come along. A thread that some other thread started can only come in together with its starter. Threads that belong to another Space, or are shared more narrowly than this Space, are refused, and the error tells the person what they can do.",
+      "Brings an existing thread of the Space owner's into this Space, only when the owner asks. Once added, it takes this Space's sharing and is listed among the Space's threads with its live status, and any threads it started come along. A thread that some other thread started can only come in together with its starter. Threads that belong to another Space are refused, and the error tells the person what they can do.",
     parameters: {
       thread:
         "The thread's URL or ID, such as thr_0193…, exactly as the person wrote it.",
@@ -139,7 +139,7 @@ const spaceToolText = {
   },
   archive_threads: {
     description:
-      "Counts or archives the Space owner's threads that match a search query in find_thread's query language. For anything broad, call it first with dryRun true, tell the person the number of matches, and repeat with dryRun false only once they agree. Use an id: filter to target one specific thread.",
+      "Counts or archives the Space owner's threads that match a search query in find_thread's query language. When someone other than the owner asks in a shared Space, only this Space's threads match. For anything broad, call it first with dryRun true, tell the person the number of matches, and repeat with dryRun false only once they agree. Use an id: filter to target one specific thread.",
     parameters: {
       query:
         "A find_thread query, keywords plus its filters, such as `updated_before:30d repo:owner/name` or `id:thr_0193…`.",

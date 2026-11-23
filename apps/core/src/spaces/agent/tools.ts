@@ -28,6 +28,7 @@ import {
   sha256Hex,
   type ThreadToolsContext,
 } from "../../threads/agent-tools.js";
+import { readCallingThread } from "../../threads/calling-thread.js";
 import { ownerRequest } from "../../threads/owner-request.js";
 import {
   announcePosts,
@@ -553,6 +554,12 @@ export const createSpaceTools = (
       run: async ({ data }) => {
         const context = getContext();
         const owner = await space(context);
+        // Adding shares the thread's family with every Space member, so
+        // only the owner may ask; a member or an automation cannot.
+        if (requesterUserId !== owner.owner_user_id)
+          throw new Error(
+            "Only the Space's owner can add a thread to it. Ask the owner to add it.",
+          );
         const threadId = parseThreadReference(data.thread);
         if (threadId === undefined)
           throw new Error("Give a thread URL or ID, such as thr_….");
@@ -696,13 +703,23 @@ export const createSpaceTools = (
       run: async ({ data }) => {
         const context = getContext();
         const owner = await space(context);
+        // Anyone but the owner reaches only this shared Space's own
+        // threads, never the owner's other private ones.
+        const familyRoot =
+          requesterUserId === owner.owner_user_id
+            ? undefined
+            : (await readCallingThread(context.db, spaceThreadId))
+                .sharedFamilyRoot;
         const matches: Array<{ id: string; title: string }> = [];
         let cursor: string | undefined;
         for (let page = 0; page < 5; page++) {
           const result = await searchThreads({
             db: context.db,
             bindings: context.bindings,
-            scope: { userId: owner.owner_user_id },
+            scope: {
+              userId: owner.owner_user_id,
+              ...(familyRoot === undefined ? {} : { familyRoot }),
+            },
             query: data.query,
             limit: 100,
             ...(cursor === undefined ? {} : { cursor }),
@@ -712,7 +729,9 @@ export const createSpaceTools = (
             if (
               item.ownerUserId === owner.owner_user_id &&
               !item.archived &&
-              item.id !== spaceThreadId
+              item.id !== spaceThreadId &&
+              // The search still shows the owner's other shared threads.
+              (familyRoot === undefined || item.parentThreadId === familyRoot)
             )
               matches.push({ id: item.id, title: item.title });
           }

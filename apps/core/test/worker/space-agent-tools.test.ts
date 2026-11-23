@@ -33,10 +33,11 @@ import { seedSpaceUsers } from "./space-users.js";
  * authors, edits, or reactions, or pages the wrong way; a reaction lands on
  * another Space's post; `list_space_threads` lists threads outside the
  * Space, misfiles a state, or never pages; `update_space` takes a color dx
- * lacks; `add_thread_to_space` takes someone else's thread or leaves its
- * started threads behind; `set_thread_status` writes a child's card;
+ * lacks; `add_thread_to_space` takes someone else's thread, lets a member share
+ * the owner's, or leaves its started threads behind; `set_thread_status` writes a child's card;
  * `archive_threads` archives without a dry run's count, touches the Space
- * itself, or another person's thread; identity and members name the wrong
+ * itself, another person's thread, or, for a member, the owner's threads
+ * outside the Space; identity and members name the wrong
  * people; the docs search finds nothing for a plain question; a child
  * started for a post forgets the post or its author.
  */
@@ -798,7 +799,66 @@ describe("The Space agent's management tools", () => {
       call(toolsFor(spaceId, member), "add_thread_to_space", {
         thread: others,
       }),
-    ).rejects.toThrow(/not found/i);
+    ).rejects.toThrow(/only the space's owner/i);
+    expect(await threadRow(others)).toMatchObject({ parent_thread_id: null });
+
+    // Only the owner may share a thread of theirs with the Space: a
+    // member or an automation naming the owner's private thread is refused.
+    const secret = await ordinaryThread("Acquisition notes");
+    for (const requester of [member, undefined])
+      await expect(
+        call(toolsFor(spaceId, requester), "add_thread_to_space", {
+          thread: secret,
+        }),
+      ).rejects.toThrow(/only the space's owner/i);
+    expect(await threadRow(secret)).toMatchObject({ parent_thread_id: null });
+    expect(
+      await env.DB.prepare("SELECT workspace_access FROM threads WHERE id = ?")
+        .bind(secret)
+        .first("workspace_access"),
+    ).not.toBe("contribute");
+  });
+
+  it("lets a member archive only the Space's threads, never the owner's others", async () => {
+    const spaceId = await createSpace();
+    const secret = await ordinaryThread("Acquisition private");
+    const sharedElsewhere = await ordinaryThread("Acquisition shared");
+    await env.DB.prepare(
+      `UPDATE threads SET visibility = 'workspace', workspace_access = 'contribute',
+         shared_workspace_id = ?2 WHERE id = ?1`,
+    )
+      .bind(sharedElsewhere, workspaceId)
+      .run();
+    const inSpace = await ordinaryThread("Acquisition in space");
+    await call(toolsFor(spaceId, owner), "add_thread_to_space", {
+      thread: inSpace,
+    });
+    await env.DB.prepare(
+      "UPDATE threads SET last_activity_at = '2026-01-01T00:00:00.000Z', updated_at = '2026-01-01T00:00:00.000Z' WHERE id IN (?, ?, ?)",
+    )
+      .bind(secret, sharedElsewhere, inSpace)
+      .run();
+    const query = "updated_before:30d archived:false";
+    for (const requester of [member, undefined]) {
+      const preview = await call(
+        toolsFor(spaceId, requester),
+        "archive_threads",
+        { query, dryRun: true },
+      );
+      expect(preview).toEqual({
+        dryRun: true,
+        count: 1,
+        sample: ["Acquisition in space"],
+      });
+    }
+    const done = await call(toolsFor(spaceId, member), "archive_threads", {
+      query,
+      dryRun: false,
+    });
+    expect(done).toMatchObject({ dryRun: false, archived: 1 });
+    expect((await threadRow(inSpace))?.lifecycle_state).toBe("archived");
+    expect((await threadRow(secret))?.lifecycle_state).toBe("active");
+    expect((await threadRow(sharedElsewhere))?.lifecycle_state).toBe("active");
   });
 
   it("archives the owner's matching threads only after a dry run", async () => {
