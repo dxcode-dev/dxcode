@@ -418,6 +418,12 @@ export default Alchemy.Stack(
         Config.Boolean("DX_MODEL_WORKERS_AI_ENABLED"),
         true,
       ),
+      // Spaces: on unless the deployment turned them off. Off binds
+      // DX_SPACES_ENABLED=false; Core then hides and refuses every Space.
+      spacesEnabled: Config.withDefault(
+        Config.Boolean("DX_DEPLOYMENT_SPACES"),
+        true,
+      ),
       workerTraces: Config.withDefault(
         Config.Boolean("DX_DEPLOYMENT_WORKER_TRACES"),
         false,
@@ -1165,6 +1171,7 @@ export default Alchemy.Stack(
         ...(configuration.workersAiEnabled
           ? {}
           : { DX_MODEL_WORKERS_AI_ENABLED: "false" }),
+        ...(configuration.spacesEnabled ? {} : { DX_SPACES_ENABLED: "false" }),
         DX_WORKLOAD_IDENTITY_ISSUER: `${configuration.origin}/api/workload-identity`,
         DX_WORKLOAD_IDENTITY_AUDIENCE_POLICIES: JSON.stringify({
           version: 1,

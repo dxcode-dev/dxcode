@@ -847,8 +847,8 @@ describe("Space thread cards in workerd with real D1", () => {
 
     // An open pull request, or uncommitted changes, is ready to ship.
     await env.DB.prepare(
-      `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at)
-       VALUES (?1, 'acme/checkout', 'acme/checkout', 7, 'pull', ?2, ?3)`,
+      `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at, verified)
+       VALUES (?1, 'acme/checkout', 'acme/checkout', 7, 'pull', ?2, ?3, 1)`,
     )
       .bind(
         childId,
@@ -945,8 +945,8 @@ describe("Space thread cards in workerd with real D1", () => {
 
     // It opened a new pull request after shipping: Ready to Ship.
     await env.DB.prepare(
-      `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at)
-       VALUES (?1, 'acme/checkout', 'acme/checkout', 8, 'pull', ?2, ?3)`,
+      `INSERT INTO thread_github_link (thread_id, repository, repository_key, number, kind, subject_json, created_at, verified)
+       VALUES (?1, 'acme/checkout', 'acme/checkout', 8, 'pull', ?2, ?3, 1)`,
     )
       .bind(
         childId,

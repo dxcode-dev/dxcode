@@ -56,6 +56,9 @@ export const NOTIFY_PER_HOUR = 10;
 /** A tool call id a notification can link to: `?message=call:<id>`. */
 const TOOL_CALL_LINK = /^[\w.-]{1,160}$/;
 
+const NO_GITHUB_CREDENTIALS =
+  "No GitHub credentials: the owner has not connected GitHub in dx Settings → Integrations and set no GITHUB_TOKEN environment variable.";
+
 const description = (lines: ReadonlyArray<string>) => lines.join("\n\n");
 
 const text = (max: number, about: string) =>
@@ -386,10 +389,7 @@ export const createAutomationTools = (
       args.thread ?? savedThreadId,
     );
     const token = await tokenFor(threadId);
-    if (token === undefined)
-      throw new Error(
-        "No GitHub credentials: the owner has not connected GitHub in dx Settings → Integrations and set no GITHUB_TOKEN environment variable.",
-      );
+    if (token === undefined) throw new Error(NO_GITHUB_CREDENTIALS);
     if (kind === "ci") {
       if (args.commit_sha === undefined)
         throw new Error("ci needs commit_sha.");
@@ -853,7 +853,7 @@ export const createAutomationTools = (
       name: "link_github_issue",
       description: description([
         "Record that this Thread works on a GitHub issue or pull request. The Thread header then lists it with its title and state, and find_thread finds this Thread with issue:owner/repo#N. Use it when you take on an issue or PR, such as when you note this Thread in an issue's body.",
-        "A comment subscription (pr-comments or issue-comments) on an issue or PR links it already, and a PR this Thread opens is linked when it opens. The link stays after the subscription ends. dx reads the item once as this Thread's gh does; the dx GitHub App's webhooks keep its title and state current.",
+        "A comment subscription (pr-comments or issue-comments) on an issue or PR links it already, and a PR this Thread opens is linked when it opens. The link stays after the subscription ends. dx reads the item once as this Thread's gh does, so it needs the owner's GitHub credentials; the dx GitHub App's webhooks keep its title and state current.",
       ]),
       input: v.object({
         repository: text(200, "GitHub repository as owner/name."),
@@ -871,26 +871,28 @@ export const createAutomationTools = (
           );
         return withOwnerAndToken(async (context, _owner, tokenFor) => {
           const token = await tokenFor(callingThreadId);
-          // Without credentials the link is still useful: find_thread
-          // finds it, and webhooks fill in its title and state.
-          const item =
-            token === undefined
-              ? undefined
-              : await readItemSubject(token, data.repository, data.number);
+          // Webhooks write each link's title and state, so a link must
+          // name an item the owner can read: no credentials, no link.
+          if (token === undefined) throw new Error(NO_GITHUB_CREDENTIALS);
+          const item = await readItemSubject(
+            token,
+            data.repository,
+            data.number,
+          );
           const links = await linkThreadAndList(context.db, {
             threadId: callingThreadId,
             repository: data.repository,
             number: data.number,
-            kind: item?.kind ?? "issue",
-            subject: item?.subject,
+            kind: item.kind,
+            subject: item.subject,
           });
           return {
             output: {
               linked: {
                 repository: data.repository,
                 number: data.number,
-                kind: item?.kind ?? "issue",
-                ...(item?.subject === undefined
+                kind: item.kind,
+                ...(item.subject === undefined
                   ? {}
                   : { title: item.subject.title, state: item.subject.state }),
               },
@@ -898,11 +900,6 @@ export const createAutomationTools = (
                 ({ repository, number, kind }) =>
                   `${repository}#${number} (${kind === "pull" ? "PR" : "issue"})`,
               ),
-              ...(token === undefined
-                ? {
-                    note: "No GitHub credentials, so dx could not read its title or check that it exists. Webhooks from the dx GitHub App fill them in.",
-                  }
-                : {}),
             },
           };
         });

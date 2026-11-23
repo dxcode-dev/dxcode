@@ -61,6 +61,11 @@ const DAY_MS = 24 * 60 * MINUTE_MS;
 const SCAN_DAYS = 3_700;
 /** How many steps an hourly or minutely rule tries. */
 const SCAN_STEPS = 250_000;
+/**
+ * How many candidate instants an hourly or minutely rule reads in its zone.
+ * Each read costs an Intl call, so this bounds a rule that never matches.
+ */
+const SCAN_ZONED = 50_000;
 const WEEKDAYS = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"] as const;
 const FREQUENCIES: ReadonlyArray<Frequency> = [
   "MINUTELY",
@@ -504,15 +509,29 @@ export const nextOccurrence = (
       rule.frequency === "HOURLY" && rule.byMinute !== undefined
         ? rule.byMinute.map((minute) => minute - rule.start.minute)
         : [0];
+    const daily: Recurrence = { ...rule, frequency: "DAILY" };
+    // A zone's offset is within a day of UTC, so the local day is the UTC
+    // day or one beside it. Days none of which match skip the Intl call.
+    let utcDay = Number.NaN;
+    let nearMatch = false;
+    let zoned = 0;
     for (let index = first; index < first + SCAN_STEPS; index++) {
       for (const shift of minutes) {
         const instant = base + index * step + shift * MINUTE_MS;
         if (beyondUntil(instant)) return undefined;
+        const day = Math.floor(instant / DAY_MS);
+        if (day !== utcDay) {
+          utcDay = day;
+          nearMatch =
+            dayMatches(daily, day - 1) ||
+            dayMatches(daily, day) ||
+            dayMatches(daily, day + 1);
+        }
+        if (!nearMatch || !accepts(instant)) continue;
+        if (++zoned > SCAN_ZONED) return undefined;
         const local = localTime(instant, rule.timeZone);
-        const day = dayNumber(local.year, local.month, local.day);
         if (
-          accepts(instant) &&
-          dayMatches({ ...rule, frequency: "DAILY" }, day) &&
+          dayMatches(daily, dayNumber(local.year, local.month, local.day)) &&
           (rule.byHour === undefined || rule.byHour.includes(local.hour)) &&
           (rule.frequency === "HOURLY" ||
             rule.byMinute === undefined ||

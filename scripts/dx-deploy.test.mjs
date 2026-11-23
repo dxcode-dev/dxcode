@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { validateSelfhostConfig } from "../deploy/selfhost/config.mjs";
 import {
+  configureSettings,
   INSTALLER_SETTING_IDS,
   SELFHOST_SETTINGS,
   unseenSettings,
@@ -239,6 +240,80 @@ describe("common deployment installer", () => {
     );
     expect(unseenSettings(on).map(({ id }) => id)).not.toContain(
       "realtimeKitApiToken",
+    );
+  });
+
+  it("asks about Spaces in pnpm dx:configure, keeps them on by default, and records off so the deploy turns them off", async () => {
+    const before = validateSelfhostConfig({
+      name: "selfhost",
+      adminEmail: "owner@example.com",
+      cloudflareAuth: "api-token",
+      orbProviders: [],
+      configuredSettings: [...INSTALLER_SETTING_IDS],
+    });
+    // The real walk `pnpm dx:configure` runs, answering each yes/no prompt
+    // with `answer` (undefined takes the prompt's default, as Enter does).
+    const configure = async (config, answer, all = false) => {
+      const asked = [];
+      const result = await configureSettings({
+        config,
+        validate: validateSelfhostConfig,
+        environment: {},
+        all,
+        ui: {
+          log: () => {},
+          answer: async (_label, current) => current,
+          secret: async () => "",
+          yes: async (label, fallback) => {
+            asked.push({ label: label.trim(), fallback });
+            return label.trim() === "Spaces" ? (answer ?? fallback) : fallback;
+          },
+        },
+      });
+      return {
+        config: result.config,
+        spaces: asked.find(({ label }) => label === "Spaces"),
+      };
+    };
+
+    // A deployment from before this setting is asked once, defaulting on.
+    expect(unseenSettings(before).map(({ id }) => id)).toContain("spaces");
+    const kept = await configure(before, undefined);
+    expect(kept.spaces).toEqual({ label: "Spaces", fallback: true });
+    expect(kept.config).not.toHaveProperty("spaces");
+    expect(kept.config.configuredSettings).toContain("spaces");
+    expect(unseenSettings(kept.config).map(({ id }) => id)).not.toContain(
+      "spaces",
+    );
+
+    // Off is saved in the config, the deploy's input.
+    const off = await configure(before, false);
+    expect(off.config.spaces).toBe(false);
+    expect(validateSelfhostConfig(off.config).spaces).toBe(false);
+    // Asked again (--all), it defaults to the saved choice; on again
+    // removes the key, so the deploy binds nothing and Spaces return.
+    const again = await configure(off.config, true, true);
+    expect(again.spaces).toEqual({ label: "Spaces", fallback: false });
+    expect(again.config).not.toHaveProperty("spaces");
+
+    // A settings file (--non-interactive) sets it by ID, as a boolean only.
+    const fromFile = await configureSettings({
+      config: before,
+      validate: validateSelfhostConfig,
+      environment: {},
+      values: { spaces: false },
+    });
+    expect(fromFile.config.spaces).toBe(false);
+    await expect(
+      configureSettings({
+        config: before,
+        validate: validateSelfhostConfig,
+        environment: {},
+        values: { spaces: "false" },
+      }),
+    ).rejects.toThrow("spaces must be true or false");
+    expect(() => validateSelfhostConfig({ ...before, spaces: "no" })).toThrow(
+      "spaces must be true or false.",
     );
   });
 

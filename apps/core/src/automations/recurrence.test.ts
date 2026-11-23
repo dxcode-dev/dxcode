@@ -19,7 +19,9 @@ import {
  * - a DTSTART long in the past fires for every missed occurrence;
  * - an omitted DTSTART is anchored in UTC instead of the owner's zone;
  * - an unsupported or never-firing rule is accepted and silently never runs;
- * - a rule that fires more often than the minimum spacing is accepted.
+ * - a rule that fires more often than the minimum spacing is accepted;
+ * - an hourly or minutely rule that never matches burns CPU for minutes
+ *   before it is refused, or a sparse valid one is refused by the bound.
  */
 
 const at = (iso: string) => new Date(iso);
@@ -79,6 +81,43 @@ describe("parseRecurrence", () => {
     expect(() => parseRecurrence(text, { now, timeZone: "UTC" })).toThrow(
       message,
     );
+  });
+});
+
+describe("bounded scans", () => {
+  const everyMinute = Array.from({ length: 60 }, (_, minute) => minute).join();
+
+  it.each([
+    `RRULE:FREQ=MINUTELY;INTERVAL=5;BYMONTH=2;BYMONTHDAY=30`,
+    `RRULE:FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=30;BYMINUTE=${everyMinute}`,
+    `RRULE:FREQ=HOURLY;INTERVAL=24;BYHOUR=5;BYMINUTE=${everyMinute}`,
+  ])("refuses the never-matching %j within a bounded scan", (text) => {
+    const started = performance.now();
+    expect(() =>
+      parseRecurrence(`DTSTART:20261024T030000Z\n${text}`, {
+        now,
+        timeZone: "UTC",
+      }),
+    ).toThrow(/never/);
+    expect(performance.now() - started).toBeLessThan(3_000);
+  });
+
+  it.each([
+    ["RRULE:FREQ=MINUTELY;INTERVAL=305", "2026-10-24T10:10:00.000Z"],
+    [
+      "RRULE:FREQ=MINUTELY;INTERVAL=5;BYMONTH=2;BYMONTHDAY=29;BYHOUR=23;BYMINUTE=55",
+      "2028-02-29T23:55:00.000Z",
+    ],
+    [
+      "RRULE:FREQ=HOURLY;BYMONTH=2;BYMONTHDAY=29;BYMINUTE=0,15,30,45",
+      "2028-02-29T00:00:00.000Z",
+    ],
+  ])("still finds the sparse but valid %j", (text, expected) => {
+    const rule = parseRecurrence(`DTSTART:20261024T000000Z\n${text}`, {
+      now,
+      timeZone: "UTC",
+    });
+    expect(nextOccurrence(rule, now, 0, true)?.toISOString()).toBe(expected);
   });
 });
 

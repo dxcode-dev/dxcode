@@ -6,6 +6,11 @@ import type { FilterKind, PullSubject, SubscriptionFilter } from "./github.js";
  * so does the agent's `link_github_issue`; the link outlives the
  * subscription. Webhooks keep each link's title and state, so the header
  * never reads GitHub.
+ *
+ * Both read GitHub with the owner's credentials before linking, so a link
+ * saved now is `verified`. Webhooks and other Threads' reads write only
+ * verified links, and only their title and state are shown: an older link
+ * saved without credentials names an item its owner may not see.
  */
 export type LinkKind = "issue" | "pull";
 
@@ -29,8 +34,9 @@ export const linkOfSubscription = (
       : undefined;
 
 /**
- * Links the Thread to an issue or PR. Linking it again keeps the saved
- * title; a known kind or subject replaces the saved one.
+ * Links the Thread to an issue or PR the owner's credentials read. Linking
+ * it again keeps the saved title; a known kind or subject replaces the
+ * saved one.
  */
 export const linkThreadStatement = (
   db: D1Database,
@@ -47,10 +53,11 @@ export const linkThreadStatement = (
     .prepare(
       `INSERT INTO thread_github_link (
          thread_id, repository, repository_key, number, kind, subject_json,
-         created_at
-       ) VALUES (?1, ?2, lower(?2), ?3, ?4, ?5, ?6)
+         created_at, verified
+       ) VALUES (?1, ?2, lower(?2), ?3, ?4, ?5, ?6, 1)
        ON CONFLICT (thread_id, repository_key, number) DO UPDATE SET
          kind = excluded.kind,
+         verified = 1,
          subject_json = COALESCE(excluded.subject_json,
                                  thread_github_link.subject_json)`,
     )
@@ -83,7 +90,7 @@ export const linkThreadAndList = async (
   return (links?.results ?? []) as LinkRow[];
 };
 
-/** A webhook's title and state for every Thread linked to the item. */
+/** A webhook's title and state for every verified link to the item. */
 export const saveLinkSubjectStatement = (
   db: D1Database,
   repository: string,
@@ -94,7 +101,7 @@ export const saveLinkSubjectStatement = (
   db
     .prepare(
       `UPDATE thread_github_link SET kind = ?3, subject_json = ?4
-        WHERE repository_key = lower(?1) AND number = ?2`,
+        WHERE repository_key = lower(?1) AND number = ?2 AND verified = 1`,
     )
     .bind(repository, number, kind, JSON.stringify(subject));
 
@@ -110,7 +117,9 @@ export const saveLinkSubject = (
 const threadLinksStatement = (db: D1Database, threadId: string) =>
   db
     .prepare(
-      `SELECT repository, number, kind, subject_json, created_at
+      `SELECT repository, number, kind,
+              CASE verified WHEN 1 THEN subject_json END AS subject_json,
+              created_at
          FROM thread_github_link WHERE thread_id = ?1
         ORDER BY created_at DESC, repository_key, number
         LIMIT 50`,

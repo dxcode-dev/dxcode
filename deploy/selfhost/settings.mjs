@@ -66,6 +66,7 @@ const field = (key) => ({
 
 export const SETTING_GROUPS = Object.freeze([
   "Sign-in",
+  "Features",
   "Model routing",
   "Orb providers",
   "Source control",
@@ -136,6 +137,21 @@ export const SELFHOST_SETTINGS = Object.freeze([
     example: "sign-in@mail.example.com",
     show: (config) => config.authEmailFrom ?? "none",
     bindings: ["DX_AUTH_EMAIL_FROM", "EMAIL"],
+  },
+  {
+    id: "spaces",
+    group: "Features",
+    kind: "boolean",
+    label: "Spaces",
+    description:
+      "Shared rooms where an agent coordinates work toward a goal. Off hides every Space and stops their agents; their data stays, so turning Spaces on again restores them.",
+    example: "true",
+    get: (config) => config.spaces !== false,
+    set: (config, on) => {
+      const { spaces: _previous, ...rest } = config;
+      return on ? rest : { ...rest, spaces: false };
+    },
+    binding: "DX_SPACES_ENABLED",
   },
   {
     id: "workersAi",

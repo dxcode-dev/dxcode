@@ -390,6 +390,7 @@ export const createSpaceTools = (
                                 'url', 'https://github.com/' || link.repository || '/pull/' || link.number)
                          FROM thread_github_link AS link
                         WHERE link.thread_id = thread.id AND link.kind = 'pull'
+                          AND link.verified = 1
                         ORDER BY link.created_at DESC LIMIT 1) AS pull_request
                  FROM threads AS thread
                 WHERE thread.id IN (SELECT value FROM json_each(?1))`,

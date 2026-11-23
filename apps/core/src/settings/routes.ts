@@ -33,6 +33,7 @@ import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
 import { personalRunnerRoutes } from "../runners/routes.js";
 import { spaceAgentModelRoutes } from "../spaces/agent-model.js";
+import { requireSpaces, spacesEnabled } from "../spaces/availability.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
@@ -84,12 +85,14 @@ const responseData = (
   composerQuickActions: boolean,
   huddle: boolean,
   mailDomain: string | undefined,
+  spaces: boolean,
 ) => ({
   activeScope: access.activeScope,
   dictationAvailable: dictation !== undefined,
   // Only when the deployment offers them.
   ...(composerQuickActions ? { composerQuickActions } : {}),
   ...(huddle ? { huddle } : {}),
+  ...(spaces ? { spaces } : {}),
   ...(dictation === undefined ? {} : { dictation }),
   ...(portalDomain === undefined ? {} : { portalDomain }),
   ...(mailDomain === undefined ? {} : { mailDomain }),
@@ -160,6 +163,7 @@ const handlePersonalSettingsContext = async (context: Context<AppEnv>) => {
             () => undefined,
           ),
         ))?.domain,
+        spacesEnabled(context.env),
       ),
     });
   });
@@ -258,6 +262,7 @@ settingsRoutes.route(
   personalExperimentalFeaturesRoutes,
 );
 settingsRoutes.route("/personal/security", personalSecurityRoutes);
+settingsRoutes.use("/personal/space-agent-model/*", requireSpaces);
 settingsRoutes.route("/personal/space-agent-model", spaceAgentModelRoutes);
 settingsRoutes.route("/personal/feedback-widget", feedbackWidgetEmbedRoutes);
 settingsRoutes.route("/personal/projects", personalProjectDefaultsRoutes);

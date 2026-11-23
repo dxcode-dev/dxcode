@@ -821,7 +821,13 @@ describe("settings routes in workerd with real D1", () => {
     );
     await expect(outsiderResponse.json()).resolves.toEqual({
       status: "success",
-      data: { activeScope: "personal", dictationAvailable: false },
+      // No workspace; Spaces are on, as on any deployment that did not
+      // turn them off.
+      data: {
+        activeScope: "personal",
+        dictationAvailable: false,
+        spaces: true,
+      },
     });
   });
 

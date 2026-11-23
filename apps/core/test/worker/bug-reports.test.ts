@@ -10,6 +10,7 @@ import {
   mayUseBugReportTools,
 } from "../../src/bug-reports/agent-tools.js";
 import {
+  BUG_REPORTS_PER_HOUR,
   bugReportRoutes,
   threadBugReportRoutes,
 } from "../../src/bug-reports/routes.js";
@@ -305,7 +306,16 @@ const agentTools = (callingThreadId: string, bindings = readerBindings()) => {
   return { call };
 };
 
-beforeEach(() => {
+/** Each test starts with an hour's reports left for the reporter. */
+const ageReports = (userId: string) =>
+  env.DB.prepare(
+    "UPDATE bug_report SET created_at = ?1 WHERE reporter_user_id = ?2",
+  )
+    .bind(new Date(Date.now() - 61 * 60 * 1000).toISOString(), userId)
+    .run();
+
+beforeEach(async () => {
+  await ageReports(principal.userId);
   githubCalls = [];
   recordGitHub();
   logQueries = [];
@@ -1064,5 +1074,55 @@ describe("Bug reports", () => {
       ).status,
     ).toBe(404);
     expect(await yourReports(threadId)).toEqual([]);
+  });
+
+  it("caps each person's reports an hour, before reading Worker logs, and still answers a retry of a kept one (#2370)", async () => {
+    const threadId = await createThread();
+    const keyed = (key: string) => {
+      const form = new FormData();
+      form.set("report", JSON.stringify({ message: "Bug", diagnostics: {} }));
+      return app().request(
+        "/bug-reports",
+        { method: "POST", body: form, headers: { "idempotency-key": key } },
+        deployedBindings(),
+      );
+    };
+    const keys = Array.from({ length: BUG_REPORTS_PER_HOUR }, () =>
+      crypto.randomUUID(),
+    );
+    const kept = [];
+    for (const key of keys) kept.push(await sent(await keyed(key)));
+
+    // The next report, from Settings or a Thread, is refused, and a Thread's
+    // costs no Worker logs query.
+    const refused = await keyed(crypto.randomUUID());
+    expect(refused.status).toBe(429);
+    expect((await refused.json<{ data: { code: string } }>()).data.code).toBe(
+      "RATE_LIMITED",
+    );
+    expect(
+      (
+        await send(threadId, {
+          message: "Bug",
+          diagnostics: { threadAndApp },
+        })
+      ).status,
+    ).toBe(429);
+    expect(logQueries).toEqual([]);
+
+    // A retry of a kept report gets it back, and someone else still reports.
+    expect((await sent(await keyed(keys[0] ?? ""))).id).toBe(kept[0]?.id);
+    await sent(
+      await sendFromSettings(
+        { message: "Mine", diagnostics: {} },
+        [],
+        deployedBindings(),
+        otherPrincipal,
+      ),
+    );
+
+    // An hour later the person reports again.
+    await ageReports(principal.userId);
+    await sent(await keyed(crypto.randomUUID()));
   });
 });

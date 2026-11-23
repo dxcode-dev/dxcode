@@ -82,6 +82,8 @@ export interface Bindings {
   readonly DX_WORKLOAD_IDENTITY_SIGNING_KEYS?: string;
   readonly DX_MODEL_ENDPOINT_ALLOWLIST?: string;
   readonly DX_MODEL_WORKERS_AI_ENABLED?: string;
+  /** `false` turns Spaces off for this deployment (spaces/availability.ts). */
+  readonly DX_SPACES_ENABLED?: string;
   readonly DX_LOCAL_MODEL_SEAM?: string;
   readonly DX_MODEL_DEPLOYMENT_PROVIDERS?: string;
   readonly DX_EXPERIMENTAL_FEATURE_FIXTURE?: string;

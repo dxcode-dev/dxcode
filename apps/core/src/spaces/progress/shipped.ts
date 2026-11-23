@@ -61,7 +61,8 @@ export const markMergedPullRequestShipped = async (
         `UPDATE threads SET shipped_at = ?3, ship_reason = 'pull_request_merged'
           WHERE shipped_at IS NULL AND lifecycle_state != 'deleted'
             AND id IN (SELECT thread_id FROM thread_github_link
-                        WHERE repository_key = lower(?1) AND number = ?2)
+                        WHERE repository_key = lower(?1) AND number = ?2
+                          AND verified = 1)
           RETURNING id`,
       )
       .bind(repository, number, mergedAt)

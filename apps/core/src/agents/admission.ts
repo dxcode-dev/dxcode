@@ -4,10 +4,12 @@ import { enforceThreadActive } from "../auth/enforce-thread-active.js";
 import type { AppEnv } from "../http/types.js";
 import { tracedMiddleware } from "../observability/boundaries.js";
 import { submissionStartupObservation } from "../observability/submission-startup.js";
+import { hideSpaceThreads } from "../spaces/availability.js";
 import { attributeSubmission } from "../thread-sharing/middleware.js";
 import { deliverFirstMessageBeforeCreatingSend } from "../threads/initial-dispatch-delivery.js";
 
 const authorize = tracedMiddleware("agent.authorizeThread", authorizeThread);
+const spaces = tracedMiddleware("agent.hideSpaceThreads", hideSpaceThreads);
 const active = tracedMiddleware(
   "agent.enforceThreadActive",
   enforceThreadActive,
@@ -34,6 +36,10 @@ const startup = tracedMiddleware(
  * and the message is kept.
  */
 export const useAgentAdmission = (routes: Hono<AppEnv>) => {
+  // With Spaces off, nothing reaches a Space's agent: not a person, a
+  // schedule, a GitHub event, or another Thread's message.
+  routes.use("/:threadId", spaces);
+  routes.use("/:threadId/:subpath{.+}", spaces);
   routes.use("/:threadId", authorize);
   routes.use("/:threadId/:subpath{.+}", authorize);
   routes.use("/:threadId", active);

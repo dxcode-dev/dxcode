@@ -264,11 +264,9 @@ describe("GitHub tool credentials", () => {
     expect(revoked.status).toBe(204);
 
     const before = github.length;
-    const output = await call("link_github_issue", {
-      repository: REPO,
-      number: 5,
-    });
-    expect(output.note).toMatch(/No GitHub credentials/);
+    await expect(
+      call("link_github_issue", { repository: REPO, number: 5 }),
+    ).rejects.toThrow(/No GitHub credentials/);
     expect(tokensSince(before)).toEqual([]);
     await expect(gitCredential(threadId)).rejects.toThrow();
     await expect(

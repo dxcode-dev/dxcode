@@ -21,6 +21,7 @@ import { resolveLocalMcpAgentConnections } from "../settings/mcp-servers/local-s
 import { loadThreadWorkspaceAgentInstructions } from "../settings/workspace-agent-instructions/thread.js";
 import { readSpaceAgentPromptData } from "../spaces/agent/prompt-data.js";
 import { readStartingSpace } from "../spaces/agent-prompt.js";
+import { spacesEnabled } from "../spaces/availability.js";
 import type { PluginAgentDefinition } from "./agents/definition.js";
 import { pluginAgentThreadOf } from "./agents/threads.js";
 import type { PluginHostContext } from "./host.js";
@@ -159,6 +160,7 @@ export const resolveAgentAdditionalRepositories = async (threadId: string) => {
  */
 export const resolveAgentSpace = async (threadId: string) => {
   const { db, bindings } = agentPluginHostContext();
+  if (!spacesEnabled(bindings)) return undefined;
   return readSpaceAgentPromptData(db, bindings, threadId);
 };
 
@@ -178,10 +180,13 @@ export const resolveAgentRunner = async (threadId: string) =>
 
 /**
  * The Space that started this Thread, for the child's prompt; undefined
- * when no Space did.
+ * when no Space did, or while Spaces are off (nothing would read a report).
  */
-export const resolveAgentStartingSpace = async (threadId: string) =>
-  readStartingSpace(agentPluginHostContext().db, threadId);
+export const resolveAgentStartingSpace = async (threadId: string) => {
+  const { db, bindings } = agentPluginHostContext();
+  if (!spacesEnabled(bindings)) return undefined;
+  return readStartingSpace(db, threadId);
+};
 
 /**
  * Installed plugins with code for this submission, with what each one's

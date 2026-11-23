@@ -209,6 +209,8 @@ export type ListSpaceThreadsResponse =
 export const SpaceErrorCodeSchema = Schema.Literals([
   "INVALID_REQUEST",
   "SPACE_NOT_FOUND",
+  /** The deployment turned Spaces off. */
+  "SPACES_UNAVAILABLE",
   "SPACE_OWNER_ONLY",
   "SPACE_SHARING_UNAVAILABLE",
   "SPACE_SHARING_MAIL_READS",

@@ -315,6 +315,10 @@ export const BugReportErrorResponseSchema = Schema.Union([
   errorResponse("TOO_LARGE", "The bug report is too large."),
   errorResponse("NOT_FOUND", "Bug report not found."),
   errorResponse(
+    "RATE_LIMITED",
+    "You sent too many bug reports this hour. Try again later.",
+  ),
+  errorResponse(
     "PERSISTENCE_UNAVAILABLE",
     "Persistence is temporarily unavailable.",
   ),

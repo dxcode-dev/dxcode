@@ -317,6 +317,12 @@
       "provenance": "alchemy"
     },
     {
+      "name": "DX_SPACES_ENABLED",
+      "type": "text",
+      "provenance": "alchemy",
+      "optional": true
+    },
+    {
       "name": "DX_STORAGE",
       "type": "r2",
       "provenance": "authored-wrangler"

@@ -1141,6 +1141,9 @@ export const loadSelfhostConfig = ({ environment, workspaceRoot }) => {
           workersAi: environment.DX_MODEL_WORKERS_AI_ENABLED !== "false",
         }
       : {}),
+    ...(environment.DX_DEPLOYMENT_SPACES?.trim()
+      ? { spaces: environment.DX_DEPLOYMENT_SPACES.trim() !== "false" }
+      : {}),
     ...(environment.DX_DEPLOYMENT_INTEGRATIONS?.trim()
       ? {
           integrations: environment.DX_DEPLOYMENT_INTEGRATIONS.split(","),

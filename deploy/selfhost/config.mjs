@@ -16,6 +16,7 @@ const CONFIG_KEYS = new Set([
   "allowSignup",
   "workersAi",
   "workerTraces",
+  "spaces",
   "githubCopilotClientId",
   "modelDeploymentProviders",
   "modelEndpointAllowlist",
@@ -283,6 +284,7 @@ export const validateSelfhostConfig = (input) => {
     "allowSignup",
     "workersAi",
     "workerTraces",
+    "spaces",
     "offeredEmailSending",
     "attachmentR2Credentials",
   ])
@@ -447,6 +449,9 @@ export const validateSelfhostConfig = (input) => {
     ...(input.workerTraces === undefined
       ? {}
       : { workerTraces: input.workerTraces }),
+    // Spaces are on unless the operator turned them off; off keeps every
+    // Space's data, so turning them on again restores each one.
+    ...(input.spaces === false ? { spaces: false } : {}),
     integrations: [...integrations].sort(),
     ...(bugReportReaders.length === 0
       ? {}

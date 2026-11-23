@@ -503,6 +503,7 @@ export const listSpaceThreadRows = async (
                 EXISTS (
                   SELECT 1 FROM thread_github_link AS link
                    WHERE link.thread_id = thread.id AND link.kind = 'pull'
+                     AND link.verified = 1
                      AND json_extract(link.subject_json, '$.state') = 'open'
                 ) AS open_pull,
                 thread.turn_settled_at,

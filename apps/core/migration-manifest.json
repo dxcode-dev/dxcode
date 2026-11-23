@@ -309,6 +309,11 @@
       "filename": "0059_release_v0.2.156.sql",
       "sha256": "071da9803baf4c7e6df0c5bd0a25659d521cde4546744c87506e7e4f34e94a95",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0060_release_v0.2.163.sql",
+      "sha256": "2eabd7e738d210908149bd9d6250a5a05fa2534a4bda4ea3b3d547fddab933f7",
+      "classification": "non-destructive"
     }
   ],
   "durableObjects": [

@@ -1,6 +1,7 @@
 import { sweepClaudePlanWaits } from "../claude-code/plan-wait.js";
 import type { Bindings } from "../http/types.js";
 import { automationLogger } from "../logging.js";
+import { spacesEnabled } from "../spaces/availability.js";
 import {
   claimFiring,
   dueSchedules,
@@ -27,18 +28,24 @@ import {
 interface ThreadState {
   readonly lifecycle_state: string;
   readonly project_id: string;
+  readonly kind: string | null;
   readonly space_state: string | null;
 }
 
 /**
  * The Thread an automation wakes, and why it may not: an archived Thread,
  * or a thread whose Space is archived, hears nothing until it is restored.
- * Nothing it missed meanwhile is replayed.
+ * While Spaces are off (`spaces` false), a Space hears nothing and its
+ * threads wake as any other. Nothing it missed meanwhile is replayed.
  */
-export const threadState = async (db: D1Database, threadId: string) => {
+export const threadState = async (
+  db: D1Database,
+  threadId: string,
+  spaces = true,
+) => {
   const row = await db
     .prepare(
-      `SELECT thread.lifecycle_state, thread.project_id,
+      `SELECT thread.lifecycle_state, thread.project_id, thread.kind,
               space.lifecycle_state AS space_state
          FROM threads AS thread
          LEFT JOIN threads AS space
@@ -53,9 +60,11 @@ export const threadState = async (db: D1Database, threadId: string) => {
   const paused =
     row.lifecycle_state !== "active"
       ? "The Thread is archived."
-      : row.space_state !== null && row.space_state !== "active"
-        ? "The Space that started this Thread is archived."
-        : undefined;
+      : !spaces && row.kind === "space"
+        ? "Spaces are off on this deployment."
+        : spaces && row.space_state !== null && row.space_state !== "active"
+          ? "The Space that started this Thread is archived."
+          : undefined;
   return { projectId: row.project_id, paused };
 };
 
@@ -79,7 +88,7 @@ const fireSchedule = async (
 ) => {
   const occurrence = row.next_run_at as string;
   if (!(await claimFiring(db, row, now))) return;
-  const thread = await threadState(db, row.thread_id);
+  const thread = await threadState(db, row.thread_id, spacesEnabled(bindings));
   // The occurrence is claimed and passes: restoring the Thread resumes the
   // schedule at its next occurrence.
   if (thread === undefined || thread.paused !== undefined) {

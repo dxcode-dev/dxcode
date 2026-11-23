@@ -1019,6 +1019,16 @@ const environment = {
     : process.env.DX_DEPLOYMENT_HUDDLE?.trim()
       ? { DX_DEPLOYMENT_HUDDLE: process.env.DX_DEPLOYMENT_HUDDLE.trim() }
       : {}),
+  // Spaces are a deploy-time choice: the self-host config's `spaces`, else
+  // the operator's DX_DEPLOYMENT_SPACES (staging, previews); unset, on.
+  ...(selfhostConfig !== undefined
+    ? {
+        DX_DEPLOYMENT_SPACES:
+          selfhostConfig.spaces === false ? "false" : "true",
+      }
+    : process.env.DX_DEPLOYMENT_SPACES?.trim()
+      ? { DX_DEPLOYMENT_SPACES: process.env.DX_DEPLOYMENT_SPACES.trim() }
+      : {}),
   // Self-host config is authoritative; previews inherit the operator's env.
   ...(selfhostConfig !== undefined
     ? {

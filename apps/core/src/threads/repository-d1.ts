@@ -924,10 +924,16 @@ export const ThreadRepositoryD1 = Layer.effect(
                   : // Active Spaces list in the sidebar's own Spaces
                     // section; archived ones list with the archived Threads.
                     // The threads a Space started list only in that Space.
-                    sql`${request.lifecycleState === "archived" ? sql`thread.kind IN ('thread', 'space')` : sql`thread.kind = 'thread'`} AND NOT EXISTS (
+                    // With Spaces off no Space lists, and a Space's threads
+                    // list as roots: their parent is no `thread`.
+                    sql`${request.lifecycleState === "archived" && request.spaces !== false ? sql`thread.kind IN ('thread', 'space')` : sql`thread.kind = 'thread'`} AND ${
+                      request.spaces === false
+                        ? sql`1 = 1`
+                        : sql`NOT EXISTS (
                       SELECT 1 FROM threads AS space
                        WHERE space.id = thread.parent_thread_id
-                         AND space.kind = 'space') AND (thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
+                         AND space.kind = 'space')`
+                    } AND (thread.parent_thread_id IS NULL OR ${sql.literal(pinnedAt)} IS NOT NULL OR NOT EXISTS (
                       SELECT 1 FROM threads AS parent
                        WHERE parent.id = thread.parent_thread_id
                          AND parent.kind = 'thread'
@@ -1000,6 +1006,7 @@ export const ThreadRepositoryD1 = Layer.effect(
                 AND ${inReachableScope("thread", reader)}
                 AND ${projectId ? sql`thread.project_id = ${projectId}` : sql`1 = 1`}
                 AND thread.lifecycle_state != 'deleted'
+                AND ${request.spaces === false ? sql`ifnull(thread.kind, 'thread') != 'space'` : sql`1 = 1`}
                 AND (${request.lifecycleState ?? null} IS NULL OR thread.lifecycle_state = ${request.lifecycleState ?? null})`;
             const rows = yield* (
               cursor === undefined

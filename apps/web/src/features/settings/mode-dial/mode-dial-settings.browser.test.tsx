@@ -226,6 +226,8 @@ describe("models settings", () => {
         ),
       },
       choices: { modes: [], models },
+      // The settings context: this deployment has Spaces on.
+      context: { activeScope: "personal", spaces: true },
       "space-agent-model": {
         route: {
           kind: "model-routing",
@@ -281,6 +283,41 @@ describe("models settings", () => {
       await vi.waitFor(() =>
         expect(onDirtyChange).toHaveBeenLastCalledWith(false),
       );
+    } finally {
+      await React.act(() => root.unmount());
+      container.remove();
+      router.data = {};
+    }
+  });
+  it("hides the Space coordinator row on a deployment with Spaces off", async () => {
+    router.search = {};
+    router.data = {
+      profile: {
+        modes: Object.fromEntries(
+          ["low", "medium", "high", "ultra"].map((mode) => [
+            mode,
+            {
+              source: "default",
+              config: { agent: { model: "openai/a", thinking: "medium" } },
+            },
+          ]),
+        ),
+      },
+      choices: { modes: [], models: [] },
+      // No `spaces`: the deployment turned Spaces off.
+      context: { activeScope: "personal" },
+      "space-agent-model": { route: { kind: "unavailable" } },
+    };
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    try {
+      await React.act(() =>
+        root.render(<ModeDialSettings onDirtyChange={vi.fn()} />),
+      );
+      expect(container.querySelector("#models-medium")).not.toBeNull();
+      expect(container.querySelector("#space-agent-model")).toBeNull();
+      expect(container.textContent).not.toContain("Space coordinator");
     } finally {
       await React.act(() => root.unmount());
       container.remove();

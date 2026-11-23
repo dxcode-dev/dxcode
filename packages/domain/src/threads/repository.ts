@@ -34,6 +34,11 @@ export interface ThreadListRequest extends PageRequest {
   readonly tree?:
     | { readonly kind: "roots" }
     | { readonly kind: "children"; readonly parentThreadId: ThreadId };
+  /**
+   * False while the deployment has Spaces off: no Space lists, and the
+   * threads a Space started list as any other Thread. Absent means on.
+   */
+  readonly spaces?: boolean;
 }
 
 /**

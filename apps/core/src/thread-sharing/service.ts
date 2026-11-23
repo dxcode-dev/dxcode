@@ -484,6 +484,8 @@ export const listSharedThreadRows = async (
   db: D1Database,
   userId: UserId,
   now = new Date(),
+  /** False while Spaces are off: a Space's threads list as any other. */
+  spaces = true,
 ): Promise<
   ReadonlyArray<
     Record<string, unknown> & {
@@ -517,16 +519,16 @@ export const listSharedThreadRows = async (
           WHERE follower.user_id = ?1
             AND thread.lifecycle_state = 'active'
             -- Spaces list in the sidebar's own Spaces section, and the
-            -- threads a Space started only in that Space.
+            -- threads a Space started only in that Space (?3, Spaces on).
             AND thread.kind = 'thread'
-            AND NOT EXISTS (SELECT 1 FROM threads AS space
+            AND (?3 = 0 OR NOT EXISTS (SELECT 1 FROM threads AS space
                              WHERE space.id = thread.parent_thread_id
-                               AND space.kind = 'space')
+                               AND space.kind = 'space'))
             AND ${sharedThreadVisibleSql("thread", "project", "?1")}
           ORDER BY COALESCE(thread.last_activity_at, thread.updated_at) DESC, thread.id DESC
           LIMIT 100`,
       )
-      .bind(userId, now.toISOString())
+      .bind(userId, now.toISOString(), spaces ? 1 : 0)
       .all<
         Record<string, unknown> & {
           access: string;

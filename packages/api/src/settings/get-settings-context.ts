@@ -44,6 +44,11 @@ export const PersonalSettingsContextDataSchema = Schema.Struct({
    * app shows no huddles.
    */
   huddle: Schema.optional(Schema.Boolean),
+  /**
+   * The deployment has Spaces on (`DX_SPACES_ENABLED`). Absent, the app
+   * shows no Space, New Space, or Space setting anywhere.
+   */
+  spaces: Schema.optional(Schema.Boolean),
 });
 
 export const WorkspaceSettingsContextDataSchema = Schema.Struct({
@@ -54,6 +59,7 @@ export const WorkspaceSettingsContextDataSchema = Schema.Struct({
   mailDomain: Schema.optional(Schema.String),
   composerQuickActions: Schema.optional(Schema.Boolean),
   huddle: Schema.optional(Schema.Boolean),
+  spaces: Schema.optional(Schema.Boolean),
 });
 
 export const SettingsContextDataSchema = Schema.Union([

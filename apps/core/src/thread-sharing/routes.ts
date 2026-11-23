@@ -14,6 +14,7 @@ import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { scheduleRealtimeInvalidation } from "../realtime/publication.js";
+import { spacesEnabled } from "../spaces/availability.js";
 import { threadAttentionFields } from "../threads/attention-d1.js";
 import {
   projectlessField,
@@ -184,7 +185,12 @@ export const sharedThreadRoutes = new Hono<AppEnv>().get("/", (context) =>
         }),
         200,
       );
-    const rows = await listSharedThreadRows(db, principal.userId as UserId);
+    const rows = await listSharedThreadRows(
+      db,
+      principal.userId as UserId,
+      new Date(),
+      spacesEnabled(context.env),
+    );
     const threads = await Effect.runPromise(decodeThreadRows(rows));
     const access = new Map(rows.map((row) => [row.id, row.access]));
     const projectNames = new Map(

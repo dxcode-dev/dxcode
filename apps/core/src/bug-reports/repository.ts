@@ -179,6 +179,22 @@ export const insertReceivedBugReport = async (
   return { id: existing?.id ?? report.id, created: false };
 };
 
+/** How many reports this person sent since `since`. */
+export const countReportedSince = async (
+  db: D1Database,
+  reporterUserId: string,
+  since: Date,
+) =>
+  (
+    await db
+      .prepare(
+        `SELECT COUNT(*) AS count FROM bug_report
+          WHERE reporter_user_id = ?1 AND created_at >= ?2`,
+      )
+      .bind(reporterUserId, since.toISOString())
+      .first<{ count: number }>()
+  )?.count ?? 0;
+
 /** How many reports this sender forwarded since `since`. */
 export const countReceivedSince = async (
   db: D1Database,

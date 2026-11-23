@@ -558,8 +558,8 @@ describe("a Space's coordinator hears each change of its children", {
     // comments, so the merge wakes it and it reports itself.
     await env.DB.prepare(
       `INSERT INTO thread_github_link (thread_id, repository_key, repository,
-         number, kind, created_at)
-       VALUES (?1, lower(?2), ?2, 41, 'pull', ?3)`,
+         number, kind, created_at, verified)
+       VALUES (?1, lower(?2), ?2, 41, 'pull', ?3, 1)`,
     )
       .bind(linked, REPO, new Date().toISOString())
       .run();

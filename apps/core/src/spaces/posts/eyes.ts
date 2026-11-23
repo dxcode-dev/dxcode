@@ -2,6 +2,7 @@ import type { FlueObservation } from "@flue/runtime";
 import { readOrbThreadState } from "../../agents/orb-free.js";
 import type { Bindings } from "../../http/types.js";
 import { spaceLogger } from "../../logging.js";
+import { spacesEnabled } from "../availability.js";
 import { announcePosts } from "./effects.js";
 import { clearAgentEyes } from "./store.js";
 
@@ -21,7 +22,8 @@ export const clearSpaceEyesOnSettle = async (
   if (
     db === undefined ||
     threadId === undefined ||
-    event.type !== "submission_settled"
+    event.type !== "submission_settled" ||
+    !spacesEnabled(bindings)
   )
     return;
   try {

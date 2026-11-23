@@ -268,6 +268,7 @@ export const smokeProductionPackage = async (packageRoot) => {
     }),
     DX_RUNTIME_MODE: "deployed",
     DX_SIGNUP_ENABLED: "",
+    DX_SPACES_ENABLED: "",
     DX_SIGN_IN_ADMISSION: "",
     DX_SIGN_IN_ALLOWED_EMAIL_DOMAINS: "",
     DX_DEPLOYMENT_ADMIN_EMAILS: "",

@@ -266,7 +266,12 @@ export function ProductShell({
       onSetPinned={setThreadPinned}
       pinningThreadId={editing?.pinningThreadId}
       extensionRegion={sidebarExtensionRegion}
-      spacesSection={spacesSection?.(closeMobileSidebar)}
+      // Only on a deployment with Spaces on (the settings context's `spaces`).
+      spacesSection={
+        settingsQuery.data?.spaces === true
+          ? spacesSection?.(closeMobileSidebar)
+          : undefined
+      }
       accountMenuItems={accountMenuItems}
     />
   );

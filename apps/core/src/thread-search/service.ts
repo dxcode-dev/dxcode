@@ -5,6 +5,7 @@ import {
 } from "@dx/domain";
 import type { Bindings } from "../http/types.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
+import { spacesEnabled } from "../spaces/availability.js";
 import { sharedThreadVisibleSql } from "../thread-sharing/access.js";
 import { ownerSearchIndex } from "./index-client.js";
 import { queryTerms, snippetTerm } from "./terms.js";
@@ -293,6 +294,10 @@ export const searchThreads = async (
     const parameters = new Parameters();
     const clauses = [
       "thread.lifecycle_state != 'deleted'",
+      // With Spaces off a Space's own Thread does not exist.
+      ...(spacesEnabled(bindings)
+        ? []
+        : ["ifnull(thread.kind, 'thread') != 'space'"]),
       accessClause(scope, parameters),
       ...filterClauses(parsed.filters, scope, parameters),
       ...extra(parameters),

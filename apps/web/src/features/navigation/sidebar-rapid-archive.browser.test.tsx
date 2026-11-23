@@ -423,6 +423,7 @@ const mount = async (
   } as never);
   client.setQueryData(settingsContextQueryOptions(userId).queryKey, {
     activeScope: "personal",
+    spaces: true,
   } as never);
   client.setQueryData(threadKeys.shared(userId), []);
   // Realtime: Core publishes a hint for each Thread it writes, and the

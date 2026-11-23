@@ -2,6 +2,7 @@ import { formatGitHubDelivery } from "@dx/api";
 import type { Bindings } from "../http/types.js";
 import { automationLogger } from "../logging.js";
 import { publishRealtimeInvalidation } from "../realtime/publication.js";
+import { spacesEnabled } from "../spaces/availability.js";
 import { shipFromPullRequestWebhook } from "../spaces/progress/shipped.js";
 import { reportShippedToSpace } from "../spaces/report-back.js";
 import {
@@ -103,7 +104,7 @@ const deliverTo = async (
   now: Date,
   waitUntil?: (promise: Promise<unknown>) => void,
 ) => {
-  const thread = await threadState(db, row.thread_id);
+  const thread = await threadState(db, row.thread_id, spacesEnabled(bindings));
   // Deleted: the subscription ends with its Thread.
   if (thread === undefined) {
     await finishSubscription(db, row.id, "failed", "Its Thread is gone.", now);

@@ -11,6 +11,7 @@ import {
   modeProfileQueryOptions,
 } from "../model-routing/model-routing-queries.js";
 import { ModelRoutingSettings } from "../model-routing/model-routing-settings.js";
+import { settingsContextQueryOptions } from "../settings-context-queries.js";
 import {
   SettingsCard,
   SettingsFormActions,
@@ -63,8 +64,11 @@ export const ModeDialSettings = (props: SettingsSectionProps) => {
   const choices = useQuery(
     modelRoutingChoicesQueryOptions(identity.id, target),
   );
-  // Spaces have their own model, beside these: personal only.
-  const spaces = target.scope === "personal";
+  // Spaces have their own model, beside these: personal only, and only on a
+  // deployment with Spaces on.
+  const settingsContext = useQuery(settingsContextQueryOptions(identity.id));
+  const spaces =
+    target.scope === "personal" && settingsContext.data?.spaces === true;
   const options = modeDialMutationOptions(queryClient, target);
   const saveMutation = useMutation(options.save);
   const resetMutation = useMutation(options.reset);

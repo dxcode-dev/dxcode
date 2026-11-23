@@ -300,6 +300,8 @@ const mount = async (
   width = 1440,
   height = 900,
   seed: (server: ReturnType<typeof fakeServer>) => void = () => {},
+  /** The deployment has Spaces on (the settings context's `spaces`). */
+  spaces = true,
 ) => {
   await page.viewport(width, height);
   const server = fakeServer();
@@ -324,6 +326,7 @@ const mount = async (
           },
         }
       : { activeScope: "personal" }),
+    ...(spaces ? { spaces: true } : {}),
   } as never);
   client.setQueryData(threadKeys.shared(userId), []);
   const rootRoute = createRootRoute({
@@ -432,6 +435,23 @@ const options = () =>
   ].map((option) => option.textContent?.trim());
 const shot = (name: string) =>
   page.screenshot({ path: `../../../.cache/spaces-ui/${name}.png` });
+
+it("shows no Spaces section, New Space, or Discover Spaces on a deployment with Spaces off", async () => {
+  const { server } = await mount(true, 1440, 900, undefined, false);
+  // The Threads list renders; the Spaces section never does.
+  await until(
+    () => document.querySelector(".product-sidebar .sidebar-scroll") !== null,
+  );
+  await settle(300);
+  expect(section()).toBeNull();
+  expect(
+    document.querySelector(".product-sidebar [aria-label='New Space']"),
+  ).toBeNull();
+  // Nor does it ask Core for Spaces it would refuse.
+  expect(
+    server.requests.filter((path) => path.startsWith("/v1/spaces")),
+  ).toEqual([]);
+});
 
 it("creates a Space from the sidebar, opens it, and lists it first in the sidebar", async () => {
   const { server } = await mount(true);

@@ -3,6 +3,7 @@ import type { Bindings } from "../http/types.js";
 import { spaceLogger } from "../logging.js";
 import type { HistoryPage } from "../thread-search/history.js";
 import { ownerRequest } from "../threads/owner-request.js";
+import { spacesEnabled } from "./availability.js";
 
 /**
  * A Space's coordinator learns about its children only from messages, so
@@ -223,7 +224,7 @@ export const reportShippedToSpace = async (
   signal: ShipSignal,
 ): Promise<void> => {
   const db = bindings.DB;
-  if (db === undefined) return;
+  if (db === undefined || !spacesEnabled(bindings)) return;
   try {
     const row = await db
       .prepare(

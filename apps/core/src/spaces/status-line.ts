@@ -9,6 +9,7 @@ import {
   type HistoryRead,
   readHistory,
 } from "../thread-search/history.js";
+import { spacesEnabled } from "./availability.js";
 import { reportTurnToSpace } from "./report-back.js";
 import { runSpaceModel } from "./space-model.js";
 
@@ -670,6 +671,8 @@ export const recordSpaceStatusLine = async (
   if (
     db === undefined ||
     threadId === undefined ||
+    // Spaces off: no card to keep current and no Space to report to.
+    !spacesEnabled(bindings) ||
     (event.type !== "submission_running" &&
       event.type !== "submission_settled" &&
       event.type !== "turn")

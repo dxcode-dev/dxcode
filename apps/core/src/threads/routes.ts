@@ -194,6 +194,7 @@ import { WorkspaceRepositoryD1 } from "../settings/workspace/repository-d1.js";
 import { WorkspacePolicyRepositoryD1 } from "../settings/workspace-policy/repository-d1.js";
 import { WorkspacePolicyService } from "../settings/workspace-policy/service.js";
 import { authorizeProjectSource } from "../source-control/admission.js";
+import { spacesEnabled } from "../spaces/availability.js";
 import { markThreadsShipped } from "../spaces/progress/shipped.js";
 import { reportShippedToSpace } from "../spaces/report-back.js";
 import { isDeletedThread } from "../thread-deletion/tombstone.js";
@@ -2182,6 +2183,7 @@ export const createThreadRoutes = (
           cursor: query.cursor,
           limit: query.limit,
           lifecycleState: query.lifecycleState,
+          ...(spacesEnabled(context.env) ? {} : { spaces: false }),
           ...(query.roots !== undefined
             ? { tree: { kind: "roots" as const } }
             : query.parentThreadId !== undefined

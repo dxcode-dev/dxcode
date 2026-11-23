@@ -15,6 +15,7 @@ import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "../../src/app.js";
 import { createAutomationTools } from "../../src/automations/agent-tools.js";
+import { threadLinks } from "../../src/automations/links.js";
 import {
   SCHEDULE_WAKE_MESSAGE,
   sweepAutomations,
@@ -1261,6 +1262,133 @@ describe("GitHub subscriptions", () => {
         .bind(doomed.id)
         .first<number>("count"),
     ).toBe(0);
+  });
+
+  it("gives a link no one verified none of a private issue's or PR's content", async () => {
+    // Another tenant with no GitHub credentials cannot link an item.
+    await expect(
+      call(other.id, "link_github_issue", { repository: REPO, number: 61 }),
+    ).rejects.toThrow(/No GitHub credentials/);
+    // A link saved before dx checked: the stranger's Thread names the
+    // owner's private issue 61 and PR 62, and the owner's Thread names PR 63.
+    const savedUnverified = (threadId: string, number: number, kind: string) =>
+      env.DB.prepare(
+        `INSERT INTO thread_github_link (thread_id, repository, repository_key,
+           number, kind, subject_json, created_at)
+         VALUES (?1, ?2, lower(?2), ?3, ?4, ?5, ?6)`,
+      ).bind(
+        threadId,
+        REPO,
+        number,
+        kind,
+        JSON.stringify({ title: "Leaked before", state: "open" }),
+        new Date().toISOString(),
+      );
+    await env.DB.batch([
+      savedUnverified(other.id, 61, "issue"),
+      savedUnverified(other.id, 62, "pull"),
+      savedUnverified(main.id, 63, "pull"),
+    ]);
+    github[`/repos/${REPO}/issues/61`] = {
+      number: 61,
+      title: "Rotate the leaked key",
+      state: "open",
+    };
+    await call(main.id, "link_github_issue", { repository: REPO, number: 61 });
+
+    await webhook("issues", {
+      action: "edited",
+      issue: {
+        number: 61,
+        title: "Rotate the leaked key sk-123",
+        body: "Private details.",
+        state: "open",
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    });
+    for (const number of [62, 63])
+      await webhook("pull_request", {
+        action: "closed",
+        pull_request: {
+          number,
+          user: { login: "alice" },
+          head: { sha: SHA, ref: "fix/key" },
+          title: `Private fix ${number}`,
+          body: "Private details.",
+          state: "closed",
+          merged: true,
+          merged_at: "2026-10-02T00:00:00Z",
+          created_at: "2026-10-01T00:00:00Z",
+        },
+      });
+
+    // The verified link follows the issue; the unverified ones get nothing,
+    // show nothing they held, and ship nothing.
+    expect((await shownTo(main.id)).issues).toEqual([
+      expect.objectContaining({
+        number: 61,
+        title: "Rotate the leaked key sk-123",
+      }),
+    ]);
+    expect((await shownTo(main.id)).pullRequests).toEqual([
+      expect.objectContaining({ number: 63 }),
+    ]);
+    expect(JSON.stringify((await shownTo(main.id)).pullRequests)).not.toMatch(
+      /Private fix|Leaked before|merged/,
+    );
+    const strangers = await threadLinks(env.DB, other.id);
+    expect(strangers.map(({ number }) => number).sort()).toEqual([61, 62]);
+    expect(strangers.map(({ subject_json }) => subject_json)).toEqual([
+      null,
+      null,
+    ]);
+    expect(
+      (
+        await env.DB.prepare(
+          `SELECT subject_json FROM thread_github_link
+            WHERE thread_id = ? ORDER BY number`,
+        )
+          .bind(other.id)
+          .all<{ subject_json: string }>()
+      ).results.map(({ subject_json }) => subject_json),
+    ).not.toContainEqual(expect.stringMatching(/sk-123|Private fix/));
+    expect(
+      await env.DB.prepare(
+        "SELECT COUNT(*) AS count FROM threads WHERE id IN (?, ?) AND shipped_at IS NOT NULL",
+      )
+        .bind(other.id, main.id)
+        .first<number>("count"),
+    ).toBe(0);
+
+    // Linking it again with the owner's credentials verifies it.
+    github[`/repos/${REPO}/issues/63`] = {
+      number: 63,
+      title: "Private fix 63",
+      state: "closed",
+      pull_request: { merged_at: "2026-10-02T00:00:00Z" },
+    };
+    await call(main.id, "link_github_issue", { repository: REPO, number: 63 });
+    await webhook("pull_request", {
+      action: "edited",
+      pull_request: {
+        number: 63,
+        user: { login: "alice" },
+        head: { sha: SHA, ref: "fix/key" },
+        title: "Private fix 63, renamed",
+        body: "",
+        state: "closed",
+        merged: true,
+        merged_at: "2026-10-02T00:00:00Z",
+        created_at: "2026-10-01T00:00:00Z",
+      },
+    });
+    expect((await shownTo(main.id)).pullRequests).toEqual([
+      expect.objectContaining({
+        number: 63,
+        state: "merged",
+        title: "Private fix 63, renamed",
+      }),
+    ]);
   });
 
   describe("while archived", () => {

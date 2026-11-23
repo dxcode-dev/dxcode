@@ -45,6 +45,7 @@ import {
   BUG_REPORT_FILE_NAME,
   bugReportFileKey,
   bugReportIdFor,
+  countReportedSince,
   deleteBugReport,
   insertBugReport,
   isBugReportReader,
@@ -71,13 +72,14 @@ const MESSAGES = {
   INVALID_REQUEST: "The bug report is invalid.",
   TOO_LARGE: "The bug report is too large.",
   NOT_FOUND: "Bug report not found.",
+  RATE_LIMITED: "You sent too many bug reports this hour. Try again later.",
   PERSISTENCE_UNAVAILABLE: "Persistence is temporarily unavailable.",
 } as const satisfies Record<ErrorCode, string>;
 
 const failure = (
   context: Context<AppEnv>,
   code: ErrorCode,
-  status: 400 | 404 | 413 | 503,
+  status: 400 | 404 | 413 | 429 | 503,
 ) =>
   context.json(
     Schema.encodeUnknownSync(BugReportErrorResponseSchema)({
@@ -90,6 +92,32 @@ const failure = (
     }),
     status,
   );
+
+/** Reports one person may send in an hour. */
+export const BUG_REPORTS_PER_HOUR = 10;
+
+/**
+ * Whether the reporter has sent their hour's reports (#2370). Each report
+ * keeps up to about 84 MB and a Thread's report runs a billed Worker logs
+ * query, so this is checked before the form is read. A retry of a report
+ * already kept passes, so it gets that report back.
+ */
+const overReportLimit = async (context: Context<AppEnv>, db: D1Database) => {
+  const reporter = context.get("actor") ?? context.get("principal");
+  const sent = await countReportedSince(
+    db,
+    reporter.userId,
+    new Date(Date.now() - 60 * 60 * 1000),
+  );
+  if (sent < BUG_REPORTS_PER_HOUR) return false;
+  const key = context.req.header("idempotency-key");
+  if (key === undefined || !IDEMPOTENCY_KEY.test(key)) return true;
+  const earlier = await readBugReport(
+    db,
+    await bugReportIdFor(reporter.userId, key),
+  );
+  return earlier?.reporterUserId !== reporter.userId;
+};
 
 interface FormFile {
   readonly name: string;
@@ -353,6 +381,8 @@ export const threadBugReportRoutes = new Hono<AppEnv>().post(
     const db = context.env.DB;
     if (db === undefined)
       return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    if (await overReportLimit(context, db))
+      return failure(context, "RATE_LIMITED", 429);
     const form = await readForm(
       context,
       CreateBugReportRequestSchema,
@@ -474,6 +504,8 @@ export const bugReportRoutes = new Hono<AppEnv>()
     const db = context.env.DB;
     if (db === undefined)
       return failure(context, "PERSISTENCE_UNAVAILABLE", 503);
+    if (await overReportLimit(context, db))
+      return failure(context, "RATE_LIMITED", 429);
     const form = await readForm(
       context,
       CreateAppBugReportRequestSchema,

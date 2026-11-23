@@ -93,6 +93,7 @@ import {
   githubControlPlaneRoutes,
   githubWebhookRoutes,
 } from "./source-control/github/routes.js";
+import { hideSpaceThreads, requireSpaces } from "./spaces/availability.js";
 import { messageCommentRoutes } from "./spaces/message-comments/routes.js";
 import { spaceRoutes } from "./spaces/routes.js";
 import {
@@ -206,8 +207,12 @@ app.route("/v1/settings", settingsRoutes);
 app.route("/v1/shared-threads", sharedThreadRoutes);
 app.route("/v1/shell", shellRoutes);
 app.route("/v1/sidebar-layout", sidebarLayoutRoutes);
+// A deployment with Spaces off answers no Space route and no Space's own
+// Thread; `/*` also matches the bare path.
+app.use("/v1/spaces/*", requireSpaces);
 app.route("/v1/spaces", spaceRoutes);
 app.route("/v1/thread-search", threadSearchRoutes);
+app.use("/v1/threads/:threadId/*", hideSpaceThreads);
 app.use("/v1/threads/:threadId", shareThreadReads);
 app.use("/v1/threads/:threadId/readiness", shareThreadReads);
 app.route("/v1/threads", threadRoutes);
