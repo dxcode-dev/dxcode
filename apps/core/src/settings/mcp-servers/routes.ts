@@ -50,6 +50,7 @@ import {
   SettingsScopeForbidden,
   WorkspacePolicyDenied,
   WorkspaceSlug,
+  workspaceRoleHasPermission,
 } from "@dx/domain";
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Option, Result, Schema } from "effect";
@@ -211,7 +212,10 @@ const authorize = Effect.fn("authorizeMcpServers")(function* (
       scope: "workspace",
       id: access.workspace.workspace.id,
     },
-    canMutate: access.workspace.role !== "member",
+    canMutate: workspaceRoleHasPermission(
+      access.workspace.role,
+      "integrations:manage",
+    ),
   } satisfies McpAccess;
 });
 
@@ -291,6 +295,9 @@ const validateName = (value: string) => {
         invalid(fieldError("name", "Enter a name up to 80 characters.")),
       );
 };
+
+const originOf = (endpoint: string) =>
+  URL.canParse(endpoint) ? new URL(endpoint).origin : endpoint;
 
 const validateEndpoint = (value: string) => {
   const decoded = Schema.decodeOption(McpServerEndpoint)(value);
@@ -1082,16 +1089,27 @@ const registerRoutes = (
             : body.authReference !== undefined
               ? "bearer"
               : current.authType);
+      // Stored credentials belong to the host they were entered for: moving
+      // the server to another origin needs them entered again.
+      const originChanged =
+        endpoint !== undefined &&
+        originOf(endpoint) !== originOf(current.endpoint);
+      const storedToken =
+        current.hasStoredCredential === true && !originChanged;
       if (
         authType === "bearer" &&
         body.authToken === undefined &&
         (body.authReference === undefined
-          ? current.hasStoredCredential !== true &&
-            current.authReference === undefined
+          ? !storedToken && current.authReference === undefined
           : body.authReference === null)
       ) {
         return yield* invalid(
-          fieldError("authToken", "Enter the bearer token."),
+          fieldError(
+            "authToken",
+            originChanged && current.hasStoredCredential === true
+              ? "Enter the bearer token again for the new endpoint."
+              : "Enter the bearer token.",
+          ),
         );
       }
       if (
@@ -1116,9 +1134,28 @@ const registerRoutes = (
         "settings.mcpServers.listSecrets",
         () => listMcpServerSecretNames(db, { id, target: authorized.target }),
       );
+      const reusableSecrets = new Set<string>(
+        originChanged ? [] : storedSecrets,
+      );
+      const storedClientSecret = storedSecrets.includes("oauth-client-secret");
+      if (
+        originChanged &&
+        storedClientSecret &&
+        authType === "oauth" &&
+        nextClientId !== undefined &&
+        body.oauthClientSecret === undefined
+      ) {
+        return yield* invalid(
+          fieldError(
+            "oauthClientSecret",
+            "Enter the client secret again for the new endpoint.",
+          ),
+        );
+      }
       const plan =
         body.headers === undefined
-          ? authType !== current.authType
+          ? authType !== current.authType ||
+            (originChanged && current.headers.some((header) => header.secret))
             ? yield* checked(
                 planMcpHeaders(
                   current.headers.map((header) => ({
@@ -1127,12 +1164,12 @@ const registerRoutes = (
                     value: header.value,
                   })),
                   authType,
-                  new Set(storedSecrets),
+                  reusableSecrets,
                 ),
               )
             : undefined
           : yield* checked(
-              planMcpHeaders(body.headers, authType, new Set(storedSecrets)),
+              planMcpHeaders(body.headers, authType, reusableSecrets),
             );
       const grants =
         body.projectIds === undefined && body.roles === undefined
@@ -1175,7 +1212,10 @@ const registerRoutes = (
             now,
           ),
         );
-      } else if (oauthClientId === null) {
+      } else if (
+        oauthClientId === null ||
+        (originChanged && storedClientSecret)
+      ) {
         yield* credentialEffect("settings.mcpServers.removeSecrets", () =>
           removeMcpServerSecrets(db, owner, {
             names: ["oauth-client-secret"],

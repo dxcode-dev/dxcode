@@ -574,6 +574,24 @@ export const createGitHubProvider = (
         throw new GitHubProviderError({ category: "invalid-response" });
       return { id, login };
     },
+    /**
+     * The user's own membership in `organization`. Needs the App's Members
+     * read permission; without it GitHub answers 403.
+     */
+    getUserOrganizationMembership: async (
+      accessToken: string,
+      organization: string,
+    ) => {
+      const { value } = await json(
+        `${API_ORIGIN}/user/memberships/orgs/${encodeURIComponent(checkInput(organization))}`,
+        { headers: apiHeaders(accessToken) },
+      );
+      const item = value as Record<string, unknown>;
+      return {
+        role: bounded(item?.role, 64),
+        state: bounded(item?.state, 64),
+      };
+    },
     listUserInstallations: (accessToken: string) =>
       paged(
         `${API_ORIGIN}/user/installations?per_page=100`,

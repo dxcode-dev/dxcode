@@ -55,6 +55,7 @@ import {
   WorkspacePolicyConflict,
   WorkspacePolicyRepository,
   WorkspaceSlug,
+  workspaceRoleHasPermission,
 } from "@dx/domain";
 import { getLogger } from "@logtape/logtape";
 import { Effect, Option, Result, Schema } from "effect";
@@ -155,7 +156,10 @@ export const authorizePluginBundles = Effect.fn("authorizePluginBundles")(
     const access = yield* settings.workspace(principal, slug.value);
     return {
       target: { scope: "workspace", id: access.workspace.workspace.id },
-      canMutate: access.workspace.role !== "member",
+      canMutate: workspaceRoleHasPermission(
+        access.workspace.role,
+        "integrations:manage",
+      ),
     } satisfies BundleAccess;
   },
 );

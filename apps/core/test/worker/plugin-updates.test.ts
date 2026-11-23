@@ -111,6 +111,7 @@ const codePlugin = (
     readonly version?: string;
     readonly settings?: ReadonlyArray<unknown>;
     readonly tool?: string;
+    readonly panes?: ReadonlyArray<unknown>;
   } = {},
 ): ReadonlyArray<FixtureEntry> => [
   {
@@ -129,6 +130,7 @@ const codePlugin = (
           ...(options.settings === undefined
             ? {}
             : { settings: options.settings }),
+          ...(options.panes === undefined ? {} : { panes: options.panes }),
         },
       },
     }),
@@ -276,6 +278,58 @@ describe("plugin updates", () => {
     expect(
       (await applied.json<{ data: { version?: string } }>()).data.version,
     ).toBe("1.2.0");
+  });
+
+  it("needs acceptance when an update adds Thread wakes or a pane's Portal ports and WebRTC", async () => {
+    const { cookie } = await signup("plugin-update-wake-panes@example.com");
+    const pane = { id: "preview", title: "Preview" };
+    const id = await installZip(
+      cookie,
+      await buildZip(
+        codePlugin({ events: ["tool.call"], ui: ["pane"] }, { panes: [pane] }),
+      ),
+    );
+    const updates = `${endpoint}/${id}/update`;
+
+    // 1.1.0 changes nothing but wake and the pane's reach.
+    const wider = await buildZip(
+      codePlugin(
+        { events: ["tool.call"], ui: ["pane"], wake: true },
+        {
+          version: "1.1.0",
+          panes: [{ ...pane, connect: { portal: [8411], webrtc: true } }],
+        },
+      ),
+    );
+    const preview = await call(`${updates}/preview?name=w2.zip`, cookie, {
+      zip: wider,
+    });
+    expect(preview.status).toBe(200);
+    const reviewed = await preview.json<UpdatePreviewBody>();
+    expect(reviewed.data.permissions).toEqual({
+      widens: true,
+      changes: [
+        {
+          permission: "wake",
+          added: ["wake Threads with a message"],
+          removed: [],
+        },
+        {
+          permission: "panes",
+          added: ["preview: Portal port 8411", "preview: WebRTC"],
+          removed: [],
+        },
+      ],
+    });
+    const refused = await call(
+      `${updates}?name=w2.zip&integrity=${reviewed.data.integrity}`,
+      cookie,
+      { zip: wider },
+    );
+    expect(refused.status).toBe(400);
+    expect(
+      (await refused.json<{ data: { message: string } }>()).data.message,
+    ).toMatch(/more permissions/);
   });
 
   it("names the GitHub plugins whose folder changed since install, and stays quiet when GitHub can't say", async () => {

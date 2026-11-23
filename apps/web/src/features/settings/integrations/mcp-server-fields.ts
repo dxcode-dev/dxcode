@@ -355,6 +355,7 @@ const FIELD_MAP: Readonly<Record<string, keyof McpFieldErrors>> = {
   authType: "auth",
   authToken: "auth",
   oauthClientId: "auth",
+  oauthClientSecret: "auth",
   clientName: "form",
   headers: "headers",
 };

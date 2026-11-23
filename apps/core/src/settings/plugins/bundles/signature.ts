@@ -31,7 +31,8 @@ import type { ZipFile } from "./zip-writer.js";
  *   git ls-files -z . | grep -zv '^plugin.sig$' | LC_ALL=C sort -z |
  *     xargs -0 sha256sum > listing && ssh-keygen -Y sign -n dx-plugin listing
  *
- * Symlinks are left out, as Git and `find -type f` leave them out. Only Ed25519 keys. A
+ * A signed plugin holds no symlinks: the listing can't cover one, so a
+ * symlink in a signed plugin fails the check. Only Ed25519 keys. A
  * signature that doesn't match blocks the install; no signature is fine.
  *
  * A signer is named only by what proves it: the viewer's own Signing Keys
@@ -113,11 +114,13 @@ export const verifyPluginSignature = Effect.fn("verifyPluginSignature")(
     const armored = yield* archive.readText(signatureEntry, 16_384);
     if (!armored.ok)
       return { status: "invalid" } satisfies PluginSignatureCheck;
-    // Symlinks never install, and an author's `git ls-files` or `find -type
-    // f` listing leaves them out too.
     const entries = [...folder.files].filter(
-      ([path, entry]) => path !== PLUGIN_SIGNATURE_FILE && !entry.symlink,
+      ([path]) => path !== PLUGIN_SIGNATURE_FILE,
     );
+    // The listing can't cover a symlink, so one added to a signed plugin
+    // (such as a `skills` link hiding its skills) must not pass as signed.
+    if (entries.some(([, entry]) => entry.symlink))
+      return { status: "invalid" } satisfies PluginSignatureCheck;
     // Bounded before inflating anything: a small archive must not make the
     // Worker inflate gigabytes just to check a signature.
     const total = entries.reduce((sum, [, entry]) => sum + entry.size, 0);

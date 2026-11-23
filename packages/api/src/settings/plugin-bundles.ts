@@ -3,6 +3,7 @@ import {
   MAX_TRUSTED_PLUGIN_SIGNERS,
   McpServerEndpoint,
   McpServerId,
+  PLUGIN_PERMISSIONS,
   PluginBundleCode,
   PluginBundleManifest,
   PluginBundleSkipped,
@@ -184,29 +185,7 @@ export const PluginBundleChangeSchema = Schema.Literals([
 
 /** One kind of grant an update adds to or drops from the reviewed version. */
 export const PluginPermissionChangeSchema = Schema.Struct({
-  permission: Schema.Literals([
-    "code",
-    "events",
-    "network",
-    "secrets",
-    "tools",
-    "ui",
-    "ai",
-    "threads",
-    "models",
-    "agents",
-    "shell",
-    "settings",
-    "mcp",
-    "commands",
-    "binaries",
-    "plugins",
-    "views",
-    "exports",
-    "tier",
-    "hosts",
-    "jobs",
-  ]),
+  permission: Schema.Literals(PLUGIN_PERMISSIONS),
   added: Schema.Array(Schema.String),
   removed: Schema.Array(Schema.String),
 });

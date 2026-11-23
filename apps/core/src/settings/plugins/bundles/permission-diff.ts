@@ -1,8 +1,12 @@
 import {
   isStdioMcpServer,
+  PLUGIN_PERMISSIONS,
   PLUGIN_TIERS,
+  type PluginBundleCode,
   type PluginBundleManifest,
+  type PluginCodePermissions,
   type PluginCodeThreadGrant,
+  type PluginPermission,
   pluginHostKinds,
   pluginThreadGrants,
   tierAtLeast,
@@ -15,31 +19,7 @@ import {
  * new review; one that only keeps or drops grants updates with one click.
  */
 
-export type PluginPermission =
-  | "code"
-  | "events"
-  | "network"
-  | "secrets"
-  | "tools"
-  | "ui"
-  | "ai"
-  | "threads"
-  | "models"
-  | "agents"
-  | "shell"
-  | "settings"
-  | "mcp"
-  | "commands"
-  | "binaries"
-  | "plugins"
-  | "views"
-  | "exports"
-  // The tiers the manifest's `tier` ceiling lets it reach,
-  // so raising the ceiling is a widening that needs a new review; and the
-  // hosts and background jobs the trusted tiers unlock.
-  | "tier"
-  | "hosts"
-  | "jobs";
+export type { PluginPermission } from "@dx/domain";
 
 export interface PluginPermissionChange {
   readonly permission: PluginPermission;
@@ -60,6 +40,56 @@ const THREAD_GRANT_LABELS = {
   read: "read Threads",
   post: "post into Threads",
 } as const satisfies Record<PluginCodeThreadGrant, string>;
+
+/**
+ * The row that compares each field a manifest's code layer grants: each key
+ * of `permissions`, and each field of the code layer, with `null` for a field
+ * that grants nothing. A key or field added to the schema fails the build here
+ * until it is sorted, so an update cannot gain it without a new review.
+ */
+export const pluginGrantRows = {
+  permissions: {
+    events: "events",
+    network: "network",
+    secrets: "secrets",
+    tools: "tools",
+    ai: "ai",
+    ui: "ui",
+    threads: "threads",
+    models: "models",
+    agents: "agents",
+    shell: "shell",
+    plugins: "plugins",
+    wake: "wake",
+  } as const satisfies {
+    readonly [Key in keyof PluginCodePermissions]-?: PluginPermission;
+  },
+  code: {
+    apiVersion: null,
+    host: null,
+    entry: "code",
+    // The modules' contents change with every version; what they may reach
+    // is in `permissions`.
+    modules: null,
+    permissions: "code",
+    settings: "settings",
+    agentModes: "agents",
+    hosts: "hosts",
+    tier: "tier",
+    binaries: "binaries",
+    archivedThreads: null,
+    // A pane's own reach is in `paneConnect`; its view needs `ui: ["pane"]`.
+    panes: null,
+    iconAssets: null,
+    views: "views",
+    exports: "exports",
+    durableScope: null,
+    jobs: "jobs",
+    paneConnect: "panes",
+  } as const satisfies {
+    readonly [Key in keyof PluginBundleCode]-?: PluginPermission | null;
+  },
+};
 
 const lists = (manifest: Grants) => {
   const code = manifest.code;
@@ -150,44 +180,18 @@ const lists = (manifest: Grants) => {
       code === undefined
         ? []
         : pluginHostKinds(code).filter((kind) => kind !== "worker"),
-    jobs: (() => {
-      const jobs = (code as { readonly jobs?: unknown } | undefined)?.jobs;
-      return Array.isArray(jobs)
-        ? jobs.map((job, index) =>
-            typeof job === "object" &&
-            job !== null &&
-            typeof (job as { id?: unknown }).id === "string"
-              ? (job as { id: string }).id
-              : `job ${index + 1}`,
-          )
-        : [];
-    })(),
+    jobs: (code?.jobs ?? []).map(({ id }) => id),
+    wake: permissions?.wake === true ? ["wake Threads with a message"] : [],
+    // Each pane's hosts, Portal ports, and WebRTC (TURN credentials).
+    panes: (code?.paneConnect ?? []).flatMap(
+      ({ pane, hosts, portal, webrtc }) => [
+        ...hosts.map((host) => `${pane}: ${host}`),
+        ...portal.map((port) => `${pane}: Portal port ${port}`),
+        ...(webrtc === true ? [`${pane}: WebRTC`] : []),
+      ],
+    ),
   } satisfies Record<PluginPermission, ReadonlyArray<string>>;
 };
-
-const order: ReadonlyArray<PluginPermission> = [
-  "code",
-  "events",
-  "network",
-  "secrets",
-  "tools",
-  "ui",
-  "ai",
-  "threads",
-  "models",
-  "agents",
-  "shell",
-  "settings",
-  "mcp",
-  "commands",
-  "binaries",
-  "plugins",
-  "views",
-  "exports",
-  "tier",
-  "hosts",
-  "jobs",
-];
 
 export const pluginPermissionDiff = (
   current: Grants,
@@ -195,7 +199,7 @@ export const pluginPermissionDiff = (
 ): PluginPermissionDiff => {
   const before = lists(current);
   const after = lists(next);
-  const changes = order.flatMap((permission) => {
+  const changes = PLUGIN_PERMISSIONS.flatMap((permission) => {
     const was = new Set(before[permission]);
     const now = new Set(after[permission]);
     const added = after[permission].filter((value) => !was.has(value));

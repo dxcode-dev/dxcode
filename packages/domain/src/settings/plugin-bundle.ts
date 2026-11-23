@@ -481,6 +481,42 @@ export const PluginCodePermissions = Schema.Struct({
 
 export type PluginCodePermissions = typeof PluginCodePermissions.Type;
 
+/**
+ * Each kind of grant an update review compares, in the order it lists them.
+ * The diff (`permission-diff.ts`) must say which of these covers every key of
+ * `PluginCodePermissions` and every field of `PluginBundleCode`.
+ */
+export const PLUGIN_PERMISSIONS = [
+  "code",
+  "events",
+  "network",
+  "secrets",
+  "tools",
+  "ui",
+  "ai",
+  "threads",
+  "models",
+  "agents",
+  "shell",
+  "settings",
+  "mcp",
+  "commands",
+  "binaries",
+  "plugins",
+  "views",
+  "exports",
+  // The tiers the manifest's `tier` ceiling lets it reach, so raising the
+  // ceiling is a widening; and the hosts, background jobs, Thread wakes, and
+  // pane reach the trusted tiers unlock.
+  "tier",
+  "hosts",
+  "jobs",
+  "wake",
+  "panes",
+] as const;
+
+export type PluginPermission = (typeof PLUGIN_PERMISSIONS)[number];
+
 /** The Thread grants a manifest's `permissions.threads` gives, in order. */
 export const pluginThreadGrants = (
   threads: PluginCodePermissions["threads"],

@@ -16,7 +16,9 @@ import type { McpAgentConnectionData } from "./execution.js";
  * inside the Thread owner's own Orb. A Thread reaches the bundles its owner
  * installed and those of the workspaces they belong to, under the same
  * policy as remote servers: a workspace that turns off personal MCP servers
- * hides personal ones, and a workspace server overrides a personal server
+ * (either `mcp_workspace_policy.allow_personal_servers` or the workspace
+ * policy's `allowPersonalMcpOverrides`) hides personal ones, and a workspace
+ * server overrides a personal server
  * with the same name. Removing or disabling the plugin stops the next call.
  * A repository plugin's local servers are recorded per Thread instead, by
  * `plugins/repository/repository-local-mcp.ts`.
@@ -70,6 +72,15 @@ const listQuery = `
                ON policy.workspace_id = member.organizationId
             WHERE member.userId = threads.owner_user_id
               AND policy.allow_personal_servers = 0
+         )
+         -- As remote servers' mcp.use-personal-override check.
+         AND NOT EXISTS (
+           SELECT 1
+             FROM member
+             JOIN workspace_policy
+               ON workspace_policy.workspace_id = member.organizationId
+            WHERE member.userId = threads.owner_user_id
+              AND workspace_policy.allow_personal_mcp_overrides = 0
          )
        )
        OR (

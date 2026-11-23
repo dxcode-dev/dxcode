@@ -202,6 +202,16 @@ describe("plugin signing", () => {
     const added = await previewZip(cookie, plugin({ "extra.md": "Hi." }));
     expect(added.conflicts).toHaveLength(1);
 
+    // Nor is an added symlink, which could hide signed files (#2357).
+    const linked = await previewZip(cookie, [
+      ...plugin(),
+      { name: "agents", content: "/dev/null", symlink: true },
+    ]);
+    expect(linked.signature).toBeUndefined();
+    expect(linked.conflicts).toEqual([
+      "plugin.sig does not match the plugin's files, so it may have been changed after it was signed.",
+    ]);
+
     // Unsigned plugins install as before, with no signature.
     expect(
       (await previewZip(cookie, plugin({}, false))).signature,

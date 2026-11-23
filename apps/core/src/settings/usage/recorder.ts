@@ -247,20 +247,30 @@ const recordContextWindow = (
   if (composition === undefined || input.outcome !== "success") return;
   const db = bindings.DB;
   if (db === undefined) return;
-  return contextWindowStatement(db, {
-    threadId: input.threadId,
-    providerId: route?.providerId ?? input.observedProviderId,
-    modelId: route?.modelId ?? input.observedModelId,
-    measuredAt: DateTime.formatIso(input.occurredAt),
-    composition: settleContext(
-      composition,
-      (input.inputTokens ?? 0) +
-        (input.cacheReadTokens ?? 0) +
-        (input.cacheWriteTokens ?? 0),
-      input.outputTokens ?? 0,
-    ),
-  })
-    .run()
+  const providerId = route?.providerId ?? input.observedProviderId;
+  // A dx model's window is the deployment's configuration, which this
+  // isolate may not have read: the agent forwards dx requests through the
+  // credential coordinator.
+  const loaded =
+    providerId === DX_PROVIDER_ID
+      ? loadDeploymentModels(db).catch(() => undefined)
+      : Promise.resolve(undefined);
+  return loaded
+    .then(() =>
+      contextWindowStatement(db, {
+        threadId: input.threadId,
+        providerId,
+        modelId: route?.modelId ?? input.observedModelId,
+        measuredAt: DateTime.formatIso(input.occurredAt),
+        composition: settleContext(
+          composition,
+          (input.inputTokens ?? 0) +
+            (input.cacheReadTokens ?? 0) +
+            (input.cacheWriteTokens ?? 0),
+          input.outputTokens ?? 0,
+        ),
+      }).run(),
+    )
     .catch((error: unknown) => {
       settingsPersistenceLogger.warn("Context window could not be recorded.", {
         event: "context_window_record_failed",

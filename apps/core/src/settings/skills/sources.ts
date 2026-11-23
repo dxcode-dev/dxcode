@@ -3,9 +3,11 @@ import {
   MAX_PLUGIN_ARCHIVE_ENTRIES,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_FILES,
+  MAX_SKILL_TOTAL_BYTES,
   type SkillSource,
 } from "@dx/domain";
 import { Effect, Schema } from "effect";
+import { readBounded } from "../../http/egress.js";
 import { PluginBundleSourceUnavailable } from "../plugins/bundles/errors.js";
 import {
   fetchGitHubPlugin,
@@ -90,12 +92,28 @@ const unavailable = (reason: string) =>
 
 const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 
+/** The most bytes dx reads from one skills.sh page or download. */
+const MAX_SKILLS_SH_BYTES = 8 * 1_048_576;
+/** The most bytes dx reads from a website's `/.well-known/skills/index.json`. */
+const MAX_WEBSITE_INDEX_BYTES = 1_048_576;
+
+/** A body over the bytes dx reads from it; never retried or cached. */
+class BodyTooLarge extends Error {}
+
+const tooLargeReason = (site: string) =>
+  `${site} answered with more data than dx reads for a skill.`;
+
 /**
- * A GET through the Workers cache, kept `ttl` seconds. A failed request, a
- * 429, or a 5xx is tried twice more: skills.sh sometimes answers a burst of
- * downloads slowly or not at all.
+ * A GET through the Workers cache, kept `ttl` seconds, reading at most
+ * `limit` bytes: the host may be any website a person names. A failed
+ * request, a 429, or a 5xx is tried twice more: skills.sh sometimes answers
+ * a burst of downloads slowly or not at all.
  */
-const cachedFetch = async (url: string, ttl: number): Promise<Response> => {
+const cachedFetch = async (
+  url: string,
+  ttl: number,
+  limit: number,
+): Promise<Response> => {
   const cache = (globalThis as { caches?: { default?: Cache } }).caches
     ?.default;
   const key = new Request(url);
@@ -114,8 +132,8 @@ const cachedFetch = async (url: string, ttl: number): Promise<Response> => {
         continue;
       }
       if (!response.ok) return response;
-      const body = await response.arrayBuffer();
-      const stored = new Response(body, {
+      const body = await readBounded(response, limit, () => new BodyTooLarge());
+      const stored = new Response(body.slice().buffer, {
         status: 200,
         headers: {
           "content-type": response.headers.get("content-type") ?? "",
@@ -125,25 +143,32 @@ const cachedFetch = async (url: string, ttl: number): Promise<Response> => {
       await cache?.put(key, stored.clone());
       return stored;
     } catch (error) {
-      if (last) throw error;
+      if (last || error instanceof BodyTooLarge) throw error;
       await pause(400 * attempt);
     }
   }
 };
 
-const fetchJson = (url: string, ttl: number, site = "skills.sh") =>
+const fetchJson = (
+  url: string,
+  ttl: number,
+  site = "skills.sh",
+  limit = MAX_SKILLS_SH_BYTES,
+) =>
   Effect.tryPromise({
     try: async () => {
-      const response = await cachedFetch(url, ttl);
+      const response = await cachedFetch(url, ttl, limit);
       if (response.status === 404) return undefined;
       if (!response.ok) throw new Error(String(response.status));
       return (await response.json()) as unknown;
     },
     catch: (error) =>
       unavailable(
-        error instanceof Error && error.message === "429"
-          ? `${site} is limiting requests right now. Try again in a minute.`
-          : `${site} could not be reached. Try again in a minute.`,
+        error instanceof BodyTooLarge
+          ? tooLargeReason(site)
+          : error instanceof Error && error.message === "429"
+            ? `${site} is limiting requests right now. Try again in a minute.`
+            : `${site} could not be reached. Try again in a minute.`,
       ),
   });
 
@@ -161,6 +186,8 @@ const DirectoryDownload = Schema.Struct({
 interface DownloadedFile {
   readonly path: string;
   readonly contents: string | undefined;
+  /** The site served more than a skill file holds, so dx stopped reading. */
+  readonly tooLarge?: true;
 }
 
 /** A website's skills, as its `/.well-known/skills/index.json` lists them. */
@@ -179,6 +206,7 @@ const websiteIndex = Effect.fn("websiteIndex")(function* (host: string) {
     `https://${host}/.well-known/skills/index.json`,
     600,
     host,
+    MAX_WEBSITE_INDEX_BYTES,
   );
   return yield* Schema.decodeUnknownEffect(WebsiteIndex)(
     body ?? { skills: [] },
@@ -193,20 +221,38 @@ const websiteIndex = Effect.fn("websiteIndex")(function* (host: string) {
 
 const strictUtf8 = new TextDecoder("utf-8", { fatal: true });
 
-/** The text at `url`, or undefined when it is not UTF-8. */
-const fetchText = (url: string, site: string) =>
+/**
+ * The text at `url`, undefined when it is not UTF-8, or `tooLarge` past a
+ * skill file's limit. Its bytes count against `budget`, a skill's whole
+ * download, which fails past a skill's limit.
+ */
+const fetchText = (url: string, site: string, budget: { used: number }) =>
   Effect.tryPromise({
-    try: async () => {
-      const response = await cachedFetch(url, 600);
+    try: async (): Promise<Omit<DownloadedFile, "path">> => {
+      const response = await cachedFetch(url, 600, MAX_SKILL_FILE_BYTES).catch(
+        (error: unknown) => {
+          if (error instanceof BodyTooLarge) return undefined;
+          throw error;
+        },
+      );
+      if (response === undefined)
+        return { contents: undefined, tooLarge: true };
       if (!response.ok) throw new Error(String(response.status));
+      const bytes = await response.arrayBuffer();
+      budget.used += bytes.byteLength;
+      if (budget.used > MAX_SKILL_TOTAL_BYTES) throw new BodyTooLarge();
       try {
-        return strictUtf8.decode(await response.arrayBuffer());
+        return { contents: strictUtf8.decode(bytes) };
       } catch {
-        return undefined;
+        return { contents: undefined };
       }
     },
-    catch: () =>
-      unavailable(`${site} could not be reached. Try again in a minute.`),
+    catch: (error) =>
+      unavailable(
+        error instanceof BodyTooLarge
+          ? tooLargeReason(site)
+          : `${site} could not be reached. Try again in a minute.`,
+      ),
   });
 
 /**
@@ -232,18 +278,20 @@ const downloadWebsiteSkill = Effect.fn("downloadWebsiteSkill")(function* (
       reason: `${host}/${slug} lists ${entry.files.length} files; a skill has at most ${MAX_SKILL_FILES}.`,
     });
   }
+  const budget = { used: 0 };
   const files: ReadonlyArray<DownloadedFile> = yield* Effect.forEach(
     entry.files,
     (path) =>
       skipReason(path, 0) !== undefined
-        ? Effect.succeed({ path, contents: undefined })
+        ? Effect.succeed<DownloadedFile>({ path, contents: undefined })
         : fetchText(
             `https://${host}/.well-known/skills/${encodeURIComponent(slug)}/${path
               .split("/")
               .map(encodeURIComponent)
               .join("/")}`,
             host,
-          ).pipe(Effect.map((contents) => ({ path, contents }))),
+            budget,
+          ).pipe(Effect.map((read) => ({ path, ...read }))),
     { concurrency: 8 },
   );
   const hash = yield* Effect.promise(async () =>
@@ -399,7 +447,11 @@ export const searchDirectory = Effect.fn("searchDirectory")(function* (
   } else {
     const html = yield* Effect.tryPromise({
       try: async () => {
-        const response = await cachedFetch(`${SKILLS_SH}/`, 3600);
+        const response = await cachedFetch(
+          `${SKILLS_SH}/`,
+          3600,
+          MAX_SKILLS_SH_BYTES,
+        );
         if (!response.ok) throw new Error(String(response.status));
         return response.text();
       },
@@ -493,8 +545,12 @@ export const previewDirectorySkill = Effect.fn("previewDirectorySkill")(
     const files: Array<SkillFileInput> = [];
     for (const file of download.files) {
       const reason =
-        skipReason(file.path, encoder.encode(file.contents ?? "").byteLength) ??
-        contentSkipReason(file.contents);
+        skipReason(
+          file.path,
+          file.tooLarge === true
+            ? MAX_SKILL_FILE_BYTES + 1
+            : encoder.encode(file.contents ?? "").byteLength,
+        ) ?? contentSkipReason(file.contents);
       if (reason === undefined && file.contents !== undefined) {
         files.push({ path: file.path, content: file.contents });
       } else {

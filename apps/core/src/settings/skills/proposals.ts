@@ -9,6 +9,7 @@ import {
   type SkillWithVersion,
   type UserId,
   WorkspaceRepository,
+  workspaceRoleHasPermission,
 } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
 import { SettingsAudit } from "../audit.js";
@@ -105,7 +106,10 @@ export const proposalScopes = Effect.fn("proposalScopes")(function* (
             target: { scope: "workspace", id: membership.workspace.id },
             slug: membership.workspace.shortName,
             name: membership.workspace.displayName,
-            canPropose: membership.role !== "member",
+            canPropose: workspaceRoleHasPermission(
+              membership.role,
+              "integrations:manage",
+            ),
           },
         }),
   } satisfies ProposalScopes;

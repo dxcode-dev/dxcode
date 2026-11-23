@@ -49,6 +49,7 @@ import {
   type SkillTarget,
   type SkillWithVersion,
   WorkspaceSlug,
+  workspaceRoleHasPermission,
 } from "@dx/domain";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
@@ -134,7 +135,10 @@ const authorize = Effect.fn("authorizeSkills")(function* (
   const access = yield* settings.workspace(principal, slug.value);
   return {
     target: { scope: "workspace", id: access.workspace.workspace.id },
-    canMutate: access.workspace.role !== "member",
+    canMutate: workspaceRoleHasPermission(
+      access.workspace.role,
+      "integrations:manage",
+    ),
     workspaceId: access.workspace.workspace.id,
   } satisfies SkillAccess;
 });

@@ -214,7 +214,7 @@ const restrictionsFor = (
     : {
         allowProjectCreation:
           workspace.lifecycleState === "active" &&
-          (workspace.role !== "member" ||
+          (workspaceRoleHasPermission(workspace.role, "workspace:update") ||
             workspace.policy.allowMemberProjectCreation),
         allowPublicCodeAccess: workspace.policy.allowPublicCodeAccess,
         allowedRunnerProfileIds: workspace.policy.allowedRunnerProfileIds,

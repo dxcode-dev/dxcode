@@ -121,6 +121,25 @@ const codeItems = (code: PluginBundleCode | undefined) => {
         ? ["Shell, Git, and secrets in each Thread's Orb, as you"]
         : [],
     ),
+    ...row(
+      "wake",
+      permissionLabel.wake,
+      permissions.wake === true
+        ? ["Its jobs post messages that start the agent in your Threads"]
+        : [],
+    ),
+    // What each pane's view reaches beyond the plugin.
+    ...row(
+      "panes",
+      permissionLabel.panes,
+      (code.paneConnect ?? []).flatMap(({ pane, hosts, portal, webrtc }) =>
+        [
+          ...hosts,
+          ...portal.map((port) => `Portal port ${port}`),
+          ...(webrtc === true ? ["WebRTC"] : []),
+        ].map((reach) => `${pane}: ${reach}`),
+      ),
+    ),
     // Other plugins it calls through dx, the views it draws, and the
     // functions other plugins may call.
     ...row("plugins", permissionLabel.plugins, permissions.plugins ?? []),

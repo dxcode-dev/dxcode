@@ -42,7 +42,9 @@ import { runRepositories } from "./runtime.js";
  * - a Space's `read_skill_file` reads a skill or file it does not have;
  * - a skill a website serves itself (`host/slug`) cannot be listed or
  *   installed, or dx fetches files it never imports;
- * - one file with NUL bytes, or one skills.sh failure, fails a whole skill.
+ * - one file with NUL bytes, or one skills.sh failure, fails a whole skill;
+ * - a website a person names streams an endless body, and dx reads it all,
+ *   retries it, or caches it (#2361).
  */
 
 const owner = Schema.decodeSync(UserId)("sources-owner");
@@ -91,6 +93,8 @@ const websiteFiles = [
   { path: "references/中文 notes.md", contents: "# 笔记\n" },
   { path: "assets/logo.png", contents: "PNG" },
   { path: "data/latin1.txt", contents: "\xff\xfe" },
+  // Served as an endless stream: past a skill file's limit.
+  { path: "references/huge.md", contents: "" },
 ];
 
 /** skills.sh answers through the Workers cache; a test starts it empty. */
@@ -106,6 +110,21 @@ const clearDirectoryCache = async () => {
     await cache.delete(url);
 };
 const fetched: Array<string> = [];
+const ENDLESS_INDEX =
+  "https://endless.example.com/.well-known/skills/index.json";
+/** Bytes dx pulled from never-ending bodies. */
+let endlessBytes = 0;
+const endless = () => {
+  const chunk = new Uint8Array(65_536).fill(0x20);
+  return new Response(
+    new ReadableStream({
+      pull(controller) {
+        endlessBytes += chunk.byteLength;
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+};
 
 const principal = (userId: UserId) => ({
   userId,
@@ -165,6 +184,8 @@ beforeEach(async () => {
   directoryOutages = 0;
   await clearDirectoryCache();
   fetched.length = 0;
+  endlessBytes = 0;
+  await (caches as unknown as { default: Cache }).default.delete(ENDLESS_INDEX);
   const archive = await repoArchive();
   vi.stubGlobal(
     "fetch",
@@ -230,6 +251,7 @@ beforeEach(async () => {
               .join("/")}` === url.pathname,
         );
         if (file === undefined) return new Response("missing", { status: 404 });
+        if (file.path === "references/huge.md") return endless();
         // latin1.txt is bytes that are not UTF-8.
         return new Response(
           file.path === "data/latin1.txt"
@@ -237,6 +259,7 @@ beforeEach(async () => {
             : file.contents,
         );
       }
+      if (url.hostname === "endless.example.com") return endless();
       if (url.hostname === "codeload.github.com") {
         const bytes = archive.slice();
         return new Response(bytes, {
@@ -391,7 +414,13 @@ describe("skills from skills.sh and GitHub", () => {
     expect(preview.skipped).toEqual([
       { path: "assets/logo.png", reason: "Binary files are not imported." },
       { path: "data/latin1.txt", reason: "The file is not UTF-8 text." },
+      {
+        path: "references/huge.md",
+        reason: "The file is larger than 1,048,576 bytes.",
+      },
     ]);
+    // Read twice (preview, then install), each stopped just past 1 MiB.
+    expect(endlessBytes).toBeLessThan(2 * (1_048_576 + 2 * 65_536));
     const skill = installed.body.data;
     expect(skill.name).toBe("lark-doc");
     expect(skill.active.source).toEqual({
@@ -403,6 +432,24 @@ describe("skills from skills.sh and GitHub", () => {
     ).toEqual(["references/api.md", "references/中文 notes.md"]);
     // The binary file is listed, never downloaded.
     expect(fetched.some((url) => url.includes("logo.png"))).toBe(false);
+  });
+
+  it("stops reading a website's oversize answer, without retrying or caching it", async () => {
+    const preview = await app(owner)(`${personal}/sources/preview`, "POST", {
+      source: { kind: "skills.sh", id: "endless.example.com/x" },
+    });
+    expect(preview.status).not.toBe(200);
+    expect(preview.body.data.code).toBe("SKILL_SOURCE_UNAVAILABLE");
+    // One request, read only a little past the 1 MiB index limit.
+    expect(
+      fetched.filter((url) => url.startsWith("endless.example.com")),
+    ).toHaveLength(1);
+    expect(endlessBytes).toBeLessThan(2 * 1_048_576);
+    expect(
+      await (caches as unknown as { default: Cache }).default.match(
+        ENDLESS_INDEX,
+      ),
+    ).toBeUndefined();
   });
 
   it("installs a skill without its file that has NUL bytes, and through a skills.sh outage", async () => {

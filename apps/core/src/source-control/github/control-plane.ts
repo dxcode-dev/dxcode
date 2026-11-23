@@ -572,6 +572,40 @@ export const createGitHubControlPlane = (input: {
   };
   const provider = createGitHubProvider(config, input.fetcher);
 
+  /**
+   * Whether the GitHub user behind `accessToken` controls the installation
+   * on `account`: it is their own user account, or they are an admin of its
+   * organization. Anyone GitHub merely shows the installation to, such as an
+   * outside collaborator on one of its repositories, does not.
+   */
+  const administersInstallation = async (
+    accessToken: string,
+    actorAccountId: string,
+    account: {
+      readonly id: string;
+      readonly login: string;
+      readonly type: string;
+    },
+  ) => {
+    if (account.type.toLowerCase() === "user")
+      return account.id === actorAccountId;
+    try {
+      const membership = await provider.getUserOrganizationMembership(
+        accessToken,
+        account.login,
+      );
+      return membership.role === "admin" && membership.state === "active";
+    } catch (cause) {
+      // A non-member, or an App without the Members permission.
+      if (
+        cause instanceof GitHubProviderError &&
+        (cause.category === "forbidden" || cause.category === "not-found")
+      )
+        return false;
+      throw cause;
+    }
+  };
+
   const removeExpiredTransactions = async () => {
     const now = nowIso();
     const [oauth, setup] = await Promise.all([
@@ -1081,6 +1115,16 @@ export const createGitHubControlPlane = (input: {
         now,
         expectedEpoch,
       );
+      // Only the installation's owner or org admin gets the installation;
+      // anyone else gets the repositories GitHub lists for them, which the
+      // collaborator sync below fills in.
+      const repositoryScope = (await administersInstallation(
+        accessToken,
+        authorization.provider_account_id,
+        reconciled.installation.account,
+      ))
+        ? "installation"
+        : "selected";
       const grantId = `ghg_${transaction.owner_scope}_${transaction.owner_id}_${installationId}`;
       const completed = await db.batch([
         db
@@ -1105,8 +1149,8 @@ export const createGitHubControlPlane = (input: {
           .prepare(`
             INSERT INTO github_owner_grant (
               id, owner_scope, owner_id, installation_id, status,
-              created_by_user_id, created_at, updated_at
-            ) SELECT ?, ?, ?, ?, 'active', ?, ?, ?
+              repository_scope, created_by_user_id, created_at, updated_at
+            ) SELECT ?, ?, ?, ?, 'active', ?, ?, ?, ?
               WHERE EXISTS (SELECT 1 FROM github_setup_transaction WHERE id = ? AND status = 'completed')
             ON CONFLICT(owner_scope, owner_id, installation_id) DO UPDATE SET
               status = 'active', updated_at = excluded.updated_at
@@ -1116,6 +1160,7 @@ export const createGitHubControlPlane = (input: {
             transaction.owner_scope,
             transaction.owner_id,
             installationId,
+            repositoryScope,
             actorUserId,
             now,
             now,
@@ -1596,6 +1641,41 @@ export const createGitHubControlPlane = (input: {
       actorUserId,
       authorization.access_token_reference_id,
     );
+    const account = await db
+      .prepare(`
+        SELECT provider_account_id AS id, provider_account_login AS login,
+               provider_account_type AS type
+          FROM github_installation WHERE installation_id = ?
+      `)
+      .bind(grant.installation_id)
+      .first<{ id: string; login: string; type: string }>();
+    if (
+      account === null ||
+      !(await administersInstallation(
+        accessToken,
+        authorization.provider_account_id,
+        account,
+      ))
+    ) {
+      // Uninstalling is for whoever controls the installation. Anyone else
+      // loses only their own grant.
+      const now = nowIso();
+      await db.batch([
+        db
+          .prepare(
+            "DELETE FROM github_owner_repository_selection WHERE owner_grant_id = ?",
+          )
+          .bind(grantId),
+        db
+          .prepare(`
+            UPDATE github_owner_grant SET status = 'disconnected', updated_at = ?
+             WHERE id = ?
+          `)
+          .bind(now, grantId),
+        incrementEpoch(db, "owner-grant", grantId, now),
+      ]);
+      return;
+    }
     const appJwt = await createGitHubAppJwt({
       appId: config.appId,
       privateKeyPem: Redacted.value(config.privateKeyPem),

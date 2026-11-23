@@ -21,6 +21,7 @@ import {
 } from "../settings/model-routing/deployment-models.js";
 import { usageModelName } from "../settings/usage/display-names.js";
 import { backfillChunk, backfillRollups } from "../settings/usage/rollup-d1.js";
+import { contextWindowOf } from "./context-window.js";
 import { orbSizeResources } from "./orb-sessions.js";
 
 /**
@@ -276,7 +277,12 @@ const summarize = (
                 contextRow.builtin_tool_tokens +
                 mcpServers.reduce((sum, server) => sum + server.tokens, 0) +
                 contextRow.message_tokens,
-              maxTokens: contextRow.context_window,
+              // A row recorded without its window (a dx model whose
+              // configuration the recording isolate had not read) takes it
+              // from the catalog now.
+              maxTokens:
+                contextRow.context_window ??
+                contextWindowOf(contextRow.provider_id, contextRow.model_id),
               compactions,
               systemPromptTokens: contextRow.system_prompt_tokens,
               builtinToolTokens: contextRow.builtin_tool_tokens,

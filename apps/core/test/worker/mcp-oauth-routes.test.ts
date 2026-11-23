@@ -412,9 +412,21 @@ describe("MCP OAuth, headers, and module IDs", () => {
     ).resolves.toBe("access-2");
     expect(fake.refreshed).toBe(1);
 
+    // Another host needs the secret header entered again.
+    const unkeyed = await call(`${base}/${server.id}`, cookie, "PATCH", {
+      endpoint: "https://mcp2.oauth.test/mcp",
+    });
+    expect(unkeyed.status).toBe(400);
+    await expect(unkeyed.text()).resolves.toContain(
+      "Enter a value for X-Api-Key.",
+    );
     // Changing the URL ends every sign-in to the old one.
     const moved = await call(`${base}/${server.id}`, cookie, "PATCH", {
       endpoint: "https://mcp2.oauth.test/mcp",
+      headers: [
+        { name: "X-Org", value: "acme" },
+        { name: "X-Api-Key", value: "second-host-value", secret: true },
+      ],
     });
     expect(moved.status).toBe(200);
     expect(

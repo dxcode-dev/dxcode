@@ -13,7 +13,13 @@
  *    with the plugin's message, which Claude reads as the tool's result.
  *
  * The bridge denies a call when no decision arrives in time, so the gate
- * fails closed in Claude Code mode as in dx mode.
+ * fails closed against a timeout or a failed check. Unlike dx mode, it
+ * binds only an agent that runs no code of its own around it: Claude Code
+ * also runs hooks from the repository's and the user's `.claude` settings,
+ * outside this gate, and anything running as the Orb's user can read and
+ * write the bridge's files (dx-hooks.json, `mcp/hooks/`). An agent that can
+ * write those settings can therefore run code the gate never sees, so a
+ * plugin cannot rely on it as a sandbox in this mode (#2359).
  */
 
 export interface ClaudeCodeHookRequest {

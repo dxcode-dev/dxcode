@@ -58,6 +58,8 @@ export const permissionLabel = {
   tier: "Trust tier",
   hosts: "Hosts",
   jobs: "Background jobs",
+  wake: "Wakes Threads",
+  panes: "Pane access",
 } as const satisfies Record<PluginPermissionChange["permission"], string>;
 
 /** Each grant the update adds or drops, added ones first. */
