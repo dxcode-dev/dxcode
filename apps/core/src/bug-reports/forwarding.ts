@@ -78,13 +78,25 @@ export const forwardingDestination = (
   return { origin: url.origin, host: url.host, key };
 };
 
-const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const EMAIL =
+  /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
 const USER_ID = /\busr_[A-Za-z0-9_-]{6,}/g;
+/**
+ * A bare UUID, which is what a dx user ID is. Prefixed IDs such as
+ * `thr_<uuid>` keep theirs: `_` and the UUID leave no word boundary between
+ * them.
+ */
+const UUID =
+  /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/gi;
+/** The names in an author tag dx prefixes to a message. */
+const AUTHOR_NAME = /\b(identifier|handle|mentions)="[^"]*"/g;
+const AUTHOR_TAG = /<dx_message_author\b[^<>]*>/gi;
 
 /**
  * A string as it may leave this deployment: redacted again, with every
- * email address, dx user ID, and the reporter's own ID removed, so neither
- * the reporter nor anyone named in a shared Thread is identified there.
+ * email address, dx user ID, author name, and the reporter's own ID
+ * removed, so neither the reporter nor anyone named in a shared Thread is
+ * identified there.
  */
 const anonymous = (text: string, reporterUserId: string) =>
   redactBugReportText(
@@ -92,8 +104,10 @@ const anonymous = (text: string, reporterUserId: string) =>
       ? text.split(reporterUserId).join("[user]")
       : text
     )
+      .replace(AUTHOR_TAG, (tag) => tag.replace(AUTHOR_NAME, '$1="[user]"'))
       .replace(EMAIL, "[email]")
-      .replace(USER_ID, "[user]"),
+      .replace(USER_ID, "[user]")
+      .replace(UUID, "[user]"),
   );
 
 const anonymousValue = (value: unknown, reporterUserId: string): unknown => {

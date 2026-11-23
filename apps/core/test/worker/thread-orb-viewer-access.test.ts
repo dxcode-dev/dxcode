@@ -35,8 +35,9 @@ import { runRepositories } from "./runtime.js";
  *   (names and counts, no contents), a file the agent shared;
  * - the work a read-only restart rescued into Thread storage opens for a
  *   viewer;
- * - a viewer's bug report reads the Orb's setup scripts into a diagnostics
- *   file the viewer can download;
+ * - a viewer's bug report reads the Orb's setup scripts, its execution
+ *   state, or the Worker logs into a diagnostics file the viewer can
+ *   download;
  * - a Portal host admits a viewer.
  */
 
@@ -471,21 +472,36 @@ describe("View-only members and the Orb (#1659)", () => {
       );
       return {
         reads: orbCalls.filter(({ operation }) => operation === "files.read"),
-        orbSetup: (
+        thread: (
           JSON.parse((await saved?.text()) ?? "{}") as {
-            thread: { orbSetup: { ok: boolean } };
+            thread: Record<
+              "orbSetup" | "execution" | "workerLogs",
+              { ok: boolean; error?: string }
+            >;
           }
-        ).thread.orbSetup,
+        ).thread,
       };
     };
 
+    // A viewer reads their report back, so it holds no Orb, execution
+    // state, or Worker logs (#2370).
     await shareAs("view");
     const viewer = await report(member);
     expect(viewer.reads).toEqual([]);
-    expect(viewer.orbSetup).toMatchObject({ ok: false });
+    const viewOnly = {
+      ok: false,
+      error: "The reporter can only view this Thread, so this was not read.",
+    };
+    expect(viewer.thread).toMatchObject({
+      orbSetup: viewOnly,
+      execution: viewOnly,
+      workerLogs: viewOnly,
+    });
 
     const ownReport = await report(owner);
     expect(ownReport.reads.length).toBeGreaterThan(0);
-    expect(ownReport.orbSetup).toMatchObject({ ok: true });
+    expect(ownReport.thread.orbSetup).toMatchObject({ ok: true });
+    expect(ownReport.thread.execution).toMatchObject({ ok: true });
+    expect(ownReport.thread.workerLogs).not.toEqual(viewOnly);
   });
 });

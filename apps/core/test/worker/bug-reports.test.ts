@@ -434,6 +434,62 @@ describe("Bug reports", () => {
     expect(githubCalls).toEqual([]);
   });
 
+  it("redacts dx's own keys, and redacts text built to stall the redactor in linear time (#2369)", async () => {
+    // Each key shaped as dx issues it, built at run time.
+    const keys = [
+      `dxu_${"AbCd".repeat(16)}`,
+      `dxo_${"EfGh".repeat(16)}`,
+      `dxd_${"IjKl".repeat(16)}`,
+      `dxbr_acme.${"Mn0_-".repeat(9)}Mn`,
+    ];
+    // Each made the old redactor rescan the string from every position: at
+    // 200 KB, from 7 seconds to over 30 each.
+    const stalls = [
+      "token".repeat(40_000),
+      "a.".repeat(100_000),
+      "eyJ-".repeat(50_000),
+      "http://a/".repeat(22_000),
+    ];
+    const threadId = await createThread();
+    const started = Date.now();
+    const data = await sent(
+      await send(threadId, {
+        message: `My key is ${keys[0]}`,
+        diagnostics: {
+          threadAndApp: {
+            ...threadAndApp,
+            logs: keys.map((key) => ({
+              at: "2026-11-23T10:00:00.000Z",
+              level: "error",
+              message: `Request failed with ${key}`,
+            })),
+            transcript: {
+              turns: stalls.map((text) => ({ role: "user", text })),
+            },
+          },
+        },
+      }),
+    );
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(data.message).toBe("My key is [redacted]");
+    const diagnostics = await (
+      await open(`${data.id}/files/diagnostics.json`)
+    ).text();
+    for (const key of keys) expect(diagnostics).not.toContain(key);
+    expect(diagnostics).toContain("Request failed with [redacted]");
+    // A key-shaped word too short to be a key is kept.
+    expect(
+      (
+        await sent(
+          await send(threadId, {
+            message: "Run dxd_test-api-key",
+            diagnostics: {},
+          }),
+        )
+      ).message,
+    ).toBe("Run dxd_test-api-key");
+  });
+
   it("keeps a report from Settings with App Diagnostics and nothing about a Thread", async () => {
     const data = await sent(
       await sendFromSettings(

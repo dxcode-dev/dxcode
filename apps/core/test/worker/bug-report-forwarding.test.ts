@@ -59,6 +59,8 @@ import {
 const CENTRAL = "https://central.test";
 const SECRET = "central-intake-secret-for-tests";
 const SECRET_TOKEN = `ghp_${"Ab3".repeat(12)}`;
+/** A teammate's dx user ID, a bare UUID as Better Auth makes it (#2370). */
+const TEAMMATE_ID = crypto.randomUUID();
 
 /** The sending deployment: the reporter is `principal`, at dx.test. */
 const senderBindings = (overrides: Partial<Bindings> = {}): Bindings => ({
@@ -154,7 +156,7 @@ const report = async (bindings: Bindings, message: string) => {
             {
               at: "2026-11-04T10:00:00.000Z",
               level: "error",
-              message: `Mention @teammate (teammate@example.org, usr_Teammate123) token=${SECRET_TOKEN}`,
+              message: `<dx_message_author role="contributor" user_id="${TEAMMATE_ID}" identifier="Teammate Person" handle="teammate" mentions="owner=${TEAMMATE_ID}" /> Mention @teammate (teammate@example.org, usr_Teammate123, ${TEAMMATE_ID.toUpperCase()}) token=${SECRET_TOKEN}`,
             },
           ],
           failedRequests: [],
@@ -291,6 +293,10 @@ describe("Bug report forwarding", () => {
       "reporterUserId",
       "teammate@example.org",
       "usr_Teammate123",
+      TEAMMATE_ID,
+      TEAMMATE_ID.toUpperCase(),
+      "Teammate Person",
+      'handle="teammate"',
       SECRET_TOKEN,
     ])
       expect(diagnostics).not.toContain(leaked);

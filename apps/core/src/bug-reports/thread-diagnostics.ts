@@ -187,8 +187,10 @@ export interface ThreadServerDiagnostics {
  * execution and agent Durable Objects' state, the Orb's setup scripts, and
  * the Thread's Worker log lines.
  * The Orb is read only when its daemon is connected, so a report never
- * wakes it, and only when the reporter may read it (`readOrb`). Every source
- * settles on its own; a failed one says why.
+ * wakes it. A reporter who may only view the Thread (`readOrb` false) reads
+ * the report back, so it holds none of the Orb, its execution state, or the
+ * Worker logs, which name other people and the Orb's environment (#2370).
+ * Every source settles on its own; a failed one says why.
  */
 export const collectThreadServerDiagnostics = async (
   bindings: Bindings,
@@ -196,22 +198,22 @@ export const collectThreadServerDiagnostics = async (
   threadId: ThreadId,
   readOrb: boolean,
 ): Promise<ThreadServerDiagnostics> => {
+  const viewOnly: Source<unknown> = {
+    ok: false,
+    error: "The reporter can only view this Thread, so this was not read.",
+  };
   const [secrets, execution, agent, workerLogs] = await Promise.all([
     threadSecretValues(bindings, threadId).catch(() => []),
-    settle(() => executionState(bindings, threadId)),
+    readOrb ? settle(() => executionState(bindings, threadId)) : viewOnly,
     settle(() => agentState(bindings, ownerUserId, threadId)),
-    settle(() => readThreadWorkerLogs(bindings, threadId)),
+    readOrb ? settle(() => readThreadWorkerLogs(bindings, threadId)) : viewOnly,
   ]);
   const connected =
     execution.ok &&
     (execution.value as { daemon?: { connected?: boolean } | null }).daemon
       ?.connected === true;
   const orbSetup: Source<unknown> = !readOrb
-    ? {
-        ok: false,
-        error:
-          "The reporter can only view this Thread, so its Orb was not read.",
-      }
+    ? viewOnly
     : connected
       ? await settle(() => orbSetupScripts(bindings, threadId))
       : { ok: false, error: "The Orb was not running, so it was not read." };
