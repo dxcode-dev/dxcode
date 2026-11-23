@@ -3809,6 +3809,16 @@
 .orb-usage-col-time {
   width: 15%;
 }
+/* With a cost column the Thread column gives it room. */
+.orb-usage-table:has(.orb-usage-col-cost) .orb-usage-col-thread {
+  width: 45%;
+}
+.orb-usage-table:has(.orb-usage-col-cost) .orb-usage-col-status {
+  width: 20%;
+}
+.orb-usage-col-cost {
+  width: 20%;
+}
 .orb-usage-table td:first-child {
   overflow-wrap: anywhere;
 }
@@ -4092,7 +4102,9 @@
     table-layout: auto;
   }
   .orb-usage-col-thread,
-  .orb-usage-col-time {
+  .orb-usage-col-time,
+  .orb-usage-col-cost,
+  .orb-usage-table:has(.orb-usage-col-cost) .orb-usage-col-thread {
     width: auto;
   }
   .orb-usage-status-inline {
@@ -4674,6 +4686,16 @@
 .orb-usage-col-time {
   width: 15%;
 }
+/* With a cost column the Thread column gives it room. */
+.orb-usage-table:has(.orb-usage-col-cost) .orb-usage-col-thread {
+  width: 45%;
+}
+.orb-usage-table:has(.orb-usage-col-cost) .orb-usage-col-status {
+  width: 20%;
+}
+.orb-usage-col-cost {
+  width: 20%;
+}
 .orb-usage-table td:first-child {
   overflow-wrap: anywhere;
 }
@@ -4957,7 +4979,9 @@
     table-layout: auto;
   }
   .orb-usage-col-thread,
-  .orb-usage-col-time {
+  .orb-usage-col-time,
+  .orb-usage-col-cost,
+  .orb-usage-table:has(.orb-usage-col-cost) .orb-usage-col-thread {
     width: auto;
   }
   .orb-usage-status-inline {
@@ -5932,45 +5956,55 @@
   text-align: center;
 }
 
+/* The Account page: its heading, then its cards. */
+.account-page {
+  display: grid;
+  gap: var(--space-4);
+}
+.account-page > .settings-heading {
+  margin-bottom: 0;
+}
 .account-settings {
   width: 100%;
 }
-.account-profile-card {
-  width: 100%;
-  overflow: hidden;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--background) 80%, transparent);
-  box-shadow:
-    0 0 0 1px var(--outline),
-    0 1px 3px color-mix(in srgb, var(--shadow-ink) 10%, transparent),
-    0 1px 2px -1px color-mix(in srgb, var(--shadow-ink) 10%, transparent);
-}
-.account-profile-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 48px;
-  padding: var(--space-2) var(--space-4);
-  border-bottom: 1px solid var(--divider);
-}
-.account-profile-header h2 {
-  margin: 0;
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  letter-spacing: -0.01em;
-}
-.account-profile-header button {
-  min-height: 26px;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-xs);
-  font-size: var(--text-sm);
-}
 .account-profile-summary {
   display: flex;
-  align-items: flex-start;
-  gap: var(--space-4);
-  min-height: 72px;
-  padding: var(--space-3) var(--space-4);
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+.account-profile-identity {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: var(--space-0-5);
+}
+.account-profile-identity > strong {
+  overflow: hidden;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-6);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-profile-identity > span,
+.account-profile-stat > span {
+  overflow: hidden;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-profile-stat {
+  display: grid;
+  flex: none;
+  justify-items: end;
+  gap: var(--space-0-5);
+}
+.account-profile-stat > strong {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-6);
 }
 .account-avatar {
   display: grid;
@@ -6047,15 +6081,14 @@
 .account-thread-count {
   font-variant-numeric: tabular-nums;
 }
-.account-usage-card {
-  margin-top: var(--space-4);
-}
-.account-usage-reset {
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
+.account-usage-stats {
+  padding: var(--space-4);
 }
 .account-usage-details {
   padding: var(--space-3) var(--space-4);
+}
+.account-cloud-plan {
+  border-top: 1px solid var(--divider);
 }
 .account-usage-details dd {
   font-variant-numeric: tabular-nums;
@@ -6084,8 +6117,8 @@
 }
 .account-edit-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-3);
+  grid-template-columns: minmax(0, 28rem);
+  gap: var(--space-4);
 }
 .account-profile-card .account-field {
   display: flex;
@@ -6117,9 +6150,6 @@
 .account-profile-card input[readonly] {
   color: var(--muted-foreground);
   cursor: default;
-}
-.account-username-field {
-  margin-top: var(--space-4);
 }
 .account-profile-edit-actions {
   display: flex;
@@ -7579,6 +7609,18 @@ img.orb-provider-logo {
 .agent-panel-stack[data-archived] .agent-transcript {
   padding-bottom: var(--space-6);
 }
+/* Unarchive to Continue fills an archived Thread's or Space's composer
+   place: a full-width outline Button. */
+.dx-button.unarchive-to-continue {
+  width: 100%;
+  max-width: var(--composer-width);
+  height: 44px;
+  margin: 0 auto;
+  display: flex;
+  pointer-events: auto;
+  border-radius: var(--radius-2xl);
+  background: var(--surface);
+}
 .archived-thread-warning {
   flex: none;
   padding: 5px var(--space-3);
@@ -7605,6 +7647,21 @@ img.orb-provider-logo {
 }
 .mobile-pane-content .agent-panel-stack[data-archived] .agent-transcript {
   padding-bottom: calc(16px + env(safe-area-inset-bottom));
+}
+/* The last message clears Unarchive to Continue, in the composer's place. */
+.agent-panel-stack[data-archived]:has([data-archived-composer])
+.agent-transcript {
+  padding-bottom: calc(44px + var(--space-8) + var(--space-2) + var(--space-6));
+}
+.mobile-pane-content
+  .agent-panel-stack[data-archived]:has([data-archived-composer])
+  .agent-transcript {
+  padding-bottom: calc(
+    44px +
+    var(--space-8) +
+    var(--agent-composer-dock-bottom) +
+    16px
+  );
 }
 .mobile-pane-content .agent-composer-dock {
   padding-right: 9px;
@@ -7886,7 +7943,6 @@ img.orb-provider-logo {
   .command-palette-item small {
     white-space: normal;
   }
-  .account-profile-summary,
   .account-profile-editor,
   .workspace-profile-body {
     flex-direction: column;

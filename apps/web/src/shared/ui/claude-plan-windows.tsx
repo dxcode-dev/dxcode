@@ -4,10 +4,11 @@ import {
   claudePlanWindowName,
 } from "@dx/domain";
 import { claudePlanWhen } from "./claude-plan-when.js";
+import { Meter } from "./meter.js";
 import "./claude-plan-windows.css";
 
-const level = (utilization: number) =>
-  utilization >= 1 ? "full" : utilization >= 0.8 ? "high" : undefined;
+const tone = (utilization: number) =>
+  utilization >= 1 ? "danger" : utilization >= 0.8 ? "warning" : "default";
 
 const ClaudePlanWindowRow = ({
   window,
@@ -28,13 +29,13 @@ const ClaudePlanWindowRow = ({
     <li className="claude-plan-window">
       <span className="claude-plan-window-name">{name}</span>
       {/* The percent beside it carries the value for assistive tech. */}
-      <span
-        className="claude-plan-meter"
-        aria-hidden="true"
-        data-level={reset ? undefined : level(window.utilization)}
-      >
-        <span style={{ width: `${reset ? 0 : Math.min(percent, 100)}%` }} />
-      </span>
+      <Meter
+        decorative
+        size="md"
+        value={reset ? 0 : Math.min(percent, 100)}
+        max={100}
+        tone={reset ? "default" : tone(window.utilization)}
+      />
       <span className="claude-plan-window-percent">
         {reset ? "–" : `${percent}%`}
       </span>

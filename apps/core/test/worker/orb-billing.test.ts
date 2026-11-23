@@ -497,6 +497,27 @@ describe("Orb billing policy, in workerd with real D1", () => {
     ]);
   });
 
+  it("tells the policy when Core releases an Orb, so its time ends there, and never fails the release when the policy fails", async () => {
+    const stopped: string[] = [];
+    const released = (orbStopped: OrbBillingPolicy["orbStopped"]) =>
+      makeExecutionActivation({
+        orbBilling: {
+          admitOrbStart: async () => ({ outcome: "meter" }),
+          recordUsage: async () => "continue",
+          orbStopped,
+        },
+      }).released?.(billedThread.id);
+    await released(async (threadId) => {
+      stopped.push(threadId);
+    });
+    expect(stopped).toEqual([billedThread.id]);
+    await expect(
+      released(async () => {
+        throw new Error("D1 is down.");
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("tells the policy when dx could not make a started Orb usable, but not when the person's own setup failed", async () => {
     const outcomeFor = async (failure: Error) => {
       const failed: OrbStartRequest[] = [];

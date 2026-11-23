@@ -1429,6 +1429,8 @@ export interface AgentPanelOptions {
   /** Replaces the composer for people who can only view this Thread. */
   readonly readOnlyNotice?: React.ReactNode;
   readonly archived?: boolean;
+  /** In the composer's place while the Thread is archived. */
+  readonly archivedComposer?: React.ReactNode;
   readonly showArchivedNotice?: boolean;
   /** The Thread's Project was deleted, so it can never be unarchived. */
   readonly projectDeleted?: boolean;
@@ -2192,6 +2194,19 @@ function useMessageChanges({
   return { messageDeleting, messageEditing };
 }
 
+/** What an archived Thread shows in the composer's place, if anything. */
+function ArchivedComposerDock({
+  children,
+}: {
+  readonly children?: React.ReactNode;
+}) {
+  return children === undefined ? null : (
+    <div className="agent-composer-dock" data-archived-composer="">
+      {children}
+    </div>
+  );
+}
+
 const composerDockRef = (node: HTMLDivElement | null) =>
   node === null ? undefined : observeComposerDock(node);
 
@@ -2227,6 +2242,7 @@ export function AgentPanel({
   onOpenModelRouting,
   inboundMessages,
   readOnlyNotice,
+  archivedComposer,
   onAccessChanged,
   mentions,
   focus,
@@ -2435,7 +2451,9 @@ export function AgentPanel({
           />
         </MessageEditContext>
 
-        {archived ? null : readOnlyNotice !== undefined ? (
+        {archived ? (
+          <ArchivedComposerDock>{archivedComposer}</ArchivedComposerDock>
+        ) : readOnlyNotice !== undefined ? (
           <div className="agent-composer-dock" ref={composerDockRef}>
             {readOnlyNotice}
           </div>

@@ -6,9 +6,10 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { ComposerSlot } from "../../shared/composer/composer-slot.js";
 import { Button } from "../../shared/ui/button.js";
+import { UnarchiveToContinue } from "../../shared/ui/unarchive-to-continue.js";
 import { SpaceCatchUpCard } from "./cards/catch-up-card.js";
 import type { CommentableMessage } from "./comments/message-comments.js";
-import { SpaceComposer, UnarchiveToContinue } from "./posts/space-composer.js";
+import { SpaceComposer } from "./posts/space-composer.js";
 import { SpacePostImages, SpacePostLinks } from "./posts/space-post-files.js";
 import {
   postContent,
@@ -154,7 +155,12 @@ export function SpaceChat({
         </div>
       </div>
       {archived ? (
-        <UnarchiveToContinue pending={unarchiving} onUnarchive={onUnarchive} />
+        <div className="agent-composer-dock space-composer-dock">
+          <UnarchiveToContinue
+            pending={unarchiving}
+            onUnarchive={onUnarchive}
+          />
+        </div>
       ) : (
         <SpaceComposer spaceThreadId={space.threadId} Composer={Composer} />
       )}

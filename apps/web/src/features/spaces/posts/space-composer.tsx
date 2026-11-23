@@ -1,11 +1,9 @@
 import { type MessageAttachment, withMessageAttachments } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { ArchiveRestore } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
 import type { ComposerSlot } from "../../../shared/composer/composer-slot.js";
-import { Button } from "../../../shared/ui/button.js";
 import { useComposerDraft } from "../../threads/composer-draft-queries.js";
 import { useSpacePeople } from "./space-people.js";
 import { postFailureText } from "./space-post-format.js";
@@ -80,29 +78,5 @@ export function SpaceComposer({
         </>
       }
     />
-  );
-}
-
-/** In place of the composer while the Space is archived. */
-export function UnarchiveToContinue({
-  pending,
-  onUnarchive,
-}: {
-  readonly pending: boolean;
-  readonly onUnarchive?: () => void;
-}) {
-  return (
-    <div className="agent-composer-dock space-composer-dock">
-      <Button
-        variant="outline"
-        className="space-unarchive"
-        disabled={onUnarchive === undefined || pending}
-        aria-busy={pending || undefined}
-        onClick={onUnarchive}
-      >
-        <ArchiveRestore aria-hidden="true" />
-        Unarchive to Continue
-      </Button>
-    </div>
   );
 }

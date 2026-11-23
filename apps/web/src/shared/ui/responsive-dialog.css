@@ -1,0 +1,68 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's responsive dialog: see responsive-dialog.tsx. A centered dialog on a
+   desktop, a bottom sheet on a phone, with one layout: header, body that
+   scrolls, footer. */
+@layer components {
+  .dialog-popup.dx-responsive-dialog {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: var(--space-4);
+    max-height: calc(100dvh - 2 * var(--space-4));
+    padding: 0;
+    overflow: hidden;
+  }
+  .dx-drawer.dx-responsive-dialog .dx-drawer-content {
+    display: grid;
+    gap: var(--space-4);
+    padding: var(--space-1) var(--space-5) var(--space-5);
+  }
+  .dx-responsive-dialog-header {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+  .dialog-popup.dx-responsive-dialog > .dx-responsive-dialog-header {
+    padding: var(--space-5) calc(var(--space-8) + var(--space-2)) 0
+      var(--space-5);
+  }
+  /* The type every dx dialog uses (styles.css .dialog-popup h2 and p). */
+  .dx-responsive-dialog-title {
+    margin: 0;
+    font-size: var(--text-xl);
+  }
+  .dx-responsive-dialog-description {
+    margin: 0;
+    color: var(--muted-foreground);
+    font-size: var(--text-xs);
+  }
+  .dx-responsive-dialog-body {
+    display: grid;
+    gap: var(--space-4);
+    min-width: 0;
+    min-height: 0;
+  }
+  .dialog-popup.dx-responsive-dialog > .dx-responsive-dialog-body {
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 var(--space-5);
+  }
+  .dialog-popup.dx-responsive-dialog > .dx-responsive-dialog-body:last-child {
+    padding-bottom: var(--space-5);
+  }
+  .dx-responsive-dialog-footer {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-2);
+  }
+  .dialog-popup.dx-responsive-dialog > .dx-responsive-dialog-footer {
+    padding: var(--space-3) var(--space-5);
+    border-top: 1px solid var(--divider);
+  }
+  /* On a phone the actions fill the width, the primary one last and widest. */
+  .dx-drawer .dx-responsive-dialog-footer > * {
+    flex: 1 1 0;
+  }
+}

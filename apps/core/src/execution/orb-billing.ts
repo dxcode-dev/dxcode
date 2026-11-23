@@ -13,7 +13,8 @@ import { DEFAULT_WORKSPACE_INACTIVITY_MS } from "./activity.js";
 /**
  * What a deployment charges for Orb time. Core asks the policy before every
  * Orb start (a create, or a connect that may resume a stopped Orb) and, for
- * a metered start, reports how long the Orb runs. Public dx ships
+ * a metered start, reports how long the Orb is kept alive: each idle
+ * deadline it sets, and its release. Public dx ships
  * `noOrbBilling`; a deployment registers its own policy in
  * `orb-billing-registration.ts`, which the public export replaces with the
  * no-op.
@@ -60,16 +61,29 @@ export interface OrbBillingPolicy {
   };
   /**
    * The Orb time this deployment metered for `userId`'s Threads between
-   * `from` and `until` (epoch ms), in milliseconds per Thread ID. Display
-   * only: Settings → Usage → Orb prefers it to the Thread's own run record
-   * for an Orb the deployment meters. Absent when the deployment meters
-   * nothing.
+   * `from` and `until` (epoch ms), and what it cost in micro-dollars of the
+   * deployment's credits, per Thread ID. Display only: Settings → Usage →
+   * Orb prefers it to the Thread's own run record for an Orb the deployment
+   * meters. Absent when the deployment meters nothing.
    */
-  readonly meteredOrbTime?: (window: {
+  readonly meteredOrbUsage?: (window: {
     readonly userId: string;
     readonly from: number;
     readonly until: number;
-  }) => Promise<ReadonlyMap<string, number>>;
+  }) => Promise<
+    ReadonlyMap<string, { readonly ms: number; readonly micros: number }>
+  >;
+  /**
+   * Core released a Thread's Orb (its Thread archived or deleted), so the
+   * policy can end its Orb time now rather than at its idle deadline. Its
+   * failures are logged, never thrown.
+   */
+  readonly orbStopped?: (threadId: ThreadId) => Promise<void>;
+  /**
+   * The Worker's minute cron: the policy settles the Orb time it meters.
+   * Returns how many Orbs it stopped for lack of credit.
+   */
+  readonly settle?: (now: number) => Promise<number>;
   /**
    * What `durationMs` of an Orb this deployment meters costs, in
    * micro-dollars of its credits, or undefined when it does not meter that
@@ -113,9 +127,9 @@ export interface OrbStartRefusalAction {
 }
 
 /**
- * A metered Orb runs at least from `from` until `until` (epoch ms): each
- * start and each idle-deadline renewal reports one interval, and the Orb
- * stops when the last one ends unless another renews it.
+ * A metered Orb is kept alive from `from` until `until` (epoch ms): each
+ * start and each idle-deadline renewal reports its new deadline, and the
+ * Orb stops when the last one ends unless another renews it.
  */
 export type OrbUsage = {
   readonly kind: "orb-time";

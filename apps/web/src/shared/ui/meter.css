@@ -1,0 +1,41 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's meter: a thin track filled to a value. See meter.tsx. */
+@layer components {
+  .dx-meter {
+    display: block;
+    width: 100%;
+    height: 6px;
+    overflow: hidden;
+    border-radius: var(--radius-full);
+    background: color-mix(in srgb, var(--foreground) 10%, transparent);
+  }
+  .dx-meter[data-size="sm"] {
+    height: 4px;
+  }
+  .dx-meter-fill {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--primary);
+    transition: width var(--duration-normal) ease;
+  }
+  .dx-meter[data-tone="success"] > .dx-meter-fill {
+    background: var(--success);
+  }
+  .dx-meter[data-tone="warning"] > .dx-meter-fill {
+    background: var(--warning);
+  }
+  .dx-meter[data-tone="danger"] > .dx-meter-fill {
+    background: var(--destructive);
+  }
+  .dx-meter[data-tone="danger"] {
+    background: color-mix(in srgb, var(--destructive) 18%, transparent);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dx-meter-fill {
+      transition: none;
+    }
+  }
+}

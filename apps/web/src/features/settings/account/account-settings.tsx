@@ -15,7 +15,11 @@ import { EmptyState } from "../../../shared/ui/empty-state.js";
 import { Input } from "../../../shared/ui/input.js";
 import { registeredDeploymentAccountCards } from "../deployment-settings-registration.js";
 import { ProfilePicture, ProfilePictureEditor } from "../profile-picture.js";
-import { SettingsBackgroundError } from "../settings-primitives.js";
+import {
+  SettingsBackgroundError,
+  SettingsCard,
+  SettingsHeading,
+} from "../settings-primitives.js";
 import type { SettingsSectionProps } from "../settings-registration.js";
 import {
   initialAccountProfileDraft,
@@ -35,7 +39,11 @@ const fieldError = (
   field: "displayName" | "username",
 ) => errors.find((error) => error.field === field)?.message;
 
-/** The saved profile, shown while the person is not editing it. */
+/**
+ * The saved profile, shown while the person is not editing it: picture,
+ * name, username, and how many Threads they own. The email stays off the
+ * page: it can't be changed here and anyone looking at the screen sees it.
+ */
 function AccountProfileSummary({
   picture,
   account,
@@ -48,26 +56,18 @@ function AccountProfileSummary({
   return (
     <div className="account-profile-summary">
       {picture}
-      <dl className="account-profile-details">
-        <div>
-          <dt>Name</dt>
-          <dd>{account.displayName}</dd>
+      <div className="account-profile-identity">
+        <strong>{account.displayName}</strong>
+        <span>@{account.username}</span>
+      </div>
+      {threadCount === undefined ? null : (
+        <div className="account-profile-stat">
+          <strong className="account-thread-count">
+            {threadCount.toLocaleString()}
+          </strong>
+          <span>{threadCount === 1 ? "Thread" : "Threads"}</span>
         </div>
-        <div>
-          <dt>Email</dt>
-          <dd>{account.email}</dd>
-        </div>
-        <div>
-          <dt>Username</dt>
-          <dd>@{account.username}</dd>
-        </div>
-        {threadCount === undefined ? null : (
-          <div>
-            <dt>Threads</dt>
-            <dd className="account-thread-count">{threadCount}</dd>
-          </div>
-        )}
-      </dl>
+      )}
     </div>
   );
 }
@@ -123,7 +123,7 @@ function UsernameField({
   );
 }
 
-/** The display name, the read-only email, the username, Cancel, and Save. */
+/** The display name, the username, Cancel, and Save. */
 function AccountProfileEditForm({
   account,
   displayName,
@@ -193,26 +193,16 @@ function AccountProfileEditForm({
           )}
         </div>
 
-        <div className="account-field">
-          <label htmlFor={`${formId}-email`}>Email</label>
-          <Input
-            id={`${formId}-email`}
-            value={account.email}
-            readOnly
-            aria-readonly="true"
-          />
-        </div>
+        <UsernameField
+          id={`${formId}-username`}
+          inputRef={usernameRef}
+          account={account}
+          value={username}
+          error={usernameError}
+          disabled={saving}
+          onChange={(next) => onChange(displayName, next)}
+        />
       </div>
-
-      <UsernameField
-        id={`${formId}-username`}
-        inputRef={usernameRef}
-        account={account}
-        value={username}
-        error={usernameError}
-        disabled={saving}
-        onChange={(next) => onChange(displayName, next)}
-      />
 
       <footer className="account-profile-edit-actions">
         <span aria-live="polite">{errorMessage ?? null}</span>
@@ -365,10 +355,11 @@ export function PersonalAccountForm({
 
   return (
     <div className="account-settings">
-      <section className="account-profile-card">
-        <header className="account-profile-header">
-          <h2>Profile</h2>
-          {editing ? null : (
+      <SettingsCard
+        className="account-profile-card"
+        title="Profile"
+        actions={
+          editing ? undefined : (
             <Button
               size="xs"
               variant="outline"
@@ -376,9 +367,9 @@ export function PersonalAccountForm({
             >
               Edit
             </Button>
-          )}
-        </header>
-
+          )
+        }
+      >
         {editing ? (
           <div className="account-profile-editor">
             {changeAvatar === undefined ? (
@@ -430,7 +421,7 @@ export function PersonalAccountForm({
             threadCount={threadCount}
           />
         )}
-      </section>
+      </SettingsCard>
     </div>
   );
 }
@@ -482,7 +473,8 @@ export function PersonalAccountSettings({
     );
   }
   return (
-    <>
+    <div className="account-page">
+      <SettingsHeading title="Account" />
       {account.error === null ? null : (
         <SettingsBackgroundError onRetry={() => void account.refetch()}>
           Account settings could not be refreshed. Showing the last loaded
@@ -503,6 +495,6 @@ export function PersonalAccountSettings({
         <Card key={id} />
       ))}
       <AccountUsageSummary userId={identity.id} />
-    </>
+    </div>
   );
 }

@@ -33,7 +33,7 @@ import { sweepThreadStorage } from "./thread-storage/store.js";
  * unfinished Thread deletions and undelivered first messages, settles turns
  * whose settlement was missed, deletes expired Thread storage files, fires
  * due schedules, polls GitHub subscriptions, renews Bitbucket and GitHub user
- * tokens, and retries bug reports still
+ * tokens, charges metered Orb time, and retries bug reports still
  * to forward to the central deployment; the daily tick also runs
  * usage and attachment retention.
  */
@@ -254,6 +254,27 @@ export const scheduled = (
       .catch((cause) =>
         orbProvidersLogger.error("Idle Orb sweep failed.", {
           event: "orb_idle_sweep_failed",
+          cause,
+        }),
+      ),
+  );
+  // Orb time a deployment meters is charged every 2 to 3 minutes while the
+  // Orb runs and once more when it stops (public dx meters nothing).
+  context.waitUntil(
+    import("./execution/orb-billing-registration.js")
+      .then(({ registeredOrbBilling }) =>
+        registeredOrbBilling.settle?.(controller.scheduledTime),
+      )
+      .then((stopped) => {
+        if (stopped !== undefined && stopped > 0)
+          orbProvidersLogger.info("Orbs out of credit stopped.", {
+            event: "orb_time_out_of_credit",
+            stopped,
+          });
+      })
+      .catch((cause) =>
+        orbProvidersLogger.error("Orb time settlement failed.", {
+          event: "orb_time_settle_failed",
           cause,
         }),
       ),

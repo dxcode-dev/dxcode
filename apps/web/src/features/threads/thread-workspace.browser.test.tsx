@@ -162,9 +162,11 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
     showArchivedNotice,
     workspaceStatus,
     readOnlyNotice,
+    archivedComposer,
   }: {
     readOnlyNotice?: React.ReactNode;
     archived?: boolean;
+    archivedComposer?: React.ReactNode;
     renderHeader?: (model: {
       rows: never[];
       turns: never[];
@@ -206,7 +208,9 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
           Open Model Routing
         </button>
       ) : null}
-      {archived ? null : readOnlyNotice !== undefined ? (
+      {archived ? (
+        archivedComposer
+      ) : readOnlyNotice !== undefined ? (
         readOnlyNotice
       ) : draft === undefined ? null : (
         <MockComposer draft={draft} />
@@ -215,6 +219,10 @@ vi.mock("./agent-panel.js", async (importOriginal) => ({
   ),
 }));
 
+import {
+  ThreadArchiveContext,
+  type ThreadArchiveController,
+} from "../../shared/thread-archive.js";
 import { MarkdownFileLinkContext } from "../../shared/ui/markdown-file-link-context.js";
 import { paneLayoutWith } from "../../testing/pane-layouts.js";
 import { PaneTreeHarness } from "../../testing/pane-tree-harness.js";
@@ -1227,6 +1235,135 @@ describe("ThreadSession panes", () => {
     expect(container.textContent).not.toContain("Undo");
     await React.act(() => root.unmount());
   });
+
+  /** The Thread page inside the app's archive controller. */
+  const renderWithArchive = async (
+    sessionThread: ThreadDetailData,
+    archive: ThreadArchiveController,
+  ) => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    queryClient.setQueryData(
+      paneLayoutKeys.layout(userId, sessionThread.id),
+      defaultPaneLayout(),
+    );
+    const render = (next: ThreadDetailData, controller = archive) => (
+      <QueryClientProvider client={queryClient}>
+        <ThreadArchiveContext value={controller}>
+          <ThreadSession thread={next} project={project} />
+        </ThreadArchiveContext>
+      </QueryClientProvider>
+    );
+    await React.act(() => root.render(render(sessionThread)));
+    return { container, root, render };
+  };
+  const unarchiveButton = (container: Element) =>
+    [...container.querySelectorAll("button")].find(
+      (button) => button.textContent === "Unarchive to Continue",
+    );
+
+  it.each([
+    ["phone", true],
+    ["wide", false],
+  ])(
+    "offers Unarchive to Continue in place of an archived Thread's composer (%s)",
+    async (_, mobile) => {
+      viewport.mobile = mobile;
+      const setArchived = vi.fn();
+      const { container, root, render } = await renderWithArchive(
+        { ...thread, lifecycleState: "archived" },
+        { setArchived },
+      );
+
+      expect(
+        container.querySelector('[aria-label="Thread composer"]'),
+      ).toBeNull();
+      const button = unarchiveButton(container);
+      expect(button?.disabled).toBe(false);
+      await click(button ?? null);
+      // The same restore as More Actions' Unarchive, which also resumes the
+      // Thread's schedules and GitHub events.
+      expect(setArchived).toHaveBeenCalledExactlyOnceWith(threadId, false);
+
+      // While the restore runs, the button waits.
+      await React.act(() =>
+        root.render(
+          render(
+            { ...thread, lifecycleState: "archived" },
+            { setArchived, pendingThreadId: threadId, pendingArchived: false },
+          ),
+        ),
+      );
+      expect(unarchiveButton(container)?.disabled).toBe(true);
+      expect(unarchiveButton(container)?.getAttribute("aria-busy")).toBe(
+        "true",
+      );
+
+      // Restored, the composer comes back in its place without a reload.
+      await React.act(() => root.render(render(thread)));
+      expect(unarchiveButton(container)).toBeUndefined();
+      expect(
+        container.querySelector('[aria-label="Thread composer"]'),
+      ).not.toBeNull();
+      await React.act(() => root.unmount());
+    },
+  );
+
+  it.each(["contribute", "view"] as const)(
+    "shows Unarchive to Continue disabled to a %s member, as an archived Space does",
+    async (access) => {
+      const setArchived = vi.fn();
+      const { container, root } = await renderWithArchive(
+        {
+          ...thread,
+          lifecycleState: "archived",
+          access,
+          sharing: { workspaceAccess: access },
+          participants: [
+            { userId: "owner-1" as UserId, name: "Ada Owner", owner: true },
+            { userId, name: "Ben Member" },
+          ],
+        },
+        { setArchived },
+      );
+
+      const button = unarchiveButton(container);
+      expect(button?.disabled).toBe(true);
+      await click(button ?? null);
+      expect(setArchived).not.toHaveBeenCalled();
+      expect(
+        container.querySelector('[aria-label="Thread composer"]'),
+      ).toBeNull();
+      await React.act(() => root.unmount());
+    },
+  );
+
+  it.each([
+    ["its project was deleted", { projectDeleted: true }],
+    ["dx removed its unused Orb", { archiveLocked: "orb-removed" }],
+  ])(
+    "offers no Unarchive to Continue when %s, since it stays archived",
+    async (_, locked) => {
+      const { container, root } = await renderWithArchive(
+        {
+          ...thread,
+          lifecycleState: "archived",
+          ...locked,
+        } as ThreadDetailData,
+        { setArchived: vi.fn() },
+      );
+
+      expect(unarchiveButton(container)).toBeUndefined();
+      expect(
+        container.querySelector('[aria-label="Thread composer"]'),
+      ).toBeNull();
+      await React.act(() => root.unmount());
+    },
+  );
 });
 
 describe("ThreadWorkspace cached metadata lifetime", () => {

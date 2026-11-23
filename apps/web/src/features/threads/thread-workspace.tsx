@@ -36,12 +36,17 @@ import {
 import { useMountEffect } from "../../shared/hooks/use-mount-effect.js";
 import { settingsNavigationState } from "../../shared/navigation/settings-return.js";
 import { lazyComponent } from "../../shared/stale-chunk.js";
+import {
+  type ThreadArchiveController,
+  useOptionalThreadArchive,
+} from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
 import {
   MarkdownFileLinkContext,
   MarkdownImageSourceContext,
 } from "../../shared/ui/markdown-file-link-context.js";
 import { MarkdownRemarkContext } from "../../shared/ui/markdown-remark-context.js";
+import { UnarchiveToContinue } from "../../shared/ui/unarchive-to-continue.js";
 import {
   listedProject,
   projectQueryOptions,
@@ -740,6 +745,38 @@ const sharedAgentPanelProps = (thread: ThreadDetailData) => {
     : { onOpenModelRouting: undefined };
 };
 
+/**
+ * In the composer's place while the Thread is archived: Unarchive to
+ * Continue, as an archived Space shows. Its owner restores it there; others
+ * see it disabled. A Thread kept from a deleted project, or whose unused
+ * Orb dx removed, stays archived, and the notice above says why.
+ */
+function archivedComposer(
+  thread: ThreadDetailData,
+  archive: ThreadArchiveController | undefined,
+) {
+  if (
+    thread.lifecycleState !== "archived" ||
+    thread.projectDeleted === true ||
+    thread.archiveLocked !== undefined
+  )
+    return undefined;
+  const own = (thread.access ?? "owner") === "owner";
+  return (
+    <UnarchiveToContinue
+      pending={
+        archive?.pendingThreadId === thread.id &&
+        archive.pendingArchived === false
+      }
+      onUnarchive={
+        own && archive !== undefined
+          ? () => archive.setArchived(thread.id, false)
+          : undefined
+      }
+    />
+  );
+}
+
 function RouteScopedThreadSession(props: ThreadSessionProps) {
   const client = createThreadAgentClient(
     props.thread.agentUrl,
@@ -1241,6 +1278,7 @@ function ThreadSessionContent({
       ? OrbDesktop
       : undefined;
   const archived = thread.lifecycleState === "archived";
+  const archive = useOptionalThreadArchive();
   // An archived Thread lists only the plugin panes and views (tabs, a
   // Thread type's main view) its plugins keep (`archivedThreads` "show" or
   // "live"); the others' tabs leave the strip until the Thread is restored.
@@ -1380,6 +1418,7 @@ function ThreadSessionContent({
             onOpenModelRouting={archived ? undefined : openModelRouting}
             archived={archived}
             showArchivedNotice={archived}
+            archivedComposer={archivedComposer(thread, archive)}
             projectDeleted={thread.projectDeleted === true}
             orbRemoved={thread.archiveLocked === "orb-removed"}
             dictationAvailable={dictationAvailable}

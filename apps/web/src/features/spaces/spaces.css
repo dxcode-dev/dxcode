@@ -1128,13 +1128,6 @@ button.space-tab:hover,
 .space-composer-dock .agent-composer > textarea {
   min-height: 52px;
 }
-/* Unarchive fills the composer's place: a full-width outline Button. */
-.dx-button.space-unarchive {
-  width: 100%;
-  height: 44px;
-  border-radius: var(--radius-2xl);
-  background: var(--surface);
-}
 
 /* Space Details: a column on the shell on a wide page, a bottom sheet
    otherwise. Toasts rest beside the column, not over its header. */

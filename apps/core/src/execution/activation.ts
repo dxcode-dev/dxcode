@@ -726,6 +726,18 @@ export const makeExecutionActivation = (
   Object.assign(activationFor(hooks), {
     admit: admitExecutionRun,
     admitDaemon: admitDaemonActivation,
+    released: async (threadId: ThreadId) => {
+      await hooks.orbBilling?.orbStopped?.(threadId).catch((error: unknown) => {
+        executionWorkspaceLogger.warn(
+          "A released Orb's time could not be ended.",
+          {
+            event: "orb_stop_record_failed",
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      });
+    },
   });
 
 const activationFor =

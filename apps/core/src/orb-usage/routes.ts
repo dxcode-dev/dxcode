@@ -66,13 +66,75 @@ const runSummary = async (
 
 const instant = (epochMs: number) => DateTime.makeUnsafe(epochMs);
 
+type MeteredUsage = { readonly ms: number; readonly micros: number };
+
+/** The start of `now`'s UTC month (epoch ms), as Billing counts a month. */
+const monthStart = (now: number) => {
+  const date = new Date(now);
+  return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1);
+};
+
+/** Threads the month's table lists at most, most credits first. */
+const MONTH_THREAD_LIMIT = 50;
+
+/**
+ * This month's metered Orb time per Thread, with each Thread's title and
+ * project while it is still the person's, and the totals of every Thread.
+ */
+const monthUsage = async (
+  db: D1Database,
+  userId: string,
+  from: number,
+  usage: ReadonlyMap<string, MeteredUsage>,
+) => {
+  const ranked = [...usage]
+    .filter(([, { ms }]) => ms > 0)
+    .toSorted(([, left], [, right]) => right.micros - left.micros);
+  const listed = ranked.slice(0, MONTH_THREAD_LIMIT);
+  const titles = new Map<
+    string,
+    { title: string; project_name: string | null }
+  >();
+  if (listed.length > 0) {
+    const { results } = await db
+      .prepare(
+        `SELECT thread.id, thread.title, project.name AS project_name
+           FROM threads AS thread
+           LEFT JOIN projects AS project ON project.id = thread.project_id
+          WHERE thread.owner_user_id = ?1
+            AND thread.lifecycle_state <> 'deleted'
+            AND thread.id IN (SELECT value FROM json_each(?2))`,
+      )
+      .bind(userId, JSON.stringify(listed.map(([threadId]) => threadId)))
+      .all<{ id: string; title: string; project_name: string | null }>();
+    for (const row of results) titles.set(row.id, row);
+  }
+  return {
+    from: instant(from),
+    totalMs: ranked.reduce((total, [, { ms }]) => total + ms, 0),
+    totalCostMicros: ranked.reduce(
+      (total, [, { micros }]) => total + micros,
+      0,
+    ),
+    threads: listed.map(([threadId, { ms, micros }]) => ({
+      threadId,
+      title: titles.get(threadId)?.title ?? null,
+      projectName: titles.get(threadId)?.project_name ?? null,
+      ms,
+      costMicros: micros,
+    })),
+  };
+};
+
 export const personalOrbUsageRoutes = new Hono<AppEnv>();
 
 /**
  * Settings → Usage → Orb: the person's running Orbs and the most recently
  * paused, with each Orb's time in the last 24 hours. An Orb the deployment
- * meters shows the metered time; any other shows the time its
- * Thread's execution object saw the Orb's daemon connected.
+ * meters shows the metered time and its cost; any other shows the time its
+ * Thread's execution object saw the Orb's daemon connected. Where the
+ * deployment meters Orbs, it also lists this month's charged Orb time per
+ * Thread: the page Orb time shows on, since Billing lists only its total.
  */
 personalOrbUsageRoutes.get("/", async (context) => {
   const db = context.env.DB;
@@ -84,19 +146,21 @@ personalOrbUsageRoutes.get("/", async (context) => {
     const threads = results.map((row) =>
       Schema.decodeUnknownSync(OrbThreadRow)(row),
     );
-    const [summaries, metered] = await Promise.all([
+    const usage = registeredOrbBilling.meteredOrbUsage;
+    const monthFrom = monthStart(now);
+    const [summaries, metered, month] = await Promise.all([
       Promise.all(threads.map((thread) => runSummary(context.env, thread.id))),
-      registeredOrbBilling.meteredOrbTime?.({
-        userId,
-        from: now - ORB_USAGE_WINDOW_MS,
-        until: now,
-      }) ?? Promise.resolve(new Map<string, number>()),
+      usage?.({ userId, from: now - ORB_USAGE_WINDOW_MS, until: now }) ??
+        Promise.resolve(new Map<string, MeteredUsage>()),
+      usage === undefined
+        ? Promise.resolve(undefined)
+        : usage({ userId, from: monthFrom, until: now }),
     ]);
     const running: Array<OrbUsageRowData & { readonly since: number }> = [];
     const paused: Array<OrbUsageRowData & { readonly at: number }> = [];
     threads.forEach((thread, index) => {
       const summary = summaries[index];
-      const meteredMs = metered.get(thread.id);
+      const meteredUsage = metered.get(thread.id);
       const row = {
         threadId: thread.id,
         title: thread.title,
@@ -107,11 +171,12 @@ personalOrbUsageRoutes.get("/", async (context) => {
             ? null
             : instant(summary.pausedAt),
         last24hMs:
-          meteredMs !== undefined
-            ? Math.round(meteredMs)
+          meteredUsage !== undefined
+            ? meteredUsage.ms
             : summary?.recorded === true
               ? summary.last24hMs
               : null,
+        last24hCostMicros: meteredUsage?.micros ?? null,
       };
       if (summary?.running === true)
         running.push({ ...row, since: summary.runningSince ?? now });
@@ -128,6 +193,10 @@ personalOrbUsageRoutes.get("/", async (context) => {
           paused: paused
             .slice(0, PAUSED_LIMIT)
             .map(({ at: _at, ...row }) => row),
+          month:
+            month === undefined
+              ? null
+              : await monthUsage(db, userId, monthFrom, month),
         },
       }),
       200,

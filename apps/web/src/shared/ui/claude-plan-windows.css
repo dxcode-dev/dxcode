@@ -24,25 +24,6 @@
 .claude-plan-window-reset {
   color: var(--muted-foreground);
 }
-.claude-plan-meter {
-  display: block;
-  height: 6px;
-  overflow: hidden;
-  border-radius: var(--radius-xs);
-  background: color-mix(in srgb, var(--foreground) 10%, transparent);
-}
-.claude-plan-meter > span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--primary);
-}
-.claude-plan-meter[data-level="high"] > span {
-  background: var(--warning);
-}
-.claude-plan-meter[data-level="full"] > span {
-  background: var(--destructive);
-}
 @media (max-width: 639px) {
   .claude-plan-windows {
     grid-template-columns: auto minmax(60px, 1fr) 3em;

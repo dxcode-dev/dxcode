@@ -246,8 +246,14 @@ describe("Settings → Usage → Orb", () => {
         size: "a1.medium",
         pausedAt: null,
         last24hMs: null,
+        last24hCostMicros: null,
       },
     ]);
+    // dx's deployment meters Orbs, so the month's charged time shows too:
+    // none for this Orb, which runs on E2B.
+    expect(before.month).toEqual(
+      expect.objectContaining({ totalMs: 0, totalCostMicros: 0, threads: [] }),
+    );
 
     const startedAt = Date.now();
     const socket = await startOrb();

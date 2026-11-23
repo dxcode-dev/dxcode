@@ -1125,6 +1125,13 @@ export const createGitHubControlPlane = (input: {
       ))
         ? "installation"
         : "selected";
+      // Another person's user account: an existing `installation` grant
+      // here came from setup before #2353, so it is narrowed as well. On an
+      // organization, an existing grant keeps its scope: GitHub shows org
+      // admins only with the App's Members permission.
+      const narrow =
+        repositoryScope === "selected" &&
+        reconciled.installation.account.type === "User";
       const grantId = `ghg_${transaction.owner_scope}_${transaction.owner_id}_${installationId}`;
       const completed = await db.batch([
         db
@@ -1153,7 +1160,9 @@ export const createGitHubControlPlane = (input: {
             ) SELECT ?, ?, ?, ?, 'active', ?, ?, ?, ?
               WHERE EXISTS (SELECT 1 FROM github_setup_transaction WHERE id = ? AND status = 'completed')
             ON CONFLICT(owner_scope, owner_id, installation_id) DO UPDATE SET
-              status = 'active', updated_at = excluded.updated_at
+              status = 'active', updated_at = excluded.updated_at,
+              repository_scope = CASE WHEN ? THEN 'selected'
+                ELSE github_owner_grant.repository_scope END
           `)
           .bind(
             grantId,
@@ -1165,7 +1174,10 @@ export const createGitHubControlPlane = (input: {
             now,
             now,
             transaction.id,
+            narrow ? 1 : 0,
           ),
+        // Threads that captured a narrowed grant are checked again.
+        ...(narrow ? [incrementEpoch(db, "owner-grant", grantId, now)] : []),
         db
           .prepare(
             "DELETE FROM github_setup_transaction WHERE id = ? AND status = 'completed'",
@@ -1303,7 +1315,10 @@ export const createGitHubControlPlane = (input: {
    * the repositories GitHub lists for them there (those they own or
    * collaborate on), among the ones the installation is entitled to. A
    * repository they lost moves the grant's epoch, and a grant left with none
-   * is disconnected. Grants from installing the App are never touched.
+   * is disconnected. Grants from installing the App are never touched,
+   * except an `installation` grant on another person's user account: only
+   * that account can install there, so it came from setup before #2353 and
+   * is narrowed to a `selected` grant here.
    */
   const syncCollaboratorGrants = async (actorUserId: string) => {
     const authorization = await freshAuthorization(actorUserId);
@@ -1314,11 +1329,16 @@ export const createGitHubControlPlane = (input: {
       authorization.access_token_reference_id,
     );
     const visible = await provider.listUserInstallations(accessToken);
-    const grants = await db
+    const stored = await db
       .prepare(`
-        SELECT id, installation_id, repository_scope, status
-          FROM github_owner_grant
-         WHERE owner_scope = 'personal' AND owner_id = ?
+        SELECT grant_row.id, grant_row.installation_id,
+               grant_row.repository_scope, grant_row.status,
+               installation.provider_account_type AS account_type,
+               installation.provider_account_id AS account_id
+          FROM github_owner_grant AS grant_row
+          LEFT JOIN github_installation AS installation
+            ON installation.installation_id = grant_row.installation_id
+         WHERE grant_row.owner_scope = 'personal' AND grant_row.owner_id = ?
       `)
       .bind(actorUserId)
       .all<{
@@ -1326,7 +1346,25 @@ export const createGitHubControlPlane = (input: {
         installation_id: string;
         repository_scope: "installation" | "selected";
         status: string;
+        account_type: string | null;
+        account_id: string | null;
       }>();
+    // An account switch disconnects every personal grant, so an active one
+    // belongs to this authorization's GitHub account. A disconnected one
+    // could come back through setup or this sync, so it is narrowed too.
+    const narrowed = stored.results.filter(
+      (grant) =>
+        grant.repository_scope === "installation" &&
+        grant.account_type === "user" &&
+        grant.account_id !== authorization.provider_account_id,
+    );
+    const grants = {
+      results: stored.results.map((grant) =>
+        narrowed.includes(grant)
+          ? { ...grant, repository_scope: "selected" as const }
+          : grant,
+      ),
+    };
     const byInstallation = new Map(
       grants.results.map((grant) => [grant.installation_id, grant]),
     );
@@ -1371,6 +1409,17 @@ export const createGitHubControlPlane = (input: {
            WHERE id = ?
         `)
         .bind(now, authorization.id),
+      // Before the statements below, which act only on `selected` grants.
+      ...narrowed.flatMap((grant) => [
+        db
+          .prepare(`
+            UPDATE github_owner_grant
+               SET repository_scope = 'selected', updated_at = ?
+             WHERE id = ? AND repository_scope = 'installation'
+          `)
+          .bind(now, grant.id),
+        incrementEpoch(db, "owner-grant", grant.id, now),
+      ]),
     ];
     for (const grant of grants.results) {
       if (grant.repository_scope !== "selected") continue;
@@ -1426,6 +1475,15 @@ export const createGitHubControlPlane = (input: {
       );
     }
     await db.batch(statements);
+    for (const grant of narrowed)
+      sourceControlLogger.warn(
+        "GitHub installation grant on another user's account narrowed.",
+        {
+          event: "github_installation_grant_narrowed",
+          grantId: grant.id,
+          installationId: grant.installation_id,
+        },
+      );
   };
 
   /**

@@ -2,6 +2,8 @@ import type { UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { Button } from "../../../shared/ui/button.js";
+import { StatGrid, StatTile } from "../../../shared/ui/stat-tile.js";
+import { SettingsCard } from "../settings-primitives.js";
 import { formatCost, formatTokens } from "../usage/usage-format.js";
 import {
   type PersonalUsageData,
@@ -43,7 +45,8 @@ const formatEstimatedCost = ({ estimatedCost }: UsageSummary) =>
     ? "Unknown"
     : formatCost(estimatedCost.amountMicros);
 
-function AccountUsageSummaryView({
+/** This month's agent use as four tiles. Separate from the query for Storybook. */
+export function AccountUsageSummaryView({
   resetsOn,
   summary,
   failed = false,
@@ -54,51 +57,40 @@ function AccountUsageSummaryView({
   readonly failed?: boolean;
   readonly onRetry?: () => void;
 }) {
-  const headingId = React.useId();
   return (
-    <section
-      className="account-profile-card account-usage-card"
-      aria-labelledby={headingId}
+    <SettingsCard
+      className="account-usage-card"
+      title="Usage this month"
+      actions={<span>Resets {resetsOn}</span>}
     >
-      <header className="account-profile-header">
-        <h2 id={headingId}>Usage this month</h2>
-        <span className="account-usage-reset">Resets {resetsOn}</span>
-      </header>
-      {summary === undefined ? (
-        failed ? (
-          <div className="account-usage-state" role="alert">
-            <span>Usage could not be loaded.</span>
-            <Button size="xs" variant="outline" onClick={onRetry}>
-              Try again
-            </Button>
-          </div>
-        ) : (
-          <div className="account-usage-state" aria-busy="true">
-            <span className="tool-spinner" />
-            <span>Loading usage…</span>
-          </div>
-        )
+      {summary === undefined && failed ? (
+        <div className="account-usage-state" role="alert">
+          <span>Usage could not be loaded.</span>
+          <Button size="xs" variant="outline" onClick={onRetry}>
+            Try again
+          </Button>
+        </div>
       ) : (
-        <dl className="account-profile-details account-usage-details">
-          <div>
-            <dt>Agent tokens</dt>
-            <dd>{formatTokens(summary.tokens.total)}</dd>
-          </div>
-          <div>
-            <dt>Model turns</dt>
-            <dd>{summary.modelTurns.toLocaleString()}</dd>
-          </div>
-          <div>
-            <dt>Estimated cost</dt>
-            <dd>{formatEstimatedCost(summary)}</dd>
-          </div>
-          <div>
-            <dt>Orb time</dt>
-            <dd>{formatOrbTime(summary.runnerDurationMs)}</dd>
-          </div>
-        </dl>
+        <StatGrid label="Usage this month" className="account-usage-stats">
+          <StatTile
+            label="Agent tokens"
+            value={summary && formatTokens(summary.tokens.total)}
+          />
+          <StatTile
+            label="Model turns"
+            value={summary?.modelTurns.toLocaleString()}
+          />
+          <StatTile
+            label="Estimated cost"
+            value={summary && formatEstimatedCost(summary)}
+          />
+          <StatTile
+            label="Orb time"
+            value={summary && formatOrbTime(summary.runnerDurationMs)}
+          />
+        </StatGrid>
       )}
-    </section>
+    </SettingsCard>
   );
 }
 

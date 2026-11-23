@@ -434,6 +434,11 @@ export type ExecutionActivationFactory = ((
   readonly admit?: (threadId: string) => ExecutionRunAdmission;
   /** Starts a daemon activation's Thread check beside its target. */
   readonly admitDaemon?: (threadId: string) => Promise<void>;
+  /**
+   * The Thread's Orb was released (archived or destroyed), so whatever
+   * meters its time ends it now. Its failures are logged, never thrown.
+   */
+  readonly released?: (threadId: ThreadId) => Promise<void>;
 };
 
 export class ExecutionProviderUnavailable extends Schema.TaggedError<ExecutionProviderUnavailable>()(
@@ -959,11 +964,14 @@ export const composeExecutionWorkspaces = (
       skippedRelease(threadId, entry, mode, target.credential.reason);
       return;
     }
-    return await entry.implementation.workspace.release(
+    const released = await entry.implementation.workspace.release(
       contextFor(entry, target),
       { threadId },
       mode,
     );
+    // Released, or stopping on its own: its Orb time ends now.
+    await activation.released?.(threadId);
+    return released;
   };
   const residentEntries = [...entries.values()].filter(
     ({ residentDaemon }) => residentDaemon,
