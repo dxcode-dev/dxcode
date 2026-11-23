@@ -49,6 +49,28 @@ const positionAtPoint = (editable: HTMLElement, x: number, y: number) => {
   };
 };
 
+/**
+ * iOS Safari zooms the page into a focused field whose text renders under
+ * 16px. The editor's code and its Find inputs sit in a shadow root, out of
+ * reach of styles.css's touch floor, so the same floor goes in here. Custom
+ * properties inherit into the shadow root; !important beats Pierre's
+ * unlayered 13px Find input and the light-DOM --diffs-font-size.
+ */
+const touchFieldFloorCSS = `@media (pointer: coarse) {
+  :host {
+    --diffs-font-size: max(
+      calc(var(--text-input-touch) / min(var(--text-zoom), 1)),
+      var(--text-code)
+    ) !important;
+  }
+  input {
+    font-size: max(
+      calc(var(--text-input-touch) / min(var(--text-zoom), 1)),
+      1em
+    ) !important;
+  }
+}`;
+
 const inFindPanel = (target: Element | null) =>
   target?.closest("[data-search-panel]") != null;
 
@@ -235,6 +257,7 @@ export const CodeEditor = React.forwardRef<
           options={{
             disableFileHeader: true,
             overflow: wrap ? "wrap" : "scroll",
+            unsafeCSS: touchFieldFloorCSS,
             onPostRender: (node) =>
               onReadyChange?.(
                 node.shadowRoot?.querySelector('[contenteditable="true"]') !=

@@ -10,6 +10,12 @@ const themes = `
 [data-palette="deadpan"] { --foreground: light-dark(#111, #ddd); --accent: light-dark(#eee, #222); }
 `;
 
+const touchFloor = `@media (pointer: coarse) {
+  input, textarea, select, [contenteditable]:not([contenteditable="false"]) {
+    font-size: max(calc(var(--text-input-touch) / min(var(--text-zoom), 1)), 1em) !important;
+  }
+}`;
+
 let fixtureIndex = 0;
 const inspect = (files) => {
   const displayRoot = join(temporaryRoot, String(fixtureIndex));
@@ -17,6 +23,7 @@ const inspect = (files) => {
   const sourceRoot = join(displayRoot, "apps/web/src");
   for (const [path, source] of Object.entries({
     "shared/ui/themes.css": themes,
+    "styles.css": touchFloor,
     ...files,
   })) {
     const target = join(sourceRoot, path);
@@ -50,6 +57,23 @@ try {
   fails("font-family", ".a { font: var(--text-sm) system-ui; }");
   fails("radius-px", ".a { border-radius: 6px; }");
   fails("radius-px", ".a { border-top-left-radius: 5px; }");
+  fails("touch-field", ".a textarea { font-size: var(--text-sm) !important; }");
+  fails(
+    "touch-field",
+    ".a { font: var(--text-sm) var(--font-ui) !important; }",
+  );
+  fails("touch-field", "body { color: var(--foreground); }", "styles.css");
+  fails(
+    "touch-field",
+    touchFloor.replace(", [contenteditable]", ""),
+    "styles.css",
+  );
+  fails("touch-field", touchFloor.replace(" !important", ""), "styles.css");
+  fails(
+    "touch-field",
+    touchFloor.replace("(pointer: coarse)", "(max-width: 600px)"),
+    "styles.css",
+  );
   fails(
     "theme-contract",
     `[data-palette="daydream"] { --foreground: #000; --accent: #eee; }
@@ -72,6 +96,7 @@ try {
 }
 .b { border-radius: 2px; font: inherit; }`,
   );
+  passes(touchFloor, "styles.css");
   passes(".a { color: #fff; }", "features/marketing/landing.css");
   passes(".a { color: #0b0d0b; }", "shared/ui/tokens.css");
   passes("body { background: #0b0d0b; }", "public-root.css");

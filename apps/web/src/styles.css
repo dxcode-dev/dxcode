@@ -96,9 +96,13 @@
     color: inherit;
   }
 }
-/* iOS Safari zooms the page into a focused field by 16px / its font size, so
-   touch devices keep every text field at 16px or larger. It overrides the
-   smaller sizes that feature styles give their fields. */
+/* iOS Safari zooms the page into a focused field whose text renders under
+   16px, by 16px / its size. On touch screens every editable field renders at
+   16px or more: the root zoom shrinks it at a small Text Size, so the floor
+   divides by --text-zoom there, and grows with a large one. !important makes
+   this beat every feature rule, whatever its specificity or order;
+   scripts/check-web-tokens.mjs keeps this rule and rejects any other
+   !important font size (rule touch-field). */
 @media (pointer: coarse) {
   input:not(
     [type="checkbox"],
@@ -113,11 +117,12 @@
     [type="hidden"]
   ),
   textarea,
-  select {
-    font-size: max(var(--text-input-touch), 1em);
-  }
-  :root[data-text-size="small"] :is(input, textarea, select) {
-    font-size: max(calc(var(--text-input-touch) / var(--text-zoom)), 1em);
+  select,
+  [contenteditable]:not([contenteditable="false"]) {
+    font-size: max(
+      calc(var(--text-input-touch) / min(var(--text-zoom), 1)),
+      1em
+    ) !important;
   }
 }
 

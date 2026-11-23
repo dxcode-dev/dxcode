@@ -18,6 +18,13 @@
 //                   or inherit.
 //   radius-px       No px corner radius above 2px. Use --radius-*; 1px and
 //                   2px hairlines are allowed.
+//   touch-field     iOS Safari zooms into a focused field whose text is
+//                   under 16px. styles.css keeps one @media (pointer: coarse)
+//                   rule that sets every input, textarea, select, and
+//                   contenteditable to at least --text-input-touch with
+//                   !important, so no feature rule can shrink a field. Any
+//                   other !important font size would beat it, so only that
+//                   rule may use one.
 //   theme-contract  Every palette block in themes.css sets every variable in
 //                   its contract (the Daydream block defines the contract).
 //   design-system   The design-system block that plugin frames and dx-views
@@ -45,6 +52,8 @@ const messages = {
     "Use var(--font-ui) for interface text, var(--font-mono) for code and numbers, or var(--font-code) for transcript code.",
   "radius-px":
     "Use a radius token: --radius-xs 4, --radius-sm 6, --radius-md 8, --radius-lg 10, --radius-xl 12, --radius-2xl 16, --radius-3xl 20, --radius-4xl 24, --radius-full (px). 1px and 2px hairlines may stay.",
+  "touch-field":
+    "iOS Safari zooms the page into a focused field whose text is under 16px. Keep the @media (pointer: coarse) rule in apps/web/src/styles.css that gives input, textarea, select, and [contenteditable] font-size: max(calc(var(--text-input-touch) / min(var(--text-zoom), 1)), 1em) !important, and give no other font-size !important.",
   "theme-contract":
     "Every palette block in shared/ui/themes.css sets every contract variable, each as light-dark(<light>, <dark>); copy the missing one from the Daydream block and give it this palette's values.",
 };
@@ -74,6 +83,23 @@ const colorLiteral = (value) => {
   for (const [, , args] of plain.matchAll(colorFunction))
     if (!args.includes("var(")) return true;
   return false;
+};
+
+/** The touch floor every editable field needs, in styles.css. */
+const touchFieldKinds = ["input", "textarea", "select", "[contenteditable]"];
+const isTouchFieldFloor = (decl) => {
+  const rule = decl.parent;
+  const media = rule?.parent;
+  return (
+    decl.prop === "font-size" &&
+    decl.important === true &&
+    /var\(--text-input-touch\)/.test(decl.value) &&
+    rule?.type === "rule" &&
+    touchFieldKinds.every((kind) => rule.selector.includes(kind)) &&
+    media?.type === "atrule" &&
+    media.name === "media" &&
+    /\(pointer:\s*coarse\)/.test(media.params)
+  );
 };
 
 const pxOrRem = /\b\d+(\.\d+)?(px|rem)\b/;
@@ -120,6 +146,7 @@ export const inspectWebTokens = ({
       evidence,
       message: messages[rule],
     });
+  let touchFloor = false;
   for (const path of walk(sourceRoot).filter((file) => file.endsWith(".css"))) {
     const display = relative(sourceRoot, path).split(sep).join("/");
     const root = postcss.parse(readFileSync(path, "utf8"), { from: path });
@@ -146,6 +173,10 @@ export const inspectWebTokens = ({
         add("font-size-px", path, decl, evidence);
       if (prop === "font" && fontShorthandSize(value))
         add("font-size-px", path, decl, evidence);
+      if (display === "styles.css" && isTouchFieldFloor(decl))
+        touchFloor = true;
+      else if (/^font(-size)?$/.test(prop) && decl.important)
+        add("touch-field", path, decl, `${evidence} !important`);
       if (prop === "font-family" && !allowedFamily.test(value.trim()))
         add("font-family", path, decl, evidence);
       if (
@@ -158,6 +189,18 @@ export const inspectWebTokens = ({
         add("radius-px", path, decl, evidence);
     });
   }
+  if (!touchFloor)
+    violations.push({
+      rule: "touch-field",
+      path: relative(displayRoot, join(sourceRoot, "styles.css"))
+        .split(sep)
+        .join("/"),
+      line: 0,
+      column: 0,
+      evidence:
+        "no touch font-size floor for input, textarea, select, [contenteditable]",
+      message: messages["touch-field"],
+    });
   return violations.sort((left, right) =>
     `${left.path}:${left.line}`.localeCompare(`${right.path}:${right.line}`),
   );
