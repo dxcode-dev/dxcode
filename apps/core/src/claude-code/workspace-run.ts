@@ -857,8 +857,11 @@ chunks() {
 }
 if [ -n "$BRIDGE" ]; then
   # Claude reads its input and dx's answers from the control pipe, which
-  # the bridge writes; the bridge passes Claude's own output on.
-  run "$@" < "$D/control" 2> "$D/stderr.log" |
+  # the bridge writes; the bridge passes Claude's own output on. cat hands
+  # them to Claude through an anonymous pipe: on macOS Claude Code reading
+  # the named pipe itself stops draining it after a write larger than its
+  # buffer (dx's tool list) and never sees it close, so the run hung.
+  cat "$D/control" 3<&- | run "$@" 2> "$D/stderr.log" |
     "$PYTHON" -I "$D/dx-bridge.py" "$D/dx-tools.json" "\${D%/runs/*}/mcp" "$D/input.jsonl" 4> "$D/control" 3<&- |
     chunks
 else
