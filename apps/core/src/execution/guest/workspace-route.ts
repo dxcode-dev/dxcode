@@ -88,8 +88,12 @@ export const chooseWorkspaceSandboxRoute = async (input: {
   readonly flag: Promise<boolean>;
   readonly waitMs?: number;
 }): Promise<WorkspaceSandboxRoute> => {
+  // The local runtime and runners map the guest's `/home/user` onto a
+  // Thread folder in their provider API; dxd's sandbox route takes paths
+  // as given, so on a Mac it would write to `/home/user` itself (ENOTSUP).
   if (
     input.provider === "local" ||
+    input.provider === "runner" ||
     input.bindings.THREAD_EXECUTION === undefined
   )
     return { route: "provider", reason: "unsupported" };

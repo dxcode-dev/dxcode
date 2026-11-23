@@ -591,6 +591,14 @@ describe("the dxd workspace route", () => {
         flag: Promise.resolve(true),
       }),
     ).toEqual({ route: "provider", reason: "unsupported" });
+    expect(
+      await chooseWorkspaceSandboxRoute({
+        bindings: env,
+        threadId,
+        provider: "runner",
+        flag: Promise.resolve(true),
+      }),
+    ).toEqual({ route: "provider", reason: "unsupported" });
 
     const older = await connectDaemon({
       terminal: { version: 1 },
