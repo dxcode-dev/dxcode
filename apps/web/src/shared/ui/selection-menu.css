@@ -1,0 +1,45 @@
+/* The toolbar at selected text in a message: icon buttons with one-key
+   shortcuts (their titles say which). Its size is fixed, since
+   selection-menu.tsx places it from these numbers: 3px 5px padding and a
+   1px border around 28px buttons, or 44px on a touch screen. */
+.selection-menu {
+  position: fixed;
+  z-index: 200;
+  display: flex;
+  gap: 0;
+  padding: 3px 5px;
+  color: var(--muted-foreground);
+  border: 1px solid var(--outline);
+  border-radius: var(--radius-full);
+  background: var(--popover);
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-ink) 16%, transparent);
+}
+.selection-menu-button {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  color: inherit;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+}
+.selection-menu[data-touch] .selection-menu-button {
+  width: 44px;
+  height: 44px;
+}
+.selection-menu-button:hover,
+.selection-menu-button:focus-visible {
+  color: var(--foreground);
+  background: var(--accent);
+}
+.selection-menu-button svg {
+  width: 15px;
+  height: 15px;
+}
+.selection-menu[data-touch] .selection-menu-button svg {
+  width: 18px;
+  height: 18px;
+}

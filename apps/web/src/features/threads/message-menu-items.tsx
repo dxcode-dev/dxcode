@@ -2,13 +2,10 @@ import { ClipboardType, Copy, Link2, Pencil, Trash2 } from "lucide-react";
 import * as React from "react";
 import { getBrowserCommandRegistry } from "../../shared/commands/command-registry.js";
 import { ShortcutKeycaps } from "../../shared/commands/shortcut-keycaps.js";
+import { copyWithStyling } from "../../shared/copy-text.js";
 import { MenuItem, MenuSeparator } from "../../shared/ui/menu.js";
 import type { MessageMenuRow } from "./message-actions.js";
-import {
-  copyMessageLink,
-  copyMessageText,
-  copyWithStyling,
-} from "./message-copy.js";
+import { copyMessageLink, copyMessageText } from "./message-copy.js";
 import {
   canDeleteMessage,
   canEditMessage,

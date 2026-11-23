@@ -75,6 +75,7 @@ export const touchScreenTests = [
   "src/features/threads/changes/changes-phone-range.browser.test.tsx",
   "src/features/threads/files/file-editor-phone.browser.test.tsx",
   "src/features/threads/new-thread-phone-composer.browser.test.tsx",
+  "src/features/threads/transcript-selection-phone.browser.test.tsx",
 ];
 
 export const browserProject = ({

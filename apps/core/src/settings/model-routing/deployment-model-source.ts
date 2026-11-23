@@ -32,6 +32,22 @@ export interface DxModel {
   readonly minBalanceMicros: number;
 }
 
+/**
+ * The most one call of a dx model can cost, in micro-dollars: a full context
+ * window at its dearest input rate and a full reply. A fixed number per
+ * model, so holding it needs no guess about the call.
+ */
+export const dxModelCallReserveMicros = (model: DxModel) =>
+  Math.ceil(
+    model.capabilities.contextWindow *
+      Math.max(
+        model.price.input,
+        model.price.cacheRead,
+        model.price.cacheWrite,
+      ) +
+      model.capabilities.maxTokens * model.price.output,
+  );
+
 /** An enabled, keyed upstream, in serving order. */
 export interface DxUpstream {
   readonly id: string;

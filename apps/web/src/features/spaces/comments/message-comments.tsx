@@ -6,13 +6,14 @@ import {
   type MessageCommentSummary,
 } from "@dx/api";
 import type { ThreadId, UserId } from "@dx/domain";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import {
   ArrowUp,
   ChevronDown,
   ChevronUp,
   MessagesSquare,
+  Reply,
   X,
 } from "lucide-react";
 import * as React from "react";
@@ -27,12 +28,23 @@ import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js"
 import { Avatar } from "../../../shared/ui/avatar.js";
 import { Button } from "../../../shared/ui/button.js";
 import { RichMarkdown } from "../../../shared/ui/rich-markdown.js";
+import {
+  appendQuote,
+  quoteSelection,
+  type SelectionSurface,
+  selectionCopyActions,
+} from "../../../shared/ui/selection-actions.js";
+import { SelectionMenu } from "../../../shared/ui/selection-menu.js";
 import { Textarea } from "../../../shared/ui/textarea.js";
 import { ThreadReferenceContext } from "../../../shared/ui/thread-reference-context.js";
 import { TimeText } from "../../../shared/ui/time-text.js";
 import { formatRelativeTime } from "../../../shared/utils.js";
 import { useComposerDraft } from "../../threads/composer-draft-queries.js";
 import { threadMembersQueryOptions } from "../../threads/sharing/thread-chat-queries.js";
+import {
+  threadDraftQueryOptions,
+  threadDraftValue,
+} from "../../threads/thread-draft-queries.js";
 import { spaceThreadReferences } from "../cards/space-thread-references.js";
 import { showLinked } from "../posts/focus-post.js";
 import {
@@ -78,7 +90,7 @@ const relative = (at: number) => (now: number) =>
 export const useOpenMessageComments = (threadId: ThreadId) => {
   const navigate = useNavigate();
   return (messageId: string | undefined) =>
-    void navigate({
+    navigate({
       to: "/threads/$threadId",
       params: { threadId },
       search: (previous: Record<string, unknown>) => {
@@ -90,6 +102,49 @@ export const useOpenMessageComments = (threadId: ThreadId) => {
       },
       replace: true,
     });
+};
+
+/** How long Comment waits for a post's saved comment draft. */
+const DRAFT_WAIT_MS = 1_500;
+
+/** Where a post's comment box keeps its draft. */
+const commentDraftAddress = (threadId: ThreadId, messageId: string) => ({
+  threadId,
+  slot: `post-comment:${messageId}`,
+});
+
+/**
+ * Quotes text (a selection) into a post's comment box: opens its comments,
+ * adds the quote under what was typed there, and puts the caret below it.
+ */
+export const useQuoteInComment = (threadId: ThreadId) => {
+  const client = useQueryClient();
+  const { identity } = useAuthenticatedIdentity();
+  const open = useOpenMessageComments(threadId);
+  return async (messageId: string, quote: string) => {
+    const address = commentDraftAddress(threadId, messageId);
+    const opened = open(messageId);
+    // Its saved draft first, so the quote adds to it rather than replacing
+    // it; a read that does not come soon is not waited for.
+    await Promise.race([
+      client
+        .ensureQueryData(threadDraftQueryOptions(identity.id, address))
+        .catch(() => undefined),
+      new Promise((resolve) => setTimeout(resolve, DRAFT_WAIT_MS)),
+    ]);
+    const draft = threadDraftValue(client, identity.id, address);
+    const next = appendQuote(draft.get(), quote);
+    draft.set(next);
+    await opened;
+    requestAnimationFrame(() => {
+      const box = document.querySelector<HTMLTextAreaElement>(
+        `.message-comments-panel[data-message-id="${CSS.escape(messageId)}"] textarea`,
+      );
+      if (box === null) return;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    });
+  };
 };
 
 const useSummaries = (threadId: ThreadId) => {
@@ -275,10 +330,9 @@ function CommentComposer({
   const { identity } = useAuthenticatedIdentity();
   // Kept in Core per person and post, so it outlasts the panel closing and
   // shows on their other devices.
-  const [body, setBody] = useComposerDraft({
-    threadId,
-    slot: `post-comment:${messageId}`,
-  });
+  const [body, setBody] = useComposerDraft(
+    commentDraftAddress(threadId, messageId),
+  );
   const [error, setError] = React.useState<string>();
   const box = React.useRef<HTMLTextAreaElement | null>(null);
   const announced = React.useRef(0);
@@ -418,6 +472,48 @@ const useMembers = (threadId: ThreadId) => {
   return { members, people };
 };
 
+/** The commented post at the top of the panel, and its comments. */
+const COMMENTS: SelectionSurface = {
+  region: ".message-comments-body",
+  message: ".message-comment, .message-comments-quote",
+  content: ".message-content, .message-comment-text",
+  // dx's post is Markdown; people's posts and comments are plain text.
+  markdown: (_message, content) =>
+    content.classList.contains("message-comments-quote-markdown"),
+};
+
+/**
+ * The toolbar at text selected in the open comments, as in a Thread: Reply
+ * quotes it into the comment box, with Copy as Markdown and Copy with
+ * Styling.
+ */
+function CommentsSelectionMenu({
+  threadId,
+  messageId,
+}: {
+  readonly threadId: ThreadId;
+  readonly messageId: string;
+}) {
+  const quoteInComment = useQuoteInComment(threadId);
+  return (
+    <SelectionMenu
+      surface={COMMENTS}
+      actions={(selection) => [
+        {
+          key: "r",
+          label: "Reply",
+          Icon: Reply,
+          run: () => {
+            window.getSelection()?.removeAllRanges();
+            void quoteInComment(messageId, quoteSelection(selection.text));
+          },
+        },
+        ...selectionCopyActions(selection),
+      ]}
+    />
+  );
+}
+
 /**
  * The open message's comments, over the conversation column: the message
  * quoted at the top, its comments (yours on the right), who is typing, and
@@ -504,10 +600,11 @@ function OpenComments({
     <section
       className="message-comments-panel"
       aria-label="Comments"
+      data-message-id={messageId}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
-          open(undefined);
+          void open(undefined);
         }
       }}
     >
@@ -520,7 +617,7 @@ function OpenComments({
           aria-label="Previous Comments"
           title="Previous Comments"
           disabled={previous === undefined}
-          onClick={() => open(previous?.message.messageId)}
+          onClick={() => void open(previous?.message.messageId)}
         >
           <ChevronUp aria-hidden="true" />
         </Button>
@@ -530,7 +627,7 @@ function OpenComments({
           aria-label="Next Comments"
           title="Next Comments"
           disabled={next === undefined}
-          onClick={() => open(next?.message.messageId)}
+          onClick={() => void open(next?.message.messageId)}
         >
           <ChevronDown aria-hidden="true" />
         </Button>
@@ -540,7 +637,7 @@ function OpenComments({
           size="icon-sm"
           aria-label="Close Comments"
           title="Close Comments"
-          onClick={() => open(undefined)}
+          onClick={() => void open(undefined)}
         >
           <X aria-hidden="true" />
         </Button>
@@ -600,6 +697,7 @@ function OpenComments({
           })}
         </div>
       </div>
+      <CommentsSelectionMenu threadId={threadId} messageId={messageId} />
       <CommentComposer
         threadId={threadId}
         messageId={messageId}

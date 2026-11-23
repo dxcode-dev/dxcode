@@ -1131,40 +1131,6 @@
   opacity: 1;
   pointer-events: auto;
 }
-/* The toolbar under selected text in a message: icon buttons with one-key
-   shortcuts (their titles say which). */
-.transcript-selection-popup {
-  position: fixed;
-  z-index: 200;
-  display: flex;
-  gap: 0;
-  padding: 3px 5px;
-  color: var(--muted-foreground);
-  border: 1px solid var(--outline);
-  border-radius: var(--radius-full);
-  background: var(--popover);
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--shadow-ink) 16%, transparent);
-}
-.transcript-selection-button {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  color: inherit;
-  border: 0;
-  border-radius: var(--radius-full);
-  background: transparent;
-}
-.transcript-selection-button:hover,
-.transcript-selection-button:focus-visible {
-  color: var(--foreground);
-  background: var(--accent);
-}
-.transcript-selection-button svg {
-  width: 15px;
-  height: 15px;
-}
 .message-menu-time {
   display: block;
   padding: 3px var(--space-2) 5px;

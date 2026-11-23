@@ -4,6 +4,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
 import type { ComposerSlot } from "../../../shared/composer/composer-slot.js";
+import { appendQuote } from "../../../shared/ui/selection-actions.js";
 import { useComposerDraft } from "../../threads/composer-draft-queries.js";
 import { useSpacePeople } from "./space-people.js";
 import { postFailureText } from "./space-post-format.js";
@@ -18,9 +19,12 @@ import { useCreateSpacePost } from "./space-posts-queries.js";
 export function SpaceComposer({
   spaceThreadId,
   Composer,
+  replyRef,
 }: {
   readonly spaceThreadId: ThreadId;
   readonly Composer: ComposerSlot;
+  /** Set to quote text (a selection in the chat) into the box. */
+  readonly replyRef?: React.RefObject<((quote: string) => void) | undefined>;
 }) {
   const { identity } = useAuthenticatedIdentity();
   // Core keeps it per person, as a Thread's composer does: leaving the
@@ -42,6 +46,17 @@ export function SpaceComposer({
     body: draft,
     setBody: setDraft,
     box,
+  });
+  React.useImperativeHandle(replyRef, () => (quote) => {
+    const next = appendQuote(draft, quote);
+    setDraft(next);
+    // After React writes the draft: the caret goes below the quote.
+    requestAnimationFrame(() => {
+      const textarea = box.current;
+      if (textarea === null) return;
+      textarea.focus();
+      textarea.setSelectionRange(next.length, next.length);
+    });
   });
   // Sent while another post is still sending, it waits its turn and shows
   // as sending in the chat meanwhile. Its files follow the text as the

@@ -2,13 +2,25 @@ import type { SpaceData } from "@dx/api";
 import { parseMessageAttachments, SPACE_POST_ID_PATTERN } from "@dx/api";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
+import { Link2, MessagesSquare, Reply } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { ComposerSlot } from "../../shared/composer/composer-slot.js";
+import { copyText } from "../../shared/copy-text.js";
 import { Button } from "../../shared/ui/button.js";
+import {
+  quoteSelection,
+  type SelectionMenuAction,
+  type SelectionSurface,
+  selectionCopyActions,
+} from "../../shared/ui/selection-actions.js";
+import { SelectionMenu } from "../../shared/ui/selection-menu.js";
 import { UnarchiveToContinue } from "../../shared/ui/unarchive-to-continue.js";
 import { SpaceCatchUpCard } from "./cards/catch-up-card.js";
-import type { CommentableMessage } from "./comments/message-comments.js";
+import {
+  type CommentableMessage,
+  useQuoteInComment,
+} from "./comments/message-comments.js";
 import { SpaceComposer } from "./posts/space-composer.js";
 import { SpacePostImages, SpacePostLinks } from "./posts/space-post-files.js";
 import {
@@ -38,6 +50,73 @@ const commentable = (
   sentAt: new Date(postTime(post.createdAt)).toISOString(),
 });
 
+/** The Space's posts; a post still sending has no ID yet. */
+const POSTS: SelectionSurface = {
+  region: ".space-chat-scroll",
+  message: "article.space-post[data-post-id]",
+  content: ".message-content",
+  // dx writes Markdown; people write plain text.
+  markdown: (post) => post.dataset.kind === "agent",
+};
+
+/**
+ * The toolbar at text selected in a post, as in a Thread: Reply quotes it
+ * into the Space's composer, Comment into the post's comments, with Copy as
+ * Markdown, Copy with Styling, and Copy Highlighted Link.
+ */
+function PostSelectionMenu({
+  spaceThreadId,
+  onReply,
+}: {
+  readonly spaceThreadId: SpaceData["threadId"];
+  /** Absent while the Space is archived. */
+  readonly onReply?: (quote: string) => void;
+}) {
+  const quoteInComment = useQuoteInComment(spaceThreadId);
+  return (
+    <SelectionMenu
+      surface={POSTS}
+      actions={(selection): ReadonlyArray<SelectionMenuAction> => {
+        const postId = selection.message.dataset.postId ?? "";
+        const quote = () => {
+          window.getSelection()?.removeAllRanges();
+          return quoteSelection(selection.text);
+        };
+        // A post's link opens the chat at it, as a mention's does.
+        const link = new URL(
+          `/threads/${spaceThreadId}?message=${encodeURIComponent(postId)}`,
+          window.location.href,
+        ).href;
+        return [
+          ...(onReply === undefined
+            ? []
+            : [
+                {
+                  key: "r",
+                  label: "Reply",
+                  Icon: Reply,
+                  run: () => onReply(quote()),
+                },
+              ]),
+          {
+            key: "m",
+            label: "Comment",
+            Icon: MessagesSquare,
+            run: () => void quoteInComment(postId, quote()),
+          },
+          ...selectionCopyActions(selection),
+          {
+            key: "l",
+            label: "Copy Highlighted Link",
+            Icon: Link2,
+            run: () => void copyText(link, "Link"),
+          },
+        ];
+      }}
+    />
+  );
+}
+
 export type RenderSpaceComments = (input: {
   readonly findMessage: (messageId: string) => CommentableMessage | undefined;
 }) => React.ReactNode;
@@ -62,6 +141,8 @@ export function SpaceChat({
   readonly unarchiving: boolean;
 }) {
   const { identity } = useAuthenticatedIdentity();
+  // The composer's Reply, which a selection in a post quotes into.
+  const composerReply = React.useRef<(quote: string) => void>(undefined);
   const posts = useInfiniteQuery(
     spacePostsQueryOptions(identity.id, space.threadId),
   );
@@ -162,8 +243,18 @@ export function SpaceChat({
           />
         </div>
       ) : (
-        <SpaceComposer spaceThreadId={space.threadId} Composer={Composer} />
+        <SpaceComposer
+          spaceThreadId={space.threadId}
+          Composer={Composer}
+          replyRef={composerReply}
+        />
       )}
+      <PostSelectionMenu
+        spaceThreadId={space.threadId}
+        {...(archived
+          ? {}
+          : { onReply: (quote) => composerReply.current?.(quote) })}
+      />
       {renderComments?.({ findMessage })}
     </div>
   );

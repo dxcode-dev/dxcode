@@ -26,7 +26,8 @@
 // nudge, or stays over the page when a thread, comments, or artifact row
 // opens what it names underneath it; a comments row leaves the thread's tab
 // in front of the chat its comments open over; the Space's own artifact
-// opens nothing.
+// opens nothing; text selected in a post or a comment shows no menu, or its
+// Reply or Comment quotes into the wrong box or loses what was typed there.
 //
 // Screenshots land in apps/web/.cache/spaces-v2-ui/ (ignored by Git).
 
@@ -56,7 +57,9 @@ import { ThreadArchiveContext } from "../../shared/thread-archive.js";
 import { settingsContextQueryOptions } from "../settings/settings-context-queries.js";
 import { useOpenViewCommands } from "../threads/panes/thread-page-layout.js";
 import { SlotComposer } from "../threads/slot-composer.js";
+import { discardUnsavedThreadDrafts } from "../threads/thread-draft-queries.js";
 import { openLinkedSpacePost } from "../threads/thread-route-links.js";
+import { MessageCommentsPanel } from "./comments/message-comments.js";
 import { invalidateSpaceArtifacts } from "./space-cache-queries.js";
 import { spaceDetailsStorageKey } from "./space-details-store.js";
 import {
@@ -463,6 +466,14 @@ const serve = ({
       });
     if (path.startsWith(`/v1/threads/${SPACE}/message-comments/`))
       return ok({ message: null, comments: [] });
+    // The person's drafts: a comment box on post 2 holds one.
+    if (path === `/v1/threads/${SPACE}/draft`) {
+      const slot = url.searchParams.get("slot");
+      if (method === "PUT") return ok({ text: body.text });
+      return ok({
+        text: slot === `post-comment:${postId(2)}` ? "Typed before." : "",
+      });
+    }
     // How the person left the Space's page: never saved.
     if (path === `/v1/threads/${SPACE}/layout`)
       return ok({ layout: method === "PUT" ? body : null });
@@ -535,6 +546,8 @@ afterEach(async () => {
   document.body.replaceChildren();
   vi.unstubAllGlobals();
   localStorage.clear();
+  // A draft a test wrote must not show in the next test's boxes.
+  discardUnsavedThreadDrafts();
   rendered = [];
   // A phone test that fails before its last line must not leave touch on.
   await cdp().send("Emulation.setTouchEmulationEnabled", { enabled: false });
@@ -565,10 +578,13 @@ const mount = async (
     search = "",
     sidebarCollapsed = false,
     appearance = "light",
+    comments = false,
   }: {
     search?: string;
     sidebarCollapsed?: boolean;
     appearance?: "light" | "dark";
+    /** Mounts the comments panel, as the Space route composes it in. */
+    comments?: boolean;
   } = {},
 ) => {
   await page.viewport(width, height);
@@ -630,6 +646,18 @@ const mount = async (
           <div className="space-artifact-stub" data-thread={threadId} />
         )}
         Composer={SlotComposer}
+        {...(comments
+          ? {
+              renderComments: ({ findMessage }) => (
+                <MessageCommentsPanel
+                  threadId={SPACE}
+                  findMessage={findMessage}
+                  typing={[]}
+                  onTyping={() => undefined}
+                />
+              ),
+            }
+          : {})}
       />
     ),
   });
@@ -1209,6 +1237,99 @@ it("opens comments on a post from its replies row and its Comment action", async
       (router.state.location.search as { comments?: string }).comments ===
       postId(4),
   );
+});
+
+/** Selects `text` inside `scope`, as a drag would. */
+const selectIn = async (scope: Element | null, text: string) => {
+  if (scope === null) throw new Error(`Nothing holds "${text}".`);
+  const walker = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+    const start = (node as Text).data.indexOf(text);
+    if (start < 0) continue;
+    getSelection()?.setBaseAndExtent(node, start, node, start + text.length);
+    document.dispatchEvent(new Event("selectionchange"));
+    await settle(80);
+    return;
+  }
+  throw new Error(`No text "${text}".`);
+};
+const selectionMenu = () => q('[role="toolbar"][aria-label="Selection"]');
+const menuLabels = () =>
+  all("button", selectionMenu() ?? document.createElement("div")).map(
+    (element) => element.getAttribute("aria-label"),
+  );
+
+/** The phone's touch screen, whose own selection menu copies. */
+const touchScreen = () =>
+  cdp().send("Emulation.setTouchEmulationEnabled", {
+    enabled: true,
+    maxTouchPoints: 5,
+  });
+
+/** The menu sits under the selection's handles, clear of the phone's menu. */
+const expectUnderHandles = (scope: Element | null) => {
+  const range = getSelection()?.getRangeAt(0).getBoundingClientRect();
+  const menu = selectionMenu()?.getBoundingClientRect();
+  if (range === undefined || menu === undefined || scope === null)
+    throw new Error("Expected a selection and its menu.");
+  expect(menu.top).toBeGreaterThanOrEqual(range.bottom + 24);
+};
+
+it("shows the selection menu in a post on a phone: Reply quotes into the composer, Comment into the post's comments", async () => {
+  serve();
+  await touchScreen();
+  const router = await mount(390, 844, { comments: true });
+  await until(loaded);
+  await selectIn(post(4), "off by a cent");
+  // Copy is the phone's own menu's.
+  expect(menuLabels()).toEqual(["Reply", "Comment", "Copy Highlighted Link"]);
+  expectUnderHandles(post(4));
+  await shot("selection-menu-post");
+  // Reply: the quote goes to the Space's composer, the caret under it.
+  await userEvent.click(button("Reply", selectionMenu() as HTMLElement));
+  const composer = q<HTMLTextAreaElement>(
+    "textarea[aria-label='Post to Space']",
+  ) as HTMLTextAreaElement;
+  await until(() => composer.value === "> off by a cent\n");
+  await until(() => document.activeElement === composer);
+  await until(() => selectionMenu() === null);
+  // Comment: the post's comments open, the quote under what was typed.
+  await selectIn(post(2), "rebuild the payment step");
+  await userEvent.click(button("Comment", selectionMenu() as HTMLElement));
+  await until(() => searchOf(router).comments === postId(2));
+  const commentBox = () =>
+    q<HTMLTextAreaElement>(".message-comments-panel textarea");
+  await until(
+    () =>
+      commentBox()?.value === "Typed before.\n\n> rebuild the payment step\n",
+  );
+  await until(() => document.activeElement === commentBox());
+});
+
+it("shows the selection menu in a post's comments on a phone, and Reply quotes into the comment box", async () => {
+  serve();
+  await touchScreen();
+  await mount(390, 844, {
+    search: `?comments=${postId(2)}`,
+    comments: true,
+  });
+  await until(() => q(".message-comment[aria-label^='Comment from']") !== null);
+  await selectIn(
+    q(".message-comment[aria-label='Comment from Thorsten Ball']"),
+    "Payment step first",
+  );
+  expect(menuLabels()).toEqual(["Reply"]);
+  expectUnderHandles(q(".message-comments-panel"));
+  await shot("selection-menu-comment");
+  await userEvent.click(button("Reply", selectionMenu() as HTMLElement));
+  const commentBox = () =>
+    q<HTMLTextAreaElement>(".message-comments-panel textarea");
+  await until(
+    () => commentBox()?.value === "Typed before.\n\n> Payment step first\n",
+  );
+  // The commented post at the top quotes the same way.
+  await selectIn(q(".message-comments-quote"), "parallel threads");
+  expect(menuLabels()[0]).toBe("Reply");
 });
 
 it("lays out tabs and Space Details as a sheet on a phone", async () => {

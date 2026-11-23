@@ -74,6 +74,7 @@ import {
   registeredDeploymentModelBilling,
   registeredDeploymentModelSource,
 } from "../model-routing/deployment-models-registration.js";
+import { dxModelCallReserveMicros } from "../model-routing/deployment-model-source.js";
 import { validateAllowedModelEndpoint } from "../model-routing/endpoint-policy.js";
 import {
   ClaudePlanUnavailable,
@@ -188,6 +189,54 @@ const pinnedDxPrice = (route: {
   isDxConnection(route.connection)
     ? deploymentUsagePrice(DX_PROVIDER_ID, route.model.id)
     : undefined;
+
+/** A dx model call's hold on its owner's balance (#2372). */
+interface CallHold {
+  readonly id: string;
+  readonly userId: string;
+}
+
+/**
+ * The response, calling `end` once when its body has been read to the end,
+ * failed, or been cancelled; at once when it has no body.
+ */
+const releasedAtEnd = (response: Response, end: () => void) => {
+  const body = response.body;
+  if (body === null) {
+    end();
+    return response;
+  }
+  let ended = false;
+  const once = () => {
+    if (ended) return;
+    ended = true;
+    end();
+  };
+  const reader = body.getReader();
+  const watched = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          once();
+          controller.close();
+        } else controller.enqueue(value);
+      } catch (error) {
+        once();
+        controller.error(error);
+      }
+    },
+    cancel: (reason) => {
+      once();
+      return reader.cancel(reason);
+    },
+  });
+  return new Response(watched, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+};
 
 class CoordinatorFailure extends Error {
   constructor(readonly failure: RunFailure) {
@@ -816,38 +865,85 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
    * seconds; the balance is read on each call.
    */
   async #refuseStoppedDxRoute(pin: PinnedSubmission) {
-    if (!isDxConnection(pin.connection)) return;
+    if (!isDxConnection(pin.connection)) return undefined;
     await loadDeploymentModels(this.#db());
     if (dxUpstreamModel(pin.connection, pin.model.id) === undefined)
       throw new CoordinatorFailure(DX_MODEL_UNAVAILABLE);
-    await this.#refuseUnpaidDxModel(pin);
+    return this.#refuseUnpaidDxModel(pin, true);
   }
 
   /**
    * A new submission on a dx model starts only when the deployment's billing
    * admits its owner, such as only while their model balance is above zero.
+   * A model call (`call`) also holds what it may cost until `#releaseHold`,
+   * so parallel Threads can't all spend the same balance (#2372). A call
+   * refused only for the owner's other running calls is retried, so it
+   * starts once one of them ends.
    */
-  async #refuseUnpaidDxModel(route: SubmissionRoute) {
-    if (!isDxConnection(route.connection)) return;
+  async #refuseUnpaidDxModel(route: SubmissionRoute, call = false) {
+    if (!isDxConnection(route.connection)) return undefined;
     const model = findDxModel(route.model.id);
+    const hold = call ? { id: crypto.randomUUID() } : undefined;
     const decision = await registeredDeploymentModelBilling.admit(
       this.#db(),
       route.ownerUserId,
       {
         minBalanceMicros: model?.minBalanceMicros ?? 0,
-        ...(model === undefined ? {} : { name: model.name }),
+        ...(model === undefined
+          ? {}
+          : {
+              name: model.name,
+              reserveMicros: dxModelCallReserveMicros(model),
+            }),
       },
+      hold,
     );
     if ("reason" in decision)
       throw new CoordinatorFailure(
-        runFailure(
-          "account",
-          decision.belowFloor === true
-            ? "DX_MODEL_BALANCE_LOW"
-            : "DX_MODEL_BALANCE_EMPTY",
-          decision.reason,
-        ),
+        decision.busy === true
+          ? runFailure("transient", "DX_MODEL_BALANCE_BUSY", decision.reason)
+          : runFailure(
+              "account",
+              decision.belowFloor === true
+                ? "DX_MODEL_BALANCE_LOW"
+                : "DX_MODEL_BALANCE_EMPTY",
+              decision.reason,
+            ),
       );
+    return hold === undefined
+      ? undefined
+      : { id: hold.id, userId: route.ownerUserId };
+  }
+
+  /** Ends a call's hold once the call has ended; its charge follows. */
+  #releaseHold(hold: CallHold | undefined) {
+    if (hold === undefined) return;
+    this.ctx.waitUntil(
+      registeredDeploymentModelBilling
+        .release(this.#db(), hold.userId, hold)
+        .catch((error: unknown) =>
+          settingsPersistenceLogger.warn("dx model hold not released.", {
+            event: "dx_model_hold_release_failed",
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+    );
+  }
+
+  /** Runs a model call, and ends its hold when the response has ended. */
+  async #holding(
+    hold: CallHold | undefined,
+    call: () => Promise<Response>,
+  ): Promise<Response> {
+    if (hold === undefined) return call();
+    let response: Response;
+    try {
+      response = await call();
+    } catch (error) {
+      this.#releaseHold(hold);
+      throw error;
+    }
+    return releasedAtEnd(response, () => this.#releaseHold(hold));
   }
 
   #db() {
@@ -960,7 +1056,11 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     threadId: string,
     submissionId: string | undefined,
     canonical: string,
-  ): Promise<{ readonly pin: PinnedSubmission; readonly live: Promise<void> }> {
+  ): Promise<{
+    readonly pin: PinnedSubmission;
+    readonly live: Promise<void>;
+    readonly hold?: CallHold;
+  }> {
     if (!submissionId) throw new Error("SUBMISSION_ROUTE_UNAVAILABLE");
     const pin = await this.#readPin(submissionId);
     if (pin?.threadId !== threadId || pin.submissionId !== submissionId)
@@ -1018,11 +1118,16 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     // Only the primary can say a Thread or connection is gone.
     if (!nearby) await confirmed();
     this.#validateEndpoint(pin.connection);
-    await this.#refuseStoppedDxRoute(pin);
-    await this.#renewPin(submissionId, pin.expiresAt);
+    const hold = await this.#refuseStoppedDxRoute(pin);
+    try {
+      await this.#renewPin(submissionId, pin.expiresAt);
+    } catch (error) {
+      this.#releaseHold(hold);
+      throw error;
+    }
     const live = nearby ? confirmed() : Promise.resolve();
     live.catch(() => undefined);
-    return { pin, live };
+    return { pin, live, ...(hold === undefined ? {} : { hold }) };
   }
 
   /**
@@ -1114,13 +1219,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     signal: AbortSignal,
   ) {
     const routingStarted = performance.now();
-    const { pin, live } = await this.#resolve(
+    const { pin, live, hold } = await this.#resolve(
       envelope.threadId,
       envelope.submissionId,
       envelope.canonical,
     );
-    return this.#underLiveness(live, signal, (upstream) =>
-      this.#proxyWithPin(pin, envelope, request, upstream, routingStarted),
+    return this.#holding(hold, () =>
+      this.#underLiveness(live, signal, (upstream) =>
+        this.#proxyWithPin(pin, envelope, request, upstream, routingStarted),
+      ),
     );
   }
 
@@ -1426,13 +1533,15 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   }
 
   async #handleStream(envelope: StreamEnvelope, signal: AbortSignal) {
-    const { pin, live } = await this.#resolve(
+    const { pin, live, hold } = await this.#resolve(
       envelope.threadId,
       envelope.submissionId,
       envelope.canonical,
     );
-    return this.#underLiveness(live, signal, (upstream) =>
-      this.#streamWithPin(pin, envelope, upstream),
+    return this.#holding(hold, () =>
+      this.#underLiveness(live, signal, (upstream) =>
+        this.#streamWithPin(pin, envelope, upstream),
+      ),
     );
   }
 
@@ -1683,224 +1792,237 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     this.#validateEndpoint(route.connection);
     // A title, media analysis, or plugin call on a dx model is charged like
     // a turn, so it starts only while the owner's balance is above the floor.
-    await this.#refuseUnpaidDxModel(route);
-    const pinnedPrice = pinnedDxPrice(route);
-    const credential = await loadConnectionCredential(
-      this.#db(),
-      route.connection,
-    );
-    if (route.connection.credentialId !== undefined && credential === undefined)
-      throw new Error("CREDENTIAL_UNAVAILABLE");
-    const pin: PinnedSubmission = { ...route, credential };
-    const canonical = `${route.model.provider}/${route.model.id}`;
-    // The Claude plan is used only through the Claude Code CLI, so a Claude
-    // Code Thread's title waits for its first run (see claude-code/registration.ts).
-    if (route.model.api === CLAUDE_CODE_API)
-      return jsonResponse({ code: CLAUDE_CODE_TITLE_DEFERRED }, 409);
-    // A title asks the model's lowest effort; "off" sends none, which each
-    // adapter turns into its provider's own no-thinking setting (GLM 4.7
-    // Flash ignores low effort and timed out on most titles). Media analysis
-    // runs at low; a plugin may ask for another, and `none` sends none.
-    const asked =
-      envelope.reasoning ??
-      (envelope.plugin === undefined && attachments.length === 0
-        ? lowestReasoning(route.model)
-        : "low");
-    const reasoning = asked === "none" ? undefined : asked;
-    // pi's API adapters read the prompt only from the transcript's leading
-    // system message; a raw `systemPrompt` field is ignored.
-    const pdf = attachments.some(
-      ({ mimeType }) => mimeType === "application/pdf",
-    );
-    if (attachments.length > 0 && !route.model.input.includes("image"))
-      return jsonResponse({ code: "MODEL_CANNOT_READ_MEDIA" }, 422);
-    if (pdf && route.model.api !== "anthropic-messages")
-      return jsonResponse({ code: "MODEL_CANNOT_READ_PDF" }, 422);
-    const context = normalizeContext({
-      systemPrompt: envelope.systemPrompt,
-      messages: [
-        {
-          role: "user",
-          content:
-            attachments.length === 0
-              ? envelope.message
-              : [
-                  ...attachments.map(({ data, mimeType }) => ({
-                    type: "image" as const,
-                    data,
-                    mimeType,
-                  })),
-                  { type: "text" as const, text: envelope.message },
-                ],
-          timestamp: Date.now(),
-        },
-      ],
-    });
-    let final: AssistantMessageEvent | undefined;
-    // The adapter sees a failed proxy answer only as an SDK error; keep the
-    // coordinator's classification for this route's own answer.
-    let rejected: { failure: RunFailure; upstreamStatus?: number } | undefined;
-    if (
-      IN_DO_APIS.has(route.model.api) ||
-      route.model.api === "cloudflare-ai-binding" ||
-      (route.connection.kind === "deployment" &&
-        !isDxConnection(route.connection))
-    ) {
-      const response = await this.#streamWithPin(
-        pin,
-        {
-          threadId: pin.threadId,
-          submissionId: pin.submissionId,
-          canonical,
-          context,
-          options: { maxTokens: envelope.maxTokens, reasoning },
-        },
-        signal,
+    const hold = await this.#refuseUnpaidDxModel(route, true);
+    try {
+      const pinnedPrice = pinnedDxPrice(route);
+      const credential = await loadConnectionCredential(
+        this.#db(),
+        route.connection,
       );
-      if (!response.ok) return response;
-      final = await finalStreamEvent(response);
-    } else {
-      const loadAdapter = PROXY_STREAM[route.model.api];
-      if (loadAdapter === undefined)
-        return jsonResponse({ code: "UNSUPPORTED_WIRE_API" }, 400);
-      const adapter = await loadAdapter();
-      const proxyFetch: typeof fetch = async (input, init) => {
-        const request = new Request(input, init);
-        const response = await this.#proxyWithPin(
+      if (
+        route.connection.credentialId !== undefined &&
+        credential === undefined
+      )
+        throw new Error("CREDENTIAL_UNAVAILABLE");
+      const pin: PinnedSubmission = { ...route, credential };
+      const canonical = `${route.model.provider}/${route.model.id}`;
+      // The Claude plan is used only through the Claude Code CLI, so a Claude
+      // Code Thread's title waits for its first run (see claude-code/registration.ts).
+      if (route.model.api === CLAUDE_CODE_API)
+        return jsonResponse({ code: CLAUDE_CODE_TITLE_DEFERRED }, 409);
+      // A title asks the model's lowest effort; "off" sends none, which each
+      // adapter turns into its provider's own no-thinking setting (GLM 4.7
+      // Flash ignores low effort and timed out on most titles). Media analysis
+      // runs at low; a plugin may ask for another, and `none` sends none.
+      const asked =
+        envelope.reasoning ??
+        (envelope.plugin === undefined && attachments.length === 0
+          ? lowestReasoning(route.model)
+          : "low");
+      const reasoning = asked === "none" ? undefined : asked;
+      // pi's API adapters read the prompt only from the transcript's leading
+      // system message; a raw `systemPrompt` field is ignored.
+      const pdf = attachments.some(
+        ({ mimeType }) => mimeType === "application/pdf",
+      );
+      if (attachments.length > 0 && !route.model.input.includes("image"))
+        return jsonResponse({ code: "MODEL_CANNOT_READ_MEDIA" }, 422);
+      if (pdf && route.model.api !== "anthropic-messages")
+        return jsonResponse({ code: "MODEL_CANNOT_READ_PDF" }, 422);
+      const context = normalizeContext({
+        systemPrompt: envelope.systemPrompt,
+        messages: [
+          {
+            role: "user",
+            content:
+              attachments.length === 0
+                ? envelope.message
+                : [
+                    ...attachments.map(({ data, mimeType }) => ({
+                      type: "image" as const,
+                      data,
+                      mimeType,
+                    })),
+                    { type: "text" as const, text: envelope.message },
+                  ],
+            timestamp: Date.now(),
+          },
+        ],
+      });
+      let final: AssistantMessageEvent | undefined;
+      // The adapter sees a failed proxy answer only as an SDK error; keep the
+      // coordinator's classification for this route's own answer.
+      let rejected:
+        | { failure: RunFailure; upstreamStatus?: number }
+        | undefined;
+      if (
+        IN_DO_APIS.has(route.model.api) ||
+        route.model.api === "cloudflare-ai-binding" ||
+        (route.connection.kind === "deployment" &&
+          !isDxConnection(route.connection))
+      ) {
+        const response = await this.#streamWithPin(
           pin,
           {
             threadId: pin.threadId,
             submissionId: pin.submissionId,
             canonical,
-            request: {
-              url: request.url,
-              method: request.method,
-              headers: Object.fromEntries(request.headers.entries()),
-            },
+            context,
+            options: { maxTokens: envelope.maxTokens, reasoning },
           },
-          request,
           signal,
-          performance.now(),
         );
-        if (!response.ok) {
-          const body = await response
-            .clone()
-            .json<{
-              code?: string;
-              class?: RunFailureClass;
-              upstreamStatus?: number;
-              message?: string;
-            }>()
-            .catch(() => undefined);
-          if (
-            body?.code !== undefined &&
-            body.class !== undefined &&
-            body.message !== undefined
-          )
-            rejected = {
-              failure: runFailure(body.class, body.code, body.message),
-              ...(body.upstreamStatus === undefined
-                ? {}
-                : { upstreamStatus: body.upstreamStatus }),
-            };
+        if (!response.ok) return response;
+        final = await finalStreamEvent(response);
+      } else {
+        const loadAdapter = PROXY_STREAM[route.model.api];
+        if (loadAdapter === undefined)
+          return jsonResponse({ code: "UNSUPPORTED_WIRE_API" }, 400);
+        const adapter = await loadAdapter();
+        const proxyFetch: typeof fetch = async (input, init) => {
+          const request = new Request(input, init);
+          const response = await this.#proxyWithPin(
+            pin,
+            {
+              threadId: pin.threadId,
+              submissionId: pin.submissionId,
+              canonical,
+              request: {
+                url: request.url,
+                method: request.method,
+                headers: Object.fromEntries(request.headers.entries()),
+              },
+            },
+            request,
+            signal,
+            performance.now(),
+          );
+          if (!response.ok) {
+            const body = await response
+              .clone()
+              .json<{
+                code?: string;
+                class?: RunFailureClass;
+                upstreamStatus?: number;
+                message?: string;
+              }>()
+              .catch(() => undefined);
+            if (
+              body?.code !== undefined &&
+              body.class !== undefined &&
+              body.message !== undefined
+            )
+              rejected = {
+                failure: runFailure(body.class, body.code, body.message),
+                ...(body.upstreamStatus === undefined
+                  ? {}
+                  : { upstreamStatus: body.upstreamStatus }),
+              };
+          }
+          return response;
+        };
+        for await (const event of adapter.streamSimple(route.model, context, {
+          maxTokens: envelope.maxTokens,
+          reasoning,
+          maxRetries: 0,
+          timeoutMs,
+          apiKey: "dx-placeholder",
+          signal,
+          fetch: proxyFetch,
+          ...(pdf ? { onPayload: anthropicDocuments } : {}),
+        })) {
+          if (event.type === "done" || event.type === "error") final = event;
         }
-        return response;
-      };
-      for await (const event of adapter.streamSimple(route.model, context, {
-        maxTokens: envelope.maxTokens,
-        reasoning,
-        maxRetries: 0,
-        timeoutMs,
-        apiKey: "dx-placeholder",
-        signal,
-        fetch: proxyFetch,
-        ...(pdf ? { onPayload: anthropicDocuments } : {}),
-      })) {
-        if (event.type === "done" || event.type === "error") final = event;
       }
-    }
-    if (final?.type !== "done") {
-      settingsPersistenceLogger.warn("One-shot completion failed.", {
-        event: "model_one_shot_failed",
+      if (final?.type !== "done") {
+        settingsPersistenceLogger.warn("One-shot completion failed.", {
+          event: "model_one_shot_failed",
+          threadId: pin.threadId,
+          connectionId: pin.connection.id,
+          model: canonical,
+          error: final?.type === "error" ? final.error.errorMessage : undefined,
+        });
+        // An in-DO adapter reports its provider's failure as an error event.
+        const adapterFailure =
+          final?.type === "error"
+            ? classifyRunFailure({ message: final.error.errorMessage ?? "" })
+            : undefined;
+        if (rejected !== undefined)
+          return failureResponse(rejected.failure, rejected.upstreamStatus);
+        return adapterFailure !== undefined &&
+          adapterFailure.class !== "internal"
+          ? failureResponse(adapterFailure, adapterFailure.status)
+          : jsonResponse({ code: "COMPLETION_FAILED" }, 502);
+      }
+      const durationMs = Math.round(performance.now() - started);
+      settingsPersistenceLogger.info("One-shot completion finished.", {
+        event: "model_one_shot_completed",
         threadId: pin.threadId,
         connectionId: pin.connection.id,
         model: canonical,
-        error: final?.type === "error" ? final.error.errorMessage : undefined,
-      });
-      // An in-DO adapter reports its provider's failure as an error event.
-      const adapterFailure =
-        final?.type === "error"
-          ? classifyRunFailure({ message: final.error.errorMessage ?? "" })
-          : undefined;
-      if (rejected !== undefined)
-        return failureResponse(rejected.failure, rejected.upstreamStatus);
-      return adapterFailure !== undefined && adapterFailure.class !== "internal"
-        ? failureResponse(adapterFailure, adapterFailure.status)
-        : jsonResponse({ code: "COMPLETION_FAILED" }, 502);
-    }
-    const durationMs = Math.round(performance.now() - started);
-    settingsPersistenceLogger.info("One-shot completion finished.", {
-      event: "model_one_shot_completed",
-      threadId: pin.threadId,
-      connectionId: pin.connection.id,
-      model: canonical,
-      inputTokens: final.message.usage.input,
-      outputTokens: final.message.usage.output,
-      durationMs,
-      ...(envelope.plugin === undefined
-        ? {}
-        : { pluginId: envelope.plugin.id, plugin: envelope.plugin.name }),
-    });
-    // A title or media analysis is dx's own; a plugin's call is the
-    // owner's, so it counts in the Thread's usage and cost like a turn.
-    if (envelope.plugin !== undefined)
-      await recordPluginModelUsage(this.env as Bindings, {
-        threadId: pin.threadId,
-        pluginName: envelope.plugin.name,
-        connectionId: pin.connection.id,
-        providerId: route.model.provider,
-        modelId: route.model.id,
-        observedProviderName: pin.connection.name,
-        usage: final.message.usage,
+        inputTokens: final.message.usage.input,
+        outputTokens: final.message.usage.output,
         durationMs,
-        pinnedPrice,
-      }).catch((error: unknown) => {
-        settingsPersistenceLogger.warn("Plugin model usage was not recorded.", {
-          event: "plugin_model_usage_record_failed",
+        ...(envelope.plugin === undefined
+          ? {}
+          : { pluginId: envelope.plugin.id, plugin: envelope.plugin.name }),
+      });
+      // A title or media analysis is dx's own; a plugin's call is the
+      // owner's, so it counts in the Thread's usage and cost like a turn.
+      if (envelope.plugin !== undefined)
+        await recordPluginModelUsage(this.env as Bindings, {
           threadId: pin.threadId,
-          pluginId: envelope.plugin?.id,
-          error: error instanceof Error ? error.message : String(error),
+          pluginName: envelope.plugin.name,
+          connectionId: pin.connection.id,
+          providerId: route.model.provider,
+          modelId: route.model.id,
+          observedProviderName: pin.connection.name,
+          usage: final.message.usage,
+          durationMs,
+          pinnedPrice,
+        }).catch((error: unknown) => {
+          settingsPersistenceLogger.warn(
+            "Plugin model usage was not recorded.",
+            {
+              event: "plugin_model_usage_record_failed",
+              threadId: pin.threadId,
+              pluginId: envelope.plugin?.id,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
         });
-      });
-    // dx's own title and media calls on a dx model are metered too.
-    if (envelope.plugin === undefined && isDxConnection(pin.connection))
-      await recordDxCompletionUsage(this.env as Bindings, {
-        threadId: pin.threadId,
-        ownerUserId: envelope.ownerUserId,
-        connectionId: pin.connection.id,
-        modelId: route.model.id,
-        kind: attachments.length === 0 ? "title" : "media",
-        usage: final.message.usage,
-        durationMs,
-        pinnedPrice,
-      }).catch((error: unknown) => {
-        settingsPersistenceLogger.warn(
-          "dx completion usage was not recorded.",
-          {
-            event: "dx_completion_usage_record_failed",
-            threadId: pin.threadId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-      });
-    return jsonResponse(
-      {
-        text: final.message.content
-          .flatMap((block) => (block.type === "text" ? [block.text] : []))
-          .join(""),
-      },
-      200,
-    );
+      // dx's own title and media calls on a dx model are metered too.
+      if (envelope.plugin === undefined && isDxConnection(pin.connection))
+        await recordDxCompletionUsage(this.env as Bindings, {
+          threadId: pin.threadId,
+          ownerUserId: envelope.ownerUserId,
+          connectionId: pin.connection.id,
+          modelId: route.model.id,
+          kind: attachments.length === 0 ? "title" : "media",
+          usage: final.message.usage,
+          durationMs,
+          pinnedPrice,
+        }).catch((error: unknown) => {
+          settingsPersistenceLogger.warn(
+            "dx completion usage was not recorded.",
+            {
+              event: "dx_completion_usage_record_failed",
+              threadId: pin.threadId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+        });
+      return jsonResponse(
+        {
+          text: final.message.content
+            .flatMap((block) => (block.type === "text" ? [block.text] : []))
+            .join(""),
+        },
+        200,
+      );
+    } finally {
+      this.#releaseHold(hold);
+    }
   }
 
   async #claudeCodeToken(pin: PinnedSubmission) {

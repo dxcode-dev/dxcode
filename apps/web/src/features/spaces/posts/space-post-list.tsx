@@ -267,7 +267,7 @@ function RepliesRow({
             : { image: person.avatarUrl }),
         }))}
       />
-      <button type="button" onClick={() => open(post.id)}>
+      <button type="button" onClick={() => void open(post.id)}>
         {count === 1 ? "1 reply" : `${count} replies`}
       </button>
     </div>
@@ -395,7 +395,7 @@ function SpacePostRow({
                 className="space-post-action"
                 aria-label="Comment"
                 title="Comment"
-                onClick={() => openComments(post.id)}
+                onClick={() => void openComments(post.id)}
               >
                 <MessagesSquare aria-hidden="true" />
               </Button>

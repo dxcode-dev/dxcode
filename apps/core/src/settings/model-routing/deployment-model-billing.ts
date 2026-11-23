@@ -8,8 +8,11 @@
  */
 export interface DeploymentModelBilling {
   /**
-   * Whether `userId` may start a submission on a dx model. A refusal's
-   * reason is what the Thread shows. Must read only the deployment's state.
+   * Whether `userId` may start a submission or a call on a dx model. A
+   * refusal's reason is what the Thread shows. Must read only the
+   * deployment's state. With `hold`, an admitted call also holds
+   * `model.reserveMicros` of the balance until `release`, in the same
+   * statement as the check, so parallel calls can't all pass one read.
    */
   readonly admit: (
     db: D1Database,
@@ -17,9 +20,12 @@ export interface DeploymentModelBilling {
     model: {
       /** The model's floor: admit only while the balance is above it. */
       readonly minBalanceMicros: number;
+      /** The most one call of the model can cost. */
+      readonly reserveMicros?: number;
       /** The model's dx name, such as "dx Flash", for the refusal. */
       readonly name?: string;
     },
+    hold?: { readonly id: string },
   ) => Promise<
     | { readonly admitted: true }
     | {
@@ -29,8 +35,19 @@ export interface DeploymentModelBilling {
          * a cheaper model, or a little more credit, would start.
          */
         readonly belowFloor?: true;
+        /**
+         * Only the person's other running calls stopped it: it can start
+         * once one of them ends.
+         */
+        readonly busy?: true;
       }
   >;
+  /** Ends a call's hold from `admit`: the call has ended. */
+  readonly release: (
+    db: D1Database,
+    userId: string,
+    hold: { readonly id: string },
+  ) => Promise<void>;
   /**
    * Charges one recorded dx model request, once per `reference`. Failures
    * are logged by the caller, never retried by it.
@@ -48,5 +65,6 @@ export interface DeploymentModelBilling {
 
 export const noDeploymentModelBilling: DeploymentModelBilling = {
   admit: async () => ({ admitted: true }),
+  release: async () => undefined,
   charge: async () => undefined,
 };
