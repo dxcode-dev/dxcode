@@ -18,6 +18,8 @@ export interface DeploymentModelBilling {
     db: D1Database,
     userId: string,
     model: {
+      /** The model's dx alias, for floors a deployment sets per model. */
+      readonly id?: string;
       /** The model's floor: admit only while the balance is above it. */
       readonly minBalanceMicros: number;
       /** The most one call of the model can cost. */
@@ -26,6 +28,7 @@ export interface DeploymentModelBilling {
       readonly name?: string;
     },
     hold?: { readonly id: string },
+    observe?: AdmissionObserver,
   ) => Promise<
     | { readonly admitted: true }
     | {
@@ -61,6 +64,17 @@ export interface DeploymentModelBilling {
       readonly micros: number;
     },
   ) => Promise<void>;
+}
+
+/** What the caller lends `admit` so the deployment can measure it. */
+export interface AdmissionObserver {
+  /**
+   * The same submission's calls share it, so a call refused as busy and
+   * retried is known to have waited.
+   */
+  readonly waitKey?: string;
+  /** Runs work after the response, off the call's path (`waitUntil`). */
+  readonly defer: (work: Promise<unknown>) => void;
 }
 
 export const noDeploymentModelBilling: DeploymentModelBilling = {

@@ -20,6 +20,13 @@ export const QUICKJS_PLUGIN_LIMITS = {
   memoryBytes: 32 * 1024 * 1024,
   outputBytes: 1024 * 1024,
   hostCalls: 256,
+  /** Timers (`setTimeout`) waiting at once; each holds host memory. */
+  pendingTimers: 1_000,
+  /**
+   * Characters of host-call arguments copied out of the guest and not yet
+   * handled, twice the guest's own memory.
+   */
+  pendingArgChars: 64 * 1024 * 1024,
 } as const;
 
 /** The PluginHost methods a plugin may call; nothing else is reachable. */
@@ -213,13 +220,14 @@ export const runPluginInQuickJS = async (input: {
     return stopped !== undefined;
   });
   const vm = runtime.newContext();
-  const deferreds: QuickJSDeferredPromise[] = [];
+  const deferreds = new Set<QuickJSDeferredPromise>();
   const pending = new Set<Promise<void>>();
   let output: string | undefined;
   /** The driver delivered its result; waiting timers no longer matter. */
   let finished = false;
-  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  const timers = new Set<ReturnType<typeof setTimeout>>();
   let hostCalls = 0;
+  let pendingArgChars = 0;
   let disposed = false;
   let fatal: Error | undefined;
   let evaluation: QuickJSHandle | undefined;
@@ -274,14 +282,26 @@ __result(result === undefined ? "" : JSON.stringify(result));
       input.call === undefined ? "" : JSON.stringify(input.call),
     );
 
+    // Checked before anything is allocated: a guest looping on setTimeout
+    // would otherwise fill the shared isolate with timers and promises.
     bind("__sleep", (msValue) => {
+      if (timers.size >= QUICKJS_PLUGIN_LIMITS.pendingTimers) {
+        fatal = new Error(
+          `The plugin set more than ${QUICKJS_PLUGIN_LIMITS.pendingTimers} timers at once.`,
+        );
+        throw fatal;
+      }
       const ms = Math.max(0, Math.min(vm.getNumber(msValue), input.wallMs));
       const deferred = vm.newPromise();
-      deferreds.push(deferred);
+      deferreds.add(deferred);
       const timer = setTimeout(() => {
-        if (!disposed) deferred.resolve();
+        timers.delete(timer);
+        if (disposed) return;
+        deferred.resolve();
+        deferreds.delete(deferred);
+        deferred.dispose();
       }, ms);
-      timers.push(timer);
+      timers.add(timer);
       return deferred.handle;
     });
     bind("__result", (value) => {
@@ -298,16 +318,31 @@ __result(result === undefined ? "" : JSON.stringify(result));
       return vm.undefined;
     });
     bind("__host", (methodValue, argsValue) => {
+      // Counted before anything is copied or queued, so a guest calling in
+      // a loop cannot fill the shared isolate's memory first.
+      if (++hostCalls > QUICKJS_PLUGIN_LIMITS.hostCalls) {
+        fatal = new Error("The plugin called dx too many times in one call.");
+        throw fatal;
+      }
+      const chars = (value: QuickJSHandle) =>
+        vm.getProp(value, "length").consume((length) => vm.getNumber(length));
+      const argChars = chars(methodValue) + chars(argsValue);
+      if (
+        !Number.isFinite(argChars) ||
+        pendingArgChars + argChars > QUICKJS_PLUGIN_LIMITS.pendingArgChars
+      ) {
+        fatal = new Error("The plugin passed dx too much data at once.");
+        throw fatal;
+      }
       // Handles live only while this callback runs: read them now.
       const method = vm.getString(methodValue);
       const argsJson = vm.getString(argsValue);
+      pendingArgChars += argChars;
       const host = input.host;
       const deferred = vm.newPromise();
-      deferreds.push(deferred);
+      deferreds.add(deferred);
       const work = Promise.resolve()
         .then(() => {
-          if (++hostCalls > QUICKJS_PLUGIN_LIMITS.hostCalls)
-            throw new Error("The plugin called dx too many times in one call.");
           const target = host as unknown as Record<string, unknown> | undefined;
           const fn = target?.[method];
           // Arguments cross as JSON here, so a handler can't reach dx.
@@ -352,7 +387,10 @@ __result(result === undefined ? "" : JSON.stringify(result));
             fatal = error instanceof Error ? error : new Error(String(error));
           }
         })
-        .finally(() => pending.delete(work));
+        .finally(() => {
+          pendingArgChars -= argChars;
+          pending.delete(work);
+        });
       pending.add(work);
       return deferred.handle;
     });

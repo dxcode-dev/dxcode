@@ -880,6 +880,38 @@ describe("Orb container object", () => {
     });
   });
 
+  it("drops the rescue archive of unsaved work when the Thread is deleted (#2389)", async () => {
+    const archive = new Uint8Array([31, 139, 8, 0, 1, 2, 3]);
+    let base64 = "";
+    for (const byte of archive) base64 += String.fromCharCode(byte);
+    const orb = setup(({ argv }) => {
+      const script = argv.join(" ");
+      if (script.includes("mktemp -d /dev/shm/dx-rescue"))
+        return {
+          stdout: `archive /dev/shm/dx-rescue.Ab12 ${String(archive.length)} 3 1 2 1 ${String(archive.length)}\n`,
+        };
+      if (script.includes("/dev/shm/dx-rescue.Ab12/archive.tar.gz"))
+        return { stdout: btoa(base64) };
+      return {};
+    });
+    await orb.controller.open(create);
+    await orb.controller.pause();
+    await orb.controller.open(create);
+    orb.container.snapshotContainer.mockRejectedValue(new Error("internal"));
+    await expect(orb.controller.pause()).resolves.toBe("stopped");
+    await expect(orb.controller.readRescue(0)).resolves.toEqual(archive);
+    // Only the archive's own pieces are served.
+    await expect(orb.controller.readRescue(1)).resolves.toBeUndefined();
+
+    await orb.controller.destroy();
+    await expect(orb.controller.readRescue(0)).resolves.toBeUndefined();
+    await expect(orb.storage.get("rescue:0")).resolves.toBeUndefined();
+    const state = await orb.storage.get<Record<string, unknown>>("workspace");
+    expect(state).toMatchObject({ status: "destroyed" });
+    expect(state).not.toHaveProperty("rescueChunks");
+    expect(state).not.toHaveProperty("unsavedStop");
+  });
+
   it("archives by snapshot and stop, and destroys for good", async () => {
     const orb = setup();
     await orb.controller.open(create);
@@ -1070,6 +1102,39 @@ describe("Orb container object", () => {
       containerSnapshot: { id: "snapshot-1" },
     });
     expect(orb.container.interceptOutboundHttp).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers one stop notice per start, so a process posting it in a loop cannot force snapshots or hold off the idle pause (#2389)", async () => {
+    const orb = setup();
+    await orb.controller.open(create);
+    let finish: (() => void) | undefined;
+    orb.container.snapshotContainer.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({ id: "snapshot-notice", size: 1 });
+        }),
+    );
+    // Any process can read DX_ORB_STOP_NOTICE and post it, again and again.
+    const notices = Array.from({ length: 50 }, () => orb.controller.stopping());
+    await vi.waitFor(() => expect(finish).toBeDefined());
+    finish?.();
+    await expect(Promise.all(notices)).resolves.toEqual(
+      Array.from({ length: 50 }, () => "snapshotted"),
+    );
+    await expect(orb.controller.stopping()).resolves.toBe("ignored");
+    expect(orb.container.snapshotContainer).toHaveBeenCalledOnce();
+    // The heartbeat still pauses it once idle.
+    orb.advance(create.idleMs);
+    await orb.controller.alarm();
+    await expect(orb.controller.status()).resolves.toEqual({
+      running: false,
+      status: "paused",
+    });
+    // The next start answers its own notice.
+    await orb.controller.open(create);
+    await expect(orb.controller.stopping()).resolves.toBe("snapshotted");
+    await expect(orb.controller.stopping()).resolves.toBe("ignored");
+    expect(orb.container.snapshotContainer).toHaveBeenCalledTimes(3);
   });
 
   it("ignores the stop notice its own pause causes", async () => {

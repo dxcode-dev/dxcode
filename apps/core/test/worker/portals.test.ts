@@ -220,6 +220,10 @@ describe("Portal host routing in workerd", () => {
       `x.t-${uuid}-p80.${portalDomain}`,
       `t-${uuid}-p80-x.${portalDomain}`,
       `www.${portalDomain}`,
+      // dx's own guest ports (#2397): the unauthenticated Desktop gateway
+      // and Chromium's DevTools.
+      `t-${uuid}-p5900.${portalDomain}`,
+      `t-${uuid}-p9222.${portalDomain}`,
     ];
     for (const host of hosts) {
       const page = await app.request(
@@ -1104,6 +1108,67 @@ describe("Portal host routing in workerd", () => {
     expect(await socket.text()).toBe("workspace-paused");
   });
 
+  it("refuses dx's own guest ports in the Thread execution object, except the Desktop's gateway", async () => {
+    // #2397: a public Portal on 5900 would hand anonymous visitors the
+    // Desktop. Only the Desktop route, with its flag, reaches 5900.
+    const owner = await signUp("internal-ports");
+    const threadId = await createThread(owner.userId);
+    const execution = env.THREAD_EXECUTION.get(
+      env.THREAD_EXECUTION.idFromName(threadId),
+    );
+    const proxy = (port: number, desktop = false) =>
+      execution.fetch("https://thread-execution/proxy/http", {
+        headers: {
+          "x-dx-thread-id": threadId,
+          "x-dx-proxy-port": String(port),
+          "x-dx-proxy-target": "/",
+          "x-dx-proxy-wake": "0",
+          ...(desktop ? { "x-dx-proxy-prepare": "desktop" } : {}),
+        },
+      });
+    for (const [port, desktop] of [
+      [5900, false],
+      [9222, false],
+      [9222, true],
+    ] as const) {
+      const refused = await proxy(port, desktop);
+      expect(refused.status, `${port} ${desktop}`).toBe(400);
+      expect(refused.headers.get("x-dx-proxy-error")).toBe("invalid-request");
+    }
+    // Allowed through to the workspace, which is paused here.
+    for (const [port, desktop] of [
+      [5900, true],
+      [5173, false],
+    ] as const) {
+      const passed = await proxy(port, desktop);
+      expect(passed.headers.get("x-dx-proxy-error"), String(port)).toBe(
+        "workspace-paused",
+      );
+    }
+
+    // Nor can the owner make them public.
+    const bindings = {
+      ...baseBindings,
+      THREAD_EXECUTION: fakeExecution().namespace,
+    };
+    for (const port of [5900, 9222]) {
+      const published = await app.request(
+        `${appOrigin}/v1/threads/${threadId}/portals/${port}/public`,
+        {
+          method: "PUT",
+          headers: {
+            cookie: owner.cookie,
+            origin: appOrigin,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ duration: "1h" }),
+        },
+        bindings,
+      );
+      expect(published.status, String(port)).toBe(400);
+    }
+  });
+
   it("serves the same handler from the standalone Portal Worker", async () => {
     const execution = fakeExecution();
     const bindings = { ...baseBindings, THREAD_EXECUTION: execution.namespace };
@@ -1715,6 +1780,12 @@ describe("Public Portal links in workerd", () => {
       ).status,
     ).toBe(200);
     expect(execution.calls).toHaveLength(1_022);
+    // Core gives anonymous visitors a smaller share of the Thread's streams
+    // (#2397); the relay says which requests are theirs.
+    expect(execution.calls[0]?.headers.get("x-dx-proxy-anonymous")).toBe("1");
+    expect(execution.calls.at(-1)?.headers.get("x-dx-proxy-anonymous")).toBe(
+      "0",
+    );
   });
 });
 

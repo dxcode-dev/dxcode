@@ -154,6 +154,11 @@ export interface OrbWorkspaceState {
    */
   readonly startedAt?: number;
   /**
+   * The `startedAt` of the start whose stop notice was answered: every
+   * process can post the notice, so each start answers one (#2389).
+   */
+  readonly stopNoticedFor?: number;
+  /**
    * A start began at this time and has not answered yet. The next open or
    * command waits for it, even after this object restarts, and never starts
    * another while Cloudflare still runs it.
@@ -356,7 +361,7 @@ const stopDone = (state: OrbWorkspaceState): OrbWorkspaceState => {
 export const ORB_DISK_CHECK_MS = 60_000;
 const DISK_RELIEF_TIMEOUT_MS = 120_000;
 /** One stored piece of a rescue archive (a SQLite value holds 2 MB). */
-const RESCUE_CHUNK_BYTES = 1024 * 1024;
+export const RESCUE_CHUNK_BYTES = 1024 * 1024;
 /** Raw bytes read back per command: about 5.3 MB of base64 output. */
 const RESCUE_READ_MIB = 4;
 const RESCUE_TIMEOUT_MS = 120_000;
@@ -587,6 +592,8 @@ export class OrbContainerController {
   readonly #now: () => number;
   /** This object is stopping the container itself; a stop notice is moot. */
   #stoppingItself = false;
+  /** The stop notice being answered; a repeat waits for it. */
+  #answering: Promise<"snapshotted" | "ignored"> | undefined;
   #state: OrbWorkspaceState | undefined | null = null;
   /** Serializes start, pause, refresh, and destroy. */
   #lifecycle: Promise<unknown> = Promise.resolve();
@@ -1606,6 +1613,13 @@ export class OrbContainerController {
   /** One piece of the rescue archive an unsaved stop kept, for Core. */
   async readRescue(index: number): Promise<Uint8Array | undefined> {
     if (!Number.isSafeInteger(index) || index < 0) return undefined;
+    const state = await this.#load();
+    if (
+      state === undefined ||
+      state.status === "destroyed" ||
+      index >= (state.rescueChunks ?? 0)
+    )
+      return undefined;
     return this.#storage.get<Uint8Array>(rescueKey(index));
   }
 
@@ -2318,8 +2332,15 @@ export class OrbContainerController {
         else await this.#destroyContainer();
       }
       await this.#storage.deleteAlarm();
+      // The rescue archive holds unsaved files; it goes with the Thread.
+      await this.#clearRescueChunks();
       const now = this.#now();
-      const { snapshot: _snapshot, ...rest } = state ?? {
+      const {
+        snapshot: _snapshot,
+        rescueChunks: _chunks,
+        unsavedStop: _unsaved,
+        ...rest
+      } = (await this.#load()) ?? {
         version: 1 as const,
         instance: "standard-1" as const,
         createdAt: now,
@@ -2380,19 +2401,38 @@ export class OrbContainerController {
    * container within 15 minutes. Snapshots the filesystem while it still
    * runs and records it, so the next use restores it instead of losing it.
    * The container stays active; it stops when the entrypoint exits.
+   *
+   * Every process in the container can post the notice, so each start
+   * answers one, and a repeat never queues behind the lifecycle: one while
+   * the snapshot runs waits for it, any later one is ignored (#2389).
    */
   stopping(): Promise<"snapshotted" | "ignored"> {
     if (this.#stoppingItself) return Promise.resolve("ignored");
+    this.#answering ??= this.#answerStop().finally(() => {
+      this.#answering = undefined;
+    });
+    return this.#answering;
+  }
+
+  async #answerStop(): Promise<"snapshotted" | "ignored"> {
     const noticedAt = this.#now();
+    const answered = (state: OrbWorkspaceState | undefined) =>
+      state?.stopNoticedFor !== undefined &&
+      state.stopNoticedFor === (state.startedAt ?? 0);
+    if (answered(await this.#load())) return "ignored";
     return this.#exclusive(async () => {
-      const state = await this.#load();
+      const loaded = await this.#load();
       if (
         this.#stoppingItself ||
         !this.#container.running ||
-        state === undefined ||
-        state.status !== "active"
+        loaded === undefined ||
+        loaded.status !== "active" ||
+        answered(loaded)
       )
         return "ignored" as const;
+      // Recorded first, so a snapshot that fails is not retried either.
+      const state = { ...loaded, stopNoticedFor: loaded.startedAt ?? 0 };
+      await this.#save(state);
       const details = {
         event: "orb_container_stop_snapshot",
         sandboxId: this.#sandboxId,

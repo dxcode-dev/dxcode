@@ -6,8 +6,16 @@ import {
 } from "@dx/domain";
 import { Context, Effect, Layer } from "effect";
 
+/**
+ * One CSV cell. Text a spreadsheet would read as a formula (`=`, `+`, `-`,
+ * `@`, tab, or CR first) gets a leading `'` so it stays text; numbers stay
+ * numbers.
+ */
 export const csvCell = (value: string | number) => {
-  const text = String(value);
+  const text =
+    typeof value === "string" && /^[=+\-@\t\r]/.test(value)
+      ? `'${value}`
+      : String(value);
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 };
 

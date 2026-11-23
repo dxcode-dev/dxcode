@@ -176,7 +176,12 @@ export const answerReadsWhileFirstMessagePending =
     try {
       const db = context.env.DB as D1Database;
       state = await firstMessageState(db, threadId);
-      if (state === undefined)
+      // An agent that exists waits only on the conversation read itself
+      // (history or live, both at the Thread's own path): any other 404 on
+      // an established Thread, such as a missing attachment, is final
+      // (#2398).
+      const conversationRead = context.req.path.endsWith(`/${threadId}`);
+      if (state === undefined && conversationRead)
         agent = await agentStarted(threadId).catch(() => "error" as const);
       // A failed lookup is not a reason to wait.
       const waiting = state === "pending" || agent === true;
@@ -187,7 +192,7 @@ export const answerReadsWhileFirstMessagePending =
           state === undefined &&
           agent === false &&
           context.req.query("view") === "history" &&
-          context.req.path.endsWith(`/${threadId}`) &&
+          conversationRead &&
           context.req.header(ABSENT_CONVERSATION_REQUEST_HEADER) !== undefined
         ) {
           context.res = undefined;

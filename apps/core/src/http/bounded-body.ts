@@ -8,7 +8,7 @@
  * so far exceed `maxBytes`. A request without a body reads as empty.
  */
 export const readBoundedBody = async (
-  request: Request,
+  request: Request | Response,
   maxBytes: number,
 ): Promise<Uint8Array<ArrayBuffer> | undefined> => {
   const declared = Number(request.headers.get("content-length"));
@@ -40,7 +40,10 @@ export const readBoundedBody = async (
 };
 
 /** The body as UTF-8 text, or undefined when it exceeds `maxBytes`. */
-export const readBoundedText = async (request: Request, maxBytes: number) => {
+export const readBoundedText = async (
+  request: Request | Response,
+  maxBytes: number,
+) => {
   const bytes = await readBoundedBody(request, maxBytes);
   return bytes === undefined ? undefined : new TextDecoder().decode(bytes);
 };

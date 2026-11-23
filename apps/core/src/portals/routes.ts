@@ -120,7 +120,7 @@ const publicLinkRequest = (context: Context<AppEnv>) => {
         context,
         400,
         "INVALID_REQUEST",
-        "The port must be a number from 1 to 65535.",
+        "The port must be a number from 1 to 65535, other than dx's own 5900 and 9222.",
       ),
     };
   if (context.get("threadAccess") !== "owner")

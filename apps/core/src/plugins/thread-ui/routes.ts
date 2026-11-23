@@ -940,8 +940,6 @@ export const pluginThreadUiRoutes = new Hono<AppEnv>()
           threadId,
           ownerUserId: context.get("threadOwnerUserId"),
           ...actorOf(context),
-          ...shellGateFor(context, db, threadId, found.plugins, found.plugin),
-          // Plugin calls reach the installs this request resolved.
           requestId: context.get("requestId"),
           // Plugin calls reach the installs this request resolved.
           peers: async () => found.plugins,

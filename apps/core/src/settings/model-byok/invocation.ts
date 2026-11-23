@@ -61,6 +61,7 @@ import {
   decryptConnectionCredential,
   loadConnectionCredential,
 } from "../model-routing/credential-access.js";
+import { dxModelCallReserveMicros } from "../model-routing/deployment-model-source.js";
 import {
   DX_PROVIDER_ID,
   dxConnectionUpstreamId,
@@ -74,7 +75,6 @@ import {
   registeredDeploymentModelBilling,
   registeredDeploymentModelSource,
 } from "../model-routing/deployment-models-registration.js";
-import { dxModelCallReserveMicros } from "../model-routing/deployment-model-source.js";
 import { validateAllowedModelEndpoint } from "../model-routing/endpoint-policy.js";
 import {
   ClaudePlanUnavailable,
@@ -892,11 +892,16 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         ...(model === undefined
           ? {}
           : {
+              id: model.id,
               name: model.name,
               reserveMicros: dxModelCallReserveMicros(model),
             }),
       },
       hold,
+      {
+        waitKey: `${route.threadId}:${route.submissionId}`,
+        defer: (work) => this.ctx.waitUntil(work),
+      },
     );
     if ("reason" in decision)
       throw new CoordinatorFailure(

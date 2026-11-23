@@ -35,6 +35,11 @@ export class OrbStopNotice extends WorkerEntrypoint<
 > {
   override async fetch(request: Request) {
     await request.body?.cancel();
+    if (
+      request.method !== "POST" ||
+      new URL(request.url).pathname !== "/stopping"
+    )
+      return new Response(null, { status: 404 });
     const namespace = this.env.ORB_CONTAINER;
     const outcome = await namespace
       .get(namespace.idFromString(this.ctx.props.sandboxId))

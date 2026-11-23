@@ -5,6 +5,8 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import type { Bindings } from "../../src/http/types.js";
+import { durableMetaOf } from "../../src/plugins/hosts/durable/client.js";
 import {
   findCodePluginTriggerInstall,
   listCodePluginTriggerCapabilities,
@@ -416,5 +418,39 @@ describe("plugin trigger durable delivery", () => {
       .bind(triggerId)
       .first<{ rows: number }>();
     expect(audited?.rows).toBe(1);
+  });
+
+  it("runs a member's trigger for a workspace install as the installer, never the trigger owner", async () => {
+    const workspaceId = `ws-trigger-${crypto.randomUUID().slice(0, 8)}`;
+    const installerUserId = `admin-${crypto.randomUUID().slice(0, 8)}`;
+    const { pluginId } = await setupPluginTrigger({
+      workspaceId,
+      installerUserId,
+    });
+    const install = await findCodePluginTriggerInstall(
+      env.DB,
+      pluginId,
+      pluginTriggerOwner,
+    );
+    expect(install).toMatchObject({
+      scope: "workspace",
+      installedByUserId: installerUserId,
+    });
+    if (install === undefined) throw new Error("The install is missing.");
+    // The install-wide Durable Object a delivery reaches stays the
+    // installer's: the member who owns the trigger does not take it over.
+    const dependencies = {
+      db: env.DB,
+      bindings: env as unknown as Bindings,
+      install,
+      ownerUserId: pluginTriggerOwner,
+    };
+    expect(durableMetaOf(dependencies).ownerUserId).toBe(installerUserId);
+    // A workspace install with no installer is refused, not handed to the
+    // caller.
+    const { installedByUserId: _installer, ...unowned } = install;
+    expect(() => durableMetaOf({ ...dependencies, install: unowned })).toThrow(
+      /no installer/,
+    );
   });
 });

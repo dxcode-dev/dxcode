@@ -111,6 +111,7 @@ import {
 } from "../execution/dxd/protocol.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import { loadDaemonReleaseMetadata } from "../execution/guest/daemon-release.js";
+import { readBoundedText } from "../http/bounded-body.js";
 import type { Bindings } from "../http/types.js";
 import { threadDaemonLogger } from "../logging.js";
 import { traceInvocation } from "../observability/boundaries.js";
@@ -182,6 +183,7 @@ import {
 } from "../thread-changes/repository-d1.js";
 import { publishThreadChangesResidentCandidate } from "../thread-changes/resident-publisher.js";
 import { serveDesktopWindows } from "../thread-desktop/execution-object.js";
+import { DESKTOP_GATEWAY_PORT, INTERNAL_GUEST_PORTS } from "../portals/host.js";
 import {
   parseServicesManifest,
   SERVICES_MANIFEST_PATH,
@@ -201,6 +203,7 @@ import {
   residentThreadDaemonEndpoint,
   SANDBOX_OPERATION_HEADER,
 } from "./daemon-client.js";
+import { MAX_PLUGIN_DEV_BODY_BYTES } from "./daemon-ingress.js";
 import { WARM_PATH, warmResponse } from "./initial-objects.js";
 import {
   HOP_BY_HOP_HEADERS,
@@ -1838,6 +1841,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     );
     if (Option.isNone(threadId)) return new Response(null, { status: 404 });
     const wake = request.headers.get("x-dx-proxy-wake") === "1";
+    const desktop = request.headers.get("x-dx-proxy-prepare") === "desktop";
+    // Only the Portal relay says so; every other caller is a signed-in user.
+    const anonymous = request.headers.get("x-dx-proxy-anonymous") === "1";
     const websocket = path === "/proxy/websocket";
     if (
       websocket !==
@@ -1856,6 +1862,13 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         !target.startsWith("/") ||
         target.length > 8_192 ||
         !/^[\x21-\x7e]+$/.test(target)
+      )
+        return proxyFailure("invalid-request");
+      // dx's own ports are never a Portal; only the Desktop route, which
+      // alone sets the Desktop flag, reaches its gateway.
+      if (
+        INTERNAL_GUEST_PORTS.has(port) &&
+        !(desktop && port === DESKTOP_GATEWAY_PORT)
       )
         return proxyFailure("invalid-request");
     }
@@ -1887,7 +1900,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         { headers: { "cache-control": "no-store" } },
       );
     }
-    if (request.headers.get("x-dx-proxy-prepare") === "desktop") {
+    if (desktop) {
       const desktop = await this.#ensureDesktop(authority);
       if (desktop?.kind !== "ready")
         return proxyFailure(
@@ -1922,6 +1935,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           .map((protocol) => protocol.trim())
           .filter((protocol) => protocol.length > 0),
         wake,
+        anonymous,
         ...(session === undefined ? {} : { session }),
       });
       if (session !== undefined && response.status === 101)
@@ -1937,6 +1951,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
         headers,
         body: idempotent ? null : request.body,
         wake,
+        anonymous,
       });
     const response = await exchange();
     // Nothing listens: a declared service for this port starts, and the
@@ -4514,7 +4529,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   async #serveDaemonPluginDev(request: Request) {
     const threadId = await this.#authenticateDaemonRequest(request);
     if (threadId instanceof Response) return threadId;
-    const body = await request.text();
+    // Read only now, after the key checks out (#2399).
+    const body = await readBoundedText(request, MAX_PLUGIN_DEV_BODY_BYTES);
+    if (body === undefined) return new Response(null, { status: 413 });
     // Loaded on use: plugin bundle code stays out of the Worker's startup.
     const { reloadDevPlugin } = await import("../plugins/trust/dev-reload.js");
     return reloadDevPlugin(this.env, { threadId, body });

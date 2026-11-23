@@ -90,6 +90,17 @@ export const durableMetaOf = (
 ): DurableMeta => {
   const { install } = dependencies;
   const threadScoped = install.code.durableScope === "thread";
+  const threadCall = threadScoped && dependencies.threadId !== undefined;
+  // Install-wide work of a workspace install runs as its installer, not
+  // as whichever member's Thread or trigger reached it first.
+  if (
+    !threadCall &&
+    install.scope === "workspace" &&
+    install.installedByUserId === undefined
+  )
+    throw new Error(
+      `Plugin ${install.name} has no installer recorded, so its workspace Durable Object cannot run.`,
+    );
   return {
     installId: install.pluginId,
     pluginName: install.name,
@@ -98,17 +109,11 @@ export const durableMetaOf = (
     targetId: install.targetId,
     version: install.version,
     integrity: install.integrity,
-    // Install-wide work of a workspace install runs as its installer, not
-    // as whichever member's Thread reached it first.
     ownerUserId:
-      threadScoped && dependencies.threadId !== undefined
-        ? dependencies.ownerUserId
-        : install.scope === "workspace"
-          ? (install.installedByUserId ?? dependencies.ownerUserId)
-          : dependencies.ownerUserId,
-    ...(threadScoped && dependencies.threadId !== undefined
-      ? { threadId: dependencies.threadId }
-      : {}),
+      !threadCall && install.scope === "workspace"
+        ? (install.installedByUserId ?? dependencies.ownerUserId)
+        : dependencies.ownerUserId,
+    ...(threadCall ? { threadId: dependencies.threadId } : {}),
     tier: callTier(dependencies),
     workspaceId:
       dependencies.workspaceId ??

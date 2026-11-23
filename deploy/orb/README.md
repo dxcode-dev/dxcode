@@ -291,7 +291,10 @@ container up to 15 minutes later. The entrypoint then posts to
 object intercepts with `interceptOutboundHttp` and routes to the Orb
 Worker's `OrbStopNotice` entrypoint. The object snapshots the filesystem
 while the container still runs, and the entrypoint exits only once it has
-answered, so the next use restores that snapshot. A container that stops
+answered, so the next use restores that snapshot. Any process in the
+container can read and post that address, so the object answers one notice
+per start: a repeat while the snapshot runs waits for it, and a later one is
+ignored. A container that stops
 without notice before its first snapshot has lost its files: the object
 never starts the bare image in its place for a command or a reconnect, and
 fails them as `WORKSPACE_RESET`, which Core retries as a whole submission so

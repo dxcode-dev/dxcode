@@ -32,6 +32,7 @@ import {
   guestResidentDaemon,
 } from "../guest/resident-daemon.js";
 import { restoreUnsavedWork } from "../read-only-rescue.js";
+import { UNSAVED_WORK_MAX_BYTES } from "../unsaved-work-script.js";
 import {
   type ExecutionWorkspaceRecord,
   type ExecutionWorkspaceRecords,
@@ -45,6 +46,7 @@ import { orbPlacement } from "./anthropic-location.js";
 import {
   ORB_WORKSPACE_RESET_DETAIL,
   type OrbOpenResult,
+  RESCUE_CHUNK_BYTES,
   type UnsavedStop,
 } from "./orb-container.js";
 
@@ -437,6 +439,23 @@ const restoreRescue = async (
 ): Promise<RestoredWork | undefined> => {
   const rescue = stop.rescue;
   if (rescue === undefined) return undefined;
+  // A connected account's Orb Worker writes this reply, so its numbers are
+  // checked against what the object itself stores before Core allocates.
+  if (
+    !Number.isSafeInteger(rescue.size) ||
+    rescue.size < 1 ||
+    rescue.size > UNSAVED_WORK_MAX_BYTES ||
+    !Number.isSafeInteger(rescue.chunks) ||
+    rescue.chunks < 1 ||
+    rescue.chunks > Math.ceil(rescue.size / RESCUE_CHUNK_BYTES)
+  ) {
+    orbContainerLogger.error("Rescued work was refused: its size is invalid.", {
+      event: "orb_container_rescue_restore",
+      threadId,
+      outcome: "refused",
+    });
+    return undefined;
+  }
   try {
     const bytes = new Uint8Array(rescue.size);
     let offset = 0;

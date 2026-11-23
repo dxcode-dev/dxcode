@@ -13,7 +13,7 @@ import {
   WorkspaceUsageAuditRepository,
   WorkspaceUsageAuditResult,
 } from "@dx/domain";
-import { Effect, Layer, Option, Schema } from "effect";
+import { DateTime, Effect, Layer, Option, Schema } from "effect";
 
 const InspectionTargetRow = Schema.Struct({
   thread_id: ThreadId,
@@ -44,6 +44,9 @@ const AuditRow = Schema.Struct({
   expires_at: Schema.DateTimeUtcFromString,
   result: WorkspaceUsageAuditResult,
 });
+
+/** At most one refused inspection per member per this interval. */
+const DENIED_AUDIT_INTERVAL_MS = 60_000;
 
 const unavailable = (operation: string, cause: unknown) =>
   PersistenceUnavailable.new({ operation }, cause);
@@ -124,14 +127,26 @@ export const WorkspaceUsageAuditRepositoryD1 = (db: D1Database) =>
                 },
           );
         }),
+      // Any member can be refused, as often as they like: a refusal is kept
+      // only when the same member has none in the last minute, so scripted
+      // attempts cannot bury the real entries (#2400).
       append: (event) =>
-        run("usage.audit.append", () =>
-          db
+        run("usage.audit.append", () => {
+          const occurredAt = asString(event.occurredAt);
+          return db
             .prepare(
               `INSERT INTO workspace_usage_audit (
                  id, workspace_id, actor_user_id, reason, target_thread_id,
                  occurred_at, expires_at, result
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+               )
+               SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+               WHERE ?8 <> 'permission_denied' OR NOT EXISTS (
+                 SELECT 1 FROM workspace_usage_audit
+                 WHERE workspace_id = ?2
+                   AND actor_user_id = ?3
+                   AND result = 'permission_denied'
+                   AND occurred_at > ?9
+               )`,
             )
             .bind(
               event.id,
@@ -139,12 +154,17 @@ export const WorkspaceUsageAuditRepositoryD1 = (db: D1Database) =>
               event.actorUserId,
               event.reason,
               event.targetThreadId,
-              asString(event.occurredAt),
+              occurredAt,
               asString(event.expiresAt),
               event.result,
+              asString(
+                DateTime.subtract(event.occurredAt, {
+                  milliseconds: DENIED_AUDIT_INTERVAL_MS,
+                }),
+              ),
             )
-            .run(),
-        ).pipe(Effect.asVoid),
+            .run();
+        }).pipe(Effect.asVoid),
       list: (workspaceId, query) =>
         Effect.gen(function* () {
           const cursor =

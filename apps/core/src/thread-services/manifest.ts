@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect";
 import { parse } from "yaml";
+import { INTERNAL_GUEST_PORTS } from "../portals/host.js";
 
 /**
  * A Thread's declared services: long-running processes (dev servers) that a
@@ -26,8 +27,6 @@ export const MAX_SERVICE_COMMAND_BYTES = 4_096;
 export const MAX_SERVICE_CWD_BYTES = 256;
 export const MAX_SERVICE_ENV = 64;
 export const MAX_SERVICE_ENV_VALUE_BYTES = 4_096;
-/** dx's own guest ports: the Desktop gateway and Chromium's DevTools. */
-const RESERVED_PORTS = new Set([5900, 9222]);
 
 // Record keys are checked by hand: a refined key schema drops keys that
 // fail it instead of rejecting the manifest.
@@ -36,7 +35,7 @@ const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 const ServicePort = Schema.Int.check(
   Schema.isBetween({ minimum: 1, maximum: 65_535 }),
-  Schema.makeFilter((port) => !RESERVED_PORTS.has(port)),
+  Schema.makeFilter((port) => !INTERNAL_GUEST_PORTS.has(port)),
 );
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;

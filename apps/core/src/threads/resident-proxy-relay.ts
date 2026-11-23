@@ -115,6 +115,11 @@ export interface ResidentProxyHost {
 /** dxd allows 128 per session; leave room for streams still closing. */
 const MAX_STREAMS = 96;
 /**
+ * Streams anonymous visitors of public Portals may hold at once, so they
+ * never use up the budget the owner's Portals and Desktop need.
+ */
+export const MAX_ANONYMOUS_STREAMS = 32;
+/**
  * The longest a request waits for its response head without progress: the
  * clock restarts whenever dxd takes a request body frame, so a large upload
  * is not cut off, and a dev server may compile on its first request.
@@ -151,6 +156,8 @@ export const HOP_BY_HOP_HEADERS = new Set([
 interface HttpStream {
   readonly kind: "http";
   readonly socket: WebSocket;
+  /** Opened for an anonymous visitor of a public Portal. */
+  readonly anonymous: boolean;
   readonly method: string;
   readonly resolveHead: (response: Response) => void;
   headSettled: boolean;
@@ -168,6 +175,7 @@ interface HttpStream {
 interface WebSocketOpening {
   readonly kind: "websocket";
   readonly socket: WebSocket;
+  readonly anonymous: boolean;
   readonly settle: (
     outcome: { protocol: string | null } | { failure: ProxyFailure },
   ) => void;
@@ -226,6 +234,15 @@ export class ResidentProxyRelay {
     }
   }
 
+  /** `too-many-streams` when the budget, or the anonymous share, is used up. */
+  #full(anonymous: boolean) {
+    if (this.#streams.size >= MAX_STREAMS) return true;
+    if (!anonymous) return false;
+    let count = 0;
+    for (const stream of this.#streams.values()) if (stream.anonymous) count++;
+    return count >= MAX_ANONYMOUS_STREAMS;
+  }
+
   #send(socket: WebSocket, message: unknown) {
     socket.send(JSON.stringify(message));
   }
@@ -258,11 +275,11 @@ export class ResidentProxyRelay {
     readonly headers: ReadonlyArray<readonly [string, string]>;
     readonly body: ReadableStream<Uint8Array> | null;
     readonly wake: boolean;
+    readonly anonymous: boolean;
   }): Promise<Response> {
     const daemon = this.#host.daemon();
     if (daemon === undefined) return proxyFailure("workspace-unavailable");
-    if (this.#streams.size >= MAX_STREAMS)
-      return proxyFailure("too-many-streams");
+    if (this.#full(input.anonymous)) return proxyFailure("too-many-streams");
     const streamId = this.#allocate();
     const open = this.#open({
       streamId,
@@ -282,6 +299,7 @@ export class ResidentProxyRelay {
     const stream: HttpStream = {
       kind: "http",
       socket: daemon.socket,
+      anonymous: input.anonymous,
       method: input.method,
       resolveHead,
       headSettled: false,
@@ -411,12 +429,12 @@ export class ResidentProxyRelay {
     readonly headers: ReadonlyArray<readonly [string, string]>;
     readonly protocols: readonly string[];
     readonly wake: boolean;
+    readonly anonymous: boolean;
     readonly session?: BrowserSessionBinding;
   }): Promise<Response> {
     const daemon = this.#host.daemon();
     if (daemon === undefined) return proxyFailure("workspace-unavailable");
-    if (this.#streams.size >= MAX_STREAMS)
-      return proxyFailure("too-many-streams");
+    if (this.#full(input.anonymous)) return proxyFailure("too-many-streams");
     const streamId = this.#allocate();
     const open = this.#open({
       streamId,
@@ -438,6 +456,7 @@ export class ResidentProxyRelay {
     this.#streams.set(streamId, {
       kind: "websocket",
       socket: daemon.socket,
+      anonymous: input.anonymous,
       settle,
     });
     try {

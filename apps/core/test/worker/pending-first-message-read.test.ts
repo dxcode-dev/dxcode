@@ -159,6 +159,29 @@ describe("A new Thread's agent read while its first message is pending", () => {
     expect(sends).toEqual([]);
   });
 
+  it("answers any other 404 on an established Thread at once", async () => {
+    // #2398: an agent exists and nothing is pending, so a missing
+    // attachment is simply missing. It neither waits nor reads Flue again.
+    const thread = await newThread("established-missing-attachment");
+    let lookups = 0;
+    const { request, reads } = fakeFlue(
+      undefined,
+      true,
+      async () => {
+        lookups++;
+        return true;
+      },
+      { waitMs: 10_000 },
+    );
+
+    const started = Date.now();
+    const missing = await request(`${thread.id}/attachments/att_missing`);
+    expect(missing.status).toBe(404);
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(reads).toEqual(["attachments/att_missing"]);
+    expect(lookups).toBe(0);
+  });
+
   it("keeps waiting after the delivery removes the row, even when Flue's instance lookup lags or fails", async () => {
     // #1626 on staging: the delivery admits the message and deletes the
     // row about a second in; Flue's conversation is readable a little

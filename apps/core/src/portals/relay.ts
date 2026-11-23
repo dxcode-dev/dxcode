@@ -9,7 +9,9 @@
 //   GET        https://thread-execution/proxy/ports      guest TCP listeners
 // with x-dx-thread-id, x-dx-proxy-port, x-dx-proxy-target (path and query),
 // x-dx-proxy-host (the Host the guest sees), and x-dx-proxy-wake ("1" may
-// wake a paused workspace). The object drops every other x-dx-* header and
+// wake a paused workspace), and x-dx-proxy-anonymous ("1" for a visitor of a
+// public Portal, who gets a smaller share of the Thread's streams). The
+// object drops every other x-dx-* header and
 // forwards the rest. Failures carry x-dx-proxy-error (see
 // threads/resident-proxy-relay.ts for the full list and statuses).
 
@@ -175,8 +177,10 @@ const relayHeaders = (
   target: PortalRelayTarget,
   path: string,
   wake: boolean,
+  identity: PortalIdentity | undefined,
 ) => {
   headers.set("x-dx-thread-id", target.threadId);
+  headers.set("x-dx-proxy-anonymous", identity === undefined ? "1" : "0");
   headers.set("x-dx-proxy-port", String(target.port));
   headers.set("x-dx-proxy-target", path);
   headers.set("x-dx-proxy-host", target.host);
@@ -200,6 +204,7 @@ export const relayHttp = (
         target,
         pathAndQuery(url),
         true,
+        identity,
       ),
       body: bodyless ? null : request.body,
       redirect: "manual",
@@ -226,6 +231,7 @@ export const relayWebSocket = (
           target,
           pathAndQuery(new URL(request.url)),
           false,
+          identity,
         ),
         session,
       ),

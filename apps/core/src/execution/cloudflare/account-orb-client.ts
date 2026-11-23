@@ -1,3 +1,4 @@
+import { readBoundedText } from "../../http/bounded-body.js";
 import {
   ACCOUNT_ORB_METHODS,
   type AccountOrbMethod,
@@ -22,6 +23,14 @@ export class AccountOrbUnavailable extends Error {
   }
 }
 
+/**
+ * The largest reply Core reads from an account Orb Worker. That Worker runs
+ * in the person's own account, so Core cannot trust it to keep the object's
+ * caps. The largest real reply is a 16 MiB `readFile` as base64 (about
+ * 21.3 MiB), or `exec`'s two 8 MiB output streams as JSON strings.
+ */
+export const ACCOUNT_ORB_MAX_REPLY_BYTES = 32 * 1024 * 1024;
+
 /** Waits this long for one call; `exec` adds its own command timeout. */
 const CALL_TIMEOUT_MS = 120_000;
 /**
@@ -29,6 +38,20 @@ const CALL_TIMEOUT_MS = 120_000;
  * `CLOUDFLARE_OPEN_TIMEOUT_MS` (330 s), and this call must not end first.
  */
 const OPEN_CALL_TIMEOUT_MS = 330_000;
+
+/** A reply's JSON object, else undefined. */
+const parseReply = (
+  text: string,
+): { readonly [field: string]: unknown } | undefined => {
+  try {
+    const value: unknown = JSON.parse(text);
+    return typeof value === "object" && value !== null
+      ? (value as { readonly [field: string]: unknown })
+      : undefined;
+  } catch {
+    return undefined;
+  }
+};
 
 /**
  * One Thread's Orb container object in a person's or workspace's own
@@ -75,9 +98,16 @@ export const accountOrbContainer = (input: {
           }),
           signal: timeout.signal,
         });
-        const body = (await response.json().catch(() => undefined)) as
-          | { readonly result?: unknown; readonly error?: unknown }
-          | undefined;
+        const text = await readBoundedText(
+          response,
+          ACCOUNT_ORB_MAX_REPLY_BYTES,
+        );
+        if (text === undefined)
+          throw new AccountOrbUnavailable(
+            502,
+            `The account Orb Worker's reply is larger than ${ACCOUNT_ORB_MAX_REPLY_BYTES} bytes.`,
+          );
+        const body = parseReply(text);
         if (!response.ok)
           throw new AccountOrbUnavailable(
             response.status,
@@ -94,6 +124,9 @@ export const accountOrbContainer = (input: {
     ACCOUNT_ORB_METHODS.map((method) => [method, call(method)]),
   ) as unknown as OrbContainerRpc;
 };
+
+/** `/health` answers a few fields. */
+const MAX_HEALTH_REPLY_BYTES = 64 * 1024;
 
 /**
  * Whether the account Orb Worker serves with this secret, uploaded for
@@ -112,8 +145,7 @@ export const accountOrbHealth = async (input: {
       signal: AbortSignal.timeout(15_000),
     },
   );
-  const body = (await response.json().catch(() => ({}))) as {
-    readonly recipe?: unknown;
-  };
-  return response.ok && body.recipe === input.recipe;
+  const text = await readBoundedText(response, MAX_HEALTH_REPLY_BYTES);
+  const body = text === undefined ? undefined : parseReply(text);
+  return response.ok && body?.recipe === input.recipe;
 };

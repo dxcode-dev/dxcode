@@ -18,14 +18,13 @@ import { type Context, Hono } from "hono";
 import { setBrowserSessionHeaders } from "../auth/session-sockets.js";
 import { readBoundedJson } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
+import { DESKTOP_GATEWAY_PORT } from "../portals/host.js";
 import { runnerCall } from "../runners/client.js";
 import { RunnerOperationError } from "../runners/protocol.js";
 import { ownsMachine, threadRunner } from "../runners/repository.js";
 import { selectWorkspaceRuntime } from "../runtime/workspace-composition.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
 
-/** The guest's voxl desktop streamer listens here on loopback only. */
-export const DESKTOP_GATEWAY_PORT = 5900;
 /** voxl's one WebSocket carries video, input, cursor, and clipboard. */
 const DESKTOP_CHANNELS = new Set(["ws"]);
 const GATEWAY_HOST = `127.0.0.1:${String(DESKTOP_GATEWAY_PORT)}`;

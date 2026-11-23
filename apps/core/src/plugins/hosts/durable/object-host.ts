@@ -8,9 +8,11 @@ import { getLogger } from "@logtape/logtape";
 import type { Bindings } from "../../../http/types.js";
 import { configuredTierLimits } from "../../trust/limits.js";
 import { mapPluginsLimited } from "../../worker-host/concurrency.js";
-import type {
-  PluginHostDependencies,
-  PluginInstallRecord,
+import {
+  grantedNetwork,
+  hostGranted,
+  type PluginHostDependencies,
+  type PluginInstallRecord,
 } from "../../worker-host/host.js";
 import {
   callPluginWorkerHost,
@@ -50,6 +52,19 @@ import { durableCostMicroUsd, recordDurableUsage } from "./usage.js";
 
 const logger = getLogger(["dx", "plugins", "hosts", "durable"]);
 
+/**
+ * A watch target as logs show it: origin and path. Plugins put tokens in
+ * the query, since `ctx.watch` takes no headers.
+ */
+const watchLabel = (target: string) => {
+  try {
+    const url = new URL(target);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return "(invalid URL)";
+  }
+};
+
 /** How long a loaded install is trusted before it is read again. */
 const INSTALL_TTL_MS = 120_000;
 /** Usage is written to D1 at most this often per object. */
@@ -66,6 +81,8 @@ const WATCH_USER_AGENT = "dx-plugin-watch/1 (+https://dxcode.dev)";
 const WATCH_QUEUE = 100;
 /** The largest blob one put takes; Workers RPC carries 32 MiB. */
 export const MAX_BLOB_BYTES = 25 * 1_048_576;
+/** The most blobs one object keeps, so empty blobs cannot pile up. */
+export const MAX_BLOBS = 10_000;
 const BLOB_KEY = /^[A-Za-z0-9!_.*'()/@:+=-]{1,512}$/;
 
 interface JobRow {
@@ -532,6 +549,9 @@ export class PluginDurableHost implements PluginDurableCapabilities {
     return `plugins/${meta.installId}/${meta.threadId ?? "_install"}/blobs/${key}`;
   }
 
+  /** Blob puts admitted and still writing to R2. */
+  readonly #blobsPutting = { bytes: 0, count: 0 };
+
   async blobPut(
     meta: DurableMeta,
     key: string,
@@ -546,21 +566,34 @@ export class PluginDurableHost implements PluginDurableCapabilities {
         : new Uint8Array(body);
     if (bytes.byteLength > MAX_BLOB_BYTES)
       throw new Error(`A blob is at most ${MAX_BLOB_BYTES / 1_048_576} MiB.`);
-    const used =
-      this.#sql
-        .exec<{ total: number | null }>(
-          "SELECT SUM(bytes) AS total FROM _dx_blobs WHERE key != ?",
-          key,
-        )
-        .one().total ?? 0;
+    // Puts still on their way to R2 count too: checked and reserved with no
+    // await between, so puts sent at once cannot all pass one check.
+    const stored = this.#sql
+      .exec<{ total: number | null; count: number }>(
+        "SELECT SUM(bytes) AS total, COUNT(*) AS count FROM _dx_blobs WHERE key != ?",
+        key,
+      )
+      .one();
+    const used = (stored.total ?? 0) + this.#blobsPutting.bytes;
     const limit = this.#limits().blobBytes;
     if (used + bytes.byteLength > limit)
       throw new Error(
         `The plugin's blob storage is full: ${used.toLocaleString("en-US")} of ${limit.toLocaleString("en-US")} bytes used, and this blob is ${bytes.byteLength.toLocaleString("en-US")} (quota).`,
       );
-    await this.#bucket().put(objectKey, bytes, {
-      ...(contentType === undefined ? {} : { httpMetadata: { contentType } }),
-    });
+    if (stored.count + this.#blobsPutting.count >= MAX_BLOBS)
+      throw new Error(
+        `The plugin keeps at most ${MAX_BLOBS.toLocaleString("en-US")} blobs (quota).`,
+      );
+    this.#blobsPutting.bytes += bytes.byteLength;
+    this.#blobsPutting.count += 1;
+    try {
+      await this.#bucket().put(objectKey, bytes, {
+        ...(contentType === undefined ? {} : { httpMetadata: { contentType } }),
+      });
+    } finally {
+      this.#blobsPutting.bytes -= bytes.byteLength;
+      this.#blobsPutting.count -= 1;
+    }
     this.#sql.exec(
       `INSERT INTO _dx_blobs (key, bytes, content_type, updated_at) VALUES (?, ?, ?, ?)
        ON CONFLICT (key) DO UPDATE SET bytes = excluded.bytes,
@@ -1297,8 +1330,49 @@ export class PluginDurableHost implements PluginDurableCapabilities {
     }
     this.#setWatchesHeld(false);
     for (const row of rows)
-      if (!this.#watches.has(row.target))
+      if (
+        this.#watchGranted(admitted.install, row.target) &&
+        !this.#watches.has(row.target)
+      )
         this.#connect(row.target, parse(row.opener_json) as DurableOpener);
+  }
+
+  /**
+   * Whether the install's active version still grants a saved watch's
+   * host at its tier. One that no longer does is closed for good: the
+   * owner reviewing the new version never saw that host.
+   */
+  #watchGranted(install: PluginInstallRecord, target: string) {
+    let hostname: string | undefined;
+    try {
+      hostname = new URL(target).hostname;
+    } catch {}
+    const granted =
+      hostname !== undefined &&
+      hostGranted(
+        grantedNetwork({
+          install,
+          tier: this.#tierFor(install),
+          bindings: this.env,
+        }),
+        hostname,
+      );
+    if (granted) return true;
+    this.#watches.get(target)?.close();
+    this.#watches.delete(target);
+    this.#sql.exec("DELETE FROM _dx_watches WHERE target = ?", target);
+    const meta = this.#meta as DurableMeta;
+    logger.warn(
+      `Plugin ${meta.pluginName}'s watch on ${watchLabel(target)} closed: its host is no longer granted.`,
+      {
+        event: "plugin_watch_closed",
+        installId: meta.installId,
+        threadId: meta.threadId,
+        target: watchLabel(target),
+        reason: "host-not-granted",
+      },
+    );
+    return false;
   }
 
   #connect(target: string, opener: DurableOpener) {
@@ -1341,12 +1415,12 @@ export class PluginDurableHost implements PluginDurableCapabilities {
       this.#addUsage(Date.now() - watch.billedFrom, 0);
       this.#watches.delete(target);
       logger.warn(
-        `Plugin ${meta.pluginName}'s watch on ${target} closed: ${reason}.`,
+        `Plugin ${meta.pluginName}'s watch on ${watchLabel(target)} closed: ${reason}.`,
         {
           event: "plugin_watch_closed",
           installId: meta.installId,
           threadId: meta.threadId,
-          target,
+          target: watchLabel(target),
           reason,
         },
       );
@@ -1364,7 +1438,10 @@ export class PluginDurableHost implements PluginDurableCapabilities {
           this.#dropWatches(admitted.reason);
           return;
         }
-        if (!this.#watches.has(target)) {
+        if (
+          !this.#watches.has(target) &&
+          this.#watchGranted(admitted.install, target)
+        ) {
           this.#connect(target, parse(row.opener_json) as DurableOpener);
           const next = this.#watches.get(target);
           if (next !== undefined) next.retryMs = retry;
@@ -1402,13 +1479,16 @@ export class PluginDurableHost implements PluginDurableCapabilities {
             lost(`closed (${event.code})`),
           );
           socket.addEventListener("error", () => lost("error"));
-          logger.info(`Plugin ${meta.pluginName} is watching ${target}.`, {
-            event: "plugin_watch_opened",
-            installId: meta.installId,
-            threadId: meta.threadId,
-            target,
-            kind: "websocket",
-          });
+          logger.info(
+            `Plugin ${meta.pluginName} is watching ${watchLabel(target)}.`,
+            {
+              event: "plugin_watch_opened",
+              installId: meta.installId,
+              threadId: meta.threadId,
+              target: watchLabel(target),
+              kind: "websocket",
+            },
+          );
           return;
         }
         // https: a server-sent event stream.
@@ -1424,13 +1504,16 @@ export class PluginDurableHost implements PluginDurableCapabilities {
           lost(`the server answered HTTP ${response.status}`);
           return;
         }
-        logger.info(`Plugin ${meta.pluginName} is watching ${target}.`, {
-          event: "plugin_watch_opened",
-          installId: meta.installId,
-          threadId: meta.threadId,
-          target,
-          kind: "event-stream",
-        });
+        logger.info(
+          `Plugin ${meta.pluginName} is watching ${watchLabel(target)}.`,
+          {
+            event: "plugin_watch_opened",
+            installId: meta.installId,
+            threadId: meta.threadId,
+            target: watchLabel(target),
+            kind: "event-stream",
+          },
+        );
         const reader = response.body
           .pipeThrough(new TextDecoderStream())
           .getReader();
@@ -1518,11 +1601,11 @@ export class PluginDurableHost implements PluginDurableCapabilities {
         );
         if (answer.missing) {
           logger.warn(
-            `Plugin ${meta.pluginName}'s watch on ${watch.target} has no handler; closing it.`,
+            `Plugin ${meta.pluginName}'s watch on ${watchLabel(watch.target)} has no handler; closing it.`,
             {
               event: "plugin_watch_orphaned",
               installId: meta.installId,
-              target: watch.target,
+              target: watchLabel(watch.target),
             },
           );
           await this.watchClose(meta, watch.target);
@@ -1539,7 +1622,7 @@ export class PluginDurableHost implements PluginDurableCapabilities {
           outcome: "ok",
           ms: Date.now() - started,
           threadId: meta.threadId,
-          detail: `${watch.target} message ${watch.messages}`,
+          detail: `${watchLabel(watch.target)} message ${watch.messages}`,
         });
     } catch (error) {
       logPluginHostCall({

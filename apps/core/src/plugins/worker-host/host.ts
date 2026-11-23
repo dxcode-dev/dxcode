@@ -845,6 +845,18 @@ export class PluginHost extends RpcTarget {
     return callTool(name, input);
   }
 
+  /**
+   * Refuses what a `live` plugin may not do in an archived Thread. The
+   * in-isolate grants hide these too, but a QuickJS guest reaches the host
+   * directly, so the host checks again.
+   */
+  #notArchivedLive(what: string) {
+    const dependencies = this.#check();
+    if (dependencies.archivedLive === true)
+      throw new Error(`The Thread is archived; plugins may not ${what} in it.`);
+    return dependencies;
+  }
+
   #ui(grant: "prompt" | "notify" | "quick-action" | "pane") {
     const dependencies = this.#check();
     if (!(dependencies.install.code.permissions.ui ?? []).includes(grant))
@@ -883,6 +895,7 @@ export class PluginHost extends RpcTarget {
    */
   async uiPrompt(kind: PromptKind, options: unknown) {
     this.#ui("prompt");
+    this.#notArchivedLive("ask questions");
     // dx's own cards (change, secret) are never a plugin's to show.
     if (kind !== "confirm" && kind !== "input" && kind !== "select")
       throw new Error("A plugin asks with confirm, input, or select.");
@@ -1202,7 +1215,7 @@ export class PluginHost extends RpcTarget {
     message: unknown,
     options: { readonly timeoutMs?: unknown; readonly title?: unknown } = {},
   ) {
-    const dependencies = this.#check();
+    const dependencies = this.#notArchivedLive("run agents");
     const { install, db, bindings, threadId, ownerUserId } = dependencies;
     if (threadId === undefined)
       throw new Error("agent.run runs only inside a Thread.");
@@ -1449,7 +1462,7 @@ export class PluginHost extends RpcTarget {
    * resolves its exit code and output, also when it exits non-zero.
    */
   async exec(request: unknown) {
-    const dependencies = this.#check();
+    const dependencies = this.#notArchivedLive("run commands");
     const { install, threadId, shellGate } = dependencies;
     if (install.code.permissions.shell !== true)
       throw new Error(`${install.name} was not granted running commands.`);
@@ -1621,6 +1634,11 @@ export class PluginHost extends RpcTarget {
     const action = asNote ? "thread.note" : "thread.post";
     return this.#audited(action, targetId, async (target) => {
       const dependencies = this.#threadGrant("post");
+      if (dependencies.archivedLive === true)
+        throw new ThreadAccessRefused(
+          "The Thread is archived; plugins may not post from it.",
+          "archived",
+        );
       const { bindings, db, install, ownerUserId, threadId } = dependencies;
       if (typeof body !== "string" || body.trim() === "")
         throw new ThreadAccessRefused("A post needs text.", "invalid_body");
@@ -1947,14 +1965,10 @@ export class PluginHost extends RpcTarget {
         throw new Error("ctx.watch takes a wss:// or https:// URL.");
       if (url.username !== "" || url.password !== "")
         throw new Error("A watch URL must not hold user info.");
-      if (
-        !hostGranted(
-          dependencies.install.code.permissions.network,
-          url.hostname,
-        )
-      )
+      const network = grantedNetwork(dependencies);
+      if (!hostGranted(network, url.hostname))
         throw new Error(
-          `${dependencies.install.name} may not reach ${url.hostname}; its manifest grants ${dependencies.install.code.permissions.network.join(", ") || "no hosts"}.`,
+          `${dependencies.install.name} may not reach ${url.hostname}; its tier grants ${network.join(", ") || "no hosts"}.`,
         );
       if (dependencies.durableOpener === undefined)
         throw new Error(

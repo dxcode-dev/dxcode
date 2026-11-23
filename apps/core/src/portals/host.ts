@@ -101,8 +101,23 @@ export const portalOrigin = (
   port: number,
 ) => `${configuration.protocol}//${portalHost(configuration, threadId, port)}`;
 
+/**
+ * dx's own guest ports, never a Portal: the Desktop gateway (5900, no auth
+ * of its own) and Chromium's DevTools (9222). Only the Desktop route reaches
+ * 5900, with the Thread execution object's trusted Desktop flag.
+ */
+/** The guest's voxl desktop streamer listens here on loopback only. */
+export const DESKTOP_GATEWAY_PORT = 5900;
+export const INTERNAL_GUEST_PORTS: ReadonlySet<number> = new Set([
+  DESKTOP_GATEWAY_PORT,
+  9222,
+]);
+
 export const isPortalPort = (port: number) =>
-  Number.isInteger(port) && port >= 1 && port <= 65_535;
+  Number.isInteger(port) &&
+  port >= 1 &&
+  port <= 65_535 &&
+  !INTERNAL_GUEST_PORTS.has(port);
 
 /** Parses a canonical decimal port string; rejects `0`, `08`, `+1`, and `1e3`. */
 export const parsePortalPort = (value: string | null | undefined) => {

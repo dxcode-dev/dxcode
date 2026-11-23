@@ -2816,6 +2816,8 @@ var OrbContainerController = class {
 	#now;
 	/** This object is stopping the container itself; a stop notice is moot. */
 	#stoppingItself = false;
+	/** The stop notice being answered; a repeat waits for it. */
+	#answering;
 	#state = null;
 	/** Serializes start, pause, refresh, and destroy. */
 	#lifecycle = Promise.resolve();
@@ -3558,6 +3560,8 @@ var OrbContainerController = class {
 	/** One piece of the rescue archive an unsaved stop kept, for Core. */
 	async readRescue(index) {
 		if (!Number.isSafeInteger(index) || index < 0) return void 0;
+		const state = await this.#load();
+		if (state === void 0 || state.status === "destroyed" || index >= (state.rescueChunks ?? 0)) return void 0;
 		return this.#storage.get(rescueKey(index));
 	}
 	/**
@@ -4090,8 +4094,9 @@ var OrbContainerController = class {
 				else await this.#destroyContainer();
 			}
 			await this.#storage.deleteAlarm();
+			await this.#clearRescueChunks();
 			const now = this.#now();
-			const { snapshot: _snapshot, ...rest } = state ?? {
+			const { snapshot: _snapshot, rescueChunks: _chunks, unsavedStop: _unsaved, ...rest } = await this.#load() ?? {
 				version: 1,
 				instance: "standard-1",
 				createdAt: now,
@@ -4145,13 +4150,30 @@ var OrbContainerController = class {
 	* container within 15 minutes. Snapshots the filesystem while it still
 	* runs and records it, so the next use restores it instead of losing it.
 	* The container stays active; it stops when the entrypoint exits.
+	*
+	* Every process in the container can post the notice, so each start
+	* answers one, and a repeat never queues behind the lifecycle: one while
+	* the snapshot runs waits for it, any later one is ignored (#2389).
 	*/
 	stopping() {
 		if (this.#stoppingItself) return Promise.resolve("ignored");
+		this.#answering ??= this.#answerStop().finally(() => {
+			this.#answering = void 0;
+		});
+		return this.#answering;
+	}
+	async #answerStop() {
 		const noticedAt = this.#now();
+		const answered = (state) => state?.stopNoticedFor !== void 0 && state.stopNoticedFor === (state.startedAt ?? 0);
+		if (answered(await this.#load())) return "ignored";
 		return this.#exclusive(async () => {
-			const state = await this.#load();
-			if (this.#stoppingItself || !this.#container.running || state === void 0 || state.status !== "active") return "ignored";
+			const loaded = await this.#load();
+			if (this.#stoppingItself || !this.#container.running || loaded === void 0 || loaded.status !== "active" || answered(loaded)) return "ignored";
+			const state = {
+				...loaded,
+				stopNoticedFor: loaded.startedAt ?? 0
+			};
+			await this.#save(state);
 			const details = {
 				event: "orb_container_stop_snapshot",
 				sandboxId: this.#sandboxId,
@@ -4373,6 +4395,7 @@ var faultyContainer = (container, plan, now = Date.now) => {
 var OrbStopNotice = class extends WorkerEntrypoint {
 	async fetch(request) {
 		await request.body?.cancel();
+		if (request.method !== "POST" || new URL(request.url).pathname !== "/stopping") return new Response(null, { status: 404 });
 		const namespace = this.env.ORB_CONTAINER;
 		const outcome = await namespace.get(namespace.idFromString(this.ctx.props.sandboxId)).stopping();
 		return Response.json({ outcome });

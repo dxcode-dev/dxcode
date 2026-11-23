@@ -39,6 +39,7 @@ interface InstallRow {
   readonly tier_cap: string | null;
   readonly trusted_signature: number | null;
   readonly source_json: string;
+  readonly trusted_by_user_id: string;
 }
 
 const installOf = (row: InstallRow): PluginInstallRecord | undefined => {
@@ -68,6 +69,8 @@ const installOf = (row: InstallRow): PluginInstallRecord | undefined => {
     integrity: row.integrity,
     code: code.value,
     tier: installedPluginTier(scope, code.value.tier, installTrustFromRow(row)),
+    // Install-wide durable work runs as the installer, not the trigger owner.
+    installedByUserId: row.trusted_by_user_id,
     ...(storedIconSet(manifest) === undefined
       ? {}
       : { iconSet: storedIconSet(manifest) }),
@@ -77,7 +80,7 @@ const installOf = (row: InstallRow): PluginInstallRecord | undefined => {
 const installSelect = `
   SELECT plugin.id, plugin.scope, plugin.target_id, plugin.name,
          version.version, version.integrity, version.manifest_json,
-         version.source_json,
+         version.source_json, version.trusted_by_user_id,
          ${installTrustColumns("plugin")}
     FROM trusted_plugin plugin
     JOIN trusted_plugin_version version

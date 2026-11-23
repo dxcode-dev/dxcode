@@ -126,13 +126,18 @@ export const forwardDaemonStorage = async (
 
 // Personal-dev hot reload.
 export const DAEMON_PLUGIN_DEV_PATH = /^\/v1\/dxd\/([^/]+)\/plugin-dev$/;
-/** A plugin folder as `dxd plugin dev` sends it: JSON, files in base64. */
-const MAX_PLUGIN_DEV_BODY_BYTES = 12 * 1024 * 1024;
+/**
+ * A plugin folder as `dxd plugin dev` sends it: JSON, files in base64. The
+ * Thread execution object enforces it once the key checks out (#2399).
+ */
+export const MAX_PLUGIN_DEV_BODY_BYTES = 12 * 1024 * 1024;
 
 /**
  * `dxd plugin dev <folder>`: reloads one of the Thread owner's personal
  * plugins from a folder in the Orb. The Thread execution object checks the
- * daemon key; `plugins/trust/dev-reload.ts` decides the rest.
+ * daemon key; `plugins/trust/dev-reload.ts` decides the rest. The body
+ * streams through unread, so a request without this Thread's key never has
+ * it buffered; only a declared length over the cap is refused here.
  */
 export const forwardDaemonPluginDev = async (
   request: Request,
@@ -148,8 +153,12 @@ export const forwardDaemonPluginDev = async (
     return new Response(null, { status: 404 });
   if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
     return new Response(null, { status: 401 });
-  const body = await readBoundedBody(request, MAX_PLUGIN_DEV_BODY_BYTES);
-  if (body === undefined) return new Response(null, { status: 413 });
+  if (
+    Number(request.headers.get("content-length")) > MAX_PLUGIN_DEV_BODY_BYTES
+  ) {
+    await request.body?.cancel().catch(() => undefined);
+    return new Response(null, { status: 413 });
+  }
   return namespace.get(namespace.idFromName(threadId)).fetch(
     new Request("https://thread.internal/daemon/plugin-dev", {
       method: "POST",
@@ -159,8 +168,10 @@ export const forwardDaemonPluginDev = async (
         "x-dx-daemon-ingress": "1",
         "x-dx-thread-id": threadId,
       },
-      body,
-    }),
+      body: request.body,
+      // Node's Request needs it for a streamed body; Workers ignores it.
+      duplex: "half",
+    } as RequestInit),
   );
 };
 

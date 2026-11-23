@@ -29,6 +29,8 @@ export const setupPluginTrigger = async (
      * trigger's owner as a member.
      */
     readonly workspaceId?: string;
+    /** Who installed the plugin; the trigger's owner when absent. */
+    readonly installerUserId?: string;
   } = {},
 ) => {
   const idempotent = options.idempotent ?? true;
@@ -73,6 +75,7 @@ export const setupPluginTrigger = async (
     skipped: [],
   };
   const workspaceId = options.workspaceId;
+  const installerUserId = options.installerUserId ?? pluginTriggerOwner;
   const membershipId =
     workspaceId === undefined ? undefined : `mem_${crypto.randomUUID()}`;
   await env.DB.batch([
@@ -85,6 +88,19 @@ export const setupPluginTrigger = async (
       1,
       1,
     ),
+    ...(installerUserId === pluginTriggerOwner
+      ? []
+      : [
+          env.DB.prepare(
+            'INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, ?, ?)',
+          ).bind(
+            installerUserId,
+            "Plugin Installer",
+            `${installerUserId}@example.com`,
+            1,
+            1,
+          ),
+        ]),
     env.DB.prepare(
       `INSERT INTO trusted_plugin (
          id, scope, target_id, name, enabled, active_version, health_status,
@@ -121,7 +137,7 @@ export const setupPluginTrigger = async (
       JSON.stringify({ type: "zip", label: "trigger.zip" }),
       integrity,
       timestamp,
-      pluginTriggerOwner,
+      installerUserId,
     ),
     env.DB.prepare(
       `INSERT INTO trusted_plugin_file (

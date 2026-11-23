@@ -181,6 +181,58 @@ describe("Cloudflare Containers Orb provider", () => {
     expect(stub.setIdleDeadline).toHaveBeenCalledWith(60_000);
   });
 
+  // #2390. A connected account's Orb Worker writes the open reply, so the
+  // rescue size in it is the person's to choose. Ways this could fail: Core
+  // allocates a buffer of whatever size the reply names, which ends the
+  // isolate other people's requests share; a chunk count far above the size
+  // makes Core call `readRescue` without end; a bad rescue fails the open.
+  it.each([
+    ["a size over the rescue cap", { size: 500_000_000, chunks: 477 }],
+    ["a fractional size", { size: 4.5, chunks: 1 }],
+    ["more chunks than the size holds", { size: 4, chunks: 1_000_000_000 }],
+  ])(
+    "refuses a rescue with %s before allocating it, and the Orb still opens (#2390)",
+    async (_name, rescue) => {
+      const { stub } = bind({
+        provider: "cloudflare",
+        state: "initialized",
+        provider_sandbox_id: "orb-object-id",
+        initialization_attempt_id: null,
+      });
+      const readRescue = vi.fn(async () => new Uint8Array(4));
+      Object.assign(stub, { readRescue, clearRescue: vi.fn() });
+      stub.open.mockResolvedValueOnce({
+        kind: "ready",
+        sandboxId: "orb-object-id",
+        residency: "created",
+        unsavedStop: {
+          stoppedAt: Date.parse("2026-11-03T13:01:00Z"),
+          failures: 3,
+          rescue: { ...rescue, changes: 1, commits: 0, checkouts: 1 },
+        },
+      } as never);
+      const allocated = vi.spyOn(globalThis, "Uint8Array");
+      try {
+        await cloudflareExecutionProvider.workspace.create(
+          context,
+          { threadId },
+          { authorize: async () => undefined },
+        );
+        expect(
+          allocated.mock.calls.some(
+            (call) => (call as ReadonlyArray<unknown>)[0] === rescue.size,
+          ),
+        ).toBe(false);
+      } finally {
+        allocated.mockRestore();
+      }
+      expect(readRescue).not.toHaveBeenCalled();
+      const stop = takeUnsavedStop(threadId);
+      expect(stop).toMatchObject({ rescue: { size: rescue.size } });
+      expect(stop).not.toHaveProperty("restored");
+    },
+  );
+
   // Placement (thr_05ddbf21, 2026-11-20). A container runs where its object
   // runs, and a new object starts next to the code that first calls it.
   // Created from Hong Kong, an Orb ran there, where claude.ai answers the

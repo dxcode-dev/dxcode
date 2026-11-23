@@ -1,8 +1,10 @@
 import { env, runInDurableObject } from "cloudflare:test";
+import { HttpResponse, http } from "msw";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
 import type { DurableMeta } from "../../src/plugins/hosts/durable/client.js";
 import { PluginDurableHost } from "../../src/plugins/hosts/durable/object-host.js";
+import { network } from "./network-boundary.js";
 
 /*
  * The plugin Durable Object host's bookkeeping, in workerd with real D1, R2,
@@ -396,5 +398,142 @@ describe("workspace jobs view and actions", () => {
         installId,
         name.includes("/") ? memberThread : undefined,
       );
+  });
+});
+
+/*
+ * The blob quota (security). Ways it could fail:
+ * 17. Puts sent at once each pass the same quota check before any of them
+ *     is recorded, so together they store several times the quota.
+ * 18. Empty blobs never count against the byte quota, so a plugin keeps
+ *     adding R2 objects and rows without end.
+ * 19. A put refused or failed keeps its reservation, so the quota shrinks.
+ */
+describe("durable host blob quota", () => {
+  it("counts puts still writing and caps how many blobs an object keeps", async () => {
+    const installId = "plg_lifecycle_blobs";
+    const meta = metaFor(installId);
+    await runInDurableObject(stubFor(installId), async (_object, state) => {
+      const host = new PluginDurableHost(state, {
+        ...env,
+        DX_PLUGIN_TIER_LIMITS: JSON.stringify({
+          "personal-dev": { blobBytes: 100 },
+        }),
+      } as unknown as Bindings);
+      // 17: five 40-byte puts at once against a 100-byte quota.
+      const results = await Promise.allSettled(
+        [0, 1, 2, 3, 4].map((index) =>
+          host.blobPut(meta, `race-${index}`, "x".repeat(40), "text/plain"),
+        ),
+      );
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(2);
+      const stored = state.storage.sql
+        .exec<{ total: number }>("SELECT SUM(bytes) AS total FROM _dx_blobs")
+        .one().total;
+      expect(stored).toBe(80);
+      // 19: what the refused puts reserved is free again.
+      await host.blobPut(meta, "fits", "x".repeat(20), "text/plain");
+
+      // 18: an object already at the cap refuses even an empty blob.
+      state.storage.sql.exec(
+        `WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+         INSERT INTO _dx_blobs (key, bytes, content_type, updated_at)
+         SELECT 'empty-' || i, 0, NULL, 0 FROM n`,
+        10_000 - 3,
+      );
+      await expect(
+        host.blobPut(meta, "one-more", "", "text/plain"),
+      ).rejects.toThrow(/at most 10,000 blobs/);
+      // Replacing a blob it keeps is not a new one.
+      await host.blobPut(meta, "fits", "", "text/plain");
+      await host.purge(installId, undefined);
+    });
+  });
+});
+
+/*
+ * Saved watches across a new version (security). Ways it could fail:
+ * 20. A watch saved under a version that granted its host reconnects after
+ *     the active version stops granting it, reaching a host the owner never
+ *     reviewed in that version.
+ * 21. The check drops watches whose host is still granted.
+ */
+describe("durable host saved watches", () => {
+  it("reopens only watches whose host the active version still grants", async () => {
+    const owner = "usr_lifecycle_watch";
+    const installId = `plg_lifecycle_watch_${crypto.randomUUID().slice(0, 8)}`;
+    const at = "2026-11-13T00:00:00.000Z";
+    const manifest = {
+      format: "agent-plugins",
+      name: "com.example.lifecycle",
+      displayName: "Lifecycle",
+      version: "2.0.0",
+      skills: [],
+      mcpServers: [],
+      code: {
+        apiVersion: 1,
+        host: "worker",
+        entry: "dev.dxcode/index.js",
+        modules: [
+          {
+            path: "dev.dxcode/index.js",
+            bytes: 1,
+            integrity: "b".repeat(64),
+          },
+        ],
+        permissions: {
+          events: [],
+          network: ["kept.example.com"],
+          secrets: [],
+          tools: [],
+          ai: false,
+        },
+        settings: [],
+      },
+    };
+    await env.DB.batch([
+      env.DB.prepare(
+        'INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, 1, 1)',
+      ).bind(owner, owner, `${owner}@example.com`),
+      env.DB.prepare(
+        `INSERT INTO trusted_plugin (id, scope, target_id, name, enabled, active_version, health_status, created_at, updated_at, kind)
+         VALUES (?, 'personal', ?, 'com.example.lifecycle', 1, '2.0.0', 'unchecked', ?, ?, 'bundle')`,
+      ).bind(installId, owner, at, at),
+      env.DB.prepare(
+        `INSERT INTO trusted_plugin_version (plugin_id, version, manifest_json, grants_json, source_json, integrity, trusted, trusted_at, trusted_by_user_id)
+         VALUES (?, '2.0.0', ?, '{}', '{"type":"zip","label":"v2.zip"}', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 1, ?, ?)`,
+      ).bind(installId, JSON.stringify(manifest), at, owner),
+    ]);
+    const meta = { ...metaFor(installId), ownerUserId: owner, jobs: [] };
+    const requested: string[] = [];
+    network.use(
+      http.get("https://:host/*", ({ request }) => {
+        requested.push(new URL(request.url).hostname);
+        return new HttpResponse(null, { status: 503 });
+      }),
+    );
+    await runInDurableObject(stubFor(installId), async (_object, state) => {
+      const host = new PluginDurableHost(state, env as unknown as Bindings);
+      await host.ensure(meta);
+      // Saved by version 1, which granted both hosts.
+      for (const target of [
+        "https://dropped.example.com/stream?token=secret",
+        "https://kept.example.com/stream",
+      ])
+        state.storage.sql.exec(
+          "INSERT INTO _dx_watches (target, opener_json, opened_at) VALUES (?, ?, 0)",
+          target,
+          JSON.stringify({ kind: "export", fn: "watch" }),
+        );
+      await host.alarm();
+      const targets = state.storage.sql
+        .exec<{ target: string }>("SELECT target FROM _dx_watches")
+        .toArray()
+        .map(({ target }) => target);
+      // 20 and 21.
+      expect(targets).toEqual(["https://kept.example.com/stream"]);
+      await host.purge(installId, undefined);
+    });
+    expect(requested).not.toContain("dropped.example.com");
   });
 });
