@@ -88,6 +88,7 @@ import {
   deriveTranscriptViewModel,
   type TranscriptViewModel,
 } from "./transcript-view-model.js";
+import { registeredTurnStop } from "./turn-stop-registration.js";
 import {
   type AgentSource,
   agentValueSource,
@@ -432,38 +433,16 @@ const isModelRoutingError = (error: unknown) => {
  */
 /**
  * A turn on a model the installation provides as dx, stopped by dx itself:
- * the owner's dx balance is used up, is above zero but below the model's
- * floor, or an admin took the model offline. Says what happened and what to do, never the upstream.
+ * the deployment's own billing stopped it (its registered `TurnStop`), or
+ * an admin took the model offline. Says what happened and what to do, never
+ * the upstream.
  */
 const dxModelStopPresentation = (
   id: string,
   text: string,
 ): ThreadErrorPresentation | undefined => {
-  if (/\(dx_failure:[a-z]+:DX_MODEL_BALANCE_EMPTY\)/.test(text))
-    return {
-      id,
-      title: "You're out of dx credit",
-      message:
-        "This turn stopped because your dx model balance is used up. Redeem a code or add credit, then retry. If your workspace admin gives you credit, ask them for more.",
-      action: "resume",
-      link: { actionLabel: "Redeem a code", actionHref: "/settings/billing" },
-    };
-  if (/\(dx_failure:[a-z]+:DX_MODEL_BALANCE_LOW\)/.test(text)) {
-    // Core's sentence, after whatever the error carries before it: "dx
-    // Flash needs at least $5.00 in your model balance to start a turn.
-    // You have $1.39."
-    const floor =
-      /(dx\s[^:()]*?|This dx model) needs at least \$[\d,.]+ in your model balance to start a turn\. You have -?\$[\d,.]+\./.exec(
-        text,
-      )?.[0] ?? "This dx model needs more in your model balance.";
-    return {
-      id,
-      title: "Not enough dx credit for this model",
-      message: `${floor} Redeem a code, or pick a cheaper model below and retry.`,
-      action: "resume",
-      link: { actionLabel: "Redeem a code", actionHref: "/settings/billing" },
-    };
-  }
+  const stop = registeredTurnStop?.(text);
+  if (stop !== undefined) return { id, ...stop, action: "resume" };
   if (/\(dx_failure:[a-z]+:DX_MODEL_UNAVAILABLE\)/.test(text))
     return {
       id,
@@ -562,6 +541,16 @@ const orbStartDenial = (error: unknown) => {
   if (type === "runner_removed")
     return {
       title: typeof message === "string" ? message : "The runner was removed",
+      message: typeof details === "string" ? details : "",
+    };
+  // A runner Thread's machine lacks git (on a Mac, the Command Line Tools):
+  // the details say what to install; Retry once it is.
+  if (type === "runner_prerequisites_missing")
+    return {
+      title:
+        typeof message === "string"
+          ? message
+          : "The runner is missing a prerequisite",
       message: typeof details === "string" ? details : "",
     };
   // A runner Thread's machine is not connected: Retry once it is back.

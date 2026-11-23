@@ -2,7 +2,8 @@
 //!
 //! macOS: Seatbelt (`/usr/bin/sandbox-exec`) with paths passed as `-D`
 //! parameters. Writes only in the Thread folder and temp folders; no reads of
-//! the rest of $HOME (toolchain folders and the runner's `bin` excepted); no
+//! the rest of $HOME (toolchain folders, the runner's `bin` and `tools`
+//! excepted); no
 //! Keychain, clipboard, AppleEvents, or `open`; and no connection to, or
 //! listener on, the Desktop's port (voxl controls the whole Mac outside any
 //! sandbox; only the supervisor reaches it).
@@ -78,7 +79,7 @@ fn seatbelt_profile(tools: usize) -> String {
   (literal "/dev/null") (literal "/dev/zero") (literal "/dev/tty") (literal "/dev/dtracehelper")
   (literal "/dev/ptmx") (regex #"^/dev/fd/") (regex #"^/dev/ttys[0-9]+$"))
 (deny file-read-data (subpath (param "REAL_HOME")) (subpath (param "RUNNER")) (subpath "/Volumes"))
-(allow file-read-data (subpath (param "THREAD")) (subpath (param "BIN")){tools})
+(allow file-read-data (subpath (param "THREAD")) (subpath (param "BIN")) (subpath (param "TOOLS")){tools})
 (deny appleevent-send)
 (deny mach-lookup
   (global-name "com.apple.SecurityServer")
@@ -134,6 +135,11 @@ fn platform_command(paths: &Paths, thread_dir: &Path, argv: &[String]) -> Result
         .arg(format!("RUNNER={}", canonical(&paths.runner)?.display()));
     cmd.arg("-D")
         .arg(format!("BIN={}", canonical(&paths.bin)?.display()));
+    // dx's tools (node, gh, Claude Code): readable, never writable.
+    let dx_tools = crate::runner::tools::dir(paths);
+    std::fs::create_dir_all(&dx_tools).map_err(|e| e.to_string())?;
+    cmd.arg("-D")
+        .arg(format!("TOOLS={}", canonical(&dx_tools)?.display()));
     for (i, t) in tools.iter().enumerate() {
         cmd.arg("-D").arg(format!("TOOL{i}={}", t.display()));
     }
@@ -149,6 +155,10 @@ fn platform_command(paths: &Paths, thread_dir: &Path, argv: &[String]) -> Result
     cmd.arg("__runner-sandbox").arg(canonical(thread_dir)?);
     std::fs::create_dir_all(&paths.bin).map_err(|e| e.to_string())?;
     cmd.arg(canonical(&paths.bin)?);
+    // dx's tools (node, gh, Claude Code): readable, never writable.
+    let dx_tools = crate::runner::tools::dir(paths);
+    std::fs::create_dir_all(&dx_tools).map_err(|e| e.to_string())?;
+    cmd.arg("--ro").arg(canonical(&dx_tools)?);
     for t in toolchains(paths) {
         cmd.arg("--ro").arg(t);
     }

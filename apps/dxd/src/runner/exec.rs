@@ -15,16 +15,19 @@ const OUTPUT_CAP: usize = 4 * 1024 * 1024;
 const DEFAULT_PATH: &str = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
 static BASE_PATH: OnceLock<String> = OnceLock::new();
+static OWN_PATH: OnceLock<String> = OnceLock::new();
 static GROUPS: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
 
 /// The PATH commands see: the runner's `bin` first (dxd for git helpers),
-/// then the PATH captured when the machine was paired.
+/// then the PATH captured when the machine was paired (the person's own).
+/// dx's own tools (`tools/bin`) come after all of it (`with_tools_last`).
 pub fn set_base_path(paths: &Paths, captured: Option<&str>) {
     let inherited = captured
         .map(str::to_string)
         .or_else(|| std::env::var("PATH").ok())
         .unwrap_or_else(|| DEFAULT_PATH.into());
     let _ = BASE_PATH.set(format!("{}:{inherited}", paths.bin.display()));
+    let _ = OWN_PATH.set(inherited);
 }
 
 pub fn base_path() -> String {
@@ -34,9 +37,37 @@ pub fn base_path() -> String {
         .unwrap_or_else(|| DEFAULT_PATH.into())
 }
 
-/// The host PATH, after the runner's `setsid`/`flock` shims for whichever
-/// of them the host lacks (macOS: both).
-fn command_path(paths: &Paths) -> String {
+/// The person's own PATH, without the runner's folders: where their own
+/// tools are looked up before dx fetches one.
+pub fn own_path() -> String {
+    OWN_PATH
+        .get()
+        .cloned()
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_else(|| DEFAULT_PATH.into())
+}
+
+/// The folder of dx's own tools, as a PATH entry.
+pub fn tools_path(paths: &Paths) -> String {
+    crate::runner::tools::bin_dir(paths).display().to_string()
+}
+
+/// `path` with dx's tools folder moved to its end: the person's tools, and
+/// any a request's PATH names, always win over dx's.
+pub fn with_tools_last(paths: &Paths, path: &str) -> String {
+    let tools = tools_path(paths);
+    let mut seen = HashSet::new();
+    path.split(':')
+        .filter(|d| !d.is_empty() && *d != tools && seen.insert(*d))
+        .chain(std::iter::once(tools.as_str()))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// The host PATH, after the runner's shims for whichever tools the host
+/// lacks (`setsid`, `flock`, `timeout`; on macOS also `nohup`; and a clear
+/// message for a missing git or python3).
+pub fn command_path(paths: &Paths) -> String {
     static SHIMS: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
     let base = base_path();
     match SHIMS.get_or_init(|| {
@@ -172,14 +203,17 @@ pub fn run_in_thread(
     std::fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let mut cmd = sandbox::command(paths, thread_dir, argv, unsandboxed)?;
     cmd.env_clear()
-        .env("PATH", command_path(paths))
+        .env("PATH", with_tools_last(paths, &command_path(paths)))
         .env("HOME", &home)
         .env("TMPDIR", &tmp)
         .env("LANG", lang())
         .env("TERM", "xterm-256color")
         .env("SHELL", "/bin/bash")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .env("DX_RUNNER", "1");
+        .env("DX_RUNNER", "1")
+        // The runner installs Claude Code once per machine (tools.rs); Core's
+        // launch must not install a copy into the Thread's folder.
+        .env("DX_RUNNER_TOOLS", "1");
     // Sandboxed, Git reads no system config; with full access it does, as in
     // the person's terminal (Homebrew's Git sets the Keychain helper there).
     if !unsandboxed {
@@ -203,11 +237,17 @@ pub fn run_in_thread(
         if k == "PATH" && unsandboxed {
             // Full access: the person's own tools (gh, Homebrew) win over the
             // ones a request's PATH (an Orb's) names.
-            cmd.env(k, host_path_first(&command_path(paths), v));
+            cmd.env(
+                k,
+                with_tools_last(paths, &host_path_first(&command_path(paths), v)),
+            );
         } else if k == "PATH" {
             // A request's own PATH (an Orb's) keeps the runner's shims first
             // and the host's PATH (Homebrew, toolchains) after it.
-            cmd.env(k, merge_path(&command_path(paths), v));
+            cmd.env(
+                k,
+                with_tools_last(paths, &merge_path(&command_path(paths), v)),
+            );
         } else {
             cmd.env(k, v);
         }

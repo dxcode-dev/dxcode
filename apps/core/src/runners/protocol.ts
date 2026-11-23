@@ -50,6 +50,8 @@ export type RunnerErrorCode =
   | "offline"
   /** The machine was removed in Settings › Runners (Core's own code). */
   | "removed"
+  /** The machine lacks a prerequisite dx cannot fetch (git: on a Mac, Apple's Command Line Tools). */
+  | "prerequisites"
   | "timeout"
   | "failed";
 
@@ -59,6 +61,7 @@ const ERROR_CODES = new Set<string>([
   "invalid",
   "offline",
   "removed",
+  "prerequisites",
   "timeout",
   "failed",
 ]);

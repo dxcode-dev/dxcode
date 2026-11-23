@@ -15,6 +15,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const GUEST_HOME: &str = "/home/user";
+/// Added by the session to a request's body: how long it waited for a free
+/// operation slot before it ran.
+pub const QUEUED_MS: &str = "dxRunnerQueuedMs";
+/// What a command keeps of its budget when a tool install comes first.
+const COMMAND_RESERVE: Duration = Duration::from_secs(15);
 pub const GUEST_WORKSPACE: &str = "/home/user/workspace/repo";
 const MAX_READ_BYTES: u64 = 6 * 1024 * 1024;
 
@@ -298,6 +303,16 @@ pub fn handle(ctx: &Ctx, op: &str, thread: &str, body: &Value) -> OpResult {
 }
 
 fn ensure(ctx: &Ctx, t: &ThreadPaths, body: &Value, existing_only: bool) -> OpResult {
+    let own_path = crate::runner::exec::own_path();
+    // Every source program, Changes, and archive runs git: an activation on
+    // a machine without one says what to install instead of failing later
+    // with a stub's prompt or "command not found".
+    if !existing_only && crate::runner::tools::missing_prerequisites(&own_path).contains(&"git") {
+        return Err(OpError::new(
+            "prerequisites",
+            crate::runner::tools::prerequisite_advice("git"),
+        ));
+    }
     let mut restored = false;
     if !t.root.exists()
         && let Some(url) = body["restore"]["url"].as_str()
@@ -307,10 +322,17 @@ fn ensure(ctx: &Ctx, t: &ThreadPaths, body: &Value, existing_only: bool) -> OpRe
     }
     let prepare = body["prepareSourceWorkspace"].as_bool() == Some(true);
     ensure_folders(t, existing_only && !restored, prepare)?;
+    // node, gh, git-lfs the person's own PATH lacks, once per machine.
+    let tools = crate::runner::tools::ensure(&ctx.paths, &ctx.config, &own_path);
+    if !existing_only && let Some(why) = tools.required_missing.first() {
+        return Err(OpError::new("prerequisites", why.clone()));
+    }
+    let tools = tools.report;
     if ctx.config.unsandboxed {
         link_own_home(&ctx.paths.home, &t.home);
     }
-    Ok(json!({ "cwd": GUEST_WORKSPACE, "restored": restored }))
+    link_claude(&ctx.paths, &t.home, &ctx.paths.home, ctx.config.unsandboxed);
+    Ok(json!({ "cwd": GUEST_WORKSPACE, "restored": restored, "tools": tools }))
 }
 
 /// Names in the Thread's home that dx itself writes (the guest's
@@ -370,26 +392,38 @@ pub fn link_own_home(own: &Path, thread_home: &Path) {
             link_children(&own_config, &config, &["dx"]);
         }
     }
-    link_own_claude(own, thread_home, &crate::runner::exec::base_path());
 }
 
 /// Claude Code mode runs `$HOME/.local/bin/claude` (Core's
-/// claude-code/workspace-run.ts) and installs it there when missing, which on
-/// a runner would install a copy into every Thread's folder. With full access
-/// the Thread uses the person's own: `~/.local/bin/claude` (where Anthropic's
-/// installer puts it), else the first `claude` on the machine's PATH.
-fn link_own_claude(own: &Path, thread_home: &Path, host_path: &str) {
+/// claude-code/workspace-run.ts), which on a runner never installs a copy
+/// into the Thread's folder (`DX_RUNNER_TOOLS`). With full access the Thread
+/// uses the person's own: `~/.local/bin/claude` (where Anthropic's installer
+/// puts it), else the first `claude` on the machine's PATH; without one (and
+/// always in the sandbox, which cannot read the person's install) the one
+/// the runner installed once for the machine (`tools::ensure_claude`).
+fn link_claude(paths: &crate::runner::Paths, thread_home: &Path, own: &Path, unsandboxed: bool) {
     let target = thread_home.join(".local/bin/claude");
     if fs::symlink_metadata(&target).is_ok() {
         return;
     }
-    let found = std::iter::once(own.join(".local/bin/claude"))
-        .chain(
-            host_path
-                .split(':')
-                .filter(|dir| !dir.is_empty() && !dir.starts_with(&*thread_home.to_string_lossy()))
-                .map(|dir| Path::new(dir).join("claude")),
-        )
+    let host_path = crate::runner::exec::own_path();
+    let own_candidates: Vec<PathBuf> = if unsandboxed {
+        std::iter::once(own.join(".local/bin/claude"))
+            .chain(
+                host_path
+                    .split(':')
+                    .filter(|dir| {
+                        !dir.is_empty() && !dir.starts_with(&*thread_home.to_string_lossy())
+                    })
+                    .map(|dir| Path::new(dir).join("claude")),
+            )
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let found = own_candidates
+        .into_iter()
+        .chain(std::iter::once(crate::runner::tools::claude(paths)))
         .find(|candidate| candidate.is_file());
     let Some(claude) = found else {
         return;
@@ -426,10 +460,50 @@ fn exec(ctx: &Ctx, t: &ThreadPaths, body: &Value) -> OpResult {
             env.push((k.clone(), translate(t, v)));
         }
     }
-    let timeout = body["timeoutMs"]
-        .as_u64()
-        .unwrap_or(120_000)
-        .clamp(1, 600_000);
+    // Core waits `timeoutMs` (plus a grace) for the reply, counted from when
+    // it sent the request: time queued here and installing a tool comes out
+    // of the same budget, so the reply always arrives while Core still
+    // waits, and a command Core gave up on never starts later.
+    let timeout = Duration::from_millis(
+        body["timeoutMs"]
+            .as_u64()
+            .unwrap_or(120_000)
+            .clamp(1, 600_000),
+    );
+    let started = std::time::Instant::now()
+        .checked_sub(Duration::from_millis(
+            body[QUEUED_MS].as_u64().unwrap_or(0).min(600_000),
+        ))
+        .unwrap_or_else(std::time::Instant::now);
+    // A command that names a dx tool it needs (Core's Claude Code launch:
+    // `# dx-runner-needs: claude>=<version>`) gets it first, installed once
+    // for the machine; a failure reaches the command as DX_RUNNER_CLAUDE_ERROR
+    // so it can say why instead of installing a copy into the Thread.
+    for (tool, minimum) in crate::runner::tools::needs(command) {
+        if tool != "claude" || thread_has_own_claude(&ctx.paths, t) {
+            continue;
+        }
+        let path = crate::runner::exec::with_tools_last(
+            &ctx.paths,
+            &crate::runner::exec::command_path(&ctx.paths),
+        );
+        // The install may use the budget but the command's own 15 s.
+        let deadline = started + timeout.saturating_sub(COMMAND_RESERVE);
+        match crate::runner::tools::ensure_claude(&ctx.paths, &path, minimum.as_deref(), deadline) {
+            Ok(_) => link_claude(&ctx.paths, &t.home, &ctx.paths.home, ctx.config.unsandboxed),
+            Err(e) => {
+                crate::runner::log(&format!("tools: {e}"));
+                env.push(("DX_RUNNER_CLAUDE_ERROR".to_string(), e));
+            }
+        }
+    }
+    let remaining = timeout.saturating_sub(started.elapsed());
+    if remaining < Duration::from_millis(500) {
+        return Err(OpError::new(
+            "timeout",
+            "command timed out before it started",
+        ));
+    }
     // Not a login shell: a host's /etc/profile (Debian resets PATH) or the
     // person's own profile would replace the environment the runner set.
     let argv = vec![
@@ -442,7 +516,7 @@ fn exec(ctx: &Ctx, t: &ThreadPaths, body: &Value) -> OpResult {
         &t.root,
         &argv,
         &cwd,
-        Duration::from_millis(timeout),
+        remaining,
         &env,
         ctx.config.unsandboxed,
     )?;
@@ -454,6 +528,15 @@ fn exec(ctx: &Ctx, t: &ThreadPaths, body: &Value) -> OpResult {
         stderr.push_str("\n[dx runner: output over 4 MiB was cut]\n");
     }
     Ok(json!({ "stdout": run.stdout, "stderr": stderr, "exitCode": run.exit_code() }))
+}
+
+/// The Thread's `~/.local/bin/claude` is the person's own (not the
+/// runner's), so the runner leaves it alone.
+fn thread_has_own_claude(paths: &crate::runner::Paths, t: &ThreadPaths) -> bool {
+    match fs::read_link(t.home.join(".local/bin/claude")) {
+        Ok(target) => target != crate::runner::tools::claude(paths),
+        Err(_) => false,
+    }
 }
 
 fn read_nofollow(p: &Path) -> std::io::Result<Vec<u8>> {

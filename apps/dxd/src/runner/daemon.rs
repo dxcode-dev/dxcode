@@ -145,15 +145,19 @@ impl Daemons {
             .append(true)
             .open(t.daemon.join("dxd.log"))?;
         use std::os::unix::process::CommandExt;
+        // The runner's shims, then the person's own PATH, then dx's tools.
+        let host_path = exec::command_path(paths);
         cmd.env_clear()
-            .env("PATH", exec::base_path())
+            .env("PATH", exec::with_tools_last(paths, &host_path))
             .env("HOME", &t.home)
             .env("TMPDIR", t.root.join("tmp"))
             .env("LANG", exec::lang())
             .env("DXD_TMUX", "")
             .env("DXD_RUNNER", "1")
             // Services and Portals in this Thread find the machine's own tools.
-            .env("DXD_HOST_PATH", exec::base_path())
+            .env("DXD_HOST_PATH", &host_path)
+            // dx's tools, which the Thread's PATH and Terminal put last.
+            .env("DXD_TOOLS_PATH", exec::tools_path(paths))
             .env("DX_WORKLOAD_IDENTITY_SOCKET", t.state.join("wi.sock"))
             .current_dir(&t.workspace)
             .stdin(Stdio::null())

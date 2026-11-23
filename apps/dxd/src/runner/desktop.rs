@@ -742,7 +742,8 @@ fn binary(paths: &Paths, config: &Config) -> Result<Option<PathBuf>, String> {
     Ok(local.is_file().then_some(local))
 }
 
-fn manifest(config: &Config) -> Result<Option<Value>, String> {
+/// The deployment's `/runner/manifest.json` (also read for `tools`).
+pub(crate) fn manifest(config: &Config) -> Result<Option<Value>, String> {
     let url = config.same_origin("/runner/manifest.json")?;
     let mut resp = crate::runner::http()
         .get(&url)

@@ -7,7 +7,8 @@
 // `--launcher` is a host build of apps/desktop (dx.app's launcher); without
 // it the test builds one with cargo.
 //
-// The mock Core speaks the runner contract: pairing, /runner/manifest.json and
+// The mock Core speaks the runner contract: pairing, /runner/manifest.json (with
+// fake dx-managed tool archives and a fake Claude Code installer) and
 // binaries, the runner WebSocket (hello, ping, request/reply), archive
 // upload/download, a dxd endpoint that records dxd's `register`, and the
 // Desktop (desktop.ensure/health and streams to a fake voxl, fake-voxl.mjs). It drives
@@ -20,10 +21,13 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer, request as httpRequest } from "node:http";
@@ -189,12 +193,23 @@ const voxlKey = `voxl-linux-${process.arch === "arm64" ? "aarch64" : "x86_64"}`;
 let launcherAsset;
 const launcherKey = `dx-desktop-linux-${process.arch === "arm64" ? "aarch64" : "x86_64"}`;
 
+// dx-managed tools (tools.rs): fake archives the manifest pins, served from
+// this mock as their "upstream", with a download count per file.
+const toolDownloads = new Map();
+const toolFiles = {};
+let toolsManifest;
+let claudeInstalls = 0;
+// How long the fake installer takes (a slow first install).
+let claudeInstallSeconds = 0;
+const CLAUDE_VERSION = "2.1.400";
+
 const assets = {
   [`dxd-${platform}`]: DXD,
   ...(UPDATE ? { [`dxd-${platform}-next`]: UPDATE } : {}),
 };
 const manifest = () => ({
   version: "0.15.0",
+  ...(toolsManifest ? { tools: toolsManifest } : {}),
   assets: {
     [platform]: { path: `/runner/dxd-${platform}`, sha256: sha(DXD) },
     ...(voxlAsset
@@ -230,6 +245,29 @@ const server = createServer(async (req, res) => {
   }
   if (req.method === "GET" && url.pathname === "/runner/manifest.json")
     return json(200, manifest());
+  if (req.method === "GET" && url.pathname.startsWith("/tools/")) {
+    const name = url.pathname.slice("/tools/".length);
+    if (!toolFiles[name]) return json(404, {});
+    toolDownloads.set(name, (toolDownloads.get(name) ?? 0) + 1);
+    res.writeHead(200, { "content-type": "application/octet-stream" });
+    return res.end(readFileSync(toolFiles[name]));
+  }
+  // A fake of Anthropic's installer: installs a `claude` that reports
+  // CLAUDE_VERSION under $HOME, as the real one does.
+  if (req.method === "GET" && url.pathname === "/claude-install.sh") {
+    claudeInstalls += 1;
+    res.writeHead(200, { "content-type": "text/plain" });
+    return res.end(`set -e
+printf '%s\n' "HOME=$HOME" "TMPDIR=$TMPDIR" "SECURE=$CLAUDE_SECURESTORAGE_CONFIG_DIR" > "$HOME/installer-env"
+sleep ${claudeInstallSeconds}
+v=${CLAUDE_VERSION}
+mkdir -p "$HOME/.local/share/claude/versions" "$HOME/.local/bin"
+printf '#!/bin/sh\necho "%s (Claude Code)"\n' "$v" > "$HOME/.local/share/claude/versions/$v"
+chmod 755 "$HOME/.local/share/claude/versions/$v"
+ln -sfn "$HOME/.local/share/claude/versions/$v" "$HOME/.local/bin/claude"
+echo "installed $1"
+`);
+  }
   if (req.method === "POST" && url.pathname.startsWith("/fake-voxl/")) {
     voxlReports.push({
       event: url.pathname.slice("/fake-voxl/".length),
@@ -374,8 +412,82 @@ writeFileSync(
     mode: 0o755,
   },
 );
+// The person's own tools: `dxowntool` here must win over dx's copy.
+const ownBin = join(root, "own-bin");
+mkdirSync(ownBin, { recursive: true });
+writeFileSync(join(ownBin, "dxowntool"), "#!/bin/sh\necho own\n", {
+  mode: 0o755,
+});
+// The PATH the runner pairs with: the person's own folder first, and no
+// `claude` (this machine's would stand in for the person's).
+const pairedPath = [
+  ownBin,
+  ...(process.env.PATH ?? "")
+    .split(":")
+    .filter((d) => d && !existsSync(join(d, "claude"))),
+].join(":");
+// Fake tool archives: dx-fake has a command the person lacks (`dxfake`) and
+// one they have (`dxowntool`); dx-bad's pinned SHA-256 is wrong.
+const toolsDir = join(root, "tool-archives");
+const fakeArchive = (name, files) => {
+  const src = join(toolsDir, `${name}-src`);
+  for (const [path, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(src, path)), { recursive: true });
+    writeFileSync(join(src, path), text, { mode: 0o755 });
+  }
+  const file = join(toolsDir, `${name}.tar.gz`);
+  const tar = spawnSync("tar", ["-czf", file, "-C", src, "."]);
+  if (tar.status !== 0) throw new Error(`tar ${name}: ${tar.stderr}`);
+  toolFiles[`${name}.tar.gz`] = file;
+  return { url: `/tools/${name}.tar.gz`, sha256: sha(file) };
+};
+mkdirSync(toolsDir, { recursive: true });
+const fakeTool = fakeArchive("dx-fake", {
+  "dx-fake-1.0/bin/dxfake": "#!/bin/sh\necho dx-fake 1.0\n",
+  "dx-fake-1.0/bin/dxowntool": "#!/bin/sh\necho dx\n",
+});
+const badTool = fakeArchive("dx-bad", {
+  "dx-bad-1.0/dxbad": "#!/bin/sh\necho bad\n",
+});
+toolsManifest = {
+  "dx-fake": {
+    version: "1.0",
+    assets: {
+      [platform]: {
+        url: `${ORIGIN}${fakeTool.url}`,
+        sha256: fakeTool.sha256,
+        bin: {
+          dxfake: "dx-fake-1.0/bin/dxfake",
+          dxowntool: "dx-fake-1.0/bin/dxowntool",
+        },
+      },
+    },
+  },
+  "dx-own": {
+    version: "1.0",
+    assets: {
+      [platform]: {
+        url: `${ORIGIN}${fakeTool.url}`,
+        sha256: fakeTool.sha256,
+        bin: { dxowntool: "dx-fake-1.0/bin/dxowntool" },
+      },
+    },
+  },
+  "dx-bad": {
+    version: "1.0",
+    assets: {
+      [platform]: {
+        url: `${ORIGIN}${badTool.url}`,
+        sha256: "0".repeat(64),
+        bin: { dxbad: "dx-bad-1.0/dxbad" },
+      },
+    },
+  },
+};
 const env = {
   ...process.env,
+  PATH: pairedPath,
+  DX_RUNNER_CLAUDE_INSTALLER: `${ORIGIN}/claude-install.sh`,
   HOME: ownHome,
   DX_RUNNER_SELF_CONTAINED_BYTES: "0",
   // Linux runners have no Desktop; this turns on the test one.
@@ -458,6 +570,51 @@ try {
     doctor.stdout + doctor.stderr,
   );
 
+  // The `timeout` a Mac lacks (Claude Code mode runs `timeout 50 claude`):
+  // dxd started under that name, as the runner links it into its shims.
+  {
+    const shimDir = join(root, "timeout-shim");
+    mkdirSync(shimDir, { recursive: true });
+    const shim = join(shimDir, "timeout");
+    symlinkSync(DXD, shim);
+    const run = (...args) => spawnSync(shim, args, { encoding: "utf8" });
+    const started = Date.now();
+    const expired = run("1", "sleep", "5");
+    const took = Date.now() - started;
+    check(
+      "timeout shim: stops a command at its limit with 124, else exits as the command did",
+      expired.status === 124 &&
+        took < 4000 &&
+        run("5", "sh", "-c", "exit 3").status === 3 &&
+        run("2s", "true").status === 0 &&
+        run("x", "true").status === 125 &&
+        run("1", join(shimDir, "missing")).status === 127,
+      JSON.stringify({ expired: expired.status, took }),
+    );
+    // The limit ends what the command started too (its process group).
+    const grouped = run("0.5", "sh", "-c", "sleep 31.25 & wait");
+    await sleep(300);
+    const left = spawnSync("ps", ["-eo", "args"], { encoding: "utf8" })
+      .stdout.split("\n")
+      .filter((l) => l.trim() === "sleep 31.25");
+    check(
+      "timeout shim: the limit ends the command's whole process group",
+      grouped.status === 124 && left.length === 0,
+      JSON.stringify({ status: grouped.status, left }),
+    );
+  }
+
+  // A shim link left for a tool the host has (it was installed since): the
+  // runner removes it, so the host's own runs.
+  const shimsDir = join(dxRoot, "runner/bin/shims");
+  mkdirSync(shimsDir, { recursive: true });
+  symlinkSync(DXD, join(shimsDir, "flock"));
+  // What a cut-off install leaves: removed when the next install starts.
+  mkdirSync(join(dxRoot, "runner/tools/dx-fake/.staging-old/x"), {
+    recursive: true,
+  });
+  writeFileSync(join(dxRoot, "runner/tools/dx-fake/.download-old"), "partial");
+
   startRunner();
   const hello = await waitFor(() => hellos[0]);
   check(
@@ -465,6 +622,210 @@ try {
     hello?.version && hello.os === "linux" && hello.sandbox === "none",
     JSON.stringify(hello),
   );
+  check(
+    "connect: hello reports no missing prerequisites on a machine with git and python3",
+    Array.isArray(hello?.missing) && hello.missing.length === 0,
+    JSON.stringify(hello?.missing),
+  );
+
+  // dx-managed tools (tools.rs): two Threads activating at once share one
+  // download; the person's own tool wins; a SHA-256 mismatch is refused.
+  {
+    const TA = "thr_0b0e2e00-aaaa-4222-8333-444455556666";
+    const TB = "thr_0b0e2e00-bbbb-4222-8333-444455556666";
+    const toolsRoot = join(dxRoot, "runner/tools");
+    const toolsBin = join(toolsRoot, "bin");
+    // No Claude Code of the person's own while these Threads activate.
+    const ownClaude = join(ownHome, ".local/bin/claude");
+    renameSync(ownClaude, `${ownClaude}.away`);
+    const [ea, eb] = await Promise.all(
+      [TA, TB].map((t) =>
+        request(
+          "ensure",
+          t,
+          { existingOnly: false, prepareSourceWorkspace: false },
+          120000,
+        ),
+      ),
+    );
+    check(
+      "tools: a missing tool is downloaded once and shared by two Threads",
+      ea.ok &&
+        eb.ok &&
+        toolDownloads.get("dx-fake.tar.gz") === 1 &&
+        [ea, eb].some((e) => e.result.tools["dx-fake"] === "downloaded") &&
+        [ea, eb].every((e) =>
+          ["downloaded", "installed"].includes(e.result.tools["dx-fake"]),
+        ) &&
+        readlinkSync(join(toolsBin, "dxfake")) ===
+          "../dx-fake/current/dx-fake-1.0/bin/dxfake",
+      JSON.stringify({ ea, eb, downloads: [...toolDownloads] }),
+    );
+    check(
+      "tools: a tool the person has is never downloaded",
+      ea.ok &&
+        ea.result.tools["dx-own"] === "own" &&
+        !existsSync(join(toolsRoot, "dx-own")),
+      JSON.stringify(ea.result?.tools),
+    );
+    check(
+      "tools: a SHA-256 mismatch is refused and nothing is installed",
+      ea.ok &&
+        /^failed: SHA-256 .* does not match/.test(ea.result.tools["dx-bad"]) &&
+        !existsSync(join(toolsBin, "dxbad")) &&
+        !existsSync(join(toolsRoot, "dx-bad/current")) &&
+        readdirSync(join(toolsRoot, "dx-bad")).length === 0,
+      JSON.stringify(ea.result?.tools),
+    );
+    let x = await request("exec", TA, {
+      command: "dxfake; dxowntool; command -v dxbad || echo no-dxbad",
+    });
+    const xb = await request("exec", TB, { command: "dxfake" });
+    check(
+      "tools: both Threads run dx's tool, and the person's own wins over dx's copy",
+      x.ok &&
+        x.result.stdout === "dx-fake 1.0\nown\nno-dxbad\n" &&
+        xb.ok &&
+        xb.result.stdout === "dx-fake 1.0\n",
+      JSON.stringify([x.result, xb.result]),
+    );
+    x = await request("exec", TA, { command: 'printf %s "$PATH"' });
+    {
+      const dirs = x.ok ? x.result.stdout.split(":") : [];
+      check(
+        "tools: PATH is runner bin, then the person's own PATH, then dx's tools last",
+        dirs[0] === join(dxRoot, "runner/bin") &&
+          dirs.indexOf(ownBin) > 0 &&
+          dirs.indexOf(ownBin) < dirs.indexOf(toolsBin) &&
+          dirs.at(-1) === toolsBin,
+        x.result?.stdout,
+      );
+    }
+    x = await request("exec", TA, {
+      command: 'printf %s "$PATH"',
+      env: { PATH: "/dx-request-bin:/usr/bin" },
+    });
+    check(
+      "tools: dx's tools stay last after a request's own PATH",
+      x.ok &&
+        x.result.stdout.split(":").at(-1) === toolsBin &&
+        x.result.stdout.includes("/dx-request-bin"),
+      x.result?.stdout,
+    );
+    // An update: the pin changes, the next activation (after the manifest
+    // is read again) installs it and drops the old build only afterwards.
+    // (The manifest is cached for ten minutes, so this is covered by the
+    // folder layout: one build folder and `current` pointing at it.)
+    check(
+      "tools: one build folder per tool, `current` switched to it",
+      readlinkSync(join(toolsRoot, "dx-fake/current")) ===
+        `1.0-${fakeTool.sha256.slice(0, 12)}` &&
+        readdirSync(join(toolsRoot, "dx-fake")).sort().join(",") ===
+          `1.0-${fakeTool.sha256.slice(0, 12)},current`,
+      readdirSync(join(toolsRoot, "dx-fake")).join(","),
+    );
+
+    // Claude Code: installed once for the machine with HOME at
+    // tools/claude, when a launch names it, and linked into each Thread.
+    const needs = `# dx-runner-needs: claude>=2.1.0\n"$HOME/.local/bin/claude" --version; printf %s "\${DX_RUNNER_CLAUDE_ERROR:-}|\${DX_RUNNER_TOOLS:-}"`;
+    x = await request("exec", TA, { command: needs }, 120000);
+    const runnerClaude = join(toolsRoot, "claude/.local/bin/claude");
+    const threadLink = (t) => {
+      try {
+        return readlinkSync(
+          join(dxRoot, "threads", t, "home/.local/bin/claude"),
+        );
+      } catch {
+        return undefined;
+      }
+    };
+    check(
+      "claude: installed into the runner's tools folder (not the Thread's) and linked into the Thread",
+      x.ok &&
+        x.result.stdout === `${CLAUDE_VERSION} (Claude Code)\n|1` &&
+        claudeInstalls === 1 &&
+        existsSync(runnerClaude) &&
+        threadLink(TA) === runnerClaude &&
+        !existsSync(join(dxRoot, "threads", TA, "home/.local/share/claude")),
+      JSON.stringify({ result: x.result, claudeInstalls }),
+    );
+    x = await request("exec", TB, { command: needs }, 120000);
+    check(
+      "claude: a second Thread reuses the machine's copy",
+      x.ok &&
+        x.result.stdout.startsWith(`${CLAUDE_VERSION} (Claude Code)`) &&
+        claudeInstalls === 1 &&
+        threadLink(TB) === runnerClaude,
+      JSON.stringify({ result: x.result, claudeInstalls }),
+    );
+    x = await request(
+      "exec",
+      TB,
+      { command: needs.replace(">=2.1.0", ">=9.0.0") },
+      120000,
+    );
+    check(
+      "claude: an older copy is updated, and a failed update reaches the command",
+      x.ok &&
+        claudeInstalls === 2 &&
+        /older than 9\.0\.0 and the update failed/.test(x.result.stdout),
+      JSON.stringify({ result: x.result, claudeInstalls }),
+    );
+    {
+      const env = readFileSync(join(toolsRoot, "claude/installer-env"), "utf8");
+      const claudeHome = join(toolsRoot, "claude");
+      check(
+        "claude: the installer's HOME, TMPDIR, and credential store are all in tools/claude",
+        env.includes(`HOME=${claudeHome}\n`) &&
+          env.includes(`TMPDIR=${claudeHome}/tmp\n`) &&
+          env.includes(`SECURE=${claudeHome}/.claude/dx-plan-only\n`),
+        env,
+      );
+    }
+    // A slow first install: the launch waits only as long as Core waits for
+    // it, says the install is still going, and the install finishes in the
+    // background for the next launch, which does not install again.
+    rmSync(join(toolsRoot, "claude"), { recursive: true, force: true });
+    claudeInstallSeconds = 25;
+    const installsBefore = claudeInstalls;
+    const slowStart = Date.now();
+    x = await request("exec", TA, { command: needs, timeoutMs: 20000 }, 60000);
+    const slowTook = Date.now() - slowStart;
+    check(
+      "claude: a slow first install answers within the launch's timeout and says it is still installing",
+      x.ok &&
+        slowTook < 20000 &&
+        /still installing on this machine/.test(x.result.stdout),
+      JSON.stringify({ result: x.result, slowTook }),
+    );
+    await waitFor(() => existsSync(runnerClaude), 40000);
+    x = await request("exec", TA, { command: needs }, 60000);
+    check(
+      "claude: the background install finishes for the next launch, installed once",
+      x.ok &&
+        x.result.stdout.startsWith(`${CLAUDE_VERSION} (Claude Code)`) &&
+        claudeInstalls === installsBefore + 1,
+      JSON.stringify({ result: x.result, claudeInstalls, installsBefore }),
+    );
+    claudeInstallSeconds = 0;
+    // A failed pin is not fetched again on every activation for a while.
+    await request("ensure", TA, {
+      existingOnly: false,
+      prepareSourceWorkspace: false,
+    });
+    check(
+      "tools: a failed download is not retried on every activation",
+      toolDownloads.get("dx-bad.tar.gz") === 1,
+      JSON.stringify([...toolDownloads]),
+    );
+    check(
+      "shims: a stale link for a tool the host has is removed",
+      !existsSync(join(shimsDir, "flock")),
+      readdirSync(shimsDir).join(","),
+    );
+    renameSync(`${ownClaude}.away`, ownClaude);
+    for (const t of [TA, TB]) await request("destroy", t, {});
+  }
 
   let r = await request("ensure", T, { existingOnly: true });
   check(
@@ -731,6 +1092,46 @@ try {
       written.localRuntime.selfUpdate === false,
     JSON.stringify(written.localRuntime),
   );
+  {
+    const toolsBin = join(dxRoot, "runner/tools/bin");
+    const pidOf = dxdPids()[0];
+    const environ = Object.fromEntries(
+      (pidOf ? readFileSync(`/proc/${pidOf}/environ`, "utf8") : "")
+        .split("\0")
+        .filter(Boolean)
+        .map((kv) => [
+          kv.slice(0, kv.indexOf("=")),
+          kv.slice(kv.indexOf("=") + 1),
+        ]),
+    );
+    const profile = await waitFor(() => {
+      try {
+        return readFileSync(
+          join(dxRoot, "threads", T, "state/dx-terminal/profile"),
+          "utf8",
+        );
+      } catch {
+        return undefined;
+      }
+    }, 5000);
+    check(
+      "daemon: the Thread's dxd and Terminal profile put the person's PATH first and dx's tools last",
+      environ.DXD_TOOLS_PATH === toolsBin &&
+        environ.PATH?.split(":").at(-1) === toolsBin &&
+        environ.DXD_HOST_PATH?.split(":").includes(ownBin) &&
+        !environ.DXD_HOST_PATH?.split(":").includes(toolsBin) &&
+        profile?.includes(`export PATH='${environ.DXD_HOST_PATH}':"$PATH"`) &&
+        profile?.trimEnd().endsWith(`export PATH="$PATH":'${toolsBin}'`),
+      JSON.stringify({
+        environ: {
+          PATH: environ.PATH,
+          DXD_HOST_PATH: environ.DXD_HOST_PATH,
+          DXD_TOOLS_PATH: environ.DXD_TOOLS_PATH,
+        },
+        profile: profile?.slice(-400),
+      }),
+    );
+  }
   const desktopOff = await waitFor(
     () => dxdRegisters.find((m) => m.thread === T && m.capabilities),
     5000,
@@ -1614,6 +2015,138 @@ try {
       !existsSync(join(dxRoot, "threads")),
     un.stdout + un.stderr,
   );
+
+  // The shims a host may lack (a Mac has no setsid, flock, or timeout), run
+  // by the dxd binary under the tool's name.
+  {
+    const shimDir = join(root, "shims");
+    mkdirSync(shimDir, { recursive: true });
+    for (const tool of ["timeout", "setsid"])
+      symlinkSync(DXD, join(shimDir, tool));
+    const timed = spawnSync(join(shimDir, "timeout"), ["0.3", "sleep", "5"]);
+    const quick = spawnSync(join(shimDir, "timeout"), [
+      "5",
+      "sh",
+      "-c",
+      "exit 7",
+    ]);
+    const missing = spawnSync(join(shimDir, "timeout"), [
+      "5",
+      "/nonexistent-dx",
+    ]);
+    check(
+      "shims: timeout ends a command at its limit (124) and passes an exit code through",
+      timed.status === 124 && quick.status === 7 && missing.status === 127,
+      `${timed.status} ${quick.status} ${missing.status}`,
+    );
+    // `setsid cmd &` from a non-interactive shell: $! is the command itself,
+    // now leading its own session (Core's Claude Code launch records it).
+    const bg = spawnSync(
+      "/bin/bash",
+      [
+        "-c",
+        `${join(shimDir, "setsid")} sleep 30 > /dev/null 2>&1 < /dev/null & p=$!; sleep 0.5; ps -o sid=,args= -p "$p"; kill "$p"`,
+      ],
+      { encoding: "utf8" },
+    );
+    const [sid, ...cmd] = bg.stdout.trim().split(/\s+/);
+    check(
+      "shims: `setsid cmd &` leaves $! naming the command, in its own session",
+      cmd.join(" ") === "sleep 30" && Number(sid) > 1,
+      bg.stdout + bg.stderr,
+    );
+  }
+
+  // A machine without git or python3 (a Mac without Apple's Command Line
+  // Tools, a minimal Linux): doctor and hello report it, an activation
+  // fails with what to install, and a Thread command that runs git says so.
+  {
+    const minimalBin = join(root, "minimal-bin");
+    mkdirSync(minimalBin, { recursive: true });
+    for (const dir of ["/usr/bin", "/bin"])
+      for (const name of readdirSync(dir))
+        if (
+          !/^(git|python|scalar)/.test(name) &&
+          !existsSync(join(minimalBin, name))
+        )
+          symlinkSync(join(dir, name), join(minimalBin, name));
+    const bareRoot = join(root, "bare");
+    const bareEnv = { ...env, PATH: minimalBin };
+    const bare = (...args) =>
+      new Promise((done) => {
+        const child = spawn(RUNNER, ["runner", "--root", bareRoot, ...args], {
+          env: bareEnv,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let stdout = "";
+        let stderr = "";
+        child.stdout.on("data", (d) => (stdout += d));
+        child.stderr.on("data", (d) => (stderr += d));
+        child.on("close", (status) => done({ status, stdout, stderr }));
+      });
+    const paired = await bare("pair", "--server", ORIGIN, "--code", PAIR_CODE);
+    const doc = await bare("doctor");
+    check(
+      "prerequisites: doctor reports git and python3 missing and fails",
+      paired.status === 0 &&
+        doc.status !== 0 &&
+        doc.stdout.includes("missing: git is not installed on this machine") &&
+        doc.stdout.includes("missing: python3 is not installed") &&
+        /"prerequisites": \{\s*"missing": \[\s*"git",\s*"python3"\s*\]/.test(
+          doc.stdout,
+        ),
+      doc.stdout + doc.stderr,
+    );
+    hellos.length = 0;
+    runnerSocket = undefined;
+    runnerProcess = spawn(RUNNER, ["runner", "--root", bareRoot, "run"], {
+      env: bareEnv,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    runnerProcess.stderr.on(
+      "data",
+      (d) => process.env.E2E_VERBOSE && process.stderr.write(d),
+    );
+    const bareHello = await waitFor(() => hellos[0], 20000);
+    check(
+      "prerequisites: hello reports what the machine lacks",
+      isDeepStrictEqual(bareHello?.missing, ["git", "python3"]),
+      JSON.stringify(bareHello),
+    );
+    const TC = "thr_0b0e2e00-cccc-4222-8333-444455556666";
+    let b = await request("ensure", TC, {
+      existingOnly: false,
+      prepareSourceWorkspace: false,
+    });
+    check(
+      "prerequisites: an activation fails with what to install",
+      !b.ok &&
+        b.error.code === "prerequisites" &&
+        b.error.message.startsWith("git is not installed on this machine"),
+      JSON.stringify(b),
+    );
+    b = await request("exec", TC, {
+      command:
+        'git --version; echo "git=$?"; python3 -c \'\'; echo "python3=$?"',
+    });
+    check(
+      "prerequisites: git and python3 in a Thread command say what to install (exit 127)",
+      b.ok &&
+        b.result.stdout === "git=127\npython3=127\n" &&
+        b.result.stderr.includes(
+          "dx runner: git is not installed on this machine",
+        ) &&
+        b.result.stderr.includes("dx runner: python3 is not installed"),
+      JSON.stringify(b.result ?? b),
+    );
+    runnerProcess.kill("SIGINT");
+    await waitFor(
+      () =>
+        runnerProcess.exitCode !== null || runnerProcess.signalCode !== null,
+      10000,
+    );
+    await bare("uninstall");
+  }
 } catch (e) {
   check("no exception", false, e.stack);
 } finally {

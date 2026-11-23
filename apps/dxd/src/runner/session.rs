@@ -132,6 +132,11 @@ pub fn run(paths: Paths) -> Result<(), String> {
     ensure_owned_dir(&paths.threads)?;
     let config = Config::load(&paths)?;
     exec::set_base_path(&paths, config.path.as_deref());
+    // The shims (shims.rs) link to the installed binary: put it in place
+    // before the first command computes the command PATH.
+    if let Err(e) = update::ensure_dxd(&paths, &config) {
+        log(&format!("dxd not installed yet: {e}"));
+    }
     let test = sandbox::self_test(&paths, config.unsandboxed)?;
     if test["ok"] != json!(true) {
         return Err(format!(
@@ -259,6 +264,9 @@ fn hello(state: &State) -> Value {
         "sandbox": sandbox::kind(ctx.config.unsandboxed),
         "threads": ops::thread_ids(&ctx.paths),
         "sha256": own_sha256(),
+        // Git or python3 this machine lacks (macOS: Apple's Command Line
+        // Tools), so dx can say what to install.
+        "missing": crate::runner::tools::missing_prerequisites(&exec::own_path()),
     })
 }
 
@@ -366,8 +374,16 @@ async fn connection(state: &Arc<State>) -> Result<(), Exit> {
                         let tx = tx.clone();
                         let permits = permits.clone();
                         state.inflight.fetch_add(1, Ordering::SeqCst);
+                        let received = Instant::now();
                         tokio::spawn(async move {
                             let _permit = permits.acquire_owned().await;
+                            let mut msg = msg;
+                            // Time waiting for a slot counts against the
+                            // command's timeout (ops::exec).
+                            if msg["body"].is_object() {
+                                msg["body"][ops::QUEUED_MS] =
+                                    json!(received.elapsed().as_millis() as u64);
+                            }
                             let reply = serve(&state, msg).await;
                             send_frames(&tx, &reply).await;
                             state.inflight.fetch_sub(1, Ordering::SeqCst);

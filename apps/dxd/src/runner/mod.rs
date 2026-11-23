@@ -8,20 +8,23 @@
 //!   asked to, its LaunchAgent or systemd user unit.
 //! - Runs every command and every per-Thread dxd inside the sandbox
 //!   (Seatbelt on macOS, Landlock on Linux), with a clean environment.
-//! - Never runs `.agents/setup` or installs tools: it uses what the machine has.
+//! - Never runs `.agents/setup`. It uses what the machine has, and fills the
+//!   gaps a Thread needs (node, gh, git-lfs, Claude Code) once per machine in
+//!   `~/.dx/runner/tools`, always after the person's own on PATH (`tools.rs`).
 //! - On a Mac, runs one voxl for the owner's Desktop outside every sandbox,
 //!   reached only through the supervisor (`desktop.rs`).
 
 mod archive;
 mod daemon;
 pub mod desktop;
-mod exec;
+pub mod exec;
 mod ops;
 pub mod sandbox;
 mod service;
 mod session;
 pub mod shims;
-mod update;
+pub mod tools;
+pub mod update;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -212,6 +215,8 @@ pub fn start_logging(paths: &Paths) -> Result<(), String> {
 pub fn http() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(600)))
+        // An unreachable host fails fast instead of holding a lock (tools).
+        .timeout_connect(Some(Duration::from_secs(20)))
         .http_status_as_error(false)
         .build()
         .into()
@@ -360,12 +365,25 @@ fn pair(
 fn doctor(paths: &Paths) -> Result<(), String> {
     start_logging(paths)?;
     ensure_owned_dir(&paths.threads)?;
-    let unsandboxed = Config::load(paths).map(|c| c.unsandboxed).unwrap_or(false);
-    let report = sandbox::self_test(paths, unsandboxed)?;
+    let config = Config::load(paths).ok();
+    let unsandboxed = config.as_ref().is_some_and(|c| c.unsandboxed);
+    exec::set_base_path(paths, config.as_ref().and_then(|c| c.path.as_deref()));
+    let mut report = sandbox::self_test(paths, unsandboxed)?;
+    let missing = tools::missing_prerequisites(&exec::own_path());
+    report["prerequisites"] = serde_json::json!({ "missing": missing });
+    report["tools"] = tools::status(paths, &exec::own_path());
     println!("{}", serde_json::to_string_pretty(&report).unwrap());
-    if report["ok"] == serde_json::json!(true) {
+    for tool in &missing {
+        println!("\nmissing: {}", tools::prerequisite_advice(tool));
+    }
+    if report["ok"] == serde_json::json!(true) && missing.is_empty() {
         println!("\nOK: the dx runner can run Threads on this machine");
         Ok(())
+    } else if report["ok"] == serde_json::json!(true) {
+        Err(format!(
+            "missing prerequisites: {}; Threads that need them fail until they are installed",
+            missing.join(", ")
+        ))
     } else {
         Err("sandbox self-test failed; `run` will refuse to start".into())
     }

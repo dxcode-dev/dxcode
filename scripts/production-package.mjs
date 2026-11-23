@@ -631,6 +631,79 @@ const runnerBinaryFormat = (binary) =>
       ? "elf"
       : undefined;
 
+/**
+ * Tools a runner Thread needs and a bare Mac or a minimal Linux lacks
+ * (node, gh, git-lfs), pinned per platform in deploy/runner/tools.json:
+ * each asset's upstream https URL, its SHA-256, and the paths of its
+ * commands inside the archive. The supervisor downloads one from that URL
+ * on first need into `~/.dx/runner/tools`, shared by every Thread, and
+ * refuses bytes whose SHA-256 differs; served in `/runner/manifest.json`
+ * as `tools`, so a deploy updates them. A `required` tool (node, which
+ * every source action runs) that cannot be fetched fails the activation
+ * with the reason.
+ */
+export const RUNNER_TOOL_PLATFORMS = Object.freeze([
+  "macos-aarch64",
+  "linux-x86_64",
+  "linux-aarch64",
+]);
+const RUNNER_TOOL_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+const RUNNER_TOOL_ARCHIVE = /\.(?:tar\.gz|tgz|zip)$/;
+
+export const validRunnerTools = (tools) => {
+  if (tools === null || typeof tools !== "object" || Array.isArray(tools))
+    throw new Error("Runner tools must be an object.");
+  for (const [name, tool] of Object.entries(tools)) {
+    const fail = (why) => {
+      throw new Error(`Runner tool ${name} is invalid: ${why}.`);
+    };
+    if (!RUNNER_TOOL_NAME.test(name)) fail("bad name");
+    if (
+      typeof tool?.version !== "string" ||
+      !/^[0-9A-Za-z.+-]{1,32}$/.test(tool.version)
+    )
+      fail("bad version");
+    if (tool.required !== undefined && typeof tool.required !== "boolean")
+      fail("required must be true or false");
+    const assets = tool.assets ?? {};
+    for (const [platform, asset] of Object.entries(assets)) {
+      if (!RUNNER_TOOL_PLATFORMS.includes(platform))
+        fail(`unknown platform ${platform}`);
+      let url;
+      try {
+        url = new URL(asset?.url);
+      } catch {
+        fail(`${platform} has no URL`);
+      }
+      if (url.protocol !== "https:" || !RUNNER_TOOL_ARCHIVE.test(url.pathname))
+        fail(`${platform} URL must be an https .tar.gz or .zip`);
+      if (
+        typeof asset.sha256 !== "string" ||
+        !/^[0-9a-f]{64}$/.test(asset.sha256)
+      )
+        fail(`${platform} has no SHA-256`);
+      const bin = Object.entries(asset.bin ?? {});
+      if (bin.length === 0) fail(`${platform} names no command`);
+      for (const [command, path] of bin)
+        if (
+          !RUNNER_TOOL_NAME.test(command) ||
+          typeof path !== "string" ||
+          path.startsWith("/") ||
+          path
+            .split("/")
+            .some((part) => part === "" || part === "." || part === "..")
+        )
+          fail(`${platform} command ${command} has a bad path`);
+    }
+    if (Object.keys(assets).length === 0) fail("no platform");
+  }
+  return tools;
+};
+
+export const loadRunnerTools = (
+  path = resolve(workspaceRoot, "deploy/runner/tools.json"),
+) => validRunnerTools(JSON.parse(readFileSync(path, "utf8")));
+
 /** Writes the runner assets and returns the manifest's `runner` entry. */
 export const packageRunnerAssets = (runnerBinaries, outputRoot, release) => {
   if (runnerBinaries === undefined) return undefined;
@@ -666,7 +739,7 @@ export const packageRunnerAssets = (runnerBinaries, outputRoot, release) => {
   if (paths.length === 0) return undefined;
   writeFileSync(
     resolve(outputRoot, "assets/runner/manifest.json"),
-    `${JSON.stringify({ version: release, assets }, null, 2)}\n`,
+    `${JSON.stringify({ version: release, assets, tools: loadRunnerTools() }, null, 2)}\n`,
     { mode: 0o644 },
   );
   return {

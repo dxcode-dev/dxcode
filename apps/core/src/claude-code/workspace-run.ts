@@ -363,6 +363,16 @@ const CLAUDE_CODE_DISK_FULL_NOTE = `dx note: this Orb's disk filled up completel
  * it as soon as it is complete (it ends with a newline) and keeps the token
  * in a pipe the CLI alone reads, once.
  */
+/**
+ * `command_of <pid>` prints a live process's command line: from /proc on
+ * Linux, from ps where there is no /proc (a Mac runner), so a run's
+ * recorded PID is checked, and stopped, the same way on both.
+ */
+const PROCESS_COMMAND = `command_of() {
+  if [ -d /proc/self ]; then tr '\\0' ' ' < "/proc/$1/cmdline" 2>/dev/null
+  else ps -p "$1" -o command= 2>/dev/null; fi
+}`;
+
 const TOKEN_FROM_FILE = `token_to_descriptor() {
   local waited=0 token
   until [ -s "$1" ] && [ -z "$(tail -c 1 "$1")" ]; do
@@ -388,7 +398,13 @@ const SCRUB_CREDENTIALS = `# The plan token is the only credential Claude Code m
 for name in $(env | sed -n 's/^\\(ANTHROPIC_[A-Za-z0-9_]*\\)=.*/\\1/p; s/^\\(CLAUDE_CODE_USE_[A-Za-z0-9_]*\\)=.*/\\1/p'); do
   unset "$name"
 done
-unset NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS CLAUDE_CONFIG_DIR`;
+unset NODE_TLS_REJECT_UNAUTHORIZED NODE_EXTRA_CA_CERTS CLAUDE_CONFIG_DIR
+# Claude Code prefers a stored /login over the descriptor's plan token. On a
+# runner that login is the person's own, in the macOS Keychain, so the run
+# would bill their plan instead of the one the Thread chose. Pointing its
+# credential store at an empty folder of the Thread hides every stored login
+# and saved key, while settings, skills, and sessions stay in ~/.claude.
+export CLAUDE_SECURESTORAGE_CONFIG_DIR="$HOME/.claude/dx-plan-only"`;
 
 const launchScript = (
   dir: string,
@@ -425,6 +441,9 @@ const launchScript = (
     .map(quote)
     .join(" ");
   return `set -eu
+# A runner installs Claude Code once for the machine before this runs, when
+# the person has none of their own (apps/dxd/src/runner/tools.rs):
+# dx-runner-needs: claude>=${CLAUDE_CODE_MIN_VERSION}
 # A full disk must not keep Claude Code from starting: the guard frees dx's
 # reserve and leftovers first, and the agent is told to free space.
 ${workspaceDiskGuard(false)}D=${quote(dir)}
@@ -446,7 +465,8 @@ ${files ?? `. "$D/${LAUNCH_FILES}"`}
 if [ "$dx_disk_full" = 1 ]; then printf '\n\n%s\n' ${quote(CLAUDE_CODE_DISK_FULL_NOTE)} >> "$D/prompt.txt"; fi
 # A recorded PID is killed only while it is still that run's runner: after a
 # container restart the number can belong to any process.
-ours() { tr '\\0' ' ' < "/proc/$2/cmdline" 2>/dev/null | grep -qF "$1/runner.sh"; }
+${PROCESS_COMMAND}
+ours() { command_of "$2" | grep -qF "$1/runner.sh"; }
 # One Claude run per Thread: a new turn or attempt ends any other live run,
 # including one a restarted Durable Object no longer knows about.
 for other in "$S"/runs/*/; do
@@ -471,7 +491,8 @@ done
 version() { "$1" --version 2>/dev/null < /dev/null | sed -n '1s/^\\([0-9][0-9.]*\\).*/\\1/p'; }
 current() {
   v="$(version "$1")"
-  [ -n "$v" ] && [ "$(printf '%s\\n%s\\n' ${CLAUDE_CODE_MIN_VERSION} "$v" | sort -V | head -n 1)" = ${CLAUDE_CODE_MIN_VERSION} ]
+  # Numeric keys rather than sort -V, which older macOS sort lacks.
+  [ -n "$v" ] && [ "$(printf '%s\\n%s\\n' ${CLAUDE_CODE_MIN_VERSION} "$v" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = ${CLAUDE_CODE_MIN_VERSION} ]
 }
 # The CLI runs from where its installer puts it, never from PATH, which a
 # login profile can change: a \`claude\` earlier on PATH would be handed the
@@ -489,6 +510,12 @@ if ! current "$CLAUDE"; then
   # installer's address with its "unavailable in region" page (thr_05ddbf21,
   # an Orb in Hong Kong). bash must never run that page, and \`claude update\`
   # fetches from the same place, so the person is told where it ran instead.
+  # A runner (DX_RUNNER_TOOLS) installed or updated the machine's copy
+  # before this ran; it never installs one into the Thread's folder.
+  if [ -n "\${DX_RUNNER_TOOLS:-}" ]; then
+    echo "\${OUTDATED:-Claude Code could not be installed on this runner.}\${DX_RUNNER_CLAUDE_ERROR:+ $DX_RUNNER_CLAUDE_ERROR}\${UPDATE:+ $UPDATE}" | tee "$D/stderr.log" >&2
+    exit 3
+  fi
   REFUSED=""
   if curl -fsSL https://claude.ai/install.sh > "$D/install.sh" 2> "$D/install.log"; then
     if [ "$(tr -d ' \\t\\r\\n' < "$D/install.sh" | head -c 1)" = "<" ]; then
@@ -548,7 +575,10 @@ fi
 # skills and the person's own. Links are relative, so they resolve inside the
 # local runtime's namespace too.
 mkdir -p "$HOME/.claude/skills"
-find "$HOME/.claude/skills" -maxdepth 1 -xtype l -delete
+# Broken links go (portable: macOS's find has no -xtype).
+for link in "$HOME/.claude/skills"/* "$HOME/.claude/skills"/.[!.]*; do
+  if [ -L "$link" ] && [ ! -e "$link" ]; then rm -f "$link"; fi
+done
 # Repository plugin skills the last launch linked go first, so a plugin the
 # repository dropped stops loading.
 REPO_SKILLS="$HOME/.claude/skills/.dx-repository-plugin-skills"
@@ -764,17 +794,28 @@ fi
 # beside the CLI, outside the local runtime's namespace, so it reads the
 # run's files by their real paths.
 PYTHON=""
-for candidate in /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 || true)"; do
-  [ -n "$candidate" ] || continue
-  if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
-done
+PYTHON_ERROR=""
+if [ -n "\${DX_RUNNER:-}" ]; then
+  # A person's machine: the python3 on its PATH, and only one that runs.
+  # macOS's /usr/bin/python3 without the Command Line Tools is a stub that
+  # opens Apple's installer; the runner's own python3 shim says so instead.
+  candidate="$(command -v python3 || true)"
+  if [ -n "$candidate" ]; then
+    if PYTHON_ERROR="$("$candidate" -c '' 2>&1 < /dev/null)"; then PYTHON="$candidate"; PYTHON_ERROR=""; fi
+  fi
+else
+  for candidate in /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 || true)"; do
+    [ -n "$candidate" ] || continue
+    if [ -x "$candidate" ]; then PYTHON="$candidate"; break; fi
+  done
+fi
 BRIDGE=""
 NO_PREFIX=""
 # Plugins gate this run's tools through the bridge: without Python there is
 # no bridge, so the run fails instead of running ungated. Plugins that only
 # observe results do not stop the run.
 if [ -e "$D/dx-hooks.json" ] && ! grep -q '"toolCall":false' "$D/dx-hooks.json" && [ -z "$PYTHON" ]; then
-  echo "dx needs python3 in the workspace to check Claude Code's tools with the Thread's plugins." > "$D/stderr.log"
+  echo "dx needs python3 in the workspace to check Claude Code's tools with the Thread's plugins.\${PYTHON_ERROR:+ $PYTHON_ERROR}" > "$D/stderr.log"
   echo 1 > "$D/exit.tmp"
   mv "$D/exit.tmp" "$D/exit"
   exit 1
@@ -1396,7 +1437,8 @@ export class ClaudeCodeRun {
       .exec(
         `bash -c ${quote(`D=${quote(this.dir)}
 pid=$(cat "$D/pid" 2>/dev/null || true)
-if [ -z "$pid" ] || tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then echo live; exit 0; fi
+${PROCESS_COMMAND}
+if [ -z "$pid" ] || command_of "$pid" | grep -qF "$D/runner.sh"; then echo live; exit 0; fi
 if [ -f "$D/exit" ]; then echo live; exit 0; fi
 echo 137 > "$D/exit"
 echo lost`)}`,
@@ -1458,10 +1500,11 @@ echo lost`)}`,
     const result = await this.#sandbox
       .exec(
         `bash -c ${quote(`D=${quote(this.dir)}
+${PROCESS_COMMAND}
 if [ ! -f "$D/exit" ]; then
   : > "$D/stopped"
   pid=$(cat "$D/pid" 2>/dev/null || true)
-  if [ -n "$pid" ] && tr '\\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -qF "$D/runner.sh"; then
+  if [ -n "$pid" ] && command_of "$pid" | grep -qF "$D/runner.sh"; then
     kill -TERM -- "-$pid" 2>/dev/null || true
     sleep 1
     kill -KILL -- "-$pid" 2>/dev/null || true

@@ -40,6 +40,8 @@ interface SocketState {
   readonly os?: "macos" | "linux";
   readonly arch?: string;
   readonly sandbox?: string;
+  /** Prerequisites the machine lacks (git, python3), as its hello said. */
+  readonly missing?: readonly string[];
   /** The runner's public IP as Cloudflare saw it when it connected. */
   readonly ip?: string;
 }
@@ -78,6 +80,11 @@ export interface RunnerStatus {
   readonly os: string | null;
   readonly arch: string | null;
   readonly sandbox: string | null;
+  /**
+   * Prerequisites dx cannot fetch that the machine lacks (git, python3: on
+   * a Mac, Apple's Command Line Tools).
+   */
+  readonly missing: readonly string[];
   /** The runner's public IP, for telling a viewer on the same network. */
   readonly ip: string | null;
 }
@@ -222,6 +229,7 @@ export class RunnerSessionObject extends DurableObject<Bindings> {
       os: state?.os ?? null,
       arch: state?.arch ?? null,
       sandbox: state?.sandbox ?? null,
+      missing: state?.missing ?? [],
       ip: state?.ip ?? null,
     };
   }
@@ -461,6 +469,16 @@ export class RunnerSessionObject extends DurableObject<Bindings> {
       ...(version === undefined ? {} : { version }),
       ...(typeof frame.sandbox === "string"
         ? { sandbox: frame.sandbox.slice(0, 32) }
+        : {}),
+      ...(Array.isArray(frame.missing)
+        ? {
+            missing: frame.missing
+              .filter(
+                (tool): tool is string =>
+                  typeof tool === "string" && /^[a-z0-9-]{1,32}$/.test(tool),
+              )
+              .slice(0, 8),
+          }
         : {}),
     };
     socket.serializeAttachment(next);

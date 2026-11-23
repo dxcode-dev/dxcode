@@ -621,7 +621,31 @@ pub fn base_environment_for(
     {
         environment.insert("PATH".into(), path_with_first(&host, &path));
     }
+    // A runner's own tools (node, gh) come last, so the machine's own and
+    // any the Thread's environment names always win.
+    if let Some(tools) = runner_tools_path()
+        && let Some(path) = environment.get("PATH").cloned()
+    {
+        environment.insert("PATH".into(), path_with_last(&path, &tools));
+    }
     environment
+}
+
+/// A runner's folder of dx-managed tools (`DXD_TOOLS_PATH`).
+fn runner_tools_path() -> Option<String> {
+    std::env::var("DXD_TOOLS_PATH")
+        .ok()
+        .filter(|value| Path::new(value).is_absolute() && !value.contains(':'))
+}
+
+/// `path` with `last` moved to its end, each folder once.
+fn path_with_last(path: &str, last: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    path.split(':')
+        .filter(|d| !d.is_empty() && *d != last && seen.insert(*d))
+        .chain(std::iter::once(last))
+        .collect::<Vec<_>>()
+        .join(":")
 }
 
 pub fn install_git_config(state_directory: &Path, git: &GitConfiguration) -> io::Result<()> {
@@ -1020,8 +1044,12 @@ fn profile_hook(paths: &EnvironmentPaths) -> String {
         }
         _ => String::new(),
     };
+    // A runner's dx-managed tools fill the gaps, after everything else.
+    let dx_tools = runner_tools_path()
+        .map(|tools| format!("export PATH=\"$PATH\":{}\n", shell_quote(&tools)))
+        .unwrap_or_default();
     format!(
-        "{version}\n__dx_home={} __dx_user={} __dx_state={}\n{body}{own_tools}",
+        "{version}\n__dx_home={} __dx_user={} __dx_state={}\n{body}{own_tools}{dx_tools}",
         shell_quote(&paths.home.to_string_lossy()),
         shell_quote(&paths.user),
         shell_quote(&paths.state_directory.to_string_lossy()),

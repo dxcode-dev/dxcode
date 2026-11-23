@@ -1,10 +1,17 @@
-//! `setsid` and `flock` for runner hosts that lack them (macOS ships
-//! neither), and on macOS `nohup`. Core's guest scripts use all three:
-//! `flock -x <lock> node …` around source preparation and
-//! `nohup setsid bash …` for background commands. Apple's nohup also
-//! detaches from the console, which fails outside a Terminal session (a
-//! LaunchAgent), so the command never starts; this one only ignores SIGHUP,
-//! as GNU's does.
+//! Tools Core's guest scripts use that a runner host may lack, run by the
+//! dxd binary itself: `setsid` and `flock` (macOS ships neither), `timeout`
+//! (GNU coreutils; not on macOS), and on macOS `nohup`. Core's scripts use
+//! `flock -x <lock> node …` around source preparation, `nohup setsid bash …`
+//! for background commands, and `timeout 50 claude …` for Claude Code
+//! answers. Apple's nohup also detaches from the console, which fails
+//! outside a Terminal session (a LaunchAgent), so the command never starts;
+//! this one only ignores SIGHUP, as GNU's does.
+//!
+//! Git and python3 are never replaced: on a machine with no usable one
+//! (macOS without the Command Line Tools, whose `/usr/bin` stubs would open
+//! Apple's installer dialog, or a Linux without the package), `git` and
+//! `python3` here run the person's own if one appears later and otherwise
+//! say what to install, instead of a raw stub prompt or "command not found".
 //!
 //! The runner links `~/.dx/runner/bin/shims/<tool>` to the dxd binary only
 //! for a tool the host's PATH does not have, and puts that folder first on
@@ -16,7 +23,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const TOOLS: [&str; 2] = ["setsid", "flock"];
+const TOOLS: [&str; 3] = ["setsid", "flock", "timeout"];
 /// Linked even where the host has its own.
 const REPLACED: &[&str] = if cfg!(target_os = "macos") {
     &["nohup"]
@@ -34,6 +41,8 @@ pub fn dispatch() -> Option<i32> {
         "setsid" => Some(setsid(&rest)),
         "flock" => Some(flock(&rest)),
         "nohup" => Some(nohup(&rest)),
+        "timeout" => Some(timeout(&rest)),
+        "git" | "python3" => Some(prerequisite(&tool, &rest)),
         _ => None,
     }
 }
@@ -50,7 +59,19 @@ pub fn install(bin: &Path, path: &str) -> Option<PathBuf> {
                 .any(|d| !d.is_empty() && Path::new(d).join(tool).is_file())
         })
         .chain(REPLACED.iter().copied())
+        .chain(crate::runner::tools::missing_prerequisites(path))
         .collect();
+    // A link for a tool the host now has (installed since) goes, so the
+    // host's own runs again.
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let stale = !missing.iter().any(|tool| name == *tool);
+            if stale && std::fs::read_link(entry.path()).is_ok() {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     if missing.is_empty() || !exe.is_file() {
         return None;
     }
@@ -75,27 +96,250 @@ fn run(command: &[String]) -> i32 {
     }
 }
 
-/// `setsid <command> [args…]`: the command runs in a new session, detached
-/// from the caller, which returns at once (as util-linux does from a
-/// process-group leader).
+/// `setsid [-f] [-w] <command> [args…]`: the command runs in a new session.
+/// As util-linux's: a process-group leader (or `-f`) forks first and the
+/// caller returns at once (with `-w`, once the command exits, with its
+/// status); otherwise this process becomes the session and runs the command
+/// itself, so `setsid … &` leaves `$!` naming the command's process, which
+/// Core's Claude Code launch records and later signals.
 fn setsid(args: &[String]) -> i32 {
-    if args.is_empty() || args[0].starts_with('-') {
-        eprintln!("usage: setsid <command> [arguments…]");
+    let (mut fork, mut wait, mut i) = (false, false, 0);
+    while let Some(arg) = args.get(i) {
+        match arg.as_str() {
+            "-f" | "--fork" => fork = true,
+            "-w" | "--wait" => wait = true,
+            "-c" | "--ctty" => {}
+            "--" => {
+                i += 1;
+                break;
+            }
+            _ if arg.starts_with('-') => {
+                eprintln!("setsid: unsupported option {arg}");
+                return 1;
+            }
+            _ => break,
+        }
+        i += 1;
+    }
+    let command = &args[i.min(args.len())..];
+    if command.is_empty() {
+        eprintln!("usage: setsid [-f] [-w] <command> [arguments…]");
         return 1;
     }
-    // SAFETY: called before dxd starts any thread; the child only calls
-    // async-signal-safe setsid before exec.
-    let pid = unsafe { libc::fork() };
-    if pid < 0 {
-        return 1;
-    }
-    if pid > 0 {
-        return 0;
+    // SAFETY: plain libc calls; dxd has started no thread yet.
+    if fork || unsafe { libc::getpgrp() == libc::getpid() } {
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return 1;
+        }
+        if pid > 0 {
+            if !wait {
+                return 0;
+            }
+            let mut status = 0;
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+            return if libc::WIFEXITED(status) {
+                libc::WEXITSTATUS(status)
+            } else {
+                128 + libc::WTERMSIG(status)
+            };
+        }
     }
     unsafe {
         libc::setsid();
     }
-    run(args)
+    run(command)
+}
+
+/// A GNU duration: a number with an optional `s`, `m`, `h`, or `d`.
+fn duration(text: &str) -> Option<std::time::Duration> {
+    let (number, unit) = match text.char_indices().last()? {
+        (i, c) if c.is_ascii_alphabetic() => (&text[..i], c),
+        _ => (text, 's'),
+    };
+    let value: f64 = number
+        .parse()
+        .ok()
+        .filter(|v: &f64| v.is_finite() && *v >= 0.0)?;
+    let seconds = match unit {
+        's' => value,
+        'm' => value * 60.0,
+        'h' => value * 3600.0,
+        'd' => value * 86400.0,
+        _ => return None,
+    };
+    Some(std::time::Duration::from_secs_f64(seconds))
+}
+
+fn signal_number(name: &str) -> Option<i32> {
+    let name = name.trim_start_matches("SIG");
+    Some(match name {
+        "TERM" => libc::SIGTERM,
+        "KILL" => libc::SIGKILL,
+        "INT" => libc::SIGINT,
+        "HUP" => libc::SIGHUP,
+        "QUIT" => libc::SIGQUIT,
+        "USR1" => libc::SIGUSR1,
+        "USR2" => libc::SIGUSR2,
+        _ => name.parse().ok()?,
+    })
+}
+
+/// `timeout [-s SIG] [-k DURATION] [--preserve-status] [--foreground]
+/// DURATION <command> [args…]`, as GNU coreutils' (exit 124 on a timeout,
+/// 125 for its own errors, 126/127 when the command cannot run).
+fn timeout(args: &[String]) -> i32 {
+    let (mut signal, mut kill_after, mut preserve, mut i) = (libc::SIGTERM, None, false, 0);
+    let mut foreground = false;
+    while let Some(arg) = args.get(i) {
+        let (flag, inline) = match arg.split_once('=') {
+            Some((f, v)) if f.starts_with("--") => (f, Some(v.to_string())),
+            _ => (arg.as_str(), None),
+        };
+        let mut value = || {
+            inline.clone().or_else(|| {
+                i += 1;
+                args.get(i).cloned()
+            })
+        };
+        match flag {
+            "-s" | "--signal" => match value().as_deref().and_then(signal_number) {
+                Some(s) => signal = s,
+                None => {
+                    eprintln!("timeout: invalid signal");
+                    return 125;
+                }
+            },
+            "-k" | "--kill-after" => match value().as_deref().and_then(duration) {
+                Some(d) => kill_after = Some(d),
+                None => {
+                    eprintln!("timeout: invalid duration");
+                    return 125;
+                }
+            },
+            "--preserve-status" => preserve = true,
+            "--foreground" => foreground = true,
+            "-v" | "--verbose" => {}
+            "--" => {
+                i += 1;
+                break;
+            }
+            _ if arg.starts_with('-')
+                && arg.len() > 1
+                && !arg[1..].starts_with(|c: char| c.is_ascii_digit()) =>
+            {
+                eprintln!("timeout: unsupported option {arg}");
+                return 125;
+            }
+            _ => break,
+        }
+        i += 1;
+    }
+    let Some(limit) = args.get(i).and_then(|d| duration(d)) else {
+        eprintln!("usage: timeout [-s SIGNAL] [-k DURATION] DURATION <command> [arguments…]");
+        return 125;
+    };
+    let command = &args[i + 1..];
+    if command.is_empty() {
+        eprintln!("timeout: missing command");
+        return 125;
+    }
+    // SAFETY: dxd has started no thread yet; the child only execs.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        return 125;
+    }
+    if pid == 0 {
+        // As GNU's: the command leads its own process group, so the limit
+        // ends everything it started, not only the command itself.
+        if !foreground {
+            unsafe { libc::setpgid(0, 0) };
+        }
+        std::process::exit(run(command));
+    }
+    // Both sides set it, so a signal sent before the child runs still finds
+    // the group.
+    let target = if foreground {
+        pid
+    } else {
+        unsafe { libc::setpgid(pid, pid) };
+        -pid
+    };
+    // A signal that stops this process reaches the command's group too.
+    for forwarded in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] {
+        unsafe { libc::signal(forwarded, forward_signal as libc::sighandler_t) };
+    }
+    let started = std::time::Instant::now();
+    let mut status = 0;
+    let mut timed_out = false;
+    let mut killed_at: Option<std::time::Instant> = None;
+    loop {
+        let done = unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        if done == pid {
+            break;
+        }
+        if done < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return 125;
+        }
+        let received = RECEIVED.swap(0, std::sync::atomic::Ordering::SeqCst);
+        if received != 0 {
+            unsafe { libc::kill(target, received) };
+        }
+        if !timed_out && !limit.is_zero() && started.elapsed() >= limit {
+            timed_out = true;
+            unsafe { libc::kill(target, signal) };
+            killed_at = Some(std::time::Instant::now());
+        }
+        if let (Some(at), Some(after)) = (killed_at, kill_after)
+            && at.elapsed() >= after
+        {
+            unsafe { libc::kill(target, libc::SIGKILL) };
+            killed_at = None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let code = if libc::WIFEXITED(status) {
+        libc::WEXITSTATUS(status)
+    } else {
+        128 + libc::WTERMSIG(status)
+    };
+    if timed_out && !preserve {
+        if libc::WIFSIGNALED(status) && libc::WTERMSIG(status) == libc::SIGKILL {
+            137
+        } else {
+            124
+        }
+    } else {
+        code
+    }
+}
+
+/// The last SIGTERM, SIGINT, or SIGHUP the `timeout` shim received, for its
+/// loop to pass on to the command's group.
+static RECEIVED: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+extern "C" fn forward_signal(signal: libc::c_int) {
+    RECEIVED.store(signal, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// `git` or `python3` on a machine without a usable one when the runner
+/// started: the person's own if one is there now (the Command Line Tools
+/// finished installing), else what to install, with exit 127.
+fn prerequisite(tool: &str, args: &[String]) -> i32 {
+    use crate::runner::tools;
+    let me = std::env::current_exe().and_then(std::fs::canonicalize).ok();
+    let path = std::env::var("PATH").unwrap_or_default();
+    let shim = |p: &Path| std::fs::canonicalize(p).ok() == me;
+    if let Some(found) = tools::find_prerequisite(&path, tool, tools::command_line_tools(), &shim) {
+        let error = Command::new(&found).args(args).exec();
+        eprintln!("{tool}: {error}");
+        return 126;
+    }
+    eprintln!("dx runner: {}", tools::prerequisite_advice(tool));
+    127
 }
 
 /// `nohup <command> [args…]`: the command ignores SIGHUP; output bound for a

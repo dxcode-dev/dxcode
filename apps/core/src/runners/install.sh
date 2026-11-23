@@ -51,6 +51,35 @@ if [ -z "$name" ]; then
   name="$(hostname -s 2>/dev/null || hostname)"
 fi
 
+# Threads need git (and python3 for Claude Code mode). On a Mac both come
+# only with Apple's Command Line Tools, which only Apple's installer
+# provides: offer to start it (asked on the terminal, since `curl | sh`
+# takes the script on stdin; without a terminal, say what to run), and
+# pair anyway (dx fetches node, gh, and Claude Code itself when a Thread
+# needs them).
+if [ "$os" = darwin ]; then
+  if ! /usr/bin/xcode-select -p >/dev/null 2>&1; then
+    echo "dx runner: this Mac has no Command Line Tools (git, python3), which Threads need."
+    answer=""
+    if [ -t 1 ] && { : < /dev/tty; } 2>/dev/null; then
+      printf 'dx runner: open Apple'"'"'s installer for them now? [y/N] ' > /dev/tty
+      read -r answer < /dev/tty || answer=""
+    fi
+    case "$answer" in
+      y | Y | yes | YES)
+        /usr/bin/xcode-select --install >/dev/null 2>&1 || true
+        echo "dx runner: finish Apple's install dialog; Threads with a repository start once it is done." ;;
+      *)
+        echo "dx runner: install them later with: xcode-select --install" ;;
+    esac
+  fi
+else
+  for tool in git python3; do
+    command -v "$tool" >/dev/null 2>&1 ||
+      echo "dx runner: $tool is not installed; install it with your package manager (Threads need it)."
+  done
+fi
+
 asset="dxd-$os-$arch"
 root="$HOME/.dx/runner"
 bin="$root/bin"

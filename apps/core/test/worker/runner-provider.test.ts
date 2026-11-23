@@ -14,7 +14,7 @@ import type { AppEnv, Bindings } from "../../src/http/types.js";
 import { hiddenOrbProviders } from "../../src/plugins/execution/orb-provider-beta.js";
 import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-providers.js";
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
-import { runnerCall } from "../../src/runners/client.js";
+import { runnerCall, runnerStatus } from "../../src/runners/client.js";
 import {
   personalRunnerRoutes,
   runnerPublicRoutes,
@@ -110,14 +110,21 @@ interface FakeMachine {
   readonly folders: Map<string, Map<string, string>>;
   readonly ops: string[];
   readonly hello: Promise<Record<string, unknown>>;
+  /** Prerequisites the machine lacks (a Mac without the Command Line Tools). */
+  readonly missing: readonly string[];
   socket: WebSocket;
   token: string;
 }
 
+const NO_GIT =
+  "git comes with Apple's Command Line Tools, which this Mac does not have. Install them: run `xcode-select --install` on the Mac (or finish the dialog it opened), then try again.";
+
 const encode = (text: string) => btoa(text);
 const decode = (base64: string) => atob(base64);
 
-const pairAndConnect = async (): Promise<FakeMachine> => {
+const pairAndConnect = async (
+  missing: readonly string[] = [],
+): Promise<FakeMachine> => {
   const pairing = await request("/v1/settings/personal/runners/pairings", {
     method: "POST",
   });
@@ -148,10 +155,13 @@ const pairAndConnect = async (): Promise<FakeMachine> => {
   expect(machineId).toMatch(/^rnm_[0-9a-f]{24}$/);
   // A code pairs once.
   expect((await pair(data.code)).status).toBe(403);
-  return connect(token);
+  return connect(token, missing);
 };
 
-const connect = async (token: string): Promise<FakeMachine> => {
+const connect = async (
+  token: string,
+  missing: readonly string[] = [],
+): Promise<FakeMachine> => {
   const response = await request("/v1/runner/connect", {
     headers: { upgrade: "websocket", authorization: `Bearer ${token}` },
   });
@@ -161,7 +171,7 @@ const connect = async (token: string): Promise<FakeMachine> => {
   const machine: Partial<FakeMachine> & {
     folders: Map<string, Map<string, string>>;
     ops: string[];
-  } = { folders: new Map(), ops: [], token, socket };
+  } = { folders: new Map(), ops: [], token, socket, missing };
   let helloReceived: (frame: Record<string, unknown>) => void = () => {};
   machine.hello = new Promise((resolve) => {
     helloReceived = resolve;
@@ -182,6 +192,7 @@ const connect = async (token: string): Promise<FakeMachine> => {
       arch: "aarch64",
       sandbox: "seatbelt",
       threads: [],
+      missing,
     }),
   );
   return machine as FakeMachine;
@@ -202,6 +213,10 @@ const serve = async (
   });
   switch (op) {
     case "ensure": {
+      // As `dxd runner`: an activation on a machine without git says what
+      // to install.
+      if (body.existingOnly !== true && machine.missing.includes("git"))
+        return fail("prerequisites", NO_GIT);
       if (folder === undefined) {
         const restore = body.restore as { url: string } | undefined;
         if (restore !== undefined) {
@@ -356,6 +371,36 @@ describe("Runners", () => {
     expect(script).toContain('DX_ORIGIN="http://localhost"');
     expect(script).not.toContain("__DX_ORIGIN__");
     expect(script).toContain('"$bin/dxd" runner pair --server "$DX_ORIGIN"');
+  });
+
+  it("records what a machine lacks and refuses its activation with what to install", async () => {
+    const machine = await pairAndConnect(["git", "python3"]);
+    await machine.hello;
+    const machineId = (await listRunners()).runners[0]?.id as string;
+    expect(await runnerStatus(bindings, machineId)).toMatchObject({
+      online: true,
+      missing: ["git", "python3"],
+    });
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO threads (id, project_id, owner_user_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+      ).bind(threadId, project, person, timestamp, timestamp),
+      env.DB.prepare(
+        `UPDATE execution_workspace
+            SET provider = 'runner', runner_profile_id = 'rn.machine',
+                account_scope = 'deployment', provider_template = ?
+          WHERE thread_id = ?`,
+      ).bind(machineId, threadId),
+    ]);
+    // The code survives the session object and the provider, so activation
+    // shows it as runner_prerequisites_missing with the runner's words.
+    await expect(
+      runnerExecutionProvider.workspace.create(
+        contextFor(machineId),
+        { threadId: threadId as never },
+        {} as never,
+      ),
+    ).rejects.toThrow(`runner:prerequisites:${NO_GIT}`);
   });
 
   it("pairs a machine, sees it online, pins Threads to it, and runs, archives, and restores a Thread there", async () => {

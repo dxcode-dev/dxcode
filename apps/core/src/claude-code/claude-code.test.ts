@@ -242,6 +242,8 @@ const createGuest = async (
     readonly installerPage?: string;
     /** This program as the installed Claude Code instead of the fake. */
     readonly claudeProgram?: string;
+    /** More of the guest's environment (a runner's DX_RUNNER_TOOLS). */
+    readonly env?: Readonly<Record<string, string>>;
   } = {},
 ) => {
   const root = await mkdtemp(join(tmpdir(), "dx-claude-code-"));
@@ -293,7 +295,7 @@ exec /usr/bin/awk "$@"
   else if (options.claude !== false) await installClaude();
   const base = await local({
     cwd: join(home, "workspace/repo"),
-    env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
+    env: { HOME: home, PATH: `${bin}:/usr/bin:/bin`, ...options.env },
   }).createSandbox({ id: "guest" });
   const map = (value: string) => value.replaceAll(GUEST_HOME, home);
   const ops: GuestOp[] = [];
@@ -1062,6 +1064,36 @@ exec /bin/mkdir "$@"
       message: { content: [{ type: "text", text: "Installed." }] },
     });
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+
+  it("on a runner, names Claude Code for the runner to install once per machine and never installs a copy into the Thread", async () => {
+    const guest = await createGuest({
+      claude: false,
+      installerWorks: true,
+      env: {
+        DX_RUNNER: "1",
+        DX_RUNNER_TOOLS: "1",
+        DX_RUNNER_CLAUDE_ERROR:
+          "Claude Code could not be installed on this machine (log: ~/.dx/runner/tools/claude/install.log): curl: (6) Could not resolve host",
+      },
+    });
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    const failed = await claude.answer({ messages: [user("Say hello", 1)] });
+    expect(failed).toMatchObject({
+      type: "error",
+      error: {
+        errorMessage: expect.stringMatching(
+          /Claude Code could not be installed on this runner\. Claude Code could not be installed on this machine .*Could not resolve host/,
+        ),
+      },
+    });
+    // The launch asks the runner for it, and the installer never ran here.
+    expect(
+      guest.commands.some(({ command }) =>
+        command.includes("\n# dx-runner-needs: claude>=2.1.310\n"),
+      ),
+    ).toBe(true);
+    expect(guest.file(`${GUEST_HOME}/.local/bin/claude`)).toBeUndefined();
   });
 
   it("updates a Claude Code too old for dx before the turn, and the turn runs on the new one", async () => {

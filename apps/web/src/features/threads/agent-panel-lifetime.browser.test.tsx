@@ -57,6 +57,19 @@ vi.mock("./thread-transcript.js", async (importOriginal) => ({
  * Uploads are a network effect; these tests control when one finishes.
  * `uploads.hold` keeps new uploads in flight until `uploads.release()`.
  */
+// A deployment's registered turn stop (turn-stop-registration.ts), as a
+// fixture: public dx registers none, so the card's copy is the fixture's.
+vi.mock("./turn-stop-registration.js", () => ({
+  registeredTurnStop: (text: string) =>
+    /\(dx_failure:[a-z]+:FIXTURE_BALANCE_EMPTY\)/.test(text)
+      ? {
+          title: "Out of fixture balance",
+          message: "This turn stopped because the fixture balance ran out.",
+          link: { actionLabel: "Add balance", actionHref: "/settings/billing" },
+        }
+      : undefined,
+}));
+
 const uploads = vi.hoisted(() => ({
   hold: false,
   cancelled: 0,
@@ -1098,32 +1111,23 @@ describe("thread composer ownership", () => {
 
   it.each([
     {
-      code: "DX_MODEL_BALANCE_EMPTY",
-      reason:
-        "Your dx model balance is used up. Add credit in Settings → Billing, or pick a model on your own key.",
-      title: "You're out of dx credit",
-      body: "your dx model balance is used up",
-      link: "Redeem a code",
+      // A stop the deployment's billing registered.
+      code: "FIXTURE_BALANCE_EMPTY",
+      reason: "The fixture balance ran out.",
+      title: "Out of fixture balance",
+      body: "This turn stopped because the fixture balance ran out.",
+      link: "Add balance",
     },
     {
-      code: "DX_MODEL_BALANCE_LOW",
-      reason:
-        "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39.",
-      title: "Not enough dx credit for this model",
-      body: "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39. Redeem a code, or pick a cheaper model below and retry.",
-      link: "Redeem a code",
-    },
-    {
-      // As #2313's preview delivered it: the error's type before the
+      // As #2313's preview delivered a stop: the error's type before the
       // message, with no "failed:" prefix, which the card must not show.
-      code: "DX_MODEL_BALANCE_LOW",
+      code: "FIXTURE_BALANCE_EMPTY",
       type: "model_routing_failure",
       prefix: "",
-      reason:
-        "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39.",
-      title: "Not enough dx credit for this model",
-      body: "dx Flash needs at least $5.00 in your model balance to start a turn. You have $1.39. Redeem a code, or pick a cheaper model below and retry.",
-      link: "Redeem a code",
+      reason: "The fixture balance ran out.",
+      title: "Out of fixture balance",
+      body: "This turn stopped because the fixture balance ran out.",
+      link: "Add balance",
     },
     {
       code: "DX_MODEL_UNAVAILABLE",

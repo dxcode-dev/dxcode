@@ -534,6 +534,18 @@ const asOrbStartRunError = (cause: unknown): never => {
       dev: "",
       meta: { code: "RUNNER_REMOVED" },
     });
+  // A runner Thread's machine lacks git (on a Mac, Apple's Command Line
+  // Tools, which only Apple's installer provides): the runner's message says
+  // what to install.
+  const prerequisite = message.match(/runner:prerequisites:([^\n]*)/);
+  if (prerequisite !== null)
+    throw new FlueError({
+      type: "runner_prerequisites_missing",
+      message: "This Thread's runner is missing a prerequisite.",
+      details: prerequisite[1].trim(),
+      dev: "",
+      meta: { code: "RUNNER_PREREQUISITES_MISSING" },
+    });
   if (message.includes("runner:offline:"))
     throw new FlueError({
       type: "runner_offline",
