@@ -254,3 +254,95 @@ export function ChoiceSelectSearch({
     </label>
   );
 }
+
+/** One choice of a `ChoiceSelect`. */
+export interface ChoiceOption {
+  readonly value: string;
+  readonly label: string;
+  /** A mark before the label, such as a provider's, in the list and the field. */
+  readonly icon?: React.ReactNode;
+  /** A quieter line under the label, in the list only. */
+  readonly detail?: React.ReactNode;
+}
+
+/**
+ * A choice list with one look everywhere: the field's chevron, the menu's
+ * rows, and a check on the chosen one. Use it beside pickers and searchable
+ * fields so every dropdown in a form reads the same; give it `options`, or
+ * compose the parts above for anything else.
+ */
+export function ChoiceSelect({
+  id,
+  options,
+  value,
+  onValueChange,
+  size = "md",
+  disabled,
+  placeholder,
+  className,
+  "aria-label": ariaLabel,
+}: {
+  readonly id?: string;
+  readonly options: ReadonlyArray<ChoiceOption>;
+  readonly value: string;
+  readonly onValueChange: (value: string) => void;
+  readonly size?: "sm" | "md" | "lg";
+  readonly disabled?: boolean;
+  /** Shown when `value` names no option. */
+  readonly placeholder?: string;
+  readonly className?: string;
+  readonly "aria-label"?: string;
+}) {
+  const current = options.find((option) => option.value === value);
+  return (
+    <ChoiceSelectRoot
+      value={value}
+      items={options.map(({ value: item, label }) => ({ value: item, label }))}
+      onValueChange={(next) => {
+        if (typeof next === "string") onValueChange(next);
+      }}
+      {...(disabled === undefined ? {} : { disabled })}
+    >
+      <ChoiceSelectTrigger
+        id={id}
+        size={size}
+        className={cn("dx-choice-trigger", className)}
+        {...(ariaLabel === undefined ? {} : { "aria-label": ariaLabel })}
+      >
+        {current?.icon === undefined ? null : (
+          <span className="dx-choice-icon" aria-hidden="true">
+            {current.icon}
+          </span>
+        )}
+        <span data-placeholder={current === undefined ? "" : undefined}>
+          {current?.label ?? placeholder ?? ""}
+        </span>
+      </ChoiceSelectTrigger>
+      <ChoiceSelectPopup width="anchor">
+        <ChoiceSelectList>
+          {options.map((option) => (
+            <ChoiceSelectItem
+              key={option.value}
+              value={option.value}
+              label={option.label}
+            >
+              {option.icon === undefined && option.detail === undefined ? (
+                <ChoiceSelectItemText className="dx-picker-item-label">
+                  {option.label}
+                </ChoiceSelectItemText>
+              ) : (
+                <ChoiceSelectItemDetail
+                  title={option.label}
+                  {...(option.detail === undefined
+                    ? {}
+                    : { detail: option.detail })}
+                  {...(option.icon === undefined ? {} : { icon: option.icon })}
+                />
+              )}
+            </ChoiceSelectItem>
+          ))}
+        </ChoiceSelectList>
+      </ChoiceSelectPopup>
+    </ChoiceSelectRoot>
+  );
+}

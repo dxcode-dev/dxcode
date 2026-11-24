@@ -20,7 +20,10 @@ export interface HeaderRow {
 export function HeaderRows({
   rows,
   onRows,
+  size = "sm",
 }: {
+  /** Its inputs' height, to match the form around it. */
+  readonly size?: "sm" | "md";
   readonly rows: ReadonlyArray<HeaderRow>;
   readonly onRows: (
     update: (current: ReadonlyArray<HeaderRow>) => ReadonlyArray<HeaderRow>,
@@ -35,14 +38,14 @@ export function HeaderRows({
       {rows.map((row, index) => (
         <div key={row.key} className="header-rows-row">
           <Input
-            size="sm"
+            size={size}
             aria-label={`Header Name ${index + 1}`}
             placeholder="x-custom-header"
             value={row.name}
             onChange={(event) => edit(row.key, { name: event.target.value })}
           />
           <Input
-            size="sm"
+            size={size}
             aria-label={`Header Value ${index + 1}`}
             type="password"
             autoComplete="new-password"
@@ -52,7 +55,7 @@ export function HeaderRows({
           />
           <Button
             type="button"
-            size="icon-sm"
+            size={size === "md" ? "icon" : "icon-sm"}
             variant="ghost"
             aria-label={`Remove header ${index + 1}`}
             onClick={() =>
@@ -68,7 +71,7 @@ export function HeaderRows({
       <div>
         <Button
           type="button"
-          size="xs"
+          size={size === "md" ? "sm" : "xs"}
           variant="outline"
           onClick={() =>
             onRows((current) => [

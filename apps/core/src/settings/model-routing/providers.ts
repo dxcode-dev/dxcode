@@ -337,6 +337,7 @@ const PROVIDER_FIELD_PATTERNS: Readonly<Record<string, RegExp>> = {
   region: /^[A-Za-z0-9-]{1,63}$/,
   accountId: /^[A-Za-z0-9_-]{1,128}$/,
   gatewayId: /^[A-Za-z0-9_-]{1,128}$/,
+  accessKeyId: /^[A-Z0-9]{16,128}$/,
 };
 
 export const providerFieldValueValid = (key: string, value: string): boolean =>

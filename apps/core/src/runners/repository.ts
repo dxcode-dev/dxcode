@@ -30,12 +30,16 @@ const randomHex = (bytes: number) =>
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 
-/** `BCDF-GHJK`: 20 consonants, eight places, as RFC 8628 suggests. */
+/**
+ * `BCDF-GHJK`: 20 consonants, eight places, as RFC 8628 suggests. Bytes of
+ * 240 and up are drawn again, so every letter is equally likely.
+ */
 export const newPairingCode = () => {
-  const values = crypto.getRandomValues(new Uint8Array(8));
-  const letters = [...values].map(
-    (value) => PAIRING_CODE_LETTERS[value % PAIRING_CODE_LETTERS.length],
-  );
+  const letters: string[] = [];
+  while (letters.length < 8)
+    for (const value of crypto.getRandomValues(new Uint8Array(8)))
+      if (value < 240 && letters.length < 8)
+        letters.push(PAIRING_CODE_LETTERS[value % 20] ?? "");
   return `${letters.slice(0, 4).join("")}-${letters.slice(4).join("")}`;
 };
 

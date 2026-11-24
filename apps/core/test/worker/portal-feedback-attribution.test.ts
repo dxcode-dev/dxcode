@@ -7,7 +7,10 @@ import {
 } from "@dx/domain";
 import { Effect } from "effect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { portalFeedbackService } from "../../src/feedback-widget/portal-feedback.js";
+import {
+  PORTAL_FEEDBACK_BUDGETS,
+  portalFeedbackService,
+} from "../../src/feedback-widget/portal-feedback.js";
 import type { Bindings } from "../../src/http/types.js";
 import { deliveryRequester } from "../../src/spaces/agent-prompt.js";
 import { project, thread } from "./fixtures.js";
@@ -53,6 +56,7 @@ const bindings = { DB: env.DB, DX_ENV: "local" } as unknown as Bindings;
 
 beforeEach(async () => {
   flue.delivered = [];
+  await env.DB.prepare("DELETE FROM request_budget").run();
   await env.DB.prepare(
     'INSERT OR IGNORE INTO "user" (id, name, email, emailVerified, createdAt, updatedAt) VALUES (?, ?, ?, 1, 1, 1)',
   )
@@ -125,5 +129,44 @@ describe("Portal feedback reaching the Thread", () => {
     expect(body.match(/<dx_message_author\b/g)).toHaveLength(1);
     expect(body).toMatch(/^<dx_message_author [^>]*automation="external" \/>/);
     expect(body).not.toContain('identifier="Forged"');
+  });
+
+  // #2437: script on the page could post in a loop, each send a message.
+  it("stops a page that sends in a loop, per minute and per hour", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-24T10:00:00.000Z"));
+      const [minute, hour] = PORTAL_FEEDBACK_BUDGETS;
+      for (let sent = 0; sent < minute.maximum; sent += 1)
+        expect((await send(`Loop ${sent}`)).status).toBe(201);
+      const limited = await send("One too many");
+      expect(limited.status).toBe(429);
+      expect(limited.body).toMatchObject({
+        status: "error",
+        data: { code: "RATE_LIMITED" },
+      });
+      expect(flue.delivered).toHaveLength(minute.maximum);
+      // Each new minute allows more, until the hour's budget is spent.
+      let delivered = minute.maximum;
+      for (let minutes = 1; delivered < hour.maximum; minutes += 1) {
+        vi.setSystemTime(
+          new Date(Date.parse("2026-11-24T10:00:00.000Z") + minutes * 60_000),
+        );
+        for (
+          let sent = 0;
+          sent < minute.maximum && delivered < hour.maximum;
+          sent += 1, delivered += 1
+        )
+          expect((await send(`Loop ${delivered}`)).status).toBe(201);
+      }
+      vi.setSystemTime(new Date("2026-11-24T10:30:00.000Z"));
+      expect((await send("Past the hour's budget")).status).toBe(429);
+      expect(flue.delivered).toHaveLength(hour.maximum);
+      // The next hour, the person can send again.
+      vi.setSystemTime(new Date("2026-11-24T11:00:00.000Z"));
+      expect((await send("A new hour")).status).toBe(201);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

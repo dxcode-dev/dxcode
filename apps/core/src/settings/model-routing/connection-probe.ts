@@ -18,7 +18,17 @@ export interface ProbeEndpoint {
 export interface ProbeHealth {
   readonly state: "healthy" | "unhealthy";
   readonly code: string;
+  /** The provider's own reason, with account names and key ids removed. */
+  readonly detail?: string;
 }
+
+/** A provider error's text an admin may read: no ARNs, key ids, or tokens. */
+const safeDetail = (message: string) =>
+  message
+    .replace(/arn:aws[^\s"']*/g, "<arn>")
+    .replace(/\b(AKIA|ASIA)[A-Z0-9]{12,}\b/g, "<key id>")
+    .replace(/\b\d{12}\b/g, "<account>")
+    .slice(0, 200);
 
 /** Headers a connection's own headers may not set: dx owns auth and framing. */
 const RESERVED_HEADER_NAMES = new Set([
@@ -186,6 +196,8 @@ export const probeBedrock = async (
     readonly name: string;
     readonly value: string;
   }> = [],
+  /** An IAM access key ID: `apiKey` is then its secret, and the call is signed. */
+  accessKeyId?: string,
 ): Promise<ProbeHealth> => {
   try {
     const { streamSimple } = await import(
@@ -199,8 +211,14 @@ export const probeBedrock = async (
         tools: [],
       } as never,
       {
-        apiKey,
-        bearerToken: apiKey,
+        ...(accessKeyId === undefined
+          ? { apiKey, bearerToken: apiKey }
+          : {
+              env: {
+                AWS_ACCESS_KEY_ID: accessKeyId,
+                AWS_SECRET_ACCESS_KEY: apiKey,
+              },
+            }),
         maxTokens: 1,
         headers: customHeaders(headers),
       } as never,
@@ -208,11 +226,30 @@ export const probeBedrock = async (
     for await (const event of events) {
       if (event.type === "done") return { state: "healthy", code: "CONNECTED" };
       if (event.type === "error")
-        return { state: "unhealthy", code: "AUTH_REJECTED" };
+        return {
+          state: "unhealthy",
+          // AWS knew the key but its policy denies the model: the key is
+          // fine, its permissions aren't.
+          // A malformed Bedrock API key is also "AccessDenied", but the key
+          // is what's wrong.
+          code:
+            /AccessDenied|not authorized/i.test(
+              event.error.errorMessage ?? "",
+            ) && !/Invalid API Key/i.test(event.error.errorMessage ?? "")
+              ? "MODEL_ACCESS_DENIED"
+              : "AUTH_REJECTED",
+          detail: safeDetail(event.error.errorMessage ?? ""),
+        };
     }
     return { state: "unhealthy", code: "ENDPOINT_UNRESOLVED" };
-  } catch {
-    return { state: "unhealthy", code: "NETWORK_ERROR" };
+  } catch (error) {
+    return {
+      state: "unhealthy",
+      code: "NETWORK_ERROR",
+      detail: safeDetail(
+        error instanceof Error ? error.message : String(error),
+      ),
+    };
   }
 };
 

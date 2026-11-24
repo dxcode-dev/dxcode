@@ -144,6 +144,62 @@ export const dxUpstreamModel = (
     : undefined;
 };
 
+/** One upstream a dx call can go to, with what the coordinator needs to reach it. */
+export interface DxCallRoute {
+  readonly upstreamId: string;
+  readonly upstreamModel: string;
+  readonly api: string;
+  readonly baseUrl: string;
+  /** The Settings provider it connects as, for its adapter and auth. */
+  readonly providerId?: string;
+  readonly fields: Readonly<Record<string, string>>;
+  readonly headers: ReadonlyArray<{
+    readonly name: string;
+    readonly value: string;
+  }>;
+}
+
+/**
+ * Where a call on `dx/<alias>` pinned to `connection` may go, in order: the
+ * connection's own upstream first while it still serves the alias, then the
+ * alias's other serving upstreams by priority. Only routes that speak `api`,
+ * since the agent has already written the request in that format. Empty
+ * once no upstream serves the alias.
+ */
+export const dxCallRoutes = (
+  connection: StoredModelConnection,
+  alias: string,
+  api: string,
+): ReadonlyArray<DxCallRoute> => {
+  const model = findDxModel(alias);
+  if (model === undefined || !isDxConnection(connection)) return [];
+  const pinned = dxConnectionUpstreamId(connection);
+  const routes = [model, ...(model.fallbacks ?? [])];
+  return [
+    ...routes.filter(({ upstreamId }) => upstreamId === pinned),
+    ...routes.filter(({ upstreamId }) => upstreamId !== pinned),
+  ].flatMap((route) => {
+    const upstream = current.upstreams.find(
+      ({ id }) => id === route.upstreamId,
+    );
+    return upstream === undefined || route.api !== api
+      ? []
+      : [
+          {
+            upstreamId: route.upstreamId,
+            upstreamModel: route.upstreamModel,
+            api: route.api,
+            baseUrl: route.baseUrl,
+            ...(route.upstream.providerId === undefined
+              ? {}
+              : { providerId: route.upstream.providerId }),
+            fields: upstream.fields ?? {},
+            headers: upstream.headers ?? [],
+          },
+        ];
+  });
+};
+
 /** One "dx" connection per enabled upstream serving a model. */
 export const dxConnections = (
   models: DeploymentModels,
@@ -214,14 +270,17 @@ const upstreamWords = (served: DxUpstream): ReadonlyArray<string> =>
     .filter((word) => word.length >= 3)
     .toSorted((left, right) => right.length - left.length);
 
-/** Removes the upstream's name from text a person may see. */
+/** Removes every upstream's name from text a person may see on a dx connection. */
 export const scrubUpstreamText = (
   connection: StoredModelConnection,
   text: string,
 ): string => {
-  const served = dxConnectionUpstream(connection);
-  if (served === undefined) return text;
-  return upstreamWords(served).reduce(
+  if (!isDxConnection(connection)) return text;
+  // Every upstream's words: a call may have gone to a fallback.
+  const words = [...new Set(current.upstreams.flatMap(upstreamWords))].toSorted(
+    (left, right) => right.length - left.length,
+  );
+  return words.reduce(
     (scrubbed, word) => scrubbed.split(word).join(DX_PROVIDER_ID),
     text,
   );

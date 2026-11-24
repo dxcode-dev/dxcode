@@ -14,11 +14,8 @@ import type {
 /** The provider people see every installation model under. */
 export const DX_PROVIDER_ID = "dx" as const;
 
-/** One model an upstream serves under a dx alias. */
-export interface DxModel {
-  /** The dx alias; the canonical id is `dx/<alias>`. */
-  readonly id: string;
-  readonly name: string;
+/** Where one upstream serves a dx alias. */
+export interface DxModelRoute {
   /** The enabled upstream serving it, and that upstream's preset. */
   readonly upstreamId: string;
   readonly upstream: DeploymentUpstream;
@@ -27,6 +24,19 @@ export interface DxModel {
   /** The wire API and endpoint the upstream serves this model at. */
   readonly api: DeploymentUpstream["api"];
   readonly baseUrl: string;
+}
+
+/** One model an upstream serves under a dx alias. */
+export interface DxModel extends DxModelRoute {
+  /** The dx alias; the canonical id is `dx/<alias>`. */
+  readonly id: string;
+  readonly name: string;
+  /**
+   * The alias's other serving upstreams, in priority order. A call the
+   * serving upstream fails before answering (unreachable, rate-limited,
+   * refused its key, a 5xx) goes to the next one with the same wire API.
+   */
+  readonly fallbacks?: ReadonlyArray<DxModelRoute>;
   /** USD per 1M tokens charged to the person. */
   readonly price: {
     readonly input: number;

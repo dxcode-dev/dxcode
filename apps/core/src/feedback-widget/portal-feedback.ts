@@ -10,6 +10,7 @@ import {
   type PortalFeedbackSend,
   type PortalFeedbackService,
 } from "../portals/feedback.js";
+import { takeRequestBudget } from "../security/request-budget.js";
 import { ownerRequest } from "../threads/owner-request.js";
 import { portalWidgetSource } from "./pages.js";
 import { sha256Hex } from "./store.js";
@@ -22,6 +23,15 @@ import { portalFeedbackPrompt } from "./thread-prompt.js";
  * so it is admitted with the same access checks. The message is marked as
  * from outside dx: any script on the page can send it.
  */
+
+/**
+ * Sends one person may make to one Thread from its Portal (#2437). Any script
+ * on the page can post, and each send is a message of up to 128 KiB.
+ */
+export const PORTAL_FEEDBACK_BUDGETS = [
+  { maximum: 10, windowMs: 60_000 },
+  { maximum: 60, windowMs: 60 * 60_000 },
+] as const;
 
 const failure = (
   status: number,
@@ -63,6 +73,32 @@ export const portalFeedbackService = (
           "FEEDBACK_WIDGET_ORIGIN_NOT_ALLOWED",
           "Every comment must be on a page of this Portal.",
         );
+      const db = bindings.DB;
+      if (db === undefined)
+        return failure(
+          503,
+          "UNAVAILABLE",
+          "Feedback is unavailable right now.",
+        );
+      for (const budget of PORTAL_FEEDBACK_BUDGETS)
+        if (
+          !(await takeRequestBudget(
+            db,
+            `portal-feedback:${budget.windowMs}:${input.userId}:${input.threadId}`,
+            budget,
+          ))
+        ) {
+          feedbackWidgetLogger.warn("Portal feedback was rate limited.", {
+            event: "portal_feedback_rate_limited",
+            threadId: input.threadId,
+            userId: input.userId,
+          });
+          return failure(
+            429,
+            "RATE_LIMITED",
+            "Too many comments were sent to this Thread. Try again later.",
+          );
+        }
       const { response, payload } = await ownerRequest(
         {
           bindings,

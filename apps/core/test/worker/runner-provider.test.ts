@@ -16,6 +16,8 @@ import { resolveThreadExecutionPin } from "../../src/plugins/execution/orb-provi
 import type { ExecutionContext } from "../../src/plugins/execution/provider.js";
 import { runnerCall, runnerStatus } from "../../src/runners/client.js";
 import {
+  PAIR_GUESSES_OVERALL,
+  PAIR_GUESSES_PER_ADDRESS,
   personalRunnerRoutes,
   runnerPublicRoutes,
 } from "../../src/runners/routes.js";
@@ -348,6 +350,7 @@ beforeEach(async () => {
   ]);
   await setRunnersFlag(person, true);
   await setRunnersFlag(stranger, true);
+  await env.DB.prepare("DELETE FROM request_budget").run();
 });
 
 describe("Runners", () => {
@@ -564,5 +567,53 @@ describe("Runners", () => {
     await expect(
       runnerCall(bindings, machineId, "stat", threadId, { path: "/home/user" }),
     ).rejects.toThrow(/^runner:removed:/);
+  });
+
+  // #2436: a code is 8 letters, so unlimited guessing finds live codes.
+  it("stops pairing guesses from one address, then from everyone", async () => {
+    const pairing = await request("/v1/settings/personal/runners/pairings", {
+      method: "POST",
+    });
+    const { code } = (
+      (await pairing.json()) as { readonly data: { code: string } }
+    ).data;
+    expect(code).toMatch(
+      /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/,
+    );
+    const wrong = code === "BBBB-BBBB" ? "CCCC-CCCC" : "BBBB-BBBB";
+    const pair = (guess: string, address: string) =>
+      request("/v1/runner/pair", {
+        method: "POST",
+        headers: { "cf-connecting-ip": address },
+        body: JSON.stringify({
+          code: guess,
+          name: "guesser",
+          os: "linux",
+          arch: "x86_64",
+        }),
+      });
+    for (let guess = 0; guess < PAIR_GUESSES_PER_ADDRESS; guess += 1)
+      expect((await pair(wrong, "198.51.100.7")).status).toBe(403);
+    // Out of guesses, even the right code is refused, and the code stays live.
+    const limited = await pair(code, "198.51.100.7");
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("retry-after")).toBe("900");
+    expect(
+      ((await limited.json()) as { data: { code: string } }).data.code,
+    ).toBe("RATE_LIMITED");
+    // Spread over many addresses, the guesses run out for everyone.
+    for (
+      let guess = PAIR_GUESSES_PER_ADDRESS;
+      guess < PAIR_GUESSES_OVERALL;
+      guess += 1
+    )
+      expect(
+        (await pair(wrong, `10.0.${Math.floor(guess / 256)}.${guess % 256}`))
+          .status,
+      ).toBe(403);
+    expect((await pair(code, "192.0.2.1")).status).toBe(429);
+    // A new window: the person on their own address pairs with the code.
+    await env.DB.prepare("DELETE FROM request_budget").run();
+    expect((await pair(code, "192.0.2.1")).status).toBe(201);
   });
 });

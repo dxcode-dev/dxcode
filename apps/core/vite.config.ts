@@ -107,6 +107,33 @@ const prebundleWorkerRuntime = {
   },
 } satisfies Plugin;
 
+/**
+ * The AWS SDK clients pick their Worker-safe runtime config through the
+ * package.json `browser` field (`./dist-es/runtimeConfig` →
+ * `runtimeConfig.browser`), which the Worker build doesn't apply, while
+ * `@aws-sdk/core` resolves its `browser` export. The mix left the Bedrock
+ * client calling `emitWarningIfUnsupportedVersion`, which the browser build
+ * of `@aws-sdk/core` exports as a symbol, so every Bedrock call failed with
+ * "emitWarningIfUnsupportedVersion$1 is not a function". This applies the
+ * field: the browser config sends with `fetch` and WebCrypto.
+ */
+const awsSdkBrowserRuntimeConfig = {
+  name: "dx-aws-sdk-browser-runtime-config",
+  enforce: "pre",
+  async resolveId(source, importer, options) {
+    if (
+      importer === undefined ||
+      !/(^|\/)runtimeConfig$/.test(source) ||
+      !/[\\/]@aws-sdk[\\/]client-[^\\/]+[\\/]dist-es[\\/]/.test(importer)
+    )
+      return null;
+    return this.resolve(`${source}.browser`, importer, {
+      ...options,
+      skipSelf: true,
+    });
+  },
+} satisfies Plugin;
+
 const fluePlugin = flue({ canonicalFlushDelayMs: 750 });
 const configureFlueWorker = flueWorkerConfig();
 
@@ -160,6 +187,7 @@ export default defineConfig(({ mode }) => ({
     },
   },
   plugins: [
+    awsSdkBrowserRuntimeConfig,
     publicBoundaryHygiene(mode === "dx-production"),
     fluePlugin,
     cloudflare({

@@ -102,6 +102,30 @@ for (const adapter of [
     );
 }
 
+// The AWS SDK must take its Worker runtime config (fetch, WebCrypto): its
+// Node one calls a function the browser build of @aws-sdk/core doesn't
+// have, and every Bedrock call failed (awsSdkBrowserRuntimeConfig in
+// vite.config.ts).
+const { readdir } = await import("node:fs/promises");
+const bedrock = (await readdir(resolve("dist/dx_core/assets"))).find((name) =>
+  name.startsWith("bedrock-converse-stream-"),
+);
+if (bedrock === undefined)
+  throw new Error("The build has no Bedrock adapter chunk.");
+const bedrockChunk = await readFile(
+  resolve("dist/dx_core/assets", bedrock),
+  "utf8",
+);
+if (
+  !bedrockChunk.includes(
+    "client-bedrock-runtime/dist-es/runtimeConfig.browser.js",
+  ) ||
+  /emitWarningIfUnsupportedVersion\$?\d*\(process\.version\)/.test(bedrockChunk)
+)
+  throw new Error(
+    "The Bedrock client must use its Worker runtime config (runtimeConfig.browser).",
+  );
+
 console.log(
   "Cloudflare build contains exactly the canonical app Durable Object bindings and migrations plus Flue's generated binding, Workers AI, and D1.",
 );

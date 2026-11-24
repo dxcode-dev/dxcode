@@ -72,9 +72,8 @@ import {
 import { dxModelCallReserveMicros } from "../model-routing/deployment-model-source.js";
 import {
   DX_PROVIDER_ID,
+  dxCallRoutes,
   dxConnectionUpstream,
-  dxConnectionUpstreamId,
-  dxUpstreamModel,
   findDxModel,
   isDxConnection,
   loadDeploymentModels,
@@ -281,6 +280,58 @@ const DX_MODEL_UNAVAILABLE = runFailure(
   "DX_MODEL_UNAVAILABLE",
   "This dx model is unavailable right now. Try again later, or pick another model.",
 );
+
+/**
+ * Answers after which a dx call tries the alias's next upstream: the
+ * upstream couldn't serve it (rate limit, its own outage, the installation's
+ * key or quota), not that the request was wrong.
+ */
+const dxFailoverStatus = (status: number) =>
+  status === 401 ||
+  status === 402 ||
+  status === 403 ||
+  status === 404 ||
+  status === 408 ||
+  status === 429 ||
+  status >= 500;
+
+/**
+ * A dx call's error as the person sees it: the installation's key, quota or
+ * permissions become dx's own unavailability (an AWS denial names the
+ * account and user); anything else loses every upstream's words.
+ */
+const dxErrorText = (connection: StoredModelConnection, message: string) =>
+  classifyRunFailure({ message }).class === "account" ||
+  /AccessDenied|not authorized|arn:aws/i.test(message)
+    ? DX_MODEL_UNAVAILABLE.message
+    : scrubUpstreamText(connection, message);
+
+/**
+ * How a dx upstream's key authenticates an in-coordinator adapter. A
+ * Bedrock upstream with an access key ID signs with that IAM key (its
+ * secret is the stored key); otherwise the key is a bearer API key.
+ */
+const dxAdapterAuth = (
+  route: {
+    readonly api: string;
+    readonly fields: Readonly<Record<string, string>>;
+  },
+  key: string,
+) =>
+  route.api === "bedrock-converse-stream" && route.fields.accessKeyId
+    ? {
+        apiKey: undefined,
+        bearerToken: undefined,
+        env: {
+          AWS_ACCESS_KEY_ID: route.fields.accessKeyId,
+          AWS_SECRET_ACCESS_KEY: key,
+          ...(route.fields.region ? { AWS_REGION: route.fields.region } : {}),
+        },
+      }
+    : {
+        apiKey: key,
+        bearerToken: route.api === "bedrock-converse-stream" ? key : undefined,
+      };
 
 /**
  * A person never sees a dx model's upstream: its key, quota and billing
@@ -876,7 +927,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   async #refuseStoppedDxRoute(pin: PinnedSubmission) {
     if (!isDxConnection(pin.connection)) return undefined;
     await loadDeploymentModels(this.#db());
-    if (dxUpstreamModel(pin.connection, pin.model.id) === undefined)
+    // Served while any upstream speaking the pinned format still serves the
+    // alias: the pinned one, or one it fails over to.
+    if (dxCallRoutes(pin.connection, pin.model.id, pin.model.api).length === 0)
       throw new CoordinatorFailure(DX_MODEL_UNAVAILABLE);
     return this.#refuseUnpaidDxModel(pin, true);
   }
@@ -1018,10 +1071,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     return this.#keyring;
   }
 
-  /** A dx connection's upstream key, decrypted from the deployment's store. */
-  async #dxUpstreamKey(connection: StoredModelConnection) {
-    const upstreamId = dxConnectionUpstreamId(connection);
-    if (upstreamId === undefined) return undefined;
+  /** One upstream's key for a call on a dx connection. */
+  async #dxKeyFor(connection: StoredModelConnection, upstreamId: string) {
     return registeredDeploymentModelSource
       .upstreamKey(this.#db(), this.env, upstreamId)
       .catch((error: unknown) => {
@@ -1407,27 +1458,18 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     if (connection.kind === "deployment" && !dx) {
       return jsonResponse({ code: "DEPLOYMENT_VIA_BINDING" }, 400);
     }
+    if (dx) return this.#proxyDx(pin, envelope, request, signal);
 
-    // A dx model's key is the installation's Worker secret, never stored.
-    const apiKey = dx
-      ? await this.#dxUpstreamKey(connection)
-      : await decryptConnectionCredential(
-          await this.#loadKeyring(),
-          pin.credential,
-        ).catch((error: unknown) => {
-          settingsPersistenceLogger.warn("BYOK credential decrypt failed.", {
-            event: "byok_credential_decrypt_failed",
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return undefined;
-        });
-    if (apiKey === undefined && dx) {
-      settingsPersistenceLogger.warn("dx model upstream key unavailable.", {
-        event: "dx_model_key_unavailable",
-        connectionId: connection.id,
+    const apiKey = await decryptConnectionCredential(
+      await this.#loadKeyring(),
+      pin.credential,
+    ).catch((error: unknown) => {
+      settingsPersistenceLogger.warn("BYOK credential decrypt failed.", {
+        event: "byok_credential_decrypt_failed",
+        error: error instanceof Error ? error.message : String(error),
       });
-      return failureResponse(DX_MODEL_UNAVAILABLE);
-    }
+      return undefined;
+    });
     if (apiKey === undefined) {
       settingsPersistenceLogger.warn("BYOK credential unavailable.", {
         event: "byok_credential_unavailable",
@@ -1464,10 +1506,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       headers.set(name, value);
     }
     applyOpenRouterAttribution(target, headers);
-    for (const header of [
-      ...connection.headers,
-      ...(dx ? (dxConnectionUpstream(connection)?.headers ?? []) : []),
-    ]) {
+    for (const header of connection.headers) {
       if (STRIPPED_HEADER_NAMES.has(header.name.toLowerCase())) continue;
       headers.set(header.name, header.value);
     }
@@ -1554,6 +1593,159 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     return failureResponse(failure, upstream.status);
   }
 
+  /**
+   * A dx model call through the proxy: to the pinned upstream, then to the
+   * alias's other upstreams that speak the same format while one fails
+   * before answering (unreachable, rate-limited, refused the installation's
+   * key or quota, a 5xx). The person is charged the alias's pinned price
+   * whichever upstream answers, and sees no upstream's name.
+   */
+  async #proxyDx(
+    pin: PinnedSubmission,
+    envelope: ProxyEnvelope,
+    request: Request,
+    signal: AbortSignal,
+  ) {
+    const { connection } = pin;
+    const routes = dxCallRoutes(connection, pin.model.id, pin.model.api);
+    const base = new URL(pin.model.baseUrl);
+    const target = new URL(envelope.request.url);
+    const basePath = base.pathname.replace(/\/$/, "");
+    if (
+      target.origin !== base.origin ||
+      !target.pathname.startsWith(`${basePath}/`)
+    ) {
+      return jsonResponse({ code: "ORIGIN_MISMATCH" }, 400);
+    }
+    // The path under the pinned endpoint, such as /chat/completions.
+    const suffix = `${target.pathname.slice(basePath.length)}${target.search}`;
+    const body = JSON.parse(await request.text()) as Record<string, unknown>;
+    const incomingAuth = Object.keys(envelope.request.headers).find((name) =>
+      AUTH_HEADER_NAMES.has(name.toLowerCase()),
+    );
+    let last: { failure: RunFailure; status?: number } = {
+      failure: DX_MODEL_UNAVAILABLE,
+    };
+    for (const [index, route] of routes.entries()) {
+      const more = index < routes.length - 1;
+      const apiKey = await this.#dxKeyFor(connection, route.upstreamId);
+      if (apiKey === undefined) {
+        settingsPersistenceLogger.warn("dx model upstream key unavailable.", {
+          event: "dx_model_key_unavailable",
+          connectionId: connection.id,
+          upstreamId: route.upstreamId,
+        });
+        continue;
+      }
+      const url = new URL(`${route.baseUrl.replace(/\/$/, "")}${suffix}`);
+      const headers = new Headers();
+      for (const [name, value] of Object.entries(envelope.request.headers)) {
+        if (STRIPPED_HEADER_NAMES.has(name.toLowerCase())) continue;
+        headers.set(name, value);
+      }
+      applyOpenRouterAttribution(url, headers);
+      for (const header of route.headers) {
+        if (STRIPPED_HEADER_NAMES.has(header.name.toLowerCase())) continue;
+        headers.set(header.name, header.value);
+      }
+      if (incomingAuth !== undefined) {
+        const scheme = envelope.request.headers[incomingAuth]
+          .trim()
+          .startsWith("Bearer ")
+          ? "Bearer "
+          : "";
+        headers.set(incomingAuth, `${scheme}${apiKey}`);
+      } else headers.set("authorization", `Bearer ${apiKey}`);
+      settingsPersistenceLogger.info("Model request authorized.", {
+        event: "model_route_authorized",
+        threadId: pin.threadId,
+        submissionId: pin.submissionId,
+        connectionId: connection.id,
+        upstreamId: route.upstreamId,
+        model: envelope.canonical,
+        attempt: index + 1,
+      });
+      let upstream: Response;
+      try {
+        upstream = await upstreamFetchCall(url.toString(), {
+          method: envelope.request.method,
+          headers,
+          body: JSON.stringify({ ...body, model: route.upstreamModel }),
+          redirect: "manual",
+          signal,
+        });
+      } catch (error) {
+        if (
+          signal.aborted ||
+          (error instanceof Error && error.name === "AbortError")
+        )
+          return jsonResponse({ code: "REQUEST_CANCELLED" }, 499);
+        last = {
+          failure: runFailure(
+            "transient",
+            "UPSTREAM_UNREACHABLE",
+            "The model provider could not be reached.",
+          ),
+        };
+        if (more) {
+          this.#logDxFailover(pin, route.upstreamId, "unreachable");
+          continue;
+        }
+        break;
+      }
+      if (upstream.ok) {
+        this.#recordOutcome(connection);
+        return new Response(upstream.body, {
+          status: upstream.status,
+          headers: upstream.headers,
+        });
+      }
+      if (upstream.status >= 300 && upstream.status < 400) {
+        void upstream.body?.cancel().catch(() => undefined);
+        last = { failure: DX_MODEL_UNAVAILABLE, status: upstream.status };
+        if (more) {
+          this.#logDxFailover(pin, route.upstreamId, `HTTP_${upstream.status}`);
+          continue;
+        }
+        break;
+      }
+      const detail = await readRejectionBody(upstream, [
+        apiKey,
+        ...route.headers.map(({ value }) => value),
+      ]);
+      this.#logRejection(pin, envelope.canonical, upstream.status, detail);
+      last = {
+        failure: asDxFailure(
+          connection,
+          classifyUpstreamRejection(upstream.status, detail),
+        ),
+        status: upstream.status,
+      };
+      if (more && dxFailoverStatus(upstream.status)) {
+        this.#logDxFailover(pin, route.upstreamId, `HTTP_${upstream.status}`);
+        continue;
+      }
+      break;
+    }
+    this.#recordOutcome(connection, last.failure, last.status);
+    return failureResponse(last.failure, last.status);
+  }
+
+  #logDxFailover(pin: PinnedSubmission, upstreamId: string, reason: string) {
+    settingsPersistenceLogger.warn(
+      "dx model call moved to the next upstream.",
+      {
+        event: "dx_model_failover",
+        threadId: pin.threadId,
+        submissionId: pin.submissionId,
+        connectionId: pin.connection.id,
+        model: pin.model.id,
+        upstreamId,
+        reason,
+      },
+    );
+  }
+
   async #handleStream(envelope: StreamEnvelope, signal: AbortSignal) {
     const { pin, live, hold } = await this.#resolve(
       envelope.threadId,
@@ -1594,25 +1786,21 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     if (!IN_DO_APIS.has(entry.api) && connection.kind !== "deployment") {
       return jsonResponse({ code: "UNSUPPORTED_WIRE_API" }, 400);
     }
-    if (dx && !dxBinding && dxUpstream === undefined)
+    const dxRoutes =
+      dx && !dxBinding
+        ? dxCallRoutes(connection, entry.id, entry.api)
+        : undefined;
+    if (dxRoutes !== undefined && dxRoutes.length === 0)
       return failureResponse(DX_MODEL_UNAVAILABLE);
-    const apiKey = dxBinding
-      ? "binding"
-      : dx
-        ? await this.#dxUpstreamKey(connection)
-        : connection.kind === "deployment"
+    const apiKey =
+      dxRoutes !== undefined
+        ? "per-route"
+        : dxBinding || connection.kind === "deployment"
           ? "binding"
           : await decryptConnectionCredential(
               await this.#loadKeyring(),
               pin.credential,
             );
-    if (apiKey === undefined && dx) {
-      settingsPersistenceLogger.warn("dx model upstream key unavailable.", {
-        event: "dx_model_key_unavailable",
-        connectionId: connection.id,
-      });
-      return failureResponse(DX_MODEL_UNAVAILABLE);
-    }
     if (apiKey === undefined) {
       return jsonResponse({ code: "CREDENTIAL_UNAVAILABLE" }, 403);
     }
@@ -1637,7 +1825,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       return jsonResponse({ code: "BINDING_MISSING" }, 400);
     const asDx = (event: AssistantMessageEvent): AssistantMessageEvent => {
       if (!dx) return event;
-      // The upstream's name never reaches the person, even in its errors.
+      // No upstream's name reaches the person, even in its errors.
       const relabel = <T>(value: T): T =>
         typeof value === "object" && value !== null && "model" in value
           ? ({
@@ -1646,12 +1834,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
               model: entry.id,
               ...("errorMessage" in value &&
               typeof value.errorMessage === "string"
-                ? {
-                    errorMessage: scrubUpstreamText(
-                      connection,
-                      value.errorMessage,
-                    ),
-                  }
+                ? { errorMessage: dxErrorText(connection, value.errorMessage) }
                 : {}),
             } as T)
           : value;
@@ -1659,42 +1842,117 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         Object.entries(event).map(([key, value]) => [key, relabel(value)]),
       ) as AssistantMessageEvent;
     };
-    const options = {
-      ...envelope.options,
-      maxRetries: 0,
-      signal,
-      headers: Object.fromEntries(
-        [...connection.headers, ...(dxUpstream?.headers ?? [])]
+    const ownHeaders = (
+      headers: ReadonlyArray<{ readonly name: string; readonly value: string }>,
+    ) =>
+      Object.fromEntries(
+        headers
           .filter(({ name }) => !STRIPPED_HEADER_NAMES.has(name.toLowerCase()))
           .map(({ name, value }) => [name, value]),
-      ),
-      apiKey,
-      bearerToken: entry.api === "bedrock-converse-stream" ? apiKey : undefined,
-    };
-    const events =
-      connection.kind === "deployment" &&
-      (dxBinding || !dx) &&
-      this.env.AI !== undefined
-        ? createDxCloudflareModelProvider(this.env.AI).streamSimple(
-            minted,
+      );
+    const adapter = async (model: typeof entry, options: object) =>
+      model.api === "bedrock-converse-stream"
+        ? (
+            await import("@earendil-works/pi-ai/api/bedrock-converse-stream")
+          ).streamSimple(
+            model as never,
             envelope.context as never,
             options as never,
           )
-        : entry.api === "bedrock-converse-stream"
-          ? (
-              await import("@earendil-works/pi-ai/api/bedrock-converse-stream")
-            ).streamSimple(
-              minted as never,
+        : (
+            await import("@earendil-works/pi-ai/api/google-generative-ai")
+          ).streamSimple(
+            model as never,
+            envelope.context as never,
+            options as never,
+          );
+    const coordinator = this;
+    const events: AsyncIterable<AssistantMessageEvent> =
+      dxRoutes !== undefined
+        ? (async function* () {
+            for (const [index, route] of dxRoutes.entries()) {
+              const more = index < dxRoutes.length - 1;
+              const key = await coordinator.#dxKeyFor(
+                connection,
+                route.upstreamId,
+              );
+              if (key === undefined) continue;
+              const options = {
+                ...envelope.options,
+                maxRetries: 0,
+                signal,
+                headers: ownHeaders(route.headers),
+                ...dxAdapterAuth(route, key),
+              };
+              const routeEvents = await adapter(
+                {
+                  ...entry,
+                  id: route.upstreamModel,
+                  provider: route.providerId ?? provider,
+                  baseUrl: route.baseUrl,
+                } as typeof entry,
+                options,
+              );
+              // Hold events until the upstream answers: one that fails
+              // before any output hands the call to the next upstream.
+              const held: Array<AssistantMessageEvent> = [];
+              let answered = false;
+              for await (const event of routeEvents) {
+                if (!answered && event.type === "start") {
+                  held.push(event);
+                  continue;
+                }
+                // The SDK's error text doesn't say reliably whether the
+                // request itself was wrong, so any failure before output
+                // moves; each upstream is tried at most once.
+                if (
+                  !answered &&
+                  more &&
+                  event.type === "error" &&
+                  event.reason === "error"
+                ) {
+                  coordinator.#logDxFailover(
+                    pin,
+                    route.upstreamId,
+                    classifyRunFailure({
+                      message: event.error.errorMessage ?? "",
+                    }).code,
+                  );
+                  break;
+                }
+                if (!answered) {
+                  answered = true;
+                  yield* held;
+                }
+                yield event;
+              }
+              if (answered) return;
+            }
+            throw new Error(DX_MODEL_UNAVAILABLE.message);
+          })()
+        : connection.kind === "deployment" &&
+            (dxBinding || !dx) &&
+            this.env.AI !== undefined
+          ? createDxCloudflareModelProvider(this.env.AI).streamSimple(
+              minted,
               envelope.context as never,
-              options as never,
+              {
+                ...envelope.options,
+                maxRetries: 0,
+                signal,
+                headers: ownHeaders(connection.headers),
+                apiKey,
+              } as never,
             )
-          : (
-              await import("@earendil-works/pi-ai/api/google-generative-ai")
-            ).streamSimple(
-              minted as never,
-              envelope.context as never,
-              options as never,
-            );
+          : await adapter(minted, {
+              ...envelope.options,
+              maxRetries: 0,
+              signal,
+              headers: ownHeaders(connection.headers),
+              apiKey,
+              bearerToken:
+                entry.api === "bedrock-converse-stream" ? apiKey : undefined,
+            });
     const encoder = new TextEncoder();
     const record = (errorMessage?: string) =>
       this.#recordOutcome(

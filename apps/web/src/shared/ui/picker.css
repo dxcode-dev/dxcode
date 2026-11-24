@@ -351,3 +351,38 @@
     color: var(--muted-foreground);
   }
 }
+
+@layer components {
+  /* ChoiceSelect: the chosen option's mark beside its label, then the chevron. */
+  .dx-choice-trigger > .dx-choice-icon {
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+  }
+  .dx-choice-trigger > .dx-choice-icon svg {
+    width: 16px;
+    height: 16px;
+  }
+  .dx-choice-trigger > span:not(.dx-choice-icon) {
+    flex: 1;
+  }
+  .dx-choice-trigger > span[data-placeholder] {
+    color: var(--muted-foreground);
+  }
+}
+
+@layer components {
+  /* On a touch screen the native Select and every text field render at
+     16px (styles.css); a picker's trigger matches them, so a form's fields
+     read the same size whichever control draws them. */
+  @media (pointer: coarse) {
+    .dx-picker-trigger {
+      font-size: max(
+        calc(var(--text-input-touch) / min(var(--text-zoom), 1)),
+        1em
+      );
+    }
+  }
+}

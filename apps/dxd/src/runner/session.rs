@@ -13,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio_tungstenite::tungstenite::Message;
@@ -169,6 +169,10 @@ struct State {
     ctx: Arc<Ctx>,
     inflight: AtomicUsize,
     pending_update: Mutex<Option<Value>>,
+    /// An update is downloading; the connection keeps serving meanwhile.
+    staging: AtomicBool,
+    /// An update is staged and waits for the runner to be idle.
+    staged: AtomicBool,
 }
 
 async fn supervise(paths: Paths, config: Config, confined: bool) -> Result<(), String> {
@@ -188,6 +192,8 @@ async fn supervise(paths: Paths, config: Config, confined: bool) -> Result<(), S
         ctx,
         inflight: AtomicUsize::new(0),
         pending_update: Mutex::new(None),
+        staging: AtomicBool::new(false),
+        staged: AtomicBool::new(false),
     });
     {
         let (paths, daemons, desktop) = (paths.clone(), daemons.clone(), desktop.clone());
@@ -643,40 +649,61 @@ async fn serve(state: &Arc<State>, msg: Value) -> Value {
     }
 }
 
-/// Applies a pending runner or dxd update once nothing is running.
+/// Applies a pending runner or dxd update once nothing is running. The
+/// download runs on its own task: awaited here, a slow or stalled download
+/// held the connection loop, so the runner sent no pings and dx marked it
+/// offline until the download's timeout (seen on a Mac on 2026-11-23).
 async fn maybe_update(state: &Arc<State>) {
-    if state.inflight.load(Ordering::SeqCst) > 0
-        || exec::running_jobs() > 0
-        || state.ctx.desktop.watched()
-    {
+    let idle = || {
+        state.inflight.load(Ordering::SeqCst) == 0
+            && exec::running_jobs() == 0
+            && !state.ctx.desktop.watched()
+    };
+    if state.staged.load(Ordering::SeqCst) {
+        if idle() {
+            restart_into_update(state).await;
+        }
+        return;
+    }
+    if state.staging.load(Ordering::SeqCst) || !idle() {
         return;
     }
     let Some(offer) = state.pending_update.lock().await.take() else {
         return;
     };
-    let ctx = state.ctx.clone();
-    let staged =
-        tokio::task::spawn_blocking(move || update::stage_update(&ctx.paths, &ctx.config, &offer))
-            .await;
-    match staged {
-        Ok(Ok(true)) => {
-            log("update: restarting into the new dxd");
-            exec::kill_all_jobs();
-            let (paths, daemons, desktop) = (
-                state.ctx.paths.clone(),
-                state.ctx.daemons.clone(),
-                state.ctx.desktop.clone(),
-            );
-            let _ = tokio::task::spawn_blocking(move || {
-                daemons.stop_all(&paths);
-                desktop.stop(&paths);
-            })
-            .await;
-            let err = update::restart(&state.ctx.paths);
-            log(&format!("update: {err}"));
+    state.staging.store(true, Ordering::SeqCst);
+    let background = state.clone();
+    tokio::spawn(async move {
+        let ctx = background.ctx.clone();
+        let staged = tokio::task::spawn_blocking(move || {
+            update::stage_update(&ctx.paths, &ctx.config, &offer)
+        })
+        .await;
+        match staged {
+            Ok(Ok(true)) => background.staged.store(true, Ordering::SeqCst),
+            Ok(Ok(false)) => {}
+            Ok(Err(e)) => log(&format!("update: {e}")),
+            Err(e) => log(&format!("update: {e}")),
         }
-        Ok(Ok(false)) => {}
-        Ok(Err(e)) => log(&format!("update: {e}")),
-        Err(e) => log(&format!("update: {e}")),
-    }
+        background.staging.store(false, Ordering::SeqCst);
+    });
+}
+
+/// Ends every job and Thread dxd, then execs the staged binary.
+async fn restart_into_update(state: &Arc<State>) {
+    log("update: restarting into the new dxd");
+    exec::kill_all_jobs();
+    let (paths, daemons, desktop) = (
+        state.ctx.paths.clone(),
+        state.ctx.daemons.clone(),
+        state.ctx.desktop.clone(),
+    );
+    let _ = tokio::task::spawn_blocking(move || {
+        daemons.stop_all(&paths);
+        desktop.stop(&paths);
+    })
+    .await;
+    let err = update::restart(&state.ctx.paths);
+    log(&format!("update: {err}"));
+    state.staged.store(false, Ordering::SeqCst);
 }

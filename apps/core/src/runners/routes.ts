@@ -11,6 +11,7 @@ import { type Context, Hono } from "hono";
 import { runnerArchiveKey } from "../execution/runner/provider.js";
 import { readBoundedBody } from "../http/bounded-body.js";
 import type { AppEnv } from "../http/types.js";
+import { takeRequestBudget } from "../security/request-budget.js";
 import { enabledExperimentalFeatures } from "../settings/experimental-features/routes.js";
 import { revokeRunnerSession, runnerStatus } from "./client.js";
 import installScript from "./install.sh?raw";
@@ -35,9 +36,19 @@ const logger = getLogger(["dx", "runners", "routes"]);
 const MAX_ARCHIVE_BYTES = 64 * 1024 * 1024;
 const MAX_PAIR_BODY_BYTES = 4096;
 
+/**
+ * Pairing guesses (#2436). A code is one of 20^8 (about 2.6e10) and lives 15
+ * minutes, so the deployment-wide budget caps a day's guesses at 28,800: a
+ * chance of about 1 in 900,000 a day per live code. One address gets 10, so
+ * a person who mistypes a code a few times still pairs.
+ */
+export const PAIR_GUESS_WINDOW_MS = 15 * 60_000;
+export const PAIR_GUESSES_PER_ADDRESS = 10;
+export const PAIR_GUESSES_OVERALL = 300;
+
 const refuse = (
   context: Context<AppEnv>,
-  status: 400 | 401 | 403 | 404 | 503,
+  status: 400 | 401 | 403 | 404 | 429 | 503,
   code: string,
   message: string,
 ) => {
@@ -227,6 +238,28 @@ export const runnerPublicRoutes = new Hono<AppEnv>()
         "INVALID_REQUEST",
         "Request validation failed.",
       );
+    const address = context.req.header("cf-connecting-ip") ?? "unknown";
+    if (
+      !(await takeRequestBudget(db, `runner-pair:address:${address}`, {
+        maximum: PAIR_GUESSES_PER_ADDRESS,
+        windowMs: PAIR_GUESS_WINDOW_MS,
+      })) ||
+      !(await takeRequestBudget(db, "runner-pair", {
+        maximum: PAIR_GUESSES_OVERALL,
+        windowMs: PAIR_GUESS_WINDOW_MS,
+      }))
+    ) {
+      logger.warn("Runner pairing was rate limited.", {
+        event: "runner_pair_rate_limited",
+      });
+      context.header("Retry-After", "900");
+      return refuse(
+        context,
+        429,
+        "RATE_LIMITED",
+        "Too many pairing attempts. Wait 15 minutes, then try again.",
+      );
+    }
     const paired = await pairMachine(db, {
       code,
       name,
