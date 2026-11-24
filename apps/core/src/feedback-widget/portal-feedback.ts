@@ -18,8 +18,9 @@ import { portalFeedbackPrompt } from "./thread-prompt.js";
 /**
  * Core's side of the Feedback Widget in a Thread's Portal (see
  * portals/feedback.ts): the widget's script, and
- * delivering comments to the Thread as the person's own message, through the
- * route the web client uses, so it is admitted with the same access checks.
+ * delivering comments to the Thread through the route the web client uses,
+ * so it is admitted with the same access checks. The message is marked as
+ * from outside dx: any script on the page can send it.
  */
 
 const failure = (
@@ -66,6 +67,10 @@ export const portalFeedbackService = (
         {
           bindings,
           ownerUserId: input.userId as UserId,
+          // Any script on the Portal's page can post here, so the text is
+          // the page's, not the owner's word: tools that act only on the
+          // owner's own word (manage_dx) refuse it.
+          automation: "external",
           ...(waitUntil === undefined ? {} : { waitUntil }),
         },
         "POST",
