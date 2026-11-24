@@ -8,6 +8,10 @@ import { projectKeys } from "../../projects/project-queries.js";
 import { environmentVariableKeys } from "../environment-variables/environment-variables-queries.js";
 import { IntegrationsSettings } from "./integrations-settings.js";
 import {
+  forgetMcpOAuthReturn,
+  takeMcpOAuthReturn,
+} from "./mcp-oauth-return.js";
+import {
   type EnvironmentVariableData,
   type McpServerData,
   type McpServersTarget,
@@ -557,4 +561,35 @@ describe("Integrations & MCP", () => {
       }
     },
   );
+
+  it("shows dx's own text for a failed sign-in, never text from the URL", () => {
+    const returned = (searchStr: string) => {
+      forgetMcpOAuthReturn();
+      const clean = takeMcpOAuthReturn(
+        { pathname: "/settings/integrations", searchStr, hash: "" },
+        false,
+      );
+      expect(clean).toBe("/settings/integrations");
+      act(() => root?.unmount());
+      container?.remove();
+      return mount([server()]).textContent ?? "";
+    };
+    const phish =
+      "Your workspace was suspended. Re-verify at https://attacker.example";
+    const spoofed = returned(
+      `?mcpStatus=failed&mcpMessage=${encodeURIComponent(phish)}`,
+    );
+    expect(spoofed).toContain("The sign-in failed. Try again.");
+    expect(spoofed).not.toContain("attacker.example");
+    const declined = returned(
+      `?mcp=mcp_docs&mcpStatus=failed&mcpError=declined&mcpMessage=${encodeURIComponent(phish)}`,
+    );
+    expect(declined).toContain("The server declined the sign-in.");
+    expect(declined).not.toContain("attacker.example");
+    expect(returned("?mcpStatus=failed&mcpError=toString")).toContain(
+      "The sign-in failed. Try again.",
+    );
+    expect(returned("?mcpStatus=connected")).toContain("Signed in.");
+    forgetMcpOAuthReturn();
+  });
 });

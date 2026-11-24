@@ -32,10 +32,12 @@ const executionOf = (context: Context<AppEnv>) => {
 /**
  * Creates a Space's root Thread through `POST /v1/threads`, as the person
  * creating the Space, so it passes the same Project, policy, source, and Orb
- * checks as any Thread and records `kind = 'space'` with its row. It runs in
- * executor mode (no Orb) on the route `resolveSpaceAgentRoute` picked:
- * Claude Code bound to a plan, or a model through Model Routing. No first
- * message: the Space's agent starts when someone writes in it.
+ * checks as any Thread and records `kind = 'space'` with its row, on the
+ * route `resolveSpaceAgentRoute` picked: Claude Code bound to a plan, or a
+ * model through Model Routing. With `coordinatorOrb` (Claude Code) it pins
+ * that Orb size like any Thread, with no repository; otherwise it runs in
+ * executor mode (no Orb). No first message: the Space's agent starts when
+ * someone writes in it.
  */
 export const createSpaceRootThread = async (
   context: Context<AppEnv>,
@@ -45,6 +47,8 @@ export const createSpaceRootThread = async (
     readonly name: string;
     readonly selection: ThreadModelSelection;
     readonly claudeConnectionId?: string;
+    /** The Orb size its coordinator runs on (`resolveSpaceCoordinatorOrb`). */
+    readonly coordinatorOrb?: string;
   },
 ): Promise<
   | { readonly ok: true; readonly threadId: ThreadId }
@@ -52,6 +56,7 @@ export const createSpaceRootThread = async (
       readonly ok: false;
       readonly status: number;
       readonly code: string | undefined;
+      readonly message: string | undefined;
     }
 > => {
   const routes = await threadRoutes();
@@ -60,7 +65,12 @@ export const createSpaceRootThread = async (
     inner.set("principal", principal);
     inner.set("requestId", context.get("requestId"));
     inner.set("requestStartedAt", Date.now());
-    inner.set("threadCreation", { kind: "space", executionMode: "executor" });
+    inner.set(
+      "threadCreation",
+      input.coordinatorOrb === undefined
+        ? { kind: "space", executionMode: "executor" }
+        : { kind: "space", coordinatorOrb: true },
+    );
     await next();
   });
   app.route("/v1/threads", routes);
@@ -78,6 +88,9 @@ export const createSpaceRootThread = async (
         ...(input.claudeConnectionId === undefined
           ? {}
           : { claudeConnectionId: input.claudeConnectionId }),
+        ...(input.coordinatorOrb === undefined
+          ? {}
+          : { runnerProfileId: input.coordinatorOrb }),
       }),
     },
     context.env,
@@ -90,10 +103,19 @@ export const createSpaceRootThread = async (
   );
   const payload = (await response.json().catch(() => undefined)) as
     | {
-        readonly data?: { readonly id?: string; readonly code?: string };
+        readonly data?: {
+          readonly id?: string;
+          readonly code?: string;
+          readonly message?: string;
+        };
       }
     | undefined;
   if (response.ok && typeof payload?.data?.id === "string")
     return { ok: true, threadId: payload.data.id as ThreadId };
-  return { ok: false, status: response.status, code: payload?.data?.code };
+  return {
+    ok: false,
+    status: response.status,
+    code: payload?.data?.code,
+    message: payload?.data?.message,
+  };
 };

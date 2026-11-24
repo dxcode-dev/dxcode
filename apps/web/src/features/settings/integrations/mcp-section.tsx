@@ -1,3 +1,4 @@
+import type { McpOAuthErrorCode } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import * as React from "react";
@@ -273,6 +274,24 @@ function McpServersSection({
  * groups servers into Enabled and Disabled and suggests templates, placed once
  * the MCP servers read answers.
  */
+/**
+ * dx's own text for each `mcpError` code Core's OAuth callback sends. The
+ * page never shows text from its address, so a crafted link cannot pose
+ * as dx.
+ */
+const MCP_OAUTH_FAILURES: Record<McpOAuthErrorCode, string> = {
+  invalid: "The sign-in link is invalid. Try again.",
+  expired: "The sign-in expired. Try again.",
+  declined: "The server declined the sign-in.",
+  no_code: "The server returned no authorization code.",
+  changed: "The server changed during sign-in. Try again.",
+  failed: "The sign-in failed. Try again.",
+};
+const mcpOAuthFailure = (code: string | undefined) =>
+  code !== undefined && Object.hasOwn(MCP_OAUTH_FAILURES, code)
+    ? MCP_OAUTH_FAILURES[code as McpOAuthErrorCode]
+    : MCP_OAUTH_FAILURES.failed;
+
 export function McpIntegrations({
   target,
   description,
@@ -301,7 +320,7 @@ export function McpIntegrations({
       ? undefined
       : returned.connected
         ? "Signed in."
-        : (returned.message ?? "The sign-in failed."),
+        : mcpOAuthFailure(returned.error),
   );
   const [busy, setBusy] = React.useState(false);
   const [query, setQuery] = React.useState("");

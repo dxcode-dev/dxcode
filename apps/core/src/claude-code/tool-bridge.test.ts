@@ -41,14 +41,29 @@ const until = async <A>(read: () => A | undefined, ms = 10_000) => {
   }
 };
 
-const startBridge = async (options: { readonly gate: boolean }) => {
+const startBridge = async (options: {
+  readonly gate: boolean;
+  /** Shorter waits, in seconds, so a test sees the bridge give up. */
+  readonly pickup?: number;
+  readonly stale?: number;
+}) => {
   const root = await mkdtemp(join(tmpdir(), "dx-bridge-"));
   roots.push(root);
   const run = join(root, "runs/attempt");
   const mcp = join(root, "mcp");
   await mkdir(run, { recursive: true });
   await mkdir(join(mcp, "hooks"), { recursive: true });
-  await writeFile(join(run, "dx-bridge.py"), CLAUDE_CODE_TOOL_BRIDGE);
+  await mkdir(join(mcp, "results"), { recursive: true });
+  await writeFile(
+    join(run, "dx-bridge.py"),
+    CLAUDE_CODE_TOOL_BRIDGE.replace(
+      /^PICKUP_SECONDS = \d+$/m,
+      `PICKUP_SECONDS = ${options.pickup ?? 120}`,
+    ).replace(
+      /^STALE_SECONDS = \d+$/m,
+      `STALE_SECONDS = ${options.stale ?? 90}`,
+    ),
+  );
   await writeFile(
     join(run, "dx-tools.json"),
     JSON.stringify([
@@ -260,6 +275,124 @@ describe("the dx tool bridge's PreToolUse hook", () => {
       expect(
         (initialize.request as Record<string, unknown>).hooks,
       ).toBeUndefined();
+    } finally {
+      bridge.child.kill();
+    }
+  });
+});
+
+/** Claude Code calling the dx tool create_thread through the SDK MCP server. */
+const toolCall = (id: string) => ({
+  type: "control_request",
+  request_id: `req-${id}`,
+  request: {
+    subtype: "mcp_message",
+    server_name: "dx",
+    message: {
+      jsonrpc: "2.0",
+      id: `rpc-${id}`,
+      method: "tools/call",
+      params: {
+        name: "create_thread",
+        arguments: { prompt: "Research it" },
+        _meta: { "claudecode/toolUseId": id },
+      },
+    },
+  },
+});
+
+/** The MCP result the bridge returned Claude for a call. */
+const toolAnswer = (
+  messages: ReadonlyArray<Record<string, unknown>>,
+  id: string,
+) => {
+  const answer = answerTo(messages, `req-${id}`) as
+    | {
+        response: {
+          response: {
+            mcp_response: {
+              result: {
+                content: Array<{ text: string }>;
+                isError: boolean;
+              };
+            };
+          };
+        };
+      }
+    | undefined;
+  return answer?.response.response.mcp_response.result;
+};
+
+describe("the dx tool bridge's dx tool calls", () => {
+  it("prints each call for dx, which answers calls no message shows", async () => {
+    const bridge = await startBridge({ gate: false });
+    try {
+      bridge.claudeSays(toolCall("toolu_deep"));
+      expect(
+        await until(() =>
+          bridge.toDx.find((line) => line.type === "dx_tool_call"),
+        ),
+      ).toEqual({
+        type: "dx_tool_call",
+        tool_use_id: "toolu_deep",
+        tool_name: "create_thread",
+        input: { prompt: "Research it" },
+      });
+      await writeFile(
+        join(bridge.mcp, "results/toolu_deep.json"),
+        JSON.stringify({
+          content: [{ type: "text", text: "Started." }],
+          isError: false,
+        }),
+      );
+      expect(
+        await until(() => toolAnswer(bridge.toClaude, "toolu_deep")),
+      ).toEqual({
+        content: [{ type: "text", text: "Started." }],
+        isError: false,
+      });
+    } finally {
+      bridge.child.kill();
+    }
+  });
+
+  it("fails a call dx never starts within the pickup wait, not after 30 minutes", async () => {
+    const bridge = await startBridge({ gate: false, pickup: 1 });
+    try {
+      const started = Date.now();
+      bridge.claudeSays(toolCall("toolu_lost"));
+      const result = await until(() =>
+        toolAnswer(bridge.toClaude, "toolu_lost"),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain(
+        "dx did not start this tool call within 1 seconds, so it did not run.",
+      );
+      expect(Date.now() - started).toBeLessThan(5_000);
+    } finally {
+      bridge.child.kill();
+    }
+  });
+
+  it("waits on a slow call while dx marks it alive, and fails it once the marks stop", async () => {
+    const bridge = await startBridge({ gate: false, pickup: 1, stale: 1 });
+    try {
+      const alive = join(bridge.mcp, "results/toolu_slow.alive");
+      bridge.claudeSays(toolCall("toolu_slow"));
+      // Beats for three seconds, past both waits: the call stays open.
+      for (let beat = 0; beat < 6; beat += 1) {
+        await writeFile(alive, String(beat));
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      expect(toolAnswer(bridge.toClaude, "toolu_slow")).toBeUndefined();
+      // dx stopped beating, as when a restart cut the call off.
+      const result = await until(() =>
+        toolAnswer(bridge.toClaude, "toolu_slow"),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content[0]?.text).toContain(
+        "dx stopped working on this tool call before it finished",
+      );
     } finally {
       bridge.child.kill();
     }

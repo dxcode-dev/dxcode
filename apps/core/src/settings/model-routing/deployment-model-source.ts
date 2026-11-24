@@ -11,6 +11,9 @@ import type {
  * `noDeploymentModels`.
  */
 
+/** The provider people see every installation model under. */
+export const DX_PROVIDER_ID = "dx" as const;
+
 /** One model an upstream serves under a dx alias. */
 export interface DxModel {
   /** The dx alias; the canonical id is `dx/<alias>`. */
@@ -21,6 +24,9 @@ export interface DxModel {
   readonly upstream: DeploymentUpstream;
   readonly upstreamModel: string;
   readonly capabilities: UpstreamModel;
+  /** The wire API and endpoint the upstream serves this model at. */
+  readonly api: DeploymentUpstream["api"];
+  readonly baseUrl: string;
   /** USD per 1M tokens charged to the person. */
   readonly price: {
     readonly input: number;
@@ -54,6 +60,16 @@ export interface DxUpstream {
   readonly upstream: DeploymentUpstream;
   readonly priority: number;
   readonly baseUrl: string;
+  /** The admin's values for the upstream's provider fields. */
+  readonly fields?: Readonly<Record<string, string>>;
+  /**
+   * Headers sent with every request to the upstream. Only the credential
+   * coordinator reads them; a person's view of a dx connection has none.
+   */
+  readonly headers?: ReadonlyArray<{
+    readonly name: string;
+    readonly value: string;
+  }>;
 }
 
 export interface DeploymentModels {

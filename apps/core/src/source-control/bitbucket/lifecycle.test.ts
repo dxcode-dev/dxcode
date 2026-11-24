@@ -33,6 +33,7 @@ import {
 import { bitbucketGitGatewayRoutes } from "./git-gateway.js";
 import { BitbucketProviderError } from "./provider-http.js";
 import { bitbucketRuntimeBroker } from "./runtime.js";
+import { sweepBitbucketRenewals } from "./token-renewer.js";
 
 const userId = "user-one";
 const workspaceId = "{11111111-1111-4111-8111-111111111111}";
@@ -70,6 +71,7 @@ const repository = {
 };
 const databases: DatabaseSync[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   for (const db of databases.splice(0)) db.close();
 });
@@ -784,6 +786,62 @@ describe("Bitbucket OAuth and source lifecycle with migrated SQLite", () => {
     expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
       status: "reauthorization-required",
       authorization_epoch: 2,
+    });
+  });
+  it("requires reauthorization when Atlassian answers a spent refresh token with 403 unauthorized_client", async () => {
+    // Nov 23 2026: after Atlassian's OAuth incident, eight connections got
+    // this answer for 30 hours and stayed "active", so Git said "try again".
+    const f = await fixture();
+    const row = await f.connect();
+    f.sqlite
+      .prepare("UPDATE bitbucket_connection SET expires_at = ?")
+      .run("2000-01-01T00:00:00.000Z");
+    f.fetcher.mockResolvedValueOnce(
+      Response.json(
+        {
+          error: "unauthorized_client",
+          error_description: "refresh_token is invalid",
+        },
+        { status: 403 },
+      ),
+    );
+    const callback = vi.fn();
+    await expect(
+      f.service.withConnection(userId, row.id, callback),
+    ).rejects.toMatchObject({ action: "reconnect" });
+    expect(callback).not.toHaveBeenCalled();
+    expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
+      status: "reauthorization-required",
+      authorization_epoch: 2,
+      last_renewal_error: "invalid_grant",
+    });
+  });
+  it("the cron waits out its backoff while Bitbucket's token endpoint fails, even after the access token expired", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const f = await fixture();
+    await f.connect();
+    f.sqlite
+      .prepare("UPDATE bitbucket_connection SET expires_at = ?")
+      .run("2000-01-01T00:00:00.000Z");
+    // The cron's renewer uses the global fetch; Bitbucket's token endpoint
+    // times out or fails for the whole quarter hour.
+    const tokenCalls = vi.fn<typeof fetch>(
+      async () => new Response("oauth-server degraded", { status: 503 }),
+    );
+    vi.stubGlobal("fetch", tokenCalls);
+    const start = Date.now();
+    for (let minute = 0; minute <= 15; minute += 1) {
+      vi.setSystemTime(start + minute * 60_000);
+      await sweepBitbucketRenewals(
+        { ...bindings, DB: f.db } as never,
+        Date.now(),
+      );
+    }
+    // Backoff 1, 2, 5, 10 minutes: asked at minutes 0, 1, 3 and 8, not 16 times.
+    expect(tokenCalls).toHaveBeenCalledTimes(4);
+    expect(await readBitbucketConnection(f.db, userId)).toMatchObject({
+      status: "active",
+      renewal_failures: 4,
     });
   });
   it("scopes guest leases to a live immutable Thread and stops them on disconnect", async () => {

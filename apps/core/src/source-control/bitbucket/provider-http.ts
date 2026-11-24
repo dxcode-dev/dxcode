@@ -161,7 +161,9 @@ export const createBitbucketProvider = (
     ) {
       // Bitbucket's token endpoint is Atlassian's: a refresh token that was
       // already used, expired, or revoked comes back as `invalid_grant`,
-      // with 403 as well as the 400 RFC 6749 names. Either ends the grant.
+      // with 403 as well as the 400 RFC 6749 names, or as 403
+      // `unauthorized_client` ("refresh_token is invalid"). Each ends the
+      // grant: retrying a spent single-use token never succeeds.
       let code: string | undefined;
       try {
         const body: unknown = JSON.parse(await readText(response));
@@ -176,7 +178,10 @@ export const createBitbucketProvider = (
       } catch (cause) {
         if (cause instanceof BitbucketProviderError) throw cause;
       }
-      if (code === "invalid_grant")
+      if (
+        code === "invalid_grant" ||
+        (response.status === 403 && code === "unauthorized_client")
+      )
         throw new BitbucketProviderError({ category: "invalid-grant", code });
       throw new BitbucketProviderError({
         category:

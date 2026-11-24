@@ -1,6 +1,7 @@
 import { lazyRouteComponent } from "@tanstack/react-router";
 import { ChevronRight, FileSymlink, Sparkles } from "lucide-react";
 import * as React from "react";
+import { defaultUrlTransform } from "react-markdown";
 import { FileContextMenu } from "../../shared/ui/file-context-menu.js";
 import { ArtifactToolCard } from "./artifact-tool-card.js";
 import { ArtifactToolLabel } from "./artifact-tool-label.js";
@@ -391,11 +392,18 @@ function ToolOutput({
         <div>
           {results.map((item) => {
             const value = record(item);
+            // Results come from the web: keep only safe protocols, as in
+            // Markdown, and show a result whose URL is not safe as text.
+            const href = defaultUrlTransform(String(value?.url));
             return (
               <div key={String(value?.url)}>
-                <a href={String(value?.url)} target="_blank" rel="noreferrer">
-                  {String(value?.title)}
-                </a>
+                {href === "" ? (
+                  <span>{String(value?.title)}</span>
+                ) : (
+                  <a href={href} target="_blank" rel="noreferrer">
+                    {String(value?.title)}
+                  </a>
+                )}
                 <small>{String(value?.url)}</small>
                 {((value?.excerpts ?? []) as unknown[]).map((excerpt) => (
                   <p key={String(excerpt)}>{String(excerpt)}</p>

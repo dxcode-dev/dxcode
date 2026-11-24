@@ -11,6 +11,7 @@ import {
 } from "@dx/api";
 import {
   type OrbProviderId,
+  SourceControlAccessDenied,
   ThreadId,
   WorkloadIdentityUnauthorized,
 } from "@dx/domain";
@@ -161,6 +162,7 @@ import {
 import { resolveExecutionSigningPlan } from "../settings/keys/execution.js";
 import { signGitPayload } from "../settings/keys/ssh-ed25519.js";
 import { bitbucketControlPlaneFor } from "../source-control/bitbucket/control-plane.js";
+import { BitbucketProviderError } from "../source-control/bitbucket/provider-http.js";
 import {
   BITBUCKET_GIT_PATH,
   bitbucketRuntimeBroker,
@@ -4378,9 +4380,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
               failure:
                 typeof reason === "string"
                   ? reason
-                  : cause instanceof Error
-                    ? cause.name
-                    : "unknown",
+                  : cause instanceof BitbucketProviderError
+                    ? `bitbucket-${cause.category}`
+                    : cause instanceof Error
+                      ? cause.name
+                      : "unknown",
             });
             throw cause;
           });
@@ -5716,6 +5720,9 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
  */
 const workloadIdentityRefused = (cause: unknown) =>
   cause instanceof WorkloadIdentityUnauthorized ||
+  // The owner's Bitbucket connection is gone or needs a reconnect.
+  (cause instanceof SourceControlAccessDenied &&
+    cause.action === "reconnect") ||
   cause instanceof GitHubControlPlaneForbidden ||
   (cause instanceof GitHubProviderError &&
     (cause.category === "unauthorized" || cause.category === "forbidden"));

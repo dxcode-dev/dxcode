@@ -39,6 +39,7 @@ import {
   preparationStep,
 } from "./orb-providers-status.js";
 import { RunnersSettings } from "./runners-settings.js";
+import { SpaceCoordinatorOrbCard } from "./space-coordinator-orb.js";
 
 /** Resolves to the error message, or undefined when the action succeeded. */
 type Run = (
@@ -359,6 +360,9 @@ export function OrbProvidersSettings({
             />
           ))}
         </SettingsCard>
+      )}
+      {data === undefined ? null : (
+        <SpaceCoordinatorOrbCard target={target} providers={data} />
       )}
       {data !== undefined &&
       target.scope === "personal" &&

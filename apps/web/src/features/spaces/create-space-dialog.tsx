@@ -40,6 +40,7 @@ import {
   SpaceProjectCombobox,
   SpaceSharingSelect,
 } from "./space-form-fields.js";
+import { CreateSpaceError } from "./create-space-error.js";
 import type { SpaceModelPick } from "./space-model-field.js";
 import { SpaceModelRows } from "./space-model-rows.js";
 import {
@@ -378,16 +379,7 @@ export function CreateSpaceDialog({
                 onPlanChange={setPlan}
                 PlanPicker={PlanPicker}
               />
-              {create.error === null ||
-              // The Agent row and the picker say this one.
-              (create.error as { readonly code?: string }).code ===
-                "SPACE_MODEL_UNAVAILABLE" ? null : (
-                <p className="space-dialog-error" role="alert">
-                  {create.error instanceof Error
-                    ? create.error.message
-                    : "The Space could not be created."}
-                </p>
-              )}
+              <CreateSpaceError error={create.error} />
               <footer className="space-create-footer">
                 <Button
                   type="submit"

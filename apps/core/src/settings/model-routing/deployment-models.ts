@@ -9,6 +9,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { Schema } from "effect";
 import {
   type DeploymentModels,
+  DX_PROVIDER_ID,
   type DxModel,
   type DxUpstream,
   EMPTY_DEPLOYMENT_MODELS,
@@ -36,7 +37,7 @@ export type {
  * The configuration lives in the deployment's own store, read through the
  * registered `DeploymentModelSource`; public dx registers none.
  */
-export const DX_PROVIDER_ID = "dx" as const;
+export { DX_PROVIDER_ID } from "./deployment-model-source.js";
 export const DX_CONNECTION_NAME = "dx" as const;
 const DX_CONNECTION_PREFIX = "deployment-dx-";
 
@@ -84,11 +85,9 @@ export const dxCatalogModels = (): ReadonlyArray<Model<Api>> =>
       ({
         id: model.id,
         name: model.name,
-        api: model.upstream.api,
+        api: model.api,
         provider: DX_PROVIDER_ID,
-        baseUrl:
-          current.upstreams.find(({ id }) => id === model.upstreamId)
-            ?.baseUrl ?? model.upstream.baseUrl,
+        baseUrl: model.baseUrl,
         reasoning: model.capabilities.reasoning,
         input: model.capabilities.vision ? ["text", "image"] : ["text"],
         cost: { ...model.price },
@@ -186,14 +185,43 @@ export const withDxModes = (
   };
 };
 
+const hostOf = (url: string) => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * The words that name an upstream: its preset's, its endpoints' hosts, and
+ * the admin's field values (an Azure resource, an AI Gateway id). Longest
+ * first, so a host goes before the brand inside it.
+ */
+const upstreamWords = (served: DxUpstream): ReadonlyArray<string> =>
+  [
+    ...new Set([
+      ...served.upstream.redact,
+      ...[
+        served.baseUrl,
+        ...current.models
+          .filter(({ upstreamId }) => upstreamId === served.id)
+          .map(({ baseUrl }) => baseUrl),
+      ].flatMap((url) => hostOf(url) ?? []),
+      ...Object.values(served.fields ?? {}),
+    ]),
+  ]
+    .filter((word) => word.length >= 3)
+    .toSorted((left, right) => right.length - left.length);
+
 /** Removes the upstream's name from text a person may see. */
 export const scrubUpstreamText = (
   connection: StoredModelConnection,
   text: string,
 ): string => {
-  const upstream = dxConnectionUpstream(connection)?.upstream;
-  if (upstream === undefined) return text;
-  return upstream.redact.reduce(
+  const served = dxConnectionUpstream(connection);
+  if (served === undefined) return text;
+  return upstreamWords(served).reduce(
     (scrubbed, word) => scrubbed.split(word).join(DX_PROVIDER_ID),
     text,
   );

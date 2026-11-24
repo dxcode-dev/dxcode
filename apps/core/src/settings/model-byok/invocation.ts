@@ -50,8 +50,16 @@ import {
   CLAUDE_CODE_API,
   catalogProviderModels,
   IN_DO_APIS,
+  providerBaseUrl,
+  providerFieldsValid,
 } from "../model-routing/catalog.js";
 import { isClaudePlanToken } from "../model-routing/claude-code-token.js";
+import {
+  bedrockProbeModel,
+  keyCheckRequest,
+  probeBedrock,
+  probeHealth,
+} from "../model-routing/connection-probe.js";
 import {
   loadConnectionForTarget,
   updateConnectionHealth,
@@ -64,6 +72,7 @@ import {
 import { dxModelCallReserveMicros } from "../model-routing/deployment-model-source.js";
 import {
   DX_PROVIDER_ID,
+  dxConnectionUpstream,
   dxConnectionUpstreamId,
   dxUpstreamModel,
   findDxModel,
@@ -986,7 +995,12 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
   }
 
   #validateEndpoint(connection: StoredModelConnection) {
-    if (connection.baseUrl === undefined) return;
+    if (connection.baseUrl === undefined) {
+      // A catalog base URL is built from these fields.
+      if (!providerFieldsValid(connection.fields))
+        throw new Error("ENDPOINT_NOT_ALLOWED");
+      return;
+    }
     const result = validateAllowedModelEndpoint(
       connection.baseUrl,
       this.env.DX_MODEL_ENDPOINT_ALLOWLIST,
@@ -1450,7 +1464,10 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       headers.set(name, value);
     }
     applyOpenRouterAttribution(target, headers);
-    for (const header of connection.headers) {
+    for (const header of [
+      ...connection.headers,
+      ...(dx ? (dxConnectionUpstream(connection)?.headers ?? []) : []),
+    ]) {
       if (STRIPPED_HEADER_NAMES.has(header.name.toLowerCase())) continue;
       headers.set(header.name, header.value);
     }
@@ -1556,28 +1573,46 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
     signal: AbortSignal,
   ) {
     const { connection } = pin;
-    // A dx model runs here only on the deployment's Workers AI binding.
-    const dxBinding =
-      isDxConnection(connection) && pin.model.api === "cloudflare-ai-binding";
+    // A dx model runs here on the deployment's Workers AI binding, or on an
+    // upstream whose adapter refuses a custom fetch (Google, Bedrock).
+    const dx = isDxConnection(connection);
+    const dxBinding = dx && pin.model.api === "cloudflare-ai-binding";
+    const dxUpstream = dx ? dxConnectionUpstream(connection) : undefined;
     if (
       connection.kind !== "provider" &&
-      !(connection.kind === "deployment" && !isDxConnection(connection)) &&
-      !dxBinding
+      !(connection.kind === "deployment" && !dx) &&
+      !dx
     ) {
       return jsonResponse({ code: "UNSUPPORTED_IN_DO_CONNECTION" }, 400);
     }
-    const { provider } = canonicalParts(envelope.canonical);
     const entry = pin.model;
+    // The provider whose adapter and auth the call uses: a dx model's
+    // upstream provider, never "dx".
+    const provider = dx
+      ? (dxUpstream?.upstream.providerId ?? "cloudflare")
+      : canonicalParts(envelope.canonical).provider;
     if (!IN_DO_APIS.has(entry.api) && connection.kind !== "deployment") {
       return jsonResponse({ code: "UNSUPPORTED_WIRE_API" }, 400);
     }
-    const apiKey =
-      connection.kind === "deployment"
-        ? "binding"
-        : await decryptConnectionCredential(
-            await this.#loadKeyring(),
-            pin.credential,
-          );
+    if (dx && !dxBinding && dxUpstream === undefined)
+      return failureResponse(DX_MODEL_UNAVAILABLE);
+    const apiKey = dxBinding
+      ? "binding"
+      : dx
+        ? await this.#dxUpstreamKey(connection)
+        : connection.kind === "deployment"
+          ? "binding"
+          : await decryptConnectionCredential(
+              await this.#loadKeyring(),
+              pin.credential,
+            );
+    if (apiKey === undefined && dx) {
+      settingsPersistenceLogger.warn("dx model upstream key unavailable.", {
+        event: "dx_model_key_unavailable",
+        connectionId: connection.id,
+      });
+      return failureResponse(DX_MODEL_UNAVAILABLE);
+    }
     if (apiKey === undefined) {
       return jsonResponse({ code: "CREDENTIAL_UNAVAILABLE" }, 403);
     }
@@ -1585,26 +1620,40 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       this.#recordOutcome(connection, PLAN_TOKEN_ELSEWHERE);
       return failureResponse(PLAN_TOKEN_ELSEWHERE);
     }
-    // Workers AI knows a dx model by its upstream id; events go back as dx's.
-    const minted = dxBinding
+    // The upstream knows a dx model by its own id; events go back as dx's.
+    const minted = dx
       ? ({
           ...entry,
           id: pin.upstreamModel,
-          provider: "cloudflare",
+          provider,
         } as typeof entry)
       : entry;
     if (
       connection.kind === "deployment" &&
       (dxBinding
         ? this.env.AI === undefined
-        : !workersAiDeploymentEnabled(this.env))
+        : !dx && !workersAiDeploymentEnabled(this.env))
     )
       return jsonResponse({ code: "BINDING_MISSING" }, 400);
     const asDx = (event: AssistantMessageEvent): AssistantMessageEvent => {
-      if (!dxBinding) return event;
+      if (!dx) return event;
+      // The upstream's name never reaches the person, even in its errors.
       const relabel = <T>(value: T): T =>
         typeof value === "object" && value !== null && "model" in value
-          ? ({ ...value, provider: entry.provider, model: entry.id } as T)
+          ? ({
+              ...value,
+              provider: entry.provider,
+              model: entry.id,
+              ...("errorMessage" in value &&
+              typeof value.errorMessage === "string"
+                ? {
+                    errorMessage: scrubUpstreamText(
+                      connection,
+                      value.errorMessage,
+                    ),
+                  }
+                : {}),
+            } as T)
           : value;
       return Object.fromEntries(
         Object.entries(event).map(([key, value]) => [key, relabel(value)]),
@@ -1615,21 +1664,23 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       maxRetries: 0,
       signal,
       headers: Object.fromEntries(
-        connection.headers
+        [...connection.headers, ...(dxUpstream?.headers ?? [])]
           .filter(({ name }) => !STRIPPED_HEADER_NAMES.has(name.toLowerCase()))
           .map(({ name, value }) => [name, value]),
       ),
       apiKey,
-      bearerToken: provider === "amazon-bedrock" ? apiKey : undefined,
+      bearerToken: entry.api === "bedrock-converse-stream" ? apiKey : undefined,
     };
     const events =
-      connection.kind === "deployment" && this.env.AI !== undefined
+      connection.kind === "deployment" &&
+      (dxBinding || !dx) &&
+      this.env.AI !== undefined
         ? createDxCloudflareModelProvider(this.env.AI).streamSimple(
             minted,
             envelope.context as never,
             options as never,
           )
-        : provider === "amazon-bedrock"
+        : entry.api === "bedrock-converse-stream"
           ? (
               await import("@earendil-works/pi-ai/api/bedrock-converse-stream")
             ).streamSimple(
@@ -2159,12 +2210,27 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           200,
         );
       } else if (connection.providerId === "amazon-bedrock") {
-        health = await this.#probeBedrock(connection, apiKey);
-      } else if (connection.providerId === "google") {
-        health = await this.#probeJsonGet(
-          "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
-          { "x-goog-api-key": apiKey },
+        const region = connection.fields.region;
+        const entry = bedrockProbeModel(
+          catalogProviderModels("amazon-bedrock"),
         );
+        health =
+          region === undefined
+            ? { state: "unhealthy", code: "FIELD_REGION_REQUIRED" }
+            : entry === undefined
+              ? { state: "unhealthy", code: "ENDPOINT_UNRESOLVED" }
+              : await probeBedrock(
+                  {
+                    ...entry,
+                    baseUrl: providerBaseUrl(
+                      "amazon-bedrock",
+                      entry.baseUrl,
+                      connection.fields,
+                      connection.baseUrl,
+                    ),
+                  },
+                  apiKey,
+                );
       } else {
         const canonical =
           connection.kind === "custom"
@@ -2174,31 +2240,22 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
           canonical === undefined
             ? undefined
             : connectionModel(connection, canonical);
-        const base = model?.baseUrl.replace(/\/$/, "");
-        const anthropic = model?.api === "anthropic-messages";
-        const probePath =
-          anthropic && !base?.endsWith("/v1") ? "/v1/models" : "/models";
-        health =
-          base === undefined
-            ? { state: "unhealthy", code: "ENDPOINT_UNRESOLVED" }
-            : await this.#probeJsonGet(
-                `${base}${probePath}${model?.api === "azure-openai-responses" ? "?api-version=v1" : ""}`,
+        const request =
+          model === undefined
+            ? undefined
+            : keyCheckRequest(
                 {
-                  ...Object.fromEntries(
-                    connection.headers
-                      .filter(
-                        ({ name }) =>
-                          !STRIPPED_HEADER_NAMES.has(name.toLowerCase()),
-                      )
-                      .map(({ name, value }) => [name, value]),
-                  ),
-                  ...(anthropic
-                    ? { "x-api-key": apiKey, "anthropic-version": "2023-06-01" }
-                    : model?.api === "azure-openai-responses"
-                      ? { "api-key": apiKey }
-                      : { authorization: `Bearer ${apiKey}` }),
+                  providerId: connection.providerId,
+                  api: model.api,
+                  baseUrl: model.baseUrl,
                 },
+                apiKey,
+                connection.headers,
               );
+        health =
+          request === undefined
+            ? { state: "unhealthy", code: "ENDPOINT_UNRESOLVED" }
+            : await this.#probeJsonGet(request.url, { ...request.headers });
       }
     }
     await updateConnectionHealth(this.#db(), connection, health);
@@ -2219,63 +2276,9 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         ? ("ENDPOINT_NOT_ALLOWED" as const)
         : undefined,
     );
-    if (response === undefined)
-      return { state: "unhealthy", code: "NETWORK_ERROR" };
-    if (response === "ENDPOINT_NOT_ALLOWED")
-      return { state: "unhealthy", code: response };
-    if (response.status === 401 || response.status === 403)
-      return { state: "unhealthy", code: "AUTH_REJECTED" };
-    if (response.status >= 300 && response.status < 400)
-      return { state: "unhealthy", code: "ENDPOINT_REDIRECT" };
-    return response.ok
-      ? { state: "healthy", code: "CONNECTED" }
-      : { state: "unhealthy", code: `HTTP_${response.status}` };
-  }
-
-  async #probeBedrock(
-    connection: StoredModelConnection,
-    apiKey: string,
-  ): Promise<{ state: string; code: string }> {
-    const region = connection.fields.region;
-    if (region === undefined) {
-      return { state: "unhealthy", code: "FIELD_REGION_REQUIRED" };
-    }
-    const entry = catalogProviderModels("amazon-bedrock").find(
-      ({ id }) =>
-        !id.startsWith("eu.") && !id.startsWith("au.") && !id.startsWith("jp."),
-    );
-    if (entry === undefined) {
-      return { state: "unhealthy", code: "ENDPOINT_UNRESOLVED" };
-    }
-    try {
-      const { streamSimple } = await import(
-        "@earendil-works/pi-ai/api/bedrock-converse-stream"
-      );
-      const events = streamSimple(
-        {
-          ...entry,
-          baseUrl:
-            connection.baseUrl ??
-            `https://bedrock-runtime.${region}.amazonaws.com`,
-        } as never,
-        {
-          systemPrompt: undefined,
-          messages: [{ role: "user", content: "ping", timestamp: 0 }],
-          tools: [],
-        } as never,
-        { apiKey, bearerToken: apiKey, maxTokens: 1 } as never,
-      );
-      for await (const event of events) {
-        if (event.type === "done")
-          return { state: "healthy", code: "CONNECTED" };
-        if (event.type === "error") {
-          return { state: "unhealthy", code: "AUTH_REJECTED" };
-        }
-      }
-      return { state: "unhealthy", code: "ENDPOINT_UNRESOLVED" };
-    } catch {
-      return { state: "unhealthy", code: "NETWORK_ERROR" };
-    }
+    if (response instanceof Response)
+      void response.body?.cancel().catch(() => undefined);
+    return probeHealth(response);
   }
 
   fetch(request: Request): Promise<Response> {

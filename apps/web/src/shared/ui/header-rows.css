@@ -1,0 +1,11 @@
+/* HeaderRows: name and value inputs per header, then Add Header. */
+.header-rows {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.header-rows-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: var(--space-2);
+}

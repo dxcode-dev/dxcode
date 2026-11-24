@@ -1,4 +1,10 @@
 import {
+  CLAUDE_CODE_DX_CALL_LINE,
+  CLAUDE_CODE_DX_CALL_PICKUP_SECONDS,
+  CLAUDE_CODE_DX_CALL_STALE_SECONDS,
+  CLAUDE_CODE_DX_CALL_WAIT_SECONDS,
+} from "./dx-calls.js";
+import {
   CLAUDE_CODE_HOOK_WAIT_SECONDS,
   CLAUDE_CODE_RESULT_HOOK_WAIT_SECONDS,
 } from "./tool-gate.js";
@@ -18,7 +24,10 @@ import {
  *    and each `tools/call` with the result dx's own tool wrote: Flue runs
  *    the real tool when the call's segment reaches it, then writes
  *    `results/<tool_use id>.json`. Claude names the call's tool_use id in
- *    `_meta`, so no request needs matching by content.
+ *    `_meta`, so no request needs matching by content. The bridge prints
+ *    each call as a `dx_tool_call` line, so dx also sees the calls of
+ *    subagents whose messages Claude never prints, and fails a call dx
+ *    did not start, or stopped marking alive, within minutes (dx-calls.ts).
  * 3. Every other line of Claude's output passes through to the chunker
  *    unchanged; control traffic does not. After Claude's `result` the bridge
  *    closes the pipe, and Claude exits.
@@ -68,7 +77,9 @@ to_claude = os.fdopen(4, "w")
 lock = threading.Lock()
 cancelled = set()
 state = {"input": False, "closed": False}
-WAIT_SECONDS = 30 * 60
+WAIT_SECONDS = ${CLAUDE_CODE_DX_CALL_WAIT_SECONDS}
+PICKUP_SECONDS = ${CLAUDE_CODE_DX_CALL_PICKUP_SECONDS}
+STALE_SECONDS = ${CLAUDE_CODE_DX_CALL_STALE_SECONDS}
 INSTRUCTIONS = "Tools from dx, the harness running this session. They run in dx, and their results are shown in the dx thread."
 
 
@@ -121,7 +132,10 @@ def text_result(text, error=False):
 
 def wait_for(rpc_id, tool_use):
     path = os.path.join(results, tool_use + ".json")
-    deadline = time.time() + WAIT_SECONDS
+    alive = os.path.join(results, tool_use + ".alive")
+    started = last = time.monotonic()
+    # The latest beat dx wrote, and when the bridge saw it change.
+    beat, beat_at = None, started
     while True:
         if rpc_id in cancelled:
             return None
@@ -131,8 +145,23 @@ def wait_for(rpc_id, tool_use):
                     return json.load(handle)
             except ValueError:
                 pass  # dx is still writing it
-        if time.time() > deadline:
+        now = time.monotonic()
+        if now - last > 10:
+            beat_at = now  # the Orb slept: nothing could beat meanwhile
+        last = now
+        try:
+            with open(alive) as handle:
+                current = handle.read()
+        except OSError:
+            current = None
+        if current and current != beat:
+            beat, beat_at = current, now
+        if now - started > WAIT_SECONDS:
             return text_result("dx did not finish this tool call in time.", True)
+        if beat is None and now - beat_at > PICKUP_SECONDS:
+            return text_result("dx did not start this tool call within %d seconds, so it did not run. Call it again." % PICKUP_SECONDS, True)
+        if beat is not None and now - beat_at > STALE_SECONDS:
+            return text_result("dx stopped working on this tool call before it finished, so its result is lost; it may have taken effect. Check before calling it again.", True)
         time.sleep(0.2)
 
 
@@ -142,6 +171,11 @@ def call(request_id, rpc_id, params):
         if not tool_use.replace("_", "").replace("-", "").isalnum():
             result = text_result("dx received this call without its tool_use id.", True)
         else:
+            # dx reads the call here: Claude prints no messages for a
+            # subagent's own subagents, so their calls appear nowhere else.
+            with lock:
+                sys.stdout.write(json.dumps({"type": "${CLAUDE_CODE_DX_CALL_LINE}", "tool_use_id": tool_use, "tool_name": str(params.get("name", "")), "input": params.get("arguments") or {}}) + "\\n")
+                sys.stdout.flush()
             result = wait_for(rpc_id, tool_use)
         if result is not None:
             mcp(request_id, {"jsonrpc": "2.0", "id": rpc_id, "result": result})

@@ -2,15 +2,17 @@
 export interface McpOAuthReturn {
   readonly serverId: string | undefined;
   readonly connected: boolean;
-  readonly message: string | undefined;
+  /** Core's `mcpError` code; the page shows dx's own text for it. */
+  readonly error: string | undefined;
 }
 
-const RETURN_PARAMS = ["mcp", "mcpStatus", "mcpMessage"] as const;
+// mcpMessage is no longer sent; it is still removed from old links.
+const RETURN_PARAMS = ["mcp", "mcpStatus", "mcpError", "mcpMessage"] as const;
 let pending: McpOAuthReturn | undefined;
 
 /**
  * The integrations routes' `beforeLoad`: Core's OAuth callback lands on
- * `?mcp=…&mcpStatus=…&mcpMessage=…`. This keeps what it reported for the
+ * `?mcp=…&mcpStatus=…&mcpError=…`. This keeps what it reported for the
  * page and returns the same page's address without those parameters, for
  * the route to redirect to, so a reload or a copied link does not report
  * it again. Undefined when the address carries no report.
@@ -30,7 +32,7 @@ export const takeMcpOAuthReturn = (
   pending = {
     serverId: params.get("mcp") ?? undefined,
     connected: status === "connected",
-    message: params.get("mcpMessage") ?? undefined,
+    error: params.get("mcpError") ?? undefined,
   };
   for (const name of RETURN_PARAMS) params.delete(name);
   const search = params.toString();

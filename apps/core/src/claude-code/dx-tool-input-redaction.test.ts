@@ -143,8 +143,9 @@ const callCreateThread = async (
   const answers: string[] = [];
   const harness = {
     sandbox: {
-      writeFile: async (_path: string, content: string) => {
-        answers.push(content);
+      writeFile: async (path: string, content: string) => {
+        // Only results: dx also marks the call alive while it runs.
+        if (path.endsWith(".json")) answers.push(content);
       },
     } as unknown as Sandbox,
   };

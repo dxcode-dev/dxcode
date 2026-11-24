@@ -14,6 +14,7 @@ import {
 } from "../orb-disk/read-only.js";
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import { environmentMaskerOf } from "../settings/environment-variables/sandbox.js";
+import type { ClaudeCodeDxCallServer } from "./dx-calls.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 import { CLAUDE_CODE_TOOL_BRIDGE } from "./tool-bridge.js";
 import type {
@@ -56,6 +57,10 @@ export const claudeCodeToolResultPath = (toolCallId: string) => {
     throw new Error("Invalid Claude Code tool call id.");
   return `${STATE_ROOT}/mcp/results/${toolCallId}.json`;
 };
+
+/** Where dx marks a dx tool call it is running as alive (dx-calls.ts). */
+export const claudeCodeToolAlivePath = (toolCallId: string) =>
+  claudeCodeToolResultPath(toolCallId).replace(/\.json$/, ".alive");
 const WORKSPACE = "/home/user/workspace/repo";
 const CHUNK_BYTES = 65_536;
 const POLL_MS = 250;
@@ -974,6 +979,8 @@ export class ClaudeCodeRun {
     private readonly gate?: () => ClaudeCodeToolGate | undefined,
     /** The Thread's plugins' tool.result for Claude Code's own tools. */
     private readonly observer?: () => ClaudeCodeToolResultObserver | undefined,
+    /** Answers subagents' dx tool calls (dx-calls.ts). */
+    private readonly dxCalls?: () => ClaudeCodeDxCallServer | undefined,
   ) {
     this.dir = `${claudeCodeRunsRoot}/${key}`;
     this.#sandbox = sandbox;
@@ -1018,6 +1025,28 @@ export class ClaudeCodeRun {
         .finally(() => decidingHooks.delete(request.toolUseId));
     }
   }
+
+  /**
+   * Answers each dx tool call the bridge printed that Flue does not run:
+   * every call but the main agent's, at any subagent depth. The server
+   * skips a call already answered or started, so a re-read after a
+   * restart runs nothing twice.
+   */
+  #answerDxCalls() {
+    // Kept until the Thread's dx tools are mounted to run them.
+    const serve = this.dxCalls?.();
+    if (serve === undefined) return;
+    for (const call of this.stream.dxCalls.splice(0)) {
+      // The main agent's call printed after its tool_use block streamed.
+      if (this.stream.isMainCall(call.id)) continue;
+      void serve(call, this, this.#serving.signal).catch(() => {
+        // Logged by the server; the bridge fails the call on its own.
+      });
+    }
+  }
+
+  /** Aborts the subagent dx calls this reader runs when the run stops. */
+  readonly #serving = new AbortController();
 
   /**
    * Runs plugins' tool.result for each finished call the bridge printed and
@@ -1090,6 +1119,9 @@ export class ClaudeCodeRun {
    * lookup that needs only what Claude wrote from there on.
    */
   readerFrom(index: number) {
+    // It answers no dx calls: starting mid-run, it could miss the main
+    // agent's tool_use block and take the main agent's call for a
+    // subagent's.
     const reader = new ClaudeCodeRun(
       this.key,
       this.#sandbox,
@@ -1246,6 +1278,7 @@ export class ClaudeCodeRun {
       }
       this.#answerHooks();
       this.#answerResults();
+      this.#answerDxCalls();
       if (!ended) break;
       this.#chunk += 1;
       this.#lines = 0;
@@ -1518,6 +1551,7 @@ fi${find}`)}`,
       )
       .catch(() => undefined);
     this.#exited = true;
+    this.#serving.abort();
     const chunk = /\/c(\d{6})\s*$/.exec(result?.stdout ?? "")?.[1];
     return chunk === undefined ? undefined : Number(chunk);
   }

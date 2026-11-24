@@ -1,0 +1,351 @@
+import { CLAUDE_CODE_PROVIDER_ID } from "@dx/domain";
+import { DX_PROVIDER_ID } from "./deployment-model-source.js";
+
+/**
+ * The model providers dx connects to, what each asks for, and where its
+ * requests go. People connect them in Settings → Model Providers; an
+ * installation's admin can connect the same ones for the models it offers
+ * as dx (deployment-upstreams.ts). This module imports nothing that loads
+ * the catalog or the deployment's configuration, so both can use it.
+ */
+
+/**
+ * Canonical dx provider id → pi-ai catalog provider id. dx calls the
+ * Workers AI deployment catalog `cloudflare`, and keeps the pre-pi-1.0
+ * `azure-openai-responses` id that stored connections and model profiles
+ * use; every other provider keeps its pi-ai id.
+ */
+const PI_PROVIDER_IDS: Record<string, string> = {
+  cloudflare: "cloudflare-workers-ai",
+  "azure-openai-responses": "azure",
+};
+
+export const piCatalogProviderId = (providerId: string): string =>
+  PI_PROVIDER_IDS[providerId] ?? providerId;
+
+/**
+ * Wire families: `proxy` adapters accept a coordinator `fetch` (the DO swaps
+ * credentials and forwards); `in-do` adapters refuse custom fetch and run
+ * inside the coordinator DO (Google genai SDK, Bedrock AWS SDK);
+ * `subscription` is the OAuth Copilot flow; `binding` is the deployment
+ * Workers AI binding; `agent` runs the Claude Code CLI in the workspace.
+ */
+export type ProviderTransport =
+  | "proxy"
+  | "in-do"
+  | "subscription"
+  | "binding"
+  | "agent";
+
+/** pi-ai `api` values routed through the coordinator header-swap proxy. */
+export const PROXY_APIS: ReadonlySet<string> = new Set([
+  "openai-completions",
+  "openai-responses",
+  "azure-openai-responses",
+  "anthropic-messages",
+  "mistral-conversations",
+]);
+
+/** pi-ai `api` values whose adapters run inside the coordinator DO. */
+export const IN_DO_APIS: ReadonlySet<string> = new Set([
+  "google-generative-ai",
+  "bedrock-converse-stream",
+]);
+
+export interface ProviderFieldSpec {
+  readonly key: string;
+  readonly label: string;
+  readonly required: boolean;
+  readonly secret: boolean;
+  readonly placeholder?: string;
+  readonly description?: string;
+}
+
+export interface SupportedProvider {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly connectionKind: "provider" | "subscription" | "deployment";
+  readonly transport: ProviderTransport;
+  readonly fields: ReadonlyArray<ProviderFieldSpec>;
+}
+
+const provider = (
+  spec: Omit<SupportedProvider, "connectionKind" | "transport" | "fields"> & {
+    readonly connectionKind?: SupportedProvider["connectionKind"];
+    readonly transport?: ProviderTransport;
+    readonly fields?: ReadonlyArray<ProviderFieldSpec>;
+  },
+): SupportedProvider => ({
+  connectionKind: "provider",
+  transport: "proxy",
+  fields: [],
+  ...spec,
+});
+
+/**
+ * The 0.1.0 provider picker (decision 15). Official key providers plus the
+ * Copilot subscription, the deployment Workers AI binding, and the models
+ * the installation provides as "dx" (deployment-models.ts). Vertex,
+ * `openai-codex` OAuth and pi-ai internal/token-plan providers stay hidden.
+ */
+export const SUPPORTED_PROVIDERS: ReadonlyArray<SupportedProvider> = [
+  provider({
+    id: "github-copilot",
+    name: "GitHub Copilot",
+    description: "Copilot subscription (device sign-in).",
+    connectionKind: "subscription",
+    transport: "subscription",
+  }),
+  provider({
+    id: CLAUDE_CODE_PROVIDER_ID,
+    name: "Claude Pro/Max",
+    description:
+      "Claude Code runs on your Claude subscription (claude setup-token).",
+    transport: "agent",
+  }),
+  provider({
+    id: "openai",
+    name: "OpenAI",
+    description: "OpenAI platform API.",
+  }),
+  provider({
+    id: "anthropic",
+    name: "Anthropic",
+    description: "Anthropic API.",
+  }),
+  provider({
+    id: "google",
+    name: "Google",
+    description: "Gemini API (AI Studio key).",
+    transport: "in-do",
+  }),
+  provider({ id: "xai", name: "xAI", description: "xAI API (Grok)." }),
+  provider({
+    id: "azure-openai-responses",
+    name: "Azure OpenAI",
+    description: "Azure OpenAI Responses deployments.",
+    fields: [
+      {
+        key: "resourceName",
+        label: "Resource name",
+        required: true,
+        secret: false,
+        placeholder: "my-resource",
+        description:
+          "Requests go to https://<resource>.openai.azure.com. Set a base URL in Advanced to override.",
+      },
+    ],
+  }),
+  provider({
+    id: "amazon-bedrock",
+    name: "Amazon Bedrock",
+    description: "Bedrock runtime with a bearer API key.",
+    transport: "in-do",
+    fields: [
+      {
+        key: "region",
+        label: "Region",
+        required: true,
+        secret: false,
+        placeholder: "us-east-1",
+        description: "AWS region for the Bedrock runtime endpoint.",
+      },
+    ],
+  }),
+  provider({
+    id: "cloudflare-ai-gateway",
+    name: "Cloudflare AI Gateway",
+    description: "Route providers through an AI Gateway.",
+    fields: [
+      {
+        key: "accountId",
+        label: "Account ID",
+        required: true,
+        secret: false,
+      },
+      {
+        key: "gatewayId",
+        label: "Gateway ID",
+        required: true,
+        secret: false,
+      },
+    ],
+  }),
+  provider({ id: "groq", name: "Groq", description: "Groq API." }),
+  provider({
+    id: "openrouter",
+    name: "OpenRouter",
+    description: "OpenRouter aggregator API.",
+  }),
+  provider({
+    id: "deepseek",
+    name: "DeepSeek",
+    description: "DeepSeek API.",
+  }),
+  provider({
+    id: "together",
+    name: "Together",
+    description: "Together AI API.",
+  }),
+  provider({
+    id: "fireworks",
+    name: "Fireworks",
+    description: "Fireworks AI API.",
+  }),
+  provider({
+    id: "cerebras",
+    name: "Cerebras",
+    description: "Cerebras inference API.",
+  }),
+  provider({
+    id: "moonshotai",
+    name: "Moonshot AI",
+    description: "Moonshot AI API (Kimi).",
+  }),
+  provider({
+    id: "minimax",
+    name: "MiniMax",
+    description: "MiniMax API.",
+  }),
+  provider({ id: "zai", name: "Z.AI", description: "Z.AI API (GLM)." }),
+  provider({
+    id: "nvidia",
+    name: "NVIDIA",
+    description: "NVIDIA NIM API.",
+  }),
+  provider({
+    id: "huggingface",
+    name: "Hugging Face",
+    description: "Hugging Face inference API.",
+  }),
+  provider({
+    id: "mistral",
+    name: "Mistral",
+    description: "Mistral API.",
+  }),
+  provider({
+    id: DX_PROVIDER_ID,
+    name: "dx",
+    description: "Models included with dx.",
+    connectionKind: "deployment",
+  }),
+  provider({
+    id: "cloudflare",
+    name: "Workers AI (deployment)",
+    description:
+      "This deployment's Workers AI binding; shown when the runtime has one.",
+    connectionKind: "deployment",
+    transport: "binding",
+  }),
+];
+
+/**
+ * The API-key providers a deployment offers when `DX_MODEL_DEPLOYMENT_PROVIDERS`
+ * is unset: every catalog provider people connect with their own key.
+ */
+export const DEFAULT_DEPLOYMENT_PROVIDERS = SUPPORTED_PROVIDERS.filter(
+  (provider) =>
+    provider.connectionKind === "provider" &&
+    provider.id !== CLAUDE_CODE_PROVIDER_ID,
+)
+  .map((provider) => provider.id)
+  .join(",");
+
+/**
+ * Providers presented by the picker. API-key providers are those the
+ * deployment lists (an empty list offers none), while the personal Copilot
+ * and Claude Pro/Max flows stay available.
+ */
+export const pickerProviders = (
+  deploymentProviders: string | undefined,
+  /** Deployment providers with a connection here, such as `dx` or `cloudflare`. */
+  deploymentConnections: ReadonlySet<string>,
+): ReadonlyArray<SupportedProvider> => {
+  const enabled = new Set(
+    (deploymentProviders ?? "")
+      .split(",")
+      .map((providerId) => providerId.trim())
+      .filter(Boolean),
+  );
+  return SUPPORTED_PROVIDERS.filter((provider) => {
+    if (
+      provider.connectionKind === "subscription" ||
+      provider.id === CLAUDE_CODE_PROVIDER_ID
+    )
+      return true;
+    if (provider.connectionKind === "deployment")
+      return deploymentConnections.has(provider.id);
+    return enabled.has(provider.id);
+  });
+};
+
+export const supportedProvider = (id: string): SupportedProvider | undefined =>
+  SUPPORTED_PROVIDERS.find((candidate) => candidate.id === id);
+
+/**
+ * Where a provider's model is served: the catalog entry's endpoint, moved
+ * by the provider's own fields (an Azure resource, a Bedrock region, an AI
+ * Gateway), and replaced by an explicit base URL when one is set.
+ */
+export const providerBaseUrl = (
+  providerId: string,
+  catalogBaseUrl: string,
+  fields: Readonly<Record<string, string>>,
+  baseUrl?: string,
+): string => {
+  if (baseUrl !== undefined) return baseUrl;
+  const { resourceName, accountId, gatewayId, region } = fields;
+  if (providerId === "azure-openai-responses" && resourceName)
+    return `https://${resourceName}.openai.azure.com/openai/v1`;
+  if (providerId === "cloudflare-ai-gateway" && accountId && gatewayId)
+    return `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/compat`;
+  if (providerId === "amazon-bedrock" && region)
+    return `https://bedrock-runtime.${region}.amazonaws.com`;
+  return catalogBaseUrl;
+};
+
+/** The provider fields a connection lacks, by label. */
+export const missingProviderFields = (
+  provider: Pick<SupportedProvider, "fields">,
+  fields: Readonly<Record<string, string>>,
+): ReadonlyArray<string> =>
+  provider.fields
+    .filter((field) => field.required && !fields[field.key]?.trim())
+    .map((field) => field.label);
+
+/**
+ * Whether the deployment offers a connection's provider. API-key connections
+ * whose provider the deployment list leaves out, or later drops, never serve.
+ */
+export const deploymentOffersConnection = (
+  connection: { readonly kind: string; readonly providerId: string },
+  deploymentProviders: string = DEFAULT_DEPLOYMENT_PROVIDERS,
+): boolean =>
+  connection.kind !== "provider" ||
+  pickerProviders(deploymentProviders, new Set()).some(
+    ({ id }) => id === connection.providerId,
+  );
+
+/**
+ * Provider fields become part of a catalog base URL: a host label
+ * (`resourceName`, `region`) or a path segment (`accountId`, `gatewayId`).
+ * Anything else could move the request to another host.
+ */
+const PROVIDER_FIELD_PATTERNS: Readonly<Record<string, RegExp>> = {
+  resourceName: /^[A-Za-z0-9-]{1,63}$/,
+  region: /^[A-Za-z0-9-]{1,63}$/,
+  accountId: /^[A-Za-z0-9_-]{1,128}$/,
+  gatewayId: /^[A-Za-z0-9_-]{1,128}$/,
+};
+
+export const providerFieldValueValid = (key: string, value: string): boolean =>
+  PROVIDER_FIELD_PATTERNS[key]?.test(value) ?? true;
+
+/** Every set field a catalog base URL is built from is safe to interpolate. */
+export const providerFieldsValid = (
+  fields: Readonly<Record<string, string>>,
+): boolean =>
+  Object.entries(fields).every(
+    ([key, value]) => value === "" || providerFieldValueValid(key, value),
+  );

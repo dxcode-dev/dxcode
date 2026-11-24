@@ -291,6 +291,9 @@ function dxFeedbackPanel(config) {
       .join("");
 
   let claimNow;
+  // The sign-in window this panel opened and the challenge it carries; the
+  // consent screen enables Allow only once this panel confirms the pair.
+  let signIn;
 
   const continueWithDx = async () => {
     message = "";
@@ -311,6 +314,7 @@ function dxFeedbackPanel(config) {
     const challenge = hex(
       await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)),
     );
+    signIn = { popup, challenge };
     popup.location.href = `${config.appOrigin}${api}/authorize?challenge=${challenge}`;
     view = "waiting";
     render();
@@ -411,6 +415,22 @@ function dxFeedbackPanel(config) {
   }
 
   window.addEventListener("message", (event) => {
+    if (
+      event.origin === config.appOrigin &&
+      event.data?.type === "dx-fw:consent-requested"
+    ) {
+      if (
+        view === "waiting" &&
+        signIn !== undefined &&
+        event.source === signIn.popup &&
+        event.data.challenge === signIn.challenge
+      )
+        signIn.popup.postMessage(
+          { type: "dx-fw:consent-confirmed", challenge: signIn.challenge },
+          config.appOrigin,
+        );
+      return;
+    }
     if (
       event.origin === config.appOrigin &&
       event.data?.type === "dx-fw:approved"

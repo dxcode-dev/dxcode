@@ -310,7 +310,10 @@ const reconnect = async (
 };
 
 /** Sleeps a running instance; one already resting or gone needs nothing. */
-const sleepInstance = async (api: Agent37Api, instanceId: string) => {
+export const sleepAgent37Instance = async (
+  api: Agent37Api,
+  instanceId: string,
+) => {
   const instance = await api.getInstance(instanceId);
   if (instance?.status !== "running") return;
   await api.sleep(instanceId).catch((cause: unknown) => {
@@ -333,7 +336,7 @@ export const pauseIdleAgent37Instance = async (
 ) => {
   const apiKey = (await idleOrbCredentials(bindings, threadId))?.apiKey;
   if (apiKey === undefined) throw unavailable("no Agent37 account");
-  await sleepInstance(agent37Api(apiKey, send), instanceId);
+  await sleepAgent37Instance(agent37Api(apiKey, send), instanceId);
 };
 
 /**
@@ -381,7 +384,7 @@ export const makeAgent37ExecutionProvider = (
       const api = apiFor(context, options.fetch);
       if (mode === "archive") {
         await assertThreadLifecycleState(db, threadId, "archived");
-        await sleepInstance(api, instanceId);
+        await sleepAgent37Instance(api, instanceId);
         await clearIdleDeadline(db, AGENT37, instanceId);
         return;
       }

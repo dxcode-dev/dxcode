@@ -213,11 +213,19 @@ export const popupPage = (
   );
 };
 
+/**
+ * The consent screen. Anyone can build an authorize link with a challenge
+ * whose verifier they keep, so Allow stays off until the window that opened
+ * this one, the widget's panel on the dx origin, confirms the challenge is
+ * the one it holds. A link opened on its own, or by another site, has no
+ * such opener and cannot record consent (#2406).
+ */
 export const consentPage = (input: {
   readonly projectLabel: string;
   readonly userLabel: string;
   readonly challenge: string;
   readonly action: string;
+  readonly appOrigin: string;
 }) =>
   popupPage(
     200,
@@ -225,13 +233,26 @@ export const consentPage = (input: {
     `<h1>Allow the Feedback Widget for ${escapeHtml(input.projectLabel)}?</h1>
 <p>It will start Threads in <strong>${escapeHtml(input.projectLabel)}</strong> as you with the comments you send from your website. You can turn this off by signing out in the widget, and the Project's admins can turn the widget off for everyone.</p>
 <p class="identity">Signed in as ${escapeHtml(input.userLabel)}</p>
+<p class="error" id="unbound" hidden>Open this window from the Feedback Widget on your website: choose Continue with dx there.</p>
 <form method="post" action="${escapeHtml(input.action)}" class="row">
 <input type="hidden" name="challenge" value="${escapeHtml(input.challenge)}">
 <button type="button" id="cancel">Cancel</button>
 <span class="spacer"></span>
-<button type="submit" class="primary" id="allow">Allow</button>
+<button type="submit" class="primary" id="allow" disabled>Allow</button>
 </form>`,
-    `document.getElementById("cancel").addEventListener("click", () => window.close());`,
+    `(() => {
+const appOrigin = ${scriptJson(input.appOrigin)};
+const challenge = ${scriptJson(input.challenge)};
+const allow = document.getElementById("allow");
+document.getElementById("cancel").addEventListener("click", () => window.close());
+window.addEventListener("message", (event) => {
+  if (event.source === null || event.source !== window.opener || event.origin !== appOrigin) return;
+  if (event.data?.type !== "dx-fw:consent-confirmed" || event.data.challenge !== challenge) return;
+  allow.disabled = false;
+});
+try { window.opener?.postMessage({ type: "dx-fw:consent-requested", challenge }, appOrigin); } catch {}
+setTimeout(() => { if (allow.disabled) document.getElementById("unbound").hidden = false; }, 3000);
+})();`,
   );
 
 /** After Allow: tell the panel, which claims the grant, then close. */

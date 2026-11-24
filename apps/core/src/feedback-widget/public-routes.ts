@@ -7,13 +7,16 @@
 //     postMessage(comments) ─────▶ panel checks the sender is allowed
 //   Continue with dx:              popup GET /<id>/authorize?challenge
 //                                   dx session? else /signin?next=…
-//                                   consent → POST → consent recorded
+//     popup ⇄ opener (dx origin):   panel confirms it holds the challenge
+//                                   Allow → POST → consent recorded
 //   panel POST /<id>/token {verifier}: sha256(verifier) = challenge → grant
 //   panel GET /<id>/me, POST /<id>/threads with the grant as a bearer token
 //
 // The grant lives only in the panel's storage, which the browser partitions
 // by the website framing it; the website never sees it. A challenge seen in
-// the popup's address is useless without the verifier the panel keeps.
+// the popup's address is useless without the verifier the panel keeps, and
+// a link built with someone else's challenge cannot be allowed, because no
+// panel holding that challenge opened it.
 
 import { FeedbackWidgetSendRequestSchema } from "@dx/api";
 import {
@@ -220,6 +223,7 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
       userLabel: current.user.email || current.user.name,
       challenge,
       action: `/api/feedback-widget/${widget.clientId}/authorize`,
+      appOrigin: await appOrigin(context.env),
     });
   })
   .post("/:clientId/authorize", async (context) => {

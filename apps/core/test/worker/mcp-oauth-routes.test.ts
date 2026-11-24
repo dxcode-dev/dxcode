@@ -329,7 +329,9 @@ describe("MCP OAuth, headers, and module IDs", () => {
       cookie,
     );
     expect(forged.status).toBe(303);
-    expect(forged.headers.get("location")).toContain("mcpStatus=failed");
+    const forgedLocation = new URL(forged.headers.get("location") ?? "");
+    expect(forgedLocation.searchParams.get("mcpStatus")).toBe("failed");
+    expect(forgedLocation.searchParams.get("mcpError")).toBe("expired");
 
     const finished = await call(
       `${base}/oauth/callback?code=good-code&state=${encodeURIComponent(state)}`,
@@ -438,6 +440,33 @@ describe("MCP OAuth, headers, and module IDs", () => {
       .bind(server.id)
       .first<{ count: number }>();
     expect(remaining?.count).toBe(0);
+  });
+
+  it("reports a failed sign-in as a fixed code, never text the provider sent", async () => {
+    vi.stubGlobal("fetch", vi.fn(fakeNetwork));
+    const { cookie } = await signup("mcp-oauth-declined@example.com");
+    const created = await call(base, cookie, "POST", {
+      name: "Declined Docs",
+      endpoint,
+      authType: "oauth",
+      timeoutMs: 10_000,
+    });
+    expect(created.status).toBe(201);
+    const { id } = (await created.json<{ data: { id: string } }>()).data;
+    const state = (await authorize(cookie, id)).searchParams.get("state") ?? "";
+
+    const declined = await call(
+      `${base}/oauth/callback?error=Your_workspace_was_suspended_reverify_now&state=${encodeURIComponent(state)}`,
+      cookie,
+    );
+    expect(declined.status).toBe(303);
+    const location = new URL(declined.headers.get("location") ?? "");
+    expect(Object.fromEntries(location.searchParams)).toEqual({
+      mcp: id,
+      mcpStatus: "failed",
+      mcpError: "declined",
+    });
+    expect(location.href).not.toContain("suspended");
   });
 
   it("rejects a duplicate module ID, an Authorization header beside OAuth, and servers without PKCE", async () => {

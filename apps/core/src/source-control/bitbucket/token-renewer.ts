@@ -79,7 +79,7 @@ const SWEEP_CONCURRENCY = 5;
 /**
  * The cron's part: every active connection whose renewal is due is renewed,
  * whether or not anyone is using dx. Due means 30 minutes or less before the
- * access token expires, or a retry time after a failure has passed.
+ * access token expires, or, after a failure, once its backoff has passed.
  */
 export const sweepBitbucketRenewals = async (
   bindings: Bindings,
@@ -97,7 +97,8 @@ export const sweepBitbucketRenewals = async (
     .prepare(
       `SELECT id, user_id FROM bitbucket_connection
         WHERE status = 'active'
-          AND (next_renewal_at <= ?1 OR expires_at IS NULL OR expires_at <= ?2)
+          AND (next_renewal_at <= ?1 OR expires_at IS NULL
+               OR (COALESCE(renewal_failures, 0) = 0 AND expires_at <= ?2))
         ORDER BY COALESCE(next_renewal_at, expires_at)
         LIMIT ${SWEEP_LIMIT}`,
     )
@@ -118,6 +119,7 @@ export const sweepBitbucketRenewals = async (
             connectionId: next.id,
             userId: next.user_id,
             trigger: "schedule",
+            at: scheduledTime,
           })
           .catch((): RenewalOutcome => ({ outcome: "unavailable" }));
         outcomes.push(result.outcome);

@@ -225,6 +225,7 @@ export const SpaceErrorCodeSchema = Schema.Literals([
   "SPACE_READ_ONLY",
   "SPACE_AGENT_UNAVAILABLE",
   "SPACE_MODEL_UNAVAILABLE",
+  "SPACE_ORB_UNAVAILABLE",
   /** The Claude plan picked for a new Space cannot serve it now. */
   "SPACE_PLAN_UNAVAILABLE",
 ]);

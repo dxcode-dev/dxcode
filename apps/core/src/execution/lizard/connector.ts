@@ -479,5 +479,10 @@ export const makeLizardConnector = (
                   : [],
             ),
           ),
+    pause: async (credentials, sandboxId) => {
+      const api = apiFor(credentials, send);
+      const sandbox = await api.getSandbox(sandboxId);
+      if (sandbox?.status === "running") await api.pause(sandboxId);
+    },
   };
 };

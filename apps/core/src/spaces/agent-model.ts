@@ -24,12 +24,12 @@ import { resolveSelectionForUser } from "../settings/model-routing/submission.js
 
 /**
  * The model a person's new Spaces run on, and the route a new Space takes
- * (wiki/runtime-architecture.md#execution-modes). A Space's main Thread runs
- * in executor mode, with no Orb. When the Space is created dx picks its
- * route once, and the Space keeps it:
+ * (wiki/runtime-architecture.md#execution-modes). When the Space is created
+ * dx picks its route once, and the Space keeps it:
  *
  * 1. the model is one Claude Code serves and the person has a Claude Pro/Max
- *    plan connected: Claude Code, in the Space's executor;
+ *    plan connected: Claude Code, on the coordinator's Orb
+ *    (`resolveSpaceCoordinatorOrb`);
  * 2. otherwise Model Routing serves the model: dx's own agent, in its
  *    Durable Object, with no container;
  * 3. otherwise the Space is not created (`SPACE_MODEL_UNAVAILABLE`), and the

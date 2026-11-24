@@ -1,4 +1,5 @@
 import type { Sandbox } from "@flue/runtime";
+import { claudeCodeDxCallServer } from "./dx-calls.js";
 import {
   claudeCodeToolGate,
   claudeCodeToolResultObserver,
@@ -54,6 +55,7 @@ class ClaudeCodeRuns {
         () => reconnectClaudeCodeSandbox(threadId),
         () => claudeCodeToolGate(threadId),
         () => claudeCodeToolResultObserver(threadId),
+        () => claudeCodeDxCallServer(threadId),
       );
       runs.set(key, run);
     }

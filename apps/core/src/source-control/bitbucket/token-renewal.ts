@@ -40,6 +40,8 @@ export interface RenewalRequest {
   readonly trigger: "use" | "schedule";
   /** The access credential Bitbucket just refused; renews even if unexpired. */
   readonly stale?: string;
+  /** `schedule`: the cron tick's time, which decides what is due. */
+  readonly at?: number;
 }
 
 export type RenewalOutcome =
@@ -314,14 +316,23 @@ export const createBitbucketRenewal = (input: {
       row.refresh_credential_id === null
     )
       return { outcome: "reauthorization-required" };
-    const now = Date.now();
+    const now =
+      request.trigger === "schedule" && request.at !== undefined
+        ? Math.max(request.at, Date.now())
+        : Date.now();
     const stale =
       request.stale !== undefined && request.stale === row.access_credential_id;
     const expiresAt =
       row.expires_at === null ? 0 : Date.parse(row.expires_at) || 0;
+    // After a failure the cron waits out the backoff, even once the token
+    // has expired: asking a failing token endpoint every minute only adds
+    // chances to lose a rotation whose answer never arrives. A person's
+    // request still tries at once.
+    const backingOff =
+      request.trigger === "schedule" && (row.renewal_failures ?? 0) > 0;
     const due =
       stale ||
-      expiresAt - now <= RENEW_BEFORE_MS ||
+      (!backingOff && expiresAt - now <= RENEW_BEFORE_MS) ||
       (row.next_renewal_at !== null && Date.parse(row.next_renewal_at) <= now);
     // A request whose token is still good, and a cron tick that raced
     // another renewal, have nothing to do.

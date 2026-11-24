@@ -1,13 +1,7 @@
 import type { ConnectionData } from "@dx/api";
-import { Plus, X } from "lucide-react";
-import { Button } from "../../../shared/ui/button.js";
-import { Input } from "../../../shared/ui/input.js";
+import { type HeaderRow, HeaderRows } from "../../../shared/ui/header-rows.js";
 
-export interface HeaderRow {
-  readonly key: number;
-  readonly name: string;
-  readonly value: string;
-}
+export type { HeaderRow } from "../../../shared/ui/header-rows.js";
 
 /** Header rows a provider key adds to each request; stored values stay masked. */
 export const ProviderHeadersField = ({
@@ -39,69 +33,7 @@ export const ProviderHeadersField = ({
         </button>
       </p>
     ) : null}
-    {rows.map((row, index) => (
-      <div key={row.key} className="routing-sheet-header-row">
-        <Input
-          size="sm"
-          aria-label={`Header Name ${index + 1}`}
-          placeholder="x-custom-header"
-          value={row.name}
-          onChange={(event) =>
-            onRows((current) =>
-              current.map((item) =>
-                item.key === row.key
-                  ? { ...item, name: event.target.value }
-                  : item,
-              ),
-            )
-          }
-        />
-        <Input
-          size="sm"
-          aria-label={`Header Value ${index + 1}`}
-          type="password"
-          autoComplete="new-password"
-          placeholder="value"
-          value={row.value}
-          onChange={(event) =>
-            onRows((current) =>
-              current.map((item) =>
-                item.key === row.key
-                  ? { ...item, value: event.target.value }
-                  : item,
-              ),
-            )
-          }
-        />
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          aria-label={`Remove header ${index + 1}`}
-          onClick={() =>
-            onRows((current) => current.filter((item) => item.key !== row.key))
-          }
-        >
-          <X />
-        </Button>
-      </div>
-    ))}
-    <div className="routing-sheet-inline-actions">
-      <Button
-        type="button"
-        size="xs"
-        variant="outline"
-        onClick={() =>
-          onRows((current) => [
-            ...current,
-            { key: Date.now(), name: "", value: "" },
-          ])
-        }
-      >
-        <Plus />
-        Add Header
-      </Button>
-    </div>
+    <HeaderRows rows={rows} onRows={onRows} />
     {error === undefined ? null : (
       <p className="model-routing-field-error">{error}</p>
     )}

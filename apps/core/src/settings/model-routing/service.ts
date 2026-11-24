@@ -41,8 +41,10 @@ import {
 import type { ConfigEncryptionKeyring } from "../config-encryption.js";
 import {
   catalogProviderModels,
+  deploymentOffersConnection,
   type ProviderFieldSpec,
   pickerProviders,
+  providerFieldValueValid,
   supportedProvider,
 } from "./catalog.js";
 import {
@@ -271,10 +273,16 @@ const validateFields = (
   fieldErrors: SettingsFieldError[],
 ) => {
   for (const spec of specFields) {
-    if (spec.required && (fields[spec.key] ?? "").trim() === "") {
+    const value = fields[spec.key] ?? "";
+    if (spec.required && value.trim() === "") {
       fieldErrors.push({
         field: `fields.${spec.key}`,
         message: `${spec.label} is required.`,
+      });
+    } else if (value !== "" && !providerFieldValueValid(spec.key, value)) {
+      fieldErrors.push({
+        field: `fields.${spec.key}`,
+        message: `${spec.label} may contain only letters, digits, and hyphens${spec.key === "accountId" || spec.key === "gatewayId" ? " or underscores" : ""}.`,
       });
     }
   }
@@ -496,7 +504,11 @@ export class ModelRoutingService {
     }
     if (input.kind === "provider") {
       const spec = supportedProvider(input.providerId);
-      if (spec === undefined || spec.connectionKind !== "provider") {
+      if (
+        spec === undefined ||
+        spec.connectionKind !== "provider" ||
+        !deploymentOffersConnection(input, this.deploymentProviders)
+      ) {
         fieldErrors.push({
           field: "providerId",
           message: `Unsupported provider ${input.providerId}.`,
@@ -1017,8 +1029,9 @@ export class ModelRoutingService {
         : await loadConnectionsForTarget(this.db, target)
       ).filter(
         (connection) =>
-          connection.kind !== "subscription" ||
-          connection.target.scope === "personal",
+          (connection.kind !== "subscription" ||
+            connection.target.scope === "personal") &&
+          deploymentOffersConnection(connection, this.deploymentProviders),
       ),
       ...this.extraConnections,
     ];

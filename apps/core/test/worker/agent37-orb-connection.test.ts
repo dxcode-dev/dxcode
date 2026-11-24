@@ -73,7 +73,7 @@ let connectors: OrbProviderConnectors;
 
 const call = async (
   path: string,
-  method: "GET" | "PUT" | "POST" = "GET",
+  method: "GET" | "PUT" | "POST" | "DELETE" = "GET",
   body?: unknown,
   using: Bindings = bindings,
 ) => {
@@ -426,6 +426,50 @@ describe("Agent37 in a person's own workspace", () => {
     expect(world.traffic.filter((line) => line.includes("sk_live_"))).toEqual(
       [],
     );
+  }, 60_000);
+
+  it("sleeps the Orbs still running on a key when the person removes it", async () => {
+    await call("/agent37/connection", "PUT", {
+      credentials: { apiKey: "sk_live_one" },
+    });
+    await prepare();
+    const provider = makeAgent37ExecutionProvider({ fetch: send });
+    const second = "thr_00000000-0000-4000-8000-0000000037c2";
+    for (const id of [threadId, second]) {
+      const { target } = await pinThread(id);
+      if (target.credential.scope !== "personal") throw new Error("no account");
+      const handle = await provider.workspace.create(
+        {
+          account: {
+            scope: "personal",
+            userId: solo,
+            providerAccount: "mem_owner",
+          },
+          credentials: target.credential.credentials,
+          profile: target.profile,
+        },
+        { threadId: id as never },
+        { authorize: async () => {} },
+      );
+      await handle.setIdleDeadline(3_600_000);
+    }
+    const instances = [...world.instances.values()] as Array<FakeInstance>;
+    expect(instances.map(({ status }) => status)).toEqual([
+      "running",
+      "running",
+    ]);
+
+    // Agent37 refuses one sleep: the key is removed all the same.
+    world.failSleeps = 1;
+    const removed = await call("/agent37/connection", "DELETE");
+    expect(removed.status).toBe(200);
+    expect(agent37Of(removed.body.data).connection).toBeNull();
+    expect(
+      instances.map(({ status }) => status).sort((a, b) => a.localeCompare(b)),
+    ).toEqual(["running", "sleeping"]);
+    // No key is left to sleep an Orb later, so nothing waits on the sweep.
+    expect(await idleRows()).toEqual([]);
+    expect(await sweep(Date.now() + 7_200_000)).toBe(0);
   }, 60_000);
 
   it("fails preparation and leaves nothing running when the test Orb lacks a workspace feature", async () => {

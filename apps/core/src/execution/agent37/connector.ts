@@ -14,7 +14,7 @@ import {
   orbCheckFailure,
 } from "../guest/orb-check.js";
 import { type Agent37Api, Agent37ApiError, agent37Api } from "./api.js";
-import { AGENT37_MOUNT_PATH } from "./provider.js";
+import { AGENT37_MOUNT_PATH, sleepAgent37Instance } from "./provider.js";
 
 /**
  * Agent37 in a person's or workspace's own Agent37 workspace, or a
@@ -305,5 +305,7 @@ export const makeAgent37Connector = (
         ? undefined
         : new Map(AGENT37_ORB_SIZES.map(({ id }) => [id, template] as const));
     },
+    pause: (credentials, instanceId) =>
+      sleepAgent37Instance(agent37Api(apiKeyOf(credentials), send), instanceId),
   };
 };

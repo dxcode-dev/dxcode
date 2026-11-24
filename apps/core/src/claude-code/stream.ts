@@ -3,6 +3,7 @@ import {
   type SecretMasker,
   secretMasker,
 } from "../settings/environment-variables/masking.js";
+import { CLAUDE_CODE_DX_CALL_LINE, type ClaudeCodeDxCall } from "./dx-calls.js";
 import { claudePlanReadingFromEvent } from "./plan.js";
 import {
   CLAUDE_CODE_HOOK_LINE,
@@ -259,6 +260,8 @@ export class ClaudeCodeStream {
   readonly hookRequests: ClaudeCodeHookRequest[] = [];
   /** Finished calls the bridge printed for plugins' `tool.result`. */
   readonly hookResults: ClaudeCodeHookResult[] = [];
+  /** dx tool calls the bridge printed that dx has not taken yet. */
+  readonly dxCalls: ClaudeCodeDxCall[] = [];
   /** The plan's limits from the latest `rate_limit_event`. */
   planReading: ClaudePlanReading | undefined;
   /** When dx read `planReading` (epoch seconds). */
@@ -287,6 +290,15 @@ export class ClaudeCodeStream {
     const segment = this.segments.at(-1);
     if (segment === undefined) throw new Error("No Claude Code segment.");
     return segment;
+  }
+
+  /** A call of the main agent, which Flue runs from its segment. */
+  isMainCall(toolCallId: string) {
+    return this.segments.some(({ blocks }) =>
+      blocks.some(
+        (block) => block.type === "toolCall" && block.id === toolCallId,
+      ),
+    );
   }
 
   get finished() {
@@ -340,6 +352,18 @@ export class ClaudeCodeStream {
       case "result":
         this.#closeFallback();
         this.#finish(event);
+        return;
+      case CLAUDE_CODE_DX_CALL_LINE:
+        if (
+          typeof event.tool_use_id === "string" &&
+          /^[A-Za-z0-9_-]+$/.test(event.tool_use_id) &&
+          typeof event.tool_name === "string"
+        )
+          this.dxCalls.push({
+            id: event.tool_use_id,
+            name: event.tool_name,
+            input: record(event.input) ?? {},
+          });
         return;
       case CLAUDE_CODE_HOOK_LINE: {
         const input = record(event.tool_input);

@@ -319,6 +319,12 @@ export interface Variables {
     readonly kind?: "space";
     /** Set only by server logic, such as Space creation; never a client. */
     readonly executionMode?: "executor";
+    /**
+     * A Space coordinator's Orb (server logic only): its size may be one
+     * the deployment keeps out of the Orb picker, and it runs no repository,
+     * so its Orb starts without a clone or the Project's scripts.
+     */
+    readonly coordinatorOrb?: true;
     readonly requestedByUserId?: string;
   };
 }

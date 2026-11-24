@@ -33,6 +33,10 @@ import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
 import { personalRunnerRoutes } from "../runners/routes.js";
 import { spaceAgentModelRoutes } from "../spaces/agent-model.js";
+import {
+  personalSpaceCoordinatorOrbRoutes,
+  workspaceSpaceCoordinatorOrbRoutes,
+} from "../spaces/coordinator-orb.js";
 import { requireSpaces, spacesEnabled } from "../spaces/availability.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
@@ -264,6 +268,11 @@ settingsRoutes.route(
 settingsRoutes.route("/personal/security", personalSecurityRoutes);
 settingsRoutes.use("/personal/space-agent-model/*", requireSpaces);
 settingsRoutes.route("/personal/space-agent-model", spaceAgentModelRoutes);
+settingsRoutes.use("/personal/space-coordinator-orb/*", requireSpaces);
+settingsRoutes.route(
+  "/personal/space-coordinator-orb",
+  personalSpaceCoordinatorOrbRoutes,
+);
 settingsRoutes.route("/personal/feedback-widget", feedbackWidgetEmbedRoutes);
 settingsRoutes.route("/personal/projects", personalProjectDefaultsRoutes);
 settingsRoutes.route("/personal/keys", personalSigningKeyRoutes);
@@ -292,6 +301,14 @@ settingsRoutes.route(
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/orb-providers",
   workspaceOrbProviderRoutes,
+);
+settingsRoutes.use(
+  "/workspaces/:workspaceSlug/space-coordinator-orb/*",
+  requireSpaces,
+);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/space-coordinator-orb",
+  workspaceSpaceCoordinatorOrbRoutes,
 );
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/plugin-bundles",

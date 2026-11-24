@@ -126,7 +126,10 @@ import {
   messageAttachmentBody,
   resolveMessageAttachments,
 } from "../attachments/message.js";
-import { deploymentOrbsFor } from "../execution/deployment-orbs.js";
+import {
+  deploymentOrbsFor,
+  loadDeploymentOrbs,
+} from "../execution/deployment-orbs.js";
 import { registeredClosedOrbProviders } from "../execution/deployment-orbs-registration.js";
 import { ExecutionWorkspaces } from "../execution/execution-workspaces.js";
 import { orbProviderConnectors } from "../execution/orb-providers.js";
@@ -1061,12 +1064,19 @@ export const createThreadRoutes = (
         );
       // Admission of a runner profile: the requested one, or for a first
       // message the Project's, which the Thread's Orb pin also uses.
+      // A Space coordinator may pin a named size kept out of the Orb picker.
+      const coordinatorOrb =
+        context.get("threadCreation")?.coordinatorOrb === true;
+      const creationDeploymentOrbs = (runnerProfileId: RunnerProfileId) =>
+        coordinatorOrb
+          ? loadDeploymentOrbs(context.env, true)
+          : deploymentOrbsFor(context.env, runnerProfileId);
       const admitRunnerProfile = (runnerProfileId: RunnerProfileId) =>
         Effect.gen(function* () {
           const catalog = yield* loadRunnerProfileCatalog(
             context.env,
             yield* Effect.promise(() =>
-              deploymentOrbsFor(context.env, runnerProfileId),
+              creationDeploymentOrbs(runnerProfileId),
             ),
           );
           const profile = yield* selectRunnerProfile(catalog, runnerProfileId);
@@ -1228,7 +1238,7 @@ export const createThreadRoutes = (
                 const executionPin = executorMode
                   ? Effect.succeed(undefined)
                   : Effect.tryPromise({
-                      try: () =>
+                      try: async () =>
                         resolveThreadExecutionPin({
                           db,
                           bindings: context.env,
@@ -1249,6 +1259,14 @@ export const createThreadRoutes = (
                             ? {}
                             : { runnerMachineId: input.runnerMachineId }),
                           connectors: orbProviderConnectors,
+                          ...(coordinatorOrb &&
+                          requestedRunnerProfileId !== undefined
+                            ? {
+                                deploymentOrbs: await creationDeploymentOrbs(
+                                  requestedRunnerProfileId,
+                                ),
+                              }
+                            : {}),
                           ...(project.kind === "projectless"
                             ? {
                                 projectlessRunnerProfileId:
@@ -1339,8 +1357,11 @@ export const createThreadRoutes = (
                 insert: {
                   pin: next.pin,
                   claudeConnectionId: route.claudeConnectionId,
+                  // A Space coordinator's Orb runs no repository.
                   source:
-                    projectId === undefined || source === undefined
+                    projectId === undefined ||
+                    source === undefined ||
+                    coordinatorOrb
                       ? undefined
                       : threadSourceDraft(projectId, source),
                 },

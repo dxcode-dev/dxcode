@@ -2191,6 +2191,195 @@ exec /usr/bin/tr "$@"
     });
   });
 
+  /** The line the dx tool bridge prints for each dx tool call it receives. */
+  const announced = (id: string, text: string) =>
+    line({
+      type: "dx_tool_call",
+      tool_use_id: id,
+      tool_name: "note",
+      input: { text },
+    });
+
+  it("answers a dx call of a subagent's own subagent, which Claude prints no messages for", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    const ran: string[] = [];
+    // The subagent starts its own subagent: Claude prints only the nested
+    // Agent call, never the nested subagent's messages, so dx learns of
+    // its dx call only from the bridge.
+    const { agent } = await subagentTurn(
+      guest,
+      [
+        line({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_nested_agent",
+                name: "Agent",
+                input: { description: "Deeper", prompt: "Note it." },
+              },
+            ],
+          },
+          parent_tool_use_id: "toolu_agent",
+        }),
+        announced("toolu_deep", "deep"),
+        waitForDxAnswer("toolu_deep"),
+      ],
+      async (text) => {
+        ran.push(text);
+        return `noted ${text}`;
+      },
+    );
+    const output = await agent.run({
+      toolCallId: "toolu_agent",
+      signal: AbortSignal.timeout(20_000),
+      harness: { sandbox: guest.sandbox },
+      log: console,
+    } as never);
+    expect(output).toBe("Noted both.");
+    expect(ran).toEqual(["deep"]);
+    expect(JSON.parse(guest.file(dxAnswer("toolu_deep")) ?? "null")).toEqual({
+      content: [{ type: "text", text: "noted deep" }],
+      isError: false,
+    });
+    expect(guest.file(`${STATE}/mcp/results/toolu_deep.alive`)).toBeDefined();
+  });
+
+  it("answers a subagent's dx call when no Agent call waits on it, as after a restart", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    const { claude } = await subagentTurn(
+      guest,
+      [
+        subagentCalls("toolu_agent", [
+          { id: "toolu_s1", input: { text: "one" } },
+        ]),
+        announced("toolu_s1", "one"),
+        waitForDxAnswer("toolu_s1"),
+        subagentResult("toolu_agent", "toolu_s1", "noted one"),
+      ],
+      async (text) => `noted ${text}`,
+    );
+    // A restart lost the Agent call: Flue settled it and asks the model
+    // again, so only the model stream reads the run.
+    expect(
+      await claude.answer({
+        messages: [
+          user("Review it", 71),
+          assistant(
+            [
+              {
+                type: "toolCall",
+                id: "toolu_agent",
+                name: "Agent",
+                arguments: {
+                  description: "Review",
+                  prompt: "Note two things.",
+                },
+              },
+            ],
+            "toolUse",
+          ),
+          {
+            role: "toolResult",
+            toolCallId: "toolu_agent",
+            toolName: "Agent",
+            content: [{ type: "text", text: "Interrupted." }],
+            isError: true,
+            timestamp: Date.now(),
+          },
+        ],
+      }),
+    ).toMatchObject({ type: "done" });
+    expect(JSON.parse(guest.file(dxAnswer("toolu_s1")) ?? "null")).toEqual({
+      content: [{ type: "text", text: "noted one" }],
+      isError: false,
+    });
+  });
+
+  it("leaves the main agent's dx call to Flue", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    const ran: string[] = [];
+    await guest.script([
+      init(),
+      ...response("m1", [
+        { id: "toolu_main", name: "note", input: { text: "main" } },
+      ]),
+      announced("toolu_main", "main"),
+      waitForDxAnswer("toolu_main"),
+      toolResult("toolu_main", "noted main"),
+      ...response("m2", [{ text: "Done." }]),
+      result("Done."),
+    ]);
+    const claude = claudeCode(createClaudeCodeProvider, guest.sandbox);
+    expect(
+      await claude.answer({
+        messages: [user("Note it", 71)],
+        tools: [
+          {
+            name: "note",
+            description: "Notes a text.",
+            parameters: { type: "object" } as never,
+          },
+        ],
+      }),
+    ).toMatchObject({ type: "done", reason: "toolUse" });
+    const [note] = claudeCodeDxTools(claude.threadId, [
+      noteTool(async (text) => {
+        ran.push(text);
+        return `noted ${text}`;
+      }),
+    ]);
+    if (note === undefined) throw new Error("Expected the note tool.");
+    // Reading the run again finds the printed call; only Flue runs it.
+    await note.run({
+      toolCallId: "toolu_main",
+      data: { text: "main" },
+      signal: AbortSignal.timeout(20_000),
+      harness: { sandbox: guest.sandbox },
+      log: console,
+    } as never);
+    expect(ran).toEqual(["main"]);
+  });
+
+  it("runs a subagent's dx call once when both its message and the bridge show it", {
+    timeout: 30_000,
+  }, async () => {
+    const guest = await createGuest();
+    const ran: string[] = [];
+    const { agent } = await subagentTurn(
+      guest,
+      [
+        subagentCalls("toolu_agent", [
+          { id: "toolu_s1", input: { text: "one" } },
+        ]),
+        announced("toolu_s1", "one"),
+        waitForDxAnswer("toolu_s1"),
+        subagentResult("toolu_agent", "toolu_s1", "noted one"),
+      ],
+      async (text) => {
+        ran.push(text);
+        return `noted ${text}`;
+      },
+    );
+    expect(
+      await agent.run({
+        toolCallId: "toolu_agent",
+        signal: AbortSignal.timeout(20_000),
+        harness: { sandbox: guest.sandbox },
+        log: console,
+      } as never),
+    ).toBe("Noted both.");
+    expect(ran).toEqual(["one"]);
+  });
+
   it("fails the Agent call with the cause and stops Claude when dx cannot hand a subagent its dx result (#2282)", {
     timeout: 30_000,
   }, async () => {

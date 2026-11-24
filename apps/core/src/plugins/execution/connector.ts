@@ -66,6 +66,16 @@ export interface OrbProviderConnector {
   readonly unavailable?: (
     preparation: Pick<OrbPreparation, "status" | "state">,
   ) => ReadonlyMap<string, string> | undefined;
+  /**
+   * Pauses one of this connection's sandboxes; one already paused or gone
+   * needs nothing. Removing the connection pauses every Orb still running
+   * on it, since no key is left to pause one later. A provider whose Orbs
+   * pause or end by themselves omits this.
+   */
+  readonly pause?: (
+    credentials: OrbProviderCredentials,
+    sandboxId: string,
+  ) => Promise<void>;
 }
 
 export type OrbProviderConnectors = Readonly<

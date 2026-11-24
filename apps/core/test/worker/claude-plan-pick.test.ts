@@ -950,6 +950,17 @@ describe("A new Space's Claude plan", () => {
     const third = await connect(cookie, "Claude Pro/Max 3", TOKENS[2]);
     await seedProject(userId, "prj_00000000-0000-4000-8000-0000000b1a51");
     const projectId = "prj_00000000-0000-4000-8000-0000000b1a51";
+    // A Claude Code Space's coordinator runs on an Orb the person chose.
+    expect(
+      (
+        await call(
+          "/v1/settings/personal/space-coordinator-orb",
+          cookie,
+          "PUT",
+          { runnerProfileId: "a1.small" },
+        )
+      ).status,
+    ).toBe(200);
 
     const picked = await space(cookie, projectId, third);
     expect(picked.status).toBe(201);

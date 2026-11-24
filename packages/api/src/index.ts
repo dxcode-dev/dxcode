@@ -103,6 +103,7 @@ export * from "./spaces/message-comments.js";
 export * from "./spaces/posts.js";
 export * from "./spaces/progress.js";
 export * from "./spaces/space-agent-model.js";
+export * from "./spaces/space-coordinator-orb.js";
 export * from "./spaces/space-artifacts.js";
 export * from "./spaces/space-cards.js";
 export * from "./spaces/space-data.js";

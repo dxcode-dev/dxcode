@@ -13,7 +13,11 @@ import {
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { claudePlanAccess, loadClaudePlan } from "../../claude-code/plan.js";
 import type { Bindings } from "../../http/types.js";
-import { catalogProviderModels } from "./catalog.js";
+import {
+  catalogProviderModels,
+  deploymentOffersConnection,
+  providerBaseUrl,
+} from "./catalog.js";
 import {
   bindThreadClaudeConnection,
   lastThreadClaudeConnection,
@@ -259,7 +263,15 @@ export const resolveSelectionForUser = async (
     loadModeProfileOverrides(db, userId),
   ]);
   const deployment = await deploymentRouting(bindings);
-  const connections = [...stored, ...deployment.connections];
+  const connections = [
+    ...stored.filter((connection) =>
+      deploymentOffersConnection(
+        connection,
+        bindings.DX_MODEL_DEPLOYMENT_PROVIDERS,
+      ),
+    ),
+    ...deployment.connections,
+  ];
   const entitlements = new Map<string, ReadonlySet<string>>(
     await Promise.all(
       connections
@@ -426,18 +438,15 @@ const servingModel = (
       compat: customEndpointCompat(entry.compat),
     } as Model<Api>;
   }
-  let baseUrl = entry.baseUrl;
-  const { resourceName, accountId, gatewayId, region } = connection.fields;
-  if (provider === "azure-openai-responses" && resourceName)
-    baseUrl = `https://${resourceName}.openai.azure.com/openai/v1`;
-  if (provider === "cloudflare-ai-gateway" && accountId && gatewayId)
-    baseUrl = `https://gateway.ai.cloudflare.com/v1/${accountId}/${gatewayId}/compat`;
-  if (provider === "amazon-bedrock" && region)
-    baseUrl = `https://bedrock-runtime.${region}.amazonaws.com`;
   return {
     ...entry,
     provider,
-    baseUrl: connection.baseUrl ?? baseUrl,
+    baseUrl: providerBaseUrl(
+      provider,
+      entry.baseUrl,
+      connection.fields,
+      connection.baseUrl,
+    ),
   } as Model<Api>;
 };
 
@@ -482,7 +491,15 @@ export const resolveRouteSubmission = async (
     loadModeProfileOverrides(db, thread.ownerUserId),
   ]);
   const deployment = await deploymentRouting(bindings);
-  const connections = [...stored, ...deployment.connections];
+  const connections = [
+    ...stored.filter((connection) =>
+      deploymentOffersConnection(
+        connection,
+        bindings.DX_MODEL_DEPLOYMENT_PROVIDERS,
+      ),
+    ),
+    ...deployment.connections,
+  ];
   const defaults = deployment.profile;
   const slot =
     thread.selection.kind === "mode"

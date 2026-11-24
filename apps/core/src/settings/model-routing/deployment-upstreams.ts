@@ -1,4 +1,5 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
+import type { ProviderFieldSpec } from "./providers.js";
 
 /**
  * Upstreams: the inference services an installation can pay for and offer
@@ -21,6 +22,12 @@ export interface UpstreamModel {
   readonly thinkingLevelMap?: Model<Api>["thinkingLevelMap"];
   /** Request traits for this model, over the preset's. */
   readonly compat?: Model<Api>["compat"];
+  /**
+   * The model's own wire API and endpoint, when they differ from the
+   * preset's: OpenRouter serves some models over Anthropic's format.
+   */
+  readonly api?: DeploymentUpstream["api"];
+  readonly baseUrl?: string;
   /**
    * The upstream's list price per 1M tokens in the preset's currency. dx
    * charges it converted to USD, plus the admin's markup. Cache rates the
@@ -48,15 +55,22 @@ export interface DeploymentUpstream {
     | "openai-completions"
     | "openai-responses"
     | "anthropic-messages"
+    | "azure-openai-responses"
+    | "mistral-conversations"
+    | "google-generative-ai"
+    | "bedrock-converse-stream"
     | "cloudflare-ai-binding";
   readonly baseUrl: string;
+  /**
+   * The Settings provider (providers.ts) this upstream connects as, when it
+   * is one: its fields move the endpoint, its check tests the key, and
+   * Google and Bedrock calls run in the credential coordinator with it.
+   */
+  readonly providerId?: string;
+  /** What the admin fills in besides the key, such as a Bedrock region. */
+  readonly fields?: ReadonlyArray<ProviderFieldSpec>;
   /** Runs on a binding the deployment already has, so it takes no key. */
   readonly keyless?: boolean;
-  /** How `checkUpstream` tests a key: a GET relative to the base URL. */
-  readonly probe?: {
-    readonly path: string;
-    readonly headers: (key: string) => Readonly<Record<string, string>>;
-  };
   readonly compat: Model<Api>["compat"];
   /** The currency of the models' upstreamPrice: USD, or one with an admin fx rate. */
   readonly currency: string;

@@ -11,8 +11,8 @@
 // 4. Controls: an unlisted origin is refused in the page and by the API; a
 //    site that is not allowed cannot frame the panel; the grant stays in the
 //    panel's storage, not the website's; consent needs the dx origin; a
-//    wrong verifier claims nothing; Turn Off makes the script inert and ends
-//    every grant.
+//    wrong verifier claims nothing; a consent link no panel opened cannot be
+//    allowed; Turn Off makes the script inert and ends every grant.
 //
 // Writes a video, screenshots, a HAR without bodies, console.json, and
 // summary.json to <output dir>.
@@ -25,6 +25,7 @@
 // :4100 (such as an Orb Portal). Credentials come from DX_PROOF_EMAIL /
 // DX_PROOF_PASSWORD, or the local account in apps/core/.dev.vars.
 import assert from "node:assert/strict";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -532,6 +533,58 @@ await check(
     assert.match(wrong.text, /AUTHORIZATION_PENDING/);
     const noGrant = await bare("GET", `/api/feedback-widget/${clientId}/me`);
     assert.equal(noGrant.status, 401);
+  },
+);
+
+await check(
+  "A consent link that no widget panel opened cannot be allowed",
+  async () => {
+    // An attacker keeps the verifier and sends the signed-in victim the
+    // authorize link with its challenge (#2406).
+    const verifier = `attacker-${randomBytes(32).toString("base64url")}`;
+    const challenge = createHash("sha256").update(verifier).digest("hex");
+    const link = `${dxOrigin}/api/feedback-widget/${clientId}/authorize?challenge=${challenge}`;
+    const direct = await context.newPage();
+    await direct.goto(link);
+    const lure = await context.newPage();
+    await lure.goto(`${unlistedOrigin}/pricing`);
+    const [opened] = await Promise.all([
+      context.waitForEvent("page"),
+      lure.evaluate((url) => window.open(url, "_blank", "popup"), link),
+    ]);
+    const outcomes = {};
+    for (const [name, page] of [
+      ["direct", direct],
+      ["popup from another site", opened],
+    ]) {
+      await page
+        .getByRole("heading", { name: /Allow the Feedback Widget/ })
+        .waitFor();
+      // The victim clicks Allow; it must record nothing.
+      outcomes[name] = await page
+        .getByRole("button", { name: "Allow" })
+        .click({ timeout: 3_000 })
+        .then(
+          () => "clicked",
+          () => "disabled",
+        );
+      await page.waitForTimeout(1_000);
+      const claim = await bare(
+        "POST",
+        `/api/feedback-widget/${clientId}/token`,
+        {
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ verifier }),
+        },
+      );
+      assert.equal(claim.status, 202, `${name}: ${claim.text}`);
+      await page
+        .getByText("Open this window from the Feedback Widget")
+        .waitFor({ timeout: 10_000 });
+      await shot(page, `consent-unbound-${name.replaceAll(" ", "-")}`);
+    }
+    await Promise.all([direct, lure, opened].map((page) => page.close()));
+    return { outcomes };
   },
 );
 

@@ -44,6 +44,12 @@ export interface DeploymentOrbSettings {
    * means the other.
    */
   readonly sizes?: ReadonlyArray<DeploymentOrbSize>;
+  /**
+   * Every named size's ID starts with it, including sizes its admin adds
+   * after `sizes` was registered, so a size ID with it reads the admin's
+   * current sizes (`deploymentOrbsFor`).
+   */
+  readonly namedSizePrefix?: string;
 }
 
 /** One of the deployment's own named sizes. */
@@ -168,8 +174,12 @@ export const deploymentSizeAccount = (
  */
 export const loadDeploymentOrbs = async (
   bindings: Bindings,
+  /** Also the named sizes kept out of the Orb picker (a Space coordinator's). */
+  withUnoffered = false,
 ): Promise<DeploymentOrbs> =>
-  loadRegisteredDeploymentOrbs(bindings).catch(() => registeredDeploymentOrbs);
+  loadRegisteredDeploymentOrbs(bindings, withUnoffered).catch(
+    () => registeredDeploymentOrbs,
+  );
 
 /**
  * How the deployment presents its accounts, as far as `runnerProfileId`
@@ -182,8 +192,11 @@ export const deploymentOrbsFor = (
   runnerProfileId: string | undefined,
 ): Promise<DeploymentOrbs> =>
   runnerProfileId !== undefined &&
-  !Object.values(registeredDeploymentOrbs).some((settings) =>
-    settings?.sizes?.some(({ id }) => id === runnerProfileId),
+  !Object.values(registeredDeploymentOrbs).some(
+    (settings) =>
+      settings?.sizes?.some(({ id }) => id === runnerProfileId) === true ||
+      (settings?.namedSizePrefix !== undefined &&
+        runnerProfileId.startsWith(settings.namedSizePrefix)),
   )
     ? Promise.resolve(registeredDeploymentOrbs)
     : loadDeploymentOrbs(bindings);

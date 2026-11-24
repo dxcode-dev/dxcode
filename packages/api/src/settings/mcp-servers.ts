@@ -293,3 +293,16 @@ export const McpServersErrorResponseSchema = Schema.Union([
   McpServersPolicyDeniedResponseSchema,
   McpServersUnavailableResponseSchema,
 ]);
+
+/**
+ * Why an MCP server's OAuth callback failed. Core's callback sends one of
+ * these codes as `?mcpError=` and the web app shows its own fixed text for
+ * it, so the page never shows text taken from its address.
+ */
+export type McpOAuthErrorCode =
+  | "invalid"
+  | "expired"
+  | "declined"
+  | "no_code"
+  | "changed"
+  | "failed";

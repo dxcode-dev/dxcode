@@ -9,10 +9,15 @@ import type {
 import { toJsonSchema } from "@valibot/to-json-schema";
 import * as v from "valibot";
 import { claudeCodeLogger } from "../logging.js";
+import {
+  CLAUDE_CODE_DX_CALL_BEAT_SECONDS,
+  setClaudeCodeDxCallServer,
+} from "./dx-calls.js";
 import { claudeCodeRuns } from "./runs.js";
 import { UNREADABLE_TOOL_INPUT } from "./stream.js";
 import {
   type ClaudeCodeDxTool,
+  claudeCodeToolAlivePath,
   claudeCodeToolResultPath,
 } from "./workspace-run.js";
 
@@ -97,6 +102,21 @@ const answer = async (
 };
 
 /**
+ * Marks a call dx runs as alive until the returned stop, so the bridge
+ * fails it soon after dx stops running it (dx-calls.ts). A beat that fails
+ * to write is skipped; the bridge tolerates a few.
+ */
+const beat = (sandbox: () => Sandbox, toolCallId: string) => {
+  const write = () =>
+    void sandbox()
+      .writeFile(claudeCodeToolAlivePath(toolCallId), String(Date.now()))
+      .catch(() => {});
+  write();
+  const timer = setInterval(write, CLAUDE_CODE_DX_CALL_BEAT_SECONDS * 1000);
+  return () => clearInterval(timer);
+};
+
+/**
  * Each Thread's dx tools as DxAgent mounted them for the current submission:
  * the list the dx MCP server offers, and the tools a subagent's calls run,
  * since Flue never sees a subagent's calls.
@@ -171,7 +191,8 @@ const execute = async (
   context: CallContext,
 ) => {
   const sandbox = context.harness.sandbox as Sandbox;
-  const outcome = await perform(tool, args, context);
+  const stopBeating = beat(() => sandbox, context.toolCallId);
+  const outcome = await perform(tool, args, context).finally(stopBeating);
   if (!outcome.ok) {
     await answer(
       sandbox,
@@ -270,6 +291,14 @@ export const claudeCodeDxTools = (
         `The dx tool ${tool.name} cannot reach Claude Code: dx tool names are snake_case, so they never clash with Claude's own tools.`,
       );
   threadTools.set(threadId, tools);
+  setClaudeCodeDxCallServer(threadId, (call, workspace, signal) =>
+    runClaudeCodeSubagentDxCall(threadId, call, {
+      signal,
+      log: subagentLog,
+      harness: { sandbox: workspace.sandbox } as FlueHarness,
+      workspace,
+    }),
+  );
   return tools.map(
     (tool) =>
       ({
@@ -288,6 +317,19 @@ type AgentTool = ReturnType<SandboxToolFactory>[number];
 
 /** Logs nothing; the tools that show images do not log. */
 const silent: FlueLogger = { info() {}, warn() {}, error() {} };
+
+/** The log of subagent calls the run's reader answers. */
+const subagentLog: FlueLogger = {
+  info: (message, properties) => claudeCodeLogger.info(message, properties),
+  warn: (message, properties) => claudeCodeLogger.warn(message, properties),
+  error: (message, properties) => claudeCodeLogger.error(message, properties),
+};
+
+/**
+ * Subagent calls this isolate is running. The run's reader and the Agent
+ * call waiting on a subagent may both find a call; only one runs it.
+ */
+const runningSubagentCalls = new Set<string>();
 
 /**
  * A dx tool that shows Claude an image, as a sandbox tool: only those can
@@ -348,13 +390,17 @@ const withinAnswerDeadline = <A>(write: Promise<A>) => {
 };
 
 /**
- * A dx tool call one of Claude's subagents made. It never reaches a Flue
- * segment, so the Agent call that started the subagent runs it, through the
- * run's own workspace handle: the Agent call's handle may have stopped
- * answering while the run's reader replaced its own (#2282). The answer is
- * written again on a new handle when a write fails. When it still cannot be
- * written this throws: the bridge would otherwise hold the subagent for 30
- * minutes on a call dx already finished.
+ * A dx tool call one of Claude's subagents made, at any depth. It never
+ * reaches a Flue segment, so the run's reader runs it, as does the Agent
+ * call waiting on a first-level subagent, through the run's own workspace
+ * handle: the Agent call's handle may have stopped answering while the
+ * run's reader replaced its own (#2282). The answer is written again on a
+ * new handle when a write fails. When it still cannot be written this
+ * throws, so a waiting Agent call stops Claude Code.
+ *
+ * A call already answered or marked alive is not run again: a restarted
+ * reader re-reads the run from its start, and a call the restart cut off
+ * may have taken effect; the bridge fails it once its beats stop.
  */
 export const runClaudeCodeSubagentDxCall = async (
   threadId: string,
@@ -364,6 +410,31 @@ export const runClaudeCodeSubagentDxCall = async (
   },
 ) => {
   const { workspace, ...rest } = context;
+  if (runningSubagentCalls.has(call.id)) return;
+  runningSubagentCalls.add(call.id);
+  try {
+    const started = await Promise.all([
+      workspace.sandbox.exists(claudeCodeToolResultPath(call.id)),
+      workspace.sandbox.exists(claudeCodeToolAlivePath(call.id)),
+    ]).catch(() => [true]);
+    if (started.some(Boolean)) return;
+    const stopBeating = beat(() => workspace.sandbox, call.id);
+    try {
+      await answerSubagentDxCall(threadId, call, workspace, rest);
+    } finally {
+      stopBeating();
+    }
+  } finally {
+    runningSubagentCalls.delete(call.id);
+  }
+};
+
+const answerSubagentDxCall = async (
+  threadId: string,
+  call: { readonly id: string; readonly name: string; readonly input: unknown },
+  workspace: ClaudeCodeSubagentWorkspace,
+  rest: Omit<CallContext, "toolCallId">,
+) => {
   const tool = threadTools
     .get(threadId)
     ?.find(({ name }) => name === dxToolName(call.name));
@@ -413,7 +484,7 @@ export const runClaudeCodeSubagentDxCall = async (
     },
   );
   throw new Error(
-    `dx could not return the result of ${call.name} to Claude Code's subagent (${cause}), so it stopped Claude Code instead of leaving the subagent waiting on it.`,
+    `dx could not return the result of ${call.name} to Claude Code's subagent (${cause}).`,
   );
 };
 

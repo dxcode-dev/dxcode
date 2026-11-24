@@ -315,4 +315,31 @@ describe("DxAgent's tool set", () => {
     expect(flue.sandboxes).toBe(0);
     expect(names().some((name) => name.startsWith("mcp__"))).toBe(false);
   });
+
+  it("runs a Claude Code Space created on an Orb in its Orb, with the Space's tools and none of a workspace's", async () => {
+    const { claudeCodeExecutor } = await import(
+      "../../src/executor/sandbox.js"
+    );
+    flue.initialData = initialData;
+    // No `orbFree`: the coordinator's Thread pinned an Orb at creation.
+    flue.promptData = {
+      plugins,
+      space,
+      route: { model: "claude-code/claude-opus-5-5", thinking: "medium" },
+    };
+    DxAgent({ id: "thr_space_claude_orb" } as never);
+    // The Orb is its sandbox, never dx's executor.
+    expect(flue.sandboxes).toBe(1);
+    expect(claudeCodeExecutor("thr_space_claude_orb")).toBeUndefined();
+    const mounted = names();
+    expect(mounted).toContain("create_thread");
+    expect(mounted).toContain("read_skill_file");
+    for (const workspaceTool of [
+      "view_media",
+      "download_thread_changes",
+      "download_thread_file",
+    ])
+      expect(mounted).not.toContain(workspaceTool);
+    expect(flue.skills).toEqual([]);
+  });
 });

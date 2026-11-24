@@ -5,6 +5,7 @@ import {
   DeleteMcpServerResponseSchema,
   DiscoverMcpServerResponseSchema,
   ListMcpServersResponseSchema,
+  type McpOAuthErrorCode,
   type McpServerData,
   McpServerDiscoveryFailedResponseSchema,
   McpServerLimitResponseSchema,
@@ -1489,15 +1490,19 @@ const registerRoutes = (
     router.get("/oauth/callback", async (context) => {
       let returnTo = "personal";
       let serverId: string | undefined;
+      // The page shows fixed text for this code, never text from the URL.
+      let errorCode: McpOAuthErrorCode = "failed";
+      const fail = (code: McpOAuthErrorCode) => {
+        errorCode = code;
+        return new McpOAuthFailed({ reason: `The sign-in failed (${code}).` });
+      };
       const operation = Effect.gen(function* () {
         const state = context.req.query("state");
         const code = context.req.query("code");
         const iss = context.req.query("iss");
         const providerError = context.req.query("error");
         if (state === undefined || state.length < 32 || state.length > 128) {
-          return yield* new McpOAuthFailed({
-            reason: "The sign-in link is invalid. Try again.",
-          });
+          return yield* fail("invalid");
         }
         const db = yield* decodeD1Binding(context.env.DB);
         const browserSessionId = yield* browserSession(context);
@@ -1516,21 +1521,15 @@ const registerRoutes = (
             ),
         );
         if (transaction === undefined) {
-          return yield* new McpOAuthFailed({
-            reason: "The sign-in expired. Try again.",
-          });
+          return yield* fail("expired");
         }
         returnTo = transaction.returnTo;
         serverId = transaction.serverId;
         if (providerError !== undefined) {
-          return yield* new McpOAuthFailed({
-            reason: `The server declined the sign-in (${providerError.replace(/[^a-z_]/gi, "").slice(0, 64)}).`,
-          });
+          return yield* fail("declined");
         }
         if (code === undefined || code.length === 0 || code.length > 4_096) {
-          return yield* new McpOAuthFailed({
-            reason: "The server returned no authorization code.",
-          });
+          return yield* fail("no_code");
         }
         const route: RouteScope = returnTo.startsWith("workspace:")
           ? {
@@ -1551,9 +1550,7 @@ const registerRoutes = (
           found.server.authType !== "oauth" ||
           found.server.endpoint !== transaction.endpoint
         ) {
-          return yield* new McpOAuthFailed({
-            reason: "The server changed during sign-in. Try again.",
-          });
+          return yield* fail("changed");
         }
         const payload = yield* Effect.tryPromise({
           try: () =>
@@ -1599,13 +1596,7 @@ const registerRoutes = (
         ...(serverId === undefined ? {} : { mcp: serverId }),
         ...(Result.isSuccess(result)
           ? { mcpStatus: "connected" }
-          : {
-              mcpStatus: "failed",
-              mcpMessage:
-                result.failure instanceof McpOAuthFailed
-                  ? result.failure.reason
-                  : "The sign-in failed. Try again.",
-            }),
+          : { mcpStatus: "failed", mcpError: errorCode }),
       }).toString();
       return context.redirect(destination.toString(), 303);
     });

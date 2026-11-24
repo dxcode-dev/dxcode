@@ -31,6 +31,7 @@ import {
   registeredClosedOrbProviders,
   registeredOrbsUnavailableNotice,
 } from "../../execution/deployment-orbs-registration.js";
+import { pauseConnectionOrbs } from "../../execution/idle-deadlines.js";
 import { orbProviderConnectors } from "../../execution/orb-providers.js";
 import { loadRunnerProfileCatalog } from "../../execution/runner-profiles/catalog.js";
 import { readBoundedJson } from "../../http/bounded-body.js";
@@ -593,6 +594,39 @@ const generatedCredentials = async (
   );
 };
 
+/**
+ * Pauses the Orbs running on a connection that is being removed, with its
+ * own credentials. A key that no longer decrypts, or a provider that
+ * pauses its Orbs by itself, pauses nothing; a failure never blocks the
+ * removal.
+ */
+const pauseOrbsOnRemovedConnection = async (
+  bindings: Bindings,
+  db: D1Database,
+  key: OrbConnectionKey,
+  connector: OrbProviderConnector,
+) => {
+  const pause = connector.pause;
+  if (pause === undefined || key.scope === "deployment") return;
+  const found = await findConnection(db, key);
+  if (found === undefined) return;
+  try {
+    const keyring = await runEffect(loadConfigEncryptionKeyring(bindings));
+    const credentials = await decryptOrbCredentials(keyring, found.stored);
+    await pauseConnectionOrbs(
+      db,
+      { scope: key.scope, targetId: key.targetId, providerId: key.providerId },
+      (sandboxId) => pause(credentials, sandboxId),
+    );
+  } catch (cause) {
+    orbProvidersLogger.warn("A removed key's Orbs could not be paused.", {
+      event: "orb_connection_removal_pause_failed",
+      providerId: key.providerId,
+      error: cause instanceof Error ? cause.message : String(cause),
+    });
+  }
+};
+
 /** Saved in the local runtime, which never reaches the provider. */
 const unpreparedConnection: OrbPreparation = {
   status: "preparing",
@@ -811,13 +845,17 @@ const mount = (
         audit(c, target, "orb-provider.connection.delete", "rejected");
         throw new OrbProviderFailure("ORB_PROVIDER_SETTINGS_FORBIDDEN", 403);
       }
-      // Threads pinned to this connection fail closed from their next
-      // operation; what preparation made stays in the owner's account.
-      await deleteConnectionStatement(db, {
+      const key: OrbConnectionKey = {
         scope: target.scope,
         targetId: target.targetId,
         providerId: connector.providerId,
-      }).run();
+      };
+      // Orbs still running on this key are paused with it now: once it is
+      // gone nothing can pause them, and the provider bills them on.
+      await pauseOrbsOnRemovedConnection(c.env, db, key, connector);
+      // Threads pinned to this connection fail closed from their next
+      // operation; what preparation made stays in the owner's account.
+      await deleteConnectionStatement(db, key).run();
       audit(c, target, "orb-provider.connection.delete", "success");
       return listData(
         c.env,

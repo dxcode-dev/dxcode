@@ -36,6 +36,10 @@ import { buildSpaceSetupMessage } from "./agent/setup-message.js";
 import { deliverToSpaceAgent } from "./agent-delivery.js";
 import { resolveSpaceAgentRoute, SpacePlanRefused } from "./agent-model.js";
 import { dismissCatchUp, readCatchUp } from "./catch-up.js";
+import {
+  resolveSpaceCoordinatorOrb,
+  SPACE_ORB_UNAVAILABLE_MESSAGE,
+} from "./coordinator-orb.js";
 import { createSpaceRootThread } from "./create-root-thread.js";
 import { spacePostHandlers } from "./posts/routes.js";
 import { spaceProgress } from "./progress/progress.js";
@@ -385,12 +389,46 @@ export const createSpaceRoutes = (
                 ? agent.route.message
                 : "No connection serves the model for Spaces.",
             );
+          // Claude Code runs the coordinator on an Orb (or dx's executor
+          // where the deployment still offers it); a dx model needs none.
+          const coordinator =
+            agent.route.kind === "claude-code"
+              ? await resolveSpaceCoordinatorOrb(context.env, ownerUserId)
+              : undefined;
+          if (coordinator?.kind === "none")
+            throw new SpaceError(
+              "SPACE_ORB_UNAVAILABLE",
+              409,
+              SPACE_ORB_UNAVAILABLE_MESSAGE,
+            );
           const created = await createSpaceRootThread(context, principal, {
             projectId: body.projectId,
             name: body.name,
             ...agent.creation,
+            ...(coordinator?.kind === "orb"
+              ? { coordinatorOrb: coordinator.runnerProfileId }
+              : {}),
           });
-          if (!created.ok) throw creationFailure(created.status, created.code);
+          if (!created.ok) {
+            // The chosen Orb can't start: say whose choice to change.
+            if (
+              coordinator?.kind === "orb" &&
+              (created.code === "ORB_UNAVAILABLE" ||
+                created.code === "RUNNER_PROFILE_UNAVAILABLE")
+            )
+              throw new SpaceError(
+                "SPACE_ORB_UNAVAILABLE",
+                409,
+                `The Orb for Space coordinators (${coordinator.runnerProfileId}, ${
+                  coordinator.source === "personal"
+                    ? "your choice"
+                    : coordinator.source === "workspace"
+                      ? "your workspace's choice"
+                      : "this deployment's default"
+                }) can't start${created.message === undefined ? "" : `: ${created.message.replace(/\.$/, "")}`}. Choose another in Settings → Orb Providers → Space coordinator.`,
+              );
+            throw creationFailure(created.status, created.code);
+          }
           await recordNewSpace(db, {
             threadId: created.threadId,
             ownerUserId,

@@ -82,6 +82,18 @@ export type IdlePausers = Readonly<
   >
 >;
 
+/**
+ * A failure's text for the log. A tagged error (such as
+ * `Agent37WorkspaceUnavailable`) has an empty message and says why in its
+ * `reason`.
+ */
+const errorText = (cause: unknown) => {
+  if (!(cause instanceof Error)) return String(cause);
+  if (cause.message !== "") return cause.message;
+  const { reason } = cause as { readonly reason?: unknown };
+  return typeof reason === "string" ? `${cause.name}: ${reason}` : cause.name;
+};
+
 /** Orbs one tick pauses at most; the next tick takes the rest. */
 const BATCH = 25;
 
@@ -138,7 +150,54 @@ export const sweepIdleDeadlines = async (
         event: "orb_idle_pause_failed",
         providerId: row.provider_id,
         threadId: row.thread_id,
-        error: cause instanceof Error ? cause.message : String(cause),
+        error: errorText(cause),
+      });
+    }
+  }
+  return paused;
+};
+
+/**
+ * Pauses every Orb still running on a person's or workspace's connection,
+ * with its credentials, as the connection is removed: once its key is gone
+ * the sweep can no longer pause them, and the provider bills them until
+ * someone stops them by hand. A pause that fails is logged, never retried
+ * (there is no key to retry with), and never keeps the key from being
+ * removed. Returns how many it paused.
+ */
+export const pauseConnectionOrbs = async (
+  db: D1Database,
+  connection: {
+    readonly scope: "personal" | "workspace";
+    readonly targetId: string;
+    readonly providerId: string;
+  },
+  pause: (sandboxId: string) => Promise<void>,
+): Promise<number> => {
+  const running = await db
+    .prepare(
+      `SELECT deadline.sandbox_id, deadline.thread_id
+         FROM orb_idle_deadline AS deadline
+         JOIN execution_workspace AS pin
+           ON pin.thread_id = deadline.thread_id
+          AND pin.provider_sandbox_id = deadline.sandbox_id
+        WHERE deadline.provider_id = ?1 AND pin.provider = ?1
+          AND pin.account_scope = ?2 AND pin.account_owner_id = ?3`,
+    )
+    .bind(connection.providerId, connection.scope, connection.targetId)
+    .all<{ sandbox_id: string; thread_id: string }>();
+  let paused = 0;
+  for (const row of running.results) {
+    await clearIdleDeadline(db, connection.providerId, row.sandbox_id);
+    try {
+      await pause(row.sandbox_id);
+      paused += 1;
+    } catch (cause) {
+      orbProvidersLogger.warn("An Orb on a removed key could not be paused.", {
+        event: "orb_connection_removal_pause_failed",
+        providerId: connection.providerId,
+        threadId: row.thread_id,
+        error: errorText(cause),
       });
     }
   }

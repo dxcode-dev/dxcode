@@ -883,13 +883,17 @@ export function DxAgent(props: AgentProps) {
   const space = promptData?.space;
   if (
     agentRuntimeComposition.capabilities === "workspace" &&
-    promptData?.orbFree === true
+    (promptData?.orbFree === true || space !== undefined)
   ) {
-    // Executor mode (wiki/runtime-architecture.md#execution-modes): no Orb,
-    // so no shell, file, or Git tools, and nothing installed into a
-    // workspace at agent start. Only a Space's main Thread runs in executor
-    // mode today, with the Space agent profile.
+    // A Space's main Thread, the coordinator
+    // (wiki/runtime-architecture.md#execution-modes), with the Space agent
+    // profile: no shell, file, or Git tools of dx's. In executor mode it has
+    // no Orb, and nothing is installed into a workspace at agent start; on
+    // Claude Code it runs `claude` in dx's executor or, for a Space created
+    // since coordinators run on Orbs, in its own Orb, which starts with no
+    // repository.
     if (space === undefined) throw new Error("This Space is unavailable.");
+    const onOrb = promptData?.orbFree !== true;
     const profile = spaceAgentProfile({
       space,
       instructions: settingsInstructionsPrompt(
@@ -903,26 +907,30 @@ export function DxAgent(props: AgentProps) {
       createSkillFileTool(props.id, agentThreadToolsContext, skills),
     );
     if (
-      promptData.route !== undefined &&
+      promptData?.route !== undefined &&
       isClaudeCodeModel(promptData.route.model)
     ) {
-      // Claude Code runs on the Thread's executor container: Claude keeps
-      // only the profile's built-in tools, and the profile's dx tools reach
-      // it through the dx tool bridge. Flue records each call as in an Orb.
-      if (!executorAvailable())
-        throw new Error(
-          "This deployment does not run dx's executor, so a Space cannot run on Claude Code here.",
-        );
-      runClaudeCodeOnExecutor(props.id, profile.claudeCodeBuiltInTools);
-      useSandbox({ createSandbox: async ({ id }) => executorSandbox(id) });
+      // Claude Code runs in the coordinator's Orb or on the Thread's
+      // executor container: Claude keeps only the profile's built-in tools,
+      // and the profile's dx tools reach it through the dx tool bridge.
+      // Flue records each call as in an Orb.
+      if (onOrb) useSandbox(agentSandbox as SandboxFactory);
+      else {
+        if (!executorAvailable())
+          throw new Error(
+            "This deployment does not run dx's executor, so a Space cannot run on Claude Code here.",
+          );
+        runClaudeCodeOnExecutor(props.id, profile.claudeCodeBuiltInTools);
+        useSandbox({ createSandbox: async ({ id }) => executorSandbox(id) });
+      }
       for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
       for (const tool of claudeCodeDxTools(props.id, [
         ...profile.tools,
         skillFileTool,
       ]))
         useTool(tool);
-      // The same skills as the dx agent's Space: written to the executor,
-      // where the launch script links them into ~/.claude/skills.
+      // The same skills as the dx agent's Space: written to the executor or
+      // the Orb, where the launch script links them into ~/.claude/skills.
       useAgentStart(async ({ harness }) => {
         resetClaudeCodeThreadState(props.id);
         rememberClaudeCodeSandbox(props.id, harness.sandbox);
@@ -938,6 +946,9 @@ export function DxAgent(props: AgentProps) {
         props.id,
         `${SPACE_CLAUDE_CODE_PREFACE}\n\n${profile.prompt}`,
         "",
+        [],
+        // On the executor `runClaudeCodeOnExecutor` keeps them.
+        onOrb ? profile.claudeCodeBuiltInTools : undefined,
       );
       return profile.prompt;
     }

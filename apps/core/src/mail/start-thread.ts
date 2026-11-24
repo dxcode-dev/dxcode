@@ -30,23 +30,19 @@ export const emailRequestBody = (input: {
   readonly attachments: ReadonlyArray<{ readonly filename: string }>;
   readonly instruction: string;
 }) => {
-  // Header text sits outside <email_content>, so it is one escaped line.
+  // Each header is one line inside <email_content>, with the body: dx's own
+  // narration interpolates nothing from the email.
   const line = (text: string, max: number) =>
-    escapeEmailContent(
-      text
-        .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")
-        .trim()
-        .slice(0, max),
-    );
-  return [
-    `The owner started this Thread from an email in their dx Mail, from ${line(input.senderEmail, 320)}.`,
+    text
+      .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, " ")
+      .trim()
+      .slice(0, max);
+  const email = [
+    `From: ${line(input.senderEmail, 320)}`,
     `Subject: ${line(input.subject, 300) || "(no subject)"}`,
-    "",
-    input.instruction.trim() || "(The owner wrote no instruction.)",
     ...(input.attachments.length === 0
       ? []
       : [
-          "",
           `Attachments (not included): ${input.attachments
             .slice(0, 20)
             .map(({ filename }) => line(filename, 120))
@@ -54,10 +50,14 @@ export const emailRequestBody = (input: {
         ]),
     ...(input.text.trim() === ""
       ? []
-      : [
-          "",
-          `<email_content kind="email">\n${escapeEmailContent(input.text.slice(0, MAX_EMAIL_CHARS))}\n</email_content>`,
-        ]),
+      : ["", input.text.slice(0, MAX_EMAIL_CHARS)]),
+  ].join("\n");
+  return [
+    "The owner started this Thread from an email in their dx Mail.",
+    "",
+    input.instruction.trim() || "(The owner wrote no instruction.)",
+    "",
+    `<email_content kind="email">\n${escapeEmailContent(email)}\n</email_content>`,
   ].join("\n");
 };
 
