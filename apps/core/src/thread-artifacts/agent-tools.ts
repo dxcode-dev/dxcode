@@ -23,6 +23,7 @@ import {
 } from "../realtime/publication.js";
 import { threadMembers } from "../thread-sharing/members.js";
 import type { ThreadToolsContext } from "../threads/agent-tools.js";
+import { readCallingThread } from "../threads/calling-thread.js";
 import { storeBoardImages } from "./artifact-images.js";
 import { artifactCommented, artifactSaved } from "./ask-effects.js";
 import {
@@ -417,7 +418,7 @@ const DESCRIPTION = [
   "read returns at most 500 lines with the artifact's revision. When that is not the whole artifact, it adds an outline of the heading lines with their line numbers; start_line and end_line read other parts. It also returns the open comments and, when people saved changes after your last save, edited_by_people_since: a diff of what they changed.",
   "People edit artifacts while you work, so read an artifact before updating it. update names the revision you read in base_revision. When someone saved a newer revision, nothing is saved and the result returns the current Markdown: merge your change into it and update again with its revision. Keep people's wording unless they asked you to change it. Set force only when the user explicitly asks you to overwrite their newer changes. For small changes pass edits instead of the whole markdown: each old_str must appear exactly once in the whole artifact, and the edits apply together or not at all, so reading the part you change is enough.",
   "Comments sit on text and are never part of the Markdown; they stay on their text when you rewrite around it. Add, reply to, and resolve comments with comments on create or update. When a comment asks for a change, make it and reply saying what you changed. Resolving hides the comment and its replies, so resolve only when someone asks.",
-  "Beyond this Thread: list with scope \"all\" lists every artifact this Thread's owner can open (their standalone artifacts from the Artifacts library, artifacts shared with them, and those of their other Threads and Spaces), with query to search titles. Each listed artifact shows where it lives and access: read works on any of them, update and comments need access owner or edit. create with standalone true makes a standalone artifact in the owner's Artifacts library instead of this Thread; it starts private to the owner, who shares it from the library. Every artifact opens at the link /artifacts/<artifact_id>; a line holding only that link in a document shows the linked artifact's preview. Never use artifacts from elsewhere to reach what the owner asked you not to touch.",
+  'Beyond this Thread: list with scope "all" lists every artifact this Thread\'s owner can open (their standalone artifacts from the Artifacts library, artifacts shared with them, and those of their other Threads and Spaces), with query to search titles. Each listed artifact shows where it lives and access: read works on any of them, update and comments need access owner or edit. create with standalone true makes a standalone artifact in the owner\'s Artifacts library instead of this Thread; it starts private to the owner, who shares it from the library. Every artifact opens at the link /artifacts/<artifact_id>; a line holding only that link in a document shows the linked artifact\'s preview. Never use artifacts from elsewhere to reach what the owner asked you not to touch. In a shared Thread, the tool reaches only artifacts of this Thread, its parent, and their child Threads: no scope "all" and no standalone.',
   "A new artifact is visible to everyone who can open this Thread. delete never deletes by itself: it shows the user a card to confirm. Delete only when the user asks.",
   "To ask someone in this Thread to act on an artifact, write a checklist item in it that mentions them, such as `- [ ] @[Name](user:USER_ID) Review the pricing table`; list returns `people`: who can open this Thread, each with the exact mention to copy. A mention notifies that person. When someone ticks an item or writes under it and sends it with Notify agent, or mentions you in a comment, this Thread wakes with a message saying so; read the artifact and carry on. Ask the owner for answers and approvals in your reply, not in an artifact.",
   UNTRUSTED_NOTE,
@@ -667,15 +668,35 @@ export const createArtifactTools = (
           { threadId, home: { threadId: home, artifactId }, sources },
         );
       };
-      /** The person this Thread acts for; artifacts elsewhere are theirs to open. */
-      const ownerReader = async (): Promise<LibraryReader> => {
-        const owner = await context.db
-          .prepare("SELECT owner_user_id FROM threads WHERE id = ?")
-          .bind(threadId)
-          .first<string>("owner_user_id");
-        if (owner === null) throw new Error("This Thread is gone.");
-        return { userId: owner, shared: true };
+      /** The Thread's owner, whom it acts for, read once per call. */
+      let calling: ReturnType<typeof readCallingThread> | undefined;
+      const callingThread = () => {
+        calling ??= readCallingThread(context.db, threadId);
+        return calling;
       };
+      /** The person this Thread acts for; artifacts elsewhere are theirs to open. */
+      const ownerReader = async (): Promise<LibraryReader> => ({
+        userId: (await callingThread()).ownerUserId,
+        shared: true,
+      });
+      /**
+       * While this Thread is shared, the root of its family: the tool then
+       * reaches only that root's and its children's artifacts, never the
+       * owner's library or their other Threads.
+       */
+      const sharedFamily = async () => (await callingThread()).sharedFamilyRoot;
+      const SHARED_REACH =
+        "it reaches only artifacts of its parent and child Threads";
+
+      if (
+        (data.action === "list" && data.scope === "all") ||
+        (data.action === "create" && data.standalone === true)
+      ) {
+        if ((await sharedFamily()) !== undefined)
+          throw new Error(
+            `This Thread is shared, so ${SHARED_REACH}. ${data.action === "list" ? 'List without scope "all".' : "Create it without standalone."}`,
+          );
+      }
 
       if (data.action === "list" && data.scope === "all") {
         const items = await listLibrary(context.db, await ownerReader(), {
@@ -729,6 +750,28 @@ export const createArtifactTools = (
         if (item === undefined)
           throw new Error(
             `Artifact ${artifactId} was not found, or this Thread's owner cannot open it.`,
+          );
+        const family = await sharedFamily();
+        if (
+          family !== undefined &&
+          (item.threadId === null ||
+            (await context.db
+              .prepare(
+                `SELECT 1 AS found FROM threads
+                  WHERE id = ? AND owner_user_id = ? AND (id = ? OR parent_thread_id = ?)`,
+              )
+              .bind(
+                item.threadId,
+                (
+                  await callingThread()
+                ).ownerUserId,
+                family,
+                family,
+              )
+              .first("found")) === null)
+        )
+          throw new Error(
+            `Artifact ${artifactId} is not reachable from this shared Thread: ${SHARED_REACH}.`,
           );
         if (write && item.access === "view")
           throw new Error(

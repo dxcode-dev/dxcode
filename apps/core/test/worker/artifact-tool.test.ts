@@ -39,7 +39,10 @@ import { runRepositories } from "./runtime.js";
  * - read returns more than 500 lines, or a partial read has no outline;
  * - delete deletes without the user's confirmation;
  * - comment operations are lost, or recorded as a person's;
- * - the tool reaches another Thread's artifact.
+ * - the tool reaches another Thread's artifact;
+ * - from a shared Thread (a Space, or a Thread shared with the workspace),
+ *   it lists, reads, or overwrites the owner's artifacts outside the
+ *   Thread's family, or writes to the owner's library.
  */
 
 const owner = Schema.decodeSync(UserId)("artifact-tool-owner");
@@ -434,5 +437,84 @@ describe("the artifact tool", () => {
         (entry: { artifact_id: string }) => entry.artifact_id,
       ),
     ).toContain(id);
+  });
+
+  it("from a shared Thread, reaches only its family's artifacts", async () => {
+    const root = await newThread();
+    const child = await newThread();
+    const privateThread = await newThread();
+    await env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'contribute' WHERE id IN (?, ?)",
+    )
+      .bind(root, child)
+      .run();
+    await env.DB.prepare("UPDATE threads SET parent_thread_id = ? WHERE id = ?")
+      .bind(root, child)
+      .run();
+    const { artifact_id: secret } = await toolFor(privateThread)({
+      action: "create",
+      title: "Private",
+      markdown: "the owner's private plan",
+    });
+    const { artifact_id: library } = await toolFor(privateThread)({
+      action: "create",
+      standalone: true,
+      title: "Library",
+      markdown: "the owner's private library",
+    });
+    const { artifact_id: family } = await toolFor(root)({
+      action: "create",
+      title: "Family",
+      markdown: "the Space's plan",
+    });
+    const shared = toolFor(child);
+
+    // The owner's library and private Threads stay out of reach.
+    await expect(shared({ action: "list", scope: "all" })).rejects.toThrow(
+      /shared/,
+    );
+    for (const id of [secret, library]) {
+      await expect(shared({ action: "read", artifact_id: id })).rejects.toThrow(
+        /not reachable from this shared Thread/,
+      );
+      await expect(
+        shared({
+          action: "update",
+          artifact_id: id,
+          markdown: "overwritten",
+          base_revision: 1,
+          force: true,
+        }),
+      ).rejects.toThrow(/not reachable from this shared Thread/);
+    }
+    expect(await revisionCount(secret)).toBe(1);
+    expect(await revisionCount(library)).toBe(1);
+    await expect(
+      shared({
+        action: "create",
+        standalone: true,
+        markdown: "into the library",
+      }),
+    ).rejects.toThrow(/shared/);
+
+    // Its parent's artifacts stay reachable.
+    expect(await shared({ action: "read", artifact_id: family })).toMatchObject(
+      { markdown: "the Space's plan" },
+    );
+    expect(
+      await shared({
+        action: "update",
+        artifact_id: family,
+        base_revision: 1,
+        markdown: "edited from the child",
+      }),
+    ).toMatchObject({ saved: true, revision: 2 });
+
+    // The same owner's private Thread still reaches everything.
+    expect(
+      (
+        await toolFor(privateThread)({ action: "list", scope: "all" })
+      ).artifacts.map((entry: { artifact_id: string }) => entry.artifact_id),
+    ).toEqual(expect.arrayContaining([secret, library, family]));
   });
 });
