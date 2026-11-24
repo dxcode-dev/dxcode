@@ -11,7 +11,7 @@
 // as an earlier version; a reaction toggles the wrong way, sends the wrong
 // request, or dx's own reaction is not told apart; a thread link alone on
 // its line is not a card, or an inline one not a chip; the composer sends
-// nothing, the wrong body, or keeps the text; an edit saves unchanged text;
+// nothing, the wrong body, or keeps the text; a post offers Edit or Delete;
 // a card, chip, row, or deep link opens no tab, opens it over the chat on a
 // wide page, or Close leaves it; Side by Side does not switch to one strip;
 // Hide Space Details is forgotten on reload or leaves no way back; the goal
@@ -403,18 +403,6 @@ const serve = ({
         existing.mine = on;
         post.reactions = post.reactions.filter(({ count }) => count > 0);
       }
-      return ok({ post });
-    }
-    const edited = new RegExp(`^${postsBase}/([^/]+)$`).exec(path)?.[1];
-    if (edited !== undefined && method === "DELETE") {
-      state.posts = state.posts.filter(({ id }) => id !== edited);
-      return ok({ postId: edited, outcome: "noted" });
-    }
-    if (edited !== undefined && method === "PATCH") {
-      const post = state.posts.find(({ id }) => id === edited) as Post;
-      post.text = body.text;
-      post.editedAt = new Date().toISOString();
-      post.revisionCount += 1;
       return ok({ post });
     }
     if (path === `/v1/threads/${SPACE}/message-comments`)
@@ -910,7 +898,7 @@ it("adds and removes the viewer's reactions", async () => {
   ).toBe("false");
 });
 
-it("posts from the composer and edits the viewer's own post", async () => {
+it("posts from the composer, and offers no Edit or Delete on any post", async () => {
   const server = serve();
   await mount(1440, 900);
   await until(loaded);
@@ -935,66 +923,22 @@ it("posts from the composer and edits the viewer's own post", async () => {
       body: { text: "Ship the coupon fix today" },
     },
   ]);
-  // Only the viewer's own posts offer Edit.
-  await userEvent.hover(post(4) as HTMLElement);
-  expect(has("Edit", post(4) as HTMLElement)).toBe(false);
-  await userEvent.hover(post(2) as HTMLElement);
-  await userEvent.click(button("Edit", post(2) as HTMLElement));
-  const edit = q<HTMLTextAreaElement>(
-    "textarea[aria-label='Edit Post']",
-  ) as HTMLTextAreaElement;
-  expect(edit.value).toBe(
-    "Split this into parallel threads: rebuild the payment step and add Apple Pay.",
-  );
-  // Unchanged text does not save.
-  expect(button("Save", post(2) as HTMLElement).disabled).toBe(true);
-  await shot("space-edit-post-1440");
-  await userEvent.clear(edit);
-  await userEvent.type(edit, "Split this into parallel threads.");
-  await userEvent.click(button("Save", post(2) as HTMLElement));
-  await until(
-    () =>
-      q(".user-message-text", post(2) as HTMLElement)?.textContent ===
-      "Split this into parallel threads.",
-  );
-  expect(server.requests.filter(({ method }) => method === "PATCH")).toEqual([
-    {
-      method: "PATCH",
-      path: `/v1/spaces/${SPACE}/posts/${postId(2)}`,
-      body: { text: "Split this into parallel threads." },
-    },
-  ]);
-  expect(q(".space-post-edited", post(2) as HTMLElement)?.textContent).toBe(
-    "edited",
-  );
-});
-
-it("deletes the viewer's own post after asking, and offers Delete on no one else's", async () => {
-  const server = serve();
-  await mount(1440, 900);
-  await until(loaded);
-  await userEvent.hover(post(4) as HTMLElement);
-  expect(has("Delete", post(4) as HTMLElement)).toBe(false);
-  await userEvent.hover(post(2) as HTMLElement);
-  await userEvent.click(button("Delete", post(2) as HTMLElement));
-  await until(() => q("[role='dialog']") !== null);
-  const dialog = q("[role='dialog']") as HTMLElement;
-  expect(dialog.textContent).toContain("Delete post?");
-  expect(dialog.textContent).toContain("It leaves the Space for everyone.");
-  // Nothing goes until the person confirms.
-  expect(server.requests.some(({ method }) => method === "DELETE")).toBe(false);
-  await shot("space-delete-post-1440");
-  await userEvent.click(button("Delete", dialog));
-  await until(() => post(2) === null && q("[role='dialog']") === null);
-  expect(server.requests.filter(({ method }) => method === "DELETE")).toEqual([
-    {
-      method: "DELETE",
-      path: `/v1/spaces/${SPACE}/posts/${postId(2)}`,
-      body: undefined,
-    },
-  ]);
-  // The rest of the chat stays.
-  expect(post(4)).not.toBeNull();
+  // No post can change after the agent read it: not the viewer's own, nor
+  // anyone else's.
+  for (const index of [2, 4]) {
+    await userEvent.hover(post(index) as HTMLElement);
+    expect(has("Comment", post(index) as HTMLElement)).toBe(true);
+    expect(has("Edit", post(index) as HTMLElement)).toBe(false);
+    expect(has("Delete", post(index) as HTMLElement)).toBe(false);
+  }
+  await shot("space-post-actions-1440");
+  expect(
+    server.requests.filter(
+      ({ method, path }) =>
+        (method === "PATCH" || method === "DELETE") &&
+        !path.includes("/reactions/"),
+    ),
+  ).toEqual([]);
 });
 
 it("opens threads as tabs beside the Space chat from a card, a chip, or the Threads tab, and closes them", async () => {
@@ -1645,41 +1589,6 @@ it("opens a mention's link at its post, far up a long Space, and flashes it", as
   await shot("space-open-at-post-1440");
   // The flash fades on its own.
   await until(() => !target.hasAttribute("data-notification-target"), 4_000);
-});
-
-it("edits a post with mentions as people read them, with the @ picker, and keeps its mentions", async () => {
-  const server = serve();
-  server.posts[1] = {
-    ...(server.posts[1] as Post),
-    text: "Ask @[Thorsten Ball](user:usr_space_member) about the split.",
-  };
-  await mount(1440, 900);
-  await until(loaded);
-  await userEvent.hover(post(2) as HTMLElement);
-  await userEvent.click(button("Edit", post(2) as HTMLElement));
-  const edit = q<HTMLTextAreaElement>(
-    "textarea[aria-label='Edit Post']",
-  ) as HTMLTextAreaElement;
-  // No mention code in the box.
-  expect(edit.value).toBe("Ask @Thorsten Ball about the split.");
-  await userEvent.keyboard(" Cc @second-r");
-  await until(() =>
-    all("[role='option']").some((option) =>
-      option.textContent?.includes("dx second reviewer"),
-    ),
-  );
-  await userEvent.keyboard("{Enter}");
-  expect(edit.value).toBe(
-    "Ask @Thorsten Ball about the split. Cc @dx second reviewer ",
-  );
-  await shot("space-edit-mention-1440");
-  await userEvent.click(button("Save", post(2) as HTMLElement));
-  await until(() => server.requests.some(({ method }) => method === "PATCH"));
-  expect(
-    server.requests.find(({ method }) => method === "PATCH")?.body,
-  ).toEqual({
-    text: "Ask @[Thorsten Ball](user:usr_space_member) about the split. Cc @[dx second reviewer](user:usr_second_reviewer)",
-  });
 });
 
 it("picks a name in the middle of a post without leaving a double space", async () => {

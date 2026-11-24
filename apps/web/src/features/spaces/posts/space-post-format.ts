@@ -34,32 +34,21 @@ const sameContent = (posted: string, text: string) => {
 export const postTime = epochOf;
 
 /**
- * Why a post or an edit did not save, in plain words, by the server's code.
- * Anything else may pass on a retry.
+ * Why a post did not send, in plain words, by the server's code. Anything
+ * else may pass on a retry.
  */
-export const postFailureText = (
-  error: unknown,
-  action: "post" | "edit" | "delete",
-) => {
+export const postFailureText = (error: unknown) => {
   const code =
     error instanceof Error && "code" in error ? error.code : undefined;
   switch (code) {
     case "SPACE_ARCHIVED":
-      return `This Space is archived. Unarchive it to ${action}.`;
+      return "This Space is archived. Unarchive it to post.";
     case "SPACE_READ_ONLY":
       return "You can read this Space, but not post in it.";
     case "SPACE_AGENT_UNAVAILABLE":
-      return `dx couldn't take your ${action} just now. Try again in a moment.`;
-    case "POST_NOT_YOURS":
-      return `Only its author can ${action === "delete" ? "delete" : "edit"} this post.`;
-    case "POST_CHANGED":
-      return "This post changed meanwhile. Reload it and edit again.";
+      return "dx couldn't take your post just now. Try again in a moment.";
     default:
-      return action === "post"
-        ? "Couldn't post. Try again."
-        : action === "delete"
-          ? "Couldn't delete the post. Try again."
-          : "Couldn't save the edit. Try again.";
+      return "Couldn't post. Try again.";
   }
 };
 

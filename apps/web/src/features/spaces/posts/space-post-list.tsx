@@ -1,15 +1,9 @@
-import {
-  type MessageAttachment,
-  parseMessageAttachments,
-  withMessageAttachments,
-} from "@dx/api";
+import { parseMessageAttachments } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { MessagesSquare, Pencil, Trash2 } from "lucide-react";
+import { MessagesSquare } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
-import { useCommentMentions } from "../../../shared/comments/comment-mention-menu.js";
-import { draftOf } from "../../../shared/comments/comment-mentions.js";
 import {
   type CommentPeople,
   CommentText,
@@ -21,7 +15,6 @@ import {
 } from "../../../shared/reactions/reactions.js";
 import { Avatar, ParticipantStack } from "../../../shared/ui/avatar.js";
 import { Button } from "../../../shared/ui/button.js";
-import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import {
   PopoverContent,
   PopoverRoot,
@@ -36,13 +29,11 @@ import { compactAge, dayLabel } from "../space-format.js";
 import { showLinkedPost } from "./focus-post.js";
 import { useSpacePeople } from "./space-people.js";
 import { SpacePostImages, SpacePostLinks } from "./space-post-files.js";
-import { postContent, postFailureText, postTime } from "./space-post-format.js";
+import { postContent, postTime } from "./space-post-format.js";
 import {
   type SpacePost,
   type SpacePostReaction,
   spacePostRevisionsQueryOptions,
-  useDeleteSpacePost,
-  useEditSpacePost,
   useSetSpacePostReaction,
 } from "./space-posts-queries.js";
 
@@ -133,113 +124,6 @@ function Revisions({
   );
 }
 
-/** The viewer's own post, open for editing in place. */
-function EditPostForm({
-  spaceThreadId,
-  postId,
-  initialText,
-  attachments,
-  onDone,
-}: {
-  readonly spaceThreadId: ThreadId;
-  readonly postId: string;
-  /** The post's text when Edit was chosen: the draft starts from it. */
-  readonly initialText: string;
-  /** The post's files, which stay with it. */
-  readonly attachments: ReadonlyArray<MessageAttachment>;
-  readonly onDone: () => void;
-}) {
-  const { identity } = useAuthenticatedIdentity();
-  const edit = useEditSpacePost(identity.id, spaceThreadId);
-  // The box shows mentions as people read them (`@Name`), and the people in
-  // them stay picked, so saving writes the same mentions back.
-  const [start] = React.useState(() => draftOf(initialText));
-  const [text, setText] = React.useState(start.draft);
-  const box = React.useRef<HTMLTextAreaElement | null>(null);
-  const { members } = useSpacePeople(spaceThreadId);
-  const mentions = useCommentMentions({
-    members,
-    body: text,
-    setBody: setText,
-    box,
-    initialPicked: start.picked,
-  });
-  const posted = mentions.post(text.trim());
-  const changed =
-    (text.trim() !== "" || attachments.length > 0) &&
-    posted !== initialText.trim();
-  const save = () => {
-    if (!changed || edit.isPending) return;
-    edit.mutate(
-      { postId, text: withMessageAttachments(posted, attachments) },
-      { onSuccess: () => onDone() },
-    );
-  };
-  return (
-    <form
-      className="space-post-edit"
-      onSubmit={(event) => {
-        event.preventDefault();
-        save();
-      }}
-    >
-      {mentions.menu}
-      <textarea
-        aria-label="Edit Post"
-        value={text}
-        rows={Math.min(8, Math.max(2, text.split("\n").length))}
-        ref={(node) => {
-          box.current = node;
-          if (node === null) return;
-          node.focus();
-          node.setSelectionRange(node.value.length, node.value.length);
-        }}
-        onChange={(event) => {
-          setText(event.target.value);
-          mentions.track(
-            event.target.value,
-            event.target.selectionStart ?? event.target.value.length,
-          );
-        }}
-        onKeyDown={(event) => {
-          if (mentions.onKeyDown(event)) return;
-          if (event.key === "Escape") {
-            event.preventDefault();
-            onDone();
-          } else if (
-            event.key === "Enter" &&
-            !event.shiftKey &&
-            // Alt+Enter starts a new Thread.
-            !event.altKey &&
-            !event.nativeEvent.isComposing
-          ) {
-            event.preventDefault();
-            save();
-          }
-        }}
-      />
-      {edit.isError ? (
-        <p className="space-post-edit-error" role="alert">
-          {postFailureText(edit.error, "edit")}
-        </p>
-      ) : null}
-      <div className="space-post-edit-actions">
-        <Button variant="ghost" size="xs" onClick={onDone}>
-          Cancel
-        </Button>
-        <Button
-          type="submit"
-          size="xs"
-          disabled={!changed || edit.isPending}
-          aria-busy={edit.isPending || undefined}
-        >
-          Save
-        </Button>
-      </div>
-    </form>
-  );
-}
-
 /** Who commented and how many replies, under a commented post. */
 function RepliesRow({
   spaceThreadId,
@@ -310,9 +194,6 @@ function SpacePostRow({
   const { identity } = useAuthenticatedIdentity();
   const react = useSetSpacePostReaction(identity.id, spaceThreadId);
   const openComments = useOpenMessageComments(spaceThreadId);
-  const [editing, setEditing] = React.useState(false);
-  const [deleting, setDeleting] = React.useState(false);
-  const remove = useDeleteSpacePost(identity.id, spaceThreadId);
   const agent = post.author.kind === "agent";
   const mine = !agent && post.author.userId === identity.id;
   const side = mine ? "right" : "left";
@@ -352,15 +233,7 @@ function SpacePostRow({
         </div>
       ) : null}
       <div className="space-post-body">
-        {editing ? (
-          <EditPostForm
-            spaceThreadId={spaceThreadId}
-            postId={post.id}
-            initialText={content.text}
-            attachments={content.attachments}
-            onDone={() => setEditing(false)}
-          />
-        ) : agent ? (
+        {agent ? (
           <div className="message-content">
             <ThreadReferenceContext.Provider value={spaceThreadReferences}>
               <RichMarkdown>{post.text}</RichMarkdown>
@@ -379,7 +252,7 @@ function SpacePostRow({
             </div>
           </>
         )}
-        {editing || !(permissions.react || permissions.comment) ? null : (
+        {!(permissions.react || permissions.comment) ? null : (
           <div className="space-post-actions" data-side={side}>
             {permissions.react ? (
               <ReactionPicker
@@ -400,58 +273,8 @@ function SpacePostRow({
                 <MessagesSquare aria-hidden="true" />
               </Button>
             ) : null}
-            {mine && permissions.react ? (
-              <Button
-                variant="subtle"
-                size="icon-xs"
-                className="space-post-action"
-                aria-label="Edit"
-                title="Edit"
-                onClick={() => setEditing(true)}
-              >
-                <Pencil aria-hidden="true" />
-              </Button>
-            ) : null}
-            {mine && permissions.react ? (
-              <Button
-                variant="subtle"
-                size="icon-xs"
-                className="space-post-action"
-                aria-label="Delete"
-                title="Delete"
-                onClick={() => {
-                  remove.reset();
-                  setDeleting(true);
-                }}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
-            ) : null}
           </div>
         )}
-        {mine ? (
-          <ConfirmDialog
-            open={deleting}
-            onOpenChange={(open) => {
-              if (!open) setDeleting(false);
-            }}
-            title="Delete post?"
-            description={
-              post.waiting === true
-                ? "It leaves the Space for everyone. dx hasn't read it yet and won't see it."
-                : "It leaves the Space for everyone. dx is told you deleted it and stops acting on it."
-            }
-            confirmLabel="Delete"
-            destructive
-            pending={remove.isPending}
-            {...(remove.isError
-              ? { error: postFailureText(remove.error, "delete") }
-              : {})}
-            onConfirm={() =>
-              remove.mutate(post.id, { onSuccess: () => setDeleting(false) })
-            }
-          />
-        ) : null}
       </div>
       {edited || reactions.length > 0 ? (
         <div className="space-post-meta" data-side={side}>

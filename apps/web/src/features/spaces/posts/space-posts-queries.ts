@@ -1,5 +1,4 @@
 import {
-  DeleteSpacePostResponseSchema,
   ListSpacePostsResponseSchema,
   SPACE_POST_ID_PATTERN,
   SPACE_POSTS_DEFAULT_LIMIT,
@@ -77,28 +76,6 @@ const createPost = async (
       body: JSON.stringify({ text }),
     })
   ).data.post;
-
-const editPost = async (
-  spaceThreadId: ThreadId,
-  postId: string,
-  text: string,
-): Promise<SpacePost> =>
-  (
-    await request(
-      postsPath(spaceThreadId, `/${encodeURIComponent(postId)}`),
-      SpacePostResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ text }) },
-    )
-  ).data.post;
-
-const deletePost = async (spaceThreadId: ThreadId, postId: string) =>
-  (
-    await request(
-      postsPath(spaceThreadId, `/${encodeURIComponent(postId)}`),
-      DeleteSpacePostResponseSchema,
-      { method: "DELETE" },
-    )
-  ).data;
 
 const setReaction = async (
   spaceThreadId: ThreadId,
@@ -280,48 +257,6 @@ export const usePendingSpacePosts = (
       };
     },
   });
-
-/** A person edits their own post; its earlier text stays as a revision. */
-export const useEditSpacePost = (userId: UserId, spaceThreadId: ThreadId) => {
-  const client = useQueryClient();
-  const key = spacePostKeys.posts(userId, spaceThreadId);
-  return useMutation({
-    mutationKey: [...key, "edit"],
-    mutationFn: (input: { readonly postId: string; readonly text: string }) =>
-      editPost(spaceThreadId, input.postId, input.text),
-    onSuccess: (post) => {
-      updateCachedPost(client, key, post.id, () => post);
-      void client.invalidateQueries({
-        queryKey: spacePostKeys.revisions(userId, spaceThreadId, post.id),
-      });
-    },
-  });
-};
-
-/**
- * A person deletes their own post; it leaves the chat once the server
- * confirms, and stays with the error when it does not.
- */
-export const useDeleteSpacePost = (userId: UserId, spaceThreadId: ThreadId) => {
-  const client = useQueryClient();
-  const key = spacePostKeys.posts(userId, spaceThreadId);
-  return useMutation({
-    mutationKey: [...key, "delete"],
-    mutationFn: (postId: string) => deletePost(spaceThreadId, postId),
-    onSuccess: ({ postId }) =>
-      client.setQueryData<PostsCache>(key, (current) =>
-        current === undefined
-          ? current
-          : {
-              ...current,
-              pages: current.pages.map((page) => ({
-                ...page,
-                items: page.items.filter(({ id }) => id !== postId),
-              })),
-            },
-      ),
-  });
-};
 
 /**
  * Adds or removes the viewer's reaction. The count changes at once; a

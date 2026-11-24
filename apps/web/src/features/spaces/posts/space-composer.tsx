@@ -86,7 +86,7 @@ export function SpaceComposer({
         <>
           {create.isError ? (
             <p className="space-composer-error" role="alert">
-              {postFailureText(create.error, "post")}
+              {postFailureText(create.error)}
             </p>
           ) : null}
           {mentions.menu}

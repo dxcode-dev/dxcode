@@ -400,8 +400,10 @@ describe("The Space agent's post tools", () => {
         text: "Fix the coupon rounding.",
       })
     ).body.data.post as SpacePost;
-    await send(member, `/v1/spaces/${spaceId}/posts/${asked.id}`, "PATCH", {
-      text: "Fix the coupon and tax rounding.",
+    // Only the agent edits a post, and only its own.
+    await call(tools, "edit_post", {
+      post_id: welcome.post_id,
+      text: "Welcome to the Space.",
     });
     await call(tools, "react", { post_id: asked.id, reaction: "thumbs_up" });
 
@@ -409,11 +411,16 @@ describe("The Space agent's post tools", () => {
     expect(
       read.posts.map(({ post_id }: { post_id: string }) => post_id),
     ).toEqual([welcome.post_id, asked.id]);
+    expect(read.posts[0]).toMatchObject({
+      post_id: welcome.post_id,
+      text: "Welcome to the Space.",
+      edited: true,
+    });
     expect(read.posts[1]).toMatchObject({
       post_id: asked.id,
       author: { kind: "user", name: "Ben Member", handle: "benm" },
-      text: "Fix the coupon and tax rounding.",
-      edited: true,
+      text: "Fix the coupon rounding.",
+      edited: false,
     });
     expect(read.posts[1].reactions).toEqual(
       expect.arrayContaining([

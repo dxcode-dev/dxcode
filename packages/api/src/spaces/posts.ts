@@ -85,12 +85,6 @@ export const SpacePostSchema = Schema.Struct({
   /** In the order they were first given. */
   reactions: Schema.Array(SpacePostReactionCountSchema),
   comments: SpacePostCommentsSchema,
-  /**
-   * The Space's agent has not read it yet: its message still waits in the
-   * agent's queue, so an edit replaces it and a delete withdraws it unseen.
-   * Absent once read, and while the Space's agent is idle.
-   */
-  waiting: Schema.optional(Schema.Boolean),
 });
 export type SpacePost = typeof SpacePostSchema.Type;
 
@@ -141,9 +135,9 @@ export type SpacePostRevisionsResponse =
   typeof SpacePostRevisionsResponseSchema.Encoded;
 
 /**
- * `POST /v1/spaces/:threadId/posts` (a person posts; it reaches the agent)
- * and `PATCH /v1/spaces/:threadId/posts/:postId` (its author edits it; the
- * edit reaches the agent). Files follow the text as the `<dx_attachments>`
+ * `POST /v1/spaces/:threadId/posts`: a person posts, and it reaches the
+ * agent. People cannot edit or delete a post afterwards: the agent's
+ * context keeps every post as sent. Files follow the text as the `<dx_attachments>`
  * block a Thread message carries (`message-attachments`): Core checks each
  * file, rewrites the block from its records, and stores it in the post's
  * text, where clients read it to show the files.
@@ -154,7 +148,7 @@ export const SpacePostTextRequestSchema = Schema.Struct({
 export type SpacePostTextRequest = typeof SpacePostTextRequestSchema.Type;
 
 /**
- * `POST /v1/spaces/:threadId/posts` (201), `PATCH …/posts/:postId`, and
+ * `POST /v1/spaces/:threadId/posts` (201) and
  * `PUT|DELETE …/posts/:postId/reactions/:reaction`: the post as it now is.
  */
 export const SpacePostResponseSchema = successResponse(
@@ -162,41 +156,12 @@ export const SpacePostResponseSchema = successResponse(
 );
 export type SpacePostResponse = typeof SpacePostResponseSchema.Encoded;
 
-/**
- * `DELETE /v1/spaces/:threadId/posts/:postId`: its author deleted it, and it
- * left the Space for everyone. `withdrawn`: the agent had not read it and
- * never will; `noted`: the agent had read it and was told it was deleted.
- */
-export const DeleteSpacePostResponseSchema = successResponse(
-  Schema.Struct({
-    postId: SpacePostIdSchema,
-    outcome: Schema.Literals(["withdrawn", "noted"]),
-  }),
-);
-export type DeleteSpacePostResponse =
-  typeof DeleteSpacePostResponseSchema.Encoded;
-
 /** The tag that names a person's post for the agent. */
 export const spacePostTag = (postId: string) => `<post id="${postId}" />`;
 
 /** A person's post as the agent receives it: its text, then its tag. */
 export const spacePostForAgent = (postId: string, text: string) =>
   `${text}\n\n${spacePostTag(postId)}`;
-
-/** An edited post as the agent receives it: the new text, then the old. */
-export const spacePostEditForAgent = (
-  postId: string,
-  text: string,
-  previous: string,
-) =>
-  `${text}\n\n<edited_post id="${postId}">\n${previous.replaceAll("</edited_post>", "<\\/edited_post>")}\n</edited_post>`;
-
-/**
- * A post its author deleted after the agent read it, as the agent receives
- * it: the text it no longer asks for.
- */
-export const spacePostDeleteForAgent = (postId: string, previous: string) =>
-  `<deleted_post id="${postId}">\n${previous.replaceAll("</deleted_post>", "<\\/deleted_post>")}\n</deleted_post>`;
 
 /** The `<post id="…" />` tags in a message the agent received. */
 export const spacePostIdsIn = (body: string): ReadonlyArray<string> =>

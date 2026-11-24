@@ -218,9 +218,6 @@ export const SpaceErrorCodeSchema = Schema.Literals([
   "SPACE_CREATION_FAILED",
   "PERSISTENCE_UNAVAILABLE",
   "POST_NOT_FOUND",
-  "POST_NOT_YOURS",
-  /** The post changed while it was being edited. */
-  "POST_CHANGED",
   "SPACE_ARCHIVED",
   "SPACE_READ_ONLY",
   "SPACE_AGENT_UNAVAILABLE",

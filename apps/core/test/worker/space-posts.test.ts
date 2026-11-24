@@ -40,8 +40,8 @@ import { seedSpaceUsers } from "./space-users.js";
 
 /**
  * A Space's posts end to end in workerd with real D1, through the same
- * Thread authorization and message admission as the app: people post, edit
- * their own posts, react, and comment; every person's post reaches the
+ * Thread authorization and message admission as the app: people post,
+ * react, and comment, and never edit or delete a post; every person's post reaches the
  * Space's agent tagged with its ID, and dx's `eyes` shows on it until the
  * agent's turn ends; children's results arrive as worker reports; a new
  * Space sends its agent a hidden setup message instead of a welcome.
@@ -49,7 +49,7 @@ import { seedSpaceUsers } from "./space-users.js";
  * Ways it could go wrong: a post never reaches the agent, or reaches it
  * without its ID, or twice; a message sent straight to the agent skips the
  * post; a refused delivery leaves a post nobody's agent saw; someone edits
- * another's post, or an edit loses the earlier text; a viewer or outsider
+ * or deletes a post, so the Space and the agent's context differ; a viewer or outsider
  * posts or reacts, or anyone posts in an archived Space; a reaction counts
  * twice or names the wrong person; `eyes` stays after the turn, or leaves
  * before it; a change reaches no one watching; a child's report shows as a
@@ -66,12 +66,6 @@ const flue = vi.hoisted(() => ({
   }>,
   /** Deliveries the agent refuses, by body text. */
   refuse: undefined as RegExp | undefined,
-  /** Submissions still waiting in the agent's queue; others were read. */
-  queued: new Set<string>(),
-  /** Each delivery's body, as the queue holds it, by submission. */
-  bodies: new Map<string, string>(),
-  withdrawn: [] as string[],
-  replaced: [] as Array<{ submissionId: string; body: string }>,
 }));
 
 const realtime = vi.hoisted(() => ({
@@ -122,55 +116,11 @@ vi.mock("../../src/agents/routes.js", async () => {
       body: delivered.body,
       delivered,
     });
-    flue.bodies.set(`sub_${flue.agent.length}`, delivered.body);
     return context.json({ submissionId: `sub_${flue.agent.length}` }, 202);
   });
   return {
     dxAgentRoutes: routes,
     stopThreadAgent: async () => undefined,
-    // Flue withdraws or rewrites a submission only while it waits in the
-    // queue with the text the caller expects.
-    withdrawThreadMessage: async (
-      _threadId: string,
-      submissionId: string,
-      expectBody: string,
-    ) => {
-      if (!flue.queued.has(submissionId))
-        return {
-          withdrawn: false,
-          status: "joined",
-          entryId: `entry_direct_${submissionId}`,
-        };
-      if (flue.bodies.get(submissionId) !== expectBody)
-        return { withdrawn: false, status: "queued" };
-      flue.queued.delete(submissionId);
-      flue.withdrawn.push(submissionId);
-      return { withdrawn: true };
-    },
-    replaceQueuedThreadMessage: async (
-      _threadId: string,
-      submissionId: string,
-      expectBody: string,
-      body: string,
-    ) => {
-      if (!flue.queued.has(submissionId))
-        return {
-          replaced: false,
-          status: "joined",
-          entryId: `entry_direct_${submissionId}`,
-        };
-      if (flue.bodies.get(submissionId) !== expectBody)
-        return { replaced: false, status: "queued" };
-      flue.bodies.set(submissionId, body);
-      flue.replaced.push({ submissionId, body });
-      return { replaced: true };
-    },
-    listQueuedThreadMessages: async () =>
-      [...flue.queued].map((submissionId) => ({
-        submissionId,
-        body: flue.bodies.get(submissionId) ?? "",
-        acceptedAt: new Date(0).toISOString(),
-      })),
   };
 });
 
@@ -302,10 +252,6 @@ const user = (id: string, name: string) =>
 beforeEach(async () => {
   flue.agent.length = 0;
   flue.refuse = undefined;
-  flue.queued.clear();
-  flue.withdrawn.length = 0;
-  flue.replaced.length = 0;
-  flue.bodies.clear();
   realtime.events.length = 0;
   await env.DB.batch([
     user(owner, "Ada Owner"),
@@ -476,256 +422,34 @@ describe("Space posts", () => {
     expect((await posts(owner, spaceId)).items).toEqual([]);
   });
 
-  it("lets authors edit only their own posts, keeps every version, and tells the agent what changed", async () => {
+  // Ways it could go wrong: an author still edits or deletes a post, so
+  // the Space shows one conversation while the agent's context holds
+  // another; a refused change still reaches the agent.
+  it("lets no one edit or delete a post, so the Space shows what the agent read", async () => {
     const spaceId = await freshSpace();
     const created = (await post(member, spaceId, "Ship on Friday.")).body.data
       .post as SpacePost;
-    flue.agent.length = 0;
-
-    const edited = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "PATCH",
-      { text: "Ship on Thursday." },
-    );
-    expect(edited.status).toBe(200);
-    expect(edited.body.data.post).toMatchObject({
-      id: created.id,
-      text: "Ship on Thursday.",
-      revisionCount: 1,
-    });
-    expect(edited.body.data.post.editedAt).toBeDefined();
-    expect(flue.agent).toHaveLength(1);
-    const tag = parseMessageAuthor(flue.agent[0]?.body ?? "");
-    expect(tag.author).toMatchObject({ userId: member });
-    expect(tag.text).toBe(
-      `Ship on Thursday.\n\n<edited_post id="${created.id}">\nShip on Friday.\n</edited_post>`,
-    );
-
-    await send(member, `/v1/spaces/${spaceId}/posts/${created.id}`, "PATCH", {
-      text: "Ship on Thursday, after QA.",
-    });
-    const revisions = await send(
-      owner,
-      `/v1/spaces/${spaceId}/posts/${created.id}/revisions`,
-    );
-    expect(revisions.status).toBe(200);
-    expect(
-      revisions.body.data.items.map(
-        ({ revision, text }: { revision: number; text: string }) => [
-          revision,
-          text,
-        ],
-      ),
-    ).toEqual([
-      [1, "Ship on Friday."],
-      [2, "Ship on Thursday."],
-      [3, "Ship on Thursday, after QA."],
-    ]);
-
-    // Not even the Space's owner edits someone else's post.
-    const notYours = await send(
-      owner,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "PATCH",
-      { text: "Ship whenever." },
-    );
-    expect(notYours.status).toBe(403);
-    expect(notYours.body.data.code).toBe("POST_NOT_YOURS");
-    const missing = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/pst_00000000000000000000000000`,
-      "PATCH",
-      { text: "Hi" },
-    );
-    expect(missing.status).toBe(404);
-    expect(missing.body.data.code).toBe("POST_NOT_FOUND");
-    expect((await posts(owner, spaceId)).items[0]?.text).toBe(
-      "Ship on Thursday, after QA.",
-    );
-  });
-
-  it("replaces a post the agent has not read yet in its queue, so the agent reads only the new text", async () => {
-    const spaceId = await freshSpace();
-    const created = (await post(member, spaceId, "Ship on Friday.")).body.data
-      .post as SpacePost;
-    // The agent is still working on something else: the post waits.
-    flue.queued.add("sub_1");
-    expect((await posts(owner, spaceId)).items[0]?.waiting).toBe(true);
-    flue.agent.length = 0;
-
-    const edited = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "PATCH",
-      { text: "Ship on Thursday." },
-    );
-    expect(edited.status).toBe(200);
-    expect(edited.body.data.post).toMatchObject({
-      text: "Ship on Thursday.",
-      revisionCount: 1,
-    });
-    // Rewritten in place, keeping its place in the queue: nothing new is
-    // sent, and the agent never sees Friday.
-    expect(flue.withdrawn).toEqual([]);
-    expect(flue.agent).toEqual([]);
-    expect(flue.replaced.map(({ submissionId }) => submissionId)).toEqual([
-      "sub_1",
-    ]);
-    // As if posted so: no <edited_post>, since the agent never saw Friday.
-    expect(parseMessageAuthor(flue.replaced[0]?.body ?? "")).toMatchObject({
-      author: expect.objectContaining({ userId: member }),
-      text: `Ship on Thursday.\n\n<post id="${created.id}" />`,
-    });
-    expect((await posts(owner, spaceId)).items[0]?.waiting).toBe(true);
-    // Once the agent read it, an edit reaches it as a change.
-    flue.queued.delete("sub_1");
-    await send(member, `/v1/spaces/${spaceId}/posts/${created.id}`, "PATCH", {
-      text: "Ship on Wednesday.",
-    });
-    expect(parseMessageAuthor(flue.agent[0]?.body ?? "").text).toBe(
-      `Ship on Wednesday.\n\n<edited_post id="${created.id}">\nShip on Thursday.\n</edited_post>`,
-    );
-  });
-
-  it("keeps a post as it was when the agent took it before the edit and refuses the change", async () => {
-    const spaceId = await freshSpace();
-    const created = (await post(member, spaceId, "Ship on Friday.")).body.data
-      .post as SpacePost;
-    flue.agent.length = 0;
-    flue.refuse = /Thursday/;
-    const edited = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "PATCH",
-      { text: "Ship on Thursday." },
-    );
-    expect(edited.status).toBe(503);
-    expect((await posts(owner, spaceId)).items[0]).toMatchObject({
-      text: "Ship on Friday.",
-      revisionCount: 0,
-    });
-    expect(flue.agent).toEqual([]);
-    expect(flue.withdrawn).toEqual([]);
-  });
-
-  // The post's submission names its last message, an edit's note included.
-  // Ways it could go wrong: deleting a read post whose edit note still waits
-  // withdraws the note and tells the agent nothing, so it keeps acting on a
-  // post that is gone; a later edit sends it again as a new post.
-  it("tells the agent of a deleted post it read even while the post's edit note waits", async () => {
-    const spaceId = await freshSpace();
-    const created = (await post(member, spaceId, "Drop the coupon field.")).body
-      .data.post as SpacePost;
-    const path = `/v1/spaces/${spaceId}/posts/${created.id}`;
-    await send(member, path, "PATCH", { text: "Drop the coupon field now." });
-    // The edit's note waits behind a running turn.
-    flue.queued.add(`sub_${flue.agent.length}`);
-    expect((await posts(owner, spaceId)).items[0]?.waiting).toBeUndefined();
-    await send(member, path, "PATCH", { text: "Drop it today." });
-    expect(flue.replaced).toEqual([]);
-    expect(parseMessageAuthor(flue.agent.at(-1)?.body ?? "").text).toContain(
-      `<edited_post id="${created.id}">`,
-    );
-    flue.agent.length = 0;
-    const deleted = await send(member, path, "DELETE");
-    expect(deleted.body.data.outcome).toBe("noted");
-    expect(flue.withdrawn).toEqual([]);
-    expect(parseMessageAuthor(flue.agent[0]?.body ?? "").text).toBe(
-      `<deleted_post id="${created.id}">\nDrop it today.\n</deleted_post>`,
-    );
-  });
-
-  it("lets only a post's author delete it; one the agent has not read leaves its queue unseen", async () => {
-    const spaceId = await freshSpace();
-    const created = (await post(member, spaceId, "Drop the coupon field.")).body
-      .data.post as SpacePost;
-    flue.queued.add("sub_1");
-    flue.agent.length = 0;
-    const path = `/v1/spaces/${spaceId}/posts/${created.id}`;
-
-    const notYours = await send(owner, path, "DELETE");
-    expect(notYours.status).toBe(403);
-    expect(notYours.body.data.code).toBe("POST_NOT_YOURS");
-
-    const deleted = await send(member, path, "DELETE");
-    expect(deleted.status).toBe(200);
-    expect(deleted.body.data).toEqual({
-      postId: created.id,
-      outcome: "withdrawn",
-    });
-    expect(flue.withdrawn).toEqual(["sub_1"]);
-    expect(flue.agent).toEqual([]);
-    expect((await posts(owner, spaceId)).items).toEqual([]);
-    expect(postsChanged(spaceId)).toBeGreaterThan(0);
-    // A repeat succeeds and changes nothing.
-    expect((await send(member, path, "DELETE")).status).toBe(200);
-    expect(flue.agent).toEqual([]);
-    expect(
-      (await send(member, `${path}`, "PATCH", { text: "Back?" })).status,
-    ).toBe(404);
-  });
-
-  it("tells the agent a post it read was deleted, and takes it out of the Space for everyone", async () => {
-    const spaceId = await freshSpace();
-    const created = (await post(member, spaceId, "Drop the coupon field.")).body
-      .data.post as SpacePost;
-    await post(owner, spaceId, "Keep this one.");
     flue.agent.length = 0;
     realtime.events.length = 0;
+    const path = `/v1/spaces/${spaceId}/posts/${created.id}`;
 
-    const deleted = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "DELETE",
-    );
-    expect(deleted.status).toBe(200);
-    expect(deleted.body.data.outcome).toBe("noted");
-    expect(flue.withdrawn).toEqual([]);
-    expect(flue.agent).toHaveLength(1);
-    const note = parseMessageAuthor(flue.agent[0]?.body ?? "");
-    expect(note.author).toMatchObject({ userId: member });
-    expect(note.text).toBe(
-      `<deleted_post id="${created.id}">\nDrop the coupon field.\n</deleted_post>`,
-    );
-    // The note is not a post; the deleted post is gone for everyone.
-    for (const reader of [owner, member])
+    for (const author of [member, owner]) {
       expect(
-        (await posts(reader, spaceId)).items.map(({ text }) => text),
-      ).toEqual(["Keep this one."]);
-    expect(postsChanged(spaceId)).toBeGreaterThan(0);
-    // Its revisions and reactions go with it.
-    expect(
-      (await send(owner, `/v1/spaces/${spaceId}/posts/${created.id}/revisions`))
-        .status,
-    ).toBe(404);
-    // A repeat neither tells the agent again nor fails.
-    expect(
-      (
-        await send(
-          member,
-          `/v1/spaces/${spaceId}/posts/${created.id}`,
-          "DELETE",
-        )
-      ).status,
-    ).toBe(200);
-    expect(flue.agent).toHaveLength(1);
-  });
+        (await send(author, path, "PATCH", { text: "Ship on Thursday." }))
+          .status,
+      ).toBe(404);
+      expect((await send(author, path, "DELETE")).status).toBe(404);
+    }
 
-  it("keeps a post the agent read when the agent cannot be told it was deleted", async () => {
-    const spaceId = await freshSpace();
-    const created = (await post(member, spaceId, "Drop the coupon field.")).body
-      .data.post as SpacePost;
-    flue.refuse = /deleted_post/;
-    const deleted = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "DELETE",
-    );
-    expect(deleted.status).toBe(503);
-    expect((await posts(owner, spaceId)).items.map(({ id }) => id)).toEqual([
-      created.id,
+    expect(flue.agent).toEqual([]);
+    expect(postsChanged(spaceId)).toBe(0);
+    expect((await posts(owner, spaceId)).items).toMatchObject([
+      { id: created.id, text: "Ship on Friday.", revisionCount: 0 },
     ]);
+    const revisions = await send(owner, `${path}/revisions`);
+    expect(
+      revisions.body.data.items.map(({ text }: { text: string }) => text),
+    ).toEqual(["Ship on Friday."]);
   });
 
   it("lets viewers read but not write, keeps outsiders out, and closes an archived Space", async () => {
@@ -854,15 +578,11 @@ describe("Space posts", () => {
     ).toBeUndefined();
     expect(postsChanged(spaceId)).toBe(1);
 
-    // An edit reaches the agent again, so eyes shows again; a failed turn
-    // still ends it, and so does the Space going idle.
-    const edited = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "PATCH",
-      { text: "Can you look at CI on main?" },
-    );
-    expect(reactions(edited.body.data.post).eyes?.agent).toBe(true);
+    // The next post shows eyes too; a failed turn still ends it, and so
+    // does the Space going idle.
+    const next = (await post(member, spaceId, "And CI on main?")).body.data
+      .post as SpacePost;
+    expect(reactions(next).eyes?.agent).toBe(true);
     await env.DB.prepare(
       "UPDATE threads SET activity_status = 'idle' WHERE id = ?",
     )
@@ -875,7 +595,7 @@ describe("Space posts", () => {
       outcome: "failed",
     } as never);
     expect(
-      reactions((await posts(owner, spaceId)).items[0]).eyes,
+      reactions((await posts(owner, spaceId)).items[1]).eyes,
     ).toBeUndefined();
   });
 
@@ -885,9 +605,7 @@ describe("Space posts", () => {
       .post as SpacePost;
     expect(postsChanged(spaceId)).toBeGreaterThanOrEqual(1);
     realtime.events.length = 0;
-    await send(owner, `/v1/spaces/${spaceId}/posts/${created.id}`, "PATCH", {
-      text: "One, edited",
-    });
+    await post(member, spaceId, "Two");
     expect(postsChanged(spaceId)).toBeGreaterThanOrEqual(1);
     realtime.events.length = 0;
     await send(
@@ -983,35 +701,6 @@ describe("Files in people's posts", () => {
         ({ name }) => name,
       ),
     ).toEqual(["export.mp4"]);
-  });
-
-  it("keeps a post's files through an edit", async () => {
-    const spaceId = await freshSpace();
-    const id = "att_5a4b1f701cb14ef0a622538ca5284715";
-    await file(id, member);
-    const created = (await post(member, spaceId, `Before.\n\n${claimed(id)}`))
-      .body.data.post as SpacePost;
-    const edited = await send(
-      member,
-      `/v1/spaces/${spaceId}/posts/${created.id}`,
-      "PATCH",
-      { text: `After.\n\n${claimed(id)}` },
-    );
-    expect(edited.status).toBe(200);
-    const shown = parseMessageAttachments(edited.body.data.post.text);
-    expect(shown.text).toBe("After.");
-    expect(
-      shown.attachments.map(({ id: shownId, name }) => [shownId, name]),
-    ).toEqual([[id, "IMG_7830.png"]]);
-    // The agent reads the new words, the old ones, then the files.
-    const tag = parseMessageAuthor(flue.agent.at(-1)?.body ?? "");
-    const received = parseMessageAttachments(tag.text);
-    expect(received.text).toBe(
-      `After.\n\n<edited_post id="${created.id}">\nBefore.\n</edited_post>`,
-    );
-    expect(received.attachments.map(({ name }) => name)).toEqual([
-      "IMG_7830.png",
-    ]);
   });
 
   it("refuses a file the author cannot read, and never lets a typed tag pose as one", async () => {
@@ -1296,22 +985,6 @@ describe("Mentions in people's posts", () => {
     ]);
     // Nothing else notified through the message path.
     expect(await allMentionsIn(spaceId)).toHaveLength(1);
-
-    // An edit notifies only people it newly mentions.
-    await send(owner, `/v1/spaces/${spaceId}/posts/${created.id}`, "PATCH", {
-      text: `Can @[Ben Member](user:${member}) and @[Vi Viewer](user:${viewer}) review it?`,
-    });
-    const after = await mentionsOf(created.id);
-    expect(after.map(({ recipient_user_id }) => recipient_user_id)).toEqual(
-      [member, viewer].sort(),
-    );
-    expect(
-      after.find(({ recipient_user_id }) => recipient_user_id === viewer),
-    ).toMatchObject({
-      actor_user_id: owner,
-      message_id: created.id,
-      excerpt: `Can @[Ben Member](user:${member}) and @[Vi Viewer](user:${viewer}) review it?`,
-    });
   });
 
   it("routes a typed @handle through the same path, with no internal tags", async () => {

@@ -296,12 +296,11 @@ export interface Variables {
   /**
    * Set only in-process by a Space's posts: the message is this person's
    * post, already stored (`create`, removed again if the agent refuses it),
-   * edited (`edit`), or deleted after the agent read it (`delete`), so
-   * admission tags no new post.
+   * so admission tags no new post.
    */
   readonly spacePost?: {
     readonly id: string;
-    readonly kind: "create" | "edit" | "delete";
+    readonly kind: "create";
   };
   /** Set only in-process: a new Space's hidden setup message, not a post. */
   readonly spaceSetup?: true;

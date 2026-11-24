@@ -1083,29 +1083,6 @@ button.space-tab:hover,
   line-height: var(--leading-normal);
   white-space: pre-wrap;
 }
-/* Only the viewer's own posts edit, in their column at the right. */
-.space-post-edit {
-  display: grid;
-  gap: var(--space-1-5);
-  width: min(36rem, 70vw);
-  margin-left: auto;
-}
-.space-post-edit > textarea {
-  width: 100%;
-  padding: var(--space-2) var(--space-3);
-  color: var(--foreground);
-  border: 1px solid var(--input);
-  border-radius: var(--radius-xl);
-  background: var(--surface);
-  font: inherit;
-  resize: vertical;
-}
-.space-post-edit-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--space-1-5);
-}
-.space-post-edit-error,
 .space-composer-error {
   margin: 0;
   color: var(--destructive);
