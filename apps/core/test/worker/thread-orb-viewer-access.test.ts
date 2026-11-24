@@ -16,8 +16,9 @@ import type { Bindings } from "../../src/http/types.js";
 import { evaluatePortalAccess } from "../../src/portals/access.js";
 import { makeThreadChangesRepository } from "../../src/thread-changes/repository-d1.js";
 import { publishThreadChangesResidentCandidate } from "../../src/thread-changes/resident-publisher.js";
+import { forwardDaemonStorage } from "../../src/threads/daemon-ingress.js";
 import { project, thread } from "./fixtures.js";
-import { direct } from "./r2-harness.js";
+import { direct, seedDaemonAuthority, wokenNamespace } from "./r2-harness.js";
 import { runRepositories } from "./runtime.js";
 
 /*
@@ -34,7 +35,8 @@ import { runRepositories } from "./runtime.js";
  * - a viewer loses what they keep: Thread detail, the Changes file list
  *   (names and counts, no contents), a file the agent shared;
  * - the work a read-only restart rescued into Thread storage opens for a
- *   viewer;
+ *   viewer, in the browser or through the dxd of one of the viewer's own
+ *   Threads (#2423);
  * - a viewer's bug report reads the Orb's setup scripts, its execution
  *   state, or the Worker logs into a diagnostics file the viewer can
  *   download;
@@ -503,5 +505,49 @@ describe("View-only members and the Orb (#1659)", () => {
     expect(ownReport.thread.orbSetup).toMatchObject({ ok: true });
     expect(ownReport.thread.execution).toMatchObject({ ok: true });
     expect(ownReport.thread.workerLogs).not.toEqual(viewOnly);
+  });
+
+  it("refuses a viewer's own dxd the rescued work the browser refuses (#2423)", async () => {
+    // The member's own Thread, whose dxd asks for the owner's files.
+    const memberProject = projectId.replace("-8000-", "-9000-") as ProjectId;
+    const memberThread = threadId.replace("-8000-", "-9000-") as ThreadId;
+    await runRepositories(
+      Effect.gen(function* () {
+        yield* (yield* ProjectRepository).insert(
+          project(memberProject, member.userId, "Member's own"),
+        );
+        yield* (yield* ThreadRepository).insert(
+          thread(memberThread, memberProject, member.userId),
+        );
+      }),
+    );
+    const key = `dxd_orb-viewer-member-key-${threadId.slice(-12)}`;
+    await seedDaemonAuthority(memberThread, member.userId, key);
+    const fetchFile = async (fileId: string) => {
+      const response = await forwardDaemonStorage(
+        new Request(
+          `https://dxd.test/v1/dxd/${memberThread}/storage/${fileId}`,
+          { headers: { authorization: `Bearer ${key}` } },
+        ),
+        wokenNamespace({ ...direct, DX_AUTH_URL: appOrigin }),
+        memberThread,
+        `/${fileId}`,
+      );
+      const body = await response.text();
+      return { status: response.status, body };
+    };
+
+    await shareAs("view");
+    expect((await fetchFile(sharedFileId)).status).toBe(200);
+    const refused = await fetchFile(rescuedFileId);
+    expect(refused.status).toBe(404);
+    expect(refused.body).not.toContain("http");
+
+    await shareAs("contribute");
+    const allowed = await fetchFile(rescuedFileId);
+    expect(allowed.status).toBe(200);
+    expect(JSON.parse(allowed.body)).toMatchObject({
+      name: "dx-recovered-2026-11-04T00-00-00.tar.gz",
+    });
   });
 });

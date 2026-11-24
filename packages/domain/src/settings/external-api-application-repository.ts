@@ -126,6 +126,21 @@ export interface ExternalApiApplicationRepositoryShape {
     ExternalApiApplication,
     RepositoryError | ExternalApiApplicationNotFound
   >;
+  /**
+   * The active application a client id names, before its secret is checked,
+   * so a wrong secret is counted against its budget and audited.
+   */
+  readonly findActiveByClientId: (
+    clientId: ExternalApiApplicationClientId,
+  ) => Effect.Effect<
+    Option.Option<
+      Pick<
+        AuthenticatedExternalApiApplication,
+        "applicationId" | "workspaceId" | "rateLimitPerMinute"
+      >
+    >,
+    PersistenceUnavailable
+  >;
   readonly authenticate: (
     clientId: ExternalApiApplicationClientId,
     secretHash: ExternalApiApplicationSecretHash,

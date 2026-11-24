@@ -7,22 +7,16 @@ import {
 import { attachmentTransfer } from "../attachments/transfer.js";
 import type { AppEnv } from "../http/types.js";
 import { threadStorageLogger } from "../logging.js";
-import { mayReadOrbContents } from "../thread-sharing/access.js";
 import {
   findThreadStorageFile,
   isReadableThreadStorageFile,
   isThreadStorageFileId,
+  mayReadStoredFile,
   type ThreadStorageRow,
   threadStorageFileData,
 } from "./store.js";
 
 const LIST_LIMIT = 200;
-
-/**
- * Work a read-only Orb restart rescued (`restoreUnsavedWork` names it): a
- * copy of the Orb's uncommitted files, which can hold an untracked `.env`.
- */
-const RESCUED_WORK_NAME = /^dx-recovered-[0-9T-]+\.tar\.gz$/;
 
 const refuse = (context: Context<AppEnv>, error: string, status: 404 | 503) => {
   context.header("Cache-Control", "no-store");
@@ -100,10 +94,7 @@ export const threadStorageRoutes = new Hono<AppEnv>()
         row.thread_id !== context.req.param("threadId")
       )
         return refuse(context, "File not found.", 404);
-      if (
-        RESCUED_WORK_NAME.test(row.name) &&
-        !mayReadOrbContents(context.get("threadAccess"))
-      ) {
+      if (!mayReadStoredFile(row, context.get("threadAccess"))) {
         context.header("Cache-Control", "no-store");
         return context.json<ThreadStorageError>(
           { error: "Only contributors can open the Orb's rescued work." },

@@ -830,4 +830,63 @@ describe("workspace external API applications in workerd with real D1", () => {
         .run(),
     ).rejects.toBeDefined();
   });
+
+  it("throttles and audits wrong secrets for a known client id (#2424)", async () => {
+    vi.useFakeTimers({
+      now: Math.floor(Date.now() / 60_000) * 60_000 + 65_000,
+      toFake: ["Date"],
+    });
+    const { application, clientSecret } = (
+      await createApplication(owner, {
+        name: "Guessed app",
+        scopes: ["projects:read"],
+        rateLimitPerMinute: 10,
+      })
+    ).data;
+    const wrongSecret = `dxs_${"w".repeat(43)}`;
+    expect(wrongSecret).not.toBe(clientSecret);
+    const attempt = (secret: string, index: number) =>
+      productRequest(application, secret, "/v1/projects", {
+        headers: { "x-request-id": `guess-${application.id}-${index}` },
+      });
+    const audited = async () =>
+      (
+        await env.DB.prepare(
+          `SELECT request_id, credential_id, outcome
+             FROM external_api_application_audit
+            WHERE application_id = ? AND actor_type = 'application'
+            ORDER BY request_id`,
+        )
+          .bind(application.id)
+          .all()
+      ).results;
+
+    // Within the budget, each wrong secret is refused and audited.
+    for (let index = 1; index <= 10; index += 1)
+      expect((await attempt(wrongSecret, index)).status).toBe(401);
+    const withinBudget = await audited();
+    expect(withinBudget).toHaveLength(10);
+    for (const row of withinBudget)
+      expect(row).toMatchObject({ credential_id: null, outcome: "rejected" });
+
+    // Past it, wrong secrets are throttled and write no more rows.
+    for (let index = 11; index <= 30; index += 1) {
+      const throttled = await attempt(wrongSecret, index);
+      expect(throttled.status).toBe(429);
+      expect(Number(throttled.headers.get("retry-after"))).toBeGreaterThan(0);
+    }
+    expect(await audited()).toHaveLength(10);
+
+    // An unknown client id is refused like a wrong secret.
+    const unknown = await productRequest(
+      { ...application, clientId: `dxa_${"u".repeat(24)}` as never },
+      wrongSecret,
+      "/v1/projects",
+    );
+    expect(unknown.status).toBe(401);
+
+    // The next window admits the real secret again.
+    vi.setSystemTime(Date.now() + 60_000);
+    expect((await attempt(clientSecret, 31)).status).toBe(200);
+  });
 });

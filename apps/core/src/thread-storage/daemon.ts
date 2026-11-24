@@ -26,6 +26,7 @@ import {
   findThreadStorageFile,
   isReadableThreadStorageFile,
   isThreadStorageFileId,
+  mayReadStoredFile,
   newThreadStorageFileId,
   purgeUnfinishedUploads,
   threadStorageFileData,
@@ -233,7 +234,14 @@ export const serveDaemonStorage = async (
                 db,
               ),
             );
-      if (!access.authorized) return refuse("Not found.", 404);
+      // Rescued work needs Orb access: a View-only grant reads it neither
+      // in the browser nor through its own Thread's dxd.
+      if (
+        !access.authorized ||
+        access.access === undefined ||
+        !mayReadStoredFile(row, access.access)
+      )
+        return refuse("Not found.", 404);
       const url = await transfer.readUrl(
         row.object_key,
         attachmentResponseType(

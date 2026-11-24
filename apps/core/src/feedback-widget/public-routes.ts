@@ -8,6 +8,7 @@
 //   Continue with dx:              popup GET /<id>/authorize?challenge
 //                                   dx session? else /signin?next=…
 //     popup ⇄ opener (dx origin):   panel confirms it holds the challenge
+//                                   and names the website; popup shows it
 //                                   Allow → POST → consent recorded
 //   panel POST /<id>/token {verifier}: sha256(verifier) = challenge → grant
 //   panel GET /<id>/me, POST /<id>/threads with the grant as a bearer token
@@ -224,6 +225,7 @@ export const feedbackWidgetPublicRoutes = new Hono<AppEnv>()
       challenge,
       action: `/api/feedback-widget/${widget.clientId}/authorize`,
       appOrigin: await appOrigin(context.env),
+      allowedOrigins: widget.origins,
     });
   })
   .post("/:clientId/authorize", async (context) => {

@@ -1,6 +1,10 @@
 import { type ThreadStorageFile, threadStoragePath } from "@dx/api";
 import type { AttachmentTransfer } from "../attachments/transfer.js";
 import type { Bindings } from "../http/types.js";
+import {
+  mayReadOrbContents,
+  type ThreadAccess,
+} from "../thread-sharing/access.js";
 
 /**
  * One file in a Thread's storage: its D1 row and R2 object. The row is the
@@ -53,6 +57,23 @@ export const isReadableThreadStorageFile = (
   row: ThreadStorageRow,
   now: number,
 ) => row.state === "ready" && (row.expires_at === null || row.expires_at > now);
+
+/**
+ * Work a read-only Orb restart rescued (`restoreUnsavedWork` names it): a
+ * copy of the Orb's uncommitted files, which can hold an untracked `.env`.
+ */
+const RESCUED_WORK_NAME = /^dx-recovered-[0-9T-]+\.tar\.gz$/;
+
+/**
+ * Whether a reader with this access to the file's Thread may open it. The
+ * rescued work is Orb contents, so a View-only member may not; every other
+ * file is what the agent shared. The browser route and another Thread's
+ * dxd both ask here.
+ */
+export const mayReadStoredFile = (
+  row: Pick<ThreadStorageRow, "name">,
+  access: ThreadAccess,
+) => !RESCUED_WORK_NAME.test(row.name) || mayReadOrbContents(access);
 
 export const findThreadStorageFile = (db: D1Database, id: string) =>
   db

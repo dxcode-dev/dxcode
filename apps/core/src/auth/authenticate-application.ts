@@ -2,6 +2,7 @@ import {
   ExternalApiApplicationAuditEventId,
   ExternalApiApplicationClientId,
   ExternalApiApplicationClientSecret,
+  type ExternalApiApplicationCredentialId,
   ExternalApiApplicationRateLimited,
   ExternalApiApplicationRepository,
   type ExternalApiApplicationScope,
@@ -61,45 +62,60 @@ export const authenticateExternalApiApplication = (
     const repository = yield* ExternalApiApplicationRepository;
     const credentials = yield* ExternalApiApplicationCredentials;
     const now = Date.now();
+    // The budget is claimed before the secret is checked, so wrong secrets
+    // against a known client id are throttled and audited like any request.
+    const known = yield* repository.findActiveByClientId(input.clientId);
+    if (Option.isNone(known)) return Option.none<Principal>();
+    const windowStartedAt = Math.floor(now / 60_000) * 60_000;
+    const claimed = yield* repository.claimRateLimit(
+      known.value.applicationId,
+      known.value.rateLimitPerMinute,
+      windowStartedAt,
+    );
     const secretHash = yield* credentials.hash(input.clientSecret);
     const authenticated = yield* repository.authenticate(
       input.clientId,
       secretHash,
       now,
     );
-    if (Option.isNone(authenticated)) return Option.none<Principal>();
-    const application = authenticated.value;
-    const windowStartedAt = Math.floor(now / 60_000) * 60_000;
-    if (
-      !(yield* repository.claimRateLimit(
-        application.applicationId,
-        application.rateLimitPerMinute,
-        windowStartedAt,
-      ))
-    ) {
-      const retryAfterSeconds = Math.max(
+    const rejected = (
+      credentialId?: typeof ExternalApiApplicationCredentialId.Type,
+    ) =>
+      Effect.gen(function* () {
+        yield* repository.recordAudit({
+          id: yield* Schema.decodeUnknownEffect(
+            ExternalApiApplicationAuditEventId,
+          )(`eaa_${crypto.randomUUID()}`),
+          applicationId: known.value.applicationId,
+          workspaceId: known.value.workspaceId,
+          actorType: "application",
+          actorId: known.value.applicationId,
+          action: "external_api_application.request",
+          outcome: "rejected",
+          requestId: input.requestId,
+          ...(credentialId === undefined ? {} : { credentialId }),
+          method: input.method,
+          path: input.path,
+          createdAt: now,
+        });
+      });
+    const rateLimited = new ExternalApiApplicationRateLimited({
+      retryAfterSeconds: Math.max(
         1,
         Math.ceil((windowStartedAt + 60_000 - now) / 1_000),
-      );
-      yield* repository.recordAudit({
-        id: yield* Schema.decodeUnknownEffect(
-          ExternalApiApplicationAuditEventId,
-        )(`eaa_${crypto.randomUUID()}`),
-        applicationId: application.applicationId,
-        workspaceId: application.workspaceId,
-        actorType: "application",
-        actorId: application.applicationId,
-        action: "external_api_application.request",
-        outcome: "rejected",
-        requestId: input.requestId,
-        credentialId: application.credentialId,
-        method: input.method,
-        path: input.path,
-        createdAt: now,
-      });
-      return yield* new ExternalApiApplicationRateLimited({
-        retryAfterSeconds,
-      });
+      ),
+    });
+    if (Option.isNone(authenticated)) {
+      // Past the budget, a wrong secret writes no row: the audit stays
+      // bounded by the application's own rate limit.
+      if (!claimed) return yield* rateLimited;
+      yield* rejected();
+      return Option.none<Principal>();
+    }
+    const application = authenticated.value;
+    if (!claimed) {
+      yield* rejected(application.credentialId);
+      return yield* rateLimited;
     }
     yield* repository.touchLastUsed(application.applicationId, now);
     return Option.some<Principal>({

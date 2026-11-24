@@ -6,13 +6,13 @@
 //    there for everyone), and allows the site's origin.
 // 2. Serves a small website on :4100 with the copied script tag, opens it
 //    with `?dx`, comments on elements across two pages, sends, signs in
-//    through the consent popup, and starts a Thread.
+//    through the consent popup, which names the site, and starts a Thread.
 // 3. Opens the Thread and checks its title, project, and first message.
 // 4. Controls: an unlisted origin is refused in the page and by the API; a
 //    site that is not allowed cannot frame the panel; the grant stays in the
 //    panel's storage, not the website's; consent needs the dx origin; a
 //    wrong verifier claims nothing; a consent link no panel opened cannot be
-//    allowed; Turn Off makes the script inert and ends every grant.
+//    allowed and names no site; Turn Off makes the script inert and ends every grant.
 //
 // Writes a video, screenshots, a HAR without bodies, console.json, and
 // summary.json to <output dir>.
@@ -47,6 +47,11 @@ assert(email && password, "No proof account credentials.");
 const siteOrigin = process.env.DX_PROOF_SITE_ORIGIN ?? "http://localhost:4100";
 // Same server, an origin nobody allowed.
 const unlistedOrigin = "http://127.0.0.1:4100";
+// How the consent screen names a site: an https one by its host.
+const siteName = (origin) => {
+  const url = new URL(origin);
+  return url.protocol === "https:" ? url.host : url.origin;
+};
 
 // The website. Its pages carry the script tag the settings page shows.
 let scriptTag = "";
@@ -370,6 +375,10 @@ await check("Send, sign in with consent, and start a Thread", async () => {
     .getByRole("heading", { name: /Allow the Feedback Widget/ })
     .waitFor();
   assert.equal(new URL(popup.url()).origin, dxOrigin);
+  // The consent screen names the website that asked.
+  await popup
+    .getByText(`${siteName(siteOrigin)} wants to start Threads as you.`)
+    .waitFor();
   await shot(popup, "consent");
   await popup.getByRole("button", { name: "Allow" }).click();
   // The popup closes itself once the panel has the grant.
@@ -581,6 +590,11 @@ await check(
       await page
         .getByText("Open this window from the Feedback Widget")
         .waitFor({ timeout: 10_000 });
+      // No panel vouched for a site, so none is named.
+      assert.equal(
+        await page.getByText("wants to start Threads as you").isVisible(),
+        false,
+      );
       await shot(page, `consent-unbound-${name.replaceAll(" ", "-")}`);
     }
     await Promise.all([direct, lure, opened].map((page) => page.close()));
@@ -650,6 +664,9 @@ await check(
         context.waitForEvent("page"),
         continueWithDx.click(),
       ]);
+      await popup
+        .getByText(`${siteName(dxOrigin)} wants to start Threads as you.`)
+        .waitFor();
       await popup.getByRole("button", { name: "Allow" }).click();
       await popup.waitForEvent("close", { timeout: 15_000 });
     }

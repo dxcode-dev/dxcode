@@ -407,6 +407,33 @@ export const ExternalApiApplicationRepositoryD1 = (db: D1Database) =>
           return yield* queryApplication(db, workspaceId, applicationId);
         },
       ),
+      findActiveByClientId: Effect.fn(
+        "ExternalApiApplicationRepository.findActiveByClientId",
+      )(function* (clientId) {
+        const row = yield* Effect.tryPromise({
+          try: () =>
+            db
+              .prepare(
+                `SELECT id, workspace_id, rate_limit_per_minute
+                   FROM external_api_application
+                  WHERE client_id = ? AND status = 'active'`,
+              )
+              .bind(clientId)
+              .first<{
+                id: string;
+                workspace_id: string;
+                rate_limit_per_minute: number;
+              }>(),
+          catch: unavailable("settings.applications.findActiveByClientId"),
+        });
+        return row === null
+          ? Option.none()
+          : Option.some({
+              applicationId: row.id as never,
+              workspaceId: row.workspace_id as never,
+              rateLimitPerMinute: row.rate_limit_per_minute as never,
+            });
+      }),
       authenticate: Effect.fn("ExternalApiApplicationRepository.authenticate")(
         function* (clientId, secretHash, now) {
           const result = yield* Effect.tryPromise({

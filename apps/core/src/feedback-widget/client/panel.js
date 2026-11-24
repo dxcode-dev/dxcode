@@ -419,14 +419,20 @@ function dxFeedbackPanel(config) {
       event.origin === config.appOrigin &&
       event.data?.type === "dx-fw:consent-requested"
     ) {
+      // The website framing this panel, which the consent screen names.
       if (
         view === "waiting" &&
         signIn !== undefined &&
+        parentOrigin !== undefined &&
         event.source === signIn.popup &&
         event.data.challenge === signIn.challenge
       )
         signIn.popup.postMessage(
-          { type: "dx-fw:consent-confirmed", challenge: signIn.challenge },
+          {
+            type: "dx-fw:consent-confirmed",
+            challenge: signIn.challenge,
+            site: parentOrigin,
+          },
           config.appOrigin,
         );
       return;

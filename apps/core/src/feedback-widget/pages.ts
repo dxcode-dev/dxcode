@@ -79,6 +79,7 @@ body { min-height: 100vh; display: grid; place-items: center; }
 main { width: min(420px, 100vw); padding: 28px 24px; display: flex; flex-direction: column; gap: 12px; }
 .mark { font-weight: 700; font-size: 18px; letter-spacing: -.03em; color: var(--fg); }
 .identity { font-size: 12px; color: var(--faint); }
+.site { color: var(--fg); }
 .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
 .spacer { flex: 1; }
 strong { color: var(--fg); font-weight: 600; }
@@ -218,7 +219,9 @@ export const popupPage = (
  * whose verifier they keep, so Allow stays off until the window that opened
  * this one, the widget's panel on the dx origin, confirms the challenge is
  * the one it holds. A link opened on its own, or by another site, has no
- * such opener and cannot record consent (#2406).
+ * such opener and cannot record consent (#2406). The panel also names the
+ * website framing it, which the page shows only when it is one of the
+ * Project's allowed origins.
  */
 export const consentPage = (input: {
   readonly projectLabel: string;
@@ -226,11 +229,13 @@ export const consentPage = (input: {
   readonly challenge: string;
   readonly action: string;
   readonly appOrigin: string;
+  readonly allowedOrigins: ReadonlyArray<string>;
 }) =>
   popupPage(
     200,
     "Allow the Feedback Widget",
     `<h1>Allow the Feedback Widget for ${escapeHtml(input.projectLabel)}?</h1>
+<p class="site" id="site" hidden><strong id="site-name"></strong> wants to start Threads as you.</p>
 <p>It will start Threads in <strong>${escapeHtml(input.projectLabel)}</strong> as you with the comments you send from your website. You can turn this off by signing out in the widget, and the Project's admins can turn the widget off for everyone.</p>
 <p class="identity">Signed in as ${escapeHtml(input.userLabel)}</p>
 <p class="error" id="unbound" hidden>Open this window from the Feedback Widget on your website: choose Continue with dx there.</p>
@@ -243,11 +248,21 @@ export const consentPage = (input: {
     `(() => {
 const appOrigin = ${scriptJson(input.appOrigin)};
 const challenge = ${scriptJson(input.challenge)};
+const allowedOrigins = ${scriptJson(input.allowedOrigins)};
 const allow = document.getElementById("allow");
 document.getElementById("cancel").addEventListener("click", () => window.close());
+// An https site shows as its host, such as acme.com; any other keeps its
+// scheme, such as http://localhost:4100.
+const siteName = (origin) => {
+  const url = new URL(origin);
+  return url.protocol === "https:" ? url.host : url.origin;
+};
 window.addEventListener("message", (event) => {
   if (event.source === null || event.source !== window.opener || event.origin !== appOrigin) return;
   if (event.data?.type !== "dx-fw:consent-confirmed" || event.data.challenge !== challenge) return;
+  if (typeof event.data.site !== "string" || !allowedOrigins.includes(event.data.site)) return;
+  document.getElementById("site-name").textContent = siteName(event.data.site);
+  document.getElementById("site").hidden = false;
   allow.disabled = false;
 });
 try { window.opener?.postMessage({ type: "dx-fw:consent-requested", challenge }, appOrigin); } catch {}
