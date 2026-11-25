@@ -26,6 +26,7 @@ import {
   loadDeploymentModels,
 } from "../model-routing/deployment-models.js";
 import { registeredDeploymentModelBilling } from "../model-routing/deployment-models-registration.js";
+import { loadLiveCatalog } from "../model-routing/live-catalog.js";
 import { usagePrice } from "./pricing.js";
 import { UsageRepositoryD1 } from "./repository-d1.js";
 
@@ -157,9 +158,12 @@ const record = (
 ) =>
   Effect.gen(function* () {
     const db = yield* decodeD1Binding(bindings.DB);
-    // dx prices are the deployment's configuration, cached per isolate.
+    // dx prices are the deployment's configuration, cached per isolate; a
+    // model learned after the release is priced from the runtime catalog.
     if (event.kind === "model")
-      yield* Effect.promise(() => loadDeploymentModels(db));
+      yield* Effect.promise(() =>
+        Promise.all([loadDeploymentModels(db), loadLiveCatalog(db)]),
+      );
     const providerId =
       event.kind === "model"
         ? (event.routeAttribution?.providerId ?? event.observedProviderId)

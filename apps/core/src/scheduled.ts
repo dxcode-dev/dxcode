@@ -10,6 +10,7 @@ import {
   bugReportLogger,
   notificationLogger,
   orbProvidersLogger,
+  settingsPersistenceLogger,
   sourceControlLogger,
   threadDeletionLogger,
   threadPersistenceLogger,
@@ -17,6 +18,7 @@ import {
 } from "./logging.js";
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
+import { refreshModelsDev } from "./settings/model-routing/live-catalog.js";
 import {
   scheduleUsageRetention,
   scheduleWorkspaceUsageBackfill,
@@ -83,6 +85,39 @@ export const scheduled = (
         }),
       ),
   );
+  // Models labs released after this deployment: models.dev is read into
+  // D1 every few hours, so every model list grows without a release
+  // (settings/model-routing/live-catalog.ts).
+  if (bindings.DB !== undefined) {
+    const db = bindings.DB;
+    context.waitUntil(
+      refreshModelsDev(db)
+        .then((result) => {
+          if (result.status === "refreshed")
+            settingsPersistenceLogger.info("models.dev catalog refreshed.", {
+              event: "models_dev_catalog_refreshed",
+              models: result.models,
+            });
+          else if (result.status === "failed")
+            settingsPersistenceLogger.warn(
+              "models.dev catalog refresh failed.",
+              {
+                event: "models_dev_catalog_refresh_failed",
+                reason: result.reason,
+              },
+            );
+        })
+        .catch((cause) =>
+          settingsPersistenceLogger.error(
+            "models.dev catalog refresh failed.",
+            {
+              event: "models_dev_catalog_refresh_failed",
+              cause,
+            },
+          ),
+        ),
+    );
+  }
   // A deleted Thread whose cleanup failed must not keep its sandbox or
   // history for a day, so its retry runs on every tick too.
   context.waitUntil(

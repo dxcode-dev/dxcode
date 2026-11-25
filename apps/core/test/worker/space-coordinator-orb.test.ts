@@ -47,7 +47,7 @@ beforeEach(() => {
     const request = new Request(input, init);
     if (!new URL(request.url).hostname.endsWith("anthropic.com"))
       return real(input, init);
-    if (request.url === "https://api.anthropic.com/v1/models?limit=1")
+    if (request.url === "https://api.anthropic.com/v1/models?limit=1000")
       return Response.json({ data: [{ id: "claude-haiku-5-5" }] });
     return Response.json({ type: "error" }, { status: 500 });
   });

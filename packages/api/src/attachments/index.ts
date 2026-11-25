@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+export * from "./errors.js";
+
 /**
  * File attachments: the browser uploads a file to Core before it sends the
  * message, and the message carries only a reference to it. The agent never
@@ -103,9 +105,6 @@ export const PLAYABLE_MEDIA_TYPES: ReadonlyArray<string> = [
   "audio/ogg",
   "audio/mp4",
 ];
-
-export const AttachmentErrorSchema = Schema.Struct({ error: Schema.String });
-export type AttachmentError = typeof AttachmentErrorSchema.Type;
 
 /**
  * A file name that is safe in a URL path segment, a header, and a guest file

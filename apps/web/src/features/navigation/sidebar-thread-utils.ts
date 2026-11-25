@@ -22,6 +22,8 @@ export interface ThreadSection {
   readonly id: string;
   readonly label?: string;
   readonly project?: boolean;
+  /** The Project a new Thread from this section's heading starts in. */
+  readonly projectId?: ProjectId;
   /** A Project section whose name is still loading. */
   readonly loading?: boolean;
   readonly threads: ReadonlyArray<ThreadData>;
@@ -265,7 +267,15 @@ export function buildThreadSections(
       if (id === ONE_LIST_SECTION_ID) return { id, threads: groupedThreads };
       const name = nameOf(id);
       if (name !== undefined)
-        return { id, label: name, project: true, threads: groupedThreads };
+        return {
+          id,
+          label: name,
+          project: true,
+          ...(id === NO_PROJECT_SECTION_ID
+            ? {}
+            : { projectId: id as ProjectId }),
+          threads: groupedThreads,
+        };
       // Once every Project is loaded, an unnamed one is a hidden No Project
       // whose Threads came without the marker.
       return projectsComplete

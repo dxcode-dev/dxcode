@@ -989,7 +989,7 @@ it("lists Spaces below the pinned Threads and above the rest, on a computer and 
   await userEvent.click(
     [
       ...document.querySelectorAll<HTMLButtonElement>(
-        ".product-sidebar [data-thread-section] > .thread-group-heading",
+        ".product-sidebar [data-thread-section] button.thread-group-heading",
       ),
     ].find((heading) =>
       heading.textContent?.includes("Website"),

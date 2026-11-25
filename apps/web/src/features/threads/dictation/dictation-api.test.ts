@@ -10,7 +10,14 @@ describe("dictation error responses", () => {
   it.each([
     [
       Response.json(
-        { error: "Dictation is temporarily unavailable." },
+        {
+          status: "error",
+          data: {
+            code: "DICTATION_BUSY",
+            message: "Dictation is temporarily unavailable.",
+            requestId: "req_test",
+          },
+        },
         { status: 429 },
       ),
       "Dictation is temporarily unavailable.",

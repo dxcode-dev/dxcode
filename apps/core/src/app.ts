@@ -82,6 +82,11 @@ import {
   inviteAcceptRoutes,
   publicInviteRoutes,
 } from "./settings/members/routes.js";
+import {
+  liveCatalogLoaded,
+  loadLiveCatalog,
+  seedModelsDev,
+} from "./settings/model-routing/live-catalog.js";
 import { settingsRoutes } from "./settings/routes.js";
 import { pluginTriggerIngressRoutes } from "./settings/triggers/routes.js";
 import { shellRoutes } from "./shell/routes.js";
@@ -171,6 +176,27 @@ app.route("/v1/plugins/icons", pluginIconRoutes);
 app.route("/v1/portal-auth", portalAuthRoutes);
 // A plugin stream's producer, by its signed URL, no session.
 app.route("/v1/plugin-streams", pluginStreamProducerRoutes);
+// Models learned after the release (live-catalog.ts). An isolate's first
+// request reads them before any route lists, validates, or resolves a model;
+// later requests use what the isolate holds and refresh it in the background
+// at most once a minute, so a request adds no D1 round trip for it.
+app.use("/v1/*", async (context, next) => {
+  const db = context.env?.DB;
+  let execution: { waitUntil(promise: Promise<unknown>): void } | undefined;
+  try {
+    execution = context.executionCtx;
+  } catch {
+    // Tests and some internal calls reach the app without one.
+    execution = undefined;
+  }
+  if (!liveCatalogLoaded()) await loadLiveCatalog(db);
+  else execution?.waitUntil(loadLiveCatalog(db));
+  // A deployed stage with no models.dev copy reads it now instead of waiting
+  // for the cron; local development and tests keep the pinned catalog.
+  if (execution !== undefined && context.env?.DX_ENV !== "local")
+    seedModelsDev(db, (promise) => execution.waitUntil(promise));
+  await next();
+});
 app.use("/v1/*", authenticate);
 app.use("/v1/*", authorizeApiTokenScope);
 // The Artifacts library: every artifact the person may open.

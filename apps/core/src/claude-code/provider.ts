@@ -760,6 +760,28 @@ const unrecordedWork = async (
   return `Before this message, Claude Code also ran: ${calls.join("; ")}.\n\n`;
 };
 
+/**
+ * The model a Claude Code pin runs: the catalog's entry, or, for a Claude
+ * id this isolate's catalog has not seen yet, the same shape under that id.
+ * Undefined for an id that is not a Claude model.
+ */
+export const claudeCodeRuntimeModel = (
+  modelId: string,
+): Model<Api> | undefined => {
+  if (!modelId.startsWith("claude-")) return undefined;
+  const models = catalogProviderModels(CLAUDE_CODE_PROVIDER_ID);
+  const known = models.find(({ id }) => id === modelId);
+  const base = known ?? models[0];
+  if (base === undefined) return undefined;
+  return {
+    ...base,
+    ...(known === undefined ? { id: modelId, name: modelId } : {}),
+    api: CLAUDE_CODE_API,
+    // Claude Code compacts its own session; Flue must never summarize it.
+    contextWindow: 0,
+  };
+};
+
 export const createClaudeCodeProvider = (deps: ClaudeCodeProviderDeps) => {
   const models = catalogProviderModels(CLAUDE_CODE_PROVIDER_ID).map(
     (model) => ({

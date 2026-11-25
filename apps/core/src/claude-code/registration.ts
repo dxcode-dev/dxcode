@@ -1,3 +1,4 @@
+import { CLAUDE_CODE_PROVIDER_ID } from "@dx/domain";
 import {
   getModelInvocationContext,
   type SandboxFactory,
@@ -8,6 +9,7 @@ import type { ClaudePlanAccess } from "./plan.js";
 import {
   type ClaudeCodeProviderDeps,
   claudeCodeContextAttachments,
+  claudeCodeRuntimeModel,
   createClaudeCodeProvider,
 } from "./provider.js";
 import { claudeCodeSandbox } from "./runs.js";
@@ -92,6 +94,15 @@ export const registerClaudeCodeProvider = (input: {
     }),
     // Flue loads only the images Claude Code is sent: a long Thread's
     // history of screenshots would not fit in the Durable Object.
-    { selectContextAttachments: claudeCodeContextAttachments },
+    {
+      selectContextAttachments: claudeCodeContextAttachments,
+      // A Claude model the plan listed after this isolate loaded its
+      // catalog: the coordinator already checked the pin against the
+      // runtime catalog (live-catalog.ts), so any Claude id runs.
+      resolveModel: async ({ providerId, modelId }) =>
+        providerId === CLAUDE_CODE_PROVIDER_ID
+          ? claudeCodeRuntimeModel(modelId)
+          : undefined,
+    },
   );
 };

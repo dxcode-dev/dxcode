@@ -6,7 +6,12 @@ import {
 } from "@earendil-works/pi-ai/providers/all";
 import { Schema } from "effect";
 import { DX_PROVIDER_ID, dxCatalogModels } from "./deployment-models.js";
-import { builtinModelsWithSuccessors } from "./newer-models.js";
+import {
+  liveCatalog,
+  mergeObserved,
+  type ObservedModel,
+  runtimeProviderModels,
+} from "./live-catalog.js";
 import { piCatalogProviderId } from "./providers.js";
 import { RETIRED_WORKERS_AI_MODELS } from "./retired-models.js";
 
@@ -24,20 +29,29 @@ const currentWorkersAiModels: ReadonlyArray<Model<Api>> = [];
  */
 export const CLAUDE_CODE_API = "claude-code" as const;
 
-const claudeCodeModels: ReadonlyArray<Model<Api>> = CLAUDE_CODE_MODELS.map(
-  ({ id, name }) => ({
-    id,
-    name,
-    api: CLAUDE_CODE_API,
-    provider: CLAUDE_CODE_PROVIDER_ID,
-    baseUrl: "",
-    reasoning: true,
-    input: ["text", "image"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1_000_000,
-    maxTokens: 128_000,
-  }),
-);
+const claudeCodeModel = (observed: ObservedModel): Model<Api> => ({
+  id: observed.id,
+  name: observed.name ?? observed.id,
+  api: CLAUDE_CODE_API,
+  provider: CLAUDE_CODE_PROVIDER_ID,
+  baseUrl: "",
+  reasoning: observed.reasoning ?? true,
+  input: observed.vision === false ? ["text"] : ["text", "image"],
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: observed.contextWindow ?? 1_000_000,
+  maxTokens: observed.maxTokens ?? 128_000,
+});
+
+/**
+ * The models a Claude Pro/Max plan serves: what Anthropic's `/v1/models`
+ * last listed for a connected plan, newest first, then the models dx ships
+ * with that it did not list. Claude Code accepts any of them as `--model`.
+ */
+const claudeCodeModels = (): ReadonlyArray<Model<Api>> =>
+  mergeObserved(
+    liveCatalog().discovered[CLAUDE_CODE_PROVIDER_ID],
+    CLAUDE_CODE_MODELS,
+  ).map(claudeCodeModel);
 
 /**
  * The pi-ai catalog entry for a canonical `providerId/modelId` pair, or
@@ -74,9 +88,9 @@ const withDisplayName = (providerId: string, model: Model<Api>): Model<Api> => {
 };
 
 export const catalogProviderModels = (providerId: string) => {
-  if (providerId === CLAUDE_CODE_PROVIDER_ID) return [...claudeCodeModels];
+  if (providerId === CLAUDE_CODE_PROVIDER_ID) return [...claudeCodeModels()];
   if (providerId === DX_PROVIDER_ID) return [...dxCatalogModels()];
-  const models = builtinModelsWithSuccessors(piCatalogProviderId(providerId));
+  const models = runtimeProviderModels(piCatalogProviderId(providerId));
   return (
     providerId === "cloudflare"
       ? [

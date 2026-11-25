@@ -1,8 +1,9 @@
 import {
   type CopilotCatalogModel,
-  GITHUB_COPILOT_CATALOG,
+  githubCopilotCatalog,
 } from "../model-subscriptions/github-copilot/catalog.js";
 import { findCatalogModel } from "./catalog.js";
+import { liveCatalog } from "./live-catalog.js";
 
 /**
  * Canonical mapping for the GitHub Copilot subscription (decision 11):
@@ -58,14 +59,26 @@ export interface CopilotServedModel {
   readonly thinkingLevelMap?: CopilotCatalogModel["thinkingLevelMap"];
 }
 
+let served: {
+  revision: string;
+  models: ReadonlyMap<string, CopilotServedModel>;
+} = { revision: "", models: new Map() };
+
 /**
  * Canonical ids a Copilot connection can serve, keyed by canonical id. A
  * canonical maps to at most one Copilot model; the actual serving set is the
- * intersection with the connection's entitlement `modelIds`.
+ * intersection with the connection's entitlement `modelIds`. Rebuilt when
+ * the runtime catalog changes (live-catalog.ts).
  */
-export const COPILOT_SERVED_MODELS: ReadonlyMap<string, CopilotServedModel> =
-  new Map(
-    GITHUB_COPILOT_CATALOG.map((model) => [
+export const copilotServedModels = (): ReadonlyMap<
+  string,
+  CopilotServedModel
+> => {
+  const { revision } = liveCatalog();
+  if (served.revision === revision && served.models.size > 0)
+    return served.models;
+  const models = new Map(
+    githubCopilotCatalog().map((model) => [
       canonicalForCopilotId(model.id),
       {
         canonical: canonicalForCopilotId(model.id),
@@ -85,9 +98,12 @@ export const COPILOT_SERVED_MODELS: ReadonlyMap<string, CopilotServedModel> =
       } satisfies CopilotServedModel,
     ]),
   );
+  served = { revision, models };
+  return models;
+};
 
 export const copilotCanonicalFor = (copilotId: string): string | undefined => {
-  const model = COPILOT_SERVED_MODELS.get(canonicalForCopilotId(copilotId));
+  const model = copilotServedModels().get(canonicalForCopilotId(copilotId));
   return model === undefined || model.upstream !== copilotId
     ? undefined
     : model.canonical;
@@ -95,8 +111,8 @@ export const copilotCanonicalFor = (copilotId: string): string | undefined => {
 
 /** Copilot upstream id for a canonical id it can serve, or undefined. */
 export const copilotUpstreamFor = (canonical: string): string | undefined =>
-  COPILOT_SERVED_MODELS.get(canonical)?.upstream;
+  copilotServedModels().get(canonical)?.upstream;
 
 export const copilotModelForCanonical = (
   canonical: string,
-): CopilotServedModel | undefined => COPILOT_SERVED_MODELS.get(canonical);
+): CopilotServedModel | undefined => copilotServedModels().get(canonical);

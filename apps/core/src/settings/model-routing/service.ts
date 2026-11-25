@@ -49,8 +49,8 @@ import {
 } from "./catalog.js";
 import {
   CLAUDE_CODE_TOKEN_PREFIX,
-  checkClaudeCodeToken,
   isClaudePlanToken,
+  listClaudeCodeModels,
 } from "./claude-code-token.js";
 import {
   loadClaudePlanLoads,
@@ -62,10 +62,11 @@ import {
   type ModeOverrideSource,
 } from "./connection-store-d1.js";
 import { effectiveContextWindow } from "./context-window.js";
-import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
+import { copilotServedModels } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import { DX_PROVIDER_ID, unservedDxModels } from "./deployment-models.js";
 import { validateAllowedModelEndpoint } from "./endpoint-policy.js";
+import { recordDiscoveredModels } from "./live-catalog.js";
 import { ModeProfileOverrideRepositoryD1 } from "./mode-profile-override-repository-d1.js";
 import {
   encryptModelCredential,
@@ -120,10 +121,20 @@ const claudeCodeTokenShaped = (token: string) =>
   token.trim().startsWith(CLAUDE_CODE_TOKEN_PREFIX) && !/\s/.test(token.trim());
 
 /** Anthropic's model list must accept the token before dx stores it. */
-const verifiedClaudeCodeHealth = async (token: string) => {
-  const check = await checkClaudeCodeToken(token.trim());
-  if (check === "valid")
+/**
+ * Checks a Claude plan token with Anthropic's model list, and keeps the
+ * list: the models the plan serves join the catalog (live-catalog.ts).
+ */
+const verifiedClaudeCodeHealth = async (
+  token: string,
+  db: D1Database | undefined,
+) => {
+  const listed = await listClaudeCodeModels(token.trim());
+  const check = listed.check;
+  if (listed.check === "valid") {
+    await recordDiscoveredModels(db, CLAUDE_CODE_PROVIDER_ID, listed.models);
     return { state: "healthy", code: "CONNECTED" } as const;
+  }
   throw new ModelRoutingValidationError([
     {
       field: "apiKey",
@@ -641,7 +652,7 @@ export class ModelRoutingService {
       throw new ModelRoutingValidationError(fieldErrors);
     const claudeCodeHealth =
       input.providerId === CLAUDE_CODE_PROVIDER_ID
-        ? await verifiedClaudeCodeHealth(input.apiKey ?? "")
+        ? await verifiedClaudeCodeHealth(input.apiKey ?? "", this.db)
         : undefined;
 
     const timestamp = new Date().toISOString();
@@ -777,7 +788,7 @@ export class ModelRoutingService {
     const claudeCodeHealth =
       claudeCodeToken === undefined
         ? undefined
-        : await verifiedClaudeCodeHealth(claudeCodeToken);
+        : await verifiedClaudeCodeHealth(claudeCodeToken, this.db);
 
     const timestamp = new Date().toISOString();
     const endpointResult =
@@ -1146,7 +1157,7 @@ export class ModelRoutingService {
     const candidates = new Set<string>();
     for (const connection of connections) {
       if (connection.kind === "subscription") {
-        for (const canonical of COPILOT_SERVED_MODELS.keys())
+        for (const canonical of copilotServedModels().keys())
           candidates.add(canonical);
         continue;
       }

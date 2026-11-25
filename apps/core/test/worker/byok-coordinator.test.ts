@@ -34,7 +34,7 @@ import { loadRoutableConnections } from "../../src/settings/model-routing/connec
 import { connectionApiKey } from "../../src/settings/model-routing/credential-access.js";
 import { encryptModelCredential } from "../../src/settings/model-routing/model-credential-encryption.js";
 import type { SubmissionRoute } from "../../src/settings/model-routing/submission.js";
-import { GITHUB_COPILOT_CATALOG } from "../../src/settings/model-subscriptions/github-copilot/provider.js";
+import { githubCopilotCatalog } from "../../src/settings/model-subscriptions/github-copilot/provider.js";
 import { PersonalModelSubscriptionRepositoryD1 } from "../../src/settings/model-subscriptions/repository-d1.js";
 import { PersonalModelSubscriptionService } from "../../src/settings/model-subscriptions/service.js";
 import {
@@ -479,7 +479,7 @@ describe("ByokCredentialCoordinatorObject", () => {
     );
   });
 
-  const COPILOT_MODEL = GITHUB_COPILOT_CATALOG.find(
+  const COPILOT_MODEL = githubCopilotCatalog().find(
     ({ protocol }) => protocol === "anthropic-messages",
   );
   const COPILOT_ORIGIN = "https://api.githubcopilot.com";

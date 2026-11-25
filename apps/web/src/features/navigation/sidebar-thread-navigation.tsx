@@ -4,6 +4,7 @@ import { Fragment, type ReactNode } from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { useNewThreadSurface } from "../../shared/new-thread-surface.js";
 import { Button } from "../../shared/ui/button.js";
+import { SidebarProjectHeading } from "./sidebar-project-heading.js";
 import { SidebarThreadChildrenProvider } from "./sidebar-thread-children.js";
 import { SidebarThreadRows } from "./sidebar-thread-rows.js";
 import type { ThreadSection } from "./sidebar-thread-utils.js";
@@ -166,7 +167,17 @@ export function SidebarThreadNavigation({
                 )
               : [];
           const heading =
-            section.label === undefined ? null : (
+            section.label === undefined ? null : section.projectId !==
+              undefined ? (
+              <SidebarProjectHeading
+                projectId={section.projectId}
+                label={section.label}
+                threadCount={section.threads.length}
+                collapsed={collapsed}
+                onToggle={() => onToggleGroup(section.id)}
+                onNavigate={onNavigate}
+              />
+            ) : (
               <button
                 className="thread-group-heading"
                 data-collapsed={collapsed || undefined}

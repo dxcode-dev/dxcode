@@ -1,6 +1,12 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { getBuiltinModelDataGeneratedAt } from "@earendil-works/pi-ai/providers/all";
-import { builtinModelsWithSuccessors } from "../../model-routing/newer-models.js";
+import {
+  getBuiltinModelDataGeneratedAt,
+  getBuiltinModels,
+} from "@earendil-works/pi-ai/providers/all";
+import {
+  liveCatalog,
+  runtimeProviderModels,
+} from "../../model-routing/live-catalog.js";
 
 export const GITHUB_COPILOT_PROVIDER_ID = "github-copilot" as const;
 export const GITHUB_COPILOT_API_ORIGIN =
@@ -235,29 +241,78 @@ const RETAINED: ReadonlyArray<CopilotCatalogModel> = [
   }),
 ];
 
-const PI_COPILOT_MODELS = builtinModelsWithSuccessors(
-  GITHUB_COPILOT_PROVIDER_ID,
-).flatMap(fromPi);
+const ENDPOINT_PROTOCOLS: ReadonlyArray<
+  readonly [CopilotCatalogModel["endpoint"], CopilotProtocol]
+> = [
+  ["/v1/messages", "anthropic-messages"],
+  ["/responses", "openai-responses"],
+  ["/chat/completions", "openai-completions"],
+];
 
 /**
- * Copilot models dx can serve: pi's pinned `github-copilot` catalog, models
- * released after it (newer-models.ts), and the retained entries. Upgrading pi adds new Copilot models here. Unknown IDs
- * fail closed.
+ * A Copilot model pi does not list, served on the protocol Copilot reported
+ * for it. It borrowed its wire traits from the closest Copilot model of its
+ * family; when Copilot does not serve it on that model's endpoint, it takes
+ * the first endpoint Copilot named that dx speaks, in the order above.
  */
-export const GITHUB_COPILOT_CATALOG: ReadonlyArray<CopilotCatalogModel> =
-  Object.freeze([
-    ...PI_COPILOT_MODELS,
-    ...RETAINED.filter(
-      ({ id }) => !PI_COPILOT_MODELS.some((model) => model.id === id),
-    ),
-  ]);
+const fromObserved = (
+  entry: Model<Api>,
+  endpoints: ReadonlyArray<string> | undefined,
+): CopilotCatalogModel[] => {
+  if (
+    endpoints === undefined ||
+    (isCopilotProtocol(entry.api) && endpoints.includes(ENDPOINTS[entry.api]))
+  )
+    return fromPi(entry);
+  const served = ENDPOINT_PROTOCOLS.find(([path]) => endpoints.includes(path));
+  return served === undefined
+    ? []
+    : fromPi({
+        ...entry,
+        api: served[1],
+        compat: {},
+        thinkingLevelMap: undefined,
+      } as Model<Api>);
+};
 
-if (
-  new Set(GITHUB_COPILOT_CATALOG.map(({ id }) => id)).size !==
-  GITHUB_COPILOT_CATALOG.length
-) {
-  throw new Error("GitHub Copilot catalog contains duplicate model IDs");
-}
+let cached: { revision: string; models: ReadonlyArray<CopilotCatalogModel> } = {
+  revision: "",
+  models: [],
+};
+
+/**
+ * Copilot models dx can serve: pi's pinned `github-copilot` catalog, the
+ * models Copilot reported live for a connected account and models.dev lists
+ * (live-catalog.ts), and the retained entries. A connection serves only the
+ * models its own Copilot entitlement enables.
+ */
+export const githubCopilotCatalog = (): ReadonlyArray<CopilotCatalogModel> => {
+  const live = liveCatalog();
+  if (cached.revision === live.revision && cached.models.length > 0)
+    return cached.models;
+  const pinned = new Set(
+    getBuiltinModels(GITHUB_COPILOT_PROVIDER_ID).map(({ id }) => id),
+  );
+  const endpoints = new Map(
+    (live.discovered[GITHUB_COPILOT_PROVIDER_ID] ?? []).map(
+      (model) => [model.id, model.endpoints] as const,
+    ),
+  );
+  const models = runtimeProviderModels(GITHUB_COPILOT_PROVIDER_ID).flatMap(
+    (entry) =>
+      pinned.has(entry.id)
+        ? fromPi(entry)
+        : fromObserved(entry, endpoints.get(entry.id)),
+  );
+  const all = Object.freeze([
+    ...models,
+    ...RETAINED.filter(({ id }) => !models.some((model) => model.id === id)),
+  ]);
+  if (new Set(all.map(({ id }) => id)).size !== all.length)
+    throw new Error("GitHub Copilot catalog contains duplicate model IDs");
+  cached = { revision: live.revision, models: all };
+  return all;
+};
 
 export const GITHUB_COPILOT_CATALOG_SOURCE = `pi:${
   getBuiltinModelDataGeneratedAt() ?? "unknown"
@@ -272,9 +327,15 @@ const catalogRevisionFor = (models: ReadonlyArray<CopilotCatalogModel>) => {
   return `${GITHUB_COPILOT_CATALOG_SOURCE}:${hash.toString(16).padStart(8, "0")}`;
 };
 
-export const GITHUB_COPILOT_CATALOG_REVISION = catalogRevisionFor(
-  GITHUB_COPILOT_CATALOG,
-);
+let revision = { of: undefined as unknown, value: "" };
+
+/** Changes whenever the catalog does, so entitlements read against it refresh. */
+export const githubCopilotCatalogRevision = () => {
+  const catalog = githubCopilotCatalog();
+  if (revision.of !== catalog)
+    revision = { of: catalog, value: catalogRevisionFor(catalog) };
+  return revision.value;
+};
 
 export const findGitHubCopilotModel = (modelId: string) =>
-  GITHUB_COPILOT_CATALOG.find(({ id }) => id === modelId);
+  githubCopilotCatalog().find(({ id }) => id === modelId);

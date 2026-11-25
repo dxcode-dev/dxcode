@@ -1,13 +1,13 @@
 import {
   DICTATION_MAX_BYTES,
   DICTATION_STREAM_SUBPROTOCOL,
-  type DictationError,
+  type DictationErrorResponse,
+  DictationErrorResponseSchema,
   type DictationJob,
   type DictationStreamResult,
-  type DictationUnavailable,
 } from "@dx/api";
 import { SpeechProviderError, type SpeechSession } from "@dx/domain";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import {
   BrowserSessionRequired,
@@ -46,14 +46,52 @@ const TRANSCRIBE_TIMEOUT = 90_000;
 const MAX_STREAM_PCM_BYTES = DICTATION_MAX_BYTES - 44;
 const MAX_STREAM_FRAME_BYTES = 64 * 1024;
 const genericError = "Dictation could not be completed.";
-const unavailableError = "Dictation is not available.";
+
+type DictationRefusal = Exclude<
+  DictationErrorResponse["data"]["code"],
+  "DICTATION_BALANCE_EXHAUSTED"
+>;
+
+const REFUSALS = {
+  DICTATION_UNAVAILABLE: [409, "Dictation is not available."],
+  DICTATION_BUSY: [429, "Dictation is temporarily unavailable."],
+  INVALID_REQUEST: [400, "Invalid request."],
+  DICTATION_INVALID_AUDIO: [400, "Invalid WAV audio."],
+  NOT_FOUND: [404, "Not found."],
+  BROWSER_SESSION_REQUIRED: [403, genericError],
+  FORBIDDEN: [403, "Forbidden."],
+  DICTATION_FAILED: [500, genericError],
+} as const satisfies Record<DictationRefusal, readonly [number, string]>;
+
+const errorAnswer = (
+  c: Context<AppEnv>,
+  data: DictationErrorResponse["data"],
+  status: 400 | 402 | 403 | 404 | 409 | 429 | 500,
+) =>
+  c.json(
+    Schema.encodeUnknownSync(DictationErrorResponseSchema)({
+      status: "error",
+      data,
+    }),
+    status,
+  );
+
+/** An error answer in dx's envelope, with the route's own message. */
+const refuse = (c: Context<AppEnv>, code: DictationRefusal) => {
+  const [status, message] = REFUSALS[code];
+  return errorAnswer(
+    c,
+    {
+      code,
+      message,
+      requestId: c.get("requestId"),
+    } as DictationErrorResponse["data"],
+    status,
+  );
+};
 
 /** Speech resolves no provider for this user: fail closed. */
-const unavailable = (c: Context<AppEnv>) =>
-  c.json<DictationUnavailable>(
-    { code: "DICTATION_UNAVAILABLE", error: unavailableError },
-    409,
-  );
+const unavailable = (c: Context<AppEnv>) => refuse(c, "DICTATION_UNAVAILABLE");
 
 /**
  * Speech resolves, but the deployment's billing refuses the call (dx speech
@@ -64,7 +102,15 @@ const refused = (
   admission: Extract<PluginCallAdmission, { admitted: false }>,
 ) =>
   admission.reason === "balance-exhausted"
-    ? c.json<DictationError>({ error: admission.message }, 402)
+    ? errorAnswer(
+        c,
+        {
+          code: "DICTATION_BALANCE_EXHAUSTED",
+          message: admission.message,
+          requestId: c.get("requestId"),
+        },
+        402,
+      )
     : unavailable(c);
 
 const noStore = (c: { header(name: string, value: string): void }) =>
@@ -220,8 +266,7 @@ const existingJob = async (
     )
     .bind(id, owner, workspace)
     .first<{ state: string }>();
-  if (!existing)
-    return c.json({ error: "Dictation is temporarily unavailable." }, 429);
+  if (!existing) return refuse(c, "DICTATION_BUSY");
   return ["reserved", "dispatching", "provider"].includes(existing.state)
     ? c.json<DictationJob>({ id, state: "processing" }, 202)
     : c.json<DictationJob>({ id, state: "failed", error: genericError });
@@ -248,11 +293,11 @@ dictationRoutes.get("/:id/stream", async (c) => {
     request.headers.get("origin") !== new URL(request.url).origin ||
     !offered.includes(DICTATION_STREAM_SUBPROTOCOL)
   )
-    return c.json({ error: "Not found." }, 404);
+    return refuse(c, "NOT_FOUND");
   try {
     const { db, owner, workspace } = await authorize(c);
     const id = c.req.param("id");
-    if (!UUID.test(id)) return c.json({ error: "Invalid request." }, 400);
+    if (!UUID.test(id)) return refuse(c, "INVALID_REQUEST");
     // Read alongside admission so the session opens no later; never rejects.
     const vocabularyRead = loadDictationVocabulary(db, owner);
     const admission = await admitSpeech({ db, bindings: c.env }, owner);
@@ -269,7 +314,7 @@ dictationRoutes.get("/:id/stream", async (c) => {
         "provider",
       ))
     )
-      return c.json({ error: "Dictation is temporarily unavailable." }, 429);
+      return refuse(c, "DICTATION_BUSY");
 
     const vocabulary = await vocabularyRead;
     let reached = false;
@@ -282,7 +327,7 @@ dictationRoutes.get("/:id/stream", async (c) => {
     } catch (error) {
       await settleJob(db, id, owner, "failed");
       logTranscriptionFailure(c.env, id, configuration, "stream", error);
-      return c.json({ error: genericError }, 500);
+      return refuse(c, "DICTATION_FAILED");
     }
 
     const { 0: client, 1: server } = new WebSocketPair();
@@ -410,9 +455,9 @@ dictationRoutes.get("/:id/stream", async (c) => {
     });
   } catch (error) {
     if (error instanceof BrowserSessionRequired)
-      return c.json({ error: genericError }, 403);
+      return refuse(c, "BROWSER_SESSION_REQUIRED");
     logUnexpectedRouteError(c, "stream", error);
-    return c.json({ error: genericError }, 500);
+    return refuse(c, "DICTATION_FAILED");
   }
 });
 
@@ -421,7 +466,7 @@ dictationRoutes.post("/:id", async (c) => {
   try {
     const { db, owner, workspace } = await authorize(c);
     const id = c.req.param("id");
-    if (!UUID.test(id)) return c.json({ error: "Invalid request." }, 400);
+    if (!UUID.test(id)) return refuse(c, "INVALID_REQUEST");
     const wav = await readCanonicalWav(c.req.raw);
     // Read alongside admission; never rejects.
     const vocabularyRead = loadDictationVocabulary(db, owner);
@@ -475,11 +520,11 @@ dictationRoutes.post("/:id", async (c) => {
     return c.json<DictationJob>({ id, state: "completed", text });
   } catch (error) {
     if (error instanceof InvalidDictationAudio)
-      return c.json({ error: "Invalid WAV audio." }, 400);
+      return refuse(c, "DICTATION_INVALID_AUDIO");
     if (error instanceof BrowserSessionRequired)
-      return c.json({ error: genericError }, 403);
+      return refuse(c, "BROWSER_SESSION_REQUIRED");
     logUnexpectedRouteError(c, "create", error);
-    return c.json({ error: genericError }, 500);
+    return refuse(c, "DICTATION_FAILED");
   }
 });
 
@@ -491,7 +536,7 @@ dictationRoutes.get("/:id", async (c) => {
   try {
     const { db, owner, workspace } = await authorize(c);
     const id = c.req.param("id");
-    if (!UUID.test(id)) return c.json({ error: "Not found." }, 404);
+    if (!UUID.test(id)) return refuse(c, "NOT_FOUND");
     const now = Date.now();
     await retireOwnerJobs(db, owner, now);
     const row = await db
@@ -501,15 +546,15 @@ dictationRoutes.get("/:id", async (c) => {
       .bind(id, owner, workspace)
       .first<{ state: string; expires_at: number }>();
     if (!row || row.expires_at <= now || row.state === "canceled")
-      return c.json({ error: "Not found." }, 404);
+      return refuse(c, "NOT_FOUND");
     return ["reserved", "dispatching", "provider"].includes(row.state)
       ? c.json<DictationJob>({ id, state: "processing" })
       : c.json<DictationJob>({ id, state: "failed", error: genericError });
   } catch (error) {
     if (error instanceof BrowserSessionRequired)
-      return c.json({ error: genericError }, 403);
+      return refuse(c, "BROWSER_SESSION_REQUIRED");
     logUnexpectedRouteError(c, "read", error);
-    return c.json({ error: genericError }, 500);
+    return refuse(c, "DICTATION_FAILED");
   }
 });
 
@@ -526,9 +571,8 @@ dictationRoutes.delete("/:id", async (c) => {
       .run();
     return c.body(null, 204);
   } catch (error) {
-    if (error instanceof BrowserSessionRequired)
-      return c.json({ error: "Forbidden." }, 403);
+    if (error instanceof BrowserSessionRequired) return refuse(c, "FORBIDDEN");
     logUnexpectedRouteError(c, "delete", error);
-    return c.json({ error: genericError }, 500);
+    return refuse(c, "DICTATION_FAILED");
   }
 });

@@ -5,6 +5,11 @@ import type { Bindings } from "../../http/types.js";
 import { settingsPersistenceLogger } from "../../logging.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
 import {
+  loadLiveCatalog,
+  recordDiscoveredModels,
+} from "../model-routing/live-catalog.js";
+import { GITHUB_COPILOT_PROVIDER_ID } from "./github-copilot/catalog.js";
+import {
   CopilotError,
   createGitHubCopilotProvider,
 } from "./github-copilot/provider.js";
@@ -124,8 +129,11 @@ export class SubscriptionCredentialCoordinatorObject extends DurableObject<Bindi
       const clientId = this.env.DX_GITHUB_COPILOT_CLIENT_ID;
       if (!clientId?.trim())
         throw new CopilotError({ code: "INVALID_CLIENT_ID" });
+      const db = this.env.DB;
       const provider = createGitHubCopilotProvider({
         clientId,
+        recordModels: (models) =>
+          recordDiscoveredModels(db, GITHUB_COPILOT_PROVIDER_ID, models),
       });
       return {
         repository,
@@ -211,6 +219,7 @@ export class SubscriptionCredentialCoordinatorObject extends DurableObject<Bindi
       );
     }
     try {
+      await loadLiveCatalog(this.env.DB);
       const runtime = await this.#loadRuntime();
       let eligible = await this.#eligibleInvocation(runtime, input);
       if (Date.parse(eligible.connection.refreshAfter) <= Date.now()) {

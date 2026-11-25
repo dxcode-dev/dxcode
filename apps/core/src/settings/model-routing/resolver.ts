@@ -19,7 +19,7 @@ import {
 import { Context, Effect, Layer, type Schema } from "effect";
 import { catalogModelExists, findCatalogModel } from "./catalog.js";
 import { effectiveContextWindow } from "./context-window.js";
-import { COPILOT_SERVED_MODELS } from "./copilot-mapping.js";
+import { copilotServedModels } from "./copilot-mapping.js";
 import { DEFAULT_PROFILE } from "./defaults.js";
 import {
   DX_PROVIDER_ID,
@@ -39,7 +39,7 @@ const canonicalParts = (canonical: string) => {
 
 /** Canonical id known to either the pi-ai catalog or the Copilot mapping. */
 export const canonicalModelKnown = (canonical: string): boolean =>
-  catalogModelExists(canonical) || COPILOT_SERVED_MODELS.has(canonical);
+  catalogModelExists(canonical) || copilotServedModels().has(canonical);
 
 /**
  * A canonical model's display name: the model catalog's name, else the Copilot
@@ -49,7 +49,7 @@ export const canonicalModelName = (canonical: string): string => {
   const { provider, model } = canonicalParts(canonical);
   return (
     findCatalogModel(provider, model)?.name ??
-    COPILOT_SERVED_MODELS.get(canonical)?.name ??
+    copilotServedModels().get(canonical)?.name ??
     (provider === DX_PROVIDER_ID ? dxModelName(model) : undefined) ??
     model.split("/").at(-1) ??
     model
@@ -61,7 +61,7 @@ export const canonicalCapabilities = (
   canonical: string,
   subscription = false,
 ) => {
-  const copilot = COPILOT_SERVED_MODELS.get(canonical);
+  const copilot = copilotServedModels().get(canonical);
   const { provider, model } = canonicalParts(canonical);
   const entry =
     subscription && copilot !== undefined
@@ -113,7 +113,7 @@ export const connectionUpstreamFor = (
       return declared.upstream ?? canonicalParts(canonical).model;
     }
     case "subscription": {
-      const served = COPILOT_SERVED_MODELS.get(canonical);
+      const served = copilotServedModels().get(canonical);
       if (served === undefined) return undefined;
       return entitledCopilotIds?.has(served.upstream)
         ? served.upstream

@@ -20,6 +20,8 @@ import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import type { AppEnv } from "../../http/types.js";
 import { decodeD1Binding } from "../../persistence/d1-binding.js";
 import { loadConfigEncryptionKeyring } from "../config-encryption.js";
+import { recordDiscoveredModels } from "../model-routing/live-catalog.js";
+import { GITHUB_COPILOT_PROVIDER_ID } from "./github-copilot/catalog.js";
 import { createGitHubCopilotProvider } from "./github-copilot/provider.js";
 import { PersonalModelSubscriptionRepositoryD1 } from "./repository-d1.js";
 import {
@@ -109,6 +111,8 @@ const dependencies = async (c: Context<AppEnv>, browser: boolean) => {
       new PersonalModelSubscriptionRepositoryD1(db),
       createGitHubCopilotProvider({
         clientId,
+        recordModels: (models) =>
+          recordDiscoveredModels(db, GITHUB_COPILOT_PROVIDER_ID, models),
       }),
       keyring,
     ),

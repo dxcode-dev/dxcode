@@ -53,7 +53,10 @@ import {
   providerBaseUrl,
   providerFieldsValid,
 } from "../model-routing/catalog.js";
-import { isClaudePlanToken } from "../model-routing/claude-code-token.js";
+import {
+  isClaudePlanToken,
+  listClaudeCodeModels,
+} from "../model-routing/claude-code-token.js";
 import {
   bedrockProbeModel,
   keyCheckRequest,
@@ -85,6 +88,11 @@ import {
 } from "../model-routing/deployment-models-registration.js";
 import { validateAllowedModelEndpoint } from "../model-routing/endpoint-policy.js";
 import {
+  discoveredStale,
+  loadLiveCatalog,
+  recordDiscoveredModels,
+} from "../model-routing/live-catalog.js";
+import {
   ClaudePlanUnavailable,
   connectionModel,
   resolveRouteSubmission,
@@ -92,6 +100,7 @@ import {
   type SubmissionRoute,
   withEffectiveContextWindow,
 } from "../model-routing/submission.js";
+import { GITHUB_COPILOT_PROVIDER_ID } from "../model-subscriptions/github-copilot/catalog.js";
 import {
   CopilotError,
   createGitHubCopilotProvider,
@@ -115,6 +124,9 @@ import {
   PROXY_ENVELOPE_HEADER,
   type ProxyEnvelope,
 } from "./proxy-envelope.js";
+
+/** How old a Claude plan's model list may get before a run reads it again. */
+const CLAUDE_CODE_MODELS_MAX_AGE_MS = 12 * 60 * 60 * 1_000;
 
 /**
  * Credential coordinator (decision 22): the only component that touches
@@ -1094,7 +1106,12 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       const clientId = this.env.DX_GITHUB_COPILOT_CLIENT_ID;
       if (!clientId?.trim())
         throw new CopilotError({ code: "INVALID_CLIENT_ID" });
-      const provider = createGitHubCopilotProvider({ clientId });
+      const db = this.#db();
+      const provider = createGitHubCopilotProvider({
+        clientId,
+        recordModels: (models) =>
+          recordDiscoveredModels(db, GITHUB_COPILOT_PROVIDER_ID, models),
+      });
       return {
         repository,
         provider,
@@ -2369,6 +2386,20 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       await loadClaudePlan(this.#db(), pin.connection.id),
       pin.model.id,
     );
+    // The plan's model list, read again twice a day by whichever run asks
+    // first, so a model Anthropic ships appears in every picker.
+    if (discoveredStale(CLAUDE_CODE_PROVIDER_ID, CLAUDE_CODE_MODELS_MAX_AGE_MS))
+      this.ctx.waitUntil(
+        listClaudeCodeModels(token).then((listed) =>
+          listed.check === "valid"
+            ? recordDiscoveredModels(
+                this.#db(),
+                CLAUDE_CODE_PROVIDER_ID,
+                listed.models,
+              )
+            : undefined,
+        ),
+      );
     return jsonResponse({ token, plan }, 200);
   }
 
@@ -2554,6 +2585,8 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
       return jsonResponse({ code: "NOT_FOUND" }, 404);
     }
     const pathname = new URL(request.url).pathname;
+    // Resolving and serving a model reads the runtime catalog.
+    await loadLiveCatalog(this.env.DB);
     const envelope =
       pathname === "/proxy"
         ? decodeProxyEnvelope(request.headers.get(PROXY_ENVELOPE_HEADER))

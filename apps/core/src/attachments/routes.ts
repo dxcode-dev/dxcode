@@ -1,6 +1,7 @@
 import {
   type AttachmentData,
-  type AttachmentError,
+  type AttachmentErrorResponse,
+  AttachmentErrorResponseSchema,
   CompleteAttachmentRequestSchema,
   CreateAttachmentRequestSchema,
   type CreateAttachmentResponse,
@@ -48,17 +49,32 @@ const afterResponse = (context: Context<AppEnv>, work: Promise<unknown>) => {
   }
 };
 
-const error = (
-  context: Context<AppEnv>,
-  message: string,
-  status: 400 | 403 | 404 | 409 | 413 | 503,
-) => {
+type AttachmentRefusal = AttachmentErrorResponse["data"]["code"];
+
+const REFUSALS = {
+  INVALID_REQUEST: [400, "The attachment request is invalid."],
+  ATTACHMENT_NOT_FOUND: [404, "Attachment not found."],
+  ATTACHMENT_PARTS_INCOMPLETE: [400, "The uploaded parts are incomplete."],
+  ATTACHMENT_SIZE_MISMATCH: [400, "The uploaded file has the wrong size."],
+  ATTACHMENT_ALREADY_SENT: [409, "The attachment was already sent."],
+  ATTACHMENTS_UNAVAILABLE: [503, "Attachments are unavailable."],
+  ATTACHMENT_REQUEST_FAILED: [503, "The attachment request failed."],
+} as const satisfies Record<AttachmentRefusal, readonly [number, string]>;
+
+const error = (context: Context<AppEnv>, code: AttachmentRefusal) => {
+  const [status, message] = REFUSALS[code];
   context.header("Cache-Control", "no-store");
-  return context.json<AttachmentError>({ error: message }, status);
+  return context.json(
+    Schema.encodeUnknownSync(AttachmentErrorResponseSchema)({
+      status: "error",
+      data: { code, message, requestId: context.get("requestId") },
+    }),
+    status,
+  );
 };
 
 const notFound = (context: Context<AppEnv>) =>
-  error(context, "Attachment not found.", 404);
+  error(context, "ATTACHMENT_NOT_FOUND");
 
 const decodeJson = async <A>(
   context: Context<AppEnv>,
@@ -93,7 +109,7 @@ const handle =
       return await run(context);
     } catch (cause) {
       if (cause instanceof AttachmentStorageUnavailable)
-        return error(context, "Attachments are unavailable.", 503);
+        return error(context, "ATTACHMENTS_UNAVAILABLE");
       attachmentLogger.error("Attachment request failed.", {
         event: "attachment_request_failed",
         operation,
@@ -102,7 +118,7 @@ const handle =
         errorMessage:
           cause instanceof Error ? cause.message.slice(0, 500) : "unknown",
       });
-      return error(context, "The attachment request failed.", 503);
+      return error(context, "ATTACHMENT_REQUEST_FAILED");
     }
   };
 
@@ -116,8 +132,7 @@ export const attachmentRoutes = new Hono<AppEnv>()
     "/",
     handle("create", async (context) => {
       const input = await decodeJson(context, CreateAttachmentRequestSchema);
-      if (input === undefined)
-        return error(context, "The attachment request is invalid.", 400);
+      if (input === undefined) return error(context, "INVALID_REQUEST");
       const { db, transfer } = attachmentContext(context);
       const uploader = context.get("principal").userId;
       // Each new upload also clears this uploader's abandoned ones, so
@@ -185,7 +200,7 @@ export const attachmentRoutes = new Hono<AppEnv>()
         numbers.length !== count ||
         numbers.some((value, index) => value !== index + 1)
       )
-        return error(context, "The uploaded parts are incomplete.", 400);
+        return error(context, "ATTACHMENT_PARTS_INCOMPLETE");
       const { db, bucket, transfer } = attachmentContext(context);
       await transfer.complete(
         row.object_key,
@@ -202,7 +217,7 @@ export const attachmentRoutes = new Hono<AppEnv>()
           .prepare("DELETE FROM attachments WHERE id = ?")
           .bind(row.id)
           .run();
-        return error(context, "The uploaded file has the wrong size.", 400);
+        return error(context, "ATTACHMENT_SIZE_MISMATCH");
       }
       const mimeType = resolveAttachmentType(
         row.mime_type,
@@ -246,7 +261,7 @@ export const attachmentRoutes = new Hono<AppEnv>()
         return notFound(context);
       // A sent message keeps its files.
       if (!(await deleteUnsentAttachment(db, bucket, transfer, row)))
-        return error(context, "The attachment was already sent.", 409);
+        return error(context, "ATTACHMENT_ALREADY_SENT");
       return context.body(null, 204);
     }),
   )

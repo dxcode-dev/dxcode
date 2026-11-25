@@ -1,12 +1,14 @@
+import type { ObservedModel } from "../../model-routing/live-catalog.js";
 import {
+  type CopilotCatalogModel,
   GITHUB_COPILOT_API_ORIGIN,
-  GITHUB_COPILOT_CATALOG,
-  GITHUB_COPILOT_CATALOG_REVISION,
+  githubCopilotCatalog,
+  githubCopilotCatalogRevision,
 } from "./catalog.js";
 import { CopilotError } from "./errors.js";
 
 export type { CopilotCatalogModel, CopilotProtocol } from "./catalog.js";
-export { CopilotError, GITHUB_COPILOT_CATALOG };
+export { CopilotError, githubCopilotCatalog };
 
 type Fetch = (
   input: RequestInfo | URL,
@@ -54,6 +56,10 @@ export interface ProviderOptions {
   readonly allowedApiOrigins?: ReadonlyArray<string>;
   /** Control-plane request limit (device flow, refresh, identity, discovery). Model streams never use it. */
   readonly timeoutMs?: number;
+  /** Stores the models `/models` reported (live-catalog.ts `recordDiscoveredModels`). */
+  readonly recordModels?: (
+    models: ReadonlyArray<ObservedModel>,
+  ) => Promise<void>;
 }
 
 const GITHUB = "https://github.com";
@@ -166,9 +172,78 @@ const errorBody = async (response: Response, token: string | undefined) => {
     .slice(0, ERROR_BODY_LIMIT);
 };
 
+const positive = (value: unknown) =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : undefined;
+
+/** Whether Copilot enables a `/models` item for the account. */
+const enabledForAccount = (item: Record<string, unknown>) => {
+  const policy = (item.policy as Record<string, unknown> | undefined)?.state;
+  return (
+    policy === "enabled" ||
+    (policy === undefined && item.model_picker_enabled === true)
+  );
+};
+
+/**
+ * What Copilot's `/models` says about each chat model it enables for the
+ * account: name, limits, vision, reasoning, and the endpoints that serve
+ * it. dx stores these (live-catalog.ts), so a model Copilot ships after dx's
+ * release is served the day Copilot enables it.
+ */
+export const observeCopilotModels = (
+  raw: unknown,
+): ReadonlyArray<ObservedModel> => {
+  let data: unknown;
+  try {
+    data = record(raw).data;
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(data)) return [];
+  return data.flatMap((value): ObservedModel[] => {
+    try {
+      const item = record(value);
+      const id = string(item.id, 256);
+      const capabilities = record(item.capabilities ?? {});
+      if (capabilities.type !== undefined && capabilities.type !== "chat")
+        return [];
+      const supports = record(capabilities.supports ?? {});
+      if (supports.tool_calls !== true || !enabledForAccount(item)) return [];
+      const limits = record(capabilities.limits ?? {});
+      const contextWindow = positive(limits.max_context_window_tokens);
+      const maxTokens = positive(limits.max_output_tokens);
+      const endpoints = Array.isArray(item.supported_endpoints)
+        ? item.supported_endpoints.filter(
+            (path): path is string => typeof path === "string",
+          )
+        : undefined;
+      return [
+        {
+          id,
+          ...(typeof item.name === "string" && item.name
+            ? { name: item.name }
+            : {}),
+          ...(contextWindow === undefined ? {} : { contextWindow }),
+          ...(maxTokens === undefined ? {} : { maxTokens }),
+          vision: supports.vision === true,
+          reasoning:
+            supports.reasoning_effort !== undefined ||
+            supports.adaptive_thinking === true ||
+            supports.max_thinking_budget !== undefined,
+          ...(endpoints === undefined ? {} : { endpoints }),
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+};
+
 export const parseActiveModels = (
   raw: unknown,
-  catalog = GITHUB_COPILOT_CATALOG,
+  catalog: ReadonlyArray<CopilotCatalogModel> = githubCopilotCatalog(),
 ): Entitlements["enabledModelIds"] => {
   const data = record(raw).data;
   if (!Array.isArray(data)) throw new CopilotError({ code: "INVALID_MODELS" });
@@ -498,14 +573,16 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
     signal?: AbortSignal,
   ): Promise<Entitlements> => {
     validateAccess(access);
+    const listed = await json(`${access.apiOrigin}/models`, {
+      headers: auth(access.accessToken),
+      signal,
+    });
+    // Models Copilot enables that no catalog lists yet join the catalog
+    // before the entitlement is read against it.
+    await options.recordModels?.(observeCopilotModels(listed));
     return {
-      enabledModelIds: parseActiveModels(
-        await json(`${access.apiOrigin}/models`, {
-          headers: auth(access.accessToken),
-          signal,
-        }),
-      ),
-      catalogRevision: GITHUB_COPILOT_CATALOG_REVISION,
+      enabledModelIds: parseActiveModels(listed),
+      catalogRevision: githubCopilotCatalogRevision(),
       observedAt: now(),
     };
   };
@@ -517,7 +594,7 @@ export const createGitHubCopilotProvider = (options: ProviderOptions) => {
     threadId?: string;
     signal?: AbortSignal;
   }): Promise<Response> => {
-    const model = GITHUB_COPILOT_CATALOG.find((x) => x.id === input.modelId);
+    const model = githubCopilotCatalog().find((x) => x.id === input.modelId);
     if (!model) throw new CopilotError({ code: "MODEL_UNSUPPORTED" });
     if (!input.entitlements.enabledModelIds.includes(model.id))
       throw new CopilotError({ code: "MODEL_DISABLED" });

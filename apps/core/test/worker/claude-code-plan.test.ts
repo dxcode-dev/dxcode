@@ -42,7 +42,7 @@ beforeEach(() => {
     if (!new URL(request.url).hostname.endsWith("anthropic.com"))
       return real(input, init);
     // Saving a plan asks the model list whether the token is valid.
-    if (request.url === "https://api.anthropic.com/v1/models?limit=1")
+    if (request.url === "https://api.anthropic.com/v1/models?limit=1000")
       return Response.json({ data: [{ id: "claude-haiku-5-5" }] });
     anthropicCalls.push(request.url);
     return Response.json({ type: "error" }, { status: 500 });

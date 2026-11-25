@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  COPILOT_SERVED_MODELS,
   copilotCanonicalFor,
   copilotModelForCanonical,
+  copilotServedModels,
   copilotUpstreamFor,
 } from "./copilot-mapping.js";
 
@@ -37,7 +37,7 @@ describe("copilot canonical mapping", () => {
   });
 
   it("round-trips canonical lookups", () => {
-    for (const model of COPILOT_SERVED_MODELS.values()) {
+    for (const model of copilotServedModels().values()) {
       expect(copilotCanonicalFor(model.upstream)).toBe(model.canonical);
       expect(copilotModelForCanonical(model.canonical)?.upstream).toBe(
         model.upstream,

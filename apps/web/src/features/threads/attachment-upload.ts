@@ -1,9 +1,9 @@
 import {
   type AttachmentData,
   AttachmentDataSchema,
-  AttachmentErrorSchema,
   type AttachmentPartResponse,
   CreateAttachmentResponseSchema,
+  ErrorAnswerMessageSchema,
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
@@ -29,10 +29,10 @@ export interface AttachmentUpload {
 }
 
 const failure = async (response: Response, fallback: string) => {
-  const body = Schema.decodeUnknownOption(AttachmentErrorSchema)(
+  const body = Schema.decodeUnknownOption(ErrorAnswerMessageSchema)(
     await response.json().catch(() => undefined),
   );
-  return new Error(Option.isSome(body) ? body.value.error : fallback);
+  return new Error(Option.isSome(body) ? body.value.data.message : fallback);
 };
 
 const decode = async <A>(

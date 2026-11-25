@@ -33,7 +33,7 @@ const bindings: Bindings = {
 const TOKEN = `sk-ant-oat01-${"v".repeat(48)}`;
 const NEW_TOKEN = `sk-ant-oat01-${"n".repeat(48)}`;
 const FORGED = `sk-ant-oat01-${"f".repeat(48)}`;
-const MODEL_LIST = "https://api.anthropic.com/v1/models?limit=1";
+const MODEL_LIST = "https://api.anthropic.com/v1/models?limit=1000";
 const MODEL = "claude-code/claude-opus-5-5";
 const hour = 3_600;
 const now = () => Math.floor(Date.now() / 1000);

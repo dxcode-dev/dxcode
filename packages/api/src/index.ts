@@ -30,6 +30,7 @@ export {
   type HealthResponse,
   HealthResponseSchema,
 } from "./health/response.js";
+export { ErrorAnswerMessageSchema } from "./http/error-message.js";
 export {
   type InternalServerErrorResponse,
   InternalServerErrorResponseSchema,

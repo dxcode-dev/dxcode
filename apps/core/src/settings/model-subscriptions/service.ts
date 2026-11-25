@@ -7,8 +7,8 @@ import {
 import type { createGitHubCopilotProvider } from "./github-copilot/provider.js";
 import {
   CopilotError,
-  GITHUB_COPILOT_CATALOG,
   type GitHubOAuthCredential,
+  githubCopilotCatalog,
 } from "./github-copilot/provider.js";
 import type {
   AuthorizationRow,
@@ -88,8 +88,9 @@ const publicAuthorization = (r: AuthorizationRow) => ({
   state: "pending" as const,
 });
 const models = (ids: readonly string[]) =>
-  GITHUB_COPILOT_CATALOG.filter((m) => ids.includes(m.id)).map(
-    ({ id, name, protocol, capabilities, cost }) => ({
+  githubCopilotCatalog()
+    .filter((m) => ids.includes(m.id))
+    .map(({ id, name, protocol, capabilities, cost }) => ({
       id,
       name,
       protocol,
@@ -100,8 +101,7 @@ const models = (ids: readonly string[]) =>
         cacheRead: cost.cacheRead,
         cacheWrite: cost.cacheWrite,
       },
-    }),
-  );
+    }));
 
 export class PersonalModelSubscriptionService {
   constructor(

@@ -55,7 +55,7 @@ beforeEach(() => {
   const real = globalThis.fetch;
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
     const request = new Request(input, init);
-    if (request.url === "https://api.anthropic.com/v1/models?limit=1")
+    if (request.url === "https://api.anthropic.com/v1/models?limit=1000")
       return Response.json({ data: [{ id: "claude-haiku-5-5" }] });
     return real(input, init);
   });

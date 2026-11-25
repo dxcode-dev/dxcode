@@ -3,6 +3,8 @@ import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
 import { SettingsFieldErrorSchema } from "../settings/field-error.js";
 
+export * from "./errors.js";
+
 export const DICTATION_MAX_SECONDS = 900;
 export const DICTATION_SAMPLE_RATE = 16_000;
 export const DICTATION_MAX_SAMPLES = 14_400_000;
@@ -36,19 +38,6 @@ export const DictationStreamResultSchema = Schema.Union([
   Schema.Struct({ type: Schema.Literal("failed"), error: Schema.String }),
 ]);
 export type DictationStreamResult = typeof DictationStreamResultSchema.Type;
-
-export const DictationErrorSchema = Schema.Struct({ error: Schema.String });
-
-/**
- * Speech is not installed, is disabled for this user, or resolves no
- * provider. Dictation fails closed; the composer hides its microphone.
- */
-export const DictationUnavailableSchema = Schema.Struct({
-  code: Schema.Literal("DICTATION_UNAVAILABLE"),
-  error: Schema.Literal("Dictation is not available."),
-});
-export type DictationUnavailable = typeof DictationUnavailableSchema.Type;
-export type DictationError = typeof DictationErrorSchema.Type;
 
 /**
  * Dictation vocabulary for one scope: `GET` and `PUT`

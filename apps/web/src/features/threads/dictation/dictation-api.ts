@@ -1,7 +1,7 @@
 import {
-  DictationErrorSchema,
   type DictationJob,
   DictationJobSchema,
+  ErrorAnswerMessageSchema,
 } from "@dx/api";
 import { Option, Schema } from "effect";
 import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
@@ -11,12 +11,12 @@ const decodeJob = Schema.decodeUnknownPromise(DictationJobSchema);
 
 const readJob = async (response: Response): Promise<DictationJob> => {
   if (!response.ok) {
-    const failure = Schema.decodeUnknownOption(DictationErrorSchema)(
+    const failure = Schema.decodeUnknownOption(ErrorAnswerMessageSchema)(
       await response.json().catch(() => undefined),
     );
     throw new Error(
       Option.isSome(failure)
-        ? failure.value.error
+        ? failure.value.data.message
         : "Dictation could not be completed.",
     );
   }

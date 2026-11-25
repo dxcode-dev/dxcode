@@ -1,7 +1,6 @@
 import {
   CLAUDE_CODE_DEFAULT_EFFORT,
   CLAUDE_CODE_DEFAULT_MODEL,
-  CLAUDE_CODE_MODELS,
   CLAUDE_CODE_PROVIDER_ID,
   type ClaudePlanUsage,
   claudePlanBlockedUntil,
@@ -162,12 +161,16 @@ const startedChild = (callingThreadId: string, childId: string) => {
   return undefined;
 };
 
-/** The agent modes create_thread accepts, in the order they are listed. */
-const AGENT_MODES = [
-  ...ModeId.literals,
-  CLAUDE_CODE_PROVIDER_ID,
-  ...CLAUDE_CODE_MODELS.map(({ id }) => `${CLAUDE_CODE_PROVIDER_ID}/${id}`),
-];
+/**
+ * Whether create_thread accepts a Claude Code model: any Claude id. The
+ * plan's model list grows at runtime (live-catalog.ts), and the child's
+ * submission is checked against it where the catalog is loaded.
+ */
+const claudeCodeAgentMode = (model: string) =>
+  isClaudeCodeModel(model) &&
+  /^claude-[a-z0-9][a-z0-9.-]*$/.test(
+    model.slice(CLAUDE_CODE_PROVIDER_ID.length + 1),
+  );
 
 /**
  * A child Thread's selection for an agent mode. A dx mode keeps the calling
@@ -194,7 +197,7 @@ export const agentModeSelection = (
     agentMode === CLAUDE_CODE_PROVIDER_ID
       ? (claudeCaller?.model ?? CLAUDE_CODE_DEFAULT_MODEL)
       : agentMode;
-  if (!AGENT_MODES.includes(model) || isMode(model))
+  if (!claudeCodeAgentMode(model) || isMode(model))
     throw new Error(
       `agent_mode must be one of ${ModeId.literals.join(", ")}. For Claude Code, use ${CLAUDE_CODE_PROVIDER_ID} or ${CLAUDE_CODE_PROVIDER_ID}/<model> from list_agent_modes.`,
     );
