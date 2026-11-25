@@ -43,6 +43,8 @@ export interface SpaceRow {
   /** The model its threads run on; null: the Space's own. */
   readonly thread_model: string | null;
   readonly thread_thinking: string | null;
+  /** The Claude plan limit its agent waits for (`claudePlanLimitText`). */
+  readonly plan_limit: string | null;
 }
 
 /** The model a Space's threads run on, as stored. */
@@ -67,6 +69,8 @@ const spaceColumns = (user: string, now: string) => `
   space.goal, ${spaceAccessSql(user, now)} AS access,
   thread.status_line, space.waiting_on_input,
   space.thread_model, space.thread_thinking,
+  (SELECT plan_wait.limit_text FROM thread_plan_wait AS plan_wait
+    WHERE plan_wait.thread_id = thread.id) AS plan_limit,
   EXISTS (SELECT 1 FROM space_member AS joined
            WHERE joined.space_thread_id = thread.id
              AND joined.user_id = ${user}) AS joined`;

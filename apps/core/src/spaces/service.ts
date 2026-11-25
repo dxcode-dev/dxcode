@@ -84,6 +84,9 @@ export const spaceData = async (
             model: row.thread_model,
             thinking: row.thread_thinking,
           } as NonNullable<SpaceData["threadModel"]>),
+    ...(row.plan_limit === null || row.lifecycle_state !== "active"
+      ? {}
+      : { planLimit: row.plan_limit.slice(0, 1_000) }),
     createdAt: timestamp(row.created_at),
     lastActivityAt: timestamp(row.last_activity_at),
   }));

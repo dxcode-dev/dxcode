@@ -1,4 +1,4 @@
-import { parseClaudePlanLimit } from "@dx/domain";
+import { claudePlanLimitText, parseClaudePlanLimit } from "@dx/domain";
 import { automationLogger } from "../logging.js";
 
 /**
@@ -19,11 +19,21 @@ import { automationLogger } from "../logging.js";
  * its mode: the resumed turn resolves its route as any other does.
  */
 
+/**
+ * The plan limit a failed submission waits for, from its text: the reset in
+ * epoch seconds, and the limit's own text for a Space's limit card.
+ */
+export const claudePlanLimitOf = (errorMessage: string | undefined) => {
+  const limit =
+    errorMessage === undefined ? undefined : parseClaudePlanLimit(errorMessage);
+  return limit === undefined
+    ? undefined
+    : { resetsAt: limit.resetsAt, text: claudePlanLimitText(limit) };
+};
+
 /** The reset a failed submission waits for, epoch seconds; from its text. */
 export const claudePlanResetOf = (errorMessage: string | undefined) =>
-  errorMessage === undefined
-    ? undefined
-    : parseClaudePlanLimit(errorMessage)?.resetsAt;
+  claudePlanLimitOf(errorMessage)?.resetsAt;
 
 interface ClaudePlanWaitActivity {
   readonly threadId: string;
@@ -32,6 +42,8 @@ interface ClaudePlanWaitActivity {
   readonly running: boolean;
   /** Set when the submission settled failed on the plan's limit. */
   readonly planResetAt?: number;
+  /** That limit's text (`claudePlanLimitText`). */
+  readonly planLimitText?: string;
   readonly recordedAt: string;
 }
 
@@ -54,19 +66,21 @@ export const claudePlanWaitStatement = (
       : db
           .prepare(
             `INSERT INTO thread_plan_wait (
-               thread_id, submission_id, resets_at, recorded_at
+               thread_id, submission_id, resets_at, recorded_at, limit_text
              )
-             SELECT id, ?2, ?3, ?4 FROM threads WHERE id = ?1
+             SELECT id, ?2, ?3, ?4, ?5 FROM threads WHERE id = ?1
              ON CONFLICT (thread_id) DO UPDATE SET
                submission_id = excluded.submission_id,
                resets_at = excluded.resets_at,
-               recorded_at = excluded.recorded_at`,
+               recorded_at = excluded.recorded_at,
+               limit_text = excluded.limit_text`,
           )
           .bind(
             activity.threadId,
             activity.submissionId,
             activity.planResetAt,
             activity.recordedAt,
+            activity.planLimitText ?? null,
           );
 
 export interface ClaudePlanWait {

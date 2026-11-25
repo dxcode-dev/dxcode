@@ -7,6 +7,7 @@ import {
   ClaudePlanWindowId,
   claudePlanBlockedUntil,
   claudePlanExtraUsage,
+  claudePlanNeedsRecheck,
   claudePlanWindowFamily,
   mergeClaudePlanUsage,
 } from "@dx/domain";
@@ -113,6 +114,11 @@ const decodeUsage = Schema.decodeUnknownOption(
 
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
+const withoutRecheck = ({
+  recheckAt: _recheckAt,
+  ...usage
+}: ClaudePlanUsage): ClaudePlanUsage => usage;
+
 export const loadClaudePlan = async (
   db: D1Database,
   connectionId: string,
@@ -199,21 +205,96 @@ export const recordClaudePlanReading = async (
     Math.min(observedAt, nowSeconds()),
   );
   if (usage === current.usage) return current;
-  await db
+  const now = nowSeconds();
+  const statements = [
+    db
+      .prepare(
+        `INSERT INTO claude_code_plan (connection_id, usage, updated_at)
+         SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM model_connection WHERE id = ?)
+         ON CONFLICT (connection_id) DO UPDATE SET
+           usage = excluded.usage, updated_at = excluded.updated_at`,
+      )
+      .bind(
+        connectionId,
+        JSON.stringify(Schema.encodeSync(ClaudePlanUsage)(usage)),
+        new Date().toISOString(),
+        connectionId,
+      ),
+  ];
+  // The plan has room again before the reset its Threads wait for, such as
+  // when the owner reset the limit on claude.ai: the next sweep resumes them.
+  // A recheck only lets runs through; the reading before it says whether the
+  // plan was used up.
+  if (
+    claudePlanBlockedUntil(
+      current.usage === undefined ? undefined : withoutRecheck(current.usage),
+      current.allowExtraUsage,
+      now,
+    ) !== undefined &&
+    claudePlanBlockedUntil(usage, current.allowExtraUsage, now) === undefined
+  )
+    statements.push(
+      db
+        .prepare(
+          `UPDATE thread_plan_wait SET resets_at = ?2
+            WHERE resets_at > ?2
+              AND thread_id IN (
+                SELECT id FROM threads WHERE claude_connection_id = ?1
+              )`,
+        )
+        .bind(connectionId, now),
+    );
+  await db.batch(statements);
+  return { ...current, usage };
+};
+
+/**
+ * A person's message found the plan blocked by a reading older than
+ * `CLAUDE_PLAN_STALE_SECONDS`: let Claude Code run so it reads the plan's
+ * limits again, since the owner may have reset them on claude.ai. If the
+ * plan is still used up, Anthropic refuses the run at once and its reading
+ * blocks the plan again. Returns whether a recheck started.
+ */
+export const recheckStaleClaudePlan = async (
+  db: D1Database,
+  connectionId: string,
+  now: number = nowSeconds(),
+): Promise<boolean> => {
+  const { usage } = await loadClaudePlan(db, connectionId);
+  if (usage === undefined || !claudePlanNeedsRecheck(usage, now)) return false;
+  const result = await db
     .prepare(
-      `INSERT INTO claude_code_plan (connection_id, usage, updated_at)
-       SELECT ?, ?, ? WHERE EXISTS (SELECT 1 FROM model_connection WHERE id = ?)
-       ON CONFLICT (connection_id) DO UPDATE SET
-         usage = excluded.usage, updated_at = excluded.updated_at`,
+      `UPDATE claude_code_plan SET usage = ?1, updated_at = ?2
+        WHERE connection_id = ?3
+          AND json_extract(usage, '$.observedAt') = ?4`,
     )
     .bind(
+      JSON.stringify(
+        Schema.encodeSync(ClaudePlanUsage)({ ...usage, recheckAt: now }),
+      ),
+      new Date(now * 1000).toISOString(),
       connectionId,
-      JSON.stringify(Schema.encodeSync(ClaudePlanUsage)(usage)),
-      new Date().toISOString(),
-      connectionId,
+      usage.observedAt,
     )
     .run();
-  return { ...current, usage };
+  return result.meta.changes > 0;
+};
+
+/**
+ * The same recheck for the plan a Thread runs on, from its stored usage as
+ * the caller already read it: writes only when the reading is stale.
+ */
+export const recheckStoredClaudePlan = async (
+  db: D1Database,
+  plan: { readonly connectionId: string; readonly usage: string | null },
+): Promise<boolean> => {
+  const usage =
+    plan.usage === null
+      ? undefined
+      : Option.getOrUndefined(decodeUsage(plan.usage));
+  return claudePlanNeedsRecheck(usage, nowSeconds())
+    ? recheckStaleClaudePlan(db, plan.connectionId)
+    : false;
 };
 
 export const setClaudePlanExtraUsage = async (

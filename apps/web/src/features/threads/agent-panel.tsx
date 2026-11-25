@@ -7,7 +7,6 @@ import {
 } from "@dx/api";
 import {
   type ClaudePlanLimit,
-  claudePlanWindowName,
   parseClaudePlanLimit,
   THREAD_SNOOZE_UNTIL_NEEDED_MS,
   threadSnoozeState,
@@ -35,6 +34,10 @@ import { useOptionalThreadSnooze } from "../../shared/thread-snooze.js";
 import { Button } from "../../shared/ui/button.js";
 import { buttonVariants } from "../../shared/ui/button-variants.js";
 import { ClaudeIcon } from "../../shared/ui/claude-icon.js";
+import {
+  CLAUDE_USAGE_URL,
+  claudePlanLimitCopy,
+} from "../../shared/ui/claude-plan-limit.js";
 import { Textarea } from "../../shared/ui/textarea.js";
 import { observeComposerDock } from "./composer-dock.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
@@ -327,47 +330,12 @@ type ThreadErrorPresentation = {
   readonly link?: { readonly actionLabel: string; readonly actionHref: string };
 };
 
-const CLAUDE_USAGE_URL = "https://claude.ai/settings/usage";
-
-const resetTime = new Intl.DateTimeFormat(undefined, {
-  hour: "numeric",
-  minute: "2-digit",
-  timeZoneName: "short",
-});
-const resetDayAndTime = new Intl.DateTimeFormat(undefined, {
-  weekday: "short",
-  hour: "numeric",
-  minute: "2-digit",
-  timeZoneName: "short",
-});
-
-/** The reset in the reader's time; a later day names the day too. */
-const claudePlanReset = (seconds: number) => {
-  const date = new Date(seconds * 1000);
-  return (
-    date.toDateString() === new Date().toDateString()
-      ? resetTime
-      : resetDayAndTime
-  ).format(date);
-};
-
 const claudePlanLimitPresentation = (
   id: string,
   limit: ClaudePlanLimit,
 ): ThreadErrorPresentation => ({
   id,
-  // Core runs the Thread again once the plan resets, with every message it
-  // got in the meantime.
-  title: `Waiting for plan reset at ${claudePlanReset(limit.resetsAt)}`,
-  message: `You've hit your Claude ${
-    limit.window === undefined
-      ? "subscription limit"
-      : claudePlanWindowName(limit.window)
-  }. This Thread answers by itself once it resets; new messages wait too.${
-    limit.cause === "exhausted"
-      ? ""
-      : " dx kept Claude Code off paid extra usage."
-  }`,
+  ...claudePlanLimitCopy(limit),
   action: "model-routing",
   claudePlan: true,
 });

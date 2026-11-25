@@ -77,6 +77,12 @@ export const SpaceDataSchema = Schema.Struct({
    * model. Optional for older clients and caches.
    */
   threadModel: Schema.optional(Schema.NullOr(SpaceAgentModel)),
+  /**
+   * The Claude plan limit the Space's agent failed on and waits for, as
+   * `claudePlanLimitText` writes it; it answers by itself once the plan
+   * resets. Absent while it waits for nothing.
+   */
+  planLimit: Schema.optional(Schema.String.check(Schema.isMaxLength(1_000))),
   createdAt: Timestamp,
   lastActivityAt: Timestamp,
 });

@@ -112,10 +112,16 @@ export const ClaudePlanReading = Schema.Struct({
 
 export type ClaudePlanReading = typeof ClaudePlanReading.Type;
 
-/** The latest reading for a plan, with when dx observed it. */
+/**
+ * The latest reading for a plan, with when dx observed it. `recheckAt` is
+ * when a person's message found the plan blocked by a reading older than
+ * `CLAUDE_PLAN_STALE_SECONDS`: the owner may have reset the limit since, so
+ * Claude Code runs once more to read it again. The next reading drops it.
+ */
 export const ClaudePlanUsage = Schema.Struct({
   ...ClaudePlanReading.fields,
   observedAt: EpochSeconds,
+  recheckAt: Schema.optional(EpochSeconds),
 });
 
 export type ClaudePlanUsage = typeof ClaudePlanUsage.Type;
@@ -198,8 +204,10 @@ export const mergeClaudePlanUsage = (
     (window) => !ids.has(window.id) && window.resetsAt > observedAt,
   );
   const order = ClaudePlanWindowId.literals;
+  // A new reading answers any recheck.
+  const { recheckAt: _answered, ...fresh } = reading as ClaudePlanUsage;
   return {
-    ...reading,
+    ...fresh,
     windows: [...reading.windows, ...kept].sort(
       (a, b) => order.indexOf(a.id) - order.indexOf(b.id),
     ),
@@ -209,6 +217,34 @@ export const mergeClaudePlanUsage = (
 
 /** How long a used-up plan stays blocked when Anthropic named no reset. */
 const UNKNOWN_RESET_SECONDS = 3_600;
+
+/**
+ * A reading that blocks the plan is trusted for this long. After it, a
+ * person's message runs Claude Code again, since the owner can reset a limit
+ * on claude.ai and only a run reads the plan's limits.
+ */
+export const CLAUDE_PLAN_STALE_SECONDS = 120;
+
+/**
+ * How long a recheck lets runs through without a new reading, such as when
+ * the run failed before Claude Code reported one.
+ */
+export const CLAUDE_PLAN_RECHECK_SECONDS = 600;
+
+/**
+ * Whether a person's message should run Claude Code to read the plan again:
+ * its reading blocks it and is older than `CLAUDE_PLAN_STALE_SECONDS`, and
+ * no recheck is under way.
+ */
+export const claudePlanNeedsRecheck = (
+  usage: ClaudePlanUsage | undefined,
+  now: number,
+) =>
+  usage !== undefined &&
+  (usage.status === "rejected" || claudePlanUsesExtraUsage(usage)) &&
+  usage.observedAt <= now - CLAUDE_PLAN_STALE_SECONDS &&
+  (usage.recheckAt === undefined ||
+    usage.recheckAt <= now - CLAUDE_PLAN_RECHECK_SECONDS);
 
 /**
  * The model family a per-model weekly window limits; account-wide windows
@@ -246,6 +282,11 @@ export const claudePlanBlockedUntil = (
   model?: string,
 ): number | undefined => {
   if (usage === undefined) return undefined;
+  if (
+    usage.recheckAt !== undefined &&
+    usage.recheckAt > now - CLAUDE_PLAN_RECHECK_SECONDS
+  )
+    return undefined;
   if (allowExtraUsage && claudePlanExtraUsage(usage) !== "off")
     return undefined;
   if (usage.status !== "rejected" && !claudePlanUsesExtraUsage(usage))

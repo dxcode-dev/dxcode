@@ -29,6 +29,11 @@ export interface DeploymentModelBilling {
     },
     hold?: { readonly id: string },
     observe?: AdmissionObserver,
+    /**
+     * The Thread the submission or call runs in, so a deployment can tell
+     * whose wallets pay for work there.
+     */
+    threadId?: string,
   ) => Promise<
     | { readonly admitted: true }
     | {

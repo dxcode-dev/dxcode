@@ -126,7 +126,13 @@ export const senderIdentityAndRewind = async (
       `SELECT ${displayNameSql('"user"', "account")} AS name,
               account.username AS handle,
               (SELECT history_rewound_at FROM threads WHERE id = ?2)
-                AS rewound_at
+                AS rewound_at,
+              (SELECT plan.connection_id FROM claude_code_plan AS plan
+                 JOIN threads ON threads.claude_connection_id = plan.connection_id
+                WHERE threads.id = ?2) AS claude_connection_id,
+              (SELECT plan.usage FROM claude_code_plan AS plan
+                 JOIN threads ON threads.claude_connection_id = plan.connection_id
+                WHERE threads.id = ?2) AS claude_usage
          FROM "user"
          LEFT JOIN personal_account AS account ON account.user_id = "user".id
         WHERE "user".id = ?1`,
@@ -136,10 +142,22 @@ export const senderIdentityAndRewind = async (
       name: string | null;
       handle?: string | null;
       rewound_at: number | null;
+      claude_connection_id: string | null;
+      claude_usage: string | null;
     }>();
   return {
     identity: identityOf(row),
     rewoundAt: row?.rewound_at ?? undefined,
+    // The Claude plan the Thread runs on and its last reading, read here so
+    // a person's message checks for a stale block without another query.
+    ...(row?.claude_connection_id == null
+      ? {}
+      : {
+          claudePlan: {
+            connectionId: row.claude_connection_id,
+            usage: row.claude_usage,
+          },
+        }),
   };
 };
 

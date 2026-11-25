@@ -964,6 +964,7 @@ export class ByokCredentialCoordinatorObject extends DurableObject<Bindings> {
         waitKey: `${route.threadId}:${route.submissionId}`,
         defer: (work) => this.ctx.waitUntil(work),
       },
+      route.threadId,
     );
     if ("reason" in decision)
       throw new CoordinatorFailure(

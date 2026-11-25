@@ -2,7 +2,7 @@ import { THREAD_SNOOZE_UNTIL_NEEDED_MS, ThreadId, Timestamp } from "@dx/domain";
 import type { FlueEventContext, FlueObservation } from "@flue/runtime";
 import { Data, DateTime, Effect, Option, Schema } from "effect";
 import {
-  claudePlanResetOf,
+  claudePlanLimitOf,
   claudePlanWaitStatement,
 } from "../claude-code/plan-wait.js";
 import type { Bindings } from "../http/types.js";
@@ -24,6 +24,10 @@ const ThreadActivityInput = Schema.Struct({
   running: Schema.optional(Schema.Literal(true)),
   /** A failure on the Claude plan's limit: when the plan resets. */
   planResetAt: Schema.optional(Schema.Number),
+  /** That limit's text, for a Space's limit card. */
+  planLimitText: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(1_000)),
+  ),
   occurredAt: Timestamp,
 });
 
@@ -51,9 +55,9 @@ export const threadActivityFromFlue = (
         }),
       );
     case "submission_settled": {
-      const planResetAt =
+      const planLimit =
         event.outcome === "failed"
-          ? claudePlanResetOf(event.error?.message)
+          ? claudePlanLimitOf(event.error?.message)
           : undefined;
       return Option.getOrUndefined(
         Schema.decodeOption(ThreadActivityInput)({
@@ -62,7 +66,12 @@ export const threadActivityFromFlue = (
           kind: "settled",
           state: "settled",
           outcome: event.outcome,
-          ...(planResetAt === undefined ? {} : { planResetAt }),
+          ...(planLimit === undefined
+            ? {}
+            : {
+                planResetAt: planLimit.resetsAt,
+                planLimitText: planLimit.text,
+              }),
           occurredAt: event.timestamp,
         }),
       );
@@ -95,6 +104,9 @@ const record = (bindings: Bindings, activity: ThreadActivityInput) =>
       ...(activity.planResetAt === undefined
         ? {}
         : { planResetAt: activity.planResetAt }),
+      ...(activity.planLimitText === undefined
+        ? {}
+        : { planLimitText: activity.planLimitText }),
       recordedAt,
     });
     // Snooze Until I'm Needed: a turn that finishes after the snooze needs
@@ -392,9 +404,9 @@ export const reconcileStaleThreadActivity = async (
           ? "aborted"
           : history.page.settled.get(submissionId);
       if (outcome === undefined) continue;
-      const planResetAt =
+      const planLimit =
         outcome === "failed" && history.kind === "page"
-          ? claudePlanResetOf(history.page.failures.get(submissionId)?.message)
+          ? claudePlanLimitOf(history.page.failures.get(submissionId)?.message)
           : undefined;
       const activity = Option.getOrUndefined(
         Schema.decodeOption(ThreadActivityInput)({
@@ -403,7 +415,12 @@ export const reconcileStaleThreadActivity = async (
           kind: "settled",
           state: "settled",
           outcome,
-          ...(planResetAt === undefined ? {} : { planResetAt }),
+          ...(planLimit === undefined
+            ? {}
+            : {
+                planResetAt: planLimit.resetsAt,
+                planLimitText: planLimit.text,
+              }),
           occurredAt: new Date(now).toISOString(),
         }),
       );

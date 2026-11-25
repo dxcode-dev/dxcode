@@ -17,6 +17,7 @@ import {
   type ResolvedMessageAttachments,
   resolveMessageAttachments,
 } from "../attachments/message.js";
+import { recheckStoredClaudePlan } from "../claude-code/plan.js";
 import type { AppEnv } from "../http/types.js";
 import { threadSharingLogger } from "../logging.js";
 import { mentionFrom, scheduleNotification } from "../notifications/publish.js";
@@ -223,7 +224,7 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
   /** A delete rewound the Thread since the agent's last message. */
   let rewoundAt: number | undefined;
   if (userMessage !== undefined) {
-    const [{ identity, rewoundAt: rewind }, initialData, shared] =
+    const [{ identity, rewoundAt: rewind, claudePlan }, initialData, shared] =
       await Promise.all([
         senderIdentityAndRewind(db, actor.userId as UserId, threadId.value),
         access !== "owner" && "initialData" in userMessage
@@ -283,6 +284,23 @@ export const attributeSubmission: MiddlewareHandler<AppEnv> = async (
     // Chat runs nothing, so the next message the agent answers carries it.
     // An edit's own mark already says the conversation went back.
     if (!chat) rewoundAt = rewind;
+    // A person's message runs Claude Code again on a plan blocked by an old
+    // reading: the owner may have reset the limit on claude.ai. Schedules,
+    // GitHub events, plugins, and other Threads wait for the reset.
+    if (
+      !chat &&
+      claudePlan !== undefined &&
+      sourceThreadId === undefined &&
+      automation === undefined &&
+      posted === undefined
+    )
+      await recheckStoredClaudePlan(db, claudePlan).catch((cause: unknown) =>
+        threadSharingLogger.warn("A Claude plan recheck failed.", {
+          event: "claude_plan_recheck_failed",
+          threadId: threadId.value,
+          cause,
+        }),
+      );
     if (
       chat &&
       (parseMessageAttachments(userMessage.body).attachments.length > 0 ||

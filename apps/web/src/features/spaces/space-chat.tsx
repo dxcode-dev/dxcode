@@ -1,5 +1,6 @@
 import type { SpaceData } from "@dx/api";
 import { parseMessageAttachments, SPACE_POST_ID_PATTERN } from "@dx/api";
+import { parseClaudePlanLimit } from "@dx/domain";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useSearch } from "@tanstack/react-router";
 import { Link2, MessagesSquare, Reply } from "lucide-react";
@@ -8,6 +9,7 @@ import { useAuthenticatedIdentity } from "../../shared/auth/auth-context.js";
 import type { ComposerSlot } from "../../shared/composer/composer-slot.js";
 import { copyText } from "../../shared/copy-text.js";
 import { Button } from "../../shared/ui/button.js";
+import { ClaudePlanLimitCard } from "../../shared/ui/claude-plan-limit-card.js";
 import {
   quoteSelection,
   type SelectionMenuAction,
@@ -113,6 +115,27 @@ function PostSelectionMenu({
           },
         ];
       }}
+    />
+  );
+}
+
+/**
+ * The Space agent's last turn failed on its Claude plan's limit: the same
+ * card a Thread shows, until the plan resets and the agent answers, or the
+ * person dismisses it.
+ */
+function SpacePlanLimit({ planLimit }: { readonly planLimit?: string }) {
+  const [dismissed, setDismissed] = React.useState<string>();
+  const limit =
+    planLimit === undefined || planLimit === dismissed
+      ? undefined
+      : parseClaudePlanLimit(planLimit);
+  if (limit === undefined) return null;
+  return (
+    <ClaudePlanLimitCard
+      limit={limit}
+      subject="Space"
+      onDismiss={() => setDismissed(planLimit)}
     />
   );
 }
@@ -247,6 +270,7 @@ export function SpaceChat({
           spaceThreadId={space.threadId}
           Composer={Composer}
           replyRef={composerReply}
+          notice={<SpacePlanLimit planLimit={space.planLimit} />}
         />
       )}
       <PostSelectionMenu

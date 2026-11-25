@@ -20,11 +20,14 @@ export function SpaceComposer({
   spaceThreadId,
   Composer,
   replyRef,
+  notice,
 }: {
   readonly spaceThreadId: ThreadId;
   readonly Composer: ComposerSlot;
   /** Set to quote text (a selection in the chat) into the box. */
   readonly replyRef?: React.RefObject<((quote: string) => void) | undefined>;
+  /** A card above the box, such as the Space agent's Claude plan limit. */
+  readonly notice?: React.ReactNode;
 }) {
   const { identity } = useAuthenticatedIdentity();
   // Core keeps it per person, as a Thread's composer does: leaving the
@@ -84,6 +87,7 @@ export function SpaceComposer({
       onKeyDown={mentions.onKeyDown}
       above={
         <>
+          {notice}
           {create.isError ? (
             <p className="space-composer-error" role="alert">
               {postFailureText(create.error)}

@@ -11,7 +11,11 @@ import {
   type UserId,
 } from "@dx/domain";
 import type { Api, Model } from "@earendil-works/pi-ai";
-import { claudePlanAccess, loadClaudePlan } from "../../claude-code/plan.js";
+import {
+  claudePlanAccess,
+  loadClaudePlan,
+  recheckStaleClaudePlan,
+} from "../../claude-code/plan.js";
 import type { Bindings } from "../../http/types.js";
 import {
   catalogProviderModels,
@@ -210,7 +214,16 @@ const pickedClaudePlan = async (
   }
   if (picked === undefined) {
     if (plans.length <= 1) return undefined;
-    const auto = await autoClaudePlan(db, plans, model);
+    let auto = await autoClaudePlan(db, plans, model);
+    // Every plan reads used up: one the owner reset on claude.ai since its
+    // reading gets a run to read it again.
+    if (
+      auto?.kind === "used-up" &&
+      (
+        await Promise.all(plans.map(({ id }) => recheckStaleClaudePlan(db, id)))
+      ).some(Boolean)
+    )
+      auto = await autoClaudePlan(db, plans, model);
     if (auto === undefined) return undefined;
     if (auto.kind === "used-up")
       throw new ClaudePlanRefused({
@@ -227,6 +240,7 @@ const pickedClaudePlan = async (
       message:
         "That Claude plan is not one of your enabled Claude Pro/Max plans.",
     });
+  await recheckStaleClaudePlan(db, plan.id);
   const blockedUntil = claudePlanAccess(
     await loadClaudePlan(db, plan.id),
     model.slice(model.indexOf("/") + 1),
