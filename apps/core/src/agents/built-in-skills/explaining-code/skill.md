@@ -57,8 +57,10 @@ clearer:
 Draw diagrams as portable Unicode line art in a fenced `text` block; dx shows it in a monospace
 font, so columns line up. Use light connectors (`─│┌┐└┘→`) for structure and heavy glyphs
 (`━┃┏┓┗┛┣┫┳┻╋▶◀▲▼●◆■!?`) as the accent. Use the accent only for the decisive path, state, or
-transition. A fenced `mermaid` block renders as a picture in dx; use it only when a flowchart or
-sequence diagram is clearer than line art, because it cannot carry the accent.
+transition. A fenced `mermaid` block renders as a picture in dx, in the reader's theme colors; use
+it when a flowchart or sequence diagram is clearer than line art. To carry the accent there, color
+the decisive node with `style id fill:#hex,stroke:#hex` or a `classDef`; dx keeps the labels
+readable on any fill.
 
 ```text
 ┌──────────┐     ┌──────────┐

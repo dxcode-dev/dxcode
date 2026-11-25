@@ -1,0 +1,23 @@
+/* A rendered diagram. When the column is narrower than
+   NARROW_DIAGRAM_WIDTH (markdown-mermaid.ts) and the diagram has a narrow
+   layout, that layout shows instead of the wide one. */
+.diagram-frame {
+  container: diagram / inline-size;
+}
+.diagram-frame img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0 auto;
+}
+.diagram-frame .diagram-narrow {
+  display: none;
+}
+@container diagram (max-width: 640px) {
+  .diagram-frame .diagram-narrow {
+    display: block;
+  }
+  .diagram-frame:has(.diagram-narrow) .diagram-wide {
+    display: none;
+  }
+}

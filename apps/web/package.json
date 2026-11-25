@@ -1,7 +1,7 @@
 {
   "name": "@dx/web",
   "private": true,
-  "version": "0.2.173",
+  "version": "0.2.174",
   "license": "FSL-1.1-ALv2",
   "type": "module",
   "scripts": {
@@ -47,8 +47,8 @@
     "lowlight": "3.3.0",
     "lucide-react": "1.31.0",
     "markdown-it": "14.3.3",
-    "mermaid": "12.2.0",
     "pdfmake": "0.3.13",
+    "pele": "1.13.0",
     "prosemirror-commands": "1.7.2",
     "prosemirror-dropcursor": "1.8.4",
     "prosemirror-gapcursor": "1.4.1",

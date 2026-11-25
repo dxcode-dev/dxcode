@@ -10,7 +10,7 @@ export interface MarkdownViewProps {
 
 /**
  * The view code and kit are one chunk that loads with the first view, as
- * Mermaid and KaTeX load with the first diagram or formula. A chunk that
+ * the diagram renderer and KaTeX load with the first diagram or formula. A chunk that
  * cannot load leaves each view as its source.
  */
 const ViewFrame = lazyComponent<React.ComponentType<MarkdownViewProps>>(() =>

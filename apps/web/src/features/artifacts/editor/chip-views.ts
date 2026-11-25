@@ -2,7 +2,8 @@
  * How chips and `dx-view` blocks look in the editor. A chip is one inline
  * atom; clicking it asks the editor to open its picker. A toggle shows or
  * hides its tagged chips for this reader only (never saved). A `dx-view`
- * block shows its view, with its HTML source one click away.
+ * block shows its view and a `mermaid` block its diagram, each with its
+ * source one click away.
  */
 import type { Node } from "prosemirror-model";
 import { Plugin, PluginKey, Selection, TextSelection } from "prosemirror-state";
@@ -17,6 +18,7 @@ import {
 export type NodeViews = NonNullable<EditorProps["nodeViews"]>;
 
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
+import { showDiagram } from "./artifact-diagram.js";
 import { PROJECTS_ICON_PATH } from "../../../shared/ui/projects-icon.js";
 import {
   type Chip,
@@ -147,26 +149,39 @@ class ChipView implements NodeView {
   }
 }
 
-/** A `dx-view` block: the view, and its source under Edit Source. */
-class ViewBlockView implements NodeView {
+/** A fenced block that shows a preview, with its source under Edit Source. */
+interface PreviewBlockKind {
+  /** The fence's language. */
+  readonly language: string;
+  /** The bar's label, and the toggle's text that returns to the preview. */
+  readonly label: string;
+  readonly showLabel: string;
+  readonly show: ChipViewHost["showView"];
+}
+
+/** A previewed block: the preview, and its source under Edit Source. */
+class PreviewBlockView implements NodeView {
   dom: HTMLElement;
   contentDOM: HTMLElement;
   #shown: ReturnType<ChipViewHost["showView"]>;
   #source: HTMLElement;
+  #kind: PreviewBlockKind;
 
   constructor(
     node: Node,
     view: EditorView,
     getPos: () => number | undefined,
-    host: ChipViewHost,
+    kind: PreviewBlockKind,
   ) {
+    this.#kind = kind;
     this.dom = document.createElement("div");
     this.dom.className = "artifact-view-block";
+    this.dom.dataset.language = kind.language;
     const bar = document.createElement("div");
     bar.className = "artifact-view-bar";
     bar.contentEditable = "false";
     const label = document.createElement("span");
-    label.textContent = "View";
+    label.textContent = kind.label;
     const toggle = document.createElement("button");
     toggle.type = "button";
     toggle.className = "artifact-view-toggle";
@@ -175,7 +190,7 @@ class ViewBlockView implements NodeView {
     toggle.addEventListener("click", () => {
       const editing = this.dom.dataset.editing !== "true";
       this.dom.dataset.editing = String(editing);
-      toggle.textContent = editing ? "Show View" : "Edit Source";
+      toggle.textContent = editing ? kind.showLabel : "Edit Source";
       // Edit Source puts the cursor at the end of the source.
       const position = getPos();
       const current =
@@ -201,11 +216,14 @@ class ViewBlockView implements NodeView {
     this.contentDOM = document.createElement("code");
     this.#source.append(this.contentDOM);
     this.dom.append(bar, preview, this.#source);
-    this.#shown = host.showView(preview, node.textContent);
+    this.#shown = kind.show(preview, node.textContent);
   }
 
   update(node: Node) {
-    if (node.type.name !== "code_block" || node.attrs.params !== "dx-view")
+    if (
+      node.type.name !== "code_block" ||
+      node.attrs.params !== this.#kind.language
+    )
       return false;
     this.#shown.update(node.textContent);
     return true;
@@ -225,6 +243,9 @@ class ViewBlockView implements NodeView {
   }
 }
 
+/** Fence languages that show a preview instead of code. */
+const PREVIEWED = new Set(["dx-view", "mermaid"]);
+
 /** A plain code block, with its language shown. */
 class CodeBlockView implements NodeView {
   dom: HTMLElement;
@@ -241,7 +262,7 @@ class CodeBlockView implements NodeView {
   update(node: Node) {
     return (
       node.type.name === "code_block" &&
-      node.attrs.params !== "dx-view" &&
+      !PREVIEWED.has(String(node.attrs.params ?? "")) &&
       (this.dom.dataset.language ?? "") === String(node.attrs.params ?? "")
     );
   }
@@ -373,8 +394,20 @@ export const chipNodeViews = (host: ChipViewHost): NodeViews => ({
     getPos: () => number | undefined,
   ) =>
     node.attrs.params === "dx-view"
-      ? new ViewBlockView(node, view, getPos, host)
-      : new CodeBlockView(node),
+      ? new PreviewBlockView(node, view, getPos, {
+          language: "dx-view",
+          label: "View",
+          showLabel: "Show View",
+          show: host.showView,
+        })
+      : node.attrs.params === "mermaid"
+        ? new PreviewBlockView(node, view, getPos, {
+            language: "mermaid",
+            label: "Diagram",
+            showLabel: "Show Diagram",
+            show: showDiagram,
+          })
+        : new CodeBlockView(node),
 });
 
 // ---------------------------------------------------------------------------

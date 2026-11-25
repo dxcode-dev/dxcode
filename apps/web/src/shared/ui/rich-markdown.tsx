@@ -239,14 +239,15 @@ function MermaidBlock({
   readonly text?: string;
 }) {
   const unsettled = React.useContext(UnsettledMarkdown);
-  const { resolvedAppearance } = useTheme();
+  const { resolvedAppearance: appearance, palette } = useTheme();
+  const theme = { appearance, palette };
   const [showSource, setShowSource] = React.useState(false);
   const source = text.replace(/\n$/, "");
   const renders = !unsettled && source.trim() !== "";
-  if (renders) requestMermaid(source, resolvedAppearance);
+  if (renders) requestMermaid(source, theme);
   const image = React.useSyncExternalStore(
     subscribeMermaid,
-    () => (renders ? mermaidRender(source, resolvedAppearance) : null),
+    () => (renders ? mermaidRender(source, theme) : null),
     () => null,
   );
   if (!image || showSource)
@@ -278,13 +279,23 @@ function MermaidBlock({
       >
         <Code aria-hidden="true" />
       </Button>
-      <div className="markdown-mermaid-scroll">
+      <div className="markdown-mermaid-scroll diagram-frame">
         <img
+          className="diagram-wide"
           src={image.src}
           alt={image.label}
           width={image.width}
           height={image.height}
         />
+        {image.narrow && (
+          <img
+            className="diagram-narrow"
+            src={image.narrow.src}
+            alt={image.label}
+            width={image.narrow.width}
+            height={image.narrow.height}
+          />
+        )}
       </div>
     </figure>
   );

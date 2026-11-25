@@ -126,12 +126,6 @@
   outline: 1px solid
     color-mix(in oklab, var(--chat-foreground) 10%, transparent);
 }
-.markdown.transcript-markdown .markdown-mermaid img {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin: 0 auto;
-}
 .markdown.transcript-markdown .markdown-mermaid-source .transcript-code-block {
   margin: 0;
 }
