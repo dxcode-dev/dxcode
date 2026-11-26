@@ -1,4 +1,5 @@
 import type { ProjectData } from "@dx/api";
+import { messageWithAttachments } from "@dx/client";
 import {
   generateThreadTitle,
   isClaudeCodeModel,
@@ -12,10 +13,9 @@ import {
   type ThreadVisibility,
 } from "@dx/domain";
 import type { useNavigate } from "@tanstack/react-router";
-import {
-  messageWithAttachments,
-  type PendingAttachment,
-  type PendingAttachmentCollection,
+import type {
+  PendingAttachment,
+  PendingAttachmentCollection,
 } from "./image-attachments.js";
 import type {
   InitialThreadCreationAttempt,

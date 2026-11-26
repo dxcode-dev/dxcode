@@ -1,5 +1,5 @@
+import type { NewThreadSetupGap } from "@dx/client";
 import { Link } from "@tanstack/react-router";
-import type { NewThreadSetupGap } from "./composer-readiness.js";
 import "./composer-setup-notice.css";
 
 const GAP_COPY = {

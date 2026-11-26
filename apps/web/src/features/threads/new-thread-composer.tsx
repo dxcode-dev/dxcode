@@ -7,6 +7,7 @@ import type {
   ProjectData,
   ThreadMemberData,
 } from "@dx/api";
+import { newThreadSetupGaps } from "@dx/client";
 import type {
   ProjectId,
   RunnerProfile,
@@ -22,7 +23,6 @@ import type { ComposerEmail } from "../../shared/new-thread-surface.js";
 import { Textarea } from "../../shared/ui/textarea.js";
 import { newThreadOrbProvidersQueryOptions } from "../settings/orb-providers/orb-providers-queries.js";
 import { useComposerEnterKey } from "./composer-enter-key.js";
-import { newThreadSetupGaps } from "./composer-readiness.js";
 import { NewThreadSetupNotice } from "./composer-setup-notice.js";
 import { EmailAttachment } from "./email-attachment.js";
 import { type PendingAttachment, pastedFiles } from "./image-attachments.js";

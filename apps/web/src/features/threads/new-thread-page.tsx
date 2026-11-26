@@ -5,6 +5,7 @@ import type {
   SettingsWorkspaceData,
   UpdatePersonalComposerDefaultsRequest,
 } from "@dx/api";
+import { attachmentsUploading } from "@dx/client";
 import {
   ModelId,
   type ProjectId,
@@ -62,7 +63,6 @@ import { settingsContextQueryOptions } from "../settings/settings-context-querie
 import { claudePlanPick } from "./claude-code-mode-options.js";
 import { useWorkspaceDraftText } from "./composer-draft-queries.js";
 import { useDictation } from "./dictation/use-dictation.js";
-import { attachmentsUploading } from "./image-attachments.js";
 import {
   InlineNewThreadFrame,
   useInlineNewThread,

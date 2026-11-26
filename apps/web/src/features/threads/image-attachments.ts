@@ -1,9 +1,4 @@
-import {
-  type AttachmentData,
-  MAX_ATTACHMENT_BYTES,
-  MAX_ATTACHMENTS_PER_MESSAGE,
-  withMessageAttachments,
-} from "@dx/api";
+import { MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_MESSAGE } from "@dx/api";
 import {
   type AttachmentUpload,
   startAttachmentUpload,
@@ -72,35 +67,6 @@ export const discardAttachments = (
     attachment.disposePreview();
     attachment.upload.cancel();
   }
-};
-
-export const attachmentsUploading = (
-  attachments: ReadonlyArray<PendingAttachment>,
-) =>
-  attachments.some(({ upload }) => upload.getSnapshot().status === "uploading");
-
-/**
- * The message as sent: the text followed by the `<dx_attachments>` block
- * naming every uploaded file. Waits for uploads still in flight and fails
- * with the first upload's error.
- */
-export const messageWithAttachments = async (
-  message: string,
-  attachments: ReadonlyArray<PendingAttachment>,
-) => {
-  const uploaded: AttachmentData[] = await Promise.all(
-    attachments.map(({ upload }) => upload.settled),
-  );
-  return withMessageAttachments(
-    message,
-    uploaded.map(({ id, filename, mimeType, size, url }) => ({
-      id,
-      name: filename,
-      mimeType,
-      size,
-      url,
-    })),
-  );
 };
 
 /** Files pasted into a text field, such as a copied screenshot. */

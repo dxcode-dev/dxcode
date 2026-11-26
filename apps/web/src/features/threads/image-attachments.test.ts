@@ -1,9 +1,9 @@
+import { messageWithAttachments } from "@dx/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AttachmentUpload } from "./attachment-upload.js";
 import {
   captureScreenshot,
   createPendingAttachmentCollection,
-  messageWithAttachments,
   readAttachment,
 } from "./image-attachments.js";
 
