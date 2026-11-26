@@ -35,9 +35,11 @@ export async function resolve(specifier, context, next) {
 }
 
 // A plugin's .js files are ES modules, as in the Worker host, whatever
-// package.json says (or does not).
+// package.json says (or does not); its .ts and .mts files are TypeScript
+// modules, which Node runs with their types stripped.
 export async function load(url, context, next) {
   if (url.startsWith(root) && url.endsWith(".js")) return next(url, { ...context, format: "module" });
+  if (url.startsWith(root) && /.m?ts$/.test(url) && !url.includes("/node_modules/")) return next(url, { ...context, format: "module-typescript" });
   return next(url, context);
 }
 `;
@@ -159,6 +161,12 @@ const hostFor = (id) =>
       // Not a thenable: awaiting the host must not call it.
       if (typeof method !== "string" || method === "then") return undefined;
       if (method === "exec") return (request) => shell(id, request ?? {});
+      // ctx.log also lands in this process's own log, beside console output.
+      if (method === "log")
+        return (level, message, data) => {
+          console.error("[" + String(level) + "] " + String(message) + (data === undefined ? "" : " " + JSON.stringify(data)));
+          return ask(id, method, [level, message, data]);
+        };
       return (...args) => ask(id, method, args);
     },
   });

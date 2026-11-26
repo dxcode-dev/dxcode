@@ -5,7 +5,6 @@ import {
   D1WriteBatch,
   deferredWritesD1,
 } from "../../../persistence/d1-deferred-writes.js";
-import { PluginTrustPoliciesD1 } from "../../../plugins/trust/policy.js";
 import { SettingsAudit } from "../../audit.js";
 import { EnvironmentVariableRepositoryD1 } from "../../environment-variables/repository-d1.js";
 import { McpServerRepositoryD1 } from "../../mcp-servers/repository-d1.js";
@@ -93,7 +92,6 @@ export const pluginBundleLayers = (
     WorkspacePolicyRepositoryD1(db),
     shares,
     signatures,
-    PluginTrustPoliciesD1(db),
     workspace,
     settings,
     bundles,

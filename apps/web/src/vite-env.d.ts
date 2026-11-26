@@ -10,7 +10,7 @@ declare module "@dxcode/plugin-ui/plugin-ui.js?minified" {
   export default code;
 }
 
-/** UI SDK for views and plugin frames, in lazy chunks (see `ui-sdk-kit.ts`). */
+/** UI SDK for views and MCP Apps cards, in lazy chunks (see `ui-sdk-kit.ts`). */
 declare module "virtual:dx-ui-sdk" {
   /** UI SDK's styles with dx's theme, and the code of `components`. */
   export const uiSdkCode: (

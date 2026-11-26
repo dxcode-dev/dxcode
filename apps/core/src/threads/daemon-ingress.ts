@@ -124,22 +124,22 @@ export const forwardDaemonStorage = async (
   );
 };
 
-// Personal-dev hot reload.
-export const DAEMON_PLUGIN_DEV_PATH = /^\/v1\/dxd\/([^/]+)\/plugin-dev$/;
+// Draft plugins for one Thread: `dxd plugin load`, `unload`, and `list`.
+export const DAEMON_PLUGIN_DRAFT_PATH = /^\/v1\/dxd\/([^/]+)\/plugin-draft$/;
 /**
- * A plugin folder as `dxd plugin dev` sends it: JSON, files in base64. The
+ * A plugin folder as `dxd plugin load` sends it: JSON, files in base64. The
  * Thread execution object enforces it once the key checks out (#2399).
  */
-export const MAX_PLUGIN_DEV_BODY_BYTES = 12 * 1024 * 1024;
+export const MAX_PLUGIN_DRAFT_BODY_BYTES = 12 * 1024 * 1024;
 
 /**
- * `dxd plugin dev <folder>`: reloads one of the Thread owner's personal
- * plugins from a folder in the Orb. The Thread execution object checks the
- * daemon key; `plugins/trust/dev-reload.ts` decides the rest. The body
- * streams through unread, so a request without this Thread's key never has
- * it buffered; only a declared length over the cap is refused here.
+ * `dxd plugin load <folder>` and its siblings: a draft plugin for this
+ * Thread. The Thread execution object checks the daemon key;
+ * `plugins/drafts/daemon.ts` decides the rest. The body streams through
+ * unread, so a request without this Thread's key never has it buffered;
+ * only a declared length over the cap is refused here.
  */
-export const forwardDaemonPluginDev = async (
+export const forwardDaemonPluginDraft = async (
   request: Request,
   namespace: DurableObjectNamespace | undefined,
   threadIdInput: string | undefined,
@@ -154,13 +154,13 @@ export const forwardDaemonPluginDev = async (
   if (!DAEMON_KEY.test(request.headers.get("authorization") ?? ""))
     return new Response(null, { status: 401 });
   if (
-    Number(request.headers.get("content-length")) > MAX_PLUGIN_DEV_BODY_BYTES
+    Number(request.headers.get("content-length")) > MAX_PLUGIN_DRAFT_BODY_BYTES
   ) {
     await request.body?.cancel().catch(() => undefined);
     return new Response(null, { status: 413 });
   }
   return namespace.get(namespace.idFromName(threadId)).fetch(
-    new Request("https://thread.internal/daemon/plugin-dev", {
+    new Request("https://thread.internal/daemon/plugin-draft", {
       method: "POST",
       headers: {
         authorization: request.headers.get("authorization") ?? "",
@@ -218,12 +218,12 @@ export default {
         attachment[1],
         attachment[2],
       );
-    const pluginDev = DAEMON_PLUGIN_DEV_PATH.exec(path);
-    if (pluginDev !== null)
-      return forwardDaemonPluginDev(
+    const pluginDraft = DAEMON_PLUGIN_DRAFT_PATH.exec(path);
+    if (pluginDraft !== null)
+      return forwardDaemonPluginDraft(
         request,
         env.THREAD_EXECUTION,
-        pluginDev[1],
+        pluginDraft[1],
       );
     const storage = DAEMON_STORAGE_PATH.exec(path);
     if (storage !== null)

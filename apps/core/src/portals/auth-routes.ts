@@ -110,6 +110,7 @@ export const portalAuthRoutes = new Hono<AppEnv>().get(
       context.env.DB,
       session.user.id,
       threadId.value,
+      port,
     );
     portalLogger.info("Portal authorization evaluated.", {
       event: "portal_authorization_completed",

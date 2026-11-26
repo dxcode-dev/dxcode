@@ -440,10 +440,16 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
           ...(input.code.hosts === undefined
             ? {}
             : { hosts: input.code.hosts }),
-          ...(input.code.durableScope === undefined
+          // Schedules, listeners, and a program on a plugin Orb.
+          ...(input.code.service === undefined
             ? {}
-            : { durableScope: input.code.durableScope }),
-          ...(input.code.jobs === undefined ? {} : { jobs: input.code.jobs }),
+            : { service: input.code.service }),
+          ...(input.code.schedules === undefined
+            ? {}
+            : { schedules: input.code.schedules }),
+          ...(input.code.listeners === undefined
+            ? {}
+            : { listeners: input.code.listeners }),
           modules: yield* Effect.promise(() =>
             Promise.all(
               (input.code?.modules ?? []).map(async ({ path, content }) => ({
@@ -458,29 +464,21 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
           ...(input.code.agentModes === undefined
             ? {}
             : { agentModes: input.code.agentModes }),
-          ...(input.code.tier === undefined ? {} : { tier: input.code.tier }),
           ...(input.code.binaries === undefined
             ? {}
             : { binaries: input.code.binaries }),
           ...(input.code.archivedThreads === undefined
             ? {}
             : { archivedThreads: input.code.archivedThreads }),
-          ...(input.code.panes === undefined
-            ? {}
-            : { panes: input.code.panes }),
           ...(input.code.iconAssets === undefined
             ? {}
             : { iconAssets: input.code.iconAssets }),
-          ...(input.code.views === undefined
+          ...(input.code.dataViews === undefined
             ? {}
-            : { views: input.code.views }),
+            : { dataViews: input.code.dataViews }),
           ...(input.code.exports === undefined
             ? {}
             : { exports: input.code.exports }),
-          // Panes[].connect.
-          ...(input.code.paneConnect === undefined
-            ? {}
-            : { paneConnect: input.code.paneConnect }),
         };
   const bundleManifest = yield* Schema.decodeUnknownEffect(
     PluginBundleManifest,
@@ -534,7 +532,12 @@ export const finishBundle = Effect.fn("finishBundle")(function* (
   return {
     manifest: bundleManifest,
     skills: input.skills,
-    codeModules: input.code?.modules ?? [],
+    // A view's file is stored beside the modules; hosts load only the
+    // modules the manifest lists.
+    codeModules: [
+      ...(input.code?.modules ?? []),
+      ...(input.code?.viewFiles ?? []),
+    ],
     integrity,
     version,
     ...(input.package === undefined

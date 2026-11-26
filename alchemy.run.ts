@@ -216,9 +216,21 @@ const durableObjectBindingContract = () => {
   const generatedBindings = contractBindings.filter(
     ({ provenance }) => provenance === "generated-flue",
   );
-  const canonicalClasses = migrationManifest.durableObjects.flatMap(
-    ({ newSqliteClasses }) => newSqliteClasses,
+  // Classes created and not deleted since (`deletedClasses`, approved in
+  // scripts/approved-durable-object-deletions.mjs).
+  const durableObjectMigrations =
+    migrationManifest.durableObjects as ReadonlyArray<{
+      readonly newSqliteClasses?: ReadonlyArray<string>;
+      readonly deletedClasses?: ReadonlyArray<string>;
+    }>;
+  const deletedClasses = new Set(
+    durableObjectMigrations.flatMap(
+      ({ deletedClasses }) => deletedClasses ?? [],
+    ),
   );
+  const canonicalClasses = durableObjectMigrations
+    .flatMap(({ newSqliteClasses }) => newSqliteClasses ?? [])
+    .filter((className) => !deletedClasses.has(className));
   const authoredClasses = authoredBindings.map(({ class_name }) => class_name);
   const generatedClasses = canonicalClasses.filter(
     (className) => !authoredClasses.includes(className),
@@ -298,10 +310,6 @@ export default Alchemy.Stack(
       ),
       workspaceInactivityMs: Config.option(
         Config.Number("DX_DEPLOYMENT_WORKSPACE_INACTIVITY_MS"),
-      ),
-      // Plugin trust tier limits (PluginTierLimitsConfig JSON), any stage.
-      pluginTierLimits: Config.option(
-        Config.String("DX_DEPLOYMENT_PLUGIN_TIER_LIMITS"),
       ),
       turnstileTestKeys: Config.withDefault(
         Config.Boolean("DX_DEPLOYMENT_TURNSTILE_TEST_KEYS"),
@@ -632,38 +640,6 @@ export default Alchemy.Stack(
         "DX_DEPLOYMENT_TURNSTILE_TEST_KEYS is restricted to previews.",
       );
 
-    // Shape only: the Worker decodes it against PluginTierLimitsConfig and
-    // keeps the defaults, logging an error, when a value doesn't fit.
-    if (Option.isSome(configuration.pluginTierLimits)) {
-      const tiers = new Set([
-        "sandboxed",
-        "personal-dev",
-        "workspace-trusted",
-        "verified",
-      ]);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(configuration.pluginTierLimits.value);
-      } catch {
-        parsed = undefined;
-      }
-      if (
-        typeof parsed !== "object" ||
-        parsed === null ||
-        Array.isArray(parsed) ||
-        !Object.entries(parsed).every(
-          ([tier, limits]) =>
-            tiers.has(tier) &&
-            typeof limits === "object" &&
-            limits !== null &&
-            !Array.isArray(limits),
-        )
-      )
-        return yield* Effect.die(
-          "DX_DEPLOYMENT_PLUGIN_TIER_LIMITS must be a JSON object of limit overrides keyed by tier.",
-        );
-    }
-
     if (Option.isSome(configuration.workspaceInactivityMs)) {
       const inactivityMs = configuration.workspaceInactivityMs.value;
       if (configuration.environment !== "preview")
@@ -841,7 +817,11 @@ export default Alchemy.Stack(
         ? yield* OrbContainers("OrbContainers", {
             workerName: configuration.orbWorkerName.value,
             recipeHash: orbRecipeHash(import.meta.dirname),
-            // The plugin container object writes plugin_host_usage itself.
+            // Read to decide whether the retired plugin container class can
+            // be deleted (deploy/orb/containers.mjs).
+            coreWorkerName: configuration.workerName,
+            // No longer read (the plugin container host is gone); kept so the
+            // resource's props, and so its redeploys, do not change.
             databaseId: database.databaseId,
           })
         : yield* Effect.die(
@@ -1049,25 +1029,11 @@ export default Alchemy.Stack(
               DX_E2B_TIMEOUT_MS: "300000",
             }
           : {}),
-        ...(Option.isSome(configuration.pluginTierLimits)
-          ? { DX_PLUGIN_TIER_LIMITS: configuration.pluginTierLimits.value }
-          : {}),
         ...(Option.isSome(configuration.workspaceInactivityMs)
           ? {
               DX_WORKSPACE_INACTIVITY_MS: String(
                 configuration.workspaceInactivityMs.value,
               ),
-            }
-          : {}),
-        // Branch previews cap each plugin install's container time at two
-        // minutes a day, so the over-cap path is provable and a preview
-        // never runs up container time (plugins/hosts/container).
-        ...(configuration.environment === "preview"
-          ? {
-              DX_PLUGIN_CONTAINER_DAILY_MS: "120000",
-              // Four minutes of container time a day for a workspace's
-              // installs together, so the workspace cap is provable.
-              DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS: "240000",
             }
           : {}),
         DX_DEPLOYMENT_REVISION: configuration.revision,
@@ -1258,11 +1224,6 @@ export default Alchemy.Stack(
               // Executor-mode Threads' agent containers (no Orb).
               THREAD_EXECUTOR: Cloudflare.DurableObject("THREAD_EXECUTOR", {
                 className: "ThreadExecutorObject",
-                scriptName: orbContainers.workerName,
-              }),
-              // The `container` plugin host: one container per install.
-              PLUGIN_CONTAINER: Cloudflare.DurableObject("PLUGIN_CONTAINER", {
-                className: "PluginContainerObject",
                 scriptName: orbContainers.workerName,
               }),
             }),

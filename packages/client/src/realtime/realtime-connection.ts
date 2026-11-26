@@ -60,7 +60,6 @@ export type RealtimeHint = Extract<
       | "space.posts.invalidated"
       | "reactions.invalidated"
       | "plugin-ui.invalidated"
-      | "plugin-pane.invalidated"
       | "disk.invalidated"
       | "notifications.invalidated"
       | "mailbox.invalidated"
@@ -117,6 +116,12 @@ export const TYPING_LAPSE_MS = 5_000;
 export interface ThreadTyping {
   readonly userId: UserId;
   readonly scope: string;
+}
+
+/** A plugin view message on the socket, before its module decodes it. */
+export interface ViewSocketMessage {
+  readonly type: string;
+  readonly [field: string]: unknown;
 }
 
 /** Someone drawing on a board, as the hub relays it. */
@@ -186,6 +191,8 @@ export class RealtimeConnection {
   readonly #typingSnapshots = new Map<ThreadId, ReadonlyArray<ThreadTyping>>();
   readonly #typingListeners = new Map<ThreadId, Set<() => void>>();
   readonly #typingTimers = new Map<ThreadId, unknown>();
+  /** Listeners for plugin view messages, which their own module decodes. */
+  readonly #viewListeners = new Set<(message: ViewSocketMessage) => void>();
   #stopped = true;
   #attempt = 0;
 
@@ -474,12 +481,35 @@ export class RealtimeConnection {
     };
   }
 
+  /**
+   * Plugin views' messages, passed through undecoded: `plugin-view.*` and
+   * `view.*` from the hub, and `ready` after each (re)connect.
+   */
+  observeViewMessages(listener: (message: ViewSocketMessage) => void) {
+    this.#viewListeners.add(listener);
+    return () => {
+      this.#viewListeners.delete(listener);
+    };
+  }
+
+  /** Sends a plugin view's message on the socket, when it is open. */
+  sendViewMessage(message: { readonly type: string }) {
+    if (this.#socket?.readyState === SOCKET_OPEN)
+      this.#socket.send(JSON.stringify(message));
+  }
+
   #receive(raw: unknown) {
     if (typeof raw !== "string") return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
+      return;
+    }
+    // `plugin-view.*` and `view.*`: no other event's type holds "view.".
+    if (String((parsed as { type?: unknown } | null)?.type).includes("view.")) {
+      for (const listener of this.#viewListeners)
+        listener(parsed as ViewSocketMessage);
       return;
     }
     const decoded = Schema.decodeUnknownOption(RealtimeServerEvent)(parsed, {
@@ -489,6 +519,7 @@ export class RealtimeConnection {
     const event = decoded.value;
     if (event.type === "ready") {
       this.#cursor = event.revision;
+      for (const listener of this.#viewListeners) listener({ type: "ready" });
       this.#deniedTopic = undefined;
       if (this.#topic !== undefined && this.#visible())
         this.#send("presence.join", this.#topic);

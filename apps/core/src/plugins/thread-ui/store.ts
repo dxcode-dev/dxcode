@@ -481,17 +481,12 @@ export const deleteQuickAction = async (
   return result.meta.changes > 0;
 };
 
-/**
- * A run-command action names its install, as the run request needs; an
- * open-pane action names its pane's tab key, `<plugin name>/<pane id>`.
- */
-const withOwner = (args: unknown, pluginId: string, pluginName: string) => {
+/** A run-command action names its install, as the run request needs. */
+const withOwner = (args: unknown, pluginId: string) => {
   if (typeof args !== "object" || args === null) return args;
-  const { command, pane } = args as { command?: unknown; pane?: unknown };
+  const { command } = args as { command?: unknown };
   if (typeof command === "string")
     return { ...args, command: `${pluginId}:${command}` };
-  if (typeof pane === "string")
-    return { ...args, pane: `${pluginName}/${pane}` };
   return args;
 };
 
@@ -536,11 +531,7 @@ export const listThreadQuickActions = async (
       pluginName,
       label: row.label,
       action: row.action,
-      args: withOwner(
-        JSON.parse(row.args_json) as unknown,
-        row.plugin_id,
-        pluginName,
-      ),
+      args: withOwner(JSON.parse(row.args_json) as unknown, row.plugin_id),
     });
     if (Option.isSome(action)) actions.push(action.value);
   }

@@ -1,15 +1,11 @@
-// @ts-nocheck: dx inlines this file as a module script into plugin frames that ask for it with
+// @ts-nocheck: dx inlines this file as a module script into views and MCP Apps cards that ask for it with
 // <script type="module" src="dx:plugin-ui"></script>. It is never imported by dx's own code.
 /* @dxcode/plugin-ui: web components in dx's design language. They read the MCP Apps style
-   variables (--color-*, --font-*, --border-radius-*), which dx sets in every plugin frame for
+   variables (--color-*, --font-*, --border-radius-*), which dx sets in every such frame for
    the current palette and light or dark, so they follow the host without reloading. */
 (() => {
   if (customElements.get("dx-button")) return;
   const VERSION = "1";
-  /** A live stream keeps at most this many chunks waiting for its buffer. */
-  const STREAM_MAX_QUEUE = 64;
-  /** Appends that fail in a row before a stream gives up. */
-  const STREAM_MAX_FAILURES = 3;
 
   /* Icons: a subset of Lucide (ISC), drawn as dx draws them, 1.75px strokes. */
   const ICONS = {
@@ -1180,10 +1176,9 @@ button:focus-visible{box-shadow:0 0 0 2px var(--color-ring-primary)}
     return done;
   };
 
-  /* <dx-player src poster live muted autoplay loop audio stream="id" type="video/mp4; codecs=…">
-	   A dx-styled <video> or <audio>. .srcObject takes a MediaStream (WebRTC); `stream` plays a
-	   window.dx.stream whose first binary message is the fMP4 init segment and each later one a
-	   whole fragment; .media is the element, for anything else. */
+  /* <dx-player src poster live muted autoplay loop audio>
+	   A dx-styled <video> or <audio>. .srcObject takes a MediaStream, such as a canvas's, and
+	   plays it as live; .media is the element, for anything else. */
   const time = (seconds) => {
     if (!Number.isFinite(seconds)) return "0:00";
     const s = Math.max(0, Math.floor(seconds));
@@ -1202,8 +1197,6 @@ button:focus-visible{box-shadow:0 0 0 2px var(--color-ring-primary)}
         "muted",
         "loop",
         "audio",
-        "stream",
-        "type",
         "autoplay",
       ];
       static styles = [
@@ -1336,25 +1329,13 @@ input[type=range]{flex:1;min-width:40px;height:16px;margin:0;accent-color:curren
         if (this.media) this.load();
       }
       static properties = ["srcObject"];
-      connectedCallback() {
-        const moved = this._rendered;
-        super.connectedCallback();
-        // Moved within the page: the stream closed when it left, so open it again.
-        if (moved && this.hasAttribute("stream") && !this._stream) this.load();
-      }
-      disconnectedCallback() {
-        this._stream?.close?.();
-        this._stream = undefined;
-      }
-      /** `live` set for a stream, not by the page; dropped when the source changes. */
+      /** `live` set for a MediaStream, not by the page; dropped when the source changes. */
       goLive() {
         if (!this.flag("live")) this._autoLive = true;
         this.toggleAttribute("live", true);
       }
       load() {
         const media = this.media;
-        this._stream?.close?.();
-        this._stream = undefined;
         if (this._autoLive) {
           this._autoLive = false;
           this.removeAttribute("live");
@@ -1372,102 +1353,9 @@ input[type=range]{flex:1;min-width:40px;height:16px;margin:0;accent-color:curren
           return;
         }
         media.srcObject = null;
-        const stream = this.getAttribute("stream");
-        if (stream !== null) return this.playStream(stream);
         const src = this.getAttribute("src");
         if (src) media.src = src;
         else media.removeAttribute("src");
-      }
-      playStream(id) {
-        const media = this.media;
-        const type =
-          this.getAttribute("type") ?? 'video/mp4; codecs="avc1.42E01F"';
-        const open = window.dx?.stream;
-        if (typeof open !== "function")
-          return this.state("Live streams need a trusted plugin.");
-        if (!window.MediaSource?.isTypeSupported(type))
-          return this.state("This browser cannot play this stream.");
-        this.goLive();
-        this.state("Connecting…");
-        const source = new MediaSource();
-        media.src = URL.createObjectURL(source);
-        const queue = [];
-        let buffer;
-        // Appends that failed in a row; a success resets it.
-        let failures = 0;
-        let failed = false;
-        const fail = () => {
-          failed = true;
-          queue.length = 0;
-          this._stream?.close?.();
-          this.state("This browser cannot play this stream.");
-        };
-        const pump = () => {
-          if (failed || !buffer || buffer.updating || queue.length === 0)
-            return;
-          const chunk = queue.shift();
-          try {
-            buffer.appendBuffer(chunk);
-          } catch (error) {
-            failures += 1;
-            if (failures >= STREAM_MAX_FAILURES) return fail();
-            queue.unshift(chunk);
-            // The buffer is full: drop what has already played and try again
-            // when the removal ends. Any other error, or nothing played to
-            // drop yet, waits for the next chunk to retry.
-            if (error?.name === "QuotaExceededError" && media.currentTime > 4)
-              buffer.remove(0, media.currentTime - 2);
-          }
-        };
-        source.addEventListener(
-          "sourceopen",
-          () => {
-            URL.revokeObjectURL(media.src);
-            buffer = source.addSourceBuffer(type);
-            buffer.mode = "sequence";
-            buffer.addEventListener("error", () => {
-              failures += 1;
-              if (failures >= STREAM_MAX_FAILURES) fail();
-            });
-            buffer.addEventListener("update", () => {
-              failures = 0;
-            });
-            buffer.addEventListener("updateend", () => {
-              // Stay at the live edge so latency stays low.
-              const end = buffer.buffered.length
-                ? buffer.buffered.end(buffer.buffered.length - 1)
-                : 0;
-              if (end - media.currentTime > 1) media.currentTime = end - 0.1;
-              if (
-                !buffer.updating &&
-                media.currentTime > 30 &&
-                buffer.buffered.length > 0 &&
-                buffer.buffered.start(0) < media.currentTime - 20
-              )
-                buffer.remove(0, media.currentTime - 10);
-              pump();
-            });
-            pump();
-          },
-          { once: true },
-        );
-        this._stream = open(id || undefined);
-        const channel = this._stream;
-        channel.addEventListener("open", () => this.state(""));
-        channel.addEventListener("message", (event) => {
-          if (failed || typeof event.data === "string") return;
-          queue.push(event.data);
-          // Live: past the cap, the oldest waiting chunks go, so a stalled
-          // buffer never holds more than a few seconds of memory.
-          if (queue.length > STREAM_MAX_QUEUE)
-            queue.splice(0, queue.length - STREAM_MAX_QUEUE);
-          pump();
-          if (media.paused && this.flag("autoplay"))
-            media.play().catch(() => undefined);
-        });
-        channel.addEventListener("close", () => {
-          if (!failed) this.state("The stream ended.");
-        });
       }
     },
   );

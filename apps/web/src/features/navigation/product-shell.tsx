@@ -36,17 +36,43 @@ import {
   threadsQueryOptions,
 } from "../threads/thread-queries.js";
 import { AppSidebar } from "./app-sidebar.js";
+import {
+  DX_SIDEBAR_SECTION_REGISTRATIONS,
+  DX_SIDEBAR_SECTIONS,
+} from "./dx-sidebar-sections.js";
 import type { AccountMenuItems } from "./sidebar-account-menu.js";
 import { sidebarDrawerDrag } from "./sidebar-drawer-drag.js";
-import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
+import {
+  createSidebarSections,
+  type SidebarSections,
+} from "./sidebar-slots.js";
 import { childThreadsByParent } from "./sidebar-thread-utils.js";
 import { SIDEBAR_PANEL_ID, useSavedSidebarPanel } from "./sidebar-width.js";
 import { ThreadSearchOnDemand } from "./thread-search-on-demand.js";
 
 const PRODUCT_SIDEBAR_MIN_SIZE = SIDEBAR_WIDTH_MIN_PX;
 const PRODUCT_SIDEBAR_MAX_SIZE = SIDEBAR_WIDTH_MAX_PX;
-const sidebarExtensionRegion = <SidebarExtensionRegion />;
+
+/**
+ * dx's own sidebar sections, with the Spaces section the application
+ * composes in leading the Threads list on a deployment with Spaces on (the
+ * settings context's `spaces`).
+ */
+const sidebarSections = (
+  spacesSection: ProductShellProps["spacesSection"],
+): SidebarSections =>
+  spacesSection === undefined
+    ? DX_SIDEBAR_SECTIONS
+    : createSidebarSections([
+        {
+          id: "dx.spaces",
+          slot: "leading",
+          shownWhen: ({ settingsContext }) => settingsContext?.spaces === true,
+          render: ({ onNavigate }) => spacesSection(onNavigate),
+        },
+        ...DX_SIDEBAR_SECTION_REGISTRATIONS,
+      ]);
 
 /** Runs `run` once the browser is idle; returns its cancellation. */
 const whenIdle = (run: () => void) => {
@@ -265,13 +291,7 @@ export function ProductShell({
       }
       onSetPinned={setThreadPinned}
       pinningThreadId={editing?.pinningThreadId}
-      extensionRegion={sidebarExtensionRegion}
-      // Only on a deployment with Spaces on (the settings context's `spaces`).
-      spacesSection={
-        settingsQuery.data?.spaces === true
-          ? spacesSection?.(closeMobileSidebar)
-          : undefined
-      }
+      slots={sidebarSections(spacesSection)}
       accountMenuItems={accountMenuItems}
     />
   );

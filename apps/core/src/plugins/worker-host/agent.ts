@@ -36,7 +36,27 @@ export interface CodePluginRuntime {
   readonly ownerUserId: string;
   readonly plugins: ReadonlyArray<ResolvedCodePlugin>;
   readonly host: () => { readonly db: D1Database; readonly bindings: Bindings };
+  /**
+   * The person whose message started the turn, when it was not the owner:
+   * a contributor in a shared Thread. It is `ctx.caller`, and the audit
+   * records it as `actorUserId`.
+   */
+  readonly actorUserId?: string;
 }
+
+/**
+ * The plugins a turn runs. Anyone who can write in a Thread uses its
+ * plugins as the owner does (decision 17), so a contributor's turn gets
+ * every one of them, the owner's personal plugins and the Thread's drafts
+ * included, with every gate; the contributor is the calls' `ctx.caller`.
+ */
+export const pluginRuntimeForTurn = (
+  runtime: CodePluginRuntime,
+  requesterUserId: string | undefined,
+): CodePluginRuntime =>
+  requesterUserId === undefined || requesterUserId === runtime.ownerUserId
+    ? runtime
+    : { ...runtime, actorUserId: requesterUserId };
 
 const handles = (plugin: ResolvedCodePlugin, event: PluginCodeEvent) =>
   plugin.events.includes(event);
@@ -60,6 +80,9 @@ const dependencies = (
   install: plugin,
   threadId: runtime.threadId,
   ownerUserId: runtime.ownerUserId,
+  ...(runtime.actorUserId === undefined
+    ? {}
+    : { actorUserId: runtime.actorUserId }),
   ...(callTool === undefined ? {} : { callTool }),
   ...(shell && plugin.code.permissions.shell === true
     ? { shellGate: pluginShellGate(runtime, plugin) }
@@ -454,14 +477,26 @@ const workspaceText = (result: WorkspaceToolResult) =>
 /** A workspace tool (shell, files) behind the same gate. */
 export const withPluginWorkspaceToolEvents = <T extends WorkspaceTool>(
   tool: T,
-  runtime: CodePluginRuntime | undefined,
+  /**
+   * The Thread's plugins, or how to read them at each call: a workspace
+   * tool outlives the render that made it, and a draft plugin loaded since
+   * gates it too.
+   */
+  runtime:
+    | CodePluginRuntime
+    | undefined
+    | (() => CodePluginRuntime | undefined),
 ): T => {
-  const gated = gatesOf(runtime);
-  if (gated === undefined) return tool;
+  if (typeof runtime !== "function" && gatesOf(runtime) === undefined)
+    return tool;
+  const current = () =>
+    gatesOf(typeof runtime === "function" ? runtime() : runtime);
   return {
     ...tool,
-    execute: (toolCallId: string, params: never, ...rest: never[]) =>
-      runGated<WorkspaceToolResult>(
+    execute: (toolCallId: string, params: never, ...rest: never[]) => {
+      const gated = current();
+      if (gated === undefined) return tool.execute(toolCallId, params, ...rest);
+      return runGated<WorkspaceToolResult>(
         gated.runtime,
         gated.gates,
         gated.observers,
@@ -488,7 +523,8 @@ export const withPluginWorkspaceToolEvents = <T extends WorkspaceTool>(
             details: result?.details,
           }),
         },
-      ),
+      );
+    },
   } as T;
 };
 
@@ -605,7 +641,11 @@ export const createPluginTools = (
       names.add(registered.name);
       tools.push({
         name: registered.name,
-        description: `${registered.description}\n\n(From the ${plugin.displayName} plugin.)`,
+        description: `${registered.description}\n\n(From the ${plugin.displayName} plugin${
+          plugin.draft === undefined
+            ? ""
+            : ", loaded in this Thread. Call it as a tool, like any other; code you run cannot import it"
+        }.)`,
         input: pluginToolInput(registered.inputSchema),
         output: undefined,
         harness: true,

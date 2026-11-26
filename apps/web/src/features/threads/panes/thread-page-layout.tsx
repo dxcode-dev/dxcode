@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import {
-  type PluginPaneRequest,
   THREAD_OPEN_VIEW_EVENT,
   takeThreadViewRequest,
 } from "../../../shared/commands/thread-open-view-event.js";
@@ -36,13 +35,11 @@ const eventSnapshot = () => 0;
 
 /**
  * Runs `open` for each view a Thread command asks this Thread's page to
- * open, and for one asked of it just before it opened; `openPlugin` for each
- * plugin pane a plugin asks it to open.
+ * open, and for one asked of it just before it opened.
  */
 export const useOpenViewCommands = (
   threadId: ThreadId,
   open: (view: PaneViewKind) => void,
-  openPlugin?: (request: PluginPaneRequest) => void,
 ) => {
   const subscribe = (_notify: () => void) => {
     const listener = (event: Event) => {
@@ -51,10 +48,6 @@ export const useOpenViewCommands = (
       ).detail;
       if (detail?.threadId !== undefined && detail.threadId !== threadId)
         return;
-      if (detail?.view === "plugin") {
-        openPlugin?.(detail as unknown as PluginPaneRequest);
-        return;
-      }
       if (detail?.threadId !== undefined) takeThreadViewRequest(threadId);
       if (isViewKind(detail?.view)) open(detail.view);
     };
@@ -77,7 +70,7 @@ const servable = (contents: PaneContents) => (tab: ThreadPaneTab) =>
 /**
  * The layout an archived Thread shows. Its Orb is stopped, so the saved
  * layout keeps only the Agent, Artifacts, files with unsaved edits, and the
- * plugin panes their plugins keep in archived Threads.
+ * plugin views their plugins still list.
  * Changes made meanwhile stay on this page and are never saved, so
  * unarchiving brings back the saved layout.
  */
@@ -157,7 +150,7 @@ export function ThreadPageLayout({
       dispatch({ type: "open-plugin-pane", tab: { plugin, pane, title } }),
     );
   };
-  useOpenViewCommands(threadId, openView, openPluginPane);
+  useOpenViewCommands(threadId, openView);
   const page = mode.stacked ? (
     <div className="mobile-thread-region thread-page" data-stacked="">
       {renderTitleBar({ views: null, stacked: true })}

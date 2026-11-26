@@ -37,6 +37,12 @@ import {
  * tools under the names dx's own loop uses. Each tool is listed with
  * `anthropic/alwaysLoad`, so Claude calls it without a tool search.
  *
+ * When dx rewrites the tools file mid-turn (a draft plugin loaded, reloaded,
+ * or kept), the bridge lists the new tools and sends Claude Code
+ * `notifications/tools/list_changed` as an `mcp_message` control request;
+ * Claude Code then asks `tools/list` again. `plugin_tool`, a fixed dx tool,
+ * reaches a new plugin tool before Claude Code refreshes.
+ *
  * 4. When the run's directory holds `dx-hooks.json`, installed plugins
  *    gate tool calls: the bridge registers a PreToolUse hook, prints each of
  *    Claude's own tool calls as a `dx_hook` line for dx, and answers the
@@ -69,14 +75,19 @@ gate_tools = hooks_config is not None and hooks_config.get("toolCall", True) is 
 observe_results = hooks_config is not None and hooks_config.get("toolResult") is True
 HOOK_SECONDS = ${CLAUDE_CODE_HOOK_WAIT_SECONDS}
 RESULT_SECONDS = ${CLAUDE_CODE_RESULT_HOOK_WAIT_SECONDS}
-tools = json.load(open(tools_path))
+def load_tools():
+    loaded = json.load(open(tools_path))
+    for tool in loaded:
+        tool.setdefault("_meta", {})["anthropic/alwaysLoad"] = True
+    return loaded
+
+
+tools = load_tools()
 dx_tool_names = set(tool.get("name") for tool in tools)
-for tool in tools:
-    tool.setdefault("_meta", {})["anthropic/alwaysLoad"] = True
 to_claude = os.fdopen(4, "w")
 lock = threading.Lock()
 cancelled = set()
-state = {"input": False, "closed": False}
+state = {"input": False, "closed": False, "tools": tools}
 WAIT_SECONDS = ${CLAUDE_CODE_DX_CALL_WAIT_SECONDS}
 PICKUP_SECONDS = ${CLAUDE_CODE_DX_CALL_PICKUP_SECONDS}
 STALE_SECONDS = ${CLAUDE_CODE_DX_CALL_STALE_SECONDS}
@@ -189,11 +200,11 @@ def mcp_message(request_id, message):
     if method == "initialize":
         mcp(request_id, {"jsonrpc": "2.0", "id": rpc_id, "result": {
             "protocolVersion": params.get("protocolVersion", "2025-06-18"),
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {"listChanged": True}},
             "serverInfo": {"name": "dx", "version": "1"},
             "instructions": INSTRUCTIONS}})
     elif method == "tools/list":
-        mcp(request_id, {"jsonrpc": "2.0", "id": rpc_id, "result": {"tools": tools}})
+        mcp(request_id, {"jsonrpc": "2.0", "id": rpc_id, "result": {"tools": state["tools"]}})
     elif method == "tools/call":
         threading.Thread(target=call, args=(request_id, rpc_id, params), daemon=True).start()
     elif method == "notifications/cancelled":
@@ -203,6 +214,32 @@ def mcp_message(request_id, message):
         mcp(request_id, {"jsonrpc": "2.0", "result": {}})
     else:
         mcp(request_id, {"jsonrpc": "2.0", "id": rpc_id, "result": {}})
+
+
+def watch_tools():
+    # dx rewrites the tools file when the Thread's dx tools change mid-turn
+    # (a draft plugin loaded or kept): list them again and tell Claude.
+    global dx_tool_names
+    try:
+        seen = os.stat(tools_path).st_mtime_ns
+    except OSError:
+        seen = None
+    while not state["closed"]:
+        time.sleep(0.5)
+        try:
+            current = os.stat(tools_path).st_mtime_ns
+        except OSError:
+            continue
+        if current == seen:
+            continue
+        try:
+            fresh = load_tools()
+        except ValueError:
+            continue  # dx is still writing it
+        seen = current
+        state["tools"] = fresh
+        dx_tool_names = set(tool.get("name") for tool in fresh)
+        send({"type": "control_request", "request_id": "dx-tools-%d" % current, "request": {"subtype": "mcp_message", "server_name": "dx", "message": {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}}})
 
 
 def hook_output(decision, reason, updated=None):
@@ -294,6 +331,7 @@ if observe_results:
 if hooks:
     initialize["hooks"] = hooks
 send({"type": "control_request", "request_id": "dx-initialize", "request": initialize})
+threading.Thread(target=watch_tools, daemon=True).start()
 for line in sys.stdin:
     try:
         message = json.loads(line)

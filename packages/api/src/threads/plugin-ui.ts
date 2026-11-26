@@ -1,13 +1,11 @@
 import { Schema } from "effect";
 import { errorResponse, successResponse } from "../http/response.js";
+import { PluginDataViewOption } from "../settings/plugin-data-views.js";
 import {
   PluginIconRefSchema,
   PluginIconSetSchema,
 } from "../settings/plugin-icons.js";
-import {
-  PluginTabEntry,
-  PluginThreadTypeEntry,
-} from "../settings/plugin-views.js";
+import { PluginThreadTypeEntry } from "../settings/plugin-views.js";
 
 /**
  * What installed plugins' code shows in a Thread, drawn by dx's own
@@ -163,7 +161,6 @@ export const PluginQuickActionKind = Schema.Literals([
   "open-url",
   "copy",
   "run-command",
-  "open-pane",
 ]);
 
 export type PluginQuickActionKind = typeof PluginQuickActionKind.Type;
@@ -175,15 +172,13 @@ export const PluginQuickAction = Schema.Struct({
   label: Text(48),
   action: PluginQuickActionKind,
   /**
-   * `text` for send-message and copy, `url` for open-url, `command` for
-   * run-command, and `pane` for open-pane: the pane's tab key
-   * (`<plugin name>/<pane id>`).
+   * `text` for send-message and copy, `url` for open-url, and `command`
+   * for run-command.
    */
   args: Schema.Struct({
     text: OptionalText(4_000),
     url: OptionalText(2_000),
     command: OptionalText(200),
-    pane: OptionalText(160),
   }),
 });
 
@@ -218,105 +213,6 @@ export const PluginLinkPattern = Schema.Struct({
 
 export type PluginLinkPattern = typeof PluginLinkPattern.Type;
 
-/** A pane id: 1 to 48 lowercase letters, digits, and hyphens. */
-export const PluginPaneId = Schema.String.check(
-  Schema.isPattern(/^[a-z][a-z0-9-]{0,47}$/),
-);
-
-/** A pane's HTML is at most this many bytes. */
-export const PLUGIN_PANE_MAX_HTML_BYTES = 262_144;
-/** One `post` is at most this many bytes of JSON. */
-export const PLUGIN_PANE_MAX_MESSAGE_BYTES = 65_536;
-/** dx keeps this many of a pane's latest posts per Thread. */
-export const PLUGIN_PANE_MESSAGES_KEPT = 20;
-/** A plugin posts at most this many messages a minute in one Thread. */
-export const PLUGIN_PANE_POSTS_PER_MINUTE = 60;
-/** An open request opens the pane on pages that load this soon after it. */
-export const PLUGIN_PANE_OPEN_SECONDS = 60;
-
-/** A pane an installed plugin offers in the Thread. */
-export const PluginPaneEntry = Schema.Struct({
-  /** The plugin's name, as its manifest declares it. */
-  plugin: Text(96),
-  pane: PluginPaneId,
-  /** The tab's label. */
-  title: Text(40),
-  /** The plugin's display name. */
-  pluginTitle: Text(96),
-  /** The plugin version whose HTML the pane shows. */
-  version: Text(200),
-  /** The latest request from the plugin's code to open it, if recent. */
-  openedAt: Schema.optional(Schema.String),
-  /** The pane's own icon; the plugin's icon when absent. */
-  icon: Schema.optional(PluginIconRefSchema),
-  /**
-   * The Thread is archived and the plugin says `archivedThreads:
-   * "show"`: the pane draws its last snapshot and takes no input.
-   */
-  readOnly: Schema.optional(Schema.Boolean),
-  /**
-   * The Thread owner's personal plugin, seen by a member: only the owner
-   * may send it messages, so the pane shows without controls.
-   */
-  ownerOnly: Schema.optional(Schema.Literal(true)),
-  /**
-   * Present at a trusted tier only: the pane gets `window.dx.stream`, and
-   * what its `panes[].connect` declared: hosts it may reach, WebRTC, and
-   * the Thread's own Portal URLs for its ports.
-   */
-  // Its shape is `PluginPaneLive`; the pane's lazy chunk reads it, so the
-  // Thread page's first load carries no schema for it.
-  live: Schema.optional(Schema.Unknown),
-});
-
-export type PluginPaneEntry = typeof PluginPaneEntry.Type;
-
-/** A trusted pane's `live` entry. */
-export interface PluginPaneLive {
-  readonly hosts: ReadonlyArray<string>;
-  readonly webrtc: boolean;
-  readonly portals: ReadonlyArray<{
-    readonly port: number;
-    readonly url: string;
-  }>;
-}
-
-/** One `post` a pane receives, in order of `seq`. */
-export const PluginPaneMessage = Schema.Struct({
-  seq: Schema.Int,
-  message: Schema.Unknown,
-});
-
-export type PluginPaneMessage = typeof PluginPaneMessage.Type;
-
-/** `GET /v1/threads/:threadId/plugin-ui/panes/:plugin/:pane`: its view. */
-export const PluginPaneViewResponseSchema = successResponse(
-  Schema.Struct({
-    html: Schema.String,
-    version: Text(200),
-  }),
-);
-
-export type PluginPaneView = (typeof PluginPaneViewResponseSchema.Type)["data"];
-
-/**
- * `GET …/panes/:plugin/:pane/messages`: the pane's kept posts in this
- * Thread, oldest first; `?after=<seq>` returns only newer ones.
- */
-export const PluginPaneMessagesResponseSchema = successResponse(
-  Schema.Struct({ messages: Schema.Array(PluginPaneMessage) }),
-);
-
-/** `POST …/panes/:plugin/:pane/messages`: a view's `dx/plugin.post`. */
-export const PostPluginPaneMessageRequestSchema = Schema.Struct({
-  message: Schema.Unknown,
-});
-
-/** The plugin's `onMessage` result, as JSON; null when it returned nothing. */
-export const PostPluginPaneMessageResponseSchema = successResponse(
-  Schema.Struct({ result: Schema.Unknown }),
-);
-
 /** A plugin whose items show in the Thread, with its icon. */
 export const PluginUiPlugin = Schema.Struct({
   /** Its display name, as items name it. */
@@ -346,19 +242,17 @@ export const PluginThreadUiResponseSchema = successResponse(
     quickActions: Schema.Array(PluginQuickAction),
     commands: Schema.Array(PluginCommand),
     linkPatterns: Schema.Array(PluginLinkPattern),
-    /** Panes the Thread's plugins offer; absent from older servers. */
-    panes: Schema.optional(Schema.Array(PluginPaneEntry)),
     /**
      * Each running plugin's icon, by the display name every item above
-     * carries as `plugin` (`pluginTitle` on panes).
+     * carries as `plugin`.
      */
     plugins: Schema.optional(Schema.Array(PluginUiPlugin)),
     /** The agent tools the plugins add, for their transcript rows. */
     tools: Schema.optional(Schema.Array(PluginUiTool)),
-    /** Full-width tabs the Thread's plugins offer. */
-    tabs: Schema.optional(Schema.Array(PluginTabEntry)),
     /** The Thread's plugin type, when it has one. */
     threadType: Schema.optional(PluginThreadTypeEntry),
+    /** Views described as data the Thread's plugins show as panels or cards. */
+    dataViews: Schema.optional(Schema.Array(PluginDataViewOption)),
   }),
 );
 
@@ -417,16 +311,8 @@ export const PluginThreadUiErrorResponseSchema = Schema.Union([
     "Only the Thread's owner can answer this plugin question.",
   ),
   errorResponse(
-    "PLUGIN_UI_OWNER_ONLY",
-    "This is the Thread owner's own plugin: only they can use it here.",
-  ),
-  errorResponse(
     "PLUGIN_COMMAND_NOT_FOUND",
     "No installed plugin offers that command in this Thread.",
-  ),
-  errorResponse(
-    "PLUGIN_PANE_NOT_FOUND",
-    "No installed plugin offers that pane in this Thread.",
   ),
   errorResponse(
     "PLUGIN_THREAD_ARCHIVED",
@@ -435,11 +321,8 @@ export const PluginThreadUiErrorResponseSchema = Schema.Union([
   Schema.Struct({
     status: Schema.Literal("error"),
     data: Schema.Struct({
-      code: Schema.Literals(["PLUGIN_COMMAND_FAILED", "PLUGIN_PANE_FAILED"]),
-      message: Schema.Literals([
-        "The plugin's command failed.",
-        "The plugin's pane could not answer.",
-      ]),
+      code: Schema.Literal("PLUGIN_COMMAND_FAILED"),
+      message: Schema.Literal("The plugin's command failed."),
       requestId: Schema.String,
       /** The plugin's own error message, when it gave one. */
       detail: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),

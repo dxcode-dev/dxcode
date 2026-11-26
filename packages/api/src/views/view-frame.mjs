@@ -224,8 +224,7 @@ const viewContrastCss = Object.entries(CONTRAST_MEDIA)
   .join("");
 
 // --- Plugin theme (UI kit) --------------------------------------------------
-// dx's tokens for plugin frames (panes, tabs, pages, thread views, MCP Apps
-// cards) and dx-views that ask for the kit, under the MCP Apps style variable
+// dx's tokens for MCP Apps cards and dx-views that ask for the kit, under the MCP Apps style variable
 // names (`--color-*`, `--font-*`, `--border-radius-*`, `--shadow-*`), so
 // `@dxcode/plugin-ui` and any MCP App built for another host both take dx's
 // look. Every value comes from DESIGN_SYSTEM, the block generated from the
@@ -353,7 +352,7 @@ const pick = (palette, index) =>
   );
 
 /**
- * The MCP Apps `hostContext.styles.variables` for a plugin frame: dx's
+ * The MCP Apps `hostContext.styles.variables` for an MCP Apps card: dx's
  * tokens for `palette` in `scheme`, as plain values.
  *
  * @param {string} palette
@@ -432,7 +431,7 @@ const pluginContrastCss = (() => {
     .join("");
 })();
 
-/** Where a plugin frame asks for the kit; the host inlines it there. */
+/** Where a view asks for the kit; the host inlines it there. */
 export const PLUGIN_UI_SPECIFIER = "dx:plugin-ui";
 // Quoted or not, closed or not: any script tag whose src is the kit.
 const pluginUiTag =
@@ -461,7 +460,7 @@ const inlinePluginUi = (source, pluginUi) => {
 
 // --- UI SDK ----------------------------------------------------------------
 // UI SDK's web components (`@ui-sdk/web`, pinned in apps/web) for any view:
-// a dx-view, a plugin frame, or an MCP Apps card. A view that writes a known
+// a dx-view or an MCP Apps card. A view that writes a known
 // `<ui-…>` start tag gets the code of those components inlined, with dx's
 // theme for them; `<script type="module" src="dx:ui-sdk">` asks for every
 // component, for views that create them only from script. A view opts out
@@ -638,8 +637,7 @@ const contentSecurityPolicy = [
 // as the view's own parse is), removes every frame element in any
 // namespace, nested templates included, and serializes it; it repeats until
 // the markup is stable, so markup that would only turn into a frame after
-// a round trip is caught. Only a trusted-tier pane that declares
-// `connect.webrtc` runs without the guard.
+// a round trip is caught. Every view runs with the guard.
 
 /**
  * Detects (never removes) a frame start or end tag exactly as the HTML
@@ -1068,9 +1066,7 @@ const shell = `(() => {
         parent.postMessage({ source: "${VIEW_FRAME_MESSAGE}", type: "mcp", message: data }, "*");
     } else if (event.source === parent && data?.source === "${VIEW_HOST_MESSAGE}") {
       if (data.type === "mcp") {
-        // A stream's ArrayBuffer moves to the view, not copied.
-        const chunk = data.message?.params?.data;
-        if (data.message?.jsonrpc === "2.0") view?.contentWindow?.postMessage(data.message, "*", chunk instanceof ArrayBuffer ? [chunk] : []);
+        if (data.message?.jsonrpc === "2.0") view?.contentWindow?.postMessage(data.message, "*");
         return;
       }
       if (data.type === "document") {
@@ -1078,9 +1074,8 @@ const shell = `(() => {
         mcpApp = data.mcpApp === true;
         view = document.createElement("iframe");
         view.setAttribute("sandbox", "allow-scripts");
-        // Unless dx said the view is unguarded (a trusted pane that
-        // declared WebRTC), its document is written without frames.
-        const written = data.guarded === false ? data.document : sanitizeDocument(data.document);
+        // The view's document is written without frames.
+        const written = sanitizeDocument(data.document);
         if (written === "")
           parent.postMessage({ source: "${VIEW_FRAME_MESSAGE}", type: "error", message: "dx removed this view's frames and its markup did not settle, so it shows nothing." }, "*");
         view.srcdoc = written;
@@ -1125,10 +1120,6 @@ const shellHead =
 export const viewFrameShell = () =>
   `${shellHead}<body><script>${shell}</script></body>\n`;
 
-/** The page at `VIEW_FRAME_CONNECTED_PATH`, for trusted panes. */
-export const viewFrameConnectedShell = () =>
-  `${shellHead.replace(contentSecurityPolicy, connectedPolicy)}<body><script>${shell}</script></body>\n`;
-
 /**
  * `head` placed first, so it applies before any of the view's own markup;
  * the parser folds a later <html> or <head> tag into the same elements.
@@ -1140,163 +1131,18 @@ const withHead = (source, head) =>
   // head, is ignored; this one keeps the document in standards mode.
   `<!doctype html>${head}${source}`;
 
-/** The view's CSP: dx's, plus the guard's directives when guarded. */
-const viewPolicy = (guarded) =>
-  guarded
-    ? [contentSecurityPolicy, ...guardPolicy].join("; ")
-    : contentSecurityPolicy;
+/** The view's CSP: dx's, plus the guard's directives. */
+const viewPolicy = [contentSecurityPolicy, ...guardPolicy].join("; ");
 
-/** The guard script, first in a guarded view's head. */
-const guardScript = (guarded) =>
-  guarded ? `<script>${webrtcGuard}</script>` : "";
+/** The guard script, first in every view's head. */
+const guardScript = `<script>${webrtcGuard}</script>`;
 
-const mcpAppHead = (guarded, palette, pane) =>
-  `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${paneViewPolicy(viewPolicy(guarded), pane)}">` +
-  guardScript(guarded) +
+const mcpAppHead = (palette) =>
+  `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${viewPolicy}">` +
+  guardScript +
   '<meta name="viewport" content="width=device-width,initial-scale=1">' +
   `<style>:root{color-scheme:light dark;${pluginThemeCss(palette)}}${pluginContrastCss}html{background:transparent}</style>` +
-  `<script>${bridge}</script>` +
-  // Only a trusted pane gets window.dx.
-  (pane === undefined ? "" : `<script>${paneScript(pane.id)}</script>`);
-
-// --- Trusted panes: streams -------------------------------------------------
-// A trusted-tier pane gets `window.dx` (its stream, WebRTC ICE servers, and
-// the Thread's Portal), and may reach the hosts its `panes[].connect` lists.
-// Its view loads under the connected shell, whose own policy allows https
-// and wss requests; the view's policy narrows them to exactly those hosts,
-// and a view cannot drop a policy once the parser has read it. Streams never
-// widen the frame: the transcript holds the WebSocket and relays messages.
-
-/** Where a connected pane's shell loads; `_headers` matches it. */
-export const VIEW_FRAME_CONNECTED_PATH = "/view-frame-connected";
-
-const connectedPolicy = [
-  "default-src 'none'",
-  "script-src 'unsafe-inline'",
-  "style-src 'unsafe-inline'",
-  "img-src data: blob: https:",
-  "media-src data: blob: https:",
-  "connect-src https: wss:",
-  "font-src data:",
-  "form-action 'none'",
-  "base-uri 'none'",
-].join("; ");
-
-/** The connected shell's response policy. */
-export const VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY = [
-  connectedPolicy,
-  "frame-ancestors 'self'",
-  "sandbox allow-scripts",
-].join("; ");
-
-const HOST_SOURCE =
-  /^(?:\*\.)?[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/;
-
-/** A pane's view policy: dx's, plus its own hosts for fetch, img, media. */
-const paneViewPolicy = (policy, pane) => {
-  const hosts = (pane?.hosts ?? []).filter((host) => HOST_SOURCE.test(host));
-  if (hosts.length === 0) return policy;
-  const https = hosts.map((host) => `https://${host}`).join(" ");
-  const wss = hosts.map((host) => `wss://${host}`).join(" ");
-  return policy
-    .replace("img-src data: blob:", `img-src data: blob: ${https}`)
-    .replace("media-src data: blob:", `media-src data: blob: ${https}`)
-    .replace(
-      "default-src 'none'",
-      `default-src 'none'; connect-src ${https} ${wss}`,
-    );
-  // Browsers ignore report-uri in a meta policy: window.dx reports each
-  // refusal to the transcript, which sends it to dx's report endpoint.
-};
-
-/**
- * `window.dx` in a trusted pane. It speaks JSON-RPC to the transcript
- * through the shell: `dx/stream.open`, `.send`, `.close` and
- * `dx/stream.message`, `.state` back; `dx/rtc.iceServers`;
- * `dx/portal.place` and `.close`.
- */
-const paneScript = (paneId) => `(() => {
-  const pane = ${JSON.stringify(paneId)};
-  let next = 1;
-  const pending = new Map();
-  const streams = new Map();
-  const send = (message) => parent.postMessage({ jsonrpc: "2.0", ...message }, "*");
-  const request = (method, params) => new Promise((resolve, reject) => {
-    const id = "dx-" + next++;
-    pending.set(id, { resolve, reject });
-    send({ id, method, params });
-  });
-  addEventListener("message", (event) => {
-    const message = event.data;
-    if (event.source !== parent || message?.jsonrpc !== "2.0") return;
-    if (typeof message.id === "string" && pending.has(message.id)) {
-      const { resolve, reject } = pending.get(message.id);
-      pending.delete(message.id);
-      if (message.error) reject(new Error(message.error.message)); else resolve(message.result);
-      return;
-    }
-    const stream = streams.get(message.params?.id);
-    if (!stream) return;
-    if (message.method === "dx/stream.message") stream.dispatchEvent(new MessageEvent("message", { data: message.params.data }));
-    else if (message.method === "dx/stream.state") {
-      const { state, producers, reason } = message.params;
-      if (state === "open" && stream.readyState !== "open") { stream.readyState = "open"; stream.dispatchEvent(new Event("open")); }
-      if (state === "closed") { stream.readyState = "closed"; streams.delete(stream.id); stream.dispatchEvent(new CloseEvent("close", { reason: reason ?? "" })); return; }
-      if (producers !== undefined) stream.dispatchEvent(new CustomEvent("state", { detail: { producers, reason } }));
-      if (state === "throttled") stream.dispatchEvent(new Event("throttled"));
-    }
-  });
-  class DxStream extends EventTarget {
-    constructor(id) { super(); this.id = id; this.readyState = "connecting"; }
-    send(data) {
-      if (this.readyState !== "open") throw new DOMException("The stream is not open.", "InvalidStateError");
-      if (typeof data !== "string" && !(data instanceof ArrayBuffer)) data = ArrayBuffer.isView(data) ? data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) : String(data);
-      send({ method: "dx/stream.send", params: { id: this.id, data } });
-    }
-    close() { if (this.readyState === "closed") return; send({ method: "dx/stream.close", params: { id: this.id } }); this.readyState = "closed"; streams.delete(this.id); }
-  }
-  const portals = new Map();
-  // A request the pane's policy refused: one log line in dx's Worker.
-  addEventListener("securitypolicyviolation", (event) =>
-    send({ method: "dx/csp.violation", params: { directive: event.effectiveDirective, blocked: String(event.blockedURI).slice(0, 300) } }));
-  // dx's own members cannot change, but the object stays extensible, so
-  // the UI kit can add window.dx.ui beside them.
-  const lock = (members) => {
-    const api = {};
-    for (const [name, value] of Object.entries(members))
-      Object.defineProperty(api, name, { value, enumerable: true, writable: false, configurable: false });
-    return api;
-  };
-  window.dx = lock({
-    pane,
-    stream(id = pane) {
-      if (id !== pane) throw new DOMException("A pane reads only its own stream.", "NotSupportedError");
-      let stream = streams.get(id);
-      if (!stream || stream.readyState === "closed") {
-        stream = new DxStream(id);
-        streams.set(id, stream);
-        send({ method: "dx/stream.open", params: { id } });
-      }
-      return stream;
-    },
-    rtc: () => request("dx/rtc.iceServers", {}),
-    portal(port, element, options = {}) {
-      const key = "portal-" + next++;
-      const place = () => {
-        const box = element.getBoundingClientRect();
-        send({ method: "dx/portal.place", params: { key, port, path: String(options.path ?? "/"), rect: { x: box.left, y: box.top, width: box.width, height: box.height } } });
-      };
-      const observer = new ResizeObserver(place);
-      observer.observe(element);
-      observer.observe(document.documentElement);
-      addEventListener("scroll", place, true);
-      place();
-      const handle = { close() { observer.disconnect(); removeEventListener("scroll", place, true); send({ method: "dx/portal.close", params: { key } }); portals.delete(key); } };
-      portals.set(key, handle);
-      return handle;
-    },
-  });
-})();`;
+  `<script>${bridge}</script>`;
 
 const escapeAttribute = (value) =>
   value.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
@@ -1308,9 +1154,9 @@ const escapeAttribute = (value) =>
  *
  * A dx-view that asks for `@dxcode/plugin-ui` (`<script type="module"
  * src="dx:plugin-ui">`) also gets the kit's code (`pluginUi`) and the plugin
- * theme below, so the kit looks the same in the transcript as in a pane.
+ * theme below, so the kit looks the same in the transcript as in a card.
  *
- * An MCP App's view (`mcpApp`), which every plugin frame is, gets the same
+ * An MCP App's view (`mcpApp`) gets the same
  * CSP and bridge and dx's tokens under the MCP Apps style variable names,
  * but not the dx-view kit: it brings its own styles, or asks for
  * `@dxcode/plugin-ui` with `<script type="module" src="dx:plugin-ui">`,
@@ -1320,45 +1166,25 @@ const escapeAttribute = (value) =>
  * its CSP allows no request, which the MCP Apps spec lets a host require.
  * The shell, told the view is an MCP App, relays it only JSON-RPC.
  *
- * Every view is guarded against WebRTC (see the guard above) unless it is
- * a trusted-tier pane (`trusted`) that declared `connect.webrtc` (`webrtc`).
- *
- * @param {string} source
- * A trusted pane (`trusted` with `pane`) also gets `window.dx` and may reach
- * `pane.hosts`; it must load under `VIEW_FRAME_CONNECTED_PATH` to use them.
+ * Every view is guarded against WebRTC (see the guard above).
  *
  * Any view that uses UI SDK (`uiSdkComponents`) gets `uiSdk`, the code and
  * styles of the components it uses, in its head; without it the view stays
  * plain HTML.
  *
- * @param {{ kit: { css: string; js: string; icons: string }; palette?: string; scheme?: "light" | "dark"; mcpApp?: boolean; pluginUi?: string; uiSdk?: { css: string; js: string }; trusted?: boolean; webrtc?: boolean; pane?: { id: string; hosts: readonly string[] } }} options
+ * @param {string} source
+ * @param {{ kit: { css: string; js: string; icons: string }; palette?: string; scheme?: "light" | "dark"; mcpApp?: boolean; pluginUi?: string; uiSdk?: { css: string; js: string } }} options
  */
 export const viewDocument = (
   source,
-  {
-    kit,
-    palette = "daydream",
-    scheme,
-    mcpApp = false,
-    pluginUi,
-    uiSdk,
-    trusted = false,
-    webrtc = false,
-    pane,
-  },
+  { kit, palette = "daydream", scheme, mcpApp = false, pluginUi, uiSdk },
 ) => {
-  const guarded = !(trusted && webrtc);
   if (mcpApp)
     return withHead(
       withoutUiSdkTags(
         usesPluginUi(source) ? inlinePluginUi(source, pluginUi) : source,
       ),
-      // Only a trusted pane gets window.dx and its connect hosts.
-      mcpAppHead(
-        guarded,
-        palette,
-        trusted && pane !== undefined ? pane : undefined,
-      ) + uiSdkHead(uiSdk),
+      mcpAppHead(palette) + uiSdkHead(uiSdk),
     );
   const icons = kit.icons.replace(/<!--[\s\S]*?-->/g, "");
   const kitScript = kit.js.replace("'__DX_VIEW_ICONS__'", () =>
@@ -1371,7 +1197,7 @@ export const viewDocument = (
       ? "html{background:transparent}"
       : `:root{color-scheme:only ${scheme}}`;
   // A view that asks for `@dxcode/plugin-ui` gets it, and the plugin theme
-  // under the MCP Apps names, as a plugin frame does. So does a view that
+  // under the MCP Apps names, as an MCP Apps card does. So does a view that
   // uses UI SDK, whose theme reads the same names (accent, input, ring, …).
   const withPluginUi = usesPluginUi(source);
   const pluginTheme =
@@ -1379,8 +1205,8 @@ export const viewDocument = (
       ? `:root{${pluginThemeCss(palette)}}${pluginContrastCss}`
       : "";
   const head =
-    `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${viewPolicy(guarded)}">` +
-    guardScript(guarded) +
+    `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${viewPolicy}">` +
+    guardScript +
     '<meta name="viewport" content="width=device-width,initial-scale=1">' +
     `<style>:root{${tokens(palette)}}${viewContrastCss}${pluginTheme}${kit.css}${fixedScheme}</style>` +
     `<script>${bridge}</script><script>${kitScript}</script>` +

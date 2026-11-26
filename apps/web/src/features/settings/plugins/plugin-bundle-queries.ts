@@ -201,27 +201,6 @@ export const setPluginBundleEnabled = async (
     )
   ).data;
 
-/** Turns personal-dev hot reload on or off for a personal plugin. */
-export const setPluginBundleDev = async (
-  target: PluginsTarget,
-  pluginId: PluginId,
-  enabled: boolean,
-  threadId?: string,
-) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/dev`,
-      UpdatePluginBundleResponseSchema,
-      {
-        method: "PUT",
-        body: JSON.stringify({
-          enabled,
-          ...(threadId === undefined ? {} : { threadId }),
-        }),
-      },
-    )
-  ).data;
-
 export const removePluginBundle = async (
   target: PluginsTarget,
   pluginId: PluginId,

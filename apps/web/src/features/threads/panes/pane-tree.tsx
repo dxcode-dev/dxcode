@@ -11,6 +11,7 @@ import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import { PluginPaneIcon } from "../plugin-ui/lazy-plugin-ui-icons.js";
 import { absolutePathFor, sandboxFileUrl } from "../transcript-file-link.js";
+import { DX_THREAD_PANELS } from "./dx-thread-panels.js";
 import {
   currentPaneDrag,
   type DropZone,
@@ -33,11 +34,7 @@ import {
 } from "./pane-layout.js";
 import { OpenTabMenuButton, PaneTabContextMenu } from "./pane-menus.js";
 import { PaneToolbarSlotContext } from "./pane-toolbar-slot-context.js";
-import {
-  PANE_VIEWS,
-  type PaneContents,
-  renderPaneContent,
-} from "./pane-views.js";
+import { type PaneContents, renderPaneContent } from "./pane-views.js";
 import { TerminalView } from "./terminal-view.js";
 import "./panes.css";
 
@@ -200,7 +197,7 @@ function TabIcon({
         title={tab.title}
       />
     );
-  const { Icon } = PANE_VIEWS[tab.kind];
+  const { Icon } = DX_THREAD_PANELS.get(tab.kind);
   return <Icon aria-hidden="true" />;
 }
 

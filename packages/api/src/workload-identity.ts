@@ -1,6 +1,6 @@
 import {
   WorkloadIdentityAudience,
-  WorkloadIdentityRuntimeAssurance,
+  WorkloadIdentityClaimRuntimeAssurance,
   WorkloadIdentityTtlSeconds,
 } from "@dx/domain";
 import { Schema } from "effect";
@@ -62,4 +62,4 @@ export type WorkloadIdentityJwksResponse =
   typeof WorkloadIdentityJwksResponseSchema.Type;
 
 export const WorkloadIdentityRuntimeAssuranceClaimSchema =
-  WorkloadIdentityRuntimeAssurance;
+  WorkloadIdentityClaimRuntimeAssurance;

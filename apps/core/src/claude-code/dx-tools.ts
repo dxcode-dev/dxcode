@@ -290,7 +290,12 @@ export const claudeCodeDxTools = (
       throw new Error(
         `The dx tool ${tool.name} cannot reach Claude Code: dx tool names are snake_case, so they never clash with Claude's own tools.`,
       );
+  const before = threadTools.get(threadId);
   threadTools.set(threadId, tools);
+  // A tool added or removed mid-turn (a draft plugin loaded, reloaded, or
+  // kept) reaches the running Claude Code through its bridge.
+  if (before !== undefined && toolSetKey(before) !== toolSetKey(tools))
+    announceClaudeCodeDxTools(threadId);
   setClaudeCodeDxCallServer(threadId, (call, workspace, signal) =>
     runClaudeCodeSubagentDxCall(threadId, call, {
       signal,
@@ -486,6 +491,30 @@ const answerSubagentDxCall = async (
   throw new Error(
     `dx could not return the result of ${call.name} to Claude Code's subagent (${cause}).`,
   );
+};
+
+/** What decides whether Claude Code's list must change. */
+const toolSetKey = (tools: ReadonlyArray<ToolDefinition>) =>
+  JSON.stringify(
+    tools.map(({ name, description }) => [name, description]).sort(),
+  );
+
+/**
+ * Writes the Thread's current dx tools into each running Claude Code's
+ * bridge, which lists them again and sends `notifications/tools/list_changed`.
+ * Best effort: `plugin_tool` reaches a new tool even before Claude Code
+ * refreshes its list.
+ */
+const announceClaudeCodeDxTools = (threadId: string) => {
+  const list = claudeCodeDxToolList(threadId);
+  for (const run of claudeCodeRuns.live(threadId))
+    void run.writeDxTools(list).catch((error: unknown) =>
+      claudeCodeLogger.warn("dx could not update Claude Code's dx tools.", {
+        event: "claude_code_dx_tools_update_failed",
+        threadId,
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    );
 };
 
 /** The Thread's dx tools as the dx tool bridge lists them. */

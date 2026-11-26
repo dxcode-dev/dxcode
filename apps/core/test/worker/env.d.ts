@@ -28,9 +28,6 @@ declare module "cloudflare:test" {
     readonly PLUGIN_DURABLE_HOST: DurableObjectNamespace<
       import("../../src/plugins/hosts/durable/object.js").PluginDurableHostObject
     >;
-    readonly PLUGIN_STREAM_RELAY: DurableObjectNamespace<
-      import("../../src/plugins/streams/relay.js").PluginStreamRelay
-    >;
     readonly RUNNER_SESSION: DurableObjectNamespace<
       import("../../src/runners/session-object.js").RunnerSessionObject
     >;

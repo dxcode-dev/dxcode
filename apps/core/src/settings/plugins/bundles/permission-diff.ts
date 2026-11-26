@@ -1,15 +1,15 @@
 import {
   isStdioMcpServer,
   PLUGIN_PERMISSIONS,
-  PLUGIN_TIERS,
   type PluginBundleCode,
   type PluginBundleManifest,
   type PluginCodePermissions,
   type PluginCodeThreadGrant,
   type PluginPermission,
   pluginHostKinds,
+  pluginServiceGrants,
   pluginThreadGrants,
-  tierAtLeast,
+  RETIRED_PLUGIN_UI_GRANT,
 } from "@dx/domain";
 
 /**
@@ -60,7 +60,6 @@ export const pluginGrantRows = {
     agents: "agents",
     shell: "shell",
     plugins: "plugins",
-    wake: "wake",
   } as const satisfies {
     readonly [Key in keyof PluginCodePermissions]-?: PluginPermission;
   },
@@ -75,17 +74,19 @@ export const pluginGrantRows = {
     settings: "settings",
     agentModes: "agents",
     hosts: "hosts",
-    tier: "tier",
     binaries: "binaries",
     archivedThreads: null,
-    // A pane's own reach is in `paneConnect`; its view needs `ui: ["pane"]`.
-    panes: null,
     iconAssets: null,
-    views: "views",
+    dataViews: "views",
     exports: "exports",
-    durableScope: null,
-    jobs: "jobs",
-    paneConnect: "panes",
+    // Retired fields an old stored version may hold; they grant nothing.
+    panes: null,
+    views: null,
+    paneConnect: null,
+    // Schedules, listeners, and a program on a plugin Orb.
+    service: "service",
+    schedules: "service",
+    listeners: "service",
   } as const satisfies {
     readonly [Key in keyof PluginBundleCode]-?: PluginPermission | null;
   },
@@ -111,7 +112,10 @@ const lists = (manifest: Grants) => {
     network: permissions?.network ?? [],
     secrets: permissions?.secrets ?? [],
     tools: permissions?.tools ?? [],
-    ui: permissions?.ui ?? [],
+    // The retired `pane` grant an old version may hold grants nothing.
+    ui: (permissions?.ui ?? []).filter(
+      (grant) => grant !== RETIRED_PLUGIN_UI_GRANT,
+    ),
     ai: permissions?.ai === true ? ["model calls"] : [],
     threads: pluginThreadGrants(permissions?.threads).map(
       (grant) => THREAD_GRANT_LABELS[grant],
@@ -150,7 +154,7 @@ const lists = (manifest: Grants) => {
         ),
       ),
     ],
-    // A native tool the Orb or container host installs; a new source is a
+    // A native tool the Orb host installs; a new source is a
     // new review.
     binaries: (code?.binaries ?? []).map(({ name, apt, url, sha256, path }) =>
       apt !== undefined
@@ -161,35 +165,16 @@ const lists = (manifest: Grants) => {
     ),
     // Other plugins it may call, and the views it draws.
     plugins: [...(permissions?.plugins ?? [])],
-    views: [
-      ...(code?.views?.tabs ?? []).map(({ title }) => `Tab: ${title}`),
-      ...(code?.views?.pages ?? []).map(({ title }) => `Page: ${title}`),
-      ...(code?.views?.threadTypes ?? []).map(
-        ({ title }) => `Thread type: ${title}`,
-      ),
-    ],
+    views: (code?.dataViews ?? []).map(
+      ({ title, show }) => `View: ${title} (${show.join(", ")})`,
+    ),
     // A new export is something more other plugins may call.
     exports: (code?.exports ?? []).map(({ name }) => name),
-    tier:
-      code === undefined
-        ? []
-        : PLUGIN_TIERS.filter((tier) =>
-            tierAtLeast(code.tier ?? "verified", tier),
-          ),
     hosts:
       code === undefined
         ? []
         : pluginHostKinds(code).filter((kind) => kind !== "worker"),
-    jobs: (code?.jobs ?? []).map(({ id }) => id),
-    wake: permissions?.wake === true ? ["wake Threads with a message"] : [],
-    // Each pane's hosts, Portal ports, and WebRTC (TURN credentials).
-    panes: (code?.paneConnect ?? []).flatMap(
-      ({ pane, hosts, portal, webrtc }) => [
-        ...hosts.map((host) => `${pane}: ${host}`),
-        ...portal.map((port) => `${pane}: Portal port ${port}`),
-        ...(webrtc === true ? [`${pane}: WebRTC`] : []),
-      ],
-    ),
+    service: pluginServiceGrants(code),
   } satisfies Record<PluginPermission, ReadonlyArray<string>>;
 };
 

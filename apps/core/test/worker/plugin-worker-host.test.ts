@@ -14,6 +14,7 @@ import type { Bindings } from "../../src/http/types.js";
 import {
   type CodePluginRuntime,
   createPluginTools,
+  pluginRuntimeForTurn,
   withPluginToolEvents,
 } from "../../src/plugins/worker-host/agent.js";
 import { resolveThreadCodePlugins } from "../../src/plugins/worker-host/resolve.js";
@@ -49,6 +50,8 @@ import { network } from "./network-boundary.js";
  * - both copies of a plugin run, or workers are shared across owners
  *   ("resolution").
  * - a bad dx block takes the portable layer down with it ("reading").
+ * - a contributor's turn loses the owner's personal plugins, or gets them
+ *   without their gate (decision 17: "a contributor's turn").
  */
 
 const loaderBindings = {
@@ -619,6 +622,57 @@ describe("plugin code on Dynamic Workers", () => {
   });
 });
 
+describe("a contributor's turn", () => {
+  it("uses the owner's personal plugins as the owner does, gate included", async () => {
+    const owner = await person();
+    const contributor = await person();
+    await install(
+      { scope: "personal", id: owner.userId } as PluginTarget,
+      owner.userId,
+      guardFiles(),
+    );
+    await install(
+      { scope: "personal", id: owner.userId } as PluginTarget,
+      owner.userId,
+      [
+        {
+          name: "plugin.json",
+          content: manifest("com.acme.whoami", {
+            apiVersion: 1,
+            entry: "dev.dxcode/index.js",
+          }),
+        },
+        {
+          name: "dev.dxcode/index.js",
+          content:
+            "export default (dx) => dx.registerTool({ name: 'who_called', description: 'Who called.', execute: (_input, ctx) => ctx.caller.userId });",
+        },
+      ],
+    );
+    // The turn the contributor's message started, as dx's agent builds it.
+    const turn = pluginRuntimeForTurn(
+      await runtimeFor(owner.threadId, owner.userId),
+      contributor.userId,
+    );
+    const tools = createPluginTools(turn, new Set(["echo_tool"]), () => []);
+    expect(tools.map(({ name }) => name)).toEqual(
+      expect.arrayContaining(["count_visits", "who_called"]),
+    );
+    const whoCalled = tools.find(({ name }) => name === "who_called");
+    if (whoCalled === undefined) throw new Error("Expected who_called.");
+    // It runs as the owner's install, with the contributor as its caller.
+    expect(String(await call(whoCalled, {}))).toBe(contributor.userId);
+    // The owner's gate still decides in the contributor's turn.
+    const shell = fakeTool("shell_command", () => "ran");
+    await expect(
+      call(withPluginToolEvents(shell.tool, turn), {
+        command: "git push --force origin main",
+      }),
+    ).rejects.toThrow("Force pushes are blocked by policy.");
+    expect(shell.runs).toEqual([]);
+  });
+});
+
 describe("webhook triggers on the worker host", () => {
   it("offers a trigger for code that handles trigger.received and delivers to it with no Thread", async () => {
     const { userId } = await person();
@@ -642,7 +696,7 @@ describe("webhook triggers on the worker host", () => {
           name: "dev.dxcode/index.js",
           content: `export default (dx) => {
 dx.on("agent.start", async (_event, ctx) => {
-  await ctx.storage.set("inThread", { hasThreads: ctx.threads !== undefined, hasThread: ctx.thread !== undefined });
+  await ctx.storage.set("inThread", { hasThreads: ctx.threads === undefined ? null : Object.keys(ctx.threads).sort(), hasThread: ctx.thread !== undefined });
 });
 dx.on("trigger.received", async (event, ctx) => {
   if (event.data && event.data.fail) throw new Error("rejected by plugin");
@@ -751,8 +805,10 @@ dx.on("trigger.received", async (event, ctx) => {
       hasThreads: true,
     });
 
-    // Inside a Thread the same plugin cannot start Threads, so it cannot
-    // multiply itself through its own Thread events.
+    // Inside a Thread the same plugin cannot start Threads with `create`,
+    // so it cannot multiply itself through its own Thread events; it has
+    // only the keyed `open`, which returns the open Thread for a key and
+    // opens at most 20 an hour.
     const { threadId } = await person();
     await dispatchPluginEvent(
       {
@@ -780,7 +836,7 @@ dx.on("trigger.received", async (event, ctx) => {
       .bind(pluginId)
       .first<{ value_json: string }>();
     expect(JSON.parse(inThread?.value_json ?? "null")).toEqual({
-      hasThreads: false,
+      hasThreads: ["open", "post"],
       hasThread: true,
     });
 
@@ -824,12 +880,9 @@ describe("plugin code on the QuickJS fallback (no Dynamic Worker loader)", () =>
     await install({ scope: "personal", id: userId } as PluginTarget, userId, [
       {
         name: "plugin.json",
-        // Sandboxed asks for today's 60 s per call; a personal install
-        // would otherwise run personal-dev, with 5 minutes.
         content: manifest("com.acme.timers", {
           apiVersion: 1,
           entry: "dev.dxcode/index.js",
-          tier: "sandboxed",
         }),
       },
       {
@@ -845,7 +898,23 @@ describe("plugin code on the QuickJS fallback (no Dynamic Worker loader)", () =>
 };`,
       },
     ]);
-    const runtime = await runtimeFor(threadId, userId);
+    // Run as a repository's plugin, whose calls get 60 s (an install's get
+    // 5 minutes): its modules where a repository's live.
+    const installed = await runtimeFor(threadId, userId);
+    await env.DB.prepare(
+      `INSERT INTO repository_plugin_file (bundle_integrity, path, content, integrity, created_at)
+       SELECT ?, path, content, integrity, '2026-11-25T00:00:00.000Z'
+         FROM trusted_plugin_file WHERE plugin_id = ?`,
+    )
+      .bind(installed.plugins[0]?.integrity, installed.plugins[0]?.pluginId)
+      .run();
+    const runtime = {
+      ...installed,
+      plugins: installed.plugins.map((plugin) => ({
+        ...plugin,
+        scope: "repository" as const,
+      })),
+    };
     const tools = createPluginTools(runtime, new Set(), () => []);
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);

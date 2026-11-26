@@ -152,6 +152,18 @@ export const DxdTerminalCapability = Schema.Struct({
    */
   pluginHost: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
   /**
+   * Version 1: `plugin.invoke` may name a `folder` in place of a `package`,
+   * for a draft plugin (`dxd plugin load`) that runs from that folder.
+   */
+  pluginDrafts: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
+   * Version 1: Core may send `service.ensure`, `service.call`,
+   * `service.stop`, `service.status`, and `service.logs` (plugin
+   * services), and answers the daemon's `service.request` with
+   * `service.response`.
+   */
+  serviceHost: Schema.optional(Schema.Struct({ version: Schema.Literal(1) })),
+  /**
    * Version 1: Core may send the `sandbox.*` operations (the agent's
    * commands and file access, the dxd workspace route) and `DXW1` frames
    * carrying write bytes.
@@ -1408,14 +1420,28 @@ export const DxdPluginInvokeOperation = Schema.Struct({
     installId: PluginInstallId,
     name: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,128}$/)),
     integrity: Schema.String.check(Schema.isMaxLength(256)),
-    package: Schema.Struct({
-      url: Schema.String.check(
-        Schema.isMinLength(1),
-        Schema.isMaxLength(8_192),
+    /** The reviewed package dxd downloads, for an install. */
+    package: Schema.optional(
+      Schema.Struct({
+        url: Schema.String.check(
+          Schema.isMinLength(1),
+          Schema.isMaxLength(8_192),
+        ),
+        sha256: Hex64,
+        size: DxdBytes,
+      }),
+    ),
+    /**
+     * A draft's folder in the Orb (`dxd plugin load`), in place of a
+     * package; needs the daemon's `pluginDrafts` capability.
+     */
+    folder: Schema.optional(
+      Schema.String.check(
+        Schema.isMinLength(2),
+        Schema.isMaxLength(4_096),
+        Schema.isPattern(/^\//),
       ),
-      sha256: Hex64,
-      size: DxdBytes,
-    }),
+    ),
     entry: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
     runtime: Schema.Struct({
       sha256: Hex64,
@@ -1450,7 +1476,6 @@ export const DxdPluginInvokeOperation = Schema.Struct({
       "dispatch",
       "callTool",
       "runCommand",
-      "paneMessage",
       "hostCall",
     ]),
     args: Schema.Array(Schema.Unknown),
@@ -1519,6 +1544,204 @@ export const DxdPluginCapabilityMessage = Schema.Struct({
 });
 export type DxdPluginCapabilityMessage = typeof DxdPluginCapabilityMessage.Type;
 
+// ─── Plugin services ───
+/** Services one daemon supervises at once. */
+export const DXD_SERVICE_MAX_SERVICES = 16;
+/** A `service.call` waits this long at most, for the start and the reply. */
+export const DXD_SERVICE_MAX_CALL_TIMEOUT_MS = 300_000;
+/** `service.request` and `service.response` frames each way. */
+export const DXD_MAX_SERVICE_FRAME_BYTES = 1024 * 1024 + 16 * 1024;
+/** `service.logs` returns at most this many lines. */
+export const DXD_SERVICE_MAX_LOG_LINES = 1_000;
+
+const ServiceInstallId = Schema.String.check(
+  Schema.isPattern(/^[A-Za-z0-9_-]{1,128}$/),
+);
+const ServiceCommand = Schema.String.check(
+  Schema.isMinLength(1),
+  Schema.isMaxLength(4_096),
+);
+const ServiceHttpMethod = Schema.Literals([
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+]);
+
+/**
+ * Start an install's service unless the same `key` already runs (a
+ * different key replaces it). `source.folder` is a draft's absolute folder
+ * under the daemon's home. `env` may hold secrets; it may not set `PORT`,
+ * `DX_API`, `DX_TOKEN`, `DX_PLUGIN_NAME`, `DX_INSTALL_ID`, or
+ * `DX_SERVICE_RUN`.
+ */
+export const DxdServiceEnsureOperation = Schema.Struct({
+  operation: Schema.Literal("service.ensure"),
+  spec: Schema.Struct({
+    installId: ServiceInstallId,
+    key: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{8,128}$/)),
+    name: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9._-]{1,128}$/)),
+    source: Schema.Union([
+      Schema.Struct({
+        package: Schema.Struct({
+          url: Schema.String.check(
+            Schema.isMinLength(1),
+            Schema.isMaxLength(2_048),
+          ),
+          sha256: Hex64,
+          size: DxdBytes,
+        }),
+      }),
+      Schema.Struct({
+        folder: Schema.String.check(
+          Schema.isPattern(/^\//),
+          Schema.isMaxLength(1_024),
+        ),
+      }),
+    ]),
+    run: ServiceCommand,
+    setup: Schema.optional(ServiceCommand),
+    env: Schema.Record(
+      Schema.String.check(Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]{0,127}$/)),
+      Schema.String.check(Schema.isMaxLength(32 * 1024)),
+    ),
+    listeners: Schema.Array(
+      Schema.Struct({
+        name: Schema.String.check(Schema.isPattern(/^[A-Za-z0-9_-]{1,64}$/)),
+        run: ServiceCommand,
+      }),
+    ).check(Schema.isMaxLength(8)),
+  }),
+});
+export type DxdServiceEnsureOperation = typeof DxdServiceEnsureOperation.Type;
+
+/** One HTTP request to the service on its `PORT`, once it accepts connections. */
+export const DxdServiceCallOperation = Schema.Struct({
+  operation: Schema.Literal("service.call"),
+  installId: ServiceInstallId,
+  method: ServiceHttpMethod,
+  path: Schema.String.check(
+    Schema.isPattern(/^\/(?!\/)[\x21-\x5b\x5d-\x7e]*$/),
+    Schema.isMaxLength(2_048),
+  ),
+  body: Schema.optional(Schema.Unknown),
+  timeoutMs: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: DXD_SERVICE_MAX_CALL_TIMEOUT_MS }),
+  ),
+});
+export type DxdServiceCallOperation = typeof DxdServiceCallOperation.Type;
+
+/** Stop one install's service, or every one without `installId`. */
+export const DxdServiceStopOperation = Schema.Struct({
+  operation: Schema.Literal("service.stop"),
+  installId: Schema.optional(ServiceInstallId),
+  /** `uninstalled` also deletes the install's copied files. */
+  reason: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(64)),
+});
+
+export const DxdServiceStatusOperation = Schema.Struct({
+  operation: Schema.Literal("service.status"),
+});
+
+export const DxdServiceLogsOperation = Schema.Struct({
+  operation: Schema.Literal("service.logs"),
+  installId: ServiceInstallId,
+  tail: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: DXD_SERVICE_MAX_LOG_LINES }),
+  ),
+});
+
+const DxdServiceEntry = Schema.Struct({
+  installId: ServiceInstallId,
+  key: Schema.String,
+  name: Schema.String,
+  state: Schema.Literals([
+    "setup",
+    "starting",
+    "running",
+    "backoff",
+    "failed",
+    "stopped",
+  ]),
+  /** Absent until the first run picks one. */
+  port: Schema.optional(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
+  ),
+  /** Milliseconds since the epoch when `state` began. */
+  since: Schema.Number,
+  restarts: Schema.Int,
+  lastExit: Schema.optional(
+    Schema.Struct({
+      code: Schema.optional(Schema.Int),
+      signal: Schema.optional(Schema.Int),
+      at: Schema.Number,
+    }),
+  ),
+  /** Why it failed: setup's last lines, or the package error. */
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(4_096))),
+});
+export type DxdServiceEntry = typeof DxdServiceEntry.Type;
+
+export const DxdServiceResult = Schema.Union([
+  /** `service.ensure`: the install's service now. */
+  Schema.Struct({ kind: Schema.Literal("status"), ...DxdServiceEntry.fields }),
+  /** `service.call`: `body` is the reply's JSON, else its text. */
+  Schema.Struct({
+    kind: Schema.Literal("response"),
+    status: Schema.Int,
+    body: Schema.Unknown,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("unavailable"),
+    reason: Schema.Literals([
+      "invalid",
+      "limit",
+      "not-running",
+      "failed",
+      "timeout",
+      "unreachable",
+      "too-large",
+      "busy",
+    ]),
+    message: Schema.String,
+  }),
+  Schema.Struct({ kind: Schema.Literal("stopped"), count: Schema.Int }),
+  Schema.Struct({
+    kind: Schema.Literal("services"),
+    services: Schema.Array(DxdServiceEntry),
+  }),
+  Schema.Struct({ kind: Schema.Literal("logs"), text: Schema.String }),
+]);
+export type DxdServiceResult = typeof DxdServiceResult.Type;
+
+/**
+ * A service's `DX_API` request (body ≤ 1 MiB JSON, `null` when empty);
+ * `installId` comes from the run's `DX_TOKEN`, never from the service.
+ * dxd does not read `path`, which keeps its query string. Core answers
+ * with `service.response` within 60 s, or dxd replies 504.
+ */
+export const DxdServiceRequestMessage = Schema.Struct({
+  type: Schema.Literal("service.request"),
+  generation: DaemonGeneration,
+  requestId: DxdRequestId,
+  installId: ServiceInstallId,
+  method: ServiceHttpMethod,
+  path: Schema.String.check(Schema.isMaxLength(2_048)),
+  body: Schema.Unknown,
+});
+export type DxdServiceRequestMessage = typeof DxdServiceRequestMessage.Type;
+
+/** Core's answer, written to the service as `status` with `body` as JSON. */
+export const DxdServiceResponseMessage = Schema.Struct({
+  type: Schema.Literal("service.response"),
+  generation: DaemonGeneration,
+  requestId: DxdRequestId,
+  status: Schema.Int.check(Schema.isBetween({ minimum: 200, maximum: 599 })),
+  body: Schema.Unknown,
+});
+export type DxdServiceResponseMessage = typeof DxdServiceResponseMessage.Type;
+
 export const DxdOperation = Schema.Union([
   DxdFilesOperation,
   DxdEnvironmentActivateOperation,
@@ -1539,6 +1762,11 @@ export const DxdOperation = Schema.Union([
   DxdPluginInvokeOperation,
   DxdPluginStatusOperation,
   DxdPluginStopOperation,
+  DxdServiceEnsureOperation,
+  DxdServiceCallOperation,
+  DxdServiceStopOperation,
+  DxdServiceStatusOperation,
+  DxdServiceLogsOperation,
   DxdSandboxOperation,
 ]);
 export type DxdOperation = typeof DxdOperation.Type;

@@ -59,10 +59,15 @@ export const readPluginBundle = Effect.fn("readPluginBundle")(function* (
     readonly root: string;
     /** Names a Claude Code plugin that has no plugin.json. */
     readonly fallbackName: string;
+    /**
+     * A draft for one Thread (`dxd plugin load`): its code runs from the
+     * folder in the Orb, so TypeScript entries load and no module is kept.
+     */
+    readonly draft?: boolean;
   },
 ) {
   const folder = yield* openBundleFolder(archive, options.root);
   return (yield* isAgentPluginsPackage(folder))
-    ? yield* readAgentPluginsFolder(folder)
+    ? yield* readAgentPluginsFolder(folder, { draft: options.draft === true })
     : yield* readClaudeFolder(folder, options);
 });

@@ -66,12 +66,12 @@ export const buildPluginPackage = Effect.fn("buildPluginPackage")(function* (
     size += 2 + name.byteLength + 1 + 4 + entry.size;
     if (included.length > MAX_PLUGIN_PACKAGE_FILES) {
       return yield* reject(
-        `A plugin with a local MCP server holds at most ${MAX_PLUGIN_PACKAGE_FILES.toLocaleString("en-US")} files.`,
+        `A plugin whose files run on an Orb holds at most ${MAX_PLUGIN_PACKAGE_FILES.toLocaleString("en-US")} files.`,
       );
     }
     if (size > MAX_PLUGIN_PACKAGE_BYTES) {
       return yield* reject(
-        `A plugin with a local MCP server holds at most ${MAX_PLUGIN_PACKAGE_BYTES.toLocaleString("en-US")} bytes.`,
+        `A plugin whose files run on an Orb holds at most ${MAX_PLUGIN_PACKAGE_BYTES.toLocaleString("en-US")} bytes.`,
       );
     }
   }

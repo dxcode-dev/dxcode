@@ -1,6 +1,6 @@
 export const CODE_EXEC_TOOL = {
   name: "code_exec",
-  description: `Run JavaScript that calls deferred dx tools and functions from the user's connected MCP servers. Find functions with tool_search first.
+  description: `Run JavaScript that calls deferred dx tools and functions from the user's connected MCP servers. Find functions with tool_search first. A tool in your tool list, such as one a plugin added, is not reachable from here: call it directly.
 
 Rules:
 - Import functions with bare module specifiers: import { create_issue } from "linear"

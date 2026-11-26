@@ -12,19 +12,26 @@ import {
  * A plugin written from the building-plugins skill alone, read by the real
  * manifest reader, and the mistakes an author or agent makes writing one.
  * What can go wrong for the author, each case below:
- * - the plugin the skill describes (a durable job, a UI-kit pane, an icon
- *   set, a tab drawn as a Thread type) is refused or loses a field;
- * - a typo inside an entry (a pane, job, view, export, setting, binary, or
- *   the icon) is dropped with no word, so the plugin quietly acts on the
- *   default;
- * - a bad value inside a view entry is reported as a different field;
- * - a tab or page reuses a pane's id, which the manifest accepts and the
- *   code's `registerView` then refuses in every Thread;
- * - an unknown Lucide name on a view is kept, where a pane's is skipped,
- *   and draws nothing;
+ * - the plugin the skill describes (a schedule and a URL listener for its
+ *   function code, an icon set, a view described as data that is also a
+ *   Thread type) is refused or loses a field, or its schedule and listener
+ *   events are not granted, so dx never sends them;
+ * - a typo inside an entry (a schedule, listener, view, export, setting,
+ *   binary, or the icon) is dropped with no word, so the plugin quietly
+ *   acts on the default;
+ * - a plugin that uses a removed feature (`tier`, `jobs`, `durableScope`,
+ *   `host.durable`, `host.container`, `permissions.wake`) loads half instead
+ *   of saying it must be rebuilt;
+ * - a listener watches a host `permissions.network` does not list, or runs
+ *   a command with no service to receive it;
+ * - a bad value inside an entry is reported as a different field;
+ * - an unknown Lucide name on a view is kept and draws nothing;
  * - a misspelt permission, scope, or host turns the code off without
  *   saying which field;
- * - the defaults (Thread type `chat`, `host` "worker") change.
+ * - a removed feature (panes, their connect, the pane UI grant, views drawn
+ *   by code) turns the whole code layer off, or is dropped without saying
+ *   what to use instead;
+ * - the default (`host` "worker") changes.
  */
 
 const SCHEMA = "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json";
@@ -33,38 +40,39 @@ const ICON =
 
 type Block = Record<string, unknown>;
 
-/** The skill's plugin: a thread-scoped durable job, a pane, a tab Thread type. */
+/** The skill's plugin: a schedule, a URL listener, and a view that is a Thread type. */
 const skillPlugin: Block = {
   apiVersion: 1,
-  host: { worker: "dev.dxcode/index.js", durable: "dev.dxcode/live.js" },
-  durableScope: "thread",
-  jobs: [{ id: "check-ci", title: "Check CI", schedule: { every: "5m" } }],
+  entry: "dev.dxcode/index.js",
+  schedules: [{ name: "check-ci", every: "5m" }],
+  listeners: [{ name: "deploys", url: "wss://events.example.com/deploys" }],
   permissions: {
-    network: ["api.github.com"],
+    network: ["api.github.com", "events.example.com"],
     secrets: ["GITHUB_TOKEN"],
-    ui: ["pane"],
-    wake: true,
+    threads: ["create", "post"],
   },
   icon: { src: "assets/icon.svg", background: "#0F766E" },
   archivedThreads: "show",
-  panes: [{ id: "ci", title: "CI", icon: "lucide:activity" }],
-  views: {
-    tabs: [{ id: "room", title: "CI room", icon: "lucide:siren" }],
-    threadTypes: [
-      { id: "ci-room", title: "CI room", view: "room", chat: "side" },
-    ],
-  },
+  views: [
+    {
+      id: "room",
+      title: "CI room",
+      icon: "lucide:siren",
+      file: "views/room.json",
+      show: ["page", "app"],
+    },
+  ],
 };
 
-const WORKER = `export default (dx) => {
-  dx.registerPane({ id: "ci", title: "CI", html: '<script type="module" src="dx:plugin-ui"></script><dx-card heading="CI"></dx-card>' });
-  dx.registerView({ id: "room", html: "<!doctype html><main>Room</main>" });
-};`;
-const DURABLE = `export default (dx) => dx.registerJob({
-  id: "check-ci",
-  run: async (_data, ctx) => { await ctx.panes.get("ci").post({ checked: Date.now() }); },
-});`;
+const ROOM_VIEW = JSON.stringify({
+  title: "CI room",
+  state: { status: "unknown" },
+  parts: [{ type: "stat", label: "CI", bind: "status" }],
+});
 
+const WORKER = `export default (dx) => {
+  dx.registerCommand({ id: "check", title: "Check CI", run: async () => {} });
+};`;
 const ORB = `import { createServer } from "node:http";
 let server;
 export default (dx) => dx.expose({
@@ -89,9 +97,9 @@ const files = (
     }),
   },
   { name: "dev.dxcode/index.js", content: WORKER },
-  { name: "dev.dxcode/live.js", content: DURABLE },
   { name: "assets/icon.svg", content: ICON },
   { name: "dev.dxcode/orb/main.js", content: ORB },
+  { name: "views/room.json", content: ROOM_VIEW },
   ...extra,
 ];
 
@@ -137,23 +145,31 @@ describe("a plugin written from the building-plugins skill", () => {
   it("reads whole, with nothing skipped", async () => {
     const { code, manifest, skipped } = await accepted(skillPlugin);
     expect(skipped).toEqual([]);
-    expect(code.hosts).toEqual({
-      worker: "dev.dxcode/index.js",
-      durable: "dev.dxcode/live.js",
-    });
-    expect(code.durableScope).toBe("thread");
-    expect(code.jobs).toEqual([
-      { id: "check-ci", title: "Check CI", schedule: { every: "5m" } },
+    expect(code.entry).toBe("dev.dxcode/index.js");
+    expect(code.service).toBeUndefined();
+    expect(code.schedules).toEqual([{ name: "check-ci", every: "5m" }]);
+    expect(code.listeners).toEqual([
+      { name: "deploys", url: "wss://events.example.com/deploys" },
     ]);
-    expect(code.permissions.wake).toBe(true);
-    expect(code.panes).toEqual([
-      { id: "ci", title: "CI", icon: "lucide:activity" },
-    ]);
-    expect(code.views?.tabs).toEqual([
-      { id: "room", title: "CI room", icon: "lucide:siren" },
-    ]);
-    expect(code.views?.threadTypes).toEqual([
-      { id: "ci-room", title: "CI room", view: "room", chat: "side" },
+    // Declaring them grants their events, so dx sends them.
+    expect(code.permissions.events).toEqual(
+      expect.arrayContaining(["job.run", "listener.event"]),
+    );
+    expect(code.permissions.threads).toEqual(["create", "post"]);
+    expect(
+      code.dataViews?.map(({ id, title, icon, show }) => ({
+        id,
+        title,
+        icon,
+        show,
+      })),
+    ).toEqual([
+      {
+        id: "room",
+        title: "CI room",
+        icon: "lucide:siren",
+        show: ["page", "app"],
+      },
     ]);
     expect(manifest.iconSet?.src).toMatch(/^[0-9a-f]{64}$/);
     expect(manifest.iconSet?.background?.toLowerCase()).toBe("#0f766e");
@@ -163,60 +179,36 @@ describe("a plugin written from the building-plugins skill", () => {
 describe("typos inside entries are reported, not dropped silently", () => {
   it.each([
     [
-      "a pane",
-      { panes: [{ id: "ci", title: "CI", archivedThread: "show" }] },
-      "panes[0].archivedThread",
+      "a schedule",
+      { schedules: [{ name: "check-ci", every: "5m", tz: "UTC" }] },
+      "schedules[0].tz",
     ],
     [
-      "a job",
+      "a listener",
       {
-        jobs: [
+        listeners: [
           {
-            id: "check-ci",
-            title: "Check CI",
-            schedule: { every: "5m" },
-            shedule: 1,
+            name: "deploys",
+            url: "wss://events.example.com/deploys",
+            headers: {},
           },
         ],
       },
-      "jobs[0].shedule",
+      "listeners[0].headers",
     ],
     [
-      "a job's schedule",
+      "a view",
       {
-        jobs: [
+        views: [
           {
-            id: "check-ci",
-            title: "Check CI",
-            schedule: { every: "5m", tz: "UTC" },
+            id: "room",
+            title: "CI room",
+            file: "views/room.json",
+            shows: ["app"],
           },
         ],
       },
-      "jobs[0].schedule.tz",
-    ],
-    [
-      "views",
-      { views: { ...(skillPlugin.views as Block), tab: [] } },
-      "views.tab",
-    ],
-    [
-      "a tab",
-      {
-        views: {
-          tabs: [{ id: "room", title: "CI room", archived: "show" }],
-        },
-      },
-      "views.tabs[0].archived",
-    ],
-    [
-      "a Thread type",
-      {
-        views: {
-          tabs: [{ id: "room", title: "CI room" }],
-          threadTypes: [{ id: "t", title: "T", view: "room", chats: "hidden" }],
-        },
-      },
-      "views.threadTypes[0].chats",
+      "views[0].shows",
     ],
     [
       "an export",
@@ -224,13 +216,6 @@ describe("typos inside entries are reported, not dropped silently", () => {
         exports: [{ name: "status", description: "Status.", descripton: "x" }],
       },
       "exports[0].descripton",
-    ],
-    [
-      "a pane's connect",
-      {
-        panes: [{ id: "ci", title: "CI", connect: { portals: [8411] } }],
-      },
-      "panes[0].connect.portals",
     ],
     [
       "a setting",
@@ -265,41 +250,6 @@ describe("typos inside entries are reported, not dropped silently", () => {
 });
 
 describe("a bad value names its own field", () => {
-  it("names a tab's archivedThreads, not its id and title", async () => {
-    const reason = await codeOff(
-      with_({
-        views: {
-          tabs: [{ id: "room", title: "CI room", archivedThreads: "keep" }],
-        },
-      }),
-    );
-    expect(reason).toContain("views.tabs[0].archivedThreads");
-    expect(reason).toContain("hide, show, live");
-    expect(reason).not.toContain("needs an id");
-  });
-
-  it("names a Thread type's chat", async () => {
-    const reason = await codeOff(
-      with_({
-        views: {
-          tabs: [{ id: "room", title: "CI room" }],
-          threadTypes: [{ id: "t", title: "T", view: "room", chat: "aside" }],
-        },
-      }),
-    );
-    expect(reason).toContain("views.threadTypes[0].chat");
-    expect(reason).toContain("side or hidden");
-  });
-
-  it("names a page's path", async () => {
-    const reason = await codeOff(
-      with_({
-        views: { pages: [{ id: "board", title: "Board", path: "open" }] },
-      }),
-    );
-    expect(reason).toContain("views.pages[0].path");
-  });
-
   it("names an export's name", async () => {
     const reason = await codeOff(
       with_({ exports: [{ name: "Status!", description: "Status." }] }),
@@ -309,96 +259,111 @@ describe("a bad value names its own field", () => {
 
   it.each([
     [
-      { permissions: { ...(skillPlugin.permissions as Block), wake: "yes" } },
-      "permissions.wake must be true or false.",
+      {
+        listeners: [{ name: "deploys", url: "wss://other.example.net/feed" }],
+      },
+      "watches other.example.net, which permissions.network does not list",
     ],
-    [{ durableScope: "Thread" }, "durableScope must be install or thread."],
+    [
+      { listeners: [{ name: "tail", run: "tail -F app.log" }] },
+      "runs a command on the plugin's service",
+    ],
   ])("%j", async (patch, message) => {
     expect(await codeOff(with_(patch))).toContain(message);
   });
 });
 
-describe("panes and views share one id namespace", () => {
-  it("refuses a tab that reuses a pane's id", async () => {
-    const reason = await codeOff(
-      with_({ views: { tabs: [{ id: "ci", title: "CI tab" }] } }),
-    );
-    expect(reason).toContain("ci");
-    expect(reason).toMatch(/pane and a view share the id ci/);
-  });
-
-  it("refuses a page that reuses a tab's id", async () => {
-    const reason = await codeOff(
-      with_({
-        views: {
-          tabs: [{ id: "room", title: "Room" }],
-          pages: [{ id: "room", title: "Room page" }],
-        },
-      }),
-    );
-    expect(reason).toMatch(/share the id room/);
+describe("a plugin that uses a removed feature must be rebuilt", () => {
+  it.each([
+    [{ tier: "workspace-trusted" }, "tier"],
+    [{ jobs: [{ id: "a", title: "A", schedule: { every: "5m" } }] }, "jobs"],
+    [{ durableScope: "install" }, "durableScope"],
+    [
+      { host: { worker: "dev.dxcode/index.js", durable: "dev.dxcode/a.js" } },
+      "host.durable",
+    ],
+    [
+      {
+        host: { worker: "dev.dxcode/index.js", container: "dev.dxcode/a.js" },
+      },
+      "host.container",
+    ],
+    [
+      { permissions: { ...(skillPlugin.permissions as Block), wake: true } },
+      "permissions.wake",
+    ],
+  ])("%j", async (patch, feature) => {
+    const reason = await codeOff(with_(patch));
+    expect(reason).toContain(`uses ${feature}`);
+    expect(reason).toContain("Rebuild it");
   });
 });
 
 describe("unknown Lucide names", () => {
-  it.each([
-    [
-      "a pane",
-      { panes: [{ id: "ci", title: "CI", icon: "lucide:no-such-icon-zz" }] },
-      "panes[0].icon",
-    ],
-    [
-      "a tab",
-      {
-        views: {
-          tabs: [{ id: "room", title: "Room", icon: "lucide:no-such-icon-zz" }],
-        },
-      },
-      "views.tabs[0].icon",
-    ],
-    [
-      "a page",
-      {
-        views: {
-          pages: [
-            { id: "board", title: "Board", icon: "lucide:no-such-icon-zz" },
-          ],
-        },
-      },
-      "views.pages[0].icon",
-    ],
-  ])(
-    "on %s are skipped with a reason and dropped",
-    async (_what, patch, field) => {
-      const { code, skipped } = await accepted(with_(patch));
-      expect(skipped).toContainEqual({
-        path: `${LABEL}.${field}`,
-        reason: "dx has no Lucide icon named no-such-icon-zz.",
-      });
-      const items = [
-        ...(code.panes ?? []),
-        ...(code.views?.tabs ?? []),
-        ...(code.views?.pages ?? []),
-      ];
-      expect(items.some((item) => item.icon === "lucide:no-such-icon-zz")).toBe(
-        false,
-      );
-    },
-  );
+  it("on a view are skipped with a reason and dropped", async () => {
+    const { code, skipped } = await accepted(
+      with_({
+        views: [
+          {
+            id: "room",
+            title: "Room",
+            icon: "lucide:no-such-icon-zz",
+            file: "views/room.json",
+            show: ["page"],
+          },
+        ],
+      }),
+    );
+    expect(skipped).toContainEqual({
+      path: `${LABEL}.views[0].icon`,
+      reason: "dx has no Lucide icon named no-such-icon-zz.",
+    });
+    expect(code.dataViews?.map(({ id }) => id)).toEqual(["room"]);
+    expect(
+      code.dataViews?.some((view) => view.icon === "lucide:no-such-icon-zz"),
+    ).toBe(false);
+  });
 });
 
-describe("what still reads, and its defaults", () => {
-  it("runs jobs in the Worker's module when there is no durable host", async () => {
-    const { code } = await accepted(
-      with_({ host: "worker", entry: "dev.dxcode/index.js" }),
+describe("removed features are skipped with what to use instead", () => {
+  const USE_A_VIEW =
+    "Describe the screen as a view: list it in views with a JSON file (see examples/plugins/log-watch).";
+
+  it("skips panes, their connect, and the pane grant, and keeps the rest", async () => {
+    const { code, skipped } = await accepted(
+      with_({
+        permissions: {
+          ...(skillPlugin.permissions as Block),
+          ui: ["pane", "notify"],
+        },
+        panes: [
+          { id: "ci", title: "CI", connect: { portal: [8411], webrtc: true } },
+        ],
+      }),
     );
-    expect(code.hosts).toBeUndefined();
-    expect(code.entry).toBe("dev.dxcode/index.js");
-    expect(code.jobs?.map(({ id }) => id)).toEqual(["check-ci"]);
+    expect(skipped).toEqual([
+      {
+        path: `${LABEL}.panes`,
+        reason: `Plugin panes were removed. ${USE_A_VIEW}`,
+      },
+      {
+        path: `${LABEL}.panes[0].connect`,
+        reason: `A pane's hosts, Portal ports, and WebRTC were removed with plugin panes. ${USE_A_VIEW}`,
+      },
+      {
+        path: `${LABEL}.permissions.ui`,
+        reason: `The pane UI permission was removed with plugin panes; views need no permission. ${USE_A_VIEW}`,
+      },
+    ]);
+    expect(code.permissions.ui).toEqual(["notify"]);
+    expect(code.panes).toBeUndefined();
+    expect(code.paneConnect).toBeUndefined();
+    expect(code.dataViews?.map(({ id }) => id)).toEqual(["room"]);
+    expect(code.schedules?.map(({ name }) => name)).toEqual(["check-ci"]);
   });
 
-  it("gives a Thread type chat side by default", async () => {
-    const { code } = await accepted(
+  it("skips views drawn by code (tabs, pages, Thread types)", async () => {
+    const { code, skipped } = await accepted(
       with_({
         views: {
           tabs: [{ id: "room", title: "Room" }],
@@ -406,29 +371,26 @@ describe("what still reads, and its defaults", () => {
         },
       }),
     );
-    expect(code.views?.threadTypes[0]?.chat).toBe("side");
-  });
-
-  it("skips a pane connect host that permissions.network lacks", async () => {
-    const { code, skipped } = await accepted(
-      with_({
-        panes: [
-          {
-            id: "ci",
-            title: "CI",
-            connect: { hosts: ["evil.example"], portal: [8411] },
-          },
-        ],
-      }),
-    );
-    expect(skipped).toContainEqual({
-      path: `${LABEL}.panes[0].connect.hosts`,
-      reason:
-        "evil.example is not in permissions.network; the pane cannot reach it.",
-    });
-    expect(code.paneConnect).toEqual([
-      { pane: "ci", hosts: [], portal: [8411] },
+    expect(skipped).toEqual([
+      {
+        path: `${LABEL}.views`,
+        reason:
+          'Views drawn by plugin code (tabs, pages, and Thread types) were removed. List each view in views as a list entry with a JSON file and where it shows, such as show: ["page"]; a view with show: ["app"] is a Thread type (see examples/plugins/log-watch).',
+      },
     ]);
+    expect(code.views).toBeUndefined();
+    expect(code.dataViews).toBeUndefined();
+  });
+});
+
+describe("what still reads, and its defaults", () => {
+  it("runs schedules in the entry module when there is no service", async () => {
+    const { code } = await accepted(
+      with_({ host: "worker", entry: "dev.dxcode/index.js" }),
+    );
+    expect(code.hosts).toBeUndefined();
+    expect(code.entry).toBe("dev.dxcode/index.js");
+    expect(code.schedules?.map(({ name }) => name)).toEqual(["check-ci"]);
   });
 
   it("reads the skill's Orb host example whole", async () => {
@@ -436,23 +398,10 @@ describe("what still reads, and its defaults", () => {
       apiVersion: 1,
       host: { worker: "dev.dxcode/index.js", orb: "dev.dxcode/orb/main.js" },
       binaries: [{ name: "jq", apt: "jq" }],
-      panes: [
-        {
-          id: "preview",
-          title: "Preview",
-          icon: "lucide:monitor",
-          connect: { portal: [8411] },
-        },
-      ],
-      permissions: { ui: ["pane"], shell: true },
+      permissions: { shell: true },
     });
     expect(skipped).toEqual([]);
     expect(code.hosts?.orb).toBe("dev.dxcode/orb/main.js");
-    expect(code.panes).toEqual([
-      { id: "preview", title: "Preview", icon: "lucide:monitor" },
-    ]);
-    expect(code.paneConnect).toEqual([
-      { pane: "preview", hosts: [], portal: [8411] },
-    ]);
+    expect(code.binaries).toEqual([{ name: "jq", apt: "jq" }]);
   });
 });

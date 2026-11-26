@@ -2,10 +2,18 @@ import type { DxChangeItem } from "@dx/api";
 import {
   MAX_PROJECT_ORB_SCRIPT_BYTES,
   MAX_SKILL_RESOURCE_FILES,
+  orbAccountForProfile,
+  orbSizeHourlyPrice,
+  type PluginBundleCode,
+  type PluginPermission,
   PROJECT_ORB_SCRIPT_KINDS,
   PROJECTLESS_PROJECT_NAME,
   type ProjectId,
   type ProjectOrbScriptKind,
+  pluginCapabilities,
+  pluginPermissionChangeText,
+  type RunnerProfile,
+  type RunnerResources,
   type UserId,
   type WorkspaceRole,
   workspaceRoleHasPermission,
@@ -17,6 +25,7 @@ import * as v from "valibot";
 import pluginApiSource from "../../agents/built-in-skills/building-plugins/reference/plugin-api.ts.txt?raw";
 import pluginUiReadme from "../../agents/built-in-skills/building-plugins/reference/plugin-ui.md?raw";
 import pluginReadme from "../../agents/built-in-skills/building-plugins/reference/README.md?raw";
+import { noteInstalledPluginChange } from "../../plugins/drafts/agent.js";
 import { ensureRepositoryOrbFilesImported } from "../../projects/orb-script-import.js";
 import {
   canManageProject,
@@ -255,7 +264,7 @@ const Input = v.object({
       v.trim(),
       v.maxLength(100),
       v.description(
-        "plugins docs: a word or name, such as registerPane or trigger; only the parts of the reference that mention it return.",
+        "plugins docs: a word or name, such as registerCommand or trigger; only the parts of the reference that mention it return.",
       ),
     ),
   ),
@@ -318,7 +327,7 @@ const withSkillFolder = (input: InputData): InputData => {
 
 const DESCRIPTION = [
   "Manage the owner's dx settings for them: skills, plugins, secrets, environment variables, agent instructions, MCP servers, and the Project's Orb setup scripts. Use it when the owner asks you to add, change, or remove one, to build them a skill or plugin, or to set up the Project's Orbs.",
-  "Do what the owner asks without asking them to confirm in chat first. Reads (list, read) answer at once. A change to the owner's own personal settings applies at once: creating, updating, or turning on or off a skill; their personal instructions; updating a plugin without new permissions; turning a plugin or MCP server on or off. Its result says what changed; tell the owner in one line. Every other change shows the owner a card above the composer with exactly what changes and waits until they apply or cancel it, up to 10 minutes: anything at workspace scope (workspace admins only), setting a variable or secret, a new plugin, a plugin update that asks for new permissions, adding an MCP server, and every delete outside project scripts. The card is the confirmation. A change reaches new Threads, not this one.",
+  "Do what the owner asks without asking them to confirm in chat first. Reads (list, read) answer at once. A change to the owner's own personal settings applies at once: creating, updating, or turning on or off a skill; their personal instructions; updating a plugin without new permissions; turning a plugin or MCP server on or off. Its result says what changed; tell the owner in one line. Every other change shows the owner a card above the composer with exactly what changes and waits until they apply or cancel it, up to 10 minutes: anything at workspace scope (workspace admins only), setting a variable or secret, a new plugin, a plugin update that asks for new permissions, adding an MCP server, and every delete outside project scripts. The card is the confirmation. Once applied, a plugin change works in this Thread from your next tool call and in other Threads from their next message; a skill change reaches new Threads.",
   "Secrets: never put a secret value in any input or message. secrets request asks the owner to type it into a card above the composer; dx stores it directly (personal, project, or workspace) and you never see it. If the owner pastes a secret into chat, tell them to rotate it and use secrets request.",
   "Project scripts: the Project's Orb setup, saved in dx and run in the Orb of every Thread in the Project. Kinds: pre-clone runs in /home/user/workspace before dx clones the repository; setup runs once from the repository root when dx prepares a fresh Orb; resume runs from the repository root each time the Orb starts or wakes; desktop-resume runs when the Desktop starts. They replace the repository's .agents/setup, .agents/resume, and .agents/desktop/resume, which dx no longer runs, so change them here, not by committing those files. set and delete apply at once, with no card, when the owner may manage the Project (its creator or a workspace admin); otherwise they fail and the owner can only list and read. set replaces the whole script: read it first to edit it.",
   "Plugins: create one from the owner's description by writing its files. Load the building-plugins skill first for the format, permissions, and code API; plugins docs returns the full @dxcode/plugin reference (query narrows it) when the skill does not settle a detail. update: read the plugin, edit its files, and send all of them. Plugins installed from GitHub update from their source in Settings instead.",
@@ -943,19 +952,41 @@ const listPlugins = async (run: RunContext, base: string) =>
   ((await settings(run, "GET", base)).data.items ??
     []) as ReadonlyArray<PluginItem>;
 
-const permissionLines = (permissions: Record<string, unknown> | undefined) => {
-  if (permissions === undefined) return "No code: skills and MCP servers only.";
-  const lines = Object.entries(permissions)
-    .filter(([, value]) =>
-      Array.isArray(value)
-        ? value.length > 0
-        : value !== false && value !== undefined,
-    )
-    .map(
-      ([key, value]) =>
-        `${key}: ${Array.isArray(value) ? value.join(", ") : JSON.stringify(value)}`,
-    );
-  return lines.length === 0 ? "Code with no permissions." : lines.join("\n");
+/** What a plugin can do, one sentence a line, as the Plugins page says it. */
+const capabilityLines = (contents: {
+  readonly skills?: ReadonlyArray<{ readonly name: string }>;
+  readonly mcpServers?: ReadonlyArray<{
+    readonly name: string;
+    readonly endpoint?: string;
+    readonly url?: string;
+    readonly command?: string;
+    readonly args?: ReadonlyArray<string>;
+  }>;
+  readonly localMcpServers?: ReadonlyArray<{
+    readonly name: string;
+    readonly command: string;
+  }>;
+  readonly code?: unknown;
+}) => {
+  const servers = contents.mcpServers ?? [];
+  const lines = pluginCapabilities({
+    skills: contents.skills ?? [],
+    remoteServers: servers.flatMap(({ name, endpoint, url, command }) =>
+      command !== undefined || (endpoint ?? url) === undefined
+        ? []
+        : [{ name, endpoint: String(endpoint ?? url) }],
+    ),
+    localServers: [
+      ...servers.flatMap(({ name, command, args }) =>
+        command === undefined
+          ? []
+          : [{ name, command: [command, ...(args ?? [])].join(" ") }],
+      ),
+      ...(contents.localMcpServers ?? []),
+    ],
+    code: contents.code as PluginBundleCode | undefined,
+  }).map(({ text: line }) => line);
+  return lines.length === 0 ? "Nothing yet." : lines.join("\n");
 };
 
 const toBase64 = (bytes: Uint8Array) => {
@@ -1031,37 +1062,93 @@ const pluginFiles = async (run: RunContext, base: string, id: string) => {
     : fail("dx could not read the plugin's files.");
 };
 
-/** The preview's code permissions, skills, and MCP servers, for the card. */
-const manifestItems = (manifest: Record<string, unknown>) => {
-  const code = manifest.code as
+/** What the previewed plugin can do, for the card. */
+const manifestItems = (manifest: Record<string, unknown>) => [
+  text(
+    "What it can do",
+    capabilityLines(manifest as Parameters<typeof capabilityLines>[0]),
+  ),
+];
+
+/**
+ * For a plugin that runs a program: where it would run, that the owner who
+ * installs it pays for its Orb time, and about how much. The installer pays
+ * for a personal and a workspace install alike (owner decision 12).
+ */
+const payerItems = async (
+  run: RunContext,
+  base: string,
+  manifest: Record<string, unknown>,
+) => {
+  const code = manifest.code as { readonly service?: unknown } | undefined;
+  if (code?.service === undefined) return [];
+  const choice = await settings(
+    run,
+    "GET",
+    base.replace(/\/plugin-bundles$/, "/plugin-orb"),
+  ).catch(() => undefined);
+  const effective = choice?.data.effective as
+    | { readonly kind: "orb"; readonly runnerProfileId: string }
+    | { readonly kind: "none" }
+    | undefined;
+  if (effective === undefined) return [];
+  if (effective.kind === "none")
+    return [
+      text(
+        "Who pays",
+        "It runs a program on an Orb, and none is chosen yet, so it won't run until one is. Choose one in Settings → Orb Providers → Plugins.",
+      ),
+    ];
+  const scopeBase = base.replace(/\/plugin-bundles$/, "");
+  const [defaults, providers] = await Promise.all([
+    settings(run, "GET", "/personal/projects").catch(() => undefined),
+    settings(run, "GET", `${scopeBase}/orb-providers`).catch(() => undefined),
+  ]);
+  const catalog = defaults?.data.catalog as
     | {
-        readonly permissions?: Record<string, unknown>;
-        readonly entry?: string;
+        readonly profiles?: ReadonlyArray<
+          RunnerProfile & { readonly resources: RunnerResources }
+        >;
       }
     | undefined;
-  const skills = (manifest.skills ?? []) as ReadonlyArray<{ name: string }>;
-  const servers = (manifest.mcpServers ?? []) as ReadonlyArray<{
-    name: string;
-    url?: string;
-    command?: string;
-  }>;
+  const profile = catalog?.profiles?.find(
+    ({ id }) => id === effective.runnerProfileId,
+  );
+  // Who bills the size, as the Plugins page and the Orb picker decide it:
+  // the deployment's account shows its own cost label or provides the Orb;
+  // a person's or workspace's own account is priced by the provider.
+  const account =
+    profile === undefined
+      ? undefined
+      : orbAccountForProfile(
+          profile,
+          (providers?.data.resolved ?? []) as ReadonlyArray<{
+            readonly providerId: string;
+            readonly scope: string;
+            readonly namedSizes?: true;
+          }>,
+        );
+  const size = profile?.label ?? effective.runnerProfileId;
+  const sleeps = `It runs a program on ${size}, which sleeps after 5 idle minutes.`;
+  if (account?.scope === "deployment" && profile?.costLabel === undefined)
+    return [text("Who pays", `${sleeps} This deployment provides its Orb.`)];
+  const price =
+    profile === undefined ||
+    account === undefined ||
+    account.scope === "deployment"
+      ? undefined
+      : orbSizeHourlyPrice(profile.adapter, profile.id, profile.resources);
+  const cost =
+    profile?.costLabel !== undefined && account?.scope === "deployment"
+      ? `: about ${profile.costLabel}`
+      : price === undefined
+        ? ""
+        : `: about ${price.maximum ? "up to " : ""}$${price.usd.toFixed(price.usd < 0.1 ? 3 : 2)}/hour, billed by the provider to your account; dx charges nothing`;
   return [
-    text("Permissions its code asks for", permissionLines(code?.permissions)),
-    ...(skills.length === 0
-      ? []
-      : [text("Skills", skills.map(({ name }) => name).join("\n"))]),
-    ...(servers.length === 0
-      ? []
-      : [
-          text(
-            "MCP servers",
-            servers
-              .map(
-                ({ name, url, command }) => `${name}: ${url ?? command ?? ""}`,
-              )
-              .join("\n"),
-          ),
-        ]),
+    text(
+      "Who pays",
+      `${sleeps} You pay for its Orb time while it's awake${cost}.`,
+    ),
   ];
 };
 
@@ -1092,7 +1179,7 @@ const pluginReferenceParts = () => [
 /** The full reference, or the parts whose text mentions `query`. */
 const pluginDocs = (query: string | undefined) => {
   if (query === undefined || query === "")
-    return `The full @dxcode/plugin reference: README.md, then the API's types (src/index.ts), then the @dxcode/plugin-ui components for pane HTML.\n\n${pluginReadme}\n\n---\n\n${pluginApiSource}\n\n---\n\n${pluginUiReadme}`;
+    return `The full @dxcode/plugin reference: README.md, then the API's types (src/index.ts), then the @dxcode/plugin-ui components for dx-views and MCP Apps cards.\n\n${pluginReadme}\n\n---\n\n${pluginApiSource}\n\n---\n\n${pluginUiReadme}`;
   const needle = query.toLowerCase();
   const matches = pluginReferenceParts().filter(({ text }) =>
     text.toLowerCase().includes(needle),
@@ -1179,6 +1266,7 @@ const plugins = async (run: RunContext, input: InputData) => {
             `${name}${manifest.version === undefined ? "" : ` ${String(manifest.version)}`}\n${String(manifest.description ?? "")}`,
           ),
           ...manifestItems(manifest),
+          ...(await payerItems(run, where.base, manifest)),
           ...files.map(({ path, content }) => code(path, content)),
         ],
         requests: [
@@ -1190,7 +1278,11 @@ const plugins = async (run: RunContext, input: InputData) => {
         ],
       }),
       () =>
-        `Installed the ${where.label.toLowerCase()} plugin ${name}. Its tools and skills load in new Threads, not this one. Settings: ${origin(run.bindings)}${where.page}`,
+        pluginChanged(
+          run,
+          name,
+          `Installed the ${where.label.toLowerCase()} plugin ${name}. Its tools work in this Thread from your next tool call, replacing a draft of the same name, and in other Threads from their next message; its skills load in new Threads. Settings: ${origin(run.bindings)}${where.page}`,
+        ),
     );
   }
   const name = required(input.name, "the plugin's name");
@@ -1262,18 +1354,23 @@ const plugins = async (run: RunContext, input: InputData) => {
     const integrity = String(preview.data.integrity);
     const permissionItem =
       permissions.changes.length === 0
-        ? text("Permissions", "Unchanged.")
+        ? text("What changes", "It does nothing new.")
         : text(
-            permissions.widens ? "Permissions it adds" : "Permissions",
-            permissions.changes
-              .map(
-                ({ permission, added, removed }) =>
-                  `${permission}: ${[
-                    ...added.map((value) => `+ ${value}`),
-                    ...removed.map((value) => `- ${value}`),
-                  ].join(", ")}`,
-              )
-              .join("\n"),
+            permissions.widens ? "What it newly does" : "What changes",
+            [
+              ...permissions.changes.flatMap(({ permission, added }) =>
+                added.map(
+                  (value) =>
+                    `New: ${pluginPermissionChangeText(permission as PluginPermission, value)}`,
+                ),
+              ),
+              ...permissions.changes.flatMap(({ permission, removed }) =>
+                removed.map(
+                  (value) =>
+                    `No longer: ${pluginPermissionChangeText(permission as PluginPermission, value)}`,
+                ),
+              ),
+            ].join("\n"),
           );
     return confirm(
       run,
@@ -1281,7 +1378,11 @@ const plugins = async (run: RunContext, input: InputData) => {
         title: `Update the plugin ${plugin.displayName}${manifest.version === undefined ? "" : ` to ${String(manifest.version)}`}`,
         scope: where.label,
         confirmLabel: "Update plugin",
-        items: [permissionItem, ...fileItems],
+        items: [
+          permissionItem,
+          ...(await payerItems(run, where.base, manifest)),
+          ...fileItems,
+        ],
         requests: [
           {
             method: "POST",
@@ -1291,7 +1392,11 @@ const plugins = async (run: RunContext, input: InputData) => {
         ],
       }),
       () =>
-        `Updated the plugin ${name}. New Threads use the new version; this one keeps the old.`,
+        pluginChanged(
+          run,
+          name,
+          `Updated the plugin ${name}. This Thread uses the new version from your next tool call, and other Threads from their next message.`,
+        ),
       // The same code trust the owner gave at install: no new permission.
       appliesAtOnce(where.scope, !permissions.widens),
     );
@@ -1306,13 +1411,15 @@ const plugins = async (run: RunContext, input: InputData) => {
         title: `Turn ${enabled ? "on" : "off"} the plugin ${plugin.displayName}`,
         scope: where.label,
         confirmLabel: enabled ? "Turn on" : "Turn off",
-        items: enabled
-          ? [text("Permissions", permissionLines(plugin.code?.permissions))]
-          : [],
+        items: enabled ? [text("What it can do", capabilityLines(plugin))] : [],
         requests: [{ method: "PATCH", path, json: { enabled } }],
       }),
       () =>
-        `Turned ${enabled ? "on" : "off"} the plugin ${name} for new Threads.`,
+        pluginChanged(
+          run,
+          name,
+          `Turned ${enabled ? "on" : "off"} the plugin ${name}: in this Thread from your next tool call, and in other Threads from their next message.`,
+        ),
       appliesAtOnce(where.scope),
     );
   }
@@ -1336,8 +1443,22 @@ const plugins = async (run: RunContext, input: InputData) => {
       ],
       requests: [{ method: "DELETE", path }],
     }),
-    () => `Removed the plugin ${name}.`,
+    () =>
+      pluginChanged(
+        run,
+        name,
+        `Removed the plugin ${name}. Its tools are gone from your next tool call.`,
+      ),
   );
+};
+
+/**
+ * An applied plugin change: this Thread's agent resolves its plugins again
+ * before its next tool call, and a draft of the same name gives way.
+ */
+const pluginChanged = (run: RunContext, name: string, message: string) => {
+  noteInstalledPluginChange(run.threadId, name);
+  return message;
 };
 
 // ─── Secrets and variables ───────────────────────────────────────────────────

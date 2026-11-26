@@ -35,6 +35,7 @@ import type {
   ExecutionWorkspaceRecovery,
 } from "../plugins/execution/provider.js";
 import { executionWorkspaceTools } from "../plugins/execution/tools.js";
+import { runnablePluginOrb } from "../plugins/services/orb-owner.js";
 import {
   publishRealtimeInvalidation,
   publishRealtimeWorkspaceStatus,
@@ -408,7 +409,13 @@ export const assertThreadLifecycleState = async (
 
 /** Also reads the environment revision in the same round trip (#1493). */
 export const assertThreadActive = async (db: D1Database, threadId: string) => {
-  await authorizeActiveThread(db, threadId);
+  try {
+    await authorizeActiveThread(db, threadId);
+  } catch (cause) {
+    // A plugin Orb has no Thread; it may start while it is runnable. The
+    // probe runs only where the Thread check already refused.
+    if ((await runnablePluginOrb(db, threadId)) === undefined) throw cause;
+  }
 };
 
 /**
@@ -420,6 +427,12 @@ const admitRunStart = async (db: D1Database, threadId: string) => {
   try {
     await authorizeRunStart(db, threadId);
   } catch (cause) {
+    // A plugin Orb has no source to admit.
+    if (
+      !(cause instanceof SourceControlAccessDenied) &&
+      (await runnablePluginOrb(db, threadId)) !== undefined
+    )
+      return;
     if (!(cause instanceof SourceControlAccessDenied)) throw cause;
     throw new FlueError({
       type: "source_authorization_denied",
@@ -1314,13 +1327,21 @@ const activationFor =
         if (provider.workspace.connectAuthorizes !== true) await authorize();
         mark("prepare");
         throwIfAborted(input.signal);
+        // A plugin Orb has no agent run to create its workspace first, so
+        // its activation creates it (or returns the existing one).
         const handle = await atDaemonInstallationStage(
           "workspace",
-          provider.workspace.connect(
-            context,
-            { threadId: input.threadId },
-            { authorize },
-          ),
+          input.pluginOrb === true
+            ? provider.workspace.create(
+                context,
+                { threadId: input.threadId },
+                { authorize },
+              )
+            : provider.workspace.connect(
+                context,
+                { threadId: input.threadId },
+                { authorize },
+              ),
         );
         // A provider that never ran `authorize` still installs nothing
         // before the checks pass.
@@ -1356,29 +1377,42 @@ const activationFor =
         let outcome: DaemonInstallOutcome;
         try {
           stage = "source";
-          const source = await handle.development?.source();
-          await activateSourceWorkspace(
-            bindings,
-            db,
-            input.threadId,
-            handle.guest,
-            false,
-            source,
-            undefined,
-            { reserve: context.profile.adapter !== "local" },
-          );
-          throwIfAborted(input.signal);
-          mark("source");
-          if (source === undefined) {
-            await ensureGithubCliWrapper(db, input.threadId, handle.guest);
-            mark("githubCli");
-            await cloneAdditionalRepositories(
+          // A plugin Orb has no source, Project, or repositories.
+          const source =
+            input.pluginOrb === true
+              ? undefined
+              : await handle.development?.source();
+          // A plugin Orb's dxd still serves a workspace root; with no
+          // source to check out, the folder is all it needs.
+          if (input.pluginOrb === true && handle.hostMachine !== true)
+            await handle.guest.commands.run(
+              `mkdir -p ${SOURCE_WORKSPACE_CWD}`,
+              { timeoutMs: 30_000 },
+            );
+          if (input.pluginOrb !== true) {
+            await activateSourceWorkspace(
               bindings,
               db,
               input.threadId,
               handle.guest,
+              false,
+              source,
+              undefined,
+              { reserve: context.profile.adapter !== "local" },
             );
-            mark("additionalRepositories");
+            throwIfAborted(input.signal);
+            mark("source");
+            if (source === undefined) {
+              await ensureGithubCliWrapper(db, input.threadId, handle.guest);
+              mark("githubCli");
+              await cloneAdditionalRepositories(
+                bindings,
+                db,
+                input.threadId,
+                handle.guest,
+              );
+              mark("additionalRepositories");
+            }
           }
           throwIfAborted(input.signal);
           stage = "guest";

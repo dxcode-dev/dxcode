@@ -2,7 +2,10 @@ import type { ThreadId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
-import { pluginViewsCatalogQueryOptions } from "../../plugins/plugin-views-queries.js";
+import {
+  pluginAppsQueryOptions,
+  pluginViewsCatalogQueryOptions,
+} from "../../plugins/plugin-views-queries.js";
 import { pluginUiQueryOptions } from "../thread-queries.js";
 import { iconForItem } from "./plugin-ui-icon-lookup.js";
 import { runPluginCommand } from "./plugin-ui-mutations.js";
@@ -32,39 +35,60 @@ export function PluginPaletteCommands(props: PaletteProps) {
 }
 
 /**
- * The person's plugin pages ("Open …") and Thread types ("New …"), in
+ * The person's plugin views shown as pages ("Open …") and Thread types
+ * ("New …"), in
  * every palette, from the views catalog.
  */
 function PluginViewCommands({ query, onRun }: PaletteProps) {
   const { data } = useQuery(pluginViewsCatalogQueryOptions());
+  const apps = useQuery(pluginAppsQueryOptions()).data;
   const navigate = useNavigate();
   const matches = (text: string) =>
     query === "" || text.toLocaleLowerCase().includes(query);
   return (
     <>
-      {(data?.pages ?? []).flatMap((page) =>
-        !matches(`open ${page.title} ${page.pluginTitle}`) ? (
+      {(data?.dataViews ?? []).flatMap((view) =>
+        !view.show.includes("page") ||
+        !matches(`open ${view.title} ${view.pluginTitle}`) ? (
           []
         ) : (
           <button
-            key={`page:${page.plugin}/${page.page}`}
+            key={`view:${view.plugin}/${view.view}`}
             type="button"
             className="command-palette-item"
             onClick={() => {
               void navigate({
                 to: "/plugins/$name/$id/$",
-                params: {
-                  name: page.plugin,
-                  id: page.page,
-                  _splat: page.path.replace(/^\//, ""),
-                },
+                params: { name: view.plugin, id: view.view, _splat: "" },
               });
               onRun();
             }}
           >
             <span>
-              <strong>Open {page.title}</strong>{" "}
-              <small>{page.pluginTitle}</small>
+              <strong>Open {view.title}</strong>{" "}
+              <small>{view.pluginTitle}</small>
+            </span>
+          </button>
+        ),
+      )}
+      {(apps ?? []).flatMap((app) =>
+        !matches(`open ${app.title} app`) ? (
+          []
+        ) : (
+          <button
+            key={`app:${app.plugin}`}
+            type="button"
+            className="command-palette-item"
+            onClick={() => {
+              void navigate({
+                to: "/plugins/$name/$id/$",
+                params: { name: app.plugin, id: "app", _splat: "" },
+              });
+              onRun();
+            }}
+          >
+            <span>
+              <strong>Open {app.title} App</strong>
             </span>
           </button>
         ),

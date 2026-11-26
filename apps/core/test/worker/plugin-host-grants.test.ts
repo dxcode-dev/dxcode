@@ -16,9 +16,6 @@ import {
  *    billed to the owner), runs a command in the Thread's Orb, asks a
  *    question, or posts.
  * 2. The archived check refuses the same calls in an active Thread.
- * 3. `ctx.watch` reaches a host the call's tier drops: a manifest listing
- *    more hosts than the tier allows gets none for `ctx.fetch`, but its
- *    watches still opened.
  */
 
 const install = (network: ReadonlyArray<string> = []): PluginInstallRecord => ({
@@ -47,7 +44,6 @@ const install = (network: ReadonlyArray<string> = []): PluginInstallRecord => ({
       threads: ["post"],
     },
     settings: [],
-    jobs: [{ id: "tick", title: "Tick", schedule: { every: "1m" } }],
   } as unknown as PluginInstallRecord["code"],
 });
 
@@ -94,36 +90,5 @@ describe("archived Thread, plugin running live", () => {
     for (const outcome of outcomes)
       if (outcome.status === "rejected")
         expect(String(outcome.reason)).not.toMatch(archived);
-  });
-});
-
-describe("ctx.watch and the tier's host cap", () => {
-  it("refuses a host the tier drops and opens one it grants", async () => {
-    const opened: string[] = [];
-    const durable = {
-      watchOpen: async (_meta: unknown, target: string) => {
-        opened.push(target);
-      },
-    } as unknown as PluginHostDependencies["durable"];
-    const hostWith = (bindings: Partial<Bindings>) =>
-      hostFor({
-        install: install(["a.example.com", "b.example.com", "c.example.com"]),
-        bindings: { ...env, ...bindings } as unknown as Bindings,
-        currentHost: "durable",
-        durable,
-        durableOpener: { kind: "export", fn: "watch" } as never,
-      });
-    // 3: three hosts against a cap of two.
-    await expect(
-      hostWith({
-        DX_PLUGIN_TIER_LIMITS: JSON.stringify({
-          "personal-dev": { networkHosts: 2 },
-        }),
-      } as Partial<Bindings>).watchOpen("wss://a.example.com/stream"),
-    ).rejects.toThrow(/may not reach a\.example\.com/);
-    expect(opened).toEqual([]);
-    // Under the cap, the same watch opens.
-    await hostWith({}).watchOpen("wss://a.example.com/stream");
-    expect(opened).toEqual(["wss://a.example.com/stream"]);
   });
 });

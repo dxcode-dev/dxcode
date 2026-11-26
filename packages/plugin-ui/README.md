@@ -1,21 +1,19 @@
 # @dxcode/plugin-ui
 
-Web components that look like dx, for plugin panes, tabs, pages, thread views
-and MCP Apps views. Ask for the kit with one tag, and dx inlines it into the
-frame:
+Web components that look like dx, for dx-views in chat replies and MCP Apps
+cards in the transcript. Ask for the kit with one tag, and dx inlines it into
+the frame:
 
 ```html
 <script type="module" src="dx:plugin-ui"></script>
 ```
-
-A dx-view in the transcript can ask for the kit the same way.
 
 The kit's look is dx's design system: its colors, fonts, type sizes, radii,
 and shadows are generated from the dx web app's theme and token files, so
 every dx palette, light or dark, and the reader's contrast and forced-colors
 settings reach the kit as they reach dx.
 
-Without that tag, nothing loads and the page stays plain HTML. Every plugin
+Without that tag, nothing loads and the page stays plain HTML. Every such
 frame gets dx's theme either way, as the [MCP Apps style
 variables](https://github.com/modelcontextprotocol/ext-apps)
 (`--color-background-primary`, `--color-text-secondary`, `--font-sans`,
@@ -53,10 +51,10 @@ it. Style a component's inner parts with `::part(...)`.
 | `<dx-tabs>` | `value` | Holds `<dx-tab value label icon>` panels. Fires a `change` event with `{ value }`. The arrow keys move between tabs. |
 | `<dx-empty>` | `heading`, `icon` (`none` hides it) | The default slot is the description. Slot `actions`. |
 | `<dx-code>` | `language`, `wrap` | Its text, or `.code = "…"`, with a copy button. |
-| `<dx-player>` | `src`, `poster`, `muted`, `autoplay`, `loop`, `audio`, `live`, `stream`, `type` | `.srcObject` takes a `MediaStream` (WebRTC, a canvas). `.media` is the inner `<video>` or `<audio>`. |
+| `<dx-player>` | `src`, `poster`, `muted`, `autoplay`, `loop`, `audio`, `live`, `type` | `.srcObject` takes a `MediaStream` (WebRTC, a canvas). `.media` is the inner `<video>` or `<audio>`. |
 
 Every form field is form-associated, so `new FormData(form)` reads it and
-`form.reset()` restores it. A plugin frame never submits a form to a URL: its
+`form.reset()` restores it. A frame never submits a form to a URL: its
 sandbox blocks that. A `<dx-button type="submit">`, or Enter in a
 `<dx-input>`, checks the form's fields and, if they are valid, fires its
 `submit` event. Handle it in script and call `preventDefault()`.
@@ -65,22 +63,10 @@ sandbox blocks that. A `<dx-button type="submit">`, or Enter in a
 
 `icon` on a button, chip, list item, tab, or empty state, and `name` on
 `<dx-icon>`, take one of these Lucide names; any other name draws nothing.
-The same set is `window.dx.ui.icons`. A manifest or `registerPane` `icon`
-is different: it takes any Lucide name as `lucide:<name>`.
+The same set is `window.dx.ui.icons`. A manifest `icon` is different: it
+takes any Lucide name as `lucide:<name>`.
 
 `check` `x` `plus` `minus` `search` `chevron-down` `chevron-up` `chevron-right` `chevron-left` `copy` `external-link` `refresh-cw` `play` `pause` `volume-2` `volume-x` `maximize-2` `picture-in-picture-2` `circle-alert` `circle-check` `info` `triangle-alert` `loader-circle` `inbox` `settings` `trash-2` `pencil` `download` `upload` `git-branch` `git-pull-request` `activity` `clock` `file` `folder` `terminal` `ellipsis` `arrow-up-right` `arrow-down-right` `radio` `cpu` `server` `zap` `bug` `user` `users` `star` `bell` `link`
-
-### Live media
-
-`<dx-player stream type='video/mp4; codecs="avc1.42E01F"' autoplay muted>`
-plays the pane's own `window.dx.stream()` (an empty `stream`, or the pane's
-id). Only a registered pane at a trusted tier gets `window.dx`, not tabs or
-pages, and a personal install's panes only for its owner. The
-producer's first binary message is the fragmented MP4's init segment, and
-each later binary message is one whole fragment that starts on a keyframe.
-The player stays near the live edge and ignores string messages. Where
-`window.dx.stream` isn't available, the player says live streams need a
-trusted plugin. For WebRTC, set `.srcObject` to the remote `MediaStream`.
 
 ### Links
 
@@ -142,22 +128,21 @@ tables, chips and native fields.
   `dx-button`'s outline variant. `data-variant` picks another: `primary`, `secondary`,
   `ghost`, `destructive` (a red fill) or `danger` (red text).
 - A dialog is a title, a description, and a `<div data-slot="row">` of its closes, the main
-  action last. dx puts the row at the end and, in a phone-width pane, stacks it with the main
+  action last. dx puts the row at the end and, in a phone-width frame, stacks it with the main
   action on top. Mark a red menu item `data-destructive`.
 - Label a select or combobox with its `-label` part, and a date picker or slider with a
   `<ui-field>` and `<ui-field-label>` around it. Leave a date picker's trigger empty.
 - A `ui-*` field with a `name` is form-associated, so `new FormData(form)` reads it with the
   kit's fields. Each root has a `value` property and fires `valuechange` (or `openchange`, or
   `action` on a menu) with `event.detail.value`; these events don't bubble.
-- Popups and dialogs open inside the frame and fit a phone-width pane.
+- Popups and dialogs open inside the frame and fit a phone-width frame.
 - A page that creates `ui-*` elements only from script adds
   `<script type="module" src="dx:ui-sdk"></script>` to get every component. A page that
   defines its own `ui-*` elements opts out with `<meta name="dx-ui-sdk" content="off">`.
 
 ## Example
 
-[`examples/release-dashboard`](examples/release-dashboard) is a plugin whose
-pane is built only from the kit:
+A table of deploys built only from the kit:
 
 ```html
 <script type="module" src="dx:plugin-ui"></script>

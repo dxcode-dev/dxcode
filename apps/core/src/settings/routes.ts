@@ -29,15 +29,20 @@ import {
   personalFirstPartyPluginRoutes,
   workspaceFirstPartyPluginRoutes,
 } from "../plugins/routes.js";
+import {
+  personalPluginOrbRoutes,
+  pluginPluginOrbRoutes,
+  workspacePluginOrbRoutes,
+} from "../plugins/services/orb-choice.js";
 import { resolveDictation } from "../plugins/speech/transcription.js";
 import { portalConfiguration } from "../portals/host.js";
 import { personalRunnerRoutes } from "../runners/routes.js";
 import { spaceAgentModelRoutes } from "../spaces/agent-model.js";
+import { requireSpaces, spacesEnabled } from "../spaces/availability.js";
 import {
   personalSpaceCoordinatorOrbRoutes,
   workspaceSpaceCoordinatorOrbRoutes,
 } from "../spaces/coordinator-orb.js";
-import { requireSpaces, spacesEnabled } from "../spaces/availability.js";
 import { clefAvailable } from "../workers-ai/clef.js";
 import { personalAccountRoutes } from "./account/routes.js";
 import { personalAgentInstructionsRoutes } from "./agent-instructions/routes.js";
@@ -273,6 +278,8 @@ settingsRoutes.route(
   "/personal/space-coordinator-orb",
   personalSpaceCoordinatorOrbRoutes,
 );
+settingsRoutes.route("/personal/plugin-orb", personalPluginOrbRoutes);
+settingsRoutes.route("/plugin-orb/plugins/:pluginId", pluginPluginOrbRoutes);
 settingsRoutes.route("/personal/feedback-widget", feedbackWidgetEmbedRoutes);
 settingsRoutes.route("/personal/projects", personalProjectDefaultsRoutes);
 settingsRoutes.route("/personal/keys", personalSigningKeyRoutes);
@@ -309,6 +316,10 @@ settingsRoutes.use(
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/space-coordinator-orb",
   workspaceSpaceCoordinatorOrbRoutes,
+);
+settingsRoutes.route(
+  "/workspaces/:workspaceSlug/plugin-orb",
+  workspacePluginOrbRoutes,
 );
 settingsRoutes.route(
   "/workspaces/:workspaceSlug/plugin-bundles",

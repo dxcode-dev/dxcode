@@ -11,7 +11,7 @@ import { invalidatePluginUi } from "./store.js";
  * What plugins hear when a Thread is archived or restored.
  * On archive, prompts still waiting are cancelled, since answering them
  * needs the agent, and every install handling `thread.archived` gets it once
- * to clean up (stop devices, save a pane snapshot). On restore, those
+ * to clean up (stop devices, say). On restore, those
  * handling `thread.unarchived` get it. Each handler has 10 seconds and no
  * Orb: the call carries no tool runner and no shell gate.
  */
@@ -101,7 +101,7 @@ export const notifyPluginsOfArchive = async (
         threadId: input.threadId,
         installId: install.pluginId,
         host: "worker",
-        tier: install.tier ?? "sandboxed",
+        scope: install.scope,
         outcome,
         ms: Date.now() - callStarted,
         ...(error === undefined ? {} : { error }),

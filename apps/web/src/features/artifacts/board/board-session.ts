@@ -27,7 +27,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import type {
   BoardLiveChannel,
   BoardLiveEvent,
-} from "../../../shared/realtime/board-live.js";
+} from "../../../shared/realtime/live.js";
 import { acceptSavedArtifact } from "../artifact-document-queries.js";
 import { type CursorPerson, collaboratorColor } from "../artifact-people.js";
 import type { ArtifactScope } from "../artifact-scope.js";

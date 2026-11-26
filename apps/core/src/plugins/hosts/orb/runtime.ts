@@ -1,5 +1,5 @@
 import { RpcTarget } from "cloudflare:workers";
-import { pluginHostEntry, TRUSTED_TIER, tierAtLeast } from "@dx/domain";
+import { pluginHostEntry } from "@dx/domain";
 import { Effect } from "effect";
 import { attachmentTransfer } from "../../../attachments/transfer.js";
 import {
@@ -10,18 +10,16 @@ import {
 } from "../../../execution/dxd/protocol.js";
 import { pluginPackageKey } from "../../../settings/plugins/bundles/plugin-package.js";
 import { insertPluginAudit } from "../../audit/audit.js";
-import { configuredTierLimits } from "../../trust/limits.js";
 import {
-  callTier,
   type PluginCallInfo,
   type PluginHost,
   type PluginHostDependencies,
+  pluginCallMs,
 } from "../../worker-host/host.js";
 import {
   COMMAND_TIMEOUT_MS,
   HANDLER_TIMEOUT_MS,
   HOST_CALL_TIMEOUT_MS,
-  PANE_MESSAGE_TIMEOUT_MS,
   TOOL_TIMEOUT_MS,
 } from "../../worker-host/runtime.js";
 import {
@@ -48,18 +46,17 @@ import type { OrbUsageBilling } from "./usage-batch.js";
 /**
  * The Orb host: a plugin's `host.orb` entry runs as a
  * Node process that dxd supervises in the Thread's own Orb, with the
- * Thread's rights, its `binaries` installed, and its `panes[].connect.portal`
- * ports reachable through the Thread's Portal.
+ * Thread's rights and its `binaries` installed.
  *
  * Each call runs exactly like a Worker host call (`withHost`: the same
  * `PluginHost`, the same per-call limit, the same permission checks, audit
  * rows, and secret masking); only the code runs elsewhere. The process's
  * `ctx.*` calls come back through dxd and the Thread's execution object to
  * that one `PluginHost`, so the Orb process reaches nothing the Worker host
- * would not. Only trusted tiers get it.
+ * would not.
  *
- * The process lives while a call runs or a pane holds a connection to one
- * of its ports, and a minute after (decision D4); the Orb sleeps on its own
+ * The process lives while a call runs, and a minute after (decision D4);
+ * the Orb sleeps on its own
  * schedule and the process wakes with it.
  */
 
@@ -70,11 +67,15 @@ import type { OrbUsageBilling } from "./usage-batch.js";
  * Thread itself never sees, stay with its Worker code.
  */
 const CAPABILITIES = new Set([
+  "secret",
   "log",
   "storageGet",
   "storageSet",
   "storageDelete",
   "storageList",
+  // Views described as data: ctx.views.set and get.
+  "viewSet",
+  "viewGet",
   "settings",
   "fetch",
   "callTool",
@@ -86,8 +87,6 @@ const CAPABILITIES = new Set([
   "uiNotify",
   "createQuickAction",
   "removeQuickAction",
-  "paneOpen",
-  "panePost",
   "threadInfo",
   "threadMessages",
   "threadPost",
@@ -101,7 +100,7 @@ const toBase64 = (bytes: Uint8Array) => {
     text += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
   return btoa(text);
 };
-const encodeBytes = (value: unknown): unknown => {
+export const encodeBytes = (value: unknown): unknown => {
   if (value instanceof ArrayBuffer)
     return { [BYTES]: toBase64(new Uint8Array(value)) };
   if (ArrayBuffer.isView(value))
@@ -117,7 +116,7 @@ const encodeBytes = (value: unknown): unknown => {
     );
   return value;
 };
-const decodeBytes = (value: unknown): unknown => {
+export const decodeBytes = (value: unknown): unknown => {
   if (Array.isArray(value)) return value.map(decodeBytes);
   if (value !== null && typeof value === "object") {
     const record = value as Record<string, unknown>;
@@ -140,10 +139,20 @@ export class OrbCapabilities extends RpcTarget implements OrbCapabilityTarget {
   readonly #dependencies: PluginHostDependencies;
   #workspace: ReturnType<typeof openThreadWorkspace> | undefined;
   #shellRuns = 0;
-  constructor(host: PluginHost, dependencies: PluginHostDependencies) {
+  readonly #secrets: boolean;
+  constructor(
+    host: PluginHost,
+    dependencies: PluginHostDependencies,
+    /**
+     * A draft plugin (`dxd plugin load`) reads granted secrets: it may name
+     * only ones the Thread's own commands already receive.
+     */
+    options: { readonly secrets?: boolean } = {},
+  ) {
     super();
     this.#host = host;
     this.#dependencies = dependencies;
+    this.#secrets = options.secrets === true;
   }
 
   /**
@@ -220,7 +229,7 @@ export class OrbCapabilities extends RpcTarget implements OrbCapabilityTarget {
 
   async call(method: string, args: ReadonlyArray<unknown>) {
     if (method === "shellAdmit") return this.#shellAdmit(args[0]);
-    if (method === "secret")
+    if (method === "secret" && !this.#secrets)
       throw new Error(
         "Secrets stay with the plugin's Worker code; the Orb host does not get them.",
       );
@@ -235,11 +244,6 @@ export class OrbCapabilities extends RpcTarget implements OrbCapabilityTarget {
     return encodeBytes(value);
   }
 }
-
-/** The ports a pane may frame through the Portal (`panes[].connect`). */
-const portsOf = (code: PluginHostDependencies["install"]["code"]) => [
-  ...new Set((code.paneConnect ?? []).flatMap(({ portal }) => portal)),
-];
 
 const sha256Hex = async (text: string) =>
   [
@@ -256,7 +260,7 @@ const refused = (
 ): PluginHostError => new PluginHostError({ host: "orb", reason, message });
 
 /** What one invocation runs in the process, and for how long. */
-const methodOf = (
+export const orbMethodOf = (
   call: PluginInvocation,
 ):
   | {
@@ -302,15 +306,6 @@ const methodOf = (
         ms: COMMAND_TIMEOUT_MS,
         what: `The command ${call.id}`,
       };
-    case "pane-message":
-      return {
-        method: "paneMessage",
-        args: [call.paneId, call.message],
-        ms: PANE_MESSAGE_TIMEOUT_MS,
-        what: `The pane ${call.paneId}'s onMessage`,
-      };
-    case "job":
-      return undefined;
   }
 };
 
@@ -341,7 +336,6 @@ const processKey = async (
   dependencies: PluginHostDependencies,
   runtimeSha256: string,
   entry: string,
-  ports: ReadonlyArray<number>,
 ) =>
   `orb-${(
     await sha256Hex(
@@ -351,7 +345,6 @@ const processKey = async (
         runtimeSha256,
         entry,
         dependencies.install.code.binaries ?? [],
-        ports,
       ]),
     )
   ).slice(0, 48)}`;
@@ -362,15 +355,6 @@ const invokeOrb = async (
   call: PluginInvocation,
 ): Promise<unknown> => {
   const { install, bindings } = dependencies;
-  const tier = callTier(dependencies);
-  if (
-    !tierAtLeast(tier, TRUSTED_TIER) ||
-    !configuredTierLimits(bindings, tier).hosts.includes("orb")
-  )
-    throw refused(
-      "blocked-tier",
-      `The Orb host needs a trusted tier; ${install.name} runs as ${tier} here.`,
-    );
   // The process has the Thread's files, environment, and secrets, as its
   // commands do: only an install reviewed with shell gets it.
   if (install.code.permissions.shell !== true)
@@ -399,18 +383,17 @@ const invokeOrb = async (
   const execution = executionOf(dependencies, threadId);
   if (transfer === undefined || execution === undefined)
     throw refused("unavailable", "This deployment has no Orbs.");
-  const run = methodOf(call);
+  const run = orbMethodOf(call);
   if (run === undefined)
-    throw refused("failed", "Jobs run in the durable host, not the Orb host.");
+    throw refused("failed", "The Orb host runs no such call.");
   const callMs = Math.min(
-    configuredTierLimits(bindings, tier).callMs,
+    pluginCallMs(dependencies),
     DXD_PLUGIN_MAX_CALL_TIMEOUT_MS,
     // The runtime limits each kind of call itself; dxd adds a margin.
     run.ms + 5_000,
   );
   const runtime = await orbRuntimeFiles(entry);
-  const ports = portsOf(install.code);
-  const key = await processKey(dependencies, runtime.sha256, entry, ports);
+  const key = await processKey(dependencies, runtime.sha256, entry);
   const packageUrl = await transfer.readUrl(
     pluginPackageKey(install.package.sha256),
     { contentType: "application/octet-stream", disposition: "attachment" },
@@ -433,7 +416,8 @@ const invokeOrb = async (
           ? { sha256: runtime.sha256, files: runtime.files }
           : { sha256: runtime.sha256 },
         binaries: install.code.binaries ?? [],
-        ports,
+        // dxd's protocol still carries Portal ports; plugins name none.
+        ports: [],
       },
       call: {
         method: run.method,
@@ -522,7 +506,6 @@ const orbHost = ({
       requestId: dependencies.requestId,
       installId: target.installId,
       host: "orb",
-      tier: target.tier,
       call,
       outcome,
       ms: Date.now() - started,
@@ -544,12 +527,9 @@ const orbHost = ({
     const entry = pluginHostEntry(dependencies.install.code, "orb");
     if (entry === undefined) return undefined;
     const runtime = await orbRuntimeFiles(entry);
-    return processKey(
-      dependencies,
-      runtime.sha256,
-      entry,
-      portsOf(dependencies.install.code),
-    ).then((key) => (target.integrity === "" ? undefined : key));
+    return processKey(dependencies, runtime.sha256, entry).then((key) =>
+      target.integrity === "" ? undefined : key,
+    );
   };
   return {
     kind: "orb",

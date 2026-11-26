@@ -7,7 +7,8 @@
     "0003_release_v0.2.0.sql",
     "0005_release_v0.2.8.sql",
     "0022_release_v0.2.47.sql",
-    "0029_release_v0.2.57.sql"
+    "0029_release_v0.2.57.sql",
+    "0066_release_v0.2.183.sql"
   ],
   "d1": [
     {
@@ -339,6 +340,11 @@
       "filename": "0065_release_v0.2.181.sql",
       "sha256": "e2d6fa5e48e22dbf809f57082977985bab98399e772d4c1007ddffcb53b89327",
       "classification": "non-destructive"
+    },
+    {
+      "filename": "0066_release_v0.2.183.sql",
+      "sha256": "0d76c71bc67d68068ac08ced38f5ad3db586dabe5712ecffff199c0542086ebb",
+      "classification": "destructive"
     }
   ],
   "durableObjects": [
@@ -419,6 +425,12 @@
       "newSqliteClasses": ["RunnerSessionObject"],
       "sha256": "fb95f1fb7979e3801d64573c901bab222ecc0785a0350ad88c25234836eeaaba",
       "classification": "non-destructive"
+    },
+    {
+      "tag": "v13-remove-plugin-stream-relay",
+      "deletedClasses": ["PluginStreamRelay"],
+      "sha256": "23b7fa3c0e05a980d5b54b73390909f013f00c5ead1143d0e5b84e54408b21a3",
+      "classification": "destructive"
     }
   ]
 }

@@ -3,3 +3,105 @@
   flex: none;
   margin-left: auto;
 }
+
+/* The Plugins page: the package browser, then dx's own plugins and rules. */
+.plugins-page {
+  --settings-content-width: 1080px;
+}
+.plugins-page .settings-heading p {
+  max-width: none;
+}
+.plugins-page > .package-browser,
+.plugins-page > .package-browser-empty,
+.plugins-built-in {
+  width: 100%;
+  max-width: var(--settings-content-width);
+  margin-right: auto;
+  margin-left: auto;
+}
+.plugins-built-in {
+  display: grid;
+  gap: var(--space-2);
+}
+.plugins-built-in > h2 {
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+}
+.plugin-browser-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.plugin-browser .package-browser-meta .plugin-bundle-source-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1-5);
+  margin: 0;
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+.plugin-file-read-only {
+  color: var(--muted-foreground);
+  font-size: var(--text-xs);
+}
+
+/* "What it can do": one sentence per line. */
+.plugin-capabilities {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.package-browser-aside .plugin-capabilities li {
+  position: relative;
+  padding-left: var(--space-3);
+  line-height: var(--leading-snug);
+}
+.package-browser-aside .plugin-capabilities li::before {
+  position: absolute;
+  top: 0.55em;
+  left: 0;
+  width: 4px;
+  height: 4px;
+  border-radius: var(--radius-full);
+  background: var(--muted-foreground);
+  content: "";
+}
+.plugin-bundle-group .plugin-capabilities li {
+  line-height: var(--leading-snug);
+}
+.plugin-capabilities-none,
+.package-browser-section > p {
+  margin: 0;
+  color: var(--muted-foreground);
+}
+.plugin-browser-limit {
+  margin: var(--space-1) 0 0;
+  color: var(--warning);
+  line-height: var(--leading-snug);
+}
+.package-browser-section > .dx-button {
+  justify-self: start;
+}
+
+/* This month: cost, calls, and job runs. */
+.plugin-activity {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+}
+.plugin-activity dt {
+  color: var(--muted-foreground);
+}
+.plugin-activity dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

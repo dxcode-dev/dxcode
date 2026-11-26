@@ -14,9 +14,6 @@
  */
 // One small agent container per Thread in executor execution mode.
 export { ThreadExecutorObject } from "../../executor/executor-object.js";
-// One container per plugin install with a `container` host
-// (apps/core/src/plugins/hosts/container).
-export { PluginContainerObject } from "../../plugins/hosts/container/object.js";
 export {
   OrbContainerObject,
   OrbRetiredEgress,

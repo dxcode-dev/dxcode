@@ -23,6 +23,7 @@
 mod binaries;
 mod lease;
 mod process;
+pub mod service;
 
 use crate::proxy::Outbound;
 use process::{CallOutcome, Process};
@@ -135,7 +136,14 @@ pub struct ProcessSpec {
     pub install_id: String,
     pub name: String,
     pub integrity: String,
-    pub package: crate::mcp::PackageRef,
+    /// The reviewed package dxd downloads, for an install.
+    #[serde(default)]
+    pub package: Option<crate::mcp::PackageRef>,
+    /// A folder already in this Orb, for a draft plugin (`dxd plugin
+    /// load`): the process runs from it as `PLUGIN_ROOT`, with no download
+    /// and no binaries. Exactly one of `package` and `folder` is set.
+    #[serde(default)]
+    pub folder: Option<String>,
     pub entry: String,
     pub runtime: RuntimeRef,
     #[serde(default)]
@@ -346,6 +354,28 @@ pub(crate) fn allowed_url(url: &str) -> bool {
     secure || matches!(host, "localhost" | "127.0.0.1" | "[::1]")
 }
 
+/// A draft's folder: a directory inside the Orb user's home, resolved
+/// through symlinks, so a draft never runs from outside it.
+fn draft_root(folder: &str, home: &Path) -> Result<PathBuf, PluginResult> {
+    let resolved = fs::canonicalize(folder).map_err(|error| {
+        unavailable(
+            "package",
+            format!("dx cannot read the draft's folder {folder}: {error}"),
+        )
+    })?;
+    let home = fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    if !resolved.is_dir() || !resolved.starts_with(&home) {
+        return Err(unavailable(
+            "package",
+            format!(
+                "A draft's folder must be a folder inside {}.",
+                home.display()
+            ),
+        ));
+    }
+    Ok(resolved)
+}
+
 fn validate(spec: &ProcessSpec) -> Result<(), &'static str> {
     if !token(&spec.key, 8, 128, b"_-") {
         return Err("The process key is invalid.");
@@ -359,11 +389,25 @@ fn validate(spec: &ProcessSpec) -> Result<(), &'static str> {
     if spec.integrity.is_empty() || spec.integrity.len() > 256 {
         return Err("The integrity is invalid.");
     }
-    if !hex64(&spec.package.sha256)
-        || !allowed_url(&spec.package.url)
-        || spec.package.size > 32 * 1024 * 1024
-    {
-        return Err("The package is invalid.");
+    match (&spec.package, &spec.folder) {
+        (Some(package), None) => {
+            if !hex64(&package.sha256)
+                || !allowed_url(&package.url)
+                || package.size > 32 * 1024 * 1024
+            {
+                return Err("The package is invalid.");
+            }
+        }
+        (None, Some(folder)) => {
+            if folder.len() > 4096 || !Path::new(folder).is_absolute() {
+                return Err("The draft's folder is invalid.");
+            }
+            // A draft runs what the Orb already has.
+            if !spec.binaries.is_empty() {
+                return Err("A draft plugin installs no binaries.");
+            }
+        }
+        _ => return Err("The process names neither a package nor a folder."),
     }
     if !crate::mcp::safe_relative(&spec.entry) {
         return Err("The entry module leaves the plugin.");
@@ -596,6 +640,10 @@ impl PluginHosts {
             return Ok(process);
         }
         let runtime = self.prepare_runtime(&spec.runtime)?;
+        // A draft's folder is checked before the version it replaces stops.
+        if let Some(folder) = &spec.folder {
+            draft_root(folder, &self.inner.paths.home)?;
+        }
         // Another version of the install must not fight this one over its
         // ports and PLUGIN_DATA: it stops first.
         self.stop_where(|other, process| {
@@ -624,14 +672,17 @@ impl PluginHosts {
         deadline: Instant,
     ) -> Result<Arc<Process>, PluginResult> {
         let paths = &self.inner.paths;
-        let root = crate::mcp::prepare_package(&spec.package, &paths.mcp(), deadline).map_err(
-            |result| match result {
+        let root = match (&spec.package, &spec.folder) {
+            (_, Some(folder)) => draft_root(folder, &paths.home)?,
+            (Some(package), None) => crate::mcp::prepare_package(package, &paths.mcp(), deadline)
+                .map_err(|result| match result {
                 crate::mcp::McpResult::Unavailable { message, .. } => {
                     unavailable("package", message)
                 }
                 _ => unavailable("package", "dx could not lay out the plugin's files."),
-            },
-        )?;
+            })?,
+            (None, None) => return Err(unavailable("invalid", "The process has no files.")),
+        };
         let entry = root.join(&spec.entry);
         if !entry.is_file() {
             return Err(unavailable(

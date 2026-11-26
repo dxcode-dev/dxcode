@@ -44,6 +44,13 @@ in the current turn; never retype one from memory or assemble a pattern yourself
 | `token_use` | Always `dx_workload_identity_v1` |
 | `runtime_assurance` | `dx_dxd_channel_v1`, or `dx_provider_attested_v1` when the Orb provider attested the runtime |
 
+A plugin's token names its install instead of a Thread. Its `sub` is `dx:wid:v1:u:<U>:i:<I>` for a personal install, or `dx:wid:v1:w:<W>:i:<I>` for a workspace install. It carries `plugin_install_id`, `plugin_name`, and `user_id` or `workspace_id`, plus `plugin_runtime`:
+
+- `service`: a program on a plugin Orb that asked over dxd's channel. `runtime_assurance` is `dx_dxd_channel_v1`.
+- `function`: function code running inside dx, with no Orb and no dxd. `runtime_assurance` is `dx_core_function_v1`.
+
+A cloud rule that requires `dx_dxd_channel_v1` does not accept function-code tokens.
+
 dx derives every claim on the server. At each mint it rechecks that the Thread is active and that its
 user is still a member of the Project's workspace. A removed member gets no new tokens, but a token
 already minted stays valid until `exp`, and credentials exchanged from it last up to an hour.

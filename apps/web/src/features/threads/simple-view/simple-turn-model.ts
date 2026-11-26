@@ -6,6 +6,7 @@ import {
   type ToolPart,
   type WorkRow,
 } from "@dx/client";
+import { pluginViewCardOf } from "../plugin-view-card-part.js";
 import { toolContentText } from "../tool-output-media-model.js";
 
 /**
@@ -22,7 +23,8 @@ export interface SimpleTurn {
   readonly attachments: ReadonlyArray<TranscriptRow>;
   /**
    * What the agent showed on purpose before its answer, in order: artifact
-   * cards, MCP App cards, and any message carrying a dx-view or media.
+   * cards, MCP App cards, plugin view cards, and any message carrying a
+   * dx-view or media.
    */
   readonly shown: ReadonlyArray<TranscriptRow>;
   /** The answer, shown once the turn is over. */
@@ -88,10 +90,18 @@ export const isShownProse = (row: TranscriptRow) =>
   (row.kind === "assistant-prose" || row.kind === "final-answer") &&
   RICH_MARKDOWN.test(row.text);
 
-/** A card the agent made for the person: an artifact or an MCP App. */
+/**
+ * A card the agent made for the person: an artifact, an MCP App, or a
+ * plugin's view described as data that its tool's result names.
+ */
 export const isShownWork = (row: TranscriptRow) => {
   const part = toolOf(row);
-  return part !== undefined && (isArtifactCardPart(part) || isMcpAppPart(part));
+  return (
+    part !== undefined &&
+    (isArtifactCardPart(part) ||
+      isMcpAppPart(part) ||
+      pluginViewCardOf(part) !== undefined)
+  );
 };
 
 /**

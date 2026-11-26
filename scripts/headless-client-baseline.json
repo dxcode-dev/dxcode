@@ -5,7 +5,6 @@
   "apps/web/src/features/huddle/huddle-summary-queries.ts": 1,
   "apps/web/src/features/plugins/plugin-views-queries.ts": 1,
   "apps/web/src/features/settings/model-routing/provider-key-presentation.ts": 1,
-  "apps/web/src/features/settings/plugins/plugin-bundle-details.tsx": 2,
   "apps/web/src/features/settings/plugins/plugin-bundle-queries.ts": 2,
   "apps/web/src/features/settings/plugins/plugin-catalog-queries.ts": 2,
   "apps/web/src/features/settings/skills/skills-queries.ts": 2,

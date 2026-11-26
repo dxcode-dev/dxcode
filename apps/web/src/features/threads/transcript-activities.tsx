@@ -26,6 +26,7 @@ import { ArtifactToolLabel } from "./artifact-tool-label.js";
 import { MailToolLabel, MailToolOpener } from "./mail-tool-label.js";
 import { isMailToolPart } from "./mail-tool-part.js";
 import { PluginToolIcon } from "./plugin-ui/lazy-plugin-ui-icons.js";
+import { pluginViewCardOf } from "./plugin-view-card-part.js";
 import { ProcessingIndicator } from "./processing-indicator.js";
 import { SubagentActivity } from "./subagent-activity.js";
 import { ThreadFileNavigationContext } from "./thread-file-navigation.js";
@@ -576,13 +577,24 @@ function ToolPartRow({
     );
   if (isArtifactCardPart(part)) return <ArtifactToolCard part={part} />;
   if (isMcpAppPart(part)) return <McpAppToolRow part={part} />;
+  // A plugin tool's result that names one of its views: the row, then the view.
+  const card = pluginViewCardOf(part);
+  if (card !== undefined)
+    return (
+      <>
+        <GenericToolPartRow category={category} part={part} />
+        <React.Suspense>
+          <ToolCards toolName={part.toolName} view={card} />
+        </React.Suspense>
+      </>
+    );
   return <GenericToolPartRow category={category} part={part} />;
 }
 
 /** The cards and their query load with the first call that showed any. */
-const McpAppCards = lazyRouteComponent(
-  () => import("./mcp-app-cards.js"),
-  "McpAppCards",
+const ToolCards = lazyRouteComponent(
+  () => import("./tool-cards.js"),
+  "ToolCards",
 );
 
 /** A `code_exec` call that showed MCP App cards: its row, then the cards. */
@@ -592,7 +604,7 @@ function McpAppToolRow({ part }: { readonly part: ToolPart }) {
     <div className="transcript-mcp-app">
       <GenericToolPartRow category={categoryForPart(part)} part={part} />
       <React.Suspense fallback={<div className="markdown-view-pending" />}>
-        {cardSetId === undefined ? null : <McpAppCards cardSetId={cardSetId} />}
+        {cardSetId === undefined ? null : <ToolCards cardSetId={cardSetId} />}
       </React.Suspense>
     </div>
   );

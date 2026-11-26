@@ -24,15 +24,21 @@ export const sourceLabel = (source: PluginBundleData["source"]) =>
     ? source.label
     : `${source.catalog === undefined ? "" : `${source.catalog.name} catalog · `}${source.repository}${source.path === "" ? "" : `/${source.path}`} @ ${source.commit.slice(0, 7)}`;
 
-/** The row hint: only when the plugin cannot fully work as shown. */
-export const bundleHint = (bundle: PluginBundleData) => {
+/**
+ * The hint beside a plugin's source: only when it cannot work as shown.
+ * Tiers are gone: what is left is a copy paused by the workspace's, tools
+ * waiting for approval, and a plugin a workspace admin turned off.
+ */
+export const bundleHint = (bundle: PluginBundleData, canMutate: boolean) => {
   if (bundle.overlap?.kind === "paused") {
     return `Paused: ${bundle.overlap.workspaceName} provides it`;
   }
   if (bundle.enabled && bundle.mcpServers.some(({ reviewed }) => !reviewed)) {
     return "Review MCP tools";
   }
-  if ((bundle.trust?.blocked.length ?? 0) > 0) return "Needs workspace trust";
+  if (!bundle.enabled && bundle.scope === "workspace" && !canMutate) {
+    return "Your workspace admin turned this off";
+  }
   return bundle.overlap?.kind === "replacing"
     ? `Used instead of ${bundle.overlap.workspaceName}'s copy`
     : undefined;

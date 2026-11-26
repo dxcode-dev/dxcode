@@ -1,17 +1,8 @@
-/* A plugin's full page; its frame fills the page below the top bar. */
+/* A plugin's full page below the top bar. */
 .standard-page-content.plugin-page-content {
   display: flex;
   padding: 0;
   overflow: hidden;
-}
-.plugin-page-view {
-  flex: 1;
-  min-width: 0;
-}
-.plugin-page-view > .markdown-view-frame,
-.plugin-page-view .plugin-pane-slot {
-  flex: 1;
-  min-height: 0;
 }
 .plugin-page-title {
   display: inline-flex;
@@ -38,13 +29,31 @@
 .plugin-page-empty {
   margin: auto;
 }
-.plugin-page-empty > svg {
-  width: 20px;
-  height: 20px;
-  color: var(--muted-foreground);
-}
 @media (max-width: 640px) {
   .plugin-page-title > small {
     display: none;
   }
+}
+/* A view described as data scrolls as any page does, at a readable width. */
+.standard-page-content.plugin-page-content.plugin-data-page {
+  display: block;
+  padding: var(--space-6);
+  overflow: auto;
+}
+.plugin-data-page > .data-view {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+@media (width < 640px) {
+  .standard-page-content.plugin-page-content.plugin-data-page {
+    padding: var(--space-4);
+  }
+}
+/* A plugin's own app fills the page below the header. */
+.plugin-app-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--background);
 }

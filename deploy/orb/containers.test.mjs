@@ -418,7 +418,10 @@ describe("Orb Worker deploy alongside other deploy steps", {
         ...workspace,
       });
       expect(deploying).toBeInstanceOf(Promise);
-      await expect(deploying).resolves.toEqual({ workerName: "dx-orb-test" });
+      await expect(deploying).resolves.toEqual({
+        workerName: "dx-orb-test",
+        pluginContainerDeleted: false,
+      });
       settled = true;
       expect(Date.now() - started).toBeGreaterThanOrEqual(2000);
     } finally {
@@ -499,7 +502,10 @@ describe("Orb Worker deploy alongside other deploy steps", {
       const { value, output, wranglerRuns } = await deployWithFaults(
         "registry-push-timeout,cloudflare-10500",
       );
-      expect(value).toEqual({ workerName: "dx-orb-test" });
+      expect(value).toEqual({
+        workerName: "dx-orb-test",
+        pluginContainerDeleted: false,
+      });
       expect(wranglerRuns).toBe(1);
       expect(output).toContain(
         "Replaying the recorded failure registry-push-timeout",

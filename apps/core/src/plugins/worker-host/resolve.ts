@@ -2,13 +2,7 @@ import { Option } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { activeMemberSql } from "../../settings/members/membership-sql.js";
 import { pluginRunsForOwnerSql } from "../../settings/plugins/bundles/overlap.js";
-import { ensureDurableJobs } from "../hosts/durable/ensure.js";
 import { manifestIconSet } from "../icons/store.js";
-import {
-  installedPluginTier,
-  installTrustColumns,
-  installTrustFromRow,
-} from "../trust/resolve-tier.js";
 import { mapPluginsLimited } from "./concurrency.js";
 import type { PluginInstallRecord } from "./host.js";
 import {
@@ -36,8 +30,6 @@ export interface ResolvedCodePlugin extends PluginInstallRecord {
   readonly tools: PluginCodeDescription["tools"];
   readonly commands: PluginCodeDescription["commands"];
   readonly linkPatterns: PluginCodeDescription["linkPatterns"];
-  readonly panes: PluginCodeDescription["panes"];
-  readonly views: PluginCodeDescription["views"];
   readonly exports: PluginCodeDescription["exports"];
   readonly agentModes: PluginCodeDescription["agentModes"];
   readonly loadError?: string;
@@ -54,8 +46,6 @@ interface InstallRow {
   readonly version: string;
   readonly integrity: string;
   readonly manifest_json: string;
-  readonly tier_cap: string | null;
-  readonly trusted_signature: number | null;
 }
 
 export const listThreadCodePluginInstalls = (
@@ -96,8 +86,7 @@ const listCodePluginInstallsOwned = async (
        SELECT (SELECT id FROM owner) AS owner_id,
               plugin.id, plugin.scope, plugin.target_id, plugin.name,
               version.trusted_by_user_id,
-              version.version, version.integrity, version.manifest_json,
-              ${installTrustColumns("plugin")}
+              version.version, version.integrity, version.manifest_json
          FROM trusted_plugin plugin
          JOIN trusted_plugin_version version
            ON version.plugin_id = plugin.id
@@ -135,7 +124,7 @@ const listCodePluginInstallsOwned = async (
     } catch {
       continue;
     }
-    const code = decodePluginCode(manifest.code);
+    const code = decodePluginCode(manifest.code, row);
     if (Option.isNone(code)) continue;
     names.add(row.name);
     const scope = row.scope === "workspace" ? "workspace" : "personal";
@@ -153,11 +142,6 @@ const listCodePluginInstallsOwned = async (
       version: row.version,
       integrity: row.integrity,
       code: code.value,
-      tier: installedPluginTier(
-        scope,
-        code.value.tier,
-        installTrustFromRow(row),
-      ),
       ...(row.trusted_by_user_id === null
         ? {}
         : { installedByUserId: row.trusted_by_user_id }),
@@ -181,26 +165,13 @@ export const resolveThreadCodePlugins = async (
   db: D1Database,
   threadId: string,
   /** Keeps background work alive past the response. */
-  waitUntil?: (promise: Promise<unknown>) => void,
+  _waitUntil?: (promise: Promise<unknown>) => void,
 ): Promise<ReadonlyArray<ResolvedCodePlugin>> => {
-  const { installs, ownerUserId } = await listCodePluginInstallsOwned(
+  const { installs } = await listCodePluginInstallsOwned(
     db,
     "SELECT owner_user_id AS id FROM threads WHERE id = ?1",
     threadId,
   );
-  // ─── Durable host ───
-  // Declared jobs start when a Thread first resolves the install: one RPC
-  // per isolate, install version, and Thread; no D1 read.
-  if (ownerUserId !== undefined) {
-    const started = ensureDurableJobs(
-      bindings,
-      db,
-      installs,
-      ownerUserId,
-      threadId,
-    );
-    if (started !== undefined) waitUntil?.(started);
-  }
   return describeCodePlugins(bindings, db, installs);
 };
 
@@ -224,8 +195,6 @@ export const describeCodePlugins = (
         tools: [],
         commands: [],
         linkPatterns: [],
-        panes: [],
-        views: [],
         exports: [],
         agentModes: [],
         loadError:

@@ -121,6 +121,11 @@ export interface DaemonCredential {
 
 export interface EnsureDaemonInput {
   readonly threadId: ThreadId;
+  /**
+   * A plugin Orb (plugins/services/orb-owner.ts): created when it has no
+   * workspace yet, and given no source, Project scripts, or repositories.
+   */
+  readonly pluginOrb?: true;
   readonly endpoint: string;
   readonly signal?: AbortSignal;
   /**

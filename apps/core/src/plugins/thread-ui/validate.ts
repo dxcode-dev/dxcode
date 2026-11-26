@@ -135,15 +135,11 @@ export const noticeOf = (message: unknown, level: unknown) => {
 
 const decodeQuickAction = Schema.decodeUnknownOption(PluginQuickAction);
 
-const ACTION_ARG: Record<
-  PluginQuickActionKind,
-  "text" | "url" | "command" | "pane"
-> = {
+const ACTION_ARG: Record<PluginQuickActionKind, "text" | "url" | "command"> = {
   "send-message": "text",
   copy: "text",
   "open-url": "url",
   "run-command": "command",
-  "open-pane": "pane",
 };
 
 export const quickActionOf = (options: unknown) => {
@@ -167,14 +163,7 @@ export const quickActionOf = (options: unknown) => {
     decoded.value.args[argName] === undefined
   )
     throw new Error(
-      "createQuickAction takes a label (at most 48 characters) and an action: send-message or copy with args.text, open-url with args.url (https), run-command with args.command (a command this plugin registered), or open-pane with args.pane (a pane this plugin registered).",
-    );
-  if (
-    argName === "pane" &&
-    !/^[a-z][a-z0-9-]{0,47}$/.test(decoded.value.args.pane ?? "")
-  )
-    throw new Error(
-      "An open-pane quick action names a pane id: 1 to 48 lowercase letters, digits, and hyphens.",
+      "createQuickAction takes a label (at most 48 characters) and an action: send-message or copy with args.text, open-url with args.url (https), or run-command with args.command (a command this plugin registered).",
     );
   if (argName === "url") {
     let url: URL | undefined;

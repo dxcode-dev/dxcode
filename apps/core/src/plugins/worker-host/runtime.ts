@@ -9,8 +9,6 @@
  *   registration order and returns their combined result.
  * - `callTool(name, input, call, host)`: runs a registered tool.
  * - `runCommand(id, call, host)`: runs a registered palette command.
- * - `paneMessage(id, message, call, host)`: runs a registered pane's or
- *   view's `onMessage` for a message its view sent.
  * - `callExport(fn, args, call, host, ms)`: runs a function `dx.expose`
  *   published, for another plugin's `ctx.plugins.call`.
  *
@@ -44,29 +42,19 @@ export const HANDLER_TIMEOUT_MS = 10_000;
 export const TOOL_TIMEOUT_MS = 60_000;
 /** Each palette command has this long. */
 export const COMMAND_TIMEOUT_MS = 60_000;
-/** Each pane's `onMessage` has this long. */
-export const PANE_MESSAGE_TIMEOUT_MS = 60_000;
 /** Each exposed function called from another host has this long. */
 export const HOST_CALL_TIMEOUT_MS = 60_000;
-/** Each job run has this long (a trusted tier's call limit). */
-export const JOB_TIMEOUT_MS = 300_000;
-/** Each `ctx.watch` handler has this long per message. */
-export const WATCH_MESSAGE_TIMEOUT_MS = 60_000;
 
 /** What `import "@dxcode/plugin"` resolves to inside the worker. */
 export const apiModuleSource = `export const PLUGIN_API_VERSION = 1;
-export const PLUGIN_TIERS = Object.freeze(["sandboxed", "personal-dev", "workspace-trusted", "verified"]);
 export const MAX_AGENT_END_CONTINUATIONS = 5;
 export const MAX_QUICK_ACTIONS_PER_THREAD = 5;
-export const MAX_PANES_PER_PLUGIN = 4;
-export const PANE_MESSAGES_KEPT = 20;
 export const SHELL_DEFAULT_TIMEOUT_MS = 30000;
 export const SHELL_MAX_TIMEOUT_MS = 60000;
 export const SHELL_OUTPUT_BYTES = 131072;
 export const MAX_THREAD_MESSAGES = 20;
 export const MAX_THREAD_POSTS_PER_CALL = 5;
 export const MAX_THREAD_POSTS_PER_MINUTE = 10;
-export const MAX_VIEWS_PER_PLUGIN = 8;
 export const MAX_PLUGIN_CALL_DEPTH = 3;
 export const definePlugin = (entry) => entry;
 `;
@@ -76,10 +64,9 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as pluginModule from ${JSON.stringify(`./${entry}`)};
 
-const EVENTS = new Set(["session.start", "agent.start", "agent.end", "tool.call", "tool.result", "trigger.received", "changes.prompt", "thread.archived", "thread.unarchived", "job.run"]);
+const EVENTS = new Set(["session.start", "agent.start", "agent.end", "tool.call", "tool.result", "trigger.received", "changes.prompt", "thread.archived", "thread.unarchived", "job.run", "listener.event"]);
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
 const COMMAND_ID = /^[a-z][a-z0-9-]{0,47}$/;
-const PANE_HTML_BYTES = 262144;
 const AGENT_NAME = /^[a-z][a-z0-9-]{0,23}$/;
 // The call each agent.run belongs to: the Thread it starts a child of.
 const calls = new AsyncLocalStorage();
@@ -96,22 +83,7 @@ const runCall = (scope, work) => {
     }
   });
 };
-// UTF-8 length without TextEncoder, which the QuickJS host lacks.
-const utf8Bytes = (text) => {
-  let bytes = 0;
-  for (let index = 0; index < text.length; index += 1) {
-    const code = text.charCodeAt(index);
-    if (code < 0x80) bytes += 1;
-    else if (code < 0x800) bytes += 2;
-    else if (code >= 0xd800 && code < 0xdc00) { bytes += 4; index += 1; }
-    else bytes += 3;
-  }
-  return bytes;
-};
 const handlers = new Map();
-const panes = new Map();
-// Tabs, pages, and Thread types draw views; other plugins call exports.
-const views = new Map();
 const tools = new Map();
 const commands = new Map();
 const linkPatterns = [];
@@ -120,11 +92,6 @@ const agentModes = new Map();
 // ─── Hosts ───
 const exposed = new Map();
 const EXPOSED_NAME = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
-// ─── Durable host ───
-const jobs = new Map();
-// ctx.watch handlers by target, in this isolate; dx re-runs the job or
-// function that opened a watch when a message finds no handler here.
-const watchHandlers = new Map();
 let sealed = false;
 let setup;
 
@@ -197,34 +164,6 @@ const api = Object.freeze({
     if (linkPatterns.length >= 16) throw new Error("A plugin registers at most 16 link patterns.");
     linkPatterns.push({ pattern: source, ...(flags === "" ? {} : { flags }), url: link.url, ...(link.title === undefined ? {} : { title: link.title }) });
   },
-  registerPane(pane) {
-    if (sealed) throw new Error("Register panes while the plugin starts, not later.");
-    if (pane === null || typeof pane !== "object") throw new TypeError("registerPane takes a pane object.");
-    if (typeof pane.id !== "string" || !COMMAND_ID.test(pane.id))
-      throw new Error("A pane id is 1 to 48 lowercase letters, digits, and hyphens, starting with a letter.");
-    if (typeof pane.title !== "string" || pane.title.trim() === "" || pane.title.trim().length > 40)
-      throw new Error("The pane " + pane.id + " needs a title of at most 40 characters.");
-    if (typeof pane.html !== "string" || pane.html.trim() === "" || utf8Bytes(pane.html) > PANE_HTML_BYTES)
-      throw new Error("The pane " + pane.id + " needs html of at most 256 KB.");
-    if (pane.onMessage !== undefined && typeof pane.onMessage !== "function")
-      throw new TypeError("The pane " + pane.id + "'s onMessage must be a function.");
-    if (panes.has(pane.id) || views.has(pane.id)) throw new Error("Two panes or views have the id " + pane.id + ".");
-    if (panes.size >= 4) throw new Error("A plugin registers at most 4 panes.");
-    panes.set(pane.id, pane);
-  },
-  registerView(view) {
-    if (sealed) throw new Error("Register views while the plugin starts, not later.");
-    if (view === null || typeof view !== "object") throw new TypeError("registerView takes a view object.");
-    if (typeof view.id !== "string" || !COMMAND_ID.test(view.id))
-      throw new Error("A view id is 1 to 48 lowercase letters, digits, and hyphens, starting with a letter.");
-    if (typeof view.html !== "string" || view.html.trim() === "" || utf8Bytes(view.html) > PANE_HTML_BYTES)
-      throw new Error("The view " + view.id + " needs html of at most 256 KB.");
-    if (view.onMessage !== undefined && typeof view.onMessage !== "function")
-      throw new TypeError("The view " + view.id + "'s onMessage must be a function.");
-    if (views.has(view.id) || panes.has(view.id)) throw new Error("Two panes or views have the id " + view.id + ".");
-    if (views.size >= 8) throw new Error("A plugin registers at most 8 views.");
-    views.set(view.id, view);
-  },
   createAgent(config) {
     if (sealed) throw new Error("Create agents while the plugin starts, not later.");
     if (config === null || typeof config !== "object") throw new TypeError("createAgent takes an agent config object.");
@@ -240,7 +179,7 @@ const api = Object.freeze({
       run(message, options) {
         const scope = calls.getStore();
         if (scope === undefined)
-          return Promise.reject(new Error("agent.run runs inside a plugin call: a tool, command, event handler, or pane message."));
+          return Promise.reject(new Error("agent.run runs inside a plugin call: a tool, command, or event handler."));
         if (scope.call.threadId === undefined)
           return Promise.reject(new Error("agent.run runs only inside a Thread."));
         // dx checks the grant itself, so a refused run is audited too.
@@ -269,16 +208,6 @@ const api = Object.freeze({
       if (exposed.has(name)) throw new Error("Two exposed functions are named " + name + ".");
       exposed.set(name, fn);
     }
-  },
-  // ─── Durable host ───
-  registerJob(job) {
-    if (sealed) throw new Error("Register jobs while the plugin starts, not later.");
-    if (job === null || typeof job !== "object") throw new TypeError("registerJob takes { id, run }.");
-    if (typeof job.id !== "string" || !COMMAND_ID.test(job.id))
-      throw new Error("A job id is 1 to 48 lowercase letters, digits, and hyphens, starting with a letter.");
-    if (typeof job.run !== "function") throw new TypeError("The job " + job.id + " needs a run function.");
-    if (jobs.has(job.id)) throw new Error("Two jobs have the id " + job.id + ".");
-    jobs.set(job.id, job);
   },
 });
 
@@ -360,7 +289,6 @@ const context = (call, host, time) => {
   const ctx = {
     install: call.install,
     caller: call.caller,
-    tier: call.tier ?? "sandboxed",
     storage: Object.freeze({
       get: (key) => host.storageGet(String(key)),
       set: (key, value) => host.storageSet(String(key), plain(value) ?? null),
@@ -409,9 +337,14 @@ const context = (call, host, time) => {
           }
         : {}),
     });
-  if (call.grants.threads || call.grants.threadRead || call.grants.threadPost)
+  if (call.grants.threads || call.grants.threadRead || call.grants.threadPost || call.grants.threadOpen || call.grants.threadPostOwn)
     ctx.threads = Object.freeze({
       ...(call.grants.threads ? { create: (options) => host.createThread(plain(options) ?? {}) } : {}),
+      // Install actions, the same calls a service makes (POST /threads).
+      ...(call.grants.threadOpen ? { open: (options) => host.threadsOpen(plain(options) ?? {}) } : {}),
+      ...(call.grants.threadPostOwn
+        ? { post: async (id, text, options) => { await host.threadsPostOwn(String(id), String(text), (plain(options) ?? {}).wake === true); } }
+        : {}),
       ...(call.grants.threadRead || call.grants.threadPost
         ? {
             get(id) {
@@ -435,6 +368,15 @@ const context = (call, host, time) => {
       return new Response(empty ? null : answer.body, { status: answer.status, headers: answer.headers });
     };
   }
+  // Views described as data: one call sets state at a path, and open
+  // browsers redraw. Each set returns the state's new version.
+  if (call.grants.viewState)
+    ctx.views = Object.freeze({
+      set: (viewId, path, value) => host.viewSet(String(viewId), path === undefined ? "" : String(path), plain(value)),
+      get: (viewId, path) => host.viewGet(String(viewId), path === undefined ? "" : String(path)),
+      // A tool's result that names a view shows it as a card under the call.
+      card: (viewId) => ({ _meta: { "dev.dxcode/view": String(viewId) } }),
+    });
   if (call.grants.secrets) ctx.secrets = Object.freeze({ get: (name) => host.secret(String(name)) });
   if (call.grants.tools) ctx.tools = Object.freeze({ call: (name, input) => host.callTool(String(name), plain(input) ?? {}) });
   if (call.grants.ai) ctx.ai = Object.freeze({ generate: (options) => host.generate(plain(options) ?? {}) });
@@ -459,87 +401,24 @@ const context = (call, host, time) => {
   }
   // ─── Hosts ───
   // Present when the manifest names entries per host; dx checks the kind
-  // against the install's tier and logs the call either way.
+  // against the manifest and logs the call either way.
   if (Array.isArray(call.hosts)) {
     ctx.host = (kind) => Object.freeze({
       // The other host keeps its own limit, so this call's clock pauses.
       call: (fn, args) => time.waitOnPerson(() => host.hostCall(String(kind), String(fn), plain(args) ?? null)),
     });
   }
-  // ─── Durable host ───
-  if (call.grants.durable) {
-    const bytesOf = (body) => {
-      if (typeof body === "string") return body;
-      if (body instanceof ArrayBuffer) return body;
-      if (ArrayBuffer.isView(body)) return body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength);
-      throw new TypeError("A blob's body is text or an ArrayBuffer.");
-    };
-    ctx.sql = Object.freeze({
-      exec: (sql, ...params) => host.sqlExec(String(sql), params.map((value) => value instanceof ArrayBuffer || value === null || typeof value !== "object" ? value : plain(value))),
+  // The install's cloud identity (POST /id-token for a service).
+  if (call.grants.identity)
+    ctx.identity = Object.freeze({
+      token: (audience, ttlSeconds) => host.identityToken(String(audience), ttlSeconds === undefined ? undefined : Number(ttlSeconds)),
     });
-    ctx.blobs = Object.freeze({
-      put: (key, body, meta) => host.blobPut(String(key), bytesOf(body), plain(meta) ?? {}),
-      get: (key) => host.blobGet(String(key)),
-      delete: (key) => host.blobDelete(String(key)),
-      list: (prefix) => host.blobList(prefix === undefined ? "" : String(prefix)),
-    });
-    ctx.jobs = Object.freeze({
-      schedule: (id, when, data) => host.jobsSchedule(String(id), plain(when) ?? {}, plain(data) ?? null),
-      cancel: (id) => host.jobsCancel(String(id)),
-      list: () => host.jobsList(),
-    });
-  }
-  if (call.grants.wake) ctx.wake = (threadId, message) => host.wake(String(threadId), String(message));
-  if (call.grants.watch) {
-    ctx.watch = async (target, handler) => {
-      if (typeof handler !== "function") throw new TypeError("ctx.watch takes a target and a handler function.");
-      const key = String(target);
-      watchHandlers.set(key, handler);
-      try {
-        await host.watchOpen(key);
-      } catch (error) {
-        watchHandlers.delete(key);
-        throw error;
-      }
-      return Object.freeze({
-        // Closed from a later call, the call's own host closes it.
-        // Resolves once dx closed the connection; await it inside a call,
-        // which ends (and with it the request) when the call returns.
-        close: () => {
-          watchHandlers.delete(key);
-          return (calls.getStore()?.host ?? host).watchClose(key);
-        },
-      });
-    };
-  }
-  if (call.grants.panes || call.grants.views) {
-    const handles = new Map();
-    ctx.panes = Object.freeze({
-      get(id) {
-        // A Thread tab is a view; it takes posts as a pane does.
-        if (!(call.grants.panes && panes.has(id)) && !(call.grants.views && views.has(id)))
-          throw new Error("The plugin registered no pane " + String(id) + ".");
-        let handle = handles.get(id);
-        if (handle === undefined) {
-          handle = Object.freeze({
-            id,
-            open: () => host.paneOpen(id),
-            post: (message) => host.panePost(id, plain(message) ?? null),
-            // The state an archived Thread shows read-only ("show").
-            snapshot: (state) => host.paneSnapshot(id, plain(state) ?? null),
-          });
-          handles.set(id, handle);
-        }
-        return handle;
-      },
-    });
-  }
   if (call.grants.plugins) {
     ctx.plugins = Object.freeze({
-      // dx checks the grant, both installs, and both tiers, and audits it.
+      // dx checks the grant and both installs, and audits it.
       call: (plugin, fn, args) => host.pluginCall(String(plugin), String(fn), plain(args) ?? null, time.remainingMs()).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        const refused = /^\\[(not-permitted|not-installed|not-exported|lower-tier|owner-only|cycle)\\] /.exec(message);
+        const refused = /^\\[(not-permitted|not-installed|not-exported|cycle)\\] /.exec(message);
         if (refused === null) throw error;
         const wrapped = new Error(message);
         wrapped.name = "PluginCallRefused";
@@ -549,22 +428,9 @@ const context = (call, host, time) => {
     });
   }
   if (call.calledBy !== undefined) ctx.calledBy = Object.freeze({ plugin: call.calledBy });
-  if (call.grants.prompt || call.grants.notify || call.streams) {
+  if (call.grants.prompt || call.grants.notify) {
     const notGranted = (what) => () => Promise.reject(new Error("This plugin was not granted the " + what + " UI permission."));
     const ask = (kind) => (options) => time.waitOnPerson(() => host.uiPrompt(kind, plain(options) ?? {}));
-    // Ctx.ui.stream(paneId), only at a trusted tier.
-    const stream = async (paneId) => {
-      if (!panes.has(paneId)) throw new Error("The plugin registered no pane " + String(paneId) + ".");
-      const opened = await host.streamOpen(paneId);
-      const id = opened.id;
-      return Object.freeze({
-        id,
-        url: opened.url,
-        send: (chunk) => host.streamSend(id, chunk instanceof ArrayBuffer ? chunk : ArrayBuffer.isView(chunk) ? chunk.buffer.slice(chunk.byteOffset, chunk.byteOffset + chunk.byteLength) : String(chunk)),
-        close: () => host.streamClose(id),
-        onMessage: (handler) => { host.streamOnMessage(id, (data) => handler(data)).catch((error) => console.error("Stream onMessage is not available: " + String(error))); },
-      });
-    };
     ctx.ui = Object.freeze({
       confirm: call.grants.prompt ? ask("confirm") : notGranted("prompt"),
       input: call.grants.prompt ? ask("input") : notGranted("prompt"),
@@ -572,7 +438,6 @@ const context = (call, host, time) => {
       notify: call.grants.notify
         ? (message, options) => host.uiNotify(String(message), plain(options)?.level ?? "info")
         : notGranted("notify"),
-      ...(call.streams ? { stream } : {}),
     });
   }
   return Object.freeze(ctx);
@@ -602,23 +467,10 @@ export default class extends WorkerEntrypoint {
         ...iconOf(command),
       })),
       linkPatterns,
-      panes: [...panes.values()].map((pane) => ({
-        id: pane.id,
-        title: pane.title.trim(),
-        html: pane.html,
-        handlesMessages: pane.onMessage !== undefined,
-        ...iconOf(pane),
-      })),
-      views: [...views.values()].map((view) => ({
-        id: view.id,
-        html: view.html,
-        handlesMessages: view.onMessage !== undefined,
-      })),
       // Exports are the exposed names the manifest lists.
       exports: [...exposed.keys()],
       agentModes: [...agentModes].map(([key, agent]) => ({ key, agent: plain(agent) })),
       exposed: [...exposed.keys()],
-      jobs: [...jobs.keys()],
     };
   }
 
@@ -720,41 +572,6 @@ export default class extends WorkerEntrypoint {
     if (target === undefined) throw new Error("The plugin exposes no function named " + fn + ".");
     const time = clock();
     const result = await runCall({ call, host, time }, () => time.within(call.callMs ?? ${HOST_CALL_TIMEOUT_MS}, "The exposed function " + fn, Promise.resolve().then(() => target(args, context(call, host, time)))));
-    return plain(result) ?? null;
-  }
-
-  // ─── Durable host ───
-  async runJob(id, runId, data, call, host) {
-    await ready();
-    const base = String(id).split(":")[0];
-    const job = jobs.get(base);
-    const time = clock();
-    if (job === undefined) {
-      if (!handlers.has("job.run")) throw new Error("The plugin registered no job " + base + " and handles no job.run event.");
-      await runCall({ call, host, time }, () => this.#dispatchIn(time, "job.run", { id, runId, data }, call, host));
-      return null;
-    }
-    const result = await runCall({ call, host, time }, () => time.within(${JOB_TIMEOUT_MS}, "The job " + id, Promise.resolve().then(() => job.run(data, context(call, host, time)))));
-    return plain(result) ?? null;
-  }
-
-  async watchMessage(target, message, call, host) {
-    await ready();
-    const handler = watchHandlers.get(target);
-    if (handler === undefined) return { missing: true };
-    const time = clock();
-    await runCall({ call, host, time }, () => time.within(${WATCH_MESSAGE_TIMEOUT_MS}, "The watch handler for " + target, Promise.resolve().then(() => handler(message, context(call, host, time)))));
-    return { missing: false };
-  }
-
-  async paneMessage(id, message, call, host) {
-    await ready();
-    // A tab's or page's view answers through the same call.
-    const pane = panes.get(id) ?? views.get(id);
-    if (pane === undefined) throw new Error("The plugin has no pane " + id + ".");
-    if (pane.onMessage === undefined) throw new Error("The pane " + id + " takes no messages.");
-    const time = clock();
-    const result = await runCall({ call, host, time }, () => time.within(call.callMs ?? ${PANE_MESSAGE_TIMEOUT_MS}, "The pane " + id + "'s onMessage", Promise.resolve().then(() => pane.onMessage(message, context(call, host, time)))));
     return plain(result) ?? null;
   }
 

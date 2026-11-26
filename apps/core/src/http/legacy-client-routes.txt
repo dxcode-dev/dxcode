@@ -19,16 +19,13 @@ GET /v1/bug-reports/:id/files/:name
 GET /v1/bug-reports/access
 GET /v1/bug-reports/all
 GET /v1/huddle-links/:workspace/:code
-GET /v1/plugin-streams/producer
 GET /v1/plugins/icons/lucide/:name
 GET /v1/plugins/views
-GET /v1/plugins/views/:plugin/pages/:page
 GET /v1/realtime
 GET /v1/settings/personal/model-routing/subscriptions
 GET /v1/settings/personal/plugin-bundles
 GET /v1/settings/personal/plugin-bundles/:pluginId/export
 GET /v1/settings/personal/plugin-bundles/:pluginId/host-usage
-GET /v1/settings/personal/plugin-bundles/:pluginId/jobs
 GET /v1/settings/personal/plugin-bundles/:pluginId/settings
 GET /v1/settings/personal/plugin-bundles/updates
 GET /v1/settings/personal/plugin-catalogs
@@ -39,7 +36,6 @@ GET /v1/settings/personal/skills/discover
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/export
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/host-usage
-GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/jobs
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/settings
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/updates
 GET /v1/settings/workspaces/:workspaceSlug/plugin-catalogs
@@ -67,13 +63,10 @@ PATCH /v1/settings/workspaces/:workspaceSlug/skills/policy
 POST /v1/agents/dx/:id
 POST /v1/bug-reports
 POST /v1/bug-reports/:id/investigation
-POST /v1/plugins/views/:plugin/pages/:page/messages
 POST /v1/settings/personal/model-routing/subscriptions/:provider/authorize
 POST /v1/settings/personal/model-routing/subscriptions/authorization/:authorizationId/poll
 POST /v1/settings/personal/model-routing/subscriptions/connections/:connectionId/refresh
 POST /v1/settings/personal/plugin-bundles
-POST /v1/settings/personal/plugin-bundles/:pluginId/jobs/:jobId/start
-POST /v1/settings/personal/plugin-bundles/:pluginId/jobs/:jobId/stop
 POST /v1/settings/personal/plugin-bundles/:pluginId/share
 POST /v1/settings/personal/plugin-bundles/:pluginId/update
 POST /v1/settings/personal/plugin-bundles/:pluginId/update/preview
@@ -91,8 +84,6 @@ POST /v1/settings/personal/skills/proposals/:proposalId/approve
 POST /v1/settings/personal/skills/proposals/:proposalId/reject
 POST /v1/settings/personal/skills/sources/preview
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles
-POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/jobs/:jobId/start
-POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/jobs/:jobId/stop
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/share
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/update
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/update/preview
@@ -117,9 +108,7 @@ POST /v1/threads/:threadId/huddle/link
 POST /v1/threads/:threadId/orb/fault
 POST /v1/threads/:threadId/terminal/close
 POST /v1/threads/:threadId/terminal/warm
-PUT /v1/settings/personal/plugin-bundles/:pluginId/dev
 PUT /v1/settings/personal/plugin-bundles/:pluginId/settings
 PUT /v1/settings/personal/plugin-bundles/policy
-PUT /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/dev
 PUT /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/settings
 PUT /v1/settings/workspaces/:workspaceSlug/plugin-bundles/policy

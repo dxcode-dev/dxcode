@@ -313,6 +313,11 @@ const commandEnvironment = (paths, supplied = {}) => {
         ? inheritedPath
         : `${daemonBinaryDirectory}:${inheritedPath}`,
     TERM: "xterm-256color",
+    // The Thread's own daemon, as the guest's default config path is: a
+    // `dxd files` or `dxd plugin` command never reaches the host's dxd.
+    ...(paths.daemon === undefined
+      ? {}
+      : { DXD_CONFIG: join(paths.daemon, "config.json") }),
   };
   for (const [name, value] of Object.entries(supplied)) {
     if (

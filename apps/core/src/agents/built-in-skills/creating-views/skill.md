@@ -214,7 +214,7 @@ logo-grok.
 ## Web components: `@dxcode/plugin-ui`
 
 For forms, tables, tabs, and status, a view can also load the plugin UI kit, the same `dx-*` web
-components plugin panes use. Put its tag first; dx inlines the kit and its theme (the MCP Apps
+components MCP Apps cards use. Put its tag first; dx inlines the kit and its theme (the MCP Apps
 `--color-*`, `--font-*`, and `--border-radius-*` variables, from the same design system, with the
 same contrast settings). Without the tag, nothing extra loads.
 

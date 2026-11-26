@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { ThreadId, UserId } from "@dx/domain";
 import { Effect, Option, Redacted, Schema } from "effect";
 import type { Bindings } from "../http/types.js";
+import {
+  pluginOrbRunnableSql,
+  runnablePluginOrb,
+} from "../plugins/services/orb-owner.js";
 import { threadProjectReachableSql } from "../settings/members/membership-sql.js";
 import { createAuth } from "./better-auth.js";
 import { loadAuthenticationRequirements } from "./requirements.js";
@@ -40,8 +44,11 @@ const activeThreadOwner = async (bindings: Bindings, threadId: ThreadId) => {
     )
     .bind(threadId)
     .first<{ readonly owner_user_id: string }>();
-  if (row === null) throw new Error("Active Thread is unavailable.");
-  return Schema.decodeUnknownSync(UserId)(row.owner_user_id);
+  if (row !== null) return Schema.decodeUnknownSync(UserId)(row.owner_user_id);
+  // A plugin Orb's dxd runs as its payer (plugins/services/orb-owner.ts).
+  const orb = await runnablePluginOrb(database(bindings), threadId);
+  if (orb === undefined) throw new Error("Active Thread is unavailable.");
+  return Schema.decodeUnknownSync(UserId)(orb.payerUserId);
 };
 
 export const mintThreadDaemonApiKey = async (
@@ -102,7 +109,11 @@ export const verifyThreadDaemonApiKey = async (
     )
     .bind(threadId, verified.key.referenceId)
     .first<{ readonly owned: number }>();
-  return owner?.owned === 1 ? { keyId: verified.key.id } : undefined;
+  if (owner?.owned === 1) return { keyId: verified.key.id };
+  const orb = await runnablePluginOrb(database(bindings), threadId);
+  return orb !== undefined && orb.payerUserId === verified.key.referenceId
+    ? { keyId: verified.key.id }
+    : undefined;
 };
 
 /**
@@ -132,7 +143,22 @@ export const confirmThreadDaemonApiKey = async (
     )
     .bind(keyId, DAEMON_KEY_CONFIG, threadId)
     .first<{ readonly owned: number }>();
-  return row?.owned === 1;
+  if (row?.owned === 1) return true;
+  const orb = await database(bindings)
+    .prepare(
+      `SELECT 1 AS owned
+         FROM apikey
+         JOIN plugin_orb AS orb ON orb.payer_user_id = apikey.referenceId
+        WHERE apikey.id = ?
+          AND apikey.configId = ?
+          AND (apikey.enabled IS NULL OR apikey.enabled = 1)
+          AND apikey.expiresAt IS NULL
+          AND orb.id = ?
+          AND ${pluginOrbRunnableSql("orb")}`,
+    )
+    .bind(keyId, DAEMON_KEY_CONFIG, threadId)
+    .first<{ readonly owned: number }>();
+  return orb?.owned === 1;
 };
 
 export const revokeThreadDaemonApiKey = async (

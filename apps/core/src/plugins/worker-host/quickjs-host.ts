@@ -36,6 +36,9 @@ const HOST_METHODS = new Set([
   "storageSet",
   "storageDelete",
   "storageList",
+  // Views described as data: ctx.views.set.
+  "viewSet",
+  "viewGet",
   "settings",
   "fetch",
   "secret",
@@ -50,11 +53,6 @@ const HOST_METHODS = new Set([
   "uiNotify",
   "createQuickAction",
   "removeQuickAction",
-  // Plugin panes (M4b).
-  "paneOpen",
-  "panePost",
-  // The state an archived Thread's pane or tab shows.
-  "paneSnapshot",
   // Thread access: permissions.threads read and post.
   "threadInfo",
   "threadMessages",
@@ -75,10 +73,6 @@ const HOST_METHODS = new Set([
   "watchOpen",
   "watchClose",
   "wake",
-  // String messages only here; binary needs the Dynamic Worker.
-  "streamOpen",
-  "streamSend",
-  "streamClose",
 ]);
 
 /** What the plugin runtime needs that QuickJS lacks: a Workers shim. */
@@ -157,11 +151,6 @@ export type QuickJSPluginOperation =
     }
   | { readonly kind: "runCommand"; readonly id: string }
   | {
-      readonly kind: "paneMessage";
-      readonly id: string;
-      readonly message: unknown;
-    }
-  | {
       readonly kind: "hostCall";
       readonly fn: string;
       readonly args: unknown;
@@ -172,17 +161,6 @@ export type QuickJSPluginOperation =
       readonly fn: string;
       readonly args: unknown;
       readonly ms: number;
-    }
-  | {
-      readonly kind: "runJob";
-      readonly id: string;
-      readonly runId: string;
-      readonly data: unknown;
-    }
-  | {
-      readonly kind: "watchMessage";
-      readonly target: string;
-      readonly message: unknown;
     };
 
 /**
@@ -261,11 +239,8 @@ const result =
   operation.kind === "describe" ? await entry.describe()
   : operation.kind === "dispatch" ? await entry.dispatch(operation.event, operation.payload, call, host)
   : operation.kind === "runCommand" ? await entry.runCommand(operation.id, call, host)
-  : operation.kind === "paneMessage" ? await entry.paneMessage(operation.id, operation.message, call, host)
   : operation.kind === "hostCall" ? await entry.hostCall(operation.fn, operation.args, operation.from, call, host)
   : operation.kind === "callExport" ? await entry.callExport(operation.fn, operation.args, call, host, operation.ms)
-  : operation.kind === "runJob" ? await entry.runJob(operation.id, operation.runId, operation.data, call, host)
-  : operation.kind === "watchMessage" ? await entry.watchMessage(operation.target, operation.message, call, host)
   : await entry.callTool(operation.name, operation.input, call, host);
 __result(result === undefined ? "" : JSON.stringify(result));
 `,
@@ -346,10 +321,6 @@ __result(result === undefined ? "" : JSON.stringify(result));
           const target = host as unknown as Record<string, unknown> | undefined;
           const fn = target?.[method];
           // Arguments cross as JSON here, so a handler can't reach dx.
-          if (method === "streamOnMessage")
-            throw new Error(
-              "A stream's onMessage needs the Dynamic Worker host; this fallback runtime can't hand dx a handler.",
-            );
           if (!HOST_METHODS.has(method) || typeof fn !== "function")
             throw new Error(`dx has no ${method} for plugins here.`);
           const args = JSON.parse(argsJson) as unknown[];

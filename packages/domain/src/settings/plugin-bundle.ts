@@ -1,6 +1,11 @@
 import { Context, type Effect, Schema } from "effect";
 import type { PersistenceUnavailable } from "../persistence/errors.js";
 import { Timestamp } from "../persistence/timestamp.js";
+import {
+  DATA_VIEW_PLACES,
+  MAX_DATA_VIEW_BYTES,
+  MAX_DATA_VIEWS,
+} from "../plugins/data-view.js";
 import { UserId } from "../users/user-id.js";
 import { McpServerEndpoint, McpServerName } from "./mcp-server.js";
 import {
@@ -12,16 +17,17 @@ import {
 } from "./plugin.js";
 import { PluginCatalogReference } from "./plugin-catalog-id.js";
 import { PluginCodeHosts } from "./plugin-host-kind.js";
-import {
-  MAX_PLUGIN_JOBS,
-  PluginDurableScope,
-  PluginJob,
-} from "./plugin-job-schedule.js";
 import type {
   PluginIntegrityConflict,
   PluginNotFound,
 } from "./plugin-repository.js";
-import { PluginTier } from "./plugin-trust.js";
+import {
+  MAX_PLUGIN_SERVICE_LISTENERS,
+  MAX_PLUGIN_SERVICE_SCHEDULES,
+  PluginService,
+  PluginServiceListener,
+  PluginServiceSchedule,
+} from "./plugin-service.js";
 import { MAX_SKILLS_PER_SCOPE, SkillDescription, SkillName } from "./skill.js";
 
 /**
@@ -33,7 +39,11 @@ import { MAX_SKILLS_PER_SCOPE, SkillDescription, SkillName } from "./skill.js";
  * imported.
  */
 
-export const MAX_PLUGIN_ARCHIVE_BYTES = 16 * 1024 * 1024;
+/**
+ * A plugin's ZIP. 24 MiB (16 MiB until plugin services): a service ships its
+ * program's files, which go into the package in R2, never into D1 rows.
+ */
+export const MAX_PLUGIN_ARCHIVE_BYTES = 24 * 1024 * 1024;
 export const MAX_PLUGIN_ARCHIVE_ENTRIES = 20_000;
 export const MAX_PLUGIN_BUNDLE_MCP_SERVERS = 10;
 export const MAX_PLUGIN_BUNDLE_SKIPPED = 100;
@@ -123,9 +133,14 @@ export const isStdioMcpServer = (
 ): server is PluginBundleStdioMcpServer =>
   "transport" in server && server.transport === "stdio";
 
-/** The most bytes and files a plugin package (its folder, for the Orb) holds. */
+/**
+ * The most bytes and files a plugin package (its folder, for the Orb) holds.
+ * The package lives in R2 (`plugin-packages/<sha256>`) and only dxd reads
+ * it, so a large one costs no request path a read. Files were 5,000 until
+ * plugin services; a program's sources reach the archive's entry limit.
+ */
 export const MAX_PLUGIN_PACKAGE_BYTES = 32 * 1024 * 1024;
-export const MAX_PLUGIN_PACKAGE_FILES = 5_000;
+export const MAX_PLUGIN_PACKAGE_FILES = MAX_PLUGIN_ARCHIVE_ENTRIES;
 
 /**
  * The plugin's own files, kept so dxd can lay them out as `PLUGIN_ROOT` in
@@ -195,29 +210,16 @@ export type PluginIconSet = typeof PluginIconSet.Type;
 export const MAX_PLUGIN_ITEM_ICONS = 32;
 
 /**
- * What a plugin shows in an archived Thread: `hide` (default) nothing,
- * `show` its views read-only with their last snapshot, `live` its views
- * working. `live` needs a trusted tier and a manifest that names a durable
- * host (`effectiveArchivedMode`); otherwise dx serves it as `hide`.
+ * What a plugin does in an archived Thread: `hide` (default) nothing,
+ * `show` its items read-only, `live` keeps its code working. `live` needs a
+ * personal or workspace install (`effectiveArchivedMode`); a repository's
+ * plugin is served as `hide`.
  */
 export const PLUGIN_ARCHIVED_MODES = ["hide", "show", "live"] as const;
 
 export const PluginArchivedMode = Schema.Literals(PLUGIN_ARCHIVED_MODES);
 
 export type PluginArchivedMode = typeof PluginArchivedMode.Type;
-
-/** A pane the manifest declares; `registerPane` with the same id draws it. */
-export const PluginManifestPane = Schema.Struct({
-  id: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,47}$/)),
-  title: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(40)),
-  icon: Schema.optional(PluginIconRef),
-  archivedThreads: Schema.optional(PluginArchivedMode),
-});
-
-export type PluginManifestPane = typeof PluginManifestPane.Type;
-
-/** At most this many panes a manifest declares, as `registerPane` allows. */
-export const MAX_PLUGIN_MANIFEST_PANES = 4;
 
 /** dx's code layer: the events a plugin's code may handle. */
 export const PLUGIN_CODE_EVENTS = [
@@ -231,9 +233,10 @@ export const PLUGIN_CODE_EVENTS = [
   // Once when the Thread is archived or restored; 10 s, no Orb.
   "thread.archived",
   "thread.unarchived",
-  // A declared job's run, for code that handles jobs as
-  // an event instead of with dx.registerJob.
+  // A manifest schedule's run, for a plugin without a service: { name, scheduledAt }.
   "job.run",
+  // A message on a manifest listener's URL: { name, data }.
+  "listener.event",
 ] as const;
 
 export const PluginCodeEvent = Schema.Literals(PLUGIN_CODE_EVENTS);
@@ -241,17 +244,18 @@ export const PluginCodeEvent = Schema.Literals(PLUGIN_CODE_EVENTS);
 /**
  * dx's own UI a plugin's code may show in a Thread: `prompt` asks with
  * `ctx.ui.confirm`, `input`, and `select` above the composer; `notify`
- * shows a toast; `quick-action` adds buttons above the composer; `pane`
- * shows the plugin's own sandboxed views as Thread panes.
+ * shows a toast; `quick-action` adds buttons above the composer.
  */
 export const PLUGIN_CODE_UI_GRANTS = [
   "prompt",
   "notify",
   "quick-action",
-  "pane",
 ] as const;
 
 export const PluginCodeUiGrant = Schema.Literals(PLUGIN_CODE_UI_GRANTS);
+
+/** The UI grant for plugin panes, removed on 2026-11-25. */
+export const RETIRED_PLUGIN_UI_GRANT = "pane";
 
 export type PluginCodeUiGrant = typeof PluginCodeUiGrant.Type;
 
@@ -320,10 +324,7 @@ export type PluginAgentMode = typeof PluginAgentMode.Type;
 
 // ─── Views and plugin-to-plugin calls ──────────────────────────────────
 
-/**
- * A view's id: the id its code passes to `dx.registerView`. Panes and views
- * share one id namespace per plugin.
- */
+/** A view's id: 1 to 48 lowercase letters, digits, and hyphens. */
 export const PluginViewId = Schema.String.check(
   Schema.isPattern(/^[a-z][a-z0-9-]{0,47}$/),
 );
@@ -333,62 +334,28 @@ const PluginViewTitle = Schema.String.check(
   Schema.isMaxLength(40),
 );
 
-/** A full-width tab in a Thread, beside Chat, Files, Changes, and Terminal. */
-export const PluginViewTab = Schema.Struct({
-  id: PluginViewId,
-  title: PluginViewTitle,
-  icon: Schema.optional(PluginIconRef),
-  archivedThreads: Schema.optional(PluginArchivedMode),
-});
-
-export type PluginViewTab = typeof PluginViewTab.Type;
-
-/** A full page outside any Thread, at `/plugins/<name>/<id><path>`. */
-export const PluginViewPage = Schema.Struct({
-  id: PluginViewId,
-  title: PluginViewTitle,
-  icon: Schema.optional(PluginIconRef),
-  /** The page's default sub-path, `/` or `/dashboard`. */
-  path: Schema.String.check(
-    Schema.isMaxLength(200),
-    Schema.isPattern(/^\/[A-Za-z0-9._~/-]*$/),
-  ),
-});
-
-export type PluginViewPage = typeof PluginViewPage.Type;
-
 /**
- * A kind of Thread whose main area the plugin draws with one of its tabs,
- * such as an incident room; the chat sits in a side panel, or is hidden.
+ * A view described as data: the array form of the manifest's `views`. dx
+ * draws its file (`data-view.ts`) with its own parts, in each place `show`
+ * names. The file is stored with the version's files, by `file` and
+ * `integrity` (the sha256 of its text).
  */
-export const PluginThreadType = Schema.Struct({
+export const PluginDataViewEntry = Schema.Struct({
   id: PluginViewId,
   title: PluginViewTitle,
   icon: Schema.optional(PluginIconRef),
-  /** The tab id that draws the Thread's main area. */
-  view: PluginViewId,
-  chat: Schema.Literals(["side", "hidden"]),
-});
-
-export type PluginThreadType = typeof PluginThreadType.Type;
-
-export const MAX_PLUGIN_VIEW_TABS = 4;
-export const MAX_PLUGIN_VIEW_PAGES = 4;
-export const MAX_PLUGIN_THREAD_TYPES = 4;
-
-export const PluginViews = Schema.Struct({
-  tabs: Schema.Array(PluginViewTab).check(
-    Schema.isMaxLength(MAX_PLUGIN_VIEW_TABS),
+  show: Schema.Array(Schema.Literals(DATA_VIEW_PLACES)).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(DATA_VIEW_PLACES.length),
   ),
-  pages: Schema.Array(PluginViewPage).check(
-    Schema.isMaxLength(MAX_PLUGIN_VIEW_PAGES),
-  ),
-  threadTypes: Schema.Array(PluginThreadType).check(
-    Schema.isMaxLength(MAX_PLUGIN_THREAD_TYPES),
+  file: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  integrity: Schema.String.check(Schema.isPattern(/^[0-9a-f]{64}$/)),
+  bytes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: MAX_DATA_VIEW_BYTES }),
   ),
 });
 
-export type PluginViews = typeof PluginViews.Type;
+export type PluginDataViewEntry = typeof PluginDataViewEntry.Type;
 
 /** A function other plugins may call with `ctx.plugins.call`. */
 export const PluginExportName = Schema.String.check(
@@ -426,20 +393,26 @@ export type PluginThreadTypeRef = typeof PluginThreadTypeRef.Type;
 export const PluginCodePermissions = Schema.Struct({
   events: Schema.Array(PluginCodeEvent).check(Schema.isMaxLength(16)),
   /** Hosts `ctx.fetch` may reach; `*.example.com` covers subdomains. */
-  network: Schema.Array(PluginCodeHost).check(
-    // Up to the highest tier's limit; a tier below it gets
-    // no network at all (plugin-trust.ts `networkHosts`).
-    Schema.isMaxLength(128),
-  ),
+  network: Schema.Array(PluginCodeHost).check(Schema.isMaxLength(128)),
   /** Secret names from Secrets & Env Vars, in the install's scope. */
   secrets: Schema.Array(PluginCodeName).check(Schema.isMaxLength(32)),
   /** dx tools `ctx.tools.call` may call. */
   tools: Schema.Array(PluginCodeName).check(Schema.isMaxLength(64)),
   /** `ctx.ai`: model calls on the Thread's model route. */
   ai: Schema.Boolean,
-  /** dx UI in the Thread; absent in versions stored before it existed. */
+  /**
+   * dx UI in the Thread; absent in versions stored before it existed.
+   * `pane` is the retired grant a version stored before 2026-11-25 may
+   * hold: it decodes so the plugin's other features keep working, grants
+   * nothing, and `pluginRebuildReason` says the plugin needs a rebuild.
+   */
   ui: Schema.optional(
-    Schema.Array(PluginCodeUiGrant).check(Schema.isMaxLength(8)),
+    Schema.Array(
+      Schema.Union([
+        PluginCodeUiGrant,
+        Schema.Literal(RETIRED_PLUGIN_UI_GRANT),
+      ]),
+    ).check(Schema.isMaxLength(8)),
   ),
   /**
    * Threads the code may reach as the install's caller: `create` starts
@@ -474,9 +447,6 @@ export const PluginCodePermissions = Schema.Struct({
   plugins: Schema.optional(
     Schema.Array(PluginName).check(Schema.isMaxLength(MAX_PLUGIN_CALL_TARGETS)),
   ),
-  // ─── Durable host ───
-  /** `ctx.wake`: a job may wake a Thread with a message (trusted tiers). */
-  wake: Schema.optional(Schema.Boolean),
 });
 
 export type PluginCodePermissions = typeof PluginCodePermissions.Type;
@@ -505,14 +475,10 @@ export const PLUGIN_PERMISSIONS = [
   "plugins",
   "views",
   "exports",
-  // The tiers the manifest's `tier` ceiling lets it reach, so raising the
-  // ceiling is a widening; and the hosts, background jobs, Thread wakes, and
-  // pane reach the trusted tiers unlock.
-  "tier",
+  // The hosts its code runs in.
   "hosts",
-  "jobs",
-  "wake",
-  "panes",
+  // Its schedules, its listeners, and a program on a plugin Orb.
+  "service",
 ] as const;
 
 export type PluginPermission = (typeof PLUGIN_PERMISSIONS)[number];
@@ -583,31 +549,6 @@ export const PluginCodeBinary = Schema.Struct({
 });
 
 export type PluginCodeBinary = typeof PluginCodeBinary.Type;
-// --- panes[].connect -------------------------------------------------
-/** At most this many panes a manifest's `panes[].connect` names. */
-export const MAX_PLUGIN_PANE_CONNECTS = 8;
-/** At most this many Portal ports one pane may frame. */
-export const MAX_PLUGIN_PANE_PORTAL_PORTS = 4;
-
-/**
- * What one pane's view may reach, from `panes[].connect` in the manifest:
- * `hosts` it may fetch, show images and media from, and open WebSockets to
- * (each also in `permissions.network`), `portal` ports of the Thread's
- * own Portal it may show with `window.dx.portal`, and `webrtc`. Only
- * trusted tiers get any of it.
- */
-export const PluginPaneConnect = Schema.Struct({
-  pane: Schema.String.check(Schema.isPattern(/^[a-z][a-z0-9-]{0,47}$/)),
-  hosts: Schema.Array(PluginCodeHost).check(Schema.isMaxLength(32)),
-  portal: Schema.Array(
-    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65_535 })),
-  ).check(Schema.isMaxLength(MAX_PLUGIN_PANE_PORTAL_PORTS)),
-  /** WebRTC in the pane, with `window.dx.rtc()` TURN credentials. */
-  webrtc: Schema.optional(Schema.Boolean),
-});
-
-export type PluginPaneConnect = typeof PluginPaneConnect.Type;
-
 /**
  * A plugin's code layer: a JavaScript entry module under `dev.dxcode/` that
  * dx runs in an isolated Cloudflare Dynamic Worker. `modules` lists every
@@ -616,7 +557,14 @@ export type PluginPaneConnect = typeof PluginPaneConnect.Type;
 export const PluginBundleCode = Schema.Struct({
   apiVersion: Schema.Literal(1),
   host: Schema.Literal("worker"),
-  entry: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  /**
+   * The Worker's entry module. Absent only for a plugin whose code is a
+   * `service` (any language, on a plugin Orb) with no JavaScript for dx to
+   * run; such a plugin has no modules.
+   */
+  entry: Schema.optional(
+    Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  ),
   modules: Schema.Array(
     Schema.Struct({
       path: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
@@ -625,7 +573,7 @@ export const PluginBundleCode = Schema.Struct({
       ),
       integrity: PluginIntegrity,
     }),
-  ).check(Schema.isMinLength(1), Schema.isMaxLength(MAX_PLUGIN_CODE_MODULES)),
+  ).check(Schema.isMaxLength(MAX_PLUGIN_CODE_MODULES)),
   permissions: PluginCodePermissions,
   settings: Schema.Array(PluginCodeSetting).check(Schema.isMaxLength(32)),
   /** Agent modes it declares; each needs `permissions.agents`. */
@@ -642,17 +590,8 @@ export const PluginBundleCode = Schema.Struct({
    * `entry`. See `pluginHostEntry`.
    */
   hosts: Schema.optional(PluginCodeHosts),
-  /**
-   * The highest tier the author asks for (`tier`). dx grants the lower of
-   * this and what the install earns; absent asks for no ceiling.
-   */
-  tier: Schema.optional(PluginTier),
   // ─── Binaries ───
-  /**
-   * Native tools the Orb or container host installs before the plugin's
-   * process starts. Read host-neutrally; each host applies its own rules
-   * (the container's apt allowlist, for one) when it runs.
-   */
+  /** Native tools the Orb host installs before the plugin's process starts. */
   binaries: Schema.optional(
     Schema.Array(PluginCodeBinary).check(
       Schema.isMaxLength(MAX_PLUGIN_BINARIES),
@@ -660,12 +599,6 @@ export const PluginBundleCode = Schema.Struct({
   ),
   /** What the plugin shows in archived Threads; `hide` when absent. */
   archivedThreads: Schema.optional(PluginArchivedMode),
-  /** Panes the manifest declares, matched to `registerPane` by id. */
-  panes: Schema.optional(
-    Schema.Array(PluginManifestPane).check(
-      Schema.isMaxLength(MAX_PLUGIN_MANIFEST_PANES),
-    ),
-  ),
   /**
    * Icon files the plugin carries for its items, by path in the plugin
    * (`assets/phone.svg`): an item's `icon` naming one resolves to its hash.
@@ -673,29 +606,94 @@ export const PluginBundleCode = Schema.Struct({
   iconAssets: Schema.optional(
     Schema.Record(Schema.String.check(Schema.isMaxLength(256)), PluginIconHash),
   ),
-  /** Tabs, pages, and Thread types its code draws with `registerView`. */
-  views: Schema.optional(PluginViews),
+  /** Views described as data, from the array form of `views`. */
+  dataViews: Schema.optional(
+    Schema.Array(PluginDataViewEntry).check(Schema.isMaxLength(MAX_DATA_VIEWS)),
+  ),
   /** Functions other plugins may call; its code `expose`s each. */
   exports: Schema.optional(
     Schema.Array(PluginExport).check(Schema.isMaxLength(MAX_PLUGIN_EXPORTS)),
   ),
-  // ─── Durable host ───
-  /** One Durable Object per install (default) or per install and Thread. */
-  durableScope: Schema.optional(PluginDurableScope),
-  /** Background jobs, shown at install and on the plugin's row. */
-  jobs: Schema.optional(
-    Schema.Array(PluginJob).check(Schema.isMaxLength(MAX_PLUGIN_JOBS)),
-  ),
-  // ─── panes[].connect ───
-  /** What each pane may reach, from `panes[].connect`. */
-  paneConnect: Schema.optional(
-    Schema.Array(PluginPaneConnect).check(
-      Schema.isMaxLength(MAX_PLUGIN_PANE_CONNECTS),
+  // ─── Schedules, listeners, and service ───
+  /** A program dxd keeps running on a plugin Orb; see `PluginService`. */
+  service: Schema.optional(PluginService),
+  /**
+   * Schedules dx runs: a call to the service when there is one, else a
+   * `job.run` event for the function code.
+   */
+  schedules: Schema.optional(
+    Schema.Array(PluginServiceSchedule).check(
+      Schema.isMaxLength(MAX_PLUGIN_SERVICE_SCHEDULES),
     ),
   ),
+  /**
+   * Commands whose output lines are events for the service (`run`), or URLs
+   * dx watches for the function code (`url`).
+   */
+  listeners: Schema.optional(
+    Schema.Array(PluginServiceListener).check(
+      Schema.isMaxLength(MAX_PLUGIN_SERVICE_LISTENERS),
+    ),
+  ),
+  // ─── Retired ───
+  /**
+   * Plugin panes (`panes`, `paneConnect`) and views its code drew (the
+   * object form of `views`), removed on 2026-11-25. A version stored before
+   * then may hold them: they decode unread, so the plugin's other features
+   * keep working, and `pluginRebuildReason` says it needs a rebuild. The
+   * bundle reader never writes them.
+   */
+  panes: Schema.optional(Schema.Unknown),
+  views: Schema.optional(Schema.Unknown),
+  paneConnect: Schema.optional(Schema.Unknown),
 });
 
 export type PluginBundleCode = typeof PluginBundleCode.Type;
+
+/**
+ * Features a stored plugin's code asks for that dx no longer has: its own
+ * container, the Durable Object `host.durable` entry and `durableScope`,
+ * manifest `jobs`, `tier`, and `permissions.wake`. A plugin that uses any of
+ * them does not load and must be rebuilt (schedules, URL listeners, and
+ * `ctx.threads` replace them). Reads the stored JSON, since decoding drops
+ * fields the schema no longer has.
+ */
+export const removedPluginFeatures = (code: unknown): ReadonlyArray<string> => {
+  if (code === null || typeof code !== "object") return [];
+  const raw = code as Readonly<Record<string, unknown>>;
+  const hosts = (raw.hosts ?? {}) as Readonly<Record<string, unknown>>;
+  const permissions = (raw.permissions ?? {}) as Readonly<
+    Record<string, unknown>
+  >;
+  return [
+    ...(hosts.container !== undefined ? ["host.container"] : []),
+    ...(hosts.durable !== undefined ? ["host.durable"] : []),
+    ...(raw.durableScope !== undefined ? ["durableScope"] : []),
+    ...(raw.jobs !== undefined ? ["jobs"] : []),
+    ...(raw.tier !== undefined ? ["tier"] : []),
+    ...(permissions.wake !== undefined ? ["permissions.wake"] : []),
+  ];
+};
+
+const REBUILD_PREFIX = "This plugin uses ";
+const REBUILD_SUFFIX =
+  ", which dx no longer runs. Rebuild it with schedules, listeners, and ctx.threads, then update it.";
+
+/** Whether a skipped entry's reason is `pluginRebuildMessage`'s sentence. */
+export const isPluginRebuildMessage = (reason: string) =>
+  reason.startsWith(REBUILD_PREFIX) && reason.endsWith(REBUILD_SUFFIX);
+
+/** The sentence a plugin that uses removed features shows, or undefined. */
+export const pluginRebuildMessage = (code: unknown): string | undefined => {
+  const removed = removedPluginFeatures(code);
+  return removed.length === 0
+    ? undefined
+    : `${REBUILD_PREFIX}${
+        removed.length === 1
+          ? removed[0]
+          : `${removed.slice(0, -1).join(", ")} and ${removed.at(-1)}`
+      }${REBUILD_SUFFIX}`;
+};
 
 export const PluginBundleManifest = Schema.Struct({
   format: Schema.Literals(["claude-code", "agent-plugins"]),

@@ -1279,18 +1279,16 @@ function ThreadSessionContent({
       : undefined;
   const archived = thread.lifecycleState === "archived";
   const archive = useOptionalThreadArchive();
-  // An archived Thread lists only the plugin panes and views (tabs, a
-  // Thread type's main view) its plugins keep (`archivedThreads` "show" or
-  // "live"); the others' tabs leave the strip until the Thread is restored.
+  // An archived Thread keeps only the plugin tabs whose views its plugins
+  // still list; the others leave the strip until the Thread is restored.
   // Until the list loads, no plugin tab shows.
-  const keptPluginPanes = useQuery({
+  const keptPluginViews = useQuery({
     ...pluginUiQueryOptions(thread.id),
     enabled: archived,
     select: (data) =>
-      new Set([
-        ...(data.panes ?? []).map(({ plugin, pane }) => `${plugin}/${pane}`),
-        ...(data.tabs ?? []).map(({ plugin, tab }) => `${plugin}/${tab}`),
-      ]),
+      new Set(
+        (data.dataViews ?? []).map(({ plugin, view }) => `${plugin}/${view}`),
+      ),
   }).data;
   // A card's Open on a phone shows the artifact full screen over the Thread.
   const queryClient = useQueryClient();
@@ -1463,13 +1461,13 @@ function ThreadSessionContent({
     // so its text can still be copied.
     file: renderFile,
     dirtyTabs,
-    // The server decides which plugin views an archived Thread keeps
-    // (`archivedThreads`): it lists only those, read-only.
+    // The server decides which plugin views an archived Thread keeps: it
+    // lists only those.
     plugin: pluginPane,
     ...(archived
       ? {
           pluginShown: (tab: PluginPaneTab) =>
-            keptPluginPanes?.has(`${tab.plugin}/${tab.pane}`) === true,
+            keptPluginViews?.has(`${tab.plugin}/${tab.pane}`) === true,
         }
       : {}),
     pluginMenu: (props: PluginPaneMenuProps) => (

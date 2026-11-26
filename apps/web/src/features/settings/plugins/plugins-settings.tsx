@@ -1,7 +1,7 @@
 import type { PluginBundleListData } from "@dx/api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useSearch } from "@tanstack/react-router";
-import { Settings } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { Plus, Settings } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { DxWordmark } from "../../../shared/brand/dx-wordmark.js";
@@ -28,7 +28,8 @@ import {
   ImportPluginDialog,
   useSharedPluginLink,
 } from "./import-plugin-dialog.js";
-import { PluginBundleDetails } from "./plugin-bundle-details.js";
+import { PluginBrowser } from "./plugin-browser.js";
+import { McpSettingsLink } from "./plugin-bundle-mcp-link.js";
 import {
   pluginBundlePreviewMutationOptions,
   pluginBundlesMutationOptions,
@@ -37,9 +38,7 @@ import {
 import type { BundleRun } from "./plugin-bundle-presentation.js";
 import { pluginBundlesQueryOptions } from "./plugin-bundle-queries.js";
 import { usePluginBundleQuickUpdate } from "./plugin-bundle-quick-update.js";
-import { PluginBundleRow } from "./plugin-bundle-row.js";
 import { PluginProposals } from "./plugin-proposals.js";
-import { PluginTrustSettings } from "./plugin-trust-settings.js";
 import {
   type FirstPartyPluginAction,
   firstPartyPluginsMutationOptions,
@@ -282,21 +281,33 @@ function OtherScopeLink({
   );
 }
 
-/** Where nothing is installed yet: ask dx to build a plugin, as on Skills. */
-function BuildHint({
-  shown,
-  target,
+/** Where nothing is installed yet: what to do, as on Skills. */
+function EmptyPlugins({
+  scope,
+  canImport,
+  onImport,
 }: {
-  readonly shown: boolean;
-  readonly target: { readonly scope: string };
+  readonly scope: Scope;
+  readonly canImport: boolean;
+  readonly onImport: () => void;
 }) {
-  if (!shown) return null;
   return (
     <div className="settings-card-empty ask-dx-empty">
-      <p>Build your own: describe it to dx in any Thread, or use Import.</p>
-      <AskDxPrompt
-        text={`Create a ${target.scope} plugin that adds a tool to check our deploy status`}
-      />
+      <p>
+        {canImport
+          ? `No ${scope} plugins yet. Describe one to dx in any Thread, or import one:`
+          : `No ${scope} plugins yet.`}
+      </p>
+      {canImport ? (
+        <>
+          <AskDxPrompt
+            text={`Create a ${scope} plugin that adds a tool to check our deploy status`}
+          />
+          <Button size="sm" variant="outline" onClick={onImport}>
+            Import a plugin
+          </Button>
+        </>
+      ) : null}
     </div>
   );
 }
@@ -319,19 +330,10 @@ export function PluginsSettings({
   );
   const [busy, setBusy] = React.useState(false);
   const [message, setMessage] = React.useState<string>();
-  // A `dxd plugin dev` link: open that plugin, with hot reload offered for
-  // the Thread it came from.
-  const search = useSearch({ strict: false }) as {
-    readonly hotReload?: unknown;
-    readonly thread?: unknown;
-  };
-  const hotReload =
-    typeof search.hotReload === "string" && typeof search.thread === "string"
-      ? { pluginId: search.hotReload, threadId: search.thread }
-      : undefined;
-  const [editing, setEditing] = React.useState<string | undefined>(
-    () => hotReload?.pluginId,
-  );
+  /** The installed plugin the browser shows. */
+  const [selected, setSelected] = React.useState<string>();
+  /** The dx plugin whose settings dialog is open. */
+  const [editing, setEditing] = React.useState<string>();
   const finalFocus = React.useRef<HTMLElement | null>(null);
   const run: Run = async (action, success) => {
     setBusy(true);
@@ -378,11 +380,10 @@ export function PluginsSettings({
       updatePreviewMutation.mutateAsync({ pluginId }),
     run: runBundle,
     report: setMessage,
-    review: setEditing,
+    review: setSelected,
   });
   const close = () => {
     setEditing(undefined);
-    quickUpdate.clearReview();
     onDirtyChange(false);
   };
   const data = resource.data;
@@ -391,9 +392,11 @@ export function PluginsSettings({
   const installed = bundles.data?.items ?? [];
   const canImport = bundles.data?.canMutate ?? false;
   const editingPlugin = plugins.find(({ id }) => id === editing);
-  const editingBundle = installed.find(({ id }) => id === editing);
+  const shown = installed.find(({ id }) => id === selected) ?? installed[0];
+  const pendingReview =
+    shown === undefined ? undefined : quickUpdate.reviewFor(shown.id);
   return (
-    <div className="first-party-plugins-settings">
+    <div className="first-party-plugins-settings plugins-page">
       <SettingsHeading
         title={
           target.scope === "workspace"
@@ -402,13 +405,13 @@ export function PluginsSettings({
         }
         description={
           target.scope === "workspace"
-            ? "Plugins add tools to dx Threads for everyone in this workspace. A plugin turned off here is off for every member."
-            : "Plugins add tools to your dx Threads. Your choices override your workspace's, unless it turns a plugin off or manages its keys."
+            ? "Plugins add tools, skills, and screens to dx for everyone in this workspace. A plugin turned off here is off for every member."
+            : "Plugins add tools, skills, and screens to your dx Threads. Your choices override your workspace's, unless it turns a plugin off or manages its keys."
         }
         actions={
           <span className="first-party-plugins-heading-actions">
             <span aria-live="polite">
-              {resource.isPending
+              {resource.isPending || bundles.isPending
                 ? "Loading plugins…"
                 : resource.error !== null
                   ? errorMessage(resource.error)
@@ -421,12 +424,11 @@ export function PluginsSettings({
             />
             {canImport ? (
               <Button
-                size="xs"
-                variant="outline"
+                size="sm"
                 disabled={busy}
                 onClick={() => setImporting(true)}
               >
-                Import
+                <Plus aria-hidden="true" /> Add plugin
               </Button>
             ) : null}
           </span>
@@ -437,14 +439,46 @@ export function PluginsSettings({
         proposals={bundles.data?.proposals ?? []}
         report={setMessage}
       />
-      {data === undefined ? null : (
-        <SettingsCard>
-          {plugins.length === 0 && installed.length === 0 ? (
-            <p className="settings-card-empty">
-              No plugins are installed on this deployment.
-            </p>
-          ) : (
-            plugins.map((plugin) => (
+      {bundles.data === undefined ? null : (
+        <PluginBrowser
+          target={target}
+          bundles={installed}
+          canMutate={canImport}
+          busy={busy}
+          run={runBundle}
+          empty={
+            <EmptyPlugins
+              scope={target.scope}
+              canImport={canImport}
+              onImport={() => setImporting(true)}
+            />
+          }
+          selectedId={shown?.id}
+          onSelect={setSelected}
+          updatesAvailable={quickUpdate.available}
+          updating={quickUpdate.checking}
+          onUpdate={(bundle) => void quickUpdate.update(bundle)}
+          review={
+            shown === undefined || pendingReview === undefined
+              ? undefined
+              : { pluginId: shown.id, preview: pendingReview }
+          }
+          onReviewChange={() => quickUpdate.clearReview()}
+          report={setMessage}
+          reviewTools={
+            <McpSettingsLink
+              workspace={workspace}
+              scope={target.scope}
+              settingsReturnTo={settingsReturnTo}
+            />
+          }
+        />
+      )}
+      {data === undefined || plugins.length === 0 ? null : (
+        <section className="plugins-built-in" aria-label="Built into dx">
+          <h2>Built into dx</h2>
+          <SettingsCard>
+            {plugins.map((plugin) => (
               <PluginRow
                 key={plugin.id}
                 plugin={plugin}
@@ -457,59 +491,46 @@ export function PluginsSettings({
                   setEditing(plugin.id);
                 }}
               />
-            ))
-          )}
-          <BuildHint shown={canImport && !installed.length} target={target} />
-          {installed.map((bundle) => (
-            <PluginBundleRow
-              key={bundle.id}
-              bundle={bundle}
-              canMutate={canImport}
-              busy={busy}
-              run={runBundle}
-              updateAvailable={quickUpdate.available.has(bundle.id)}
-              updating={quickUpdate.checking === bundle.id}
-              onUpdate={() => void quickUpdate.update(bundle)}
-              onOpen={(trigger) => {
-                finalFocus.current = trigger;
-                setEditing(bundle.id);
-              }}
-            />
-          ))}
-          {target.scope === "workspace" && bundles.data !== undefined ? (
+            ))}
+            {target.scope === "workspace" ? (
+              <SettingsRow
+                title="Members can use their own keys"
+                control={
+                  <MemberPolicyToggle
+                    checked={plugins.every(
+                      ({ personalOverridesAllowed }) =>
+                        personalOverridesAllowed,
+                    )}
+                    disabled={!canUpdate || busy}
+                    label="Members can use their own keys"
+                    subject="members' own keys"
+                    description="Members' next plugin calls follow the new policy."
+                    onConfirm={(value) =>
+                      run(
+                        { type: "policy", allowPersonalOverrides: value },
+                        "Workspace plugin policy updated.",
+                      )
+                    }
+                  />
+                }
+              />
+            ) : null}
+          </SettingsCard>
+        </section>
+      )}
+      {target.scope === "workspace" && bundles.data !== undefined ? (
+        <section className="plugins-built-in" aria-label="Rules for plugins">
+          <h2>Rules for plugins</h2>
+          <SettingsCard>
             <WorkspaceBundlePolicies
               bundles={bundles.data}
-              workspaceId={workspace?.id}
               canMutate={canImport}
               busy={busy}
               run={runBundle}
-              message={message}
             />
-          ) : null}
-          {target.scope === "workspace" && plugins.length > 0 ? (
-            <SettingsRow
-              title="Members can use their own keys"
-              control={
-                <MemberPolicyToggle
-                  checked={plugins.every(
-                    ({ personalOverridesAllowed }) => personalOverridesAllowed,
-                  )}
-                  disabled={!canUpdate || busy}
-                  label="Members can use their own keys"
-                  subject="members' own keys"
-                  description="Members' next plugin calls follow the new policy."
-                  onConfirm={(value) =>
-                    run(
-                      { type: "policy", allowPersonalOverrides: value },
-                      "Workspace plugin policy updated.",
-                    )
-                  }
-                />
-              }
-            />
-          ) : null}
-        </SettingsCard>
-      )}
+          </SettingsCard>
+        </section>
+      ) : null}
       <ImportPluginDialog
         userId={identity.id}
         target={target}
@@ -524,40 +545,6 @@ export function PluginsSettings({
           shareLink.dismiss();
         }}
       />
-      <DialogRoot
-        open={editingBundle !== undefined}
-        onOpenChange={(open) => {
-          if (!open) close();
-        }}
-      >
-        {editingBundle === undefined ? null : (
-          <DialogContent
-            finalFocus={finalFocus}
-            className="plugin-bundle-dialog"
-          >
-            <PluginBundleDetails
-              bundle={editingBundle}
-              canMutate={canImport}
-              busy={busy}
-              run={runBundle}
-              previewUpdate={(file) =>
-                updatePreviewMutation.mutateAsync({
-                  pluginId: editingBundle.id,
-                  ...(file === undefined ? {} : { file }),
-                })
-              }
-              workspace={workspace}
-              settingsReturnTo={settingsReturnTo}
-              initialUpdate={quickUpdate.reviewFor(editingBundle.id)}
-              {...(hotReload?.pluginId === editingBundle.id
-                ? { hotReloadThreadId: hotReload.threadId }
-                : {})}
-              onDone={close}
-              key={editingBundle.id}
-            />
-          </DialogContent>
-        )}
-      </DialogRoot>
       <DialogRoot
         open={editingPlugin !== undefined}
         onOpenChange={(open) => {
@@ -588,23 +575,19 @@ export function PluginsSettings({
 }
 
 /**
- * A workspace's rules for installed plugins: members' own copies, which
- * repositories' plugins it trusts, and plugins from repositories.
+ * A workspace's rules for installed plugins: members' own copies, and
+ * plugins from repositories.
  */
 function WorkspaceBundlePolicies({
   bundles,
-  workspaceId,
   canMutate,
   busy,
   run,
-  message,
 }: {
   readonly bundles: PluginBundleListData;
-  readonly workspaceId: string | undefined;
   readonly canMutate: boolean;
   readonly busy: boolean;
   readonly run: BundleRun;
-  readonly message: string | undefined;
 }) {
   return (
     <>
@@ -626,25 +609,15 @@ function WorkspaceBundlePolicies({
           />
         }
       />
-      {bundles.pluginTrust === undefined ? null : (
-        <PluginTrustSettings
-          trust={bundles.pluginTrust}
-          workspaceId={workspaceId}
-          canMutate={canMutate}
-          busy={busy}
-          run={run}
-          message={message}
-        />
-      )}
       <SettingsRow
-        title="Load plugins from repositories"
+        title="Plugins from a repository or built in a Thread"
         control={
           <MemberPolicyToggle
             checked={bundles.repositoryPluginsAllowed !== false}
             disabled={!canMutate || busy}
-            label="Load plugins from repositories"
-            subject="repository plugins"
-            description="When on, plugins a project's repository commits in .agents/plugins load in its Threads. An installed plugin of the same name is used instead."
+            label="Plugins from a repository or built in a Thread"
+            subject="plugins from repositories and Threads"
+            description="When on, a plugin a project's repository carries in .agents/plugins, or one an agent builds in a Thread, runs in that Thread's Orb only. An installed plugin of the same name is used instead. When off, neither runs."
             onConfirm={(value) =>
               run(
                 { type: "policy", allowRepositoryPlugins: value },

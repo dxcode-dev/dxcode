@@ -20,7 +20,7 @@ import {
   type BoardLiveChannel,
   type BoardLiveEvent,
   useBoardLiveChannel,
-} from "../../../shared/realtime/board-live.js";
+} from "../../../shared/realtime/live.js";
 import {
   ArtifactPeople,
   type CursorPerson,

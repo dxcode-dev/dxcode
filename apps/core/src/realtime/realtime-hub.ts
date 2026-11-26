@@ -13,6 +13,7 @@ import {
 } from "../auth/session-sockets.js";
 import type { AppEnv, Bindings } from "../http/types.js";
 import { realtimeLogger } from "../logging.js";
+import { verifyViewWatch } from "../plugins/views/watch-token.js";
 import { activeMemberSql } from "../settings/members/membership-sql.js";
 import {
   sharedThreadAccessSql,
@@ -62,7 +63,12 @@ interface SocketAttachment {
   readonly edit?: boolean;
   /** The browser session that opened the socket; it closes when that ends. */
   readonly session?: BrowserSessionBinding;
+  /** Plugin views (`<install>/<view>`) whose state changes it hears. */
+  readonly views?: ReadonlyArray<string>;
 }
+
+/** One socket watches at most this many plugin views at once. */
+const MAX_VIEW_WATCHES = 16;
 
 interface PresenceEntry {
   readonly topic: PresenceTopic;
@@ -164,7 +170,6 @@ const decodeThreadEvent = (input: unknown): ThreadEvent | undefined => {
       "disk.invalidated",
       "artifacts.invalidated",
       "plugin-ui.invalidated",
-      "plugin-pane.invalidated",
       "comments.invalidated",
       "space.posts.invalidated",
       "reactions.invalidated",
@@ -326,6 +331,10 @@ export class RealtimeHub extends DurableObject<Bindings> {
     }
     if (typeof input !== "object" || input === null || !("type" in input))
       return;
+    if (input.type === "view.watch" || input.type === "view.unwatch") {
+      await this.#watchView(socket, input);
+      return;
+    }
     const topic = decodeTopic("topic" in input ? input.topic : undefined);
     const now = Date.now();
     this.#restorePresence();
@@ -452,6 +461,8 @@ export class RealtimeHub extends DurableObject<Bindings> {
       return this.#publishUserEvent(request, audience);
     if (request.method === "GET" && url.pathname === "/presence")
       return this.#readPresence(url);
+    if (request.method === "POST" && url.pathname === "/view-state")
+      return this.#publishViewState(request);
     return new Response(null, { status: 404 });
   }
 
@@ -705,6 +716,72 @@ export class RealtimeHub extends DurableObject<Bindings> {
       .first<{ access: string }>();
     if (row === null) return undefined;
     return row.access === "contribute" ? "edit" : "view";
+  }
+
+  /**
+   * Starts or stops hearing one plugin view's state. A watch carries a token
+   * the state route signed for this participant (`views/watch-token.ts`),
+   * so the hub reads nothing to allow it. Kept on the socket, so it
+   * survives hibernation; it ends with the socket.
+   */
+  async #watchView(socket: WebSocket, input: object) {
+    const attachment = socket.deserializeAttachment() as
+      | SocketAttachment
+      | undefined;
+    if (attachment === undefined) return;
+    const watched = attachment.views ?? [];
+    let next: ReadonlyArray<string>;
+    if ("token" in input) {
+      const claims = await verifyViewWatch(this.env, input.token);
+      if (claims === undefined || claims.userId !== attachment.participant) {
+        socket.send(JSON.stringify({ type: "view.denied" }));
+        return;
+      }
+      next = [...watched.filter((key) => key !== claims.key), claims.key].slice(
+        -MAX_VIEW_WATCHES,
+      );
+    } else {
+      const key = "key" in input ? input.key : undefined;
+      next = watched.filter((watchedKey) => watchedKey !== key);
+    }
+    try {
+      socket.serializeAttachment({ ...attachment, views: next });
+    } catch {
+      // A closed socket hears nothing more.
+    }
+  }
+
+  /** Sends a view's state change to every socket watching it. */
+  async #publishViewState(request: Request): Promise<Response> {
+    const body = (await request.json().catch(() => undefined)) as
+      | { key?: unknown; version?: unknown; patch?: unknown }
+      | undefined;
+    if (
+      body === undefined ||
+      typeof body.key !== "string" ||
+      !Number.isSafeInteger(body.version)
+    )
+      return new Response(null, { status: 400 });
+    const event = JSON.stringify({
+      type: "plugin-view.state",
+      key: body.key,
+      version: body.version,
+      ...(body.patch === undefined ? {} : { patch: body.patch }),
+    });
+    let sent = 0;
+    for (const socket of this.ctx.getWebSockets()) {
+      const attachment = socket.deserializeAttachment() as
+        | SocketAttachment
+        | undefined;
+      if (attachment?.views?.includes(body.key) !== true) continue;
+      try {
+        socket.send(event);
+        sent += 1;
+      } catch {
+        // The hub is a hint channel; the state route stays authoritative.
+      }
+    }
+    return Response.json({ sent });
   }
 
   #prunePresence(now: number) {

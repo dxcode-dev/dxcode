@@ -94,8 +94,6 @@ const preBitbucketTokenCoordinatorBindingOmission =
 const preGitHubTokenCoordinatorBindingOmission = "GITHUB_TOKEN_COORDINATOR";
 // Plugins' Durable Object host.
 const prePluginDurableHostBindingOmission = "PLUGIN_DURABLE_HOST";
-// Stages deployed before the plugin stream relay lack it.
-const prePluginStreamRelayBindingOmission = "PLUGIN_STREAM_RELAY";
 // Stages deployed before runners lack their session object.
 const preRunnerSessionBindingOmission = "RUNNER_SESSION";
 // Plugin code's Dynamic Worker loader. Stages deployed before it, and the
@@ -140,7 +138,6 @@ const destroyWorkerBindingOmissions = new Set([
   "GITHUB_TOKEN_COORDINATOR",
   "ORB_PROVIDER_PREPARATION",
   "PLUGIN_DURABLE_HOST",
-  "PLUGIN_STREAM_RELAY",
   "REALTIME_HUB",
   "RUNNER_SESSION",
   "THREAD_SEARCH_INDEX",
@@ -171,7 +168,6 @@ const workerDurableObjectBindings = [
   ["GITHUB_TOKEN_COORDINATOR", "GitHubTokenCoordinatorObject"],
   ["ORB_PROVIDER_PREPARATION", "OrbProviderPreparationObject"],
   ["PLUGIN_DURABLE_HOST", "PluginDurableHostObject"],
-  ["PLUGIN_STREAM_RELAY", "PluginStreamRelay"],
   ["PLUGIN_TRIGGER_DELIVERY", "PluginTriggerDeliveryObject"],
   ["REALTIME_HUB", "RealtimeHub"],
   ["RUNNER_SESSION", "RunnerSessionObject"],
@@ -371,7 +367,7 @@ const orbRemovalWorkerBindings = ({
   new Map([
     ...(orbProviders.includes("cloudflare")
       ? []
-      : ["ORB_CONTAINER", "THREAD_EXECUTOR", "PLUGIN_CONTAINER"].map((name) => [
+      : ["ORB_CONTAINER", "THREAD_EXECUTOR"].map((name) => [
           name,
           "durable_object_namespace",
         ])),
@@ -429,6 +425,15 @@ const retiredWorkerBindings = new Map([
   ["LIZARD_PROJECT_ID", "plain_text"],
   ["LIZARD_REGION", "plain_text"],
   ["MODEL_EGRESS_COORDINATOR", "durable_object_namespace"],
+  // The plugin container host and per-tier plugin limits, removed
+  // (tasks/plugins-next.md decision 4).
+  ["PLUGIN_CONTAINER", "durable_object_namespace"],
+  ["DX_PLUGIN_CONTAINER_DAILY_MS", "plain_text"],
+  ["DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS", "plain_text"],
+  ["DX_PLUGIN_TIER_LIMITS", "plain_text"],
+  // Plugin pane streams' relay, whose class Core deletes
+  // (v13-remove-plugin-stream-relay).
+  ["PLUGIN_STREAM_RELAY", "durable_object_namespace"],
 ]);
 const cloudflareResourceIds = new Set([
   "DaemonIngress",
@@ -1541,13 +1546,6 @@ const validateWorkerProps = (
         (representation === "persisted" ||
           representation === "prior" ||
           allowDestroyWorkerBindingOmissions) &&
-        name === prePluginStreamRelayBindingOmission
-      ) &&
-      !(
-        !current &&
-        (representation === "persisted" ||
-          representation === "prior" ||
-          allowDestroyWorkerBindingOmissions) &&
         name === preRunnerSessionBindingOmission
       ) &&
       !(
@@ -1831,9 +1829,29 @@ const assertExactOrbContainersIdentity = (
           [node.state?.props, recorded],
           [node.state?.old?.props, recorded],
         ];
-  for (const [props, names] of representations.filter(
+  // `coreWorkerName` names this stage's Core Worker, read before deleting
+  // the retired plugin container class (deploy/orb/containers.mjs); a
+  // `pluginContainerDeleted` attribute records the outcome.
+  const withoutRetirement = (value, { attr = false } = {}) => {
+    if (value === null || typeof value !== "object") return value;
+    const { coreWorkerName, pluginContainerDeleted, ...rest } = value;
+    if (
+      (!attr &&
+        coreWorkerName !== undefined &&
+        coreWorkerName !== selection.workerName) ||
+      (attr && coreWorkerName !== undefined) ||
+      (!attr && pluginContainerDeleted !== undefined) ||
+      (attr &&
+        pluginContainerDeleted !== undefined &&
+        typeof pluginContainerDeleted !== "boolean")
+    )
+      throw new Error("OrbContainers plan is outside the exact allowlist.");
+    return rest;
+  };
+  for (const [raw, names] of representations.filter(
     ([value]) => value !== undefined,
-  ))
+  )) {
+    const props = withoutRetirement(raw);
     if (
       !(
         exactKeys(props, ["recipeHash", "workerName"]) ||
@@ -1841,18 +1859,20 @@ const assertExactOrbContainersIdentity = (
           validOrbDatabaseId(
             props.databaseId,
             context,
-            props === node.state?.props || props === node.state?.old?.props,
+            raw === node.state?.props || raw === node.state?.old?.props,
           ))
       ) ||
       !names.has(props.workerName) ||
       !/^[a-f0-9]{64}$/.test(props.recipeHash ?? "")
     )
       throw new Error("OrbContainers plan is outside the exact allowlist.");
+  }
   // Only an interrupted create's lookup recovers the Worker's name alone.
-  for (const [attr, interrupted] of [
+  for (const [rawAttr, interrupted] of [
     [node.state?.attr, node.state?.status === "creating"],
     [node.state?.old?.attr, false],
-  ].filter(([value]) => value !== undefined))
+  ].filter(([value]) => value !== undefined)) {
+    const attr = withoutRetirement(rawAttr, { attr: true });
     if (
       !(
         (interrupted && exactKeys(attr, ["workerName"])) ||
@@ -1864,6 +1884,7 @@ const assertExactOrbContainersIdentity = (
       !recorded.has(attr.workerName)
     )
       throw new Error("OrbContainers plan is outside the exact allowlist.");
+  }
 };
 
 // workers.dev previews cap script names at 54 characters.

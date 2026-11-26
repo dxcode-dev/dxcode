@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import {
   loadMigrationManifest,
   resolveD1MigrationsDirectory,
+  wranglerDurableObjectMigration,
 } from "../../../scripts/migration-manifest.mjs";
 
 const redirectPath = resolve(".wrangler/deploy/config.json");
@@ -24,10 +25,7 @@ const applicationBindings = effectiveBindings?.filter(
 const effectiveMigrations = config.migrations;
 const canonicalMigrations = canonical.migrations;
 const manifestMigrations = manifest.durableObjects.map(
-  ({ tag, newSqliteClasses }) => ({
-    tag,
-    new_sqlite_classes: newSqliteClasses,
-  }),
+  wranglerDurableObjectMigration,
 );
 const hasDuplicates = (values) => new Set(values).size !== values.length;
 

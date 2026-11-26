@@ -1,16 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Search, Trash2 } from "lucide-react";
+import { Trash2 } from "lucide-react";
 import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import { Badge } from "../../../shared/ui/badge.js";
 import { Button } from "../../../shared/ui/button.js";
-import { Card } from "../../../shared/ui/card.js";
 import { ConfirmDialog } from "../../../shared/ui/confirm-dialog.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
-import { FileTree } from "../../../shared/ui/file-tree.js";
 import { FileView } from "../../../shared/ui/file-view.js";
 import { GitHubIcon } from "../../../shared/ui/github-icon.js";
-import { Input } from "../../../shared/ui/input.js";
+import {
+  PackageBrowser,
+  PackageBrowserHeader,
+} from "../../../shared/ui/package-browser.js";
 import { SettingsToggle } from "../settings-primitives.js";
 import {
   fileCount,
@@ -42,7 +43,7 @@ function SkillMeta({ skill }: { readonly skill: SkillData }) {
   const registry = source.type === "github" ? source.registry?.name : undefined;
   const hint = stateHint(skill.effectiveState);
   return (
-    <div className="skill-browser-meta">
+    <>
       {repository === undefined ? (
         <Badge>{source.label}</Badge>
       ) : (
@@ -59,7 +60,7 @@ function SkillMeta({ skill }: { readonly skill: SkillData }) {
       <Badge>Version {skill.activeVersion}</Badge>
       <Badge>{fileCount(skill.active.resources.length + 1)}</Badge>
       {hint === undefined ? null : <Badge tone="warning">{hint}</Badge>}
-    </div>
+    </>
   );
 }
 
@@ -99,7 +100,6 @@ function OpenFile({
   if (content === undefined) {
     return (
       <EmptyState
-        className="skill-browser-file-state"
         title={file.isError ? "This file could not be loaded." : "Loading…"}
         busy={file.isPending}
         tone={file.isError ? "error" : undefined}
@@ -125,10 +125,8 @@ function OpenFile({
 }
 
 /**
- * Installed skills as a file browser: the skills by name on the left, the
- * chosen one's files below it in the trees library the Files pane uses, and
- * the open file on the right, editable in place. On a phone the list and the
- * skill are one screen each.
+ * Installed skills in the package browser: the skills by name, the chosen
+ * one's files below it, and the open file on the right, editable in place.
  */
 export function SkillBrowser({
   target,
@@ -154,105 +152,68 @@ export function SkillBrowser({
     content: string,
   ) => Promise<unknown>;
 }) {
-  const [filter, setFilter] = React.useState("");
   const [selectedId, setSelectedId] = React.useState<SkillData["id"]>();
-  /** On a phone, whether the chosen skill's screen is showing. */
-  const [opened, setOpened] = React.useState(false);
   const [files, setFiles] = React.useState<Record<string, string>>({});
   const [removing, setRemoving] = React.useState<SkillData>();
   const [removePending, setRemovePending] = React.useState(false);
-  if (skills.length === 0) return <Card padding="md">{empty}</Card>;
-  const shown = skills.filter(({ name }) =>
-    name.includes(filter.trim().toLowerCase()),
-  );
   const skill = skills.find(({ id }) => id === selectedId) ?? skills[0];
-  if (skill === undefined) return null;
-  const tree = skillTreePaths(skill.active.resources);
-  const openPath = files[skill.id] ?? "SKILL.md";
-  const choose = (path: string) =>
-    setFiles((current) => ({ ...current, [skill.id]: path }));
-  const fileTree = (className: string) => (
-    <FileTree
-      key={`${skill.id}-${skill.activeVersion}`}
-      className={className}
-      label={`${skill.name} files`}
-      paths={tree}
-      selectedPath={openPath}
-      onSelect={choose}
-    />
-  );
+  const openPath =
+    skill === undefined ? "SKILL.md" : (files[skill.id] ?? "SKILL.md");
   return (
-    <Card className="skill-browser" data-opened={opened || undefined}>
-      <div className="skill-browser-list">
-        <label className="skill-browser-search">
-          <Search aria-hidden="true" />
-          <Input
-            variant="bare"
-            placeholder="Filter skills"
-            aria-label="Filter skills"
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
+    <PackageBrowser
+      className="skill-browser"
+      noun="skills"
+      items={skills.map(({ id, name }) => ({ id, name }))}
+      selectedId={skill?.id}
+      onSelect={(id) => setSelectedId(id as SkillData["id"])}
+      empty={empty}
+      files={
+        skill === undefined
+          ? undefined
+          : {
+              label: `${skill.name} files`,
+              paths: skillTreePaths(skill.active.resources),
+              selectedPath: openPath,
+              onSelect: (path) =>
+                setFiles((current) => ({ ...current, [skill.id]: path })),
+              version: `${skill.id}-${skill.activeVersion}`,
+            }
+      }
+      header={
+        skill === undefined ? null : (
+          <PackageBrowserHeader
+            title={skill.name}
+            actions={
+              <>
+                <span className="skill-browser-state">
+                  {skill.enabled ? "On" : "Off"}
+                  <SettingsToggle
+                    label={`Use ${skill.name}`}
+                    checked={skill.enabled}
+                    pending={toggling.has(skill.id)}
+                    disabled={!canMutate}
+                    onCheckedChange={(enabled) => onToggle(skill, enabled)}
+                  />
+                </span>
+                {canMutate ? (
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Remove ${skill.name}`}
+                    onClick={() => setRemoving(skill)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </Button>
+                ) : null}
+              </>
+            }
+            description={skill.active.manifest.description}
+            meta={<SkillMeta skill={skill} />}
           />
-        </label>
-        {shown.map((item) => (
-          <div key={item.id}>
-            <button
-              type="button"
-              className="skill-browser-skill"
-              aria-current={item.id === skill.id ? "true" : undefined}
-              onClick={() => {
-                setSelectedId(item.id);
-                setOpened(true);
-              }}
-            >
-              {item.name}
-            </button>
-            {item.id === skill.id ? fileTree("skill-browser-tree") : null}
-          </div>
-        ))}
-        {shown.length === 0 ? (
-          <p className="skill-browser-none">No skill matches “{filter}”.</p>
-        ) : null}
-      </div>
-      <section className="skill-browser-detail" aria-label={skill.name}>
-        <Button
-          className="skill-browser-back"
-          variant="ghost"
-          size="sm"
-          onClick={() => setOpened(false)}
-        >
-          <ArrowLeft aria-hidden="true" /> Skills
-        </Button>
-        <header className="skill-browser-header">
-          <h2>{skill.name}</h2>
-          <div className="skill-browser-actions">
-            <span className="skill-browser-state">
-              {skill.enabled ? "On" : "Off"}
-              <SettingsToggle
-                label={`Use ${skill.name}`}
-                checked={skill.enabled}
-                pending={toggling.has(skill.id)}
-                disabled={!canMutate}
-                onCheckedChange={(enabled) => onToggle(skill, enabled)}
-              />
-            </span>
-            {canMutate ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Remove ${skill.name}`}
-                onClick={() => setRemoving(skill)}
-              >
-                <Trash2 aria-hidden="true" />
-              </Button>
-            ) : null}
-          </div>
-          <p className="skill-browser-description">
-            {skill.active.manifest.description}
-          </p>
-          <SkillMeta skill={skill} />
-        </header>
-        {fileTree("skill-browser-phone-tree")}
+        )
+      }
+    >
+      {skill === undefined ? null : (
         <OpenFile
           target={target}
           skill={skill}
@@ -264,7 +225,7 @@ export function SkillBrowser({
               }
             : {})}
         />
-      </section>
+      )}
       <ConfirmDialog
         open={removing !== undefined}
         onOpenChange={(open) => {
@@ -283,11 +244,10 @@ export function SkillBrowser({
             if (done) {
               setRemoving(undefined);
               setSelectedId(undefined);
-              setOpened(false);
             }
           });
         }}
       />
-    </Card>
+    </PackageBrowser>
   );
 }

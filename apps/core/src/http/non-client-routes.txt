@@ -13,7 +13,7 @@ GET /v1/threads/:threadId/dxd
 HEAD /v1/dxd/:threadId/attachments/:attachmentId
 HEAD /v1/dxd/:threadId/storage
 HEAD /v1/dxd/:threadId/storage/*
-POST /v1/dxd/:threadId/plugin-dev
+POST /v1/dxd/:threadId/plugin-draft
 POST /v1/dxd/:threadId/storage
 POST /v1/dxd/:threadId/storage/*
 

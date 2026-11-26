@@ -567,9 +567,14 @@ fn request_token(arguments: &[String]) -> Result<TokenResponse, HelperError> {
     if !request.valid() {
         return Err(HelperError::Invalid);
     }
-    let body = serde_json::to_vec(&request).map_err(|_| HelperError::Invalid)?;
-    let token: TokenResponse =
-        serde_json::from_slice(&exchange(&body)?).map_err(|_| HelperError::Unavailable)?;
+    let token = match service_api() {
+        // In a plugin service: its install, through the daemon's DX_API.
+        Some((api, bearer)) => service_token(&api, &bearer, &request)?,
+        None => {
+            let body = serde_json::to_vec(&request).map_err(|_| HelperError::Invalid)?;
+            serde_json::from_slice(&exchange(&body)?).map_err(|_| HelperError::Unavailable)?
+        }
+    };
     let result = WorkloadIdentityResult::Issued {
         token: token.token,
         expires_at: token.expires_at,
@@ -581,6 +586,96 @@ fn request_token(arguments: &[String]) -> Result<TokenResponse, HelperError> {
         return Err(HelperError::Unavailable);
     };
     Ok(TokenResponse { token, expires_at })
+}
+
+/// `DX_API` and `DX_TOKEN` when this runs inside a plugin service.
+fn service_api() -> Option<(String, String)> {
+    let api = std::env::var("DX_API")
+        .ok()
+        .filter(|value| !value.is_empty())?;
+    let token = std::env::var("DX_TOKEN")
+        .ok()
+        .filter(|value| !value.is_empty())?;
+    Some((api, token))
+}
+
+/// `POST $DX_API/id-token`, asking again while dxd's connection to Core is
+/// down, as [`exchange`] does. Only dxd's loopback relay is ever sent the
+/// service's token.
+fn service_token(
+    api: &str,
+    bearer: &str,
+    request: &WorkloadIdentityRequest,
+) -> Result<TokenResponse, HelperError> {
+    let port = api
+        .strip_prefix("http://127.0.0.1:")
+        .map(|rest| rest.trim_end_matches('/'))
+        .filter(|port| port.parse::<u16>().is_ok_and(|port| port != 0))
+        .ok_or(HelperError::Invalid)?;
+    let mut body = serde_json::json!({ "audience": request.audience });
+    if let Some(ttl) = request.ttl_seconds {
+        body["ttlSeconds"] = ttl.into();
+    }
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(75)))
+        .http_status_as_error(false)
+        .proxy(None)
+        .build()
+        .new_agent();
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Issued {
+        token: String,
+        expires_at: u64,
+    }
+    let deadline = std::time::Instant::now() + RECONNECT_WAIT;
+    let mut announced = false;
+    loop {
+        let reply = agent
+            .post(format!("http://127.0.0.1:{port}/id-token"))
+            .header("authorization", &format!("Bearer {bearer}"))
+            .send_json(&body);
+        let disconnected = match reply {
+            Ok(mut response) => {
+                let status = response.status().as_u16();
+                let text = response
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_HTTP_RESPONSE_BYTES)
+                    .read_to_vec()
+                    .map_err(|_| HelperError::Unavailable)?;
+                match status {
+                    200 => {
+                        let Issued { token, expires_at } =
+                            serde_json::from_slice(&text).map_err(|_| HelperError::Unavailable)?;
+                        return Ok(TokenResponse { token, expires_at });
+                    }
+                    401 | 403 => return Err(HelperError::Refused),
+                    400 => return Err(HelperError::Invalid),
+                    503 => serde_json::from_slice::<serde_json::Value>(&text)
+                        .is_ok_and(|value| value["error"]["code"] == DISCONNECTED),
+                    _ => false,
+                }
+                .then_some(())
+                .ok_or(HelperError::Unavailable)
+                .map(|()| true)?
+            }
+            // The daemon is restarting.
+            Err(ureq::Error::ConnectionFailed | ureq::Error::Io(_)) => true,
+            Err(_) => return Err(HelperError::Unavailable),
+        };
+        if !disconnected || std::time::Instant::now() + RECONNECT_POLL >= deadline {
+            return Err(HelperError::Disconnected);
+        }
+        if !announced {
+            announced = true;
+            eprintln!(
+                "dx: dx's connection to this Orb dropped; retrying for up to {} s.",
+                RECONNECT_WAIT.as_secs()
+            );
+        }
+        thread::sleep(RECONNECT_POLL);
+    }
 }
 
 pub fn print_token(arguments: &[String]) -> Result<(), ()> {

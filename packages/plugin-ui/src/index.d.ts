@@ -40,7 +40,7 @@ export interface DxCodeElement extends HTMLElement {
   code: string;
 }
 export interface DxPlayerElement extends HTMLElement {
-  /** A WebRTC or canvas `MediaStream`; plays as live. */
+  /** A `MediaStream`, such as a canvas's; plays as live. */
   srcObject: MediaStream | null;
   /** The inner `<video>` or `<audio>`. */
   readonly media: HTMLMediaElement;

@@ -1,23 +1,40 @@
 import type { PluginBundleData, PluginBundleUpdatePreviewData } from "@dx/api";
 import { CircleAlert, KeyRound, Library, PlugZap } from "lucide-react";
+import type { PluginsTarget } from "../../../shared/api/client.js";
 import { Button } from "../../../shared/ui/button.js";
 import { DialogDescription, DialogTitle } from "../../../shared/ui/dialog.js";
 import { changeItems, permissionItems } from "./plugin-bundle-changes.js";
 import { PluginBundleGroup } from "./plugin-bundle-group.js";
 import { type BundleRun, plural } from "./plugin-bundle-presentation.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
+import { PluginPayerNote } from "./plugin-payer-note.js";
 
 /** The reviewed update of an installed plugin: what changes, then Update. */
 export function PluginBundleUpdate({
   bundle,
+  target,
   update,
   file,
   busy,
   run,
+  title,
+  confirmLabel = "Update",
+  onApply,
   onBack,
   onDone,
 }: {
+  /** The dialog's title; "Update <name>" by default. */
+  readonly title?: string;
+  /** The button that applies a change asking for nothing new. */
+  readonly confirmLabel?: string;
+  /**
+   * Applies the reviewed change, such as edited files saved as a version;
+   * an update from the plugin's source by default. Resolves true once done.
+   */
+  readonly onApply?: (acceptPermissions: boolean) => Promise<boolean>;
   readonly bundle: PluginBundleData;
+  /** Where it is installed, for the payer line of a program. */
+  readonly target?: PluginsTarget;
   readonly update: PluginBundleUpdatePreviewData;
   readonly file?: File;
   readonly busy: boolean;
@@ -38,7 +55,7 @@ export function PluginBundleUpdate({
   return (
     <div className="plugin-bundle-form">
       <header>
-        <DialogTitle>Update {bundle.displayName}</DialogTitle>
+        <DialogTitle>{title ?? `Update ${bundle.displayName}`}</DialogTitle>
         <PluginBundleSourceLine
           source={update.source}
           version={update.manifest.version}
@@ -51,8 +68,8 @@ export function PluginBundleUpdate({
               ? update.manifest.code === undefined
                 ? "Only details that dx does not import changed."
                 : update.permissions.changes.length === 0
-                  ? "Its code changed; it asks for the same permissions."
-                  : "Its code and permissions changed."
+                  ? "Its code changed. It does nothing new."
+                  : "Its code and what it can do changed."
               : `${plural(changed, "item changes", "items change")}. Unchanged items keep their settings.`}
         </DialogDescription>
       </header>
@@ -60,7 +77,7 @@ export function PluginBundleUpdate({
         <div className="plugin-bundle-items">
           <PluginBundleGroup
             icon={<KeyRound aria-hidden="true" />}
-            title="Permissions"
+            title="What changes"
             items={permissionItems(update.permissions.changes)}
           />
           <PluginBundleGroup
@@ -96,9 +113,9 @@ export function PluginBundleUpdate({
       )}
       {!update.upToDate && update.permissions.widens ? (
         <p className="plugin-bundle-help plugin-bundle-warning" role="note">
-          This version asks for more than you approved.
+          This version does more than the one you allowed: see What changes.
           {bundle.scope === "workspace"
-            ? " Updating grants it for every member of the workspace."
+            ? " Saving allows it for every member of the workspace."
             : ""}
         </p>
       ) : null}
@@ -110,6 +127,11 @@ export function PluginBundleUpdate({
           MCP.
         </p>
       ) : null}
+      {update.upToDate ||
+      target === undefined ||
+      update.manifest.code?.service === undefined ? null : (
+        <PluginPayerNote target={target} />
+      )}
       {!update.upToDate && serversToReview ? (
         <p className="plugin-bundle-help">
           Added and changed MCP servers run no tools until you approve their
@@ -118,7 +140,7 @@ export function PluginBundleUpdate({
       ) : null}
       {update.conflicts.length === 0 ? null : (
         <div className="plugin-bundle-conflicts" role="alert">
-          <strong>This update can't be installed</strong>
+          <strong>dx can't apply this change</strong>
           <ul>
             {update.conflicts.map((conflict) => (
               <li key={conflict}>{conflict}</li>
@@ -141,25 +163,29 @@ export function PluginBundleUpdate({
             size="xs"
             disabled={busy || update.conflicts.length > 0}
             onClick={async () => {
-              const updated = await run(
-                {
-                  type: "update",
-                  pluginId: bundle.id,
-                  preview: update,
-                  ...(file === undefined ? {} : { file }),
-                  // Pressing Update here accepts the grants listed above.
-                  acceptPermissions: update.permissions.widens,
-                },
-                `${bundle.displayName} updated.`,
-              );
+              // Pressing the button accepts what the review lists as new.
+              const accept = update.permissions.widens;
+              const updated =
+                onApply === undefined
+                  ? await run(
+                      {
+                        type: "update",
+                        pluginId: bundle.id,
+                        preview: update,
+                        ...(file === undefined ? {} : { file }),
+                        acceptPermissions: accept,
+                      },
+                      `${bundle.displayName} updated.`,
+                    )
+                  : await onApply(accept);
               if (updated) onDone();
             }}
           >
             {busy
-              ? "Updating…"
+              ? "Saving…"
               : update.permissions.widens
-                ? "Accept and update"
-                : "Update"}
+                ? `Allow and ${confirmLabel.toLowerCase()}`
+                : confirmLabel}
           </Button>
         )}
       </footer>

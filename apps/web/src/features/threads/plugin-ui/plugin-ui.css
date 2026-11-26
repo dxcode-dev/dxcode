@@ -100,32 +100,13 @@
   }
 }
 
-/* A plugin's pane fills its tab; its view brings its own styles. */
-.plugin-pane,
-.plugin-pane-view {
+/* A plugin's view fills its tab. */
+.plugin-pane {
   display: flex;
   flex-direction: column;
   width: 100%;
   height: 100%;
   min-height: 0;
-}
-.plugin-pane-slot {
-  flex: 1;
-  min-height: 0;
-}
-.plugin-pane-slot > .plugin-pane-frame {
-  height: 100%;
-}
-/* The Thread's own Portal over the box a trusted pane reserved. */
-.plugin-pane-view {
-  position: relative;
-  /* The Portal stays inside the pane, wherever the view asks for it. */
-  overflow: hidden;
-}
-.plugin-pane-portal {
-  position: absolute;
-  border: 0;
-  background: var(--background);
 }
 .plugin-pane-state {
   padding: var(--space-4);
@@ -274,32 +255,6 @@
 .plugin-pane-tab-icon {
   flex: none;
 }
-.plugin-pane-read-only {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-bottom: 1px solid var(--divider);
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
-}
-.plugin-pane-read-only > svg {
-  width: 13px;
-  height: 13px;
-  flex: none;
-}
-.plugin-pane-archived {
-  display: flex;
-  height: 100%;
-  min-height: 0;
-  flex-direction: column;
-}
-.plugin-pane-archived-frame {
-  display: flex;
-  min-height: 0;
-  flex: 1;
-  flex-direction: column;
-}
 .plugin-tool-icon {
   margin-right: 6px;
   vertical-align: -3px;
@@ -328,4 +283,11 @@
 /* Last: more specific than the `… > svg` sizing rules above. */
 .dx-prompt-card[data-destructive="true"] > svg {
   color: var(--destructive);
+}
+/* A view described as data, in a Thread panel: it scrolls in the panel. */
+.plugin-data-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
 }

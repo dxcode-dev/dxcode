@@ -30,13 +30,15 @@ export function retryContainerSettings<
 }): Promise<Result>;
 export function deployOrbWorker(input: {
   workerName: string;
-  /** The stage's D1 database, bound as DB for plugin container usage. */
+  /** The stage's Core Worker, read before deleting the retired plugin container class. */
+  coreWorkerName?: string;
+  /** No longer read; the deployment's resource props still pass it. */
   databaseId?: string;
   workspaceRoot: string;
   stateDirectory: string;
   environment?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
-}): Promise<{ workerName: string }>;
+}): Promise<{ workerName: string; pluginContainerDeleted: boolean }>;
 export function orbWorkerExists(input: {
   workerName: string;
   accountId: string;

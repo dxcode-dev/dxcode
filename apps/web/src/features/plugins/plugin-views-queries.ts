@@ -1,16 +1,15 @@
 import {
-  PluginPageViewResponseSchema,
+  GetPluginAppUrlEndpoint,
+  ListPluginAppsEndpoint,
   PluginViewsCatalogResponseSchema,
   PluginViewsErrorResponseSchema,
-  PostPluginPaneMessageResponseSchema,
 } from "@dx/api";
-import { mutationOptions, queryOptions } from "@tanstack/react-query";
-import { request } from "../../shared/api/client.js";
+import { queryOptions } from "@tanstack/react-query";
+import { dxClient, request } from "../../shared/api/client.js";
 
 /**
- * The person's plugin pages and Thread types (`GET /v1/plugins/views`),
- * one page's view, and the messages a page's view sends its plugin. Loaded
- * only by a page, the new Thread type menu, or the command palette.
+ * The person's plugin views and Thread types (`GET /v1/plugins/views`).
+ * Loaded only by a page, the new Thread type menu, or the command palette.
  */
 
 const VIEWS_PATH = "/v1/plugins/views";
@@ -18,8 +17,6 @@ const VIEWS_PATH = "/v1/plugins/views";
 export const pluginViewsKeys = {
   all: ["plugin-views"] as const,
   catalog: () => [...pluginViewsKeys.all, "catalog"] as const,
-  page: (plugin: string, page: string) =>
-    [...pluginViewsKeys.all, "page", plugin, page] as const,
 };
 
 export const pluginViewsCatalogQueryOptions = () =>
@@ -38,53 +35,45 @@ export const pluginViewsCatalogQueryOptions = () =>
     retry: 1,
   });
 
-const pagePath = (plugin: string, page: string) =>
-  `${VIEWS_PATH}/${encodeURIComponent(plugin)}/pages/${encodeURIComponent(page)}`;
+/**
+ * A plugin's own web app: the person's plugins that have one, and where a
+ * frame loads one now. Loaded only by the app page and the command palette.
+ */
 
-export const pluginPageViewQueryOptions = (plugin: string, page: string) =>
+export const pluginAppKeys = {
+  all: ["plugin-apps"] as const,
+  list: () => [...pluginAppKeys.all, "list"] as const,
+  url: (plugin: string) => [...pluginAppKeys.all, "url", plugin] as const,
+};
+
+export const pluginAppsQueryOptions = () =>
   queryOptions({
-    queryKey: pluginViewsKeys.page(plugin, page),
+    queryKey: pluginAppKeys.list(),
     queryFn: async ({ signal }) =>
-      (
-        await request(
-          pagePath(plugin, page),
-          PluginPageViewResponseSchema,
-          { signal },
-          PluginViewsErrorResponseSchema,
-        )
-      ).data,
+      (await dxClient.call(ListPluginAppsEndpoint, undefined, { signal })).data
+        .apps,
     staleTime: 60_000,
     retry: 1,
   });
 
-const errorDetail = (error: unknown) =>
-  error !== null &&
-  typeof error === "object" &&
-  "data" in error &&
-  typeof (error as { data?: { detail?: unknown } }).data?.detail === "string"
-    ? (error as { data: { detail: string } }).data.detail
-    : error instanceof Error
-      ? error.message
-      : "The plugin could not answer.";
-
-/** A page view's `dx/plugin.post`: runs its `onMessage`; resolves its result. */
-export const pluginPageMessageMutationOptions = (
-  plugin: string,
-  page: string,
-) =>
-  mutationOptions({
-    mutationFn: async (message: unknown) => {
-      try {
-        return (
-          await request(
-            `${pagePath(plugin, page)}/messages`,
-            PostPluginPaneMessageResponseSchema,
-            { method: "POST", body: JSON.stringify({ message }) },
-            PluginViewsErrorResponseSchema,
-          )
-        ).data.result;
-      } catch (error) {
-        throw new Error(errorDetail(error));
-      }
-    },
+/**
+ * The app's frame URL. Starting the program can wake its plugin Orb, so a
+ * first answer can take seconds; the URL is offered for a few minutes and
+ * the Portal session it opens lasts longer, so it is not read again while
+ * the page stays open.
+ */
+export const pluginAppUrlQueryOptions = (plugin: string) =>
+  queryOptions({
+    queryKey: pluginAppKeys.url(plugin),
+    queryFn: async ({ signal }) =>
+      (
+        await dxClient.call(
+          GetPluginAppUrlEndpoint,
+          { params: { plugin } },
+          { signal },
+        )
+      ).data,
+    staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 0,
+    retry: false,
   });

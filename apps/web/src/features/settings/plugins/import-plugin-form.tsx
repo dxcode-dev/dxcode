@@ -19,6 +19,7 @@ import {
 } from "./plugin-bundle-presentation.js";
 import { PluginBundleSourceLine } from "./plugin-bundle-source.js";
 import { PluginCatalogTab } from "./plugin-catalog-tab.js";
+import { PluginPayerNote } from "./plugin-payer-note.js";
 
 function ImportHeader() {
   return (
@@ -130,6 +131,9 @@ export function ImportPluginForm({
           code={manifest.code}
           skipped={manifest.skipped}
         />
+        {manifest.code?.service === undefined ? null : (
+          <PluginPayerNote target={target} />
+        )}
         {manifest.code?.hosts?.orb === undefined ? null : (
           <p className="plugin-bundle-help plugin-bundle-warning" role="note">
             Its Orb code runs in each Thread&apos;s Orb with the Thread&apos;s

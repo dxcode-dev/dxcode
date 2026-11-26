@@ -20,6 +20,7 @@ export type PaneViewKind =
   | "terminal"
   | "desktop"
   | "artifacts";
+/** The workspace views, in the order dx's Thread panel slot lists them. */
 export const PANE_VIEW_KINDS: ReadonlyArray<PaneViewKind> = [
   "files",
   "changes",
@@ -92,10 +93,10 @@ export const PANE_MIN_SHARE = 0.1;
 
 const AGENT_TAB: ThreadPaneTab = { kind: "agent" };
 
-/** An installed plugin's pane tab. */
+/** An installed plugin's view tab. */
 export type PluginPaneTab = Extract<ThreadPaneTab, { kind: "plugin" }>;
 
-/** `plugin:<plugin name>/<pane id>`: one tab per plugin pane and Thread. */
+/** `plugin:<plugin name>/<view id>`: one tab per plugin view and Thread. */
 export const pluginPaneTabId = (tab: {
   readonly plugin: string;
   readonly pane: string;

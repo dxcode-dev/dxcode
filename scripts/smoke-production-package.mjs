@@ -14,6 +14,7 @@ import { VIEW_FRAME_CONTENT_SECURITY_POLICY } from "../packages/api/src/views/vi
 import {
   loadMigrationManifest,
   sourceControlSchemaVersion,
+  wranglerDurableObjectMigration,
 } from "./migration-manifest.mjs";
 import {
   deriveDurableObjectBindings,
@@ -310,9 +311,6 @@ export const smokeProductionPackage = async (packageRoot) => {
       ],
     }),
     DX_WORKSPACE_INACTIVITY_MS: "300000",
-    DX_PLUGIN_CONTAINER_DAILY_MS: "",
-    DX_PLUGIN_CONTAINER_WORKSPACE_DAILY_MS: "",
-    DX_PLUGIN_TIER_LIMITS: "",
     DX_WORKER_LOGS: "",
     DX_REALTIMEKIT: "",
     E2B_API_KEY: "package-smoke-not-a-provider-key",
@@ -421,10 +419,7 @@ export const smokeProductionPackage = async (packageRoot) => {
         class_name: className,
       })),
     },
-    migrations: migrations.durableObjects.map(({ tag, newSqliteClasses }) => ({
-      tag,
-      new_sqlite_classes: newSqliteClasses,
-    })),
+    migrations: migrations.durableObjects.map(wranglerDurableObjectMigration),
   };
   writeFileSync(resolve(smokeRoot, "wrangler.json"), JSON.stringify(config));
 

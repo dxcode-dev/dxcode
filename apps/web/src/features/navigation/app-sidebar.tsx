@@ -6,9 +6,8 @@ import type {
 } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { useDebouncer } from "@tanstack/react-pacer";
-import { useQuery } from "@tanstack/react-query";
 import { Link, useLocation } from "@tanstack/react-router";
-import { Files, Mail, Search, SquarePen } from "lucide-react";
+import { Search, SquarePen } from "lucide-react";
 import * as React from "react";
 import type { ThreadListClientItem } from "../../shared/api/client.js";
 import { AppUpdateRow } from "../../shared/app-update/app-update-row.js";
@@ -20,9 +19,8 @@ import {
 import { preloadableComponent } from "../../shared/preloadable-component.js";
 import { useThreadArchive } from "../../shared/thread-archive.js";
 import { Button } from "../../shared/ui/button.js";
-import { ProjectsIcon } from "../../shared/ui/projects-icon.js";
 import { SharedRowContextMenu } from "../../shared/ui/row-context-menu.js";
-import { mailboxQueryOptions } from "../mailbox/mailbox-summary-queries.js";
+import { DX_SIDEBAR_SECTIONS } from "./dx-sidebar-sections.js";
 import { NotificationInbox } from "./notification-inbox.js";
 import {
   type AccountMenuItems,
@@ -30,12 +28,14 @@ import {
 } from "./sidebar-account-menu.js";
 import { SidebarAccountMenuSlot } from "./sidebar-account-menu-slot.js";
 import { SidebarArchive } from "./sidebar-archive.js";
+import { SidebarExtensionRegion } from "./sidebar-extensions.js";
 import {
   type SidebarLayout,
   useLocalSidebarLayout,
   useSyncedSidebarLayout,
 } from "./sidebar-layout.js";
 import { SidebarPanelIcon } from "./sidebar-panel-icon.js";
+import { renderSidebarSlot, type SidebarSections } from "./sidebar-slots.js";
 import { SidebarThreadNavigation } from "./sidebar-thread-navigation.js";
 import {
   buildThreadSections,
@@ -242,9 +242,8 @@ export interface AppSidebarProps {
   readonly loadMoreError?: string;
   readonly onSetPinned?: (threadId: ThreadData["id"], pinned: boolean) => void;
   readonly pinningThreadId?: ThreadData["id"];
-  readonly extensionRegion?: React.ReactNode;
-  /** The Spaces section, listed above the Threads. */
-  readonly spacesSection?: React.ReactNode;
+  /** What the sidebar's slots hold; dx's own sections by default. */
+  readonly slots?: SidebarSections;
   /** A deployment's own account menu items, such as Admin. */
   readonly accountMenuItems?: AccountMenuItems;
   /** Each listed root's child Threads, loaded with the roots. */
@@ -258,37 +257,6 @@ export interface AppSidebarProps {
  * Mail, beside Projects and Artifacts where the deployment has a mail
  * domain, with the Inbox's unread count.
  */
-function MailboxDockLink({
-  userId,
-  selected,
-  onNavigate,
-}: {
-  readonly userId: UserId;
-  readonly selected: boolean;
-  readonly onNavigate: () => void;
-}) {
-  const mailbox = useQuery(mailboxQueryOptions(userId));
-  const unread = mailbox.data?.enabled === true ? mailbox.data.unread.inbox : 0;
-  return (
-    <Link
-      to="/mailbox"
-      className={`dock-link ${selected ? "selected" : ""}`}
-      aria-label={unread > 0 ? `Mail, ${unread} unread` : undefined}
-      onClick={onNavigate}
-    >
-      <span className="dock-link-icon">
-        <Mail aria-hidden="true" />
-        {unread > 0 ? (
-          <span className="dock-link-count" aria-hidden="true">
-            {unread > 99 ? "99+" : unread}
-          </span>
-        ) : null}
-      </span>
-      <span>Mail</span>
-    </Link>
-  );
-}
-
 /** The sidebar, with the person's synced layout when signed in. */
 export function AppSidebar(props: AppSidebarProps) {
   return props.userId === undefined ? (
@@ -334,8 +302,7 @@ function AppSidebarContent({
   onSetPinned = noop,
   onUnfollow,
   pinningThreadId,
-  extensionRegion,
-  spacesSection,
+  slots = DX_SIDEBAR_SECTIONS,
   accountMenuItems,
   childThreads,
   layout,
@@ -349,6 +316,9 @@ function AppSidebarContent({
     ? pathname.slice("/threads/".length)
     : undefined;
   const pendingCreations = usePendingCreations(newThreadSurface);
+  const slotContext = { userId, settingsContext, pathname, onNavigate };
+  const leading = renderSidebarSlot(slots, "leading", slotContext);
+  const afterThreads = renderSidebarSlot(slots, "after-threads", slotContext);
   const {
     dismissPreviewForNavigation,
     keepPreviewOpen,
@@ -443,7 +413,7 @@ function AppSidebarContent({
       {/* The rows share one context menu instead of one each (#1462). */}
       <SharedRowContextMenu>
         <SidebarThreadNavigation
-          leadingContent={spacesSection}
+          leadingContent={leading.length === 0 ? undefined : leading}
           archiveContent={
             userId === undefined ? undefined : (
               <SidebarArchive
@@ -491,33 +461,12 @@ function AppSidebarContent({
         />
       </SharedRowContextMenu>
 
-      {extensionRegion}
+      <SidebarExtensionRegion>
+        {afterThreads.length === 0 ? undefined : afterThreads}
+      </SidebarExtensionRegion>
 
       <nav className="sidebar-dock" aria-label="Primary navigation">
-        <Link
-          to="/projects"
-          className={`dock-link ${pathname === "/projects" ? "selected" : ""}`}
-          onClick={onNavigate}
-        >
-          <ProjectsIcon />
-          <span>Projects</span>
-        </Link>
-        <Link
-          to="/artifacts"
-          className={`dock-link ${pathname === "/artifacts" || pathname.startsWith("/artifacts/") ? "selected" : ""}`}
-          onClick={onNavigate}
-        >
-          <Files aria-hidden="true" />
-          <span>Artifacts</span>
-        </Link>
-        {userId === undefined ||
-        settingsContext?.mailDomain === undefined ? null : (
-          <MailboxDockLink
-            userId={userId}
-            selected={pathname === "/mailbox"}
-            onNavigate={onNavigate}
-          />
-        )}
+        {renderSidebarSlot(slots, "dock", slotContext)}
       </nav>
 
       <AppUpdateRow />

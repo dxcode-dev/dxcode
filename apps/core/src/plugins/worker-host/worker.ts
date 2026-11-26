@@ -1,12 +1,13 @@
 import {
-  type PluginArchivedMode,
   PluginBundleCode,
   type PluginCodeEvent,
   type PluginHostKind,
   type PluginIconRef,
+  pluginRebuildMessage,
+  removedPluginFeatures,
 } from "@dx/domain";
 import { getLogger } from "@logtape/logtape";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import type { Bindings } from "../../http/types.js";
 import type { PluginAgentDefinition } from "../agents/definition.js";
 import type { PluginHostDependencies, PluginInstallRecord } from "./host.js";
@@ -22,6 +23,8 @@ import type { PluginHostDependencies, PluginInstallRecord } from "./host.js";
 const logger = getLogger(["dx", "plugins", "worker-host"]);
 
 const calls = () => import("./worker-calls.js");
+/** A draft plugin's code runs from its folder in the Thread's Orb. */
+const drafts = () => import("../drafts/orb.js");
 
 /** The compatibility date plugin workers run on. */
 export const PLUGIN_WORKER_COMPATIBILITY_DATE = "2026-08-20";
@@ -61,25 +64,6 @@ export interface PluginCodeDescription {
     readonly flags?: string;
     readonly url: string;
     readonly title?: string;
-  }>;
-  readonly panes: ReadonlyArray<{
-    readonly id: string;
-    readonly title: string;
-    readonly html: string;
-    readonly handlesMessages: boolean;
-    /** The manifest's icon for the pane, else the one it registered. */
-    readonly icon?: PluginIconRef;
-    /** The manifest's `archivedThreads` for the pane, when it sets one. */
-    readonly archivedThreads?: PluginArchivedMode;
-  }>;
-  /**
-   * Views its code registered that the manifest's `views` declares,
-   * by id; tabs and pages look them up here.
-   */
-  readonly views: ReadonlyArray<{
-    readonly id: string;
-    readonly html: string;
-    readonly handlesMessages: boolean;
   }>;
   /** Exposed functions the manifest's `exports` lists. */
   readonly exports: ReadonlyArray<string>;
@@ -130,7 +114,18 @@ export const dispatchPluginEvent = async (
   /** The worker times each handler; this bounds a worker that never answers. */
   timeoutMs?: number,
 ): Promise<unknown> =>
-  (await calls()).dispatchPluginEvent(dependencies, event, payload, timeoutMs);
+  dependencies.install.draft !== undefined
+    ? (await drafts()).invokeDraft(dependencies, {
+        kind: "event",
+        event,
+        payload,
+      })
+    : (await calls()).dispatchPluginEvent(
+        dependencies,
+        event,
+        payload,
+        timeoutMs,
+      );
 
 /** Runs one of the install's registered tools. */
 export const callPluginTool = async (
@@ -138,24 +133,18 @@ export const callPluginTool = async (
   name: string,
   input: unknown,
 ): Promise<unknown> =>
-  (await calls()).callPluginTool(dependencies, name, input);
+  dependencies.install.draft !== undefined
+    ? (await drafts()).invokeDraft(dependencies, { kind: "tool", name, input })
+    : (await calls()).callPluginTool(dependencies, name, input);
 
 /** Runs one of the install's palette commands. */
 export const runPluginCommand = async (
   dependencies: PluginHostDependencies,
   id: string,
-): Promise<unknown> => (await calls()).runPluginCommand(dependencies, id);
-
-/**
- * Runs one of the install's panes' `onMessage` for a message its view sent
- * with `dx/plugin.post`, and returns its result.
- */
-export const sendPaneMessage = async (
-  dependencies: PluginHostDependencies,
-  id: string,
-  message: unknown,
 ): Promise<unknown> =>
-  (await calls()).sendPaneMessage(dependencies, id, message);
+  dependencies.install.draft !== undefined
+    ? (await drafts()).invokeDraft(dependencies, { kind: "command", id })
+    : (await calls()).runPluginCommand(dependencies, id);
 
 /** Runs a function the install's Worker code exposed, for another host. */
 export const callPluginWorkerHost = async (
@@ -164,7 +153,14 @@ export const callPluginWorkerHost = async (
   args: unknown,
   from: string,
 ): Promise<unknown> =>
-  (await calls()).callPluginWorkerHost(dependencies, fn, args, from);
+  dependencies.install.draft !== undefined
+    ? (await drafts()).invokeDraft(dependencies, {
+        kind: "host-call",
+        fn,
+        args,
+        from: "worker",
+      })
+    : (await calls()).callPluginWorkerHost(dependencies, fn, args, from);
 
 /**
  * Runs one of the install's exposed functions for another plugin's
@@ -176,32 +172,42 @@ export const callPluginExport = async (
   args: unknown,
   ms: number,
 ): Promise<unknown> =>
-  (await calls()).callPluginExport(dependencies, fn, args, ms);
+  dependencies.install.draft !== undefined
+    ? (await drafts()).invokeDraft(dependencies, {
+        kind: "export",
+        fn,
+        args,
+        callerPlugin: dependencies.calledBy ?? "",
+      })
+    : (await calls()).callPluginExport(dependencies, fn, args, ms);
 
-/** Runs one job in the install's durable Dynamic Worker. */
-export const runPluginJob = async (
-  dependencies: PluginHostDependencies,
-  id: string,
-  runId: string,
-  data: unknown,
-  ms?: number,
-): Promise<unknown> =>
-  (await calls()).runPluginJob(dependencies, id, runId, data, ms);
+/** Rebuild warnings already logged in this isolate, by plugin. */
+const rebuildLogged = new Set<string>();
 
 /**
- * Hands one watched message to the handler `ctx.watch` registered; says
- * `missing` when the isolate holding it is gone.
+ * The manifest's code block, decoded again where it leaves D1: a stored
+ * version's code, or none when it does not decode or uses a
+ * feature dx removed (`pluginRebuildMessage`): such a plugin does not load
+ * until it is rebuilt, and dx logs why once per isolate and plugin.
  */
-export const sendPluginWatchMessage = async (
-  dependencies: PluginHostDependencies,
-  target: string,
-  message: unknown,
-): Promise<{ readonly missing: boolean }> =>
-  (await calls()).sendPluginWatchMessage(dependencies, target, message);
-
-/** The manifest's code block, decoded again where it leaves D1. */
-export const decodePluginCode = (value: unknown) =>
-  Schema.decodeUnknownOption(PluginBundleCode)(value);
+export const decodePluginCode = (
+  value: unknown,
+  plugin?: { readonly id: string; readonly name: string },
+): Option.Option<PluginBundleCode> => {
+  const rebuild = pluginRebuildMessage(value);
+  if (rebuild !== undefined) {
+    if (plugin !== undefined && !rebuildLogged.has(plugin.id)) {
+      rebuildLogged.add(plugin.id);
+      logger.warn(`Plugin ${plugin.name} must be rebuilt: ${rebuild}`, {
+        event: "plugin_needs_rebuild",
+        pluginId: plugin.id,
+        removed: removedPluginFeatures(value),
+      });
+    }
+    return Option.none();
+  }
+  return Schema.decodeUnknownOption(PluginBundleCode)(value);
+};
 
 export const logPluginFailure = (
   install: PluginInstallRecord,

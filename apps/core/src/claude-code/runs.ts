@@ -62,6 +62,13 @@ class ClaudeCodeRuns {
     return run;
   }
 
+  /** The Thread's attempts whose Claude Code may still be running. */
+  live(threadId: string): ReadonlyArray<ClaudeCodeRun> {
+    return [...(this.#threads.get(threadId)?.values() ?? [])].filter(
+      (run) => !run.exited,
+    );
+  }
+
   /**
    * Forgets the Thread's readers, with their handles and read failures; a
    * later call re-reads each attempt from its files.

@@ -1,4 +1,5 @@
 import type { PluginPermissionChange } from "@dx/api";
+import { pluginPermissionChangeText } from "@dx/domain";
 import type { PluginBundleGroupItem } from "./plugin-bundle-group.js";
 
 /** What an update or a proposal changes, as rows of a bundle group. */
@@ -35,52 +36,25 @@ export const changeItems = (
       tone: credentialsCleared ? "removed" : change,
     }));
 
-/** A grant's name, the same in install and update reviews. */
-export const permissionLabel = {
-  code: "Code",
-  events: "Events",
-  network: "Network",
-  secrets: "Secrets",
-  tools: "dx tools",
-  ui: "Thread UI",
-  ai: "Model calls",
-  threads: "Threads",
-  models: "Models",
-  agents: "Agents",
-  shell: "Commands",
-  settings: "Required settings",
-  mcp: "MCP hosts",
-  commands: "Local commands",
-  binaries: "Native tools",
-  plugins: "Calls plugins",
-  views: "Views",
-  exports: "Exports",
-  tier: "Trust tier",
-  hosts: "Hosts",
-  jobs: "Background jobs",
-  wake: "Wakes Threads",
-  panes: "Pane access",
-} as const satisfies Record<PluginPermissionChange["permission"], string>;
-
-/** Each grant the update adds or drops, added ones first. */
+/** What an update newly does or no longer does, new things first. */
 export const permissionItems = (
   changes: ReadonlyArray<PluginPermissionChange>,
 ): ReadonlyArray<PluginBundleGroupItem> => [
   ...changes.flatMap(({ permission, added }) =>
     added.map((value) => ({
       key: `added:${permission}:${value}`,
-      name: permissionLabel[permission],
-      detail: value,
-      status: "Added",
+      name: pluginPermissionChangeText(permission, value),
+      sentence: true,
+      status: "New",
       tone: "added" as const,
     })),
   ),
   ...changes.flatMap(({ permission, removed }) =>
     removed.map((value) => ({
       key: `removed:${permission}:${value}`,
-      name: permissionLabel[permission],
-      detail: value,
-      status: "Removed",
+      name: pluginPermissionChangeText(permission, value),
+      sentence: true,
+      status: "No longer",
       tone: "removed" as const,
     })),
   ),

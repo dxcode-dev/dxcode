@@ -6,6 +6,7 @@ import type {
 } from "@dx/api";
 import {
   type ThreadId,
+  WORKLOAD_IDENTITY_CORE_FUNCTION_ASSURANCE,
   WORKLOAD_IDENTITY_TOKEN_USE,
   WorkloadIdentityAudience,
   type WorkloadIdentityRuntimeAssuranceType,
@@ -570,6 +571,8 @@ export const makeWorkloadIdentityBroker = (
         "project_id",
         "workspace_id",
         "thread_id",
+        "plugin_install_id",
+        "plugin_name",
       ],
     };
   },
@@ -586,6 +589,78 @@ export const makeWorkloadIdentityBroker = (
     configuredIssuer(bindings);
     parseAudiencePolicies(bindings);
     await activeSigningKey(bindings);
+  },
+
+  /**
+   * A token for one plugin install's service on a plugin Orb
+   * (plugins/services/requests.ts), which checked first that the install
+   * still runs there. Its subject names the install, not a Thread:
+   * `dx:wid:v1:u:<h(person)>:i:<h(install)>` for a personal install and
+   * `dx:wid:v1:w:<h(workspace)>:i:<h(install)>` for a workspace's, so a
+   * cloud rule can allow exactly that plugin, and it stays the same when the
+   * Orb is replaced. The workspace claim appears only for a workspace
+   * install. `plugin_runtime` says where the asking code ran, and
+   * `runtime_assurance` says only what happened: `dx_dxd_channel_v1` for a
+   * service (a program on a plugin Orb, asking over dxd's channel), and
+   * `dx_core_function_v1` for function code (inside dx, no Orb, no dxd).
+   * An audience that requires provider attestation is refused for both.
+   * Audited in `plugin_audit` (`identity.token`).
+   */
+  async issueForInstall(
+    bindings: Bindings,
+    request: IssueWorkloadIdentityRequest & {
+      readonly install: {
+        readonly pluginId: string;
+        readonly name: string;
+        readonly scope: "personal" | "workspace";
+        readonly targetId: string;
+      };
+      readonly runtime: "service" | "function";
+    },
+  ) {
+    const issuedAt = Math.floor(dependencies.now() / 1_000);
+    const effectiveTtlSeconds = request.ttlSeconds ?? DEFAULT_TTL_SECONDS;
+    if (
+      parseAudiencePolicies(bindings).get(request.audience) ===
+      "dx_provider_attested_v1"
+    )
+      throw new WorkloadIdentityUnauthorized();
+    const issuer = configuredIssuer(bindings);
+    const active = await activeSigningKey(bindings);
+    const expiresAt = issuedAt + effectiveTtlSeconds;
+    const jti = dependencies.randomBytes(16);
+    const { install } = request;
+    const scopeSegment =
+      install.scope === "workspace"
+        ? `w:${await digest(install.targetId)}`
+        : `u:${await digest(install.targetId)}`;
+    const subject = `dx:wid:v1:${scopeSegment}:i:${await digest(install.pluginId)}`;
+    try {
+      const token = await new SignJWT({
+        token_use: WORKLOAD_IDENTITY_TOKEN_USE,
+        runtime_assurance:
+          request.runtime === "function"
+            ? WORKLOAD_IDENTITY_CORE_FUNCTION_ASSURANCE
+            : "dx_dxd_channel_v1",
+        plugin_install_id: install.pluginId,
+        plugin_name: install.name,
+        plugin_runtime: request.runtime,
+        ...(install.scope === "workspace"
+          ? { workspace_id: install.targetId }
+          : { user_id: install.targetId }),
+      })
+        .setProtectedHeader({ alg: "RS256", kid: active.kid, typ: "JWT" })
+        .setIssuer(issuer)
+        .setAudience(request.audience)
+        .setSubject(subject)
+        .setIssuedAt(issuedAt)
+        .setExpirationTime(expiresAt)
+        .setJti(encodeBase64Url(jti))
+        .sign(active.privateKey);
+      return { token, expiresAt, subject };
+    } catch {
+      throw new WorkloadIdentityUnavailable();
+    }
   },
 
   async issue(

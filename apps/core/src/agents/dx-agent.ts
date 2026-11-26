@@ -20,6 +20,7 @@ import {
   useSkill,
   useTool,
 } from "@flue/runtime";
+import { getLogger } from "@logtape/logtape";
 import { createAutomationTools } from "../automations/agent-tools.js";
 import { githubToken } from "../automations/github.js";
 import { createBugReportTools } from "../bug-reports/agent-tools.js";
@@ -101,6 +102,14 @@ import {
   agentKeepsTool,
   agentPromptSection,
 } from "../plugins/agents/definition.js";
+import {
+  refreshThreadDrafts,
+  takeInstalledPluginChanges,
+  threadDrafts,
+  unloadThreadDraft,
+  withThreadDrafts,
+} from "../plugins/drafts/agent.js";
+import { createPluginToolTool } from "../plugins/drafts/plugin-tool.js";
 import { analyzeOnThreadRoute } from "../plugins/execution/media/analysis.js";
 import { createViewMediaTool } from "../plugins/execution/media/view-media.js";
 import type { RepositoryPluginSkill } from "../plugins/repository/repository-plugins.js";
@@ -110,6 +119,7 @@ import {
   createPluginTools,
   decidePluginToolCall,
   observePluginToolResult,
+  pluginRuntimeForTurn,
   usePluginCodeLifecycle,
   withPluginToolEvents,
   withPluginWorkspaceToolEvents,
@@ -255,19 +265,165 @@ const repositoryPluginSkills = (
       ),
   );
 
-/** This submission's plugin code, or undefined when none runs. */
+/**
+ * This render's plugin code, or undefined when none runs: the submission's
+ * installed and repository plugins, after the Thread's draft plugins as of
+ * now (they change between tool calls; plugins/drafts/agent.ts).
+ */
 const codePluginRuntime = (
   threadId: string,
   promptData: DxAgentPromptData | undefined,
+  requesterUserId: UserId | undefined,
 ): CodePluginRuntime | undefined => {
   const resolved = promptData?.codePlugins;
-  if (resolved === undefined || resolved.plugins.length === 0) return undefined;
-  return {
-    threadId,
-    ownerUserId: resolved.ownerUserId,
-    plugins: resolved.plugins,
-    host: agentPluginHostContext,
+  const drafts = threadDrafts(threadId);
+  // A plugin manage_dx installed or changed in this turn, resolved again.
+  const fresh = freshInstalled.get(threadId);
+  const submitted = resolved?.plugins ?? [];
+  const installed =
+    fresh === undefined
+      ? submitted
+      : [
+          ...fresh.plugins,
+          ...submitted.filter(({ scope }) => scope === "repository"),
+        ];
+  const plugins = withThreadDrafts(drafts, installed);
+  const ownerUserId =
+    resolved?.ownerUserId ?? fresh?.ownerUserId ?? drafts[0]?.targetId;
+  if (plugins.length === 0 || ownerUserId === undefined) return undefined;
+  return pluginRuntimeForTurn(
+    { threadId, ownerUserId, plugins, host: agentPluginHostContext },
+    requesterUserId,
+  );
+};
+
+const pluginChangeLogger = getLogger(["dx", "plugins", "drafts"]);
+
+/**
+ * Installed plugins resolved again after `manage_dx` changed one in this
+ * submission; a new submission resolves them itself.
+ */
+const freshInstalled = new Map<
+  string,
+  {
+    readonly ownerUserId: string;
+    readonly plugins: ReadonlyArray<ResolvedCodePlugin>;
+  }
+>();
+
+/**
+ * `manage_dx`: once a plugin change it made applies, this Thread resolves
+ * its installed plugins again (one read, only then) and unloads the draft
+ * of the same name, so the kept plugin works from the next tool call.
+ */
+const withPluginChanges = (
+  tool: ToolDefinition,
+  threadId: string,
+): ToolDefinition =>
+  ({
+    ...tool,
+    run: async (context: Parameters<ToolDefinition["run"]>[0]) => {
+      try {
+        return await tool.run(context);
+      } finally {
+        const names = takeInstalledPluginChanges(threadId);
+        if (names.length > 0) {
+          const { bindings } = agentPluginHostContext();
+          await Promise.all(
+            names.map((name) =>
+              unloadThreadDraft(bindings, threadId, name).catch(() => false),
+            ),
+          );
+          const fresh = await resolveAgentCodePlugins(threadId).catch(
+            (error: unknown) => {
+              pluginChangeLogger.warn(
+                "dx could not resolve the Thread's plugins again.",
+                {
+                  event: "plugin_changes_resolve_failed",
+                  threadId,
+                  error: error instanceof Error ? error.message : String(error),
+                },
+              );
+              return undefined;
+            },
+          );
+          if (fresh !== undefined)
+            freshInstalled.set(threadId, {
+              ownerUserId: fresh.ownerUserId,
+              plugins: fresh.plugins,
+            });
+          pluginChangeLogger.info("A plugin change applied in this Thread.", {
+            event: "plugin_changes_applied",
+            threadId,
+            changed: names,
+            plugins: fresh?.plugins.map(({ name }) => name),
+          });
+        }
+        await refreshDrafts(threadId);
+      }
+    },
+  }) as ToolDefinition;
+
+/**
+ * `code_exec` and `tool_search` reach MCP servers' functions, not the tools
+ * plugins registered. When the code or query names one of those tools, the
+ * result says so, because a model that just loaded a draft tends to reach
+ * for it through code.
+ */
+const withPluginToolHint = (
+  tool: ToolDefinition,
+  pluginToolNames: () => ReadonlyArray<string> | undefined,
+): ToolDefinition => {
+  if (tool.name !== "code_exec" && tool.name !== "tool_search") return tool;
+  const hint = (context: Parameters<ToolDefinition["run"]>[0]) => {
+    const input = JSON.stringify(
+      (context as { readonly data?: unknown }).data ?? {},
+    );
+    const named = (pluginToolNames() ?? []).filter((name) =>
+      new RegExp(`\\b${name}\\b`).test(input),
+    );
+    return named.length === 0
+      ? undefined
+      : `${named.join(", ")} ${named.length === 1 ? "is a tool" : "are tools"} in your tool list, from a plugin. Call ${named.length === 1 ? "it" : "them"} directly, as a tool, the way you call shell_command; ${tool.name} does not reach plugin tools.`;
   };
+  return {
+    ...tool,
+    run: async (context: Parameters<ToolDefinition["run"]>[0]) => {
+      try {
+        const result = await tool.run(context);
+        const note = hint(context);
+        return note === undefined
+          ? result
+          : typeof result === "string"
+            ? `${result}\n\n${note}`
+            : typeof result === "object" &&
+                result !== null &&
+                "output" in result &&
+                typeof result.output === "string"
+              ? { ...result, output: `${result.output}\n\n${note}` }
+              : result;
+      } catch (error) {
+        const note = hint(context);
+        if (note === undefined) throw error;
+        throw new Error(
+          `${error instanceof Error ? error.message : String(error)}\n\n${note}`,
+        );
+      }
+    },
+  } as ToolDefinition;
+};
+
+/** After a call that may have loaded, reloaded, or unloaded a draft. */
+const refreshDrafts = async (threadId: string) => {
+  // A draft never fails a turn: without the host context (a render outside
+  // the Worker) the Thread keeps the drafts it holds.
+  let bindings: ReturnType<typeof agentPluginHostContext>["bindings"];
+  try {
+    bindings = agentPluginHostContext().bindings;
+  } catch {
+    return;
+  }
+  await refreshThreadDrafts(bindings, threadId);
 };
 
 const localModelPreviewPrompt = `You are dx, a coding assistant running in a local UI preview.
@@ -373,14 +529,18 @@ const dxTools = (
       tools.push(withToolFailureMessage(tool));
   // manage_dx: the owner's dx settings, changed only after they apply each
   // change on a card above the composer.
+  // A plugin it installs replaces the draft of the same name.
   tools.push(
-    withToolFailureMessage(
-      createManageDxTool(
-        threadId,
-        agentThreadToolsContext,
-        requesterUserId,
-        promptData?.plugins?.submissionId,
+    withPluginChanges(
+      withToolFailureMessage(
+        createManageDxTool(
+          threadId,
+          agentThreadToolsContext,
+          requesterUserId,
+          promptData?.plugins?.submissionId,
+        ),
       ),
+      threadId,
     ),
   );
   const pluginTools = promptData?.plugins;
@@ -393,12 +553,23 @@ const dxTools = (
       agentPluginHostContext,
       pluginTools.mcpConnections,
     ))
-      tools.push(withToolFailureMessage(tool));
+      tools.push(
+        withToolFailureMessage(
+          withPluginToolHint(tool, () =>
+            (space
+              ? undefined
+              : codePluginRuntime(threadId, promptData, requesterUserId)
+            )?.plugins.flatMap((plugin) =>
+              plugin.tools.map(({ name }) => name),
+            ),
+          ),
+        ),
+      );
   // Tools installed plugins registered. A plugin tool calling a dx tool
   // goes through the same gate as the model's own calls.
   const codePlugins = space
     ? undefined
-    : codePluginRuntime(threadId, promptData);
+    : codePluginRuntime(threadId, promptData, requesterUserId);
   let gated: ToolDefinition[] = [];
   for (const tool of createPluginTools(
     codePlugins,
@@ -406,6 +577,19 @@ const dxTools = (
     () => gated,
   ))
     tools.push(withToolFailureMessage(tool));
+  // Claude Code fixes its tool list per turn: plugin_tool reaches a tool a
+  // draft added since, through the same gate (so it is not gated itself).
+  const pluginTool =
+    !space &&
+    promptData?.route !== undefined &&
+    isClaudeCodeModel(promptData.route.model)
+      ? createPluginToolTool({
+          refresh: () => refreshDrafts(threadId),
+          runtime: () =>
+            codePluginRuntime(threadId, promptData, requesterUserId),
+          threadTools: () => gated,
+        })
+      : undefined;
   // A Space's main thread has the Space agent profile's tools: its own,
   // then the dx tools it keeps.
   const mounted = space
@@ -428,30 +612,83 @@ const dxTools = (
       codePlugins,
     ),
   );
-  return gated;
+  if (pluginTool === undefined) return gated;
+  return [
+    ...gated,
+    withToolFailureMessage(
+      withMaskedToolResults(pluginTool, () =>
+        threadEnvironmentMasker(threadId),
+      ),
+    ),
+  ];
 };
 
 const CLAUDE_CODE_MIRRORED: ReadonlySet<string> = new Set(
   CLAUDE_CODE_MIRROR_TOOLS,
 );
 
-/** The workspace's tools behind installed plugins' tool.call gate. */
+/**
+ * The workspace's tools behind the Thread's plugins' tool.call gate, read
+ * at each call: Flue makes these tools once per sandbox, and a draft plugin
+ * loaded since gates them too. A command may load, reload, or unload a
+ * draft (`dxd plugin load`), so the drafts are asked for again after one.
+ */
 const withPluginSandboxEvents = (
   factory: SandboxFactory,
-  runtime: CodePluginRuntime | undefined,
-): SandboxFactory =>
-  runtime === undefined
-    ? factory
-    : {
-        ...factory,
-        tools: (sandbox, options) =>
-          (factory.tools?.(sandbox, options) ?? []).map((tool) =>
-            // Claude Code's Read mirror is gated by its PreToolUse hook.
-            CLAUDE_CODE_MIRRORED.has(tool.name)
-              ? tool
-              : withPluginWorkspaceToolEvents(tool, runtime),
-          ),
-      };
+  threadId: string,
+  runtime: () => CodePluginRuntime | undefined,
+): SandboxFactory => ({
+  ...factory,
+  tools: (sandbox, options) =>
+    (factory.tools?.(sandbox, options) ?? []).map((tool) => {
+      // Claude Code's Read mirror is gated by its PreToolUse hook.
+      const gated = CLAUDE_CODE_MIRRORED.has(tool.name)
+        ? tool
+        : withPluginWorkspaceToolEvents(tool, runtime);
+      return COMMAND_TOOLS.has(tool.name)
+        ? {
+            ...gated,
+            execute: async (...args: Parameters<typeof gated.execute>) => {
+              try {
+                return await gated.execute(...args);
+              } finally {
+                await refreshDrafts(threadId);
+              }
+            },
+          }
+        : gated;
+    }),
+});
+
+/**
+ * Each Thread's latest render's plugin runtime, read by its workspace
+ * tools at each call; Flue keeps those tools past the render that made them.
+ */
+const renderedRuntimes = new Map<string, () => CodePluginRuntime | undefined>();
+
+/** Tools that run commands in the Orb, and so may change its drafts. */
+const COMMAND_TOOLS: ReadonlySet<string> = new Set([
+  "shell_command",
+  "shell_command_status",
+  "bash",
+  "Bash",
+]);
+
+/** A tool that asks for the Thread's drafts again once it ran. */
+const withDraftRefresh = (
+  tool: ToolDefinition,
+  threadId: string,
+): ToolDefinition =>
+  ({
+    ...tool,
+    run: async (context: Parameters<ToolDefinition["run"]>[0]) => {
+      try {
+        return await tool.run(context);
+      } finally {
+        await refreshDrafts(threadId);
+      }
+    },
+  }) as ToolDefinition;
 
 /**
  * Installed plugins' decision for one of Claude Code's own tool calls, or
@@ -982,7 +1219,15 @@ export function DxAgent(props: AgentProps) {
     const claudeViewMedia = claudeCode
       ? claudeCodeViewMedia(props.id, promptData)
       : undefined;
-    const codePlugins = codePluginRuntime(props.id, promptData);
+    const codePlugins = codePluginRuntime(
+      props.id,
+      promptData,
+      requesterUserId,
+    );
+    // The latest render's plugins, with the drafts as of each call.
+    renderedRuntimes.set(props.id, () =>
+      codePluginRuntime(props.id, promptData, requesterUserId),
+    );
     const agent = promptData?.codePlugins?.agent;
     const keep = agentToolFilter(agent);
     useSandbox(
@@ -991,7 +1236,8 @@ export function DxAgent(props: AgentProps) {
           claudeViewMedia === undefined
             ? withViewMedia(sandbox, props.id)
             : withClaudeCodeImageTools(sandbox, props.id, claudeViewMedia),
-          codePlugins,
+          props.id,
+          () => renderedRuntimes.get(props.id)?.(),
         ),
         agent,
       ),
@@ -1003,7 +1249,12 @@ export function DxAgent(props: AgentProps) {
     // own tools reach Claude through the dx MCP server, except web search
     // and page reading, which Claude Code has itself.
     if (claudeViewMedia !== undefined) {
-      for (const tool of claudeCodeMirrorTools(props.id)) useTool(tool);
+      for (const tool of claudeCodeMirrorTools(props.id))
+        useTool(
+          COMMAND_TOOLS.has(tool.name)
+            ? withDraftRefresh(tool, props.id)
+            : tool,
+        );
       // view_media runs as a sandbox tool, which can record its image; the
       // dx tool bridge still lists it among the dx tools.
       for (const tool of claudeCodeDxTools(
@@ -1106,6 +1357,8 @@ DxAgent.resolvePromptData = async (
   context: ModelResolutionContext,
 ): Promise<DxAgentPromptData | undefined> => {
   const scope = context.scope;
+  // This submission resolves the installed plugins itself.
+  freshInstalled.delete(context.instanceId);
   // A Thread in executor mode never activates an Orb. Its execution mode is
   // the server's, read from D1, never the creation data a client sent; any
   // other Thread's activation starts as soon as that read answers, still
@@ -1206,6 +1459,16 @@ DxAgent.resolvePromptData = async (
               state.kind === "space" || runsWithoutOrb(state)
                 ? undefined
                 : resolveAgentRunner(context.instanceId),
+            )
+          : Promise.resolve(undefined),
+        // The Thread's draft plugins, held for the render; not prompt data,
+        // since they change between tool calls.
+        agentRuntimeComposition.capabilities === "workspace" &&
+        scope?.kind === "prompt"
+          ? threadState.then((state) =>
+              state.kind === "space" || runsWithoutOrb(state)
+                ? undefined
+                : refreshDrafts(context.instanceId),
             )
           : Promise.resolve(undefined),
       ]),

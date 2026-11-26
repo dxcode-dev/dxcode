@@ -112,7 +112,11 @@ const isObjectOfObjects = (value: unknown) =>
   isRecord(value) && Object.values(value).every(isRecord);
 
 export const readAgentPluginsFolder = Effect.fn("readAgentPluginsFolder")(
-  function* (folder: BundleFolder) {
+  function* (
+    folder: BundleFolder,
+    /** A draft (`dxd plugin load`) runs from its folder in the Orb. */
+    options: { readonly draft?: boolean } = {},
+  ) {
     const { files, paths, skip } = folder;
 
     // §5: the manifest. Anything but an unknown field is fatal.
@@ -219,6 +223,7 @@ export const readAgentPluginsFolder = Effect.fn("readAgentPluginsFolder")(
       folder,
       extensions[DX_EXTENSION_NAMESPACE],
       pluginName.value,
+      options,
     );
 
     const displayName =

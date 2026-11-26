@@ -1150,6 +1150,17 @@ export class ClaudeCodeRun {
     return this.#exited;
   }
 
+  /**
+   * Replaces the dx tools the run's bridge lists: it notices the file
+   * change, lists them again, and tells Claude Code its tool list changed.
+   */
+  async writeDxTools(tools: ReadonlyArray<ClaudeCodeDxTool>) {
+    await this.#sandbox.writeFile(
+      `${this.dir}/dx-tools.json`,
+      JSON.stringify(tools),
+    );
+  }
+
   get dead() {
     return this.#dead;
   }

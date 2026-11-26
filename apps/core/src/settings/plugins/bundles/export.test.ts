@@ -213,9 +213,17 @@ describe("exportPluginBundle", () => {
   });
 
   it.each([
-    [{ host: { durable: "dev.dxcode/live.js" } }],
-    [{ entry: "dev.dxcode/index.js", host: { durable: "dev.dxcode/live.js" } }],
+    [{ host: { worker: "dev.dxcode/live.js" } }],
     [{ entry: "dev.dxcode/index.js" }],
+    // Schedules and a URL listener for the function code.
+    [
+      {
+        entry: "dev.dxcode/index.js",
+        schedules: [{ name: "check", every: "15m" }],
+        listeners: [{ name: "feed", url: "wss://feed.example.com/live" }],
+        permissions: { network: ["feed.example.com"] },
+      },
+    ],
   ])("round-trips the code layer's host form %j", async (dx) => {
     const modules = [
       { path: "dev.dxcode/index.js", content: "export default () => {};\n" },

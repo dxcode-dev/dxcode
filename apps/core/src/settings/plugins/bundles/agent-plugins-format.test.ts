@@ -313,7 +313,7 @@ describe("readPluginBundle with an Agent Plugins package", () => {
   // - a path outside dev.dxcode/, a TypeScript file, or a missing module;
   // - an object naming no host at all;
   // - `worker` not defaulting to `entry`, or `entry` left pointing at a
-  //   module the Worker host should not load when only `durable` is named;
+  //   module the Worker host should not load when only `orb` is named;
   // - `entry` and `host.worker` naming different modules;
   // - the plain string form changing for plugins that never used hosts.
   const codeBundle = (dx: Record<string, unknown>, files: string[]) =>
@@ -327,23 +327,29 @@ describe("readPluginBundle with an Agent Plugins package", () => {
     ]);
 
   it("normalizes the object form of host into entry plus hosts", async () => {
+    // The Orb host needs shell, which its process has.
+    const shell = { permissions: { shell: true } };
     const both = await codeBundle(
-      { entry: "dev.dxcode/index.js", host: { durable: "dev.dxcode/live.js" } },
+      {
+        entry: "dev.dxcode/index.js",
+        host: { orb: "dev.dxcode/live.js" },
+        ...shell,
+      },
       ["dev.dxcode/index.js", "dev.dxcode/live.js"],
     );
     expect(both.manifest.code?.entry).toBe("dev.dxcode/index.js");
     expect(both.manifest.code?.host).toBe("worker");
     expect(both.manifest.code?.hosts).toEqual({
       worker: "dev.dxcode/index.js",
-      durable: "dev.dxcode/live.js",
+      orb: "dev.dxcode/live.js",
     });
-    const durableOnly = await codeBundle(
-      { host: { durable: "dev.dxcode/live.js" } },
+    const orbOnly = await codeBundle(
+      { host: { orb: "dev.dxcode/live.js" }, ...shell },
       ["dev.dxcode/live.js"],
     );
-    expect(durableOnly.manifest.code?.entry).toBe("dev.dxcode/live.js");
-    expect(durableOnly.manifest.code?.hosts).toEqual({
-      durable: "dev.dxcode/live.js",
+    expect(orbOnly.manifest.code?.entry).toBe("dev.dxcode/live.js");
+    expect(orbOnly.manifest.code?.hosts).toEqual({
+      orb: "dev.dxcode/live.js",
     });
     const plain = await codeBundle({ entry: "dev.dxcode/index.js" }, [
       "dev.dxcode/index.js",
@@ -353,12 +359,19 @@ describe("readPluginBundle with an Agent Plugins package", () => {
 
   it.each([
     [{ host: { gpu: "dev.dxcode/a.js" } }, "dx has no host named gpu"],
-    [{ host: { durable: 3 } }, "host.durable must name an entry module"],
-    [{ host: { durable: "live.js" } }, "inside the dev.dxcode/ folder"],
-    [{ host: { durable: "dev.dxcode/live.ts" } }, "dx runs JavaScript"],
+    [{ host: { orb: 3 } }, "host.orb must name an entry module"],
+    [{ host: { orb: "live.js" } }, "inside the dev.dxcode/ folder"],
+    // Orb code may be TypeScript (Node strips the types), but not TSX.
+    [{ host: { orb: "dev.dxcode/live.tsx" } }, "is a .tsx file"],
+    [{ host: { orb: "dev.dxcode/gone.js" } }, "dev.dxcode/gone.js is missing"],
+    // Removed hosts: the plugin must be rebuilt.
     [
-      { host: { durable: "dev.dxcode/gone.js" } },
-      "dev.dxcode/gone.js is missing",
+      { host: { durable: "dev.dxcode/a.js" } },
+      "This plugin uses host.durable, which dx no longer runs",
+    ],
+    [
+      { host: { container: "dev.dxcode/a.js" } },
+      "This plugin uses host.container, which dx no longer runs",
     ],
     [{ host: {} }, "names no entry module"],
     [

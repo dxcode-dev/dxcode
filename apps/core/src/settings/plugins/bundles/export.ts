@@ -1,6 +1,5 @@
 import {
   isStdioMcpServer,
-  type PluginBundleManifest,
   type PluginCodeModuleContent,
   type SkillRepositoryShape,
   type SkillResource,
@@ -36,38 +35,6 @@ const skillMarkdown = ({ active }: SkillWithVersion) =>
     { name: active.manifest.name, description: active.manifest.description },
     { lineWidth: 0 },
   )}---\n\n${active.instructions.trim()}\n`;
-
-/**
- * The manifest's `panes`: the declared panes (icons as paths), each with
- * the `connect` read for it, and any pane that only has a `connect`.
- */
-const exportPanes = (
-  code: NonNullable<PluginBundleManifest["code"]>,
-  itemPath: (icon: string) => string,
-) => {
-  const connectOf = (id: string) => {
-    const found = code.paneConnect?.find(({ pane }) => pane === id);
-    return found === undefined
-      ? undefined
-      : {
-          hosts: found.hosts,
-          portal: found.portal,
-          ...(found.webrtc === true ? { webrtc: true } : {}),
-        };
-  };
-  const declared = (code.panes ?? []).map((pane) => {
-    const connect = connectOf(pane.id);
-    return {
-      ...pane,
-      ...(pane.icon === undefined ? {} : { icon: itemPath(pane.icon) }),
-      ...(connect === undefined ? {} : { connect }),
-    };
-  });
-  const connectOnly = (code.paneConnect ?? [])
-    .filter(({ pane }) => !declared.some(({ id }) => id === pane))
-    .map(({ pane }) => ({ id: pane, connect: connectOf(pane) }));
-  return [...declared, ...connectOnly];
-};
 
 /** A skill with its active version's files and their content. */
 export type SkillWithFiles = SkillWithVersion & {
@@ -131,11 +98,25 @@ export const pluginExportFiles = (input: {
                   apiVersion: manifest.code.apiVersion,
                   // With hosts, entry is written only as the Worker's
                   // module, so a re-import reads the same hosts back.
-                  ...(manifest.code.hosts !== undefined &&
-                  manifest.code.hosts.worker === undefined
+                  ...((manifest.code.hosts !== undefined &&
+                    manifest.code.hosts.worker === undefined) ||
+                  manifest.code.entry === undefined
                     ? {}
                     : { entry: manifest.code.entry }),
-                  host: manifest.code.hosts ?? manifest.code.host,
+                  // A plugin whose only code is its service names no host.
+                  ...(manifest.code.entry === undefined &&
+                  manifest.code.hosts === undefined
+                    ? {}
+                    : { host: manifest.code.hosts ?? manifest.code.host }),
+                  ...(manifest.code.service === undefined
+                    ? {}
+                    : { service: manifest.code.service }),
+                  ...(manifest.code.schedules === undefined
+                    ? {}
+                    : { schedules: manifest.code.schedules }),
+                  ...(manifest.code.listeners === undefined
+                    ? {}
+                    : { listeners: manifest.code.listeners }),
                   permissions: manifest.code.permissions,
                   ...(manifest.code.settings.length === 0
                     ? {}
@@ -143,9 +124,6 @@ export const pluginExportFiles = (input: {
                   ...(manifest.code.agentModes === undefined
                     ? {}
                     : { agentModes: manifest.code.agentModes }),
-                  ...(manifest.code.tier === undefined
-                    ? {}
-                    : { tier: manifest.code.tier }),
                   ...(manifest.code.binaries === undefined
                     ? {}
                     : { binaries: manifest.code.binaries }),
@@ -153,17 +131,6 @@ export const pluginExportFiles = (input: {
                   ...(manifest.code.archivedThreads === undefined
                     ? {}
                     : { archivedThreads: manifest.code.archivedThreads }),
-                  // Declared panes, with each one's connect.
-                  ...(manifest.code.panes === undefined &&
-                  manifest.code.paneConnect === undefined
-                    ? {}
-                    : { panes: exportPanes(manifest.code, icons.itemPath) }),
-                  ...(manifest.code.durableScope === undefined
-                    ? {}
-                    : { durableScope: manifest.code.durableScope }),
-                  ...(manifest.code.jobs === undefined
-                    ? {}
-                    : { jobs: manifest.code.jobs }),
                 },
               },
             }),

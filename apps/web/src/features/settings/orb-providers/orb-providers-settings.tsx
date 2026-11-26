@@ -38,6 +38,7 @@ import {
   orbProviderSource,
   preparationStep,
 } from "./orb-providers-status.js";
+import { PluginOrbCard } from "./plugin-orb.js";
 import { RunnersSettings } from "./runners-settings.js";
 import { SpaceCoordinatorOrbCard } from "./space-coordinator-orb.js";
 
@@ -363,6 +364,9 @@ export function OrbProvidersSettings({
       )}
       {data === undefined ? null : (
         <SpaceCoordinatorOrbCard target={target} providers={data} />
+      )}
+      {data === undefined ? null : (
+        <PluginOrbCard target={target} providers={data} />
       )}
       {data !== undefined &&
       target.scope === "personal" &&

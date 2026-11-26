@@ -92,6 +92,9 @@ export {
   ThreadNotFound,
 } from "./persistence/errors.js";
 export { Timestamp } from "./persistence/timestamp.js";
+export * from "./plugins/data-view.js";
+export * from "./plugins/data-view-state.js";
+export * from "./plugins/data-view-validate.js";
 export {
   EXECUTION_CAPABILITY_IDS,
   ExecutionCapabilityId,
@@ -201,8 +204,8 @@ export {
   CLAUDE_CODE_EFFORTS,
   CLAUDE_CODE_MODELS,
   CLAUDE_CODE_PROVIDER_ID,
-  type ClaudeCodeEffort,
   CLAUDE_PLAN_STALE_SECONDS,
+  type ClaudeCodeEffort,
   type ClaudeCodeModel,
   type ClaudePlanExtraUsage,
   type ClaudePlanLimit,
@@ -625,6 +628,7 @@ export {
   effectiveArchivedMode,
 } from "./settings/plugin-archived.js";
 export {
+  isPluginRebuildMessage,
   isStdioMcpServer,
   MAX_PLUGIN_AGENT_MODES,
   MAX_PLUGIN_ARCHIVE_BYTES,
@@ -641,17 +645,11 @@ export {
   MAX_PLUGIN_EXPORTS,
   MAX_PLUGIN_ICON_BYTES,
   MAX_PLUGIN_ITEM_ICONS,
-  MAX_PLUGIN_MANIFEST_PANES,
   MAX_PLUGIN_PACKAGE_BYTES,
   MAX_PLUGIN_PACKAGE_FILES,
-  MAX_PLUGIN_PANE_CONNECTS,
-  MAX_PLUGIN_PANE_PORTAL_PORTS,
   MAX_PLUGIN_STDIO_ARGS,
   MAX_PLUGIN_STDIO_ENV,
   MAX_PLUGIN_STDIO_VALUE_LENGTH,
-  MAX_PLUGIN_THREAD_TYPES,
-  MAX_PLUGIN_VIEW_PAGES,
-  MAX_PLUGIN_VIEW_TABS,
   PLUGIN_ARCHIVED_MODES,
   PLUGIN_CODE_EVENTS,
   PLUGIN_CODE_THREAD_GRANTS,
@@ -681,25 +679,31 @@ export {
   PluginCodeSetting,
   PluginCodeThreadGrant,
   PluginCodeUiGrant,
+  PluginDataViewEntry,
   PluginExport,
   PluginExportName,
   type PluginIconFileContent,
   PluginIconHash,
   PluginIconRef,
   PluginIconSet,
-  PluginManifestPane,
-  PluginPaneConnect,
   type PluginPermission,
-  PluginThreadType,
   PluginThreadTypeRef,
   PluginViewId,
-  PluginViewPage,
-  PluginViews,
-  PluginViewTab,
+  pluginRebuildMessage,
   pluginThreadGrants,
+  RETIRED_PLUGIN_UI_GRANT,
+  removedPluginFeatures,
   StoredPluginBundle,
 } from "./settings/plugin-bundle.js";
 export { stdioCommandLine } from "./settings/plugin-bundle-command.js";
+export {
+  listInWords,
+  type PluginCapability,
+  type PluginCapabilityInput,
+  pluginCapabilities,
+  pluginPermissionChangeText,
+  pluginRebuildReason,
+} from "./settings/plugin-capabilities.js";
 export {
   FIRST_PARTY_GITHUB_OWNER,
   FIRST_PARTY_PLUGIN_DOMAIN,
@@ -733,16 +737,6 @@ export {
   pluginHostKinds,
 } from "./settings/plugin-host-kind.js";
 export {
-  MAX_PLUGIN_JOBS,
-  PLUGIN_DURABLE_SCOPES,
-  PLUGIN_JOB_ID,
-  PLUGIN_JOB_INSTANCE_ID,
-  PluginDurableScope,
-  PluginJob,
-  PluginJobId,
-  PluginJobSchedule,
-} from "./settings/plugin-job-schedule.js";
-export {
   PluginIntegrityConflict,
   PluginInvocationForbidden,
   PluginLimitExceeded,
@@ -751,6 +745,24 @@ export {
   PluginRepository,
   type PluginRepositoryShape,
 } from "./settings/plugin-repository.js";
+export {
+  isCommandListener,
+  MAX_PLUGIN_SERVICE_COMMAND,
+  MAX_PLUGIN_SERVICE_LISTENERS,
+  MAX_PLUGIN_SERVICE_SCHEDULES,
+  MAX_PLUGIN_SERVICE_TOOLS,
+  PLUGIN_JOB_ID,
+  PLUGIN_SERVICE_APP_PATH,
+  PLUGIN_SERVICE_ORBS,
+  PluginJobId,
+  PluginService,
+  PluginServiceCommand,
+  PluginServiceListener,
+  type PluginServiceOrb,
+  PluginServiceSchedule,
+  PluginServiceTool,
+  pluginServiceGrants,
+} from "./settings/plugin-service.js";
 export {
   MAX_PLUGIN_TRIGGERS_PER_USER,
   MAX_TRIGGER_DELIVERY_ATTEMPTS,
@@ -781,16 +793,6 @@ export {
   PluginTriggerRepository,
   type PluginTriggerRepositoryShape,
 } from "./settings/plugin-trigger-repository.js";
-export {
-  DEFAULT_PLUGIN_TIER_LIMITS,
-  lowerTier,
-  PLUGIN_TIERS,
-  PluginTier,
-  type PluginTierLimits,
-  pluginTierLimits,
-  TRUSTED_TIER,
-  tierAtLeast,
-} from "./settings/plugin-trust.js";
 export {
   CommitAuthorPreference,
   CommitSigningPreference,
@@ -1217,9 +1219,11 @@ export {
 } from "./usage/workspace-usage-repository.js";
 export { UserId } from "./users/user-id.js";
 export {
+  WORKLOAD_IDENTITY_CORE_FUNCTION_ASSURANCE,
   WORKLOAD_IDENTITY_TOKEN_USE,
   WorkloadIdentityAudience,
   type WorkloadIdentityAudience as WorkloadIdentityAudienceType,
+  WorkloadIdentityClaimRuntimeAssurance,
   WorkloadIdentityRuntimeAssurance,
   type WorkloadIdentityRuntimeAssurance as WorkloadIdentityRuntimeAssuranceType,
   WorkloadIdentityRuntimeProvider,

@@ -75,7 +75,8 @@ import { openThreadSeen } from "./features/threads/thread-seen-mutations.js";
 import { ThreadSnoozeProvider } from "./features/threads/thread-snooze.js";
 import { huddleJoinRequest } from "./shared/huddle/huddle-join-request.js";
 import { NewProjectSurfaceContext } from "./shared/new-project-surface.js";
-import { isStaleChunkError } from "./shared/stale-chunk.js";
+import { DataViewSlot } from "./shared/realtime/live.js";
+import { isStaleChunkError, lazyComponent } from "./shared/stale-chunk.js";
 
 export interface RouterContext {
   readonly queryClient: QueryClient;
@@ -176,6 +177,12 @@ const SpaceSidebarSection = lazyRouteComponent(
   () => import("./space-sidebar-route.js"),
   "SpaceSidebarSection",
 );
+// The plugins feature's view renderer fills the slot every place a plugin
+// view shows reads; it loads the first time one does.
+const LazyDataView = lazyComponent(
+  () => import("./features/plugins/data-view/data-view.js"),
+);
+
 const productSpacesSection = (onNavigate: () => void) => (
   <React.Suspense fallback={null}>
     <SpaceSidebarSection onNavigate={onNavigate} />
@@ -219,11 +226,13 @@ const productRoute = createRoute({
     <ThreadArchiveProvider>
       <ThreadSnoozeProvider>
         <ThreadEditingProvider>
-          <ProductShell
-            notices={productNotices}
-            spacesSection={productSpacesSection}
-            accountMenuItems={DeploymentAccountMenuItems}
-          />
+          <DataViewSlot value={LazyDataView}>
+            <ProductShell
+              notices={productNotices}
+              spacesSection={productSpacesSection}
+              accountMenuItems={DeploymentAccountMenuItems}
+            />
+          </DataViewSlot>
         </ThreadEditingProvider>
       </ThreadSnoozeProvider>
     </ThreadArchiveProvider>

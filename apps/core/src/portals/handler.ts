@@ -12,6 +12,7 @@
 
 import { readBoundedText } from "../http/bounded-body.js";
 import { portalLogger } from "../logging.js";
+import { pluginAppPortal } from "../plugins/services/app.js";
 import { recheckPortalSession } from "./access.js";
 import { redeemPortalCode } from "./codes.js";
 import { portalSigningKey, RANDOM_TOKEN, randomToken } from "./crypto.js";
@@ -185,7 +186,15 @@ const authenticate = async (
     if (session === undefined) continue;
     if (now - session.checkedAt < PORTAL_RECHECK_SECONDS)
       return { session, refresh: [] };
-    if (!(await recheckPortalSession(db, session, match.threadId, nowMs))) {
+    if (
+      !(await recheckPortalSession(
+        db,
+        session,
+        match.threadId,
+        nowMs,
+        match.port,
+      ))
+    ) {
       portalLogger.info("Portal session no longer has access.", {
         event: "portal_session_revoked",
         threadId: match.threadId,
@@ -282,10 +291,19 @@ const completeHandshake = async (
     return signInExpired(request, configuration);
   }
   const now = nowSeconds(nowMs);
+  // A plugin's page on a plugin Orb reaches only its own path prefix; one
+  // read at sign-in, none per request.
+  const app = await pluginAppPortal(
+    db,
+    grant.userId,
+    match.threadId,
+    match.port,
+  );
   const value = await encodePortalSession(key, {
     host: match.host,
     userId: grant.userId,
     sessionId: grant.sessionId,
+    ...(app === undefined ? {} : { appPath: app.path }),
     ...(grant.email === undefined ? {} : { email: grant.email }),
     ...(grant.name === undefined ? {} : { name: grant.name }),
     issuedAt: now,
@@ -498,6 +516,18 @@ const servePortalRequest = async (
   const authenticated = await authenticate(request, key, db, match, nowMs);
   if ("session" in authenticated) {
     const { session, refresh } = authenticated;
+    // A plugin's page: nothing else its program answers (its tools, jobs,
+    // or events) is reachable from a browser.
+    if (
+      session.appPath !== undefined &&
+      !new URL(request.url).pathname.startsWith(session.appPath)
+    )
+      return portalFailure(request, {
+        status: 404,
+        title: "Not found",
+        message: "This plugin page has nothing here.",
+        frameAncestor: configuration.appOrigin,
+      });
     if (feedbackPath) {
       const response =
         url.pathname === PORTAL_FEEDBACK_SCRIPT_PATH

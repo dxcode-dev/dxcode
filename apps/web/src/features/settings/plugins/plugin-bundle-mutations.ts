@@ -28,7 +28,6 @@ import {
   previewPluginBundle,
   previewPluginBundleUpdate,
   removePluginBundle,
-  setPluginBundleDev,
   setPluginBundleEnabled,
   setPluginBundleSettings,
   updatePluginBundle,
@@ -58,13 +57,6 @@ export type PluginBundleAction =
       readonly acceptPermissions?: boolean;
     }
   | { readonly type: "remove"; readonly pluginId: PluginId }
-  | {
-      readonly type: "dev";
-      readonly pluginId: PluginId;
-      readonly enabled: boolean;
-      /** The Thread whose Orb may reload it; needed to turn it on. */
-      readonly threadId?: string;
-    }
   | ({ readonly type: "policy" } & SetPluginBundlePolicyRequest);
 
 /** The workspace's plugin policies; an absent field stays as is. */
@@ -96,14 +88,6 @@ const mutate = async (
         action.preview,
         action.file,
         action.acceptPermissions === true,
-      );
-      return;
-    case "dev":
-      await setPluginBundleDev(
-        target,
-        action.pluginId,
-        action.enabled,
-        action.threadId,
       );
       return;
     case "remove":

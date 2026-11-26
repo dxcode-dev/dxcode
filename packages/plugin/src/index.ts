@@ -42,22 +42,6 @@
  * });
  * ```
  *
- * A plugin can also add its own views to a Thread as panes: HTML that runs
- * sandboxed beside the transcript, which the plugin's code updates live:
- *
- * ```js
- * dx.registerPane({
- *   id: "board",
- *   title: "Release board",
- *   html: BOARD_HTML, // an MCP Apps view; see PluginPaneDefinition
- *   onMessage: async (message, ctx) => ({ ok: true }),
- * });
- * dx.on("tool.result", async (event, ctx) => {
- *   const board = ctx.panes.get("board");
- *   await board.post({ lastTool: event.tool });
- * });
- * ```
- *
  * With `permissions.shell`, code runs commands in the Thread's Orb, in its
  * checkout:
  *
@@ -84,8 +68,8 @@
  * ```
  *
  * dx runs the code in an isolated Cloudflare Dynamic Worker with no network,
- * secrets, or storage of its own (at a trusted tier, also in the hosts
- * {@link PluginHostKind} names). Everything it may reach comes through the
+ * secrets, or storage of its own (and, with `host.orb`, as a process in the
+ * Thread's Orb). Everything it may reach comes through the
  * {@link PluginContext} each call receives, and only what `permissions`
  * grants: a capability the plugin did not ask for has no object.
  */
@@ -280,8 +264,7 @@ export interface PluginEvents {
     readonly context: ThreadPluginContext;
   };
   /**
-   * The Thread was archived: clean up, such as stopping a device or saving
-   * a pane's `snapshot`. Sent once, 10 seconds, no Orb; the agent is stopped
+   * The Thread was archived: clean up, such as stopping a device. Sent once, 10 seconds, no Orb; the agent is stopped
    * and prompts still waiting were cancelled.
    */
   readonly "thread.archived": {
@@ -295,21 +278,42 @@ export interface PluginEvents {
     readonly result: undefined;
     readonly context: ThreadPluginContext;
   };
-  // ─── Durable host ───
-  /** A declared job ran that the code did not register with `registerJob`. */
+  // ─── Schedules and listeners ───
+  /**
+   * One run of a manifest schedule, for a plugin with no `service` (with
+   * one, the service gets `POST /jobs/<name>`). Runs as the install's person
+   * with 5 minutes; no Thread, no Orb.
+   */
   readonly "job.run": {
     readonly event: JobRunEvent;
     readonly result: undefined;
-    readonly context: DurablePluginContext;
+    readonly context: BackgroundPluginContext;
+  };
+  /**
+   * One message on a manifest listener's `url` (a `wss://` WebSocket or an
+   * `https://` event stream), which dx keeps open. Messages of one listener
+   * arrive one at a time, in order; at most 100 wait, the oldest go first.
+   */
+  readonly "listener.event": {
+    readonly event: ListenerEvent;
+    readonly result: undefined;
+    readonly context: BackgroundPluginContext;
   };
 }
 
-/** `job.run`: one run of a declared job, in the durable host. */
+/** `job.run`: one occurrence of a manifest schedule. */
 export interface JobRunEvent {
-  /** The job's id, or `<declared id>:<key>` for an instance the code scheduled. */
-  readonly id: string;
-  readonly runId: string;
-  /** What `ctx.jobs.schedule` passed, or null. */
+  /** The schedule's `name` in the manifest. */
+  readonly name: string;
+  /** When this occurrence was due (ISO 8601); a late run keeps it. */
+  readonly scheduledAt: string;
+}
+
+/** `listener.event`: one message a listener's URL sent. */
+export interface ListenerEvent {
+  /** The listener's `name` in the manifest. */
+  readonly name: string;
+  /** A WebSocket text message or an event's `data`, parsed as JSON when it is JSON. */
   readonly data: unknown;
 }
 
@@ -360,8 +364,8 @@ export interface PluginToolDefinition<Input = Record<string, unknown>> {
   readonly icon?: PluginItemIcon;
   /**
    * Runs the call. The result reaches the model as text: strings as they
-   * are, anything else as JSON. Each call has the tier's time: 60 seconds
-   * sandboxed, 5 minutes at trusted tiers.
+   * are, anything else as JSON. Each call has 5 minutes (60 seconds for a
+   * plugin a repository carries).
    */
   readonly execute: (input: Input, ctx: ThreadPluginContext) => unknown;
 }
@@ -469,46 +473,12 @@ export interface PluginUi {
     message: string,
     options?: { readonly level?: PluginNoticeLevel },
   ): Promise<void>;
-  // ─── Streams ───
-  /**
-   * Opens a binary channel to one of this plugin's registered panes, which
-   * reads it with `window.dx.stream()`. Present only at a trusted tier
-   * (personal installs in your own Threads, workspace installs, plugins from
-   * a repository an admin trusts); other people see a personal install's
-   * panes sealed. Limited by bandwidth
-   * (5 MB/s, 10 MB/s verified), not message count.
-   */
-  stream?(paneId: string): Promise<PluginStream>;
-}
-
-// ─── Streams ───
-/**
- * A pane's stream. Messages go to every open copy of the pane; the first
- * binary message after a producer connects is the stream's header, which a
- * viewer that opens the pane later gets first (an fMP4 init segment, a
- * decoder config). A message past the bandwidth limit is dropped.
- */
-export interface PluginStream {
-  /** The pane's id. */
-  readonly id: string;
-  /**
-   * A signed WebSocket URL another process (in the Orb or a container) may
-   * connect to once, within ten minutes, as this stream's producer: what
-   * it sends reaches the pane, and the pane's messages reach it.
-   */
-  readonly url?: string;
-  /** Sends one message, at most 1 MiB, to every viewer. */
-  send(chunk: ArrayBuffer | string): Promise<void>;
-  /** Ends this producer and refuses every URL issued for the stream so far. */
-  close(): Promise<void>;
-  /** What the pane sends with `stream.send`. */
-  onMessage(handler: (data: ArrayBuffer | string) => void): void;
 }
 
 /**
  * What a quick action button does: send `text` as the person's next
- * message, copy `text`, open an https `url` in a new tab, run one of this
- * plugin's palette commands by id, or open one of its panes by id.
+ * message, copy `text`, open an https `url` in a new tab, or run one of
+ * this plugin's palette commands by id.
  */
 export type PluginQuickActionSpec =
   | {
@@ -525,12 +495,6 @@ export type PluginQuickActionSpec =
       readonly label: string;
       readonly action: "run-command";
       readonly args: { readonly command: string };
-    }
-  | {
-      readonly label: string;
-      /** Opens one of this plugin's panes; needs `permissions.ui` `pane`. */
-      readonly action: "open-pane";
-      readonly args: { readonly pane: string };
     };
 
 /** At most this many plugin quick actions show in one Thread. */
@@ -721,16 +685,15 @@ export interface PluginThreads {
   /**
    * Starts a Thread as the trigger's owner, at most five per delivery;
    * needs `permissions.threads` `create` (or `true`). Only a call outside
-   * any Thread (a webhook trigger, or a page's `onMessage`) may start
-   * Threads.
+   * any Thread, such as a webhook trigger, may start Threads.
    */
   readonly create?: (options: {
     readonly prompt: string;
     readonly projectId?: string;
     readonly title?: string;
     /**
-     * One of this plugin's own `views.threadTypes`, by id: its tab
-     * draws the new Thread's main area. Set only at creation.
+     * The id of one of this plugin's views whose `show` includes `app`:
+     * it draws the new Thread's main area. Set only at creation.
      */
     readonly type?: string;
   }) => Promise<{ readonly threadId: string }>;
@@ -739,6 +702,37 @@ export interface PluginThreads {
    * until you call it: a Thread out of reach rejects then.
    */
   readonly get?: (threadId: string) => PluginThreadHandle;
+  /**
+   * Opens a Thread as the install's person (a workspace install's
+   * installer), from any call: a schedule, a listener, a tool. With `key`,
+   * the Thread already open for that key (not archived or deleted) comes
+   * back with `created: false`, so repeated incidents open one Thread. At
+   * most 20 new Threads an hour. Needs `permissions.threads` `create`, on a
+   * personal or workspace install. The same call a service makes with
+   * `POST /threads`.
+   */
+  readonly open?: (options: {
+    readonly prompt: string;
+    /** 1 to 200 characters. */
+    readonly key?: string;
+    readonly title?: string;
+    readonly projectId?: string;
+  }) => Promise<{
+    readonly threadId: string;
+    readonly url: string;
+    readonly created: boolean;
+  }>;
+  /**
+   * Posts into an open Thread this install opened with `open`: a note (no
+   * model call) by default, or with `wake: true` and the `post` grant, a
+   * message the agent answers. Needs `create` or `post`. The same call a
+   * service makes with `POST /threads/<id>/messages`.
+   */
+  readonly post?: (
+    threadId: string,
+    text: string,
+    options?: { readonly wake?: boolean },
+  ) => Promise<void>;
 }
 
 /** The Thread a call runs in. */
@@ -755,97 +749,6 @@ export interface PluginThread extends PluginThreadAccess {
   ) => Promise<{ readonly id: string }>;
   /** Removes one of this plugin's quick actions; false when it was gone. */
   readonly removeQuickAction?: (id: string) => Promise<boolean>;
-}
-
-// ─── Panes ──────────────────────────────────────────────────────────────────
-
-/** A plugin registers at most this many panes. */
-export const MAX_PANES_PER_PLUGIN = 4;
-/** dx keeps this many of a pane's latest posts per Thread, for late openers. */
-export const PANE_MESSAGES_KEPT = 20;
-
-/**
- * A view the plugin adds to Threads it runs in. It shows as a tab in the
- * Thread's pane layout, from the Views menu, an `open-pane` quick action, or
- * `ctx.panes.get(id).open()`, and stays loaded while the Thread is open.
- *
- * `html` is an MCP Apps view (the `io.modelcontextprotocol/ui` extension)
- * and runs as one does in dx: in a sandboxed frame with an opaque origin and
- * a `default-src 'none'` policy, so it reaches no network, cookie, or dx API.
- * At a trusted tier (for the viewer too), a manifest pane's `connect` adds
- * its `hosts` to that policy and gives the frame `window.dx`: `stream()`,
- * `rtc()`, and `portal(port, element, { path? })`.
- * It talks to dx in MCP Apps JSON-RPC over `window.parent.postMessage`:
- *
- * - `ui/initialize`, then `ui/notifications/initialized`, as in MCP Apps.
- * - `dx/plugin.message` notifications carry `{ message }` for each
- *   `post(message)`, in order. A pane that opens later first hears the
- *   pane's last {@link PANE_MESSAGES_KEPT} posts in this Thread, and any
- *   from the last minute.
- * - A `dx/plugin.post` request with `{ message }` runs `onMessage` and
- *   answers with what it returns. People who can only view the Thread
- *   cannot send one; a plugin's panes send it at most 60 a minute per
- *   Thread (600 when the viewer's tier is trusted).
- *
- * The frame has dx's theme as the MCP Apps style variables
- * (`--color-background-primary`, `--color-text-secondary`, `--font-sans`,
- * `--border-radius-md`, …) for the person's palette, in light or dark, and
- * `hostContext.styles.variables` carries the same values. With
- * `<script type="module" src="dx:plugin-ui"></script>` in `html`, dx
- * inlines `@dxcode/plugin-ui`: web components in dx's look, such as
- * `<dx-button>`, `<dx-table>`, `<dx-tabs>`, `<dx-input>`, `<dx-chip>`,
- * `<dx-empty>`, `<dx-code>` and `<dx-player>`. Its README lists them all.
- * For a select with search, a menu, a dialog, a popover, a tooltip or a date
- * picker, write UI SDK's `ui-*` tags (`<ui-select>`, `<ui-menu>`,
- * `<ui-dialog>`, `<ui-date-picker>`, …): dx inlines the components the page
- * uses, styled like the kit, with no extra tag.
- */
-export interface PluginPaneDefinition {
-  /** 1 to 48 lowercase letters, digits, and hyphens, starting with a letter. */
-  readonly id: string;
-  /** The tab's label, at most 40 characters. */
-  readonly title: string;
-  /** The view's HTML document, at most 256 KB. */
-  readonly html: string;
-  /**
-   * The tab's icon. A `panes` entry in the manifest with this id sets
-   * it (and `archivedThreads`) without running code; this is used otherwise.
-   */
-  readonly icon?: PluginItemIcon;
-  /**
-   * Answers a `dx/plugin.post` request from the pane, with the context of
-   * the Thread it is open in; the tier's call time (60 s sandboxed, 5 min
-   * trusted), not counting prompts it waits on.
-   * The result reaches the view as JSON.
-   */
-  readonly onMessage?: (message: unknown, ctx: ThreadPluginContext) => unknown;
-}
-
-/** One of this plugin's panes in the Thread a call runs in. */
-export interface PluginPane {
-  readonly id: string;
-  /** Opens the pane for everyone who has the Thread open now. */
-  open(): Promise<void>;
-  /**
-   * Sends a JSON `message` (at most 64 KB) to every open copy of the pane,
-   * live, and keeps it for copies opened later. At most 60 a minute (600 at
-   * trusted tiers).
-   */
-  post(message: unknown): Promise<void>;
-  /**
-   * Saves the pane's state (JSON, at most 64 KB) for when the Thread is
-   * archived. With `archivedThreads: "show"`, an archived Thread draws the
-   * pane read-only and its view hears this state once, as a
-   * `dx/plugin.message`, instead of live posts. Each call replaces the last.
-   * A Thread tab saves its own under its id, without the `pane` grant.
-   */
-  snapshot?(state: unknown): Promise<void>;
-}
-
-/** Needs `permissions.ui` `pane`. */
-export interface PluginPanes {
-  /** A pane the plugin registered; throws for an id it did not register. */
-  get(id: string): PluginPane;
 }
 
 // ─── Commands ───────────────────────────────────────────────────────────────
@@ -922,22 +825,6 @@ export interface PluginInstall {
   /** dx's version of the plugin: its declared version plus a content hash. */
   readonly version: string;
 }
-
-/**
- * Trust tiers, lowest to highest. dx grants a plugin the lower of the
- * manifest's `tier` and what its install earns: repository plugins are
- * sandboxed unless an admin trusts the repository; personal installs are
- * `personal-dev` in their owner's own Threads; workspace installs are
- * `workspace-trusted`, or `verified` when signed by a key the workspace
- * trusts. A workspace admin can cap the highest tier.
- */
-export const PLUGIN_TIERS = [
-  "sandboxed",
-  "personal-dev",
-  "workspace-trusted",
-  "verified",
-] as const;
-export type PluginTier = (typeof PLUGIN_TIERS)[number];
 
 /** Who a call runs for. */
 export interface PluginCaller {
@@ -1025,21 +912,17 @@ export interface PluginContext {
   readonly install: PluginInstall;
   readonly caller: PluginCaller;
   /**
-   * The tier this call runs at. Features above it are absent, not refused:
-   * a `sandboxed` plugin gets 60-second calls, no streams, storage, or jobs,
-   * and only the Worker host.
+   * The install's key-value state, kept by dx. A plugin's service reads and
+   * writes the same store (`/state` on DX_API), so state survives moving
+   * code between the function and a service.
    */
-  readonly tier: PluginTier;
   readonly storage: PluginStorage;
   readonly settings: {
     /** The install's settings, with each declared default filled in. */
     get(): Promise<Readonly<Record<string, PluginSettingValue>>>;
   };
   readonly log: PluginLog;
-  /**
-   * HTTPS requests to the hosts `permissions.network` lists; none when it
-   * lists more than the tier allows (32 sandboxed, 128 trusted).
-   */
+  /** HTTPS requests to the hosts `permissions.network` lists. */
   readonly fetch?: (
     input: string | URL,
     init?: {
@@ -1063,110 +946,46 @@ export interface PluginContext {
   // ─── Hosts ───
   /**
    * Calls a function the plugin's code exposed with `dx.expose` in another
-   * host: `ctx.host("durable").call("refresh", { pr: 12 })`. Present when
+   * host: `ctx.host("orb").call("capture", { seconds: 5 })`. Present when
    * the manifest's `host` names an entry module per host; dx refuses a host
-   * the manifest does not name or the install's trust tier does not allow.
-   * Absent in the container host.
+   * the manifest does not name.
    */
   host?(kind: PluginHostKind): {
     call<T = unknown>(fn: string, args?: unknown): Promise<T>;
   };
   /** Other plugins' exports; present when `permissions.plugins` lists any. */
   readonly plugins?: PluginCalls;
-  // ─── Durable host ───
-  /** `ctx.sql`: present in trusted tiers when the manifest declares jobs or `host.durable`. */
-  readonly sql?: PluginSql;
-  /** `ctx.blobs`: as `ctx.sql`. */
-  readonly blobs?: PluginBlobs;
-  /** `ctx.jobs`: as `ctx.sql`. */
-  readonly jobs?: PluginJobs;
+  /** Views described as data; present when the manifest declares any. */
+  readonly views?: PluginViewState;
+  // ─── Install actions ───
   /**
-   * Keeps a connection open in the durable host and calls `handler` with
-   * each message: a `wss://` WebSocket, or an `https://` server-sent event
-   * stream, on a host `permissions.network` lists. Only in the durable host,
-   * inside a job or an exposed function; dx reconnects it, and runs that job
-   * or function again if the handler is lost, so open watches there.
+   * The install's cloud identity: an OIDC token whose subject names the
+   * install (`dx:wid:v1:[w:<workspace>:]u:<owner>:i:<install>`), for a cloud
+   * that trusts dx's issuer. `ttlSeconds` is 60 to 3600 (default 600). The
+   * same call a service makes with `POST /id-token`. Present for a personal
+   * or workspace install, never a repository's plugin.
    */
-  watch?(
-    target: string,
-    handler: (message: unknown, ctx: DurablePluginContext) => unknown,
-  ): Promise<{ close(): Promise<void> }>;
-  /**
-   * Posts `message` into a Thread and starts its agent, marked as the
-   * plugin's. Needs `permissions.wake` and a trusted tier; at most 6 wakes a
-   * Thread an hour, never into an archived Thread.
-   */
-  wake?(threadId: string, message: string): Promise<void>;
+  readonly identity?: {
+    token(
+      audience: string,
+      ttlSeconds?: number,
+    ): Promise<{
+      readonly token: string;
+      /** Epoch seconds, as dx's other identity tokens say it. */
+      readonly expiresAt: number;
+    }>;
+  };
 }
 
 /** Where a plugin's code runs; see the manifest's `host`. */
-export type PluginHostKind = "worker" | "durable" | "orb" | "container";
-
-// ─── Durable host ───
+export type PluginHostKind = "worker" | "orb";
 
 /**
- * The install's own SQLite database, in its Durable Object (about 1 GB in
- * trusted tiers). Tables named `_dx_`, `_cf_`, or `sqlite_` are dx's, and
- * PRAGMA, ATTACH, and VACUUM are refused. Writes are refused once the
- * tier's quota is used.
+ * The context of a schedule's `job.run` or a listener's `listener.event`:
+ * no Thread, as the install's person (a workspace install's installer).
+ * `ctx.threads.open` and `ctx.threads.post` reach Threads from here.
  */
-export interface PluginSql {
-  exec(
-    sql: string,
-    ...params: unknown[]
-  ): Promise<{ rows: unknown[]; changes: number }>;
-}
-
-/** Files, frames, and recordings in R2, with a quota per tier (5 GB trusted). */
-export interface PluginBlobs {
-  /** At most 25 MiB per blob; keys are 1 to 512 URL-safe characters. */
-  put(
-    key: string,
-    body: ArrayBuffer | string,
-    meta?: { contentType?: string },
-  ): Promise<void>;
-  get(
-    key: string,
-  ): Promise<{ body: ArrayBuffer; contentType?: string } | undefined>;
-  delete(key: string): Promise<void>;
-  /** Keys starting with `prefix`, at most 1,000. */
-  list(prefix?: string): Promise<string[]>;
-}
-
-/**
- * Background jobs, run by the durable host on alarms. `id` is a job the
- * manifest's `jobs` declares, or `<declared id>:<key>` for one instance of
- * it (such as `watch-pr:123`). A tier allows 20 scheduled jobs (50 for
- * verified); each run has 5 minutes.
- */
-export interface PluginJobs {
-  /**
-   * Schedules a declared job, or one instance of it. Without `when`, an
-   * on-demand job runs now and a repeating one keeps its declared schedule.
-   * `at` is an epoch millisecond (`Date.now() + 60_000`), not the
-   * manifest's `"on-demand"`, which throws.
-   */
-  schedule(
-    id: string,
-    when?: {
-      /** Once, at this epoch millisecond. */
-      at?: number;
-      /** Repeatedly: 1m to 30d, such as "5m", "2h", "1d". */
-      every?: string;
-      /** Five-field cron, in UTC. */
-      cron?: string;
-    },
-    data?: unknown,
-  ): Promise<void>;
-  cancel(id: string): Promise<void>;
-  list(): Promise<Array<{ id: string; next?: number }>>;
-}
-
-/** The context of a job run, a watch message, or an exposed function in the durable host. */
-export interface DurablePluginContext extends PluginContext {
-  /** Present for a `durableScope: "thread"` object: its Thread. */
-  readonly thread?: PluginThread;
-  readonly panes?: PluginPanes;
+export interface BackgroundPluginContext extends PluginContext {
   /** Present when `permissions.threads` grants any. */
   readonly threads?: PluginThreads;
 }
@@ -1176,10 +995,8 @@ export interface DurablePluginContext extends PluginContext {
  * In the Orb host (the manifest's `host.orb` entry), the plugin runs as a
  * Node process in the Thread's own Orb, with the Thread's rights there, the
  * manifest's `binaries` on its PATH, and Node's own modules (`node:http`,
- * `node:child_process`) available. It may serve a port that a pane listed
- * in `panes[].connect.portal` shows with `window.dx.portal(port, element)`.
- * The process lives while a call runs or a pane holds a connection to one of
- * those ports, and about a minute after. Trusted tiers only. Plugin secrets
+ * `node:child_process`) available. The process lives while a call runs,
+ * and about a minute after. Plugin secrets
  * stay with the Worker code: `ctx.secrets` is refused there.
  *
  * There, `ctx.$` returns an {@link OrbShellRun}: dx admits each command
@@ -1205,13 +1022,8 @@ export interface OrbShellRun
 /** The context of a call made inside a Thread: every event but triggers. */
 export interface ThreadPluginContext extends PluginContext {
   readonly thread: PluginThread;
-  /**
-   * Present when `permissions.ui` grants `prompt` or `notify`, or `pane` at
-   * a trusted tier (for `stream`).
-   */
+  /** Present when `permissions.ui` grants `prompt` or `notify`. */
   readonly ui?: PluginUi;
-  /** Present when `permissions.ui` grants `pane`, or the plugin has tabs at a trusted tier. */
-  readonly panes?: PluginPanes;
   /**
    * Shell commands in the Thread's Orb, in its checkout, as the Thread's
    * own commands run: with its environment, secrets, Git credentials, and
@@ -1330,7 +1142,7 @@ export interface PluginAgent {
   /**
    * Starts a child Thread of the calling Thread that runs this agent on
    * `message`, waits for its turn to finish, and resolves its answer. Only
-   * inside a Thread (a tool, command, event handler, or pane message).
+   * inside a Thread (a tool, command, or event handler).
    */
   run(
     message: string,
@@ -1356,8 +1168,8 @@ export interface PluginAgentModeDefinition {
 /**
  * A command in dx's command palette while a Thread with the plugin is open,
  * for the owner and Contribute members. `run` gets the context of that
- * Thread and has the tier's call time (60 s sandboxed, 5 min trusted), not
- * counting time its prompts wait.
+ * Thread and has 5 minutes (60 s for a repository's plugin), not counting
+ * time its prompts wait.
  */
 export interface PluginCommandDefinition {
   /** 1 to 48 lowercase letters, digits, and hyphens, starting with a letter. */
@@ -1391,35 +1203,8 @@ export interface PluginLinkPatternDefinition {
 
 // ─── Views and plugin calls ────────────────────────────────────────────
 
-/** At most this many views (tabs and pages) one plugin registers. */
-export const MAX_VIEWS_PER_PLUGIN = 8;
 /** A chain of plugin calls (A calls B calls C) is at most this deep. */
 export const MAX_PLUGIN_CALL_DEPTH = 3;
-
-/**
- * A view the manifest's `views` lists: a Thread tab, a full page outside
- * any Thread (`/plugins/<name>/<id><path>`), or a Thread type's main area,
- * which is one of its tabs. Its `id` is the id `views.tabs` or
- * `views.pages` declares; panes and views share one id namespace. Inside a
- * Thread, `ctx.panes.get(id).post` reaches an open tab live, as it does a
- * pane. A page has no Thread: its `onMessage` gets a context without one.
- */
-export interface PluginViewDefinition {
-  readonly id: string;
-  /** The view's HTML document, at most 256 KB; an MCP Apps view, as a pane is. */
-  readonly html: string;
-  /**
-   * Answers a `dx/plugin.post` request from the view, with the tier's call
-   * time. A page's view first hears its sub-path as a `dx/plugin.message` of
-   * `{ type: "dx.page", path }`; a page has no `thread`, and with
-   * `permissions.threads` `create` gets `ctx.threads.create`.
-   */
-  readonly onMessage?: (
-    message: unknown,
-    ctx: PluginContext &
-      Partial<Pick<ThreadPluginContext, "thread" | "panes" | "threads">>,
-  ) => unknown;
-}
 
 /** Why dx refused a `ctx.plugins.call`; each refusal is audited. */
 export type PluginCallRefusedCode =
@@ -1429,10 +1214,6 @@ export type PluginCallRefusedCode =
   | "not-installed"
   /** The callee's manifest `exports` does not list the function. */
   | "not-exported"
-  /** The caller's trust tier is lower than the callee's. */
-  | "lower-tier"
-  /** Another member's click on a workspace plugin's command or pane, reaching the owner's personal plugin. */
-  | "owner-only"
   /** The call would loop back to a plugin already in the chain, or pass the depth limit. */
   | "cycle";
 
@@ -1448,13 +1229,34 @@ export interface PluginCallRefused extends Error {
 
 /**
  * Calls another plugin's exported function through dx. Needs the callee in
- * `permissions.plugins`, both plugins installed for the call's owner, and
- * this plugin's tier at least the callee's. The callee runs with its own
+ * `permissions.plugins` and both plugins installed for the call's owner.
+ * The callee runs with its own
  * permissions, settings, and secrets, never the caller's, and its time
  * counts against this call's own limit. dx audits every call.
  */
 export interface PluginCalls {
   call<T = unknown>(plugin: string, fn: string, args?: unknown): Promise<T>;
+}
+
+/**
+ * The state of the plugin's views described as data (the list form of the
+ * manifest's `views`). dx draws each view from its JSON file and this state,
+ * and every open browser updates when it changes. Paths are dot keys and
+ * list indexes: `stats.errors`, `rows.0.status`; `""` is the whole state.
+ * A view's state is at most 512 KB of JSON.
+ */
+export interface PluginViewState {
+  /** Sets the value at `path`; resolves the state's new version. */
+  set(viewId: string, path: string, value: unknown): Promise<number>;
+  /** The view's state, or the value at `path` in it. */
+  get(viewId: string, path?: string): Promise<unknown>;
+  /**
+   * What a tool returns, or spreads into its result, to show the view as a
+   * card under the tool call: `return { ...summary, ...ctx.views.card("dashboard") }`.
+   */
+  card(viewId: string): {
+    readonly _meta: { readonly "dev.dxcode/view": string };
+  };
 }
 
 /** What an exported function learns about who called it. */
@@ -1486,18 +1288,13 @@ export interface PluginAPI {
   /** Links matching transcript text; at most 16 per plugin. */
   registerLinkPattern(link: PluginLinkPatternDefinition): void;
   /**
-   * Adds a pane Threads can open; at most {@link MAX_PANES_PER_PLUGIN}.
-   * Showing it needs `permissions.ui` `pane`.
-   */
-  registerPane(pane: PluginPaneDefinition): void;
-  /**
    * Defines an agent its code can run with `run`, or register as a mode.
    * Needs `permissions.agents`; call it while the plugin starts.
    */
   createAgent(config: PluginAgentConfig): PluginAgent;
   /** Lists an agent as a mode the manifest's `agentModes` declares. */
   registerAgentMode(mode: PluginAgentModeDefinition): void;
-  // ─── Hosts, views, and plugin calls ───
+  // ─── Hosts and plugin calls ───
   /**
    * Names functions other hosts of this plugin may call with
    * `ctx.host(kind).call(name, args)`, and other plugins may call with
@@ -1505,21 +1302,6 @@ export interface PluginAPI {
    * Arguments and results are JSON. Call it while the plugin starts.
    */
   expose(handlers: Readonly<Record<string, PluginExportHandler>>): void;
-  /**
-   * Draws a tab, page, or Thread type the manifest's `views` declares;
-   * at most {@link MAX_VIEWS_PER_PLUGIN}. Below the trusted tier dx drops
-   * views (they do not show) rather than refusing the plugin.
-   */
-  registerView(view: PluginViewDefinition): void;
-  // ─── Durable host ───
-  /**
-   * Runs a job the manifest's `jobs` declares, in the durable host. Its
-   * instances (`<id>:<key>`) run it too, with their own `data`.
-   */
-  registerJob(job: {
-    id: string;
-    run: (data: unknown, ctx: DurablePluginContext) => unknown;
-  }): void;
 }
 
 /** The shape of a plugin's entry module. */

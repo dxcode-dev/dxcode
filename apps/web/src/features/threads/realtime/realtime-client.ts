@@ -3,6 +3,7 @@ import {
   RealtimeConnection,
   type RealtimeHints,
   type RealtimeSocket,
+  type ViewSocketMessage,
 } from "@dx/client";
 import type { UserId } from "@dx/domain";
 import type { QueryClient } from "@tanstack/react-query";
@@ -46,7 +47,6 @@ import {
 import { invalidateMessageReactions } from "../sharing/message-reactions-cache-queries.js";
 import {
   invalidateAllThreadQueries,
-  invalidatePluginPaneMessages,
   invalidatePluginUi,
   invalidateReadinessQuery,
 } from "../thread-queries.js";
@@ -68,6 +68,8 @@ const invalidateAllRealtimeState = (
   void invalidateSpaceQueries(queryClient, userId);
   void invalidateAllMessageComments(queryClient, userId);
 };
+
+export type { ViewSocketMessage };
 
 const visible = () =>
   typeof document === "undefined" || document.visibilityState !== "hidden";
@@ -122,9 +124,6 @@ const queryHints = (
         return;
       case "plugin-ui.invalidated":
         void invalidatePluginUi(queryClient, event.threadId);
-        return;
-      case "plugin-pane.invalidated":
-        void invalidatePluginPaneMessages(queryClient, event.threadId);
         return;
       case "space.posts.invalidated":
         void invalidateSpacePosts(queryClient, userId, event.threadId);
@@ -197,6 +196,20 @@ export class RealtimeClient extends RealtimeConnection {
     }
     this.#rows.stop();
     super.stop();
+  }
+
+  /**
+   * Plugin views' messages, passed through undecoded (`plugin-view.*`,
+   * `view.*`, and `ready` after each (re)connect): the views' lazy module
+   * decodes them and keeps its watches. `ViewLiveContext` is this pair.
+   */
+  observe(listener: (message: ViewSocketMessage) => void) {
+    return this.observeViewMessages(listener);
+  }
+
+  /** Sends a plugin view's message on the socket, when it is open. */
+  send(message: { readonly type: string }) {
+    this.sendViewMessage(message);
   }
 
   readonly #onVisibility = () => this.visibilityChanged();

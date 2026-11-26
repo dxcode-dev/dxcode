@@ -485,7 +485,6 @@ describe("ProductShell route ownership across the mobile breakpoint", () => {
       quickActions: [],
       commands: [],
       linkPatterns: [],
-      panes: [],
       linkRemark: null,
     });
     const routeIdentities = new Set<symbol>();

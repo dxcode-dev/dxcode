@@ -8,10 +8,7 @@ import {
 } from "@dx/domain";
 import { Effect, Result } from "effect";
 import type { Bindings } from "../../http/types.js";
-import {
-  codePluginTriggerLeaseMs,
-  deliverCodePluginTrigger,
-} from "../../plugins/worker-host/triggers.js";
+import { deliverCodePluginTrigger } from "../../plugins/worker-host/triggers.js";
 import { logPluginFailure } from "../../plugins/worker-host/worker.js";
 import {
   loadAuthorizedTriggerDelivery,
@@ -467,15 +464,9 @@ export class PluginTriggerDeliveryObject extends DurableObject<Bindings> {
       await this.ctx.storage.deleteAlarm();
       return;
     }
-    // A plugin that hands deliveries to its container gets the container
-    // call's limit as its lease; others keep the 30-second lease.
     const delivery = this.#claim(
       authorization.success.trigger.idempotent,
-      codePluginTriggerLeaseMs(
-        this.env,
-        authorization.success.install,
-        TRIGGER_DELIVERY_LEASE_MS,
-      ),
+      TRIGGER_DELIVERY_LEASE_MS,
     );
     if (delivery === undefined || delivery.payload_json === null) {
       await this.#schedule();

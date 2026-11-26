@@ -34,6 +34,7 @@ import {
   warmTerminalAfterDwell,
 } from "../../terminal/terminal-warm-mutations.js";
 import { RoutePluginPaneIcon } from "../plugin-ui/lazy-plugin-ui-icons.js";
+import { DX_THREAD_PANELS } from "./dx-thread-panels.js";
 import {
   canOpenTerminal,
   findViewTab,
@@ -48,7 +49,7 @@ import {
   tabLabel,
   terminalSession,
 } from "./pane-layout.js";
-import { PANE_VIEWS, type PaneContents } from "./pane-views.js";
+import type { PaneContents } from "./pane-views.js";
 import { TerminalWarmContext } from "./terminal-warm-context.js";
 
 const availableViews = (contents: PaneContents) =>
@@ -78,7 +79,7 @@ function ViewMenuItems({
   return (
     <>
       {availableViews(contents).map((view) => {
-        const { label, Icon, command } = PANE_VIEWS[view];
+        const { label, Icon, command } = DX_THREAD_PANELS.get(view);
         const open = findViewTab(layout, view) !== undefined;
         const another =
           open && view === "terminal" && onNewTerminal !== undefined;
@@ -95,7 +96,10 @@ function ViewMenuItems({
             {another ? null : open ? (
               <MenuItemHint>Open</MenuItemHint>
             ) : (
-              <ShortcutKeycaps keycaps={keycaps(command)} emptyLabel="" />
+              <ShortcutKeycaps
+                keycaps={command === undefined ? [] : keycaps(command)}
+                emptyLabel=""
+              />
             )}
           </MenuItem>
         );

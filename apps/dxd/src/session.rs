@@ -20,11 +20,13 @@ use crate::files_sandbox::{self, SandboxReadResult};
 use crate::mcp::{McpPaths, McpServers};
 use crate::memory::{self, Memory};
 use crate::observer::Observer;
+use crate::plugin_host::service::{PluginServices, ServiceResult};
 use crate::plugin_host::{CapabilityLane, PluginHosts, PluginPaths};
 use crate::protocol::{
     Capabilities, ClientMessage, DiskOperation, EnvironmentOperation, McpOperation,
     MemoryOperation, OperationResult, PluginOperation, PortalOperation, PortalResult,
-    RequestOperation, ServerMessage, StorageOperation, UpdateStatus, WorkloadIdentityResult,
+    RequestOperation, ServerMessage, ServiceOperation, StorageOperation, UpdateStatus,
+    WorkloadIdentityResult,
 };
 use crate::proxy::{self, DesktopStart, Outbound, Proxy};
 use crate::sandbox::{self, Sandbox, SandboxDone, SandboxOutcome, SandboxPaths};
@@ -168,6 +170,8 @@ pub struct Daemon {
     mcp: McpServers,
     /// Plugin processes (the Orb host); they outlive a session.
     plugins: PluginHosts,
+    /// Plugin services; they outlive a session, not an update.
+    plugin_services: PluginServices,
     /// The agent's commands and file access; they outlive a session.
     sandbox: Sandbox,
     sandbox_results: UnboundedReceiver<SandboxDone>,
@@ -233,6 +237,18 @@ impl Daemon {
                 log_directory: PathBuf::from(crate::STATE_DIR).join("plugins"),
             },
         });
+        let plugin_services = PluginServices::new(match &config.local_runtime {
+            Some(local) => crate::plugin_host::service::ServicePaths {
+                home: PathBuf::from(&local.home_directory),
+                user: std::env::var("USER").unwrap_or_else(|_| "user".into()),
+                log_directory: PathBuf::from(&local.state_directory).join("plugins"),
+            },
+            None => crate::plugin_host::service::ServicePaths {
+                home: PathBuf::from(crate::GUEST_HOME),
+                user: "user".into(),
+                log_directory: PathBuf::from(crate::STATE_DIR).join("plugins"),
+            },
+        });
         let (sandbox, sandbox_results) = Sandbox::new(match &config.local_runtime {
             Some(local) => SandboxPaths {
                 state: PathBuf::from(&local.state_directory).join("sandbox"),
@@ -284,6 +300,7 @@ impl Daemon {
             disk,
             mcp,
             plugins,
+            plugin_services,
             sandbox,
             sandbox_results,
             desktop_paths,
@@ -301,6 +318,7 @@ impl Daemon {
                 Err(exit) => eprintln!("dxd reconnecting: {exit}"),
             }
             self.connected.store(false, Ordering::Release);
+            self.plugin_services.disconnect();
             if healthy_since.is_some() {
                 self.resumed_at = None;
             }
@@ -527,6 +545,7 @@ impl Daemon {
         }
         let session_epoch = self.workload_identity_epoch.fetch_add(1, Ordering::AcqRel) + 1;
         self.connected.store(true, Ordering::Release);
+        self.plugin_services.connect(proxy.sender(), &generation);
         *healthy_since = Some(Instant::now());
 
         // The first heartbeat only takes the reading the next one compares.
@@ -882,6 +901,9 @@ impl Daemon {
         // Services stay this process's children across exec; the new image
         // reaps them.
         handoff.push((crate::services::HANDOFF_VARIABLE, self.services.handoff()));
+        // Plugin services hang on this process (pipes, tokens, DX_API):
+        // they stop here and Core ensures them again after the update.
+        self.plugin_services.stop(None, "update");
         eprintln!("dxd restarting into the updated release");
         let error = update::reexec(self.updater.current_exe(), &handoff);
         eprintln!("dxd re-exec failed: {error}");
@@ -1200,6 +1222,73 @@ impl Daemon {
                             }
                         });
                     }
+                    RequestOperation::Service(operation) => {
+                        // Ensure and stop wait on the blocking pool; a call
+                        // waits as a task for the service, then for its reply.
+                        let sender = proxy.sender();
+                        let generation = generation.to_owned();
+                        let services = self.plugin_services.clone();
+                        tokio::spawn(async move {
+                            let result = match operation {
+                                ServiceOperation::Ensure { spec } => services.ensure(*spec).await,
+                                ServiceOperation::Call {
+                                    install_id,
+                                    method,
+                                    path,
+                                    body,
+                                    timeout_ms,
+                                } => {
+                                    services
+                                        .call(&install_id, &method, &path, body, timeout_ms)
+                                        .await
+                                }
+                                ServiceOperation::Stop { install_id, reason } => {
+                                    let services = services.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        services.stop(install_id.as_deref(), &reason)
+                                    })
+                                    .await
+                                    .unwrap_or(ServiceResult::Stopped { count: 0 })
+                                }
+                                ServiceOperation::Status {} => services.status(),
+                                ServiceOperation::Logs { install_id, tail } => {
+                                    let services = services.clone();
+                                    tokio::task::spawn_blocking(move || {
+                                        services.logs(&install_id, tail)
+                                    })
+                                    .await
+                                    .unwrap_or(
+                                        ServiceResult::Logs {
+                                            text: String::new(),
+                                        },
+                                    )
+                                }
+                            };
+                            let encode = |result| {
+                                serde_json::to_string(&ClientMessage::Response {
+                                    generation: &generation,
+                                    request_id: &request_id,
+                                    result: OperationResult::Service(result),
+                                })
+                            };
+                            // Core drops a daemon whose frame passes its limit.
+                            let text = encode(result)
+                                .ok()
+                                .filter(|text| text.len() <= crate::mcp::MAX_RESPONSE_FRAME_BYTES)
+                                .or_else(|| {
+                                    encode(ServiceResult::Unavailable {
+                                        reason: "too-large",
+                                        message:
+                                            "The service's reply is too large for dx to relay."
+                                                .into(),
+                                    })
+                                    .ok()
+                                });
+                            if let Some(text) = text {
+                                let _ = sender.send(Outbound::Text(text));
+                            }
+                        });
+                    }
                     // A write's bytes arrive in a `DXW1` frame; this JSON
                     // one has none, and is answered `invalid`.
                     RequestOperation::Sandbox(operation) => {
@@ -1315,6 +1404,15 @@ impl Daemon {
             } if seen == generation => {
                 self.plugins
                     .answer(&request_id, call_id, ok, value, error.unwrap_or_default());
+            }
+            ServerMessage::ServiceResponse {
+                generation: seen,
+                request_id,
+                status,
+                body,
+            } => {
+                self.plugin_services
+                    .respond(&seen, &request_id, status, body);
             }
             ServerMessage::WorkloadIdentityResponse {
                 generation: seen,
@@ -2044,6 +2142,9 @@ pub fn decode_server(text: &str) -> Result<ServerMessage, SessionExit> {
         ServerMessage::WorkloadIdentityResponse { .. } => MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
         ServerMessage::PluginCapabilityResult { .. } => {
             crate::plugin_host::MAX_CAPABILITY_FRAME_BYTES
+        }
+        ServerMessage::ServiceResponse { .. } => {
+            crate::plugin_host::service::MAX_SERVICE_FRAME_BYTES
         }
         _ => MAX_CONTROL_FRAME_BYTES,
     };

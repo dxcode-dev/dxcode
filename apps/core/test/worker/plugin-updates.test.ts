@@ -111,7 +111,7 @@ const codePlugin = (
     readonly version?: string;
     readonly settings?: ReadonlyArray<unknown>;
     readonly tool?: string;
-    readonly panes?: ReadonlyArray<unknown>;
+    readonly schedules?: ReadonlyArray<unknown>;
   } = {},
 ): ReadonlyArray<FixtureEntry> => [
   {
@@ -130,7 +130,9 @@ const codePlugin = (
           ...(options.settings === undefined
             ? {}
             : { settings: options.settings }),
-          ...(options.panes === undefined ? {} : { panes: options.panes }),
+          ...(options.schedules === undefined
+            ? {}
+            : { schedules: options.schedules }),
         },
       },
     }),
@@ -280,25 +282,19 @@ describe("plugin updates", () => {
     ).toBe("1.2.0");
   });
 
-  it("needs acceptance when an update adds Thread wakes or a pane's Portal ports and WebRTC", async () => {
-    const { cookie } = await signup("plugin-update-wake-panes@example.com");
-    const pane = { id: "preview", title: "Preview" };
+  it("needs acceptance when an update adds a schedule", async () => {
+    const { cookie } = await signup("plugin-update-schedule@example.com");
     const id = await installZip(
       cookie,
-      await buildZip(
-        codePlugin({ events: ["tool.call"], ui: ["pane"] }, { panes: [pane] }),
-      ),
+      await buildZip(codePlugin({ events: ["tool.call"], ui: ["notify"] })),
     );
     const updates = `${endpoint}/${id}/update`;
 
-    // 1.1.0 changes nothing but wake and the pane's reach.
+    // 1.1.0 changes nothing but a schedule.
     const wider = await buildZip(
       codePlugin(
-        { events: ["tool.call"], ui: ["pane"], wake: true },
-        {
-          version: "1.1.0",
-          panes: [{ ...pane, connect: { portal: [8411], webrtc: true } }],
-        },
+        { events: ["tool.call"], ui: ["notify"] },
+        { version: "1.1.0", schedules: [{ name: "check", every: "15m" }] },
       ),
     );
     const preview = await call(`${updates}/preview?name=w2.zip`, cookie, {
@@ -309,14 +305,11 @@ describe("plugin updates", () => {
     expect(reviewed.data.permissions).toEqual({
       widens: true,
       changes: [
+        // A schedule grants its event.
+        { permission: "events", added: ["job.run"], removed: [] },
         {
-          permission: "wake",
-          added: ["wake Threads with a message"],
-          removed: [],
-        },
-        {
-          permission: "panes",
-          added: ["preview: Portal port 8411", "preview: WebRTC"],
+          permission: "service",
+          added: ["runs check every 15m"],
           removed: [],
         },
       ],

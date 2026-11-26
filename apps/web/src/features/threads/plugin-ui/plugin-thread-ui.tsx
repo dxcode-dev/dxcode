@@ -1,6 +1,5 @@
 import type {
   PluginIconSetData,
-  PluginPaneEntry,
   PluginPrompt,
   PluginQuickAction,
   PluginThreadUiData,
@@ -9,7 +8,6 @@ import type { ThreadId } from "@dx/domain";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { PanelsTopLeft } from "lucide-react";
 import { toast } from "sonner";
-import { requestPluginPane } from "../../../shared/commands/thread-open-view-event.js";
 import { Button } from "../../../shared/ui/button.js";
 import { Input } from "../../../shared/ui/input.js";
 import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
@@ -67,7 +65,6 @@ export function PluginThreadUi({
         <PluginQuickActions
           threadId={threadId}
           actions={data.quickActions}
-          panes={data.panes ?? []}
           plugins={data.plugins ?? []}
           onSend={onSend}
         />
@@ -281,18 +278,16 @@ function PluginPromptCard({
 function PluginQuickActions({
   threadId,
   actions,
-  panes,
   plugins,
   onSend,
 }: {
   readonly threadId: ThreadId;
   readonly actions: ReadonlyArray<PluginQuickAction>;
-  readonly panes: ReadonlyArray<PluginPaneEntry>;
   readonly plugins: NonNullable<PluginThreadUiData["plugins"]>;
   readonly onSend: (message: string) => void;
 }) {
   const perform = (action: PluginQuickAction) => {
-    const { text, url, command, pane } = action.args;
+    const { text, url, command } = action.args;
     if (action.action === "send-message" && text !== undefined) onSend(text);
     else if (action.action === "copy" && text !== undefined)
       void navigator.clipboard.writeText(text).then(
@@ -303,22 +298,6 @@ function PluginQuickActions({
       window.open(url, "_blank", "noopener,noreferrer");
     else if (action.action === "run-command" && command !== undefined)
       void runPluginCommand(threadId, command, action.label);
-    else if (action.action === "open-pane" && pane !== undefined) {
-      const offered = panes.find(
-        (entry) => `${entry.plugin}/${entry.pane}` === pane,
-      );
-      if (offered === undefined)
-        toast.error("That plugin pane is not available", {
-          description: action.plugin,
-        });
-      else
-        requestPluginPane({
-          threadId,
-          plugin: offered.plugin,
-          pane: offered.pane,
-          title: offered.title,
-        });
-    }
   };
   return (
     <div className="plugin-ui-row">

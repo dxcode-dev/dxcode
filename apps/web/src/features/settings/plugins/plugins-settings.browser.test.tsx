@@ -143,6 +143,7 @@ const installed = {
   mcpServers: [],
   code,
   skipped: [],
+  localMcpServers: [],
   installedAt: "2026-11-10T12:00:00.000Z",
   updatedAt: "2026-11-10T12:00:00.000Z",
 } as const;
@@ -236,7 +237,7 @@ describe("Plugins settings", () => {
       expect(dialog?.textContent).toContain("Update Notes?");
       expect(dialog?.textContent).toContain("api.other.com");
       expect(dialog?.textContent).toContain(
-        "This version asks for more than you approved.",
+        "This version does more than the one you allowed",
       );
       expect(buttons(document, "Approve and update")).toHaveLength(1);
     } finally {
@@ -251,11 +252,10 @@ describe("Plugins settings", () => {
     });
     const page = await render("/settings/plugins", queryClient);
     try {
-      const row = page.container.querySelector(
-        '[data-plugin-bundle="com.acme.notes"]',
-      );
+      const header = page.container.querySelector(".package-browser-header");
+      expect(header?.textContent).toContain("Notes");
       expect(
-        row?.querySelector('button[aria-label="Update Notes"]'),
+        header?.querySelector('button[aria-label="Update Notes"]'),
       ).not.toBeNull();
     } finally {
       await page.unmount();

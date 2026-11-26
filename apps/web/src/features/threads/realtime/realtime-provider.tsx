@@ -6,7 +6,8 @@ import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
 import {
   BoardLiveContext,
   type BoardLiveHub,
-} from "../../../shared/realtime/board-live.js";
+  ViewLiveContext,
+} from "../../../shared/realtime/live.js";
 import { RealtimeClient } from "./realtime-client.js";
 
 const RealtimeContext = React.createContext<RealtimeClient | undefined>(
@@ -41,7 +42,9 @@ export function RealtimeProvider({
   }));
   return (
     <RealtimeContext value={client}>
-      <BoardLiveContext value={boards}>{children}</BoardLiveContext>
+      <BoardLiveContext value={boards}>
+        <ViewLiveContext value={client}>{children}</ViewLiveContext>
+      </BoardLiveContext>
     </RealtimeContext>
   );
 }

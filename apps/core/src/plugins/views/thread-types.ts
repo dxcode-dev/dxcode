@@ -1,12 +1,12 @@
 import { getLogger } from "@logtape/logtape";
 import { listOwnerCodePluginInstalls } from "../worker-host/resolve.js";
-import { installTier, showsViews } from "./tier.js";
 
 /**
  * Plugin Thread types. A Thread is given a type (`<plugin>/<type>`)
- * only when it is created, and keeps it. Creation checks the owner has the
- * plugin installed and on, that its manifest declares the type, and that
- * it runs at the trusted tier; opening the Thread later checks again, and
+ * only when it is created, and keeps it. A type is a view described as data
+ * with `show` including `app`. Creation checks the owner has the plugin
+ * installed and on and that its manifest has that view; opening the Thread
+ * later checks again, and
  * shows a plain chat with a notice when the type is no longer available.
  */
 
@@ -29,24 +29,21 @@ export const checkPluginThreadType = async (
   const install = (
     await listOwnerCodePluginInstalls(db, input.ownerUserId)
   ).find((candidate) => candidate.name === plugin);
-  const declared = install?.code.views?.threadTypes.find(
-    ({ id }) => id === type,
+  const app = install?.code.dataViews?.some(
+    ({ id, show }) => id === type && show.includes("app"),
   );
   const reason =
     install === undefined
       ? "not-installed"
-      : declared === undefined
-        ? "not-declared"
-        : !showsViews(install)
-          ? "tier"
-          : undefined;
+      : app === true
+        ? undefined
+        : "not-declared";
   logger.info("Plugin Thread type checked.", {
     event: "plugin_thread_type_checked",
     requestId: input.requestId,
     installId: install?.pluginId,
     threadType: input.ref,
     host: "worker",
-    tier: install === undefined ? undefined : installTier(install),
     outcome: reason === undefined ? "allowed" : `refused:${reason}`,
     ms: Date.now() - started,
   });
@@ -57,9 +54,5 @@ export const checkPluginThreadType = async (
   if (reason === "not-declared")
     throw new PluginThreadTypeNotOffered(
       `${plugin} declares no Thread type named ${type}.`,
-    );
-  if (reason === "tier")
-    throw new PluginThreadTypeNotOffered(
-      `${plugin}'s Thread types need a trusted tier; this install runs sandboxed.`,
     );
 };

@@ -22,15 +22,27 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { assertApprovedDurableObjectDeletion } from "../../scripts/approved-durable-object-deletions.mjs";
 
 export const ORB_CONTAINER_CLASS = "OrbContainerObject";
 export const ORB_IMAGE_NAME = "orb";
 /** Executor-mode Threads' agent containers (apps/core/src/executor). */
 export const EXECUTOR_CLASS = "ThreadExecutorObject";
 export const EXECUTOR_CLAUDE_CODE_IMAGE = "claude-code";
-/** The `container` plugin host (apps/core/src/plugins/hosts/container). */
-export const PLUGIN_CONTAINER_CLASS = "PluginContainerObject";
-export const PLUGIN_CONTAINER_IMAGE = "plugin";
+/**
+ * The removed plugin container host's class. A stage deletes it with the
+ * owner-approved `deleted_classes` migration once nothing binds it
+ * (`pluginContainerRetirement`); until then the Orb Worker still exports an
+ * empty stub, because Cloudflare refuses to delete a class another Worker
+ * binds, and Core of the release before plugins-next binds it as
+ * PLUGIN_CONTAINER (wiki/release-operations.md "Retiring a Durable Object
+ * class").
+ */
+export const RETIRED_PLUGIN_CONTAINER_CLASS = "PluginContainerObject";
+export const PLUGIN_CONTAINER_DELETION_TAG = "v4-remove-plugin-container";
+assertApprovedDurableObjectDeletion("orb", PLUGIN_CONTAINER_DELETION_TAG, [
+  RETIRED_PLUGIN_CONTAINER_CLASS,
+]);
 export const ORB_COMPATIBILITY_DATE = "2026-09-29";
 
 /** Everything that changes what the Orb Worker or its image does. */
@@ -38,6 +50,8 @@ export const orbRecipeFiles = [
   "apps/core/src/execution/cloudflare/orb-worker.ts",
   "apps/core/src/execution/cloudflare/orb-container-object.ts",
   "apps/core/src/execution/cloudflare/orb-container.ts",
+  "apps/core/src/execution/cloudflare/plugin-container-tombstone.ts",
+  "apps/core/src/execution/cloudflare/orb-worker-with-plugin-container.ts",
   "apps/core/src/logging.ts",
   "apps/dxd/assets/dx-terminal-stub.sh",
   "deploy/orb/Dockerfile",
@@ -52,12 +66,6 @@ export const orbRecipeFiles = [
   "apps/core/src/executor/executor-object.ts",
   "deploy/executor/claude-code/Dockerfile",
   "deploy/executor/claude-code/Dockerfile.dockerignore",
-  "apps/core/src/plugins/hosts/container/object.ts",
-  "apps/core/src/plugins/hosts/container/limits.ts",
-  "apps/core/src/plugins/hosts/usage.ts",
-  "deploy/plugin-container/Dockerfile",
-  "deploy/plugin-container/Dockerfile.dockerignore",
-  "deploy/plugin-container/runner.mjs",
 ];
 
 const wranglerVersion = (workspaceRoot) =>
@@ -80,11 +88,20 @@ export const orbRecipeHash = (workspaceRoot) => {
   return hash.update(wranglerVersion(workspaceRoot)).digest("hex");
 };
 
-const orbWorkerConfig = ({ workerName, workspaceRoot, image, databaseId }) => ({
+export const orbWorkerConfig = ({
+  workerName,
+  workspaceRoot,
+  image,
+  deletePluginContainer = false,
+}) => ({
   name: workerName,
+  // Until the stage deletes the retired class, the entry still exports its
+  // empty stub.
   main: resolve(
     workspaceRoot,
-    "apps/core/src/execution/cloudflare/orb-worker.ts",
+    deletePluginContainer
+      ? "apps/core/src/execution/cloudflare/orb-worker.ts"
+      : "apps/core/src/execution/cloudflare/orb-worker-with-plugin-container.ts",
   ),
   compatibility_date: ORB_COMPATIBILITY_DATE,
   compatibility_flags: ["nodejs_compat"],
@@ -119,34 +136,11 @@ const orbWorkerConfig = ({ workerName, workspaceRoot, image, databaseId }) => ({
         },
       },
     },
-    {
-      class_name: PLUGIN_CONTAINER_CLASS,
-      scheduling_policy: "durable_object",
-      images: {
-        [PLUGIN_CONTAINER_IMAGE]: {
-          dockerfile: resolve(
-            workspaceRoot,
-            "deploy/plugin-container/Dockerfile",
-          ),
-          build_context: resolve(workspaceRoot, "deploy/plugin-container"),
-        },
-      },
-    },
   ],
-  // The plugin container object writes its usage to the stage's D1
-  // (plugin_host_usage), once a minute and when its container stops.
-  ...(databaseId === undefined
-    ? {}
-    : {
-        d1_databases: [
-          { binding: "DB", database_name: "dx", database_id: databaseId },
-        ],
-      }),
   durable_objects: {
     bindings: [
       { name: "ORB_CONTAINER", class_name: ORB_CONTAINER_CLASS },
       { name: "THREAD_EXECUTOR", class_name: EXECUTOR_CLASS },
-      { name: "PLUGIN_CONTAINER", class_name: PLUGIN_CONTAINER_CLASS },
     ],
   },
   migrations: [
@@ -154,10 +148,91 @@ const orbWorkerConfig = ({ workerName, workspaceRoot, image, databaseId }) => ({
     { tag: "v2-thread-executor", new_sqlite_classes: [EXECUTOR_CLASS] },
     {
       tag: "v3-plugin-container",
-      new_sqlite_classes: [PLUGIN_CONTAINER_CLASS],
+      new_sqlite_classes: [RETIRED_PLUGIN_CONTAINER_CLASS],
     },
+    ...(deletePluginContainer
+      ? [
+          {
+            tag: PLUGIN_CONTAINER_DELETION_TAG,
+            deleted_classes: [RETIRED_PLUGIN_CONTAINER_CLASS],
+          },
+        ]
+      : []),
   ],
 });
+
+/**
+ * Whether this deploy deletes the retired plugin container class. Only
+ * when both reads succeeded and nothing binds it: the stage's Core Worker
+ * bound it as PLUGIN_CONTAINER before plugins-next. Cloudflare refuses to delete a class
+ * another Worker binds, so deleting early fails the deploy; a failed read
+ * keeps the class and says why, never guesses. Deleting is idempotent: a
+ * stage that already applied the migration has no namespace of the class,
+ * and the same config deploys again unchanged.
+ */
+export const pluginContainerRetirement = async ({
+  workerName,
+  coreWorkerName,
+  read,
+}) => {
+  let namespaces;
+  try {
+    namespaces =
+      (await read("/workers/durable_objects/namespaces?per_page=1000")) ?? [];
+  } catch (error) {
+    return {
+      delete: false,
+      reason: `could not read the account's Durable Object namespaces (${error.message}), so the class stays`,
+    };
+  }
+  const namespace = namespaces.find(
+    (candidate) =>
+      candidate.script === workerName &&
+      candidate.class === RETIRED_PLUGIN_CONTAINER_CLASS,
+  );
+  if (namespace === undefined)
+    return {
+      delete: true,
+      namespaceId: undefined,
+      reason: `${workerName} has no ${RETIRED_PLUGIN_CONTAINER_CLASS} namespace (already deleted, or never created)`,
+    };
+  if (coreWorkerName === undefined)
+    return {
+      delete: false,
+      reason: "the stage's Core Worker is unknown, so the class stays",
+    };
+  let settings;
+  try {
+    settings = await read(`/workers/scripts/${coreWorkerName}/settings`, {
+      missing: true,
+    });
+  } catch (error) {
+    return {
+      delete: false,
+      reason: `could not read ${coreWorkerName}'s bindings (${error.message}), so the class stays`,
+    };
+  }
+  const binding = (settings?.bindings ?? []).find(
+    (candidate) =>
+      candidate.type === "durable_object_namespace" &&
+      (candidate.namespace_id === namespace.id ||
+        (candidate.class_name === RETIRED_PLUGIN_CONTAINER_CLASS &&
+          candidate.script_name === workerName)),
+  );
+  return binding === undefined
+    ? {
+        delete: true,
+        namespaceId: namespace.id,
+        reason:
+          settings === undefined
+            ? `${coreWorkerName} does not exist yet, so nothing binds ${RETIRED_PLUGIN_CONTAINER_CLASS}`
+            : `${coreWorkerName} no longer binds ${RETIRED_PLUGIN_CONTAINER_CLASS}`,
+      }
+    : {
+        delete: false,
+        reason: `${coreWorkerName} still binds ${RETIRED_PLUGIN_CONTAINER_CLASS} as ${binding.name}; the class stays until Core deploys without it`,
+      };
+};
 
 // Output kept per stream: enough for the retry match, JSON listings, and
 // the tail an error reports, without holding a whole image build in memory.
@@ -1004,10 +1079,16 @@ export const pruneSharedPreviewOrbImages = async ({
 /** Builds the image and deploys the Orb Worker; idempotent. */
 export const deployOrbWorker = async ({
   workerName,
-  databaseId,
+  // The stage's Core Worker, which may still bind the retired plugin
+  // container class; unknown keeps it.
+  coreWorkerName,
+  // The stage's D1, which only the removed plugin container host bound;
+  // still passed by the deployment's resource props.
+  databaseId: _databaseId,
   workspaceRoot,
   stateDirectory,
   environment = process.env,
+  fetch = globalThis.fetch,
   signal,
   retryDelayMilliseconds,
 }) => {
@@ -1043,10 +1124,54 @@ export const deployOrbWorker = async ({
         `[OrbContainers] The Orb image in ${repository} is unavailable, so Wrangler builds this stage's own: ${error.message}\n`,
       );
     }
+  const credentials = {
+    accountId: environment.CLOUDFLARE_ACCOUNT_ID ?? "",
+    apiToken: environment.CLOUDFLARE_API_TOKEN ?? "",
+    fetch,
+  };
+  const api = (path, { missing = false } = {}) =>
+    credentials.accountId === "" || credentials.apiToken === ""
+      ? Promise.reject(new Error("no Cloudflare account ID or API token"))
+      : cloudflareApi(credentials, path, { signal }, { missing });
+  const retirement = await pluginContainerRetirement({
+    workerName,
+    coreWorkerName,
+    read: api,
+  });
+  process.stderr.write(
+    `[OrbContainers] ${RETIRED_PLUGIN_CONTAINER_CLASS}: ${retirement.delete ? "deleting" : "keeping"}; ${retirement.reason}.\n`,
+  );
+  // The class's leftover container application goes first: nothing runs in
+  // it, and the migration then deletes the namespace it pointed at.
+  if (retirement.delete && retirement.namespaceId !== undefined)
+    for (const application of (
+      (await api("/containers/applications")) ?? []
+    ).filter(
+      (candidate) =>
+        candidate.durable_objects?.namespace_id === retirement.namespaceId,
+    )) {
+      await cloudflareApi(
+        credentials,
+        `/containers/applications/${application.id}`,
+        { method: "DELETE", signal },
+      );
+      process.stderr.write(
+        `[OrbContainers] Removed the retired container application ${application.name ?? application.id}.\n`,
+      );
+    }
   const configPath = resolve(stateDirectory, "wrangler.json");
   writeFileSync(
     configPath,
-    `${JSON.stringify(orbWorkerConfig({ workerName, workspaceRoot, image, databaseId }), null, 2)}\n`,
+    `${JSON.stringify(
+      orbWorkerConfig({
+        workerName,
+        workspaceRoot,
+        image,
+        deletePluginContainer: retirement.delete,
+      }),
+      null,
+      2,
+    )}\n`,
     { mode: 0o600 },
   );
   const result = await retryOrbWorkerDeploy({
@@ -1073,7 +1198,7 @@ export const deployOrbWorker = async ({
     throw new Error(
       `Orb Worker deployment failed (wrangler exit ${result.status ?? result.signal}).\n${result.stderr.slice(-4000)}`,
     );
-  return { workerName };
+  return { workerName, pluginContainerDeleted: retirement.delete };
 };
 
 const cloudflareApi = async (
@@ -1143,7 +1268,8 @@ export const destroyOrbWorker = async ({
           [
             ORB_CONTAINER_CLASS,
             EXECUTOR_CLASS,
-            PLUGIN_CONTAINER_CLASS,
+            // A stage deployed before its removal may still own one.
+            RETIRED_PLUGIN_CONTAINER_CLASS,
           ].includes(candidate.class),
       )
       .map(({ id }) => id),

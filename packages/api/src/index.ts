@@ -110,15 +110,20 @@ export * from "./settings/personal-account.js";
 export * from "./settings/personal-agent-instructions.js";
 export * from "./settings/personal-security.js";
 export * from "./settings/personal-usage.js";
+// Plugin views.
+export * from "./settings/plugin-apps.js";
+export * from "./settings/plugin-bundle-file-endpoints.js";
 export * from "./settings/plugin-bundles.js";
 export * from "./settings/plugin-catalogs.js";
+export * from "./settings/plugin-data-view-endpoints.js";
+export * from "./settings/plugin-data-views.js";
 export * from "./settings/plugin-host-usage.js";
 export * from "./settings/plugin-icons.js";
 export * from "./settings/plugin-icons-endpoints.js";
-export * from "./settings/plugin-jobs.js";
+export * from "./settings/plugin-orb.js";
+export * from "./settings/plugin-orb-endpoints.js";
 export * from "./settings/plugin-triggers.js";
 export * from "./settings/plugin-triggers-endpoints.js";
-// Plugin views.
 export * from "./settings/plugin-views.js";
 export * from "./settings/project-defaults.js";
 export * from "./settings/runners.js";

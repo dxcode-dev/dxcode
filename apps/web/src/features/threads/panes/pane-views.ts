@@ -1,46 +1,5 @@
-import {
-  AppWindow,
-  FileText,
-  FolderTree,
-  GitCompareArrows,
-  type LucideIcon,
-  Monitor,
-  SquareTerminal,
-} from "lucide-react";
 import type * as React from "react";
-import type { CommandId } from "../../../shared/commands/command-registry.js";
 import type { PaneViewKind } from "./pane-layout.js";
-
-/** How each workspace view is named and drawn, on every layout. */
-export const PANE_VIEWS: Readonly<
-  Record<
-    PaneViewKind,
-    {
-      readonly label: string;
-      readonly Icon: LucideIcon;
-      readonly command: CommandId;
-    }
-  >
-> = {
-  files: { label: "Files", Icon: FolderTree, command: "thread.open-files" },
-  changes: {
-    label: "Changes",
-    Icon: GitCompareArrows,
-    command: "thread.open-changes",
-  },
-  portal: { label: "Portal", Icon: AppWindow, command: "thread.open-portal" },
-  terminal: {
-    label: "Terminal",
-    Icon: SquareTerminal,
-    command: "thread.open-terminal",
-  },
-  desktop: { label: "Desktop", Icon: Monitor, command: "thread.open-desktop" },
-  artifacts: {
-    label: "Artifacts",
-    Icon: FileText,
-    command: "thread.open-artifacts",
-  },
-};
 
 /** A tab's content: a node, or a function of whether the tab is shown. */
 export type PaneTabContent =
@@ -50,15 +9,14 @@ export type PaneTabContent =
 export const renderPaneContent = (content: PaneTabContent, active: boolean) =>
   typeof content === "function" ? content(active) : content;
 
-/** A pane an installed plugin offers in the Thread. */
+/** A view an installed plugin shows as a panel in the Thread. */
 export interface PluginPaneOption {
   readonly plugin: string;
+  /** The view's id. */
   readonly pane: string;
   readonly title: string;
   readonly pluginTitle: string;
-  /** A full-width tab rather than a pane. */
-  readonly kind?: "tab";
-  /** The tab's own icon, `lucide:<name>` or an asset hash. */
+  /** The view's own icon, `lucide:<name>` or an asset hash. */
   readonly icon?: string;
 }
 
@@ -71,19 +29,19 @@ export interface PluginPaneMenuProps {
 export interface PaneContents {
   readonly agent: PaneTabContent;
   readonly views: Partial<Record<PaneViewKind, PaneTabContent>>;
-  /** Installed plugins' panes; absent where plugin code cannot run. */
+  /** Installed plugins' views; absent where plugin code cannot run. */
   readonly plugin?: (
     tab: import("./pane-layout.js").PluginPaneTab,
     active: boolean,
   ) => React.ReactNode;
   /**
-   * In an archived Thread, whether its plugin keeps the pane's tab
-   * (`archivedThreads` "show"); absent keeps every plugin tab.
+   * In an archived Thread, whether its plugin still lists the tab's view;
+   * absent keeps every plugin tab.
    */
   readonly pluginShown?: (
     tab: import("./pane-layout.js").PluginPaneTab,
   ) => boolean;
-  /** The Views menu's items for the plugins' panes, loaded lazily. */
+  /** The Views menu's items for the plugins' views, loaded lazily. */
   readonly pluginMenu?: (props: PluginPaneMenuProps) => React.ReactNode;
   readonly file: (
     target: import("@dx/api").ThreadPaneFileTarget,

@@ -4,6 +4,8 @@ import { PluginStatusBadge } from "./plugin-status-badge.js";
 interface Item {
   readonly key: string;
   readonly name: string;
+  /** The name is a sentence, not a name or path, so it is not monospace. */
+  readonly sentence?: boolean;
   readonly detail?: string;
   /** A short status after the detail, such as "Needs review". */
   readonly status?: string;
@@ -34,7 +36,11 @@ export function PluginBundleGroup({
       <ul>
         {items.map((item) => (
           <li key={item.key}>
-            <code>{item.name}</code>
+            {item.sentence === true ? (
+              <span className="plugin-bundle-sentence">{item.name}</span>
+            ) : (
+              <code>{item.name}</code>
+            )}
             {item.detail === undefined || item.detail === "" ? null : (
               <span title={item.detail}>{item.detail}</span>
             )}

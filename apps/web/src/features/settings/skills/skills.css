@@ -21,23 +21,15 @@
   padding-top: var(--space-4);
 }
 
-/* Installed: the skills and their files beside the open file. */
-.skill-browser {
-  display: grid;
-  grid-template-columns: 260px minmax(0, 1fr);
-  height: min(640px, calc(100dvh - 220px));
-  min-height: 420px;
-  overflow: hidden;
+/* Installed: the package browser (shared/ui/package-browser.tsx). */
+.skill-browser-state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
 }
-.skill-browser-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  min-height: 0;
-  padding: var(--space-2);
-  overflow: auto;
-  border-right: 1px solid var(--divider);
-}
+/* Discover's search field. */
 .skill-browser-search {
   display: flex;
   flex: 1;
@@ -48,11 +40,6 @@
   border: 1px solid var(--input);
   border-radius: var(--radius-md);
   background: var(--background);
-}
-.skill-browser-list > .skill-browser-search {
-  flex: none;
-  height: var(--control-sm);
-  margin-bottom: var(--space-1);
 }
 .skill-browser-search:focus-within {
   box-shadow: var(--focus-ring);
@@ -67,158 +54,12 @@
   flex: 1;
   min-width: 0;
 }
-.skill-browser-skill {
-  display: block;
-  width: 100%;
-  min-height: var(--control-md);
-  overflow: hidden;
-  padding: 0 var(--space-2);
-  color: inherit;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  font: inherit;
-  font-weight: var(--weight-medium);
-  line-height: var(--control-md);
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.skill-browser-skill:hover:not([aria-current="true"]) {
-  background: var(--accent);
-}
-.skill-browser-skill[aria-current="true"] {
-  background: var(--secondary);
-}
-.skill-browser-skill:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-.skill-browser-list .skill-browser-tree {
-  margin: var(--space-1) 0 var(--space-2) var(--space-2);
-}
-.skill-browser-none {
-  margin: var(--space-2);
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
-}
-.skill-browser-detail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-.skill-browser-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: var(--space-1) var(--space-4);
-  padding: var(--space-4);
-  border-bottom: 1px solid var(--divider);
-}
-.skill-browser-header h2 {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  font-size: var(--text-xl);
-  font-weight: var(--weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.skill-browser-actions {
-  display: flex;
-  grid-row: 1;
-  grid-column: 2;
-  align-items: center;
-  gap: var(--space-2);
-}
-.skill-browser-state {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
-}
-.skill-browser-description {
-  grid-column: 1 / -1;
-  margin: 0;
-  color: var(--muted-foreground);
-  font-size: var(--text-sm);
-  line-height: var(--leading-relaxed);
-}
-.skill-browser-meta {
-  display: flex;
-  grid-column: 1 / -1;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-1-5);
-  margin-top: var(--space-1);
-}
-.skill-browser-meta a {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  font-size: var(--text-sm);
-}
-.skill-browser-meta svg {
-  width: var(--icon-sm);
-  height: var(--icon-sm);
-}
-.skill-browser-meta a,
 .skill-discover-facts a {
   color: var(--link);
   text-decoration: none;
 }
-.skill-browser-meta a:hover,
 .skill-discover-facts a:hover {
   text-decoration: underline;
-}
-.skill-browser-file-state {
-  margin: auto;
-}
-.skill-browser-back,
-.skill-browser .skill-browser-phone-tree {
-  display: none;
-}
-
-/* A phone shows the list, or the chosen skill with its files above the file. */
-@media (max-width: 767px) {
-  .skill-browser {
-    display: block;
-    height: auto;
-    min-height: 0;
-  }
-  .skill-browser-list {
-    border-right: 0;
-  }
-  .skill-browser-list .skill-browser-tree {
-    display: none;
-  }
-  .skill-browser[data-opened] .skill-browser-list,
-  .skill-browser:not([data-opened]) .skill-browser-detail {
-    display: none;
-  }
-  .skill-browser-back {
-    display: inline-flex;
-    align-self: flex-start;
-    margin: var(--space-2) var(--space-2) 0;
-  }
-  .skill-browser-back + .skill-browser-header {
-    grid-template-columns: minmax(0, 1fr);
-    padding-top: var(--space-1);
-  }
-  .skill-browser-actions {
-    grid-row: auto;
-    grid-column: 1;
-  }
-  .skill-browser .skill-browser-phone-tree {
-    display: block;
-    padding: var(--space-2);
-    border-bottom: 1px solid var(--divider);
-  }
-  .skill-browser-detail .dx-file-view {
-    min-height: 360px;
-  }
 }
 
 /* Discover: skills.sh's list and a skill's page. */

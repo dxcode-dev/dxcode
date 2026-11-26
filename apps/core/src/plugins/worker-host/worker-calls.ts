@@ -1,9 +1,7 @@
 import {
-  PLUGIN_PANE_MAX_HTML_BYTES,
   PLUGIN_PROMPT_MAX_SECONDS,
   PluginCommand,
   PluginLinkPattern,
-  PluginPaneId,
 } from "@dx/api";
 import {
   type PluginCodeEvent,
@@ -32,13 +30,10 @@ import {
   COMMAND_TIMEOUT_MS,
   HANDLER_TIMEOUT_MS,
   HOST_CALL_TIMEOUT_MS,
-  JOB_TIMEOUT_MS,
   linkApiImports,
-  PANE_MESSAGE_TIMEOUT_MS,
   RUNTIME_MODULE,
   runtimeModuleSource,
   TOOL_TIMEOUT_MS,
-  WATCH_MESSAGE_TIMEOUT_MS,
 } from "./runtime.js";
 import {
   PLUGIN_WORKER_COMPATIBILITY_DATE,
@@ -56,6 +51,8 @@ import {
  * worker per call. The worker has no network, bindings, or storage; each
  * call hands it a {@link PluginHost} for what the install was granted.
  */
+
+import { callPluginService, isServiceTool } from "../services/call.js";
 
 const logger = getLogger(["dx", "plugins", "worker-host"]);
 
@@ -88,12 +85,6 @@ interface PluginEntrypoint {
     call: PluginCallInfo,
     host: PluginHost,
   ): Promise<unknown>;
-  paneMessage(
-    id: string,
-    message: unknown,
-    call: PluginCallInfo,
-    host: PluginHost,
-  ): Promise<unknown>;
   hostCall(
     fn: string,
     args: unknown,
@@ -107,19 +98,6 @@ interface PluginEntrypoint {
     call: PluginCallInfo,
     host: PluginHost,
     ms: number,
-  ): Promise<unknown>;
-  runJob(
-    id: string,
-    runId: string,
-    data: unknown,
-    call: PluginCallInfo,
-    host: PluginHost,
-  ): Promise<unknown>;
-  watchMessage(
-    target: string,
-    message: unknown,
-    call: PluginCallInfo,
-    host: PluginHost,
   ): Promise<unknown>;
 }
 
@@ -225,14 +203,6 @@ const quickJSEntrypoint = (
         host,
         wallMs: call.callMs ?? COMMAND_TIMEOUT_MS,
       }),
-    paneMessage: async (id, message, call, host) =>
-      runPluginInQuickJS({
-        modules: await modules(),
-        operation: { kind: "paneMessage", id, message },
-        call,
-        host,
-        wallMs: call.callMs ?? PANE_MESSAGE_TIMEOUT_MS,
-      }),
     hostCall: async (fn, args, from, call, host) =>
       runPluginInQuickJS({
         modules: await modules(),
@@ -248,22 +218,6 @@ const quickJSEntrypoint = (
         call,
         host,
         wallMs: ms,
-      }),
-    runJob: async (id, runId, data, call, host) =>
-      runPluginInQuickJS({
-        modules: await modules(),
-        operation: { kind: "runJob", id, runId, data },
-        call,
-        host,
-        wallMs: JOB_TIMEOUT_MS,
-      }),
-    watchMessage: async (target, message, call, host) =>
-      runPluginInQuickJS({
-        modules: await modules(),
-        operation: { kind: "watchMessage", target, message },
-        call,
-        host,
-        wallMs: WATCH_MESSAGE_TIMEOUT_MS,
       }),
   };
 };
@@ -341,28 +295,6 @@ const DescriptionSchema = Schema.Struct({
       title: Schema.optional(Schema.String),
     }),
   ),
-  // Absent from a worker that started before panes existed.
-  panes: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        title: Schema.String,
-        html: Schema.String,
-        handlesMessages: Schema.Boolean,
-        icon: Schema.optional(Schema.String),
-      }),
-    ),
-  ),
-  // Absent from a worker that started before views existed.
-  views: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        html: Schema.String,
-        handlesMessages: Schema.Boolean,
-      }),
-    ),
-  ),
   exports: Schema.optional(Schema.Array(Schema.String)),
   // Absent from a worker that started before plugin agents existed.
   agentModes: Schema.optional(
@@ -374,7 +306,6 @@ const DescriptionSchema = Schema.Struct({
 const PROMPT_CEILING_MS = (PLUGIN_PROMPT_MAX_SECONDS + 30) * 1_000;
 
 const decodeCommand = Schema.decodeUnknownOption(PluginCommand);
-const decodePaneId = Schema.decodeUnknownOption(PluginPaneId);
 const decodeLinkPattern = Schema.decodeUnknownOption(PluginLinkPattern);
 
 /**
@@ -401,6 +332,50 @@ const safeLinkPattern = (link: {
   }
 };
 
+/**
+ * What a plugin's code says it handles, checked: events the manifest does
+ * not grant are dropped (dx never sends them), and every item is bounded.
+ * The Orb host's describe for a draft plugin reads it the same way.
+ */
+export const decodePluginDescription = (
+  install: PluginInstallRecord,
+  raw: unknown,
+): PluginCodeDescription => {
+  const decoded = Schema.decodeUnknownSync(DescriptionSchema)(raw);
+  const granted = new Set<string>(install.code.permissions.events);
+  return {
+    events: decoded.events.filter((event) =>
+      granted.has(event),
+    ) as ReadonlyArray<PluginCodeEvent>,
+    tools: decoded.tools.slice(0, 32).map(withItemIcon(install)),
+    // Checked here too: the plugin's isolate is the plugin's to change.
+    commands: decoded.commands
+      .filter((command) =>
+        Option.isSome(
+          decodeCommand({
+            id: command.id,
+            title: command.title,
+            ...(command.description === undefined
+              ? {}
+              : { description: command.description }),
+            plugin: install.name,
+          }),
+        ),
+      )
+      .slice(0, 16)
+      .map(withItemIcon(install)),
+    linkPatterns: decoded.linkPatterns
+      .filter(
+        (link) =>
+          Option.isSome(decodeLinkPattern({ ...link, plugin: install.name })) &&
+          safeLinkPattern(link),
+      )
+      .slice(0, 16),
+    exports: exportsOf(install, decoded.exports ?? []),
+    agentModes: agentModesOf(install, decoded.agentModes ?? []),
+  };
+};
+
 /** Cached per worker ID: the same code describes itself the same way. */
 const descriptions = new Map<string, Promise<PluginCodeDescription>>();
 
@@ -408,7 +383,49 @@ const descriptions = new Map<string, Promise<PluginCodeDescription>>();
  * Starts (or reuses) the install's worker and asks what its code handles.
  * Events the manifest does not grant are dropped: dx never sends them.
  */
-export const describePlugin = (
+/** The tools an install's service answers, as `describe()` reports tools. */
+const serviceTools = (install: PluginInstallRecord) =>
+  (install.code.service?.tools ?? []).map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.input ?? { type: "object", properties: {} },
+  }));
+
+/**
+ * What the install's code handles: its Worker's `describe()`, plus the
+ * tools its service answers. A plugin whose only code is a service starts
+ * no Worker.
+ */
+export const describePlugin = async (
+  bindings: Bindings,
+  db: D1Database,
+  install: PluginInstallRecord,
+): Promise<PluginCodeDescription> => {
+  const fromService = serviceTools(install);
+  if (pluginHostEntry(install.code, "worker") === undefined)
+    return {
+      events: [],
+      tools: fromService,
+      commands: [],
+      linkPatterns: [],
+      panes: [],
+      views: [],
+      exports: [],
+      agentModes: [],
+    } as unknown as PluginCodeDescription;
+  const described = await describeWorker(bindings, db, install);
+  if (fromService.length === 0) return described;
+  const names = new Set(fromService.map(({ name }) => name));
+  return {
+    ...described,
+    tools: [
+      ...fromService,
+      ...described.tools.filter(({ name }) => !names.has(name)),
+    ],
+  };
+};
+
+const describeWorker = (
   bindings: Bindings,
   db: D1Database,
   install: PluginInstallRecord,
@@ -422,60 +439,13 @@ export const describePlugin = (
     retryOnDynamicWorkerLimit(() =>
       entrypoint(bindings, db, install).describe(),
     ),
-  ).then((raw) => {
-    const decoded = Schema.decodeUnknownSync(DescriptionSchema)(raw);
-    const granted = new Set<string>(install.code.permissions.events);
-    return {
-      events: decoded.events.filter((event) =>
-        granted.has(event),
-      ) as ReadonlyArray<PluginCodeEvent>,
-      tools: decoded.tools.slice(0, 32).map(withItemIcon(install)),
-      // Checked here too: the plugin's isolate is the plugin's to change.
-      commands: decoded.commands
-        .filter((command) =>
-          Option.isSome(
-            decodeCommand({
-              id: command.id,
-              title: command.title,
-              ...(command.description === undefined
-                ? {}
-                : { description: command.description }),
-              plugin: install.name,
-            }),
-          ),
-        )
-        .slice(0, 16)
-        .map(withItemIcon(install)),
-      linkPatterns: decoded.linkPatterns
-        .filter(
-          (link) =>
-            Option.isSome(
-              decodeLinkPattern({ ...link, plugin: install.name }),
-            ) && safeLinkPattern(link),
-        )
-        .slice(0, 16),
-      // Checked here too, as commands are.
-      panes: (decoded.panes ?? [])
-        .filter(
-          (pane) =>
-            Option.isSome(decodePaneId(pane.id)) &&
-            pane.title.length >= 1 &&
-            pane.title.length <= 40 &&
-            new TextEncoder().encode(pane.html).byteLength <=
-              PLUGIN_PANE_MAX_HTML_BYTES,
-        )
-        .slice(0, 4)
-        .map((pane) => withManifestPane(install, pane)),
-      ...viewsOf(install, decoded.views ?? [], decoded.exports ?? []),
-      agentModes: agentModesOf(install, decoded.agentModes ?? []),
-    };
-  });
+  ).then((raw) => decodePluginDescription(install, raw));
   descriptions.set(id, described);
   described.catch(() => descriptions.delete(id));
   return described;
 };
 
-// --- Item icons and manifest panes ---
+// --- Item icons ---
 
 /** An item's registered icon resolved against the plugin's icon files. */
 const withItemIcon =
@@ -488,65 +458,19 @@ const withItemIcon =
     return { ...(rest as T), ...(icon === undefined ? {} : { icon }) };
   };
 
-/** A registered pane with what its manifest entry says: icon and archive mode. */
-const withManifestPane = (
-  install: PluginInstallRecord,
-  pane: {
-    readonly id: string;
-    readonly title: string;
-    readonly html: string;
-    readonly handlesMessages: boolean;
-    readonly icon?: string;
-  },
-) => {
-  const declared = install.code.panes?.find(({ id }) => id === pane.id);
-  const icon =
-    declared?.icon ?? resolveItemIcon(pane.icon, install.code.iconAssets);
-  return {
-    id: pane.id,
-    title: pane.title,
-    html: pane.html,
-    handlesMessages: pane.handlesMessages,
-    ...(icon === undefined ? {} : { icon }),
-    ...(declared?.archivedThreads === undefined
-      ? {}
-      : { archivedThreads: declared.archivedThreads }),
-  };
-};
-
 /**
- * The views a tab or page of the manifest names, and the exposed
- * functions its `exports` lists. A view or export the manifest does not
- * declare is left out: dx never serves what was not shown at install.
+ * The exposed functions the manifest's `exports` lists. An export the
+ * manifest does not declare is left out: dx never serves what was not
+ * shown at install.
  */
-const viewsOf = (
+const exportsOf = (
   install: PluginInstallRecord,
-  registered: ReadonlyArray<{
-    readonly id: string;
-    readonly html: string;
-    readonly handlesMessages: boolean;
-  }>,
   exposed: ReadonlyArray<string>,
 ) => {
-  const declared = new Set([
-    ...(install.code.views?.tabs ?? []).map(({ id }) => id),
-    ...(install.code.views?.pages ?? []).map(({ id }) => id),
-  ]);
   const exportNames = new Set(
     (install.code.exports ?? []).map(({ name }) => name),
   );
-  return {
-    views: registered
-      .filter(
-        (view) =>
-          declared.has(view.id) &&
-          Option.isSome(decodePaneId(view.id)) &&
-          new TextEncoder().encode(view.html).byteLength <=
-            PLUGIN_PANE_MAX_HTML_BYTES,
-      )
-      .slice(0, 8),
-    exports: exposed.filter((name) => exportNames.has(name)).slice(0, 16),
-  };
+  return exposed.filter((name) => exportNames.has(name)).slice(0, 16);
 };
 
 /**
@@ -678,8 +602,34 @@ export const dispatchPluginEvent = (
       ).dispatch(event, payload, call, host),
   );
 
-/** Runs one of the install's registered tools. */
-export const callPluginTool = (
+/**
+ * Runs one of the install's tools: a tool its service answers goes to the
+ * service on its plugin Orb (plugins/services/call.ts); any other runs in
+ * its Worker.
+ */
+export const callPluginTool = async (
+  dependencies: PluginHostDependencies,
+  name: string,
+  input: unknown,
+): Promise<unknown> => {
+  if (isServiceTool(dependencies.install, name)) {
+    const result = await callPluginService(dependencies.bindings, {
+      install: dependencies.install,
+      kind: "tool",
+      name,
+      args: input,
+      actorUserId: dependencies.actorUserId ?? dependencies.ownerUserId,
+      ...(dependencies.threadId === undefined
+        ? {}
+        : { threadId: dependencies.threadId }),
+    });
+    if (!result.ok) throw new Error(result.message);
+    return result.value;
+  }
+  return callWorkerTool(dependencies, name, input);
+};
+
+const callWorkerTool = (
   dependencies: PluginHostDependencies,
   name: string,
   input: unknown,
@@ -713,28 +663,6 @@ export const runPluginCommand = (
         dependencies.install,
         dependencies.currentHost,
       ).runCommand(id, call, host),
-  );
-
-/**
- * Runs one of the install's panes' `onMessage` for a message its view sent
- * with `dx/plugin.post`, and returns its result.
- */
-export const sendPaneMessage = (
-  dependencies: PluginHostDependencies,
-  id: string,
-  message: unknown,
-): Promise<unknown> =>
-  withHost(
-    dependencies,
-    pluginCallMs(dependencies, PANE_MESSAGE_TIMEOUT_MS) + 5_000,
-    `${dependencies.install.name}'s ${id} pane`,
-    (call, host) =>
-      entrypoint(
-        dependencies.bindings,
-        dependencies.db,
-        dependencies.install,
-        dependencies.currentHost,
-      ).paneMessage(id, message, call, host),
   );
 
 // ─── Hosts ───
@@ -779,54 +707,3 @@ export const callPluginExport = (
         dependencies.install,
       ).callExport(fn, args, call, host, ms),
   );
-
-// ─── Durable host ───
-/** Runs one job in the install's durable Dynamic Worker. */
-export const runPluginJob = (
-  dependencies: PluginHostDependencies,
-  id: string,
-  runId: string,
-  data: unknown,
-  ms: number = JOB_TIMEOUT_MS,
-): Promise<unknown> =>
-  withHost(
-    dependencies,
-    ms + 5_000,
-    `${dependencies.install.name}'s ${id} job`,
-    (call, host) =>
-      entrypoint(
-        dependencies.bindings,
-        dependencies.db,
-        dependencies.install,
-        dependencies.currentHost ?? "durable",
-      ).runJob(id, runId, data, call, host),
-  );
-
-/**
- * Hands one watched message to the handler `ctx.watch` registered; says
- * `missing` when the isolate holding it is gone.
- */
-export const sendPluginWatchMessage = async (
-  dependencies: PluginHostDependencies,
-  target: string,
-  message: unknown,
-): Promise<{ readonly missing: boolean }> => {
-  const answer = await withHost(
-    dependencies,
-    WATCH_MESSAGE_TIMEOUT_MS + 5_000,
-    `${dependencies.install.name}'s watch handler`,
-    (call, host) =>
-      entrypoint(
-        dependencies.bindings,
-        dependencies.db,
-        dependencies.install,
-        dependencies.currentHost ?? "durable",
-      ).watchMessage(target, message, call, host),
-  );
-  return {
-    missing:
-      answer !== null &&
-      typeof answer === "object" &&
-      (answer as { missing?: unknown }).missing === true,
-  };
-};

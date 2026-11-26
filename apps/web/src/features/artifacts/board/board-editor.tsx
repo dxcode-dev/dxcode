@@ -22,7 +22,7 @@ import * as React from "react";
 import { useAuthenticatedIdentity } from "../../../shared/auth/auth-context.js";
 import type { DictationSlot } from "../../../shared/dictation/dictation-slot.js";
 import { useMountEffect } from "../../../shared/hooks/use-mount-effect.js";
-import { useBoardLiveChannel } from "../../../shared/realtime/board-live.js";
+import { useBoardLiveChannel } from "../../../shared/realtime/live.js";
 import { useTheme } from "../../../shared/theme/theme-provider.js";
 import { Button } from "../../../shared/ui/button.js";
 import { buttonVariants } from "../../../shared/ui/button-variants.js";

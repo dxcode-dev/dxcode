@@ -1,17 +1,9 @@
 import type { TriggerPluginCapabilityData } from "@dx/api";
-import { pluginHostEntry } from "@dx/domain";
 import { Context, Effect, Layer, Option } from "effect";
 import type { Bindings } from "../../http/types.js";
 import { pluginRunsForOwnerSql } from "../../settings/plugins/bundles/overlap.js";
 import { storedIconSet } from "../icons/store.js";
-import { configuredTierLimits } from "../trust/limits.js";
-import {
-  installedPluginTier,
-  installTrustColumns,
-  installTrustFromRow,
-} from "../trust/resolve-tier.js";
 import type { PluginInstallRecord } from "./host.js";
-import { triggerLeaseMs } from "./trigger-lease.js";
 import { decodePluginCode, dispatchPluginEvent } from "./worker.js";
 
 /**
@@ -36,8 +28,6 @@ interface InstallRow {
   readonly version: string;
   readonly integrity: string;
   readonly manifest_json: string;
-  readonly tier_cap: string | null;
-  readonly trusted_signature: number | null;
   readonly source_json: string;
   readonly trusted_by_user_id: string;
 }
@@ -49,7 +39,7 @@ const installOf = (row: InstallRow): PluginInstallRecord | undefined => {
   } catch {
     return undefined;
   }
-  const code = decodePluginCode(manifest.code);
+  const code = decodePluginCode(manifest.code, row);
   if (
     Option.isNone(code) ||
     !code.value.permissions.events.includes(CODE_TRIGGER_EVENT)
@@ -68,8 +58,7 @@ const installOf = (row: InstallRow): PluginInstallRecord | undefined => {
     version: row.version,
     integrity: row.integrity,
     code: code.value,
-    tier: installedPluginTier(scope, code.value.tier, installTrustFromRow(row)),
-    // Install-wide durable work runs as the installer, not the trigger owner.
+    // Install actions (ctx.threads.open, ctx.identity) run as the installer.
     installedByUserId: row.trusted_by_user_id,
     ...(storedIconSet(manifest) === undefined
       ? {}
@@ -80,8 +69,7 @@ const installOf = (row: InstallRow): PluginInstallRecord | undefined => {
 const installSelect = `
   SELECT plugin.id, plugin.scope, plugin.target_id, plugin.name,
          version.version, version.integrity, version.manifest_json,
-         version.source_json, version.trusted_by_user_id,
-         ${installTrustColumns("plugin")}
+         version.source_json, version.trusted_by_user_id
     FROM trusted_plugin plugin
     JOIN trusted_plugin_version version
       ON version.plugin_id = plugin.id
@@ -165,21 +153,8 @@ export const listCodePluginTriggerCapabilities = async (
   return capabilities;
 };
 
-/**
- * How long a delivery's lease lasts: 30 seconds, or for an install whose
- * code hands work to its container host, the container call's limit plus a
- * cold start, so a transcode started by a webhook is not cut off.
- */
-export const codePluginTriggerLeaseMs = (
-  bindings: Pick<Bindings, "DX_PLUGIN_TIER_LIMITS">,
-  install: PluginInstallRecord,
-  defaultMs: number,
-) =>
-  triggerLeaseMs({
-    container: pluginHostEntry(install.code, "container") !== undefined,
-    callMs: configuredTierLimits(bindings, install.tier ?? "sandboxed").callMs,
-    defaultMs,
-  });
+/** A delivery's lease (settings/triggers/durable-object.ts): 30 seconds. */
+const TRIGGER_LEASE_MS = 30_000;
 
 /** Sends one delivery to the install's worker as `trigger.received`. */
 export const deliverCodePluginTrigger = (
@@ -202,10 +177,7 @@ export const deliverCodePluginTrigger = (
       bindings,
       install: input.install,
       ownerUserId: input.ownerUserId,
-      // ─── Container host ───
-      // The install's tier rides on its record (installedPluginTier); the
-      // installer's workspace pays for its hosts, and the delivery ID ties
-      // its log lines together.
+      // The delivery ID ties its log lines together.
       requestId: input.deliveryId,
       deliveryId: input.deliveryId,
       ...(input.install.scope === "workspace"
@@ -222,7 +194,7 @@ export const deliverCodePluginTrigger = (
       attempt: input.attempt,
     },
     // Inside the delivery's lease, so a delivery never outlives it.
-    codePluginTriggerLeaseMs(bindings, input.install, 30_000) - 5_000,
+    TRIGGER_LEASE_MS - 5_000,
   );
 
 /** Where the trigger service finds code plugins' webhook capabilities. */

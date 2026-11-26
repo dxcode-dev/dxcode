@@ -43,8 +43,21 @@ type E2BProfilesResource = Alchemy.Resource<
  */
 type OrbContainersResource = Alchemy.Resource<
   "Dx.OrbContainers",
-  { workerName: string; recipeHash: string; databaseId?: string },
-  { workerName: string; recipeHash?: string; databaseId?: string }
+  {
+    workerName: string;
+    recipeHash: string;
+    databaseId?: string;
+    // The stage's Core Worker, read to decide whether the retired plugin
+    // container class can be deleted; not part of the recipe, so it never
+    // forces a redeploy on its own.
+    coreWorkerName?: string;
+  },
+  {
+    workerName: string;
+    recipeHash?: string;
+    databaseId?: string;
+    pluginContainerDeleted?: boolean;
+  }
 >;
 
 export const HeldSecret = Alchemy.Resource<HeldSecretResource>("Dx.HeldSecret");
@@ -158,9 +171,12 @@ const orbContainersProvider = () =>
         ? Effect.succeed(output)
         : Effect.tryPromise({
             try: async (signal) => {
-              await deployOrbWorker({
+              const deployed = await deployOrbWorker({
                 signal,
                 workerName: news.workerName,
+                ...(news.coreWorkerName === undefined
+                  ? {}
+                  : { coreWorkerName: news.coreWorkerName }),
                 ...(news.databaseId === undefined
                   ? {}
                   : { databaseId: news.databaseId }),
@@ -191,6 +207,7 @@ const orbContainersProvider = () =>
               return {
                 workerName: news.workerName,
                 recipeHash: news.recipeHash,
+                pluginContainerDeleted: deployed.pluginContainerDeleted,
                 ...(news.databaseId === undefined
                   ? {}
                   : { databaseId: news.databaseId }),

@@ -3,11 +3,8 @@ import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import {
-  VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY,
-  VIEW_FRAME_CONNECTED_PATH,
   VIEW_FRAME_CONTENT_SECURITY_POLICY,
   VIEW_FRAME_PATH,
-  viewFrameConnectedShell,
   viewFrameShell,
 } from "@dx/api/views/view-frame.mjs";
 import tailwindcss from "@tailwindcss/vite";
@@ -27,16 +24,6 @@ const viewFrame: Plugin = {
   configureServer(server) {
     server.middlewares.use((request, response, next) => {
       const path = request.url?.split("?")[0];
-      // A trusted pane's connected shell.
-      if (path === VIEW_FRAME_CONNECTED_PATH) {
-        response.setHeader("content-type", "text/html; charset=utf-8");
-        response.setHeader(
-          "content-security-policy",
-          VIEW_FRAME_CONNECTED_CONTENT_SECURITY_POLICY,
-        );
-        response.end(viewFrameConnectedShell());
-        return;
-      }
       if (path !== VIEW_FRAME_PATH) return next();
       response.setHeader("content-type", "text/html; charset=utf-8");
       response.setHeader(
@@ -51,11 +38,6 @@ const viewFrame: Plugin = {
       type: "asset",
       fileName: `${VIEW_FRAME_PATH.slice(1)}.html`,
       source: viewFrameShell(),
-    });
-    this.emitFile({
-      type: "asset",
-      fileName: `${VIEW_FRAME_CONNECTED_PATH.slice(1)}.html`,
-      source: viewFrameConnectedShell(),
     });
   },
 };

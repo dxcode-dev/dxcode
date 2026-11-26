@@ -1,0 +1,97 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's log view: see log-view.tsx. Rows are absolutely placed at a fixed
+   height (ROW_HEIGHT there, --leading-5 here) so only the rows in view are
+   drawn. */
+@layer components {
+  .dx-log-view {
+    position: relative;
+    min-width: 0;
+  }
+  .dx-log-view-scroll {
+    overflow: auto;
+    color: var(--foreground);
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    line-height: var(--leading-5);
+    border: 1px solid var(--divider);
+    border-radius: var(--radius-md);
+    background: var(--code-surface);
+    overscroll-behavior: contain;
+  }
+  .dx-log-view-scroll:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+  .dx-log-view-scroll > .dx-empty {
+    height: 100%;
+  }
+  .dx-log-view-rows {
+    position: relative;
+  }
+  .dx-log-view-row {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: var(--leading-5);
+    padding: 0 var(--space-3) 0 var(--space-1-5);
+    white-space: pre;
+  }
+  .dx-log-view-row:hover {
+    background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  }
+  .dx-log-view-level {
+    position: relative;
+    flex: none;
+    align-self: stretch;
+    width: var(--space-0-5);
+    margin: var(--space-0-5) 0;
+    border-radius: 1px;
+  }
+  .dx-log-view-level[data-level="debug"] {
+    background: color-mix(in srgb, var(--muted-foreground) 50%, transparent);
+  }
+  .dx-log-view-level[data-level="info"] {
+    background: var(--unread);
+  }
+  .dx-log-view-level[data-level="warn"] {
+    background: var(--warning);
+  }
+  .dx-log-view-level[data-level="error"] {
+    background: var(--destructive);
+  }
+  .dx-log-view-level-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .dx-log-view-time {
+    flex: none;
+    color: var(--muted-foreground);
+    font-variant-numeric: tabular-nums;
+  }
+  .dx-log-view-row[data-level="debug"] .dx-log-view-text {
+    color: var(--muted-foreground);
+  }
+  .dx-log-view-row[data-level="warn"] .dx-log-view-text {
+    color: var(--state-needs-you-text);
+  }
+  .dx-log-view-row[data-level="error"] .dx-log-view-text {
+    color: color-mix(in srgb, var(--destructive) 80%, var(--foreground));
+  }
+  .dx-log-view-jump.dx-button {
+    position: absolute;
+    bottom: var(--space-3);
+    left: 50%;
+    translate: -50% 0;
+    box-shadow: var(--shadow-md);
+  }
+}

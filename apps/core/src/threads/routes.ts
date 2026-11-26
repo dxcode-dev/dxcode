@@ -167,7 +167,6 @@ import {
   OrbUnavailable,
   resolveThreadExecutionPin,
 } from "../plugins/execution/orb-providers.js";
-import { durableThreadLifecycle } from "../plugins/hosts/durable/lifecycle.js";
 import { notifyPluginsOfArchive } from "../plugins/thread-ui/archive.js";
 import {
   checkPluginThreadType,
@@ -2943,20 +2942,6 @@ export const createThreadRoutes = (
             "thread.invalidated",
           ),
         );
-      // ─── Durable host ───
-      // Thread-scoped plugin jobs pause on archive (unless the plugin is
-      // `live` there) and resume on restore; in the background.
-      for (const changed of [thread, ...children])
-        try {
-          context.executionCtx.waitUntil(
-            durableThreadLifecycle(
-              context.env,
-              changed.id,
-              body.archived,
-              requestId,
-            ),
-          );
-        } catch {}
       let orbStopping = false;
       if (body.archived) {
         // The agent stops before its Orb: a turn left running would fail

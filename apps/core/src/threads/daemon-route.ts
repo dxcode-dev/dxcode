@@ -5,7 +5,7 @@ import { threadDaemonLogger } from "../logging.js";
 import {
   DAEMON_STORAGE_PATH,
   forwardDaemonAttachment,
-  forwardDaemonPluginDev,
+  forwardDaemonPluginDraft,
   forwardDaemonStorage,
   forwardDaemonUpgrade,
 } from "./daemon-ingress.js";
@@ -61,8 +61,8 @@ export const threadDaemonRoutes = new Hono<AppEnv>()
       );
     },
   )
-  .post("/dxd/:threadId/plugin-dev", (context) =>
-    forwardDaemonPluginDev(
+  .post("/dxd/:threadId/plugin-draft", (context) =>
+    forwardDaemonPluginDraft(
       context.req.raw,
       context.env.THREAD_EXECUTION,
       context.req.param("threadId"),

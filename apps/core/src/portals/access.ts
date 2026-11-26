@@ -13,6 +13,7 @@ import { Principal, type ThreadId } from "@dx/domain";
 import { Effect, Option, Schema } from "effect";
 import { authorizeThreadRequest } from "../auth/authorize-thread.js";
 import { readSessionExpiry } from "../auth/session-sockets.js";
+import { pluginAppPortal } from "../plugins/services/app.js";
 import { mayReadOrbContents } from "../thread-sharing/access.js";
 import type { PortalSession } from "./session.js";
 
@@ -22,6 +23,8 @@ export const evaluatePortalAccess = async (
   db: unknown,
   userId: string,
   threadId: ThreadId,
+  /** The Portal's port, for a plugin's page on a plugin Orb. */
+  port?: number,
 ): Promise<PortalAccess> => {
   const principal = Schema.decodeUnknownOption(Principal)({
     userId,
@@ -31,7 +34,14 @@ export const evaluatePortalAccess = async (
   const result = await Effect.runPromise(
     authorizeThreadRequest(threadId, principal.value, db),
   );
-  if (!result.authorized) return "not-found";
+  if (!result.authorized)
+    // No Thread has the ID: it may be a plugin Orb, whose only Portal is a
+    // plugin's own page (`service.app`) on its program's port.
+    return port !== undefined &&
+      (await pluginAppPortal(db as D1Database, userId, threadId, port)) !==
+        undefined
+      ? "allowed"
+      : "not-found";
   if (!mayReadOrbContents(result.access ?? "owner")) return "read-only";
   if (result.lifecycleState !== "active") return "archived";
   return "allowed";
@@ -58,13 +68,14 @@ export const recheckPortalSession = async (
   session: PortalSession,
   threadId: ThreadId,
   nowMs: number,
+  port?: number,
 ) => {
   const key = `${session.sessionId}\u0000${session.userId}\u0000${threadId}`;
   const cached = allowedUntil.get(key);
   if (cached !== undefined && cached > nowMs) return true;
   allowedUntil.delete(key);
   const [access, signedIn] = await Promise.all([
-    evaluatePortalAccess(db, session.userId, threadId),
+    evaluatePortalAccess(db, session.userId, threadId, port),
     dxSessionActive(db, session.sessionId, session.userId, nowMs),
   ]);
   if (access !== "allowed" || !signedIn) return false;

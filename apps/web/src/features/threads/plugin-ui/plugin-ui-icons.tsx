@@ -14,10 +14,10 @@ import { iconByName, iconForItem } from "./plugin-ui-icon-lookup.js";
 /**
  * The Thread's plugin icons, from the plugin UI query
  * every plugin surface already reads: items name their plugin by display
- * name (`plugin`), panes by manifest name.
+ * name (`plugin`), views by manifest name.
  */
 
-/** A plugin pane's tab or menu icon: the pane's own, else its plugin's. */
+/** A plugin view's tab or menu icon: the view's own, else its plugin's. */
 export function PluginPaneIcon({
   threadId,
   plugin,
@@ -35,14 +35,9 @@ export function PluginPaneIcon({
     ...pluginUiQueryOptions(threadId),
     select: (data) => ({
       icon: iconByName(data, plugin),
-      item:
-        data.panes?.find(
-          (entry) => entry.plugin === plugin && entry.pane === pane,
-        )?.icon ??
-        // A plugin tab's own icon.
-        data.tabs?.find(
-          (entry) => entry.plugin === plugin && entry.tab === pane,
-        )?.icon,
+      item: data.dataViews?.find(
+        (entry) => entry.plugin === plugin && entry.view === pane,
+      )?.icon,
       pluginTitle:
         data.plugins?.find((entry) => entry.name === plugin)?.title ?? plugin,
     }),

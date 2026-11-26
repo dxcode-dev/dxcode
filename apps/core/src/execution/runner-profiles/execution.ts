@@ -224,6 +224,52 @@ const targetQuery = `SELECT threads.runner_profile_id AS thread_runner_profile_i
   LIMIT 1`;
 
 /**
+ * The same columns for a plugin Orb (plugins/services/orb-owner.ts): its
+ * size and payer stand in for the Thread's, and the workspace whose policy
+ * applies is the Orb's own, or a personal Orb's payer's. Read only when no
+ * Thread has the ID, so a Thread's activation costs nothing more.
+ */
+const pluginOrbTargetQuery = `SELECT orb.runner_profile_id AS thread_runner_profile_id,
+        orb.runner_profile_id AS project_runner_profile_id,
+        orb.payer_user_id AS owner_user_id,
+        CASE WHEN orb.scope = 'workspace' THEN orb.target_id
+             ELSE (SELECT member.organizationId FROM member
+                     JOIN organization ON organization.id = member.organizationId
+                    WHERE member.userId = orb.payer_user_id
+                      AND organization.lifecycleState = 'active'
+                    LIMIT 1)
+        END AS project_workspace_id,
+        pin.provider AS pin_provider,
+        pin.runner_profile_id AS pin_runner_profile_id,
+        pin.account_scope,
+        pin.account_owner_id,
+        pin.provider_account,
+        pin.provider_template,
+        connection.provider_id AS connection_provider_id,
+        connection.key_version,
+        connection.value_nonce,
+        connection.ciphertext,
+        connection.wrapped_key_nonce,
+        connection.wrapped_key,
+        connection.account AS connection_account,
+        policy.allow_personal_plugin_overrides,
+        policy.allow_personal_execution_overrides,
+        CASE WHEN pin.account_scope = 'workspace' THEN ${activeMemberSql(
+          "pin.account_owner_id",
+          "orb.payer_user_id",
+        )} ELSE NULL END AS owner_is_member
+   FROM plugin_orb AS orb
+   LEFT JOIN execution_workspace AS pin ON pin.thread_id = orb.id
+   LEFT JOIN orb_connection AS connection
+     ON connection.scope = pin.account_scope
+    AND connection.target_id = pin.account_owner_id
+    AND connection.provider_id = pin.provider
+   LEFT JOIN workspace_policy AS policy
+     ON policy.workspace_id = CASE WHEN orb.scope = 'workspace' THEN orb.target_id ELSE NULL END
+  WHERE orb.id = ?
+  LIMIT 1`;
+
+/**
  * The runner profile and credential a Thread's workspace uses. A pinned
  * Thread uses its pinned size; earlier Threads use the Thread's or the
  * project's profile, as before. `admission: false` is for releasing an
@@ -278,7 +324,33 @@ export const resolveExecutionTarget = Effect.fn("resolveExecutionTarget")(
               .then((result) => [result]),
       catch: () => new ExecutionRunnerProfileUnavailable(),
     });
-    const row = yield* Effect.succeed(target?.results[0] ?? null).pipe(
+    // No Thread has the ID: it may be a plugin Orb's.
+    const pluginOrb =
+      (target?.results[0] ?? null) !== null
+        ? undefined
+        : yield* Effect.tryPromise({
+            try: () =>
+              options.admission
+                ? db.batch([
+                    db.prepare(pluginOrbTargetQuery).bind(threadId),
+                    ...ownerPolicyStatements(
+                      db,
+                      "(SELECT payer_user_id FROM plugin_orb WHERE id = ?1)",
+                      [threadId],
+                    ),
+                  ])
+                : db
+                    .prepare(pluginOrbTargetQuery)
+                    .bind(threadId)
+                    .all()
+                    .then((result) => [result]),
+            catch: () => new ExecutionRunnerProfileUnavailable(),
+          });
+    if (pluginOrb !== undefined)
+      ownerPolicy.splice(0, ownerPolicy.length, ...pluginOrb.slice(1));
+    const row = yield* Effect.succeed(
+      target?.results[0] ?? pluginOrb?.[0]?.results[0] ?? null,
+    ).pipe(
       Effect.flatMap((value) =>
         value === null
           ? Effect.fail(new ExecutionRunnerProfileUnavailable())

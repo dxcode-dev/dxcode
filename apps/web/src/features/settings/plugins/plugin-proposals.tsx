@@ -1,4 +1,5 @@
 import type { PluginProposalData } from "@dx/api";
+import { isStdioMcpServer, stdioCommandLine } from "@dx/domain";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useRouterState } from "@tanstack/react-router";
 import { KeyRound, Library, PlugZap } from "lucide-react";
@@ -60,7 +61,7 @@ function PluginProposalDialog({
               >
                 {proposal.threadTitle ?? "a Thread"}
               </Link>
-              . Approving installs exactly this commit; new Threads load it.
+              . Approving installs exactly this version; new Threads use it.
             </DialogDescription>
           </header>
           {proposal.note === "" ? null : (
@@ -71,7 +72,11 @@ function PluginProposalDialog({
           {proposal.change === "new" ? (
             <BundleItems
               skills={manifest.skills}
-              mcpServers={manifest.mcpServers}
+              mcpServers={manifest.mcpServers.map((server) =>
+                isStdioMcpServer(server)
+                  ? { name: server.name, command: stdioCommandLine(server) }
+                  : { name: server.name, endpoint: server.endpoint },
+              )}
               code={manifest.code}
               skipped={manifest.skipped}
             />
@@ -79,7 +84,7 @@ function PluginProposalDialog({
             <div className="plugin-bundle-items">
               <PluginBundleGroup
                 icon={<KeyRound aria-hidden="true" />}
-                title="Permissions"
+                title="What changes"
                 items={permissionItems(proposal.permissions?.changes ?? [])}
               />
               <PluginBundleGroup
@@ -96,7 +101,7 @@ function PluginProposalDialog({
           )}
           {widens ? (
             <p className="plugin-bundle-help plugin-bundle-warning" role="note">
-              This version asks for more than you approved.
+              This version does more than the one you allowed: see What changes.
             </p>
           ) : null}
           {error === undefined ? null : (

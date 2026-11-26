@@ -15,7 +15,6 @@ export type RealtimeThreadEventType =
   | "disk.invalidated"
   | "artifacts.invalidated"
   | "plugin-ui.invalidated"
-  | "plugin-pane.invalidated"
   | "comments.invalidated"
   | "space.posts.invalidated"
   | "reactions.invalidated"

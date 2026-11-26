@@ -6,6 +6,4 @@
  */
 export * from "./registry.js";
 
-import "./durable/runtime.js";
-import "./container/runtime.js";
 import "./orb/runtime.js";

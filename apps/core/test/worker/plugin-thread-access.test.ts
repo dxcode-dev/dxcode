@@ -426,7 +426,8 @@ describe("plugin thread access", () => {
           "state",
           "title",
         ],
-        threads: ["get"],
+        // `post` posts into Threads this install opened with a key.
+        threads: ["get", "post"],
       },
     });
     // `true` is the original `create` grant: nothing to read or post with,
@@ -446,8 +447,10 @@ describe("plugin thread access", () => {
         );
       }),
     );
+    // It keeps the keyed `open` and `post` into what it opened, the calls a
+    // service makes, but not `create`.
     expect(await probe(cyHome, cy, "com.acme.legacy", { op: "shape" })).toEqual(
-      { ok: { thread: ["id"], threads: null } },
+      { ok: { thread: ["id"], threads: ["open", "post"] } },
     );
     // A read-only grant has no posting methods.
     const benHome = threadIds.benPrivate;

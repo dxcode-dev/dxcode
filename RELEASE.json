@@ -1,5 +1,5 @@
 {
-  "version": "0.2.182",
+  "version": "0.2.183",
   "license": "FSL-1.1-ALv2",
   "baselineSha256": "7847f65a9b20b366a60d52d19ca3cd6bdd1bb09b8cb506659a270f27a21d8877",
   "e2b": {
@@ -7,24 +7,24 @@
     "profileSha256": "414dbecee2d47de36016ea05c736e2edff3a0deb298babf923887ea184a01c10"
   },
   "dxd": {
-    "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.182/dxd-linux-x64",
-    "sha256": "8394bdeacae2a22f9c6f965c8765528ce9f2b9ce011675d724eb286991630401"
+    "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.183/dxd-linux-x64",
+    "sha256": "c037d64d127b636d4a47240fe5b4518d68831197dbf9146380e0766959efce92"
   },
   "runner": {
     "dxd-darwin-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.182/dxd-darwin-arm64",
-      "sha256": "08f5a77ccf2906539272a4c4aa9c2cd5b787cde6e351a458a0c8fc2570704e69"
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.183/dxd-darwin-arm64",
+      "sha256": "eacc3f9cd79317207213d1368317ac5af3c6912ffe34879e8425244e50407d6c"
     },
     "dxd-linux-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.182/dxd-linux-arm64",
-      "sha256": "ec2bfff39ecb51dca28b851767ff3253ce8506ba75720596bbff9f3d7bdf36b6"
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.183/dxd-linux-arm64",
+      "sha256": "af88a8edb4e48d497efd807e0f395e58703464eee62458ebee255a0a0a281f31"
     },
     "voxl-darwin-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.182/voxl-darwin-arm64",
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.183/voxl-darwin-arm64",
       "sha256": "b0785d81bdeb5e0d6639bac4a9ca1533db4e669f3eea08a2579043bc96d706e9"
     },
     "dx-desktop-darwin-arm64": {
-      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.182/dx-desktop-darwin-arm64",
+      "url": "https://github.com/dxcode-dev/dxcode/releases/download/v0.2.183/dx-desktop-darwin-arm64",
       "sha256": "2c3ec56d9317bfb3d7053b4189ce5804284cee702a96c53ca42b1402cf0769aa"
     }
   },

@@ -8,10 +8,7 @@ import {
   callPluginWorkerHost,
   dispatchPluginEvent,
   runPluginCommand,
-  sendPaneMessage,
 } from "../worker-host/worker.js";
-import { tierAllowsHost } from "./policy.js";
-import type { PluginTier } from "./tier.js";
 import {
   PluginHostError,
   type PluginHostRuntime,
@@ -52,27 +49,9 @@ export const pluginHostRuntime = (
   context: PluginHostContext,
 ): PluginHostRuntime | undefined => factories.get(kind)?.(context);
 
-export { tierAllowsHost };
-
-/**
- * The hosts one call may reach with `ctx.host(kind)`: declared in the
- * manifest, allowed by the tier, and registered in this deployment.
- */
-export const reachablePluginHosts = (
-  code: PluginHostDependencies["install"]["code"],
-  tier: PluginTier,
-): ReadonlyArray<PluginHostKind> =>
-  (["worker", "durable", "orb", "container"] as const).filter(
-    (kind) =>
-      pluginHostEntry(code, kind) !== undefined &&
-      tierAllowsHost(tier, kind) &&
-      factories.has(kind),
-  );
-
 /** Why a host refuses a call, before it reaches any code. */
 export const pluginHostRefusal = (
   code: PluginHostDependencies["install"]["code"],
-  tier: PluginTier,
   kind: PluginHostKind,
 ): PluginHostError | undefined =>
   pluginHostEntry(code, kind) === undefined
@@ -81,19 +60,13 @@ export const pluginHostRefusal = (
         reason: "not-declared",
         message: `This plugin has no ${kind} code: its manifest's host names no ${kind} entry.`,
       })
-    : !tierAllowsHost(tier, kind)
+    : !factories.has(kind)
       ? new PluginHostError({
           host: kind,
-          reason: "blocked-tier",
-          message: `The ${kind} host needs a trusted tier; this install runs as ${tier}.`,
+          reason: "unavailable",
+          message: `This deployment does not run the ${kind} host.`,
         })
-      : !factories.has(kind)
-        ? new PluginHostError({
-            host: kind,
-            reason: "unavailable",
-            message: `This deployment does not run the ${kind} host.`,
-          })
-        : undefined;
+      : undefined;
 
 /** One structured line per host call, so proof ties log lines to requests. */
 export const logPluginHostCall = (fields: {
@@ -102,8 +75,7 @@ export const logPluginHostCall = (fields: {
   readonly host: PluginHostKind | "unknown";
   /** The host the call came from, for host-to-host calls. */
   readonly from?: PluginHostKind | undefined;
-  readonly tier: PluginTier;
-  readonly call: PluginInvocation["kind"] | "watch";
+  readonly call: PluginInvocation["kind"];
   readonly outcome: string;
   readonly ms: number;
   readonly threadId?: string | undefined;
@@ -134,8 +106,6 @@ registerPluginHost("worker", ({ dependencies }) => ({
             return callPluginTool(dependencies, call.name, call.input);
           case "command":
             return runPluginCommand(dependencies, call.id);
-          case "pane-message":
-            return sendPaneMessage(dependencies, call.paneId, call.message);
           case "host-call":
             return callPluginWorkerHost(
               dependencies,
@@ -149,10 +119,6 @@ registerPluginHost("worker", ({ dependencies }) => ({
               call.fn,
               call.args,
               "worker",
-            );
-          case "job":
-            return Promise.reject(
-              new Error("Jobs run in the durable host, not the Worker host."),
             );
         }
       },

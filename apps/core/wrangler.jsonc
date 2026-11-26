@@ -59,10 +59,6 @@
         "class_name": "RealtimeHub"
       },
       {
-        "name": "PLUGIN_STREAM_RELAY",
-        "class_name": "PluginStreamRelay"
-      },
-      {
         "name": "BYOK_CREDENTIAL_COORDINATOR",
         "class_name": "ByokCredentialCoordinatorObject"
       },
@@ -144,6 +140,10 @@
     {
       "tag": "v12-runner-session",
       "new_sqlite_classes": ["RunnerSessionObject"]
+    },
+    {
+      "tag": "v13-remove-plugin-stream-relay",
+      "deleted_classes": ["PluginStreamRelay"]
     }
   ]
 }

@@ -63,7 +63,7 @@ export const ThreadPaneTabSchema = Schema.Union([
     kind: Schema.Literal("file"),
     target: ThreadPaneFileTargetSchema,
   }),
-  /** An installed plugin's pane (`registerPane`), by plugin name and id. */
+  /** An installed plugin's view (a panel or an app), by plugin name and view id. */
   Schema.Struct({
     kind: Schema.Literal("plugin"),
     plugin: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(96)),

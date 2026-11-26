@@ -29,6 +29,21 @@ export const WorkloadIdentityRuntimeAssurance = Schema.Literals([
 export type WorkloadIdentityRuntimeAssurance =
   typeof WorkloadIdentityRuntimeAssurance.Type;
 
+/**
+ * The assurance of a token Core minted for a plugin's function code, which
+ * runs inside dx: no Orb, no dxd channel, no provider attestation. Only
+ * plugin install tokens carry it (`plugin_runtime: "function"`); a Thread's
+ * token never does.
+ */
+export const WORKLOAD_IDENTITY_CORE_FUNCTION_ASSURANCE = "dx_core_function_v1";
+
+/** Every `runtime_assurance` a dx token can carry. */
+export const WorkloadIdentityClaimRuntimeAssurance = Schema.Literals([
+  "dx_dxd_channel_v1",
+  "dx_provider_attested_v1",
+  WORKLOAD_IDENTITY_CORE_FUNCTION_ASSURANCE,
+]);
+
 export class WorkloadIdentityUnauthorized extends Schema.TaggedError<WorkloadIdentityUnauthorized>()(
   "WorkloadIdentityUnauthorized",
   {},

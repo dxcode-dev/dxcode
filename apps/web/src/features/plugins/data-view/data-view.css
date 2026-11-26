@@ -1,0 +1,93 @@
+/* A plugin view described as data. Parts bring their own look; this only
+   lays them out. */
+.data-view {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.data-view-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.data-view-title {
+  margin: 0;
+  font-size: var(--text-18);
+  font-weight: var(--weight-semibold);
+}
+
+.data-view-parts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.data-view-heading {
+  margin: var(--space-2) 0 0;
+  font-weight: var(--weight-semibold);
+  font-size: var(--text-14);
+}
+
+.data-view-heading[data-level="1"] {
+  font-size: var(--text-16);
+}
+
+.data-view-heading[data-level="3"] {
+  font-size: var(--text-13);
+  color: var(--muted-foreground);
+}
+
+.data-view-text {
+  margin: 0;
+  font-size: var(--text-13);
+  line-height: var(--leading-normal);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.data-view-text[data-tone="muted"] {
+  color: var(--muted-foreground);
+}
+
+.data-view-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.data-view-card {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.data-view-code {
+  margin: 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--muted);
+  font-family: var(--font-code);
+  font-size: var(--text-code);
+  line-height: var(--leading-code);
+  overflow: auto;
+  white-space: pre;
+}
+
+.data-view-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* A view as a card under the tool call that named it. */
+.dx-card.transcript-plugin-view-card {
+  margin-block: var(--space-2) var(--space-3);
+  max-width: 100%;
+  /* A card stays a card in the transcript: the rest scrolls inside it. */
+  max-height: 32rem;
+  overflow: auto;
+}

@@ -1,9 +1,11 @@
 import {
+  MAX_PLUGIN_BUNDLE_SKIPPED,
   PersistenceUnavailable,
   PluginBundleRepository,
   type PluginCodeModuleContent,
   PluginIntegrityConflict,
   PluginNotFound,
+  pluginRebuildMessage,
   StoredPluginBundle,
   Timestamp,
 } from "@dx/domain";
@@ -286,12 +288,13 @@ const codeFileStatements = (
             `INSERT INTO trusted_plugin_file (
                plugin_id, version, path, media_type, content, size_bytes,
                integrity
-             ) VALUES (?, ?, ?, 'text/javascript', ?, ?, ?)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             bundle.id,
             bundle.version,
             path,
+            path.endsWith(".json") ? "application/json" : "text/javascript",
             content,
             new TextEncoder().encode(content).byteLength,
             await sha256(content),
@@ -341,13 +344,28 @@ const decodeBundle = (row: BundleRow) =>
         [JSON.parse(row.manifest_json), JSON.parse(row.source_json)] as const,
       catch: unavailable("settings.pluginBundles.decode"),
     });
+    // A version that uses a feature dx removed does not load (worker.ts
+    // `decodePluginCode`); the Plugins page lists why with what it skipped.
+    const rebuild = pluginRebuildMessage(
+      (manifest as { code?: unknown } | null)?.code,
+    );
     return yield* Schema.decodeUnknownEffect(StoredPluginBundle)({
       id: row.id,
       target: { scope: row.scope, id: row.target_id },
       name: row.name,
       enabled: row.enabled === 1,
       version: row.active_version,
-      manifest,
+      manifest:
+        rebuild === undefined
+          ? manifest
+          : {
+              ...manifest,
+              skipped: [
+                ...((manifest as { skipped?: ReadonlyArray<unknown> })
+                  .skipped ?? []),
+                { path: "plugin.json#extensions.dev.dxcode", reason: rebuild },
+              ].slice(-MAX_PLUGIN_BUNDLE_SKIPPED),
+            },
       source,
       integrity: row.integrity,
       installedAt: row.trusted_at,

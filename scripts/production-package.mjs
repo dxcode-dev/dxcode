@@ -10,7 +10,10 @@ import {
 } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { staticHeaders } from "../apps/core/src/security/content-security-policy.mjs";
-import { loadMigrationManifest } from "./migration-manifest.mjs";
+import {
+  liveDurableObjectClasses,
+  loadMigrationManifest,
+} from "./migration-manifest.mjs";
 
 export const productionManifestFilename = "production-manifest.json";
 const workspaceRoot = resolve(import.meta.dirname, "..");
@@ -289,8 +292,8 @@ export const deriveDurableObjectBindings = ({
     .sort();
   const authoredNames = authoredBindings.map(({ name }) => name).sort();
   const authoredClasses = authoredBindings.map(({ class_name }) => class_name);
-  const canonicalClasses = migrationManifest.durableObjects.flatMap(
-    ({ newSqliteClasses }) => newSqliteClasses,
+  const canonicalClasses = liveDurableObjectClasses(
+    migrationManifest.durableObjects,
   );
   const generatedBindings = contractBindings.filter(
     ({ provenance }) => provenance === "generated-flue",
@@ -851,8 +854,6 @@ export const createProductionPackage = async ({
     "sw.js",
     // The dx-view shell, served with its own policy.
     "view-frame.html",
-    // A trusted plugin pane's shell, with its own policy.
-    "view-frame-connected.html",
   ];
   const web = readGraph(webBuildRoot, {
     source: "index.html",
@@ -929,9 +930,7 @@ export const createProductionPackage = async ({
     resolve(outputRoot, "worker/index.js"),
     "utf8",
   );
-  for (const className of migrations.durableObjects.flatMap(
-    ({ newSqliteClasses }) => newSqliteClasses,
-  )) {
+  for (const className of liveDurableObjectClasses(migrations.durableObjects)) {
     if (!workerEntry.includes(className))
       throw new Error(
         `Production Worker is missing Durable Object class ${className}.`,
@@ -988,9 +987,7 @@ export const createProductionPackage = async ({
       durableObjects: migrations.durableObjects,
     },
     durableObjects: {
-      classes: migrations.durableObjects.flatMap(
-        ({ newSqliteClasses }) => newSqliteClasses,
-      ),
+      classes: liveDurableObjectClasses(migrations.durableObjects),
     },
     bindings,
     generatedCode: [
@@ -1267,7 +1264,6 @@ export const validateProductionPackage = async (root) => {
     "assets/social-card.png",
     "assets/sw.js",
     "assets/view-frame.html",
-    "assets/view-frame-connected.html",
     "assets/dxd",
     ...runnerPackageFiles(manifest, files),
   ]);
@@ -1317,11 +1313,7 @@ export const validateProductionPackage = async (root) => {
     JSON.stringify(manifest.migrations?.durableObjects) !==
       JSON.stringify(migrations.durableObjects) ||
     JSON.stringify(manifest.durableObjects?.classes) !==
-      JSON.stringify(
-        migrations.durableObjects.flatMap(
-          ({ newSqliteClasses }) => newSqliteClasses,
-        ),
-      )
+      JSON.stringify(liveDurableObjectClasses(migrations.durableObjects))
   )
     throw new Error(
       "Production package migrations drifted from their authority.",

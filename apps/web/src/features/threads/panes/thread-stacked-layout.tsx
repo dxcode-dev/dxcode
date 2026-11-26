@@ -3,6 +3,7 @@ import { Plus, X } from "lucide-react";
 import * as React from "react";
 import { OrbIcon } from "../../../shared/ui/orb-icon.js";
 import { RoutePluginPaneIcon } from "../plugin-ui/lazy-plugin-ui-icons.js";
+import { DX_THREAD_PANELS } from "./dx-thread-panels.js";
 import {
   canOpenTerminal,
   flattenPaneTabs,
@@ -19,11 +20,7 @@ import {
   type PaneTabSlots,
   PaneToolbarSlotContext,
 } from "./pane-toolbar-slot-context.js";
-import {
-  PANE_VIEWS,
-  type PaneContents,
-  renderPaneContent,
-} from "./pane-views.js";
+import { type PaneContents, renderPaneContent } from "./pane-views.js";
 import { TerminalView } from "./terminal-view.js";
 
 type Dispatch = (action: PaneLayoutAction) => void;
@@ -97,7 +94,7 @@ type RowEntry =
 /**
  * Agent, then each view (open or not) in phone order, then open files.
  * Every open Terminal has its entry, and New Terminal follows them. Open
- * plugin panes follow the files.
+ * plugin views follow the files.
  */
 const rowEntries = (
   layout: ThreadPaneLayout,
@@ -182,7 +179,7 @@ function RowButton({
       </div>
     );
   if (entry.kind === "closed") {
-    const { label, Icon } = PANE_VIEWS[entry.view];
+    const { label, Icon } = DX_THREAD_PANELS.get(entry.view);
     return (
       <div className="stacked-tab" role="presentation" data-kind={entry.view}>
         <button
@@ -213,7 +210,7 @@ function RowButton({
         ? null
         : tab.kind === "plugin"
           ? null
-          : PANE_VIEWS[tab.kind].Icon;
+          : DX_THREAD_PANELS.get(tab.kind).Icon;
   return (
     <div
       className="stacked-tab"

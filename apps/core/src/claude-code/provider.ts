@@ -557,10 +557,30 @@ const turnKey = (anchor: UserMessage) =>
 /**
  * Flue records a submission's own outcome (an abort, a failure) as a
  * `submission_*` signal in the conversation. It is not input: a Retry after
- * one continues the interrupted turn. Other signals, such as plugin
+ * one continues the interrupted turn. Nor is Flue's narration of a change
+ * to the agent's tools or instructions between tool calls (`resources`,
+ * `instructions`, `environment`), such as a draft plugin's tool loaded
+ * mid-turn: Claude Code learns of a tool from the dx tool bridge's
+ * `tools/list_changed`, and the turn goes on. Other signals, such as plugin
  * deliveries, are input like a user message.
  */
 const isLifecycleSignal = (message: Context["messages"][number]) => {
+  if (message.role !== "user") return false;
+  const first =
+    typeof message.content === "string"
+      ? message.content
+      : message.content.find((block) => block.type === "text")?.text;
+  const start = first?.trimStart() ?? "";
+  return (
+    start.startsWith('<signal type="submission_') ||
+    start.startsWith('<signal type="resources"') ||
+    start.startsWith('<signal type="instructions"') ||
+    start.startsWith('<signal type="environment"')
+  );
+};
+
+/** A submission's own outcome: an abort or a failure ended an attempt. */
+const isSubmissionSignal = (message: Context["messages"][number]) => {
   if (message.role !== "user") return false;
   const first =
     typeof message.content === "string"
@@ -674,7 +694,7 @@ const position = (context: Context) => {
   const turnInput = messages.slice(turnStart + 1, lastUser + 1).filter(isInput);
   // Segments Flue recorded before the latest interruption of this turn.
   const interruption = messages.findLastIndex(
-    (message, index) => index > lastUser && isLifecycleSignal(message),
+    (message, index) => index > lastUser && isSubmissionSignal(message),
   );
   const interruptedAt =
     interruption < 0
@@ -703,7 +723,7 @@ const position = (context: Context) => {
             finished:
               last?.role === "assistant" &&
               last.stopReason === "stop" &&
-              !messages.slice(lastAssistant + 1).some(isLifecycleSignal),
+              !messages.slice(lastAssistant + 1).some(isSubmissionSignal),
             /** Tool calls Flue recorded for it, in order. */
             calls: messages
               .slice(previousIndex + 1, lastAssistant + 1)

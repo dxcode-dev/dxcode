@@ -28,11 +28,10 @@ import { runRepositories } from "./runtime.js";
  * interactive calls are the owner's only; a workspace install was approved
  * for every member. Ways this could go wrong, each checked:
  *
- * - a member runs a personal install's command, or sends its pane a message;
+ * - a member runs one of a personal install's palette commands;
  * - a member sees the personal install's commands or run-command buttons,
  *   or clicks one of those quick actions;
- * - a member's pane of a personal install looks usable (no ownerOnly flag);
- * - the owner loses their own command or pane;
+ * - the owner loses their own commands or quick actions;
  * - a member's call to a workspace install is refused;
  * - a member's call reaches the plugin as the owner (`ctx.caller`);
  * - a member's call is audited as the owner's alone (no `actorUserId`);
@@ -53,20 +52,22 @@ const bindings = {
   BETTER_AUTH_SECRET: "plugin-owner-only-secret-0000000000000",
 } as unknown as Bindings;
 
-/** A command and a pane that read the Thread (audited); the pane says who called. */
+/**
+ * Two palette commands that read the Thread (audited); `inspect` also says
+ * who called, as a notice everyone with the Thread open sees.
+ */
 const code = `export default function (dx) {
   dx.registerCommand({
     id: "restart",
     title: "Restart service",
     run: async (ctx) => { await ctx.thread.info(); },
   });
-  dx.registerPane({
-    id: "board",
-    title: "Board",
-    html: "<p>board</p>",
-    onMessage: async (message, ctx) => {
+  dx.registerCommand({
+    id: "inspect",
+    title: "Inspect service",
+    run: async (ctx) => {
       await ctx.thread.info();
-      return { caller: ctx.caller.userId };
+      await ctx.ui.notify("caller " + ctx.caller.userId);
     },
   });
 }`;
@@ -76,7 +77,7 @@ const install = async (
   target: PluginTarget,
   userId: UserId,
   name: string,
-  /** Manifest fields and code beyond the default command and pane. */
+  /** Manifest fields and code beyond the default commands. */
   extra: {
     readonly dxcode?: Record<string, unknown>;
     readonly code?: string;
@@ -101,7 +102,7 @@ const install = async (
                 entry: "dev.dxcode/index.js",
                 permissions: {
                   events: [],
-                  ui: ["pane", "quick-action"],
+                  ui: ["notify", "quick-action"],
                   threads: ["read"],
                 },
                 ...extra.dxcode,
@@ -242,7 +243,7 @@ const ui = async (call: (path: string) => Promise<Response>) => {
       data: {
         commands: { id: string }[];
         quickActions: { action: string; args: { command?: string } }[];
-        panes: { plugin: string; pane: string; ownerOnly?: true }[];
+        notices: { message: string }[];
       };
     }
   ).data;
@@ -257,14 +258,10 @@ const runCommand = (
     body: JSON.stringify({ command }),
   });
 
-const postPane = (
+/** The notices the plugin's commands showed in the Thread, oldest first. */
+const notices = async (
   call: (path: string, init?: RequestInit) => Promise<Response>,
-  plugin: string,
-) =>
-  call(`/plugin-ui/panes/${plugin}/board/messages`, {
-    method: "POST",
-    body: JSON.stringify({ message: { click: true } }),
-  });
+) => (await ui(call)).notices.map(({ message }) => message);
 
 /** The plugin's run-command quick action for its restart command. */
 const addQuickAction = (threadId: string, pluginId: PluginId, name: string) =>
@@ -293,7 +290,7 @@ const notes = (threadId: string, pluginName: string) =>
     .all<{ action: string; detail_json: string }>();
 
 describe("the owner's plugins in a shared Thread", () => {
-  it("keeps a personal install's commands and pane messages for its owner", async () => {
+  it("runs a personal install's commands and quick actions for a member who can write, as the member, and refuses View members", async () => {
     const shared = await sharedThread();
     const id = await install(
       { scope: "personal", id: shared.owner.userId } as PluginTarget,
@@ -301,51 +298,56 @@ describe("the owner's plugins in a shared Thread", () => {
       "com.acme.mine",
     );
     const command = `${id}:restart`;
+    const inspect = `${id}:inspect`;
     await addQuickAction(shared.threadId, id, "com.acme.mine");
 
-    // The owner sees and uses all three.
-    const mine = await ui(shared.owner.call);
-    expect(mine.commands.map(({ id: entry }) => entry)).toContain(command);
-    expect(quickCommands(mine)).toEqual([command]);
-    expect(
-      mine.panes.find(({ plugin }) => plugin === "com.acme.mine"),
-    ).not.toHaveProperty("ownerOnly");
-    expect((await runCommand(shared.owner.call, command)).status).toBe(200);
-    expect((await postPane(shared.owner.call, "com.acme.mine")).status).toBe(
-      200,
-    );
+    // The owner and the member see and use all three alike.
+    for (const person of [shared.owner, shared.member]) {
+      const listed = await ui(person.call);
+      expect(listed.commands.map(({ id: entry }) => entry)).toEqual([
+        command,
+        inspect,
+      ]);
+      expect(quickCommands(listed)).toEqual([command]);
+    }
+    expect((await runCommand(shared.member.call, command)).status).toBe(200);
+    expect((await runCommand(shared.member.call, inspect)).status).toBe(200);
     // The quick action's click is the same command run.
     expect(
-      (await runCommand(shared.owner.call, quickCommands(mine)[0] ?? ""))
-        .status,
+      (
+        await runCommand(
+          shared.member.call,
+          quickCommands(await ui(shared.member.call))[0] ?? "",
+        )
+      ).status,
     ).toBe(200);
-
-    // The member sees no command, a pane marked for the owner only, and is
-    // refused both calls.
-    const theirs = await ui(shared.member.call);
-    expect(theirs.commands).toEqual([]);
-    expect(quickCommands(theirs)).toEqual([]);
-    expect(
-      theirs.panes.find(({ plugin }) => plugin === "com.acme.mine")?.ownerOnly,
-    ).toBe(true);
-    const ran = await runCommand(shared.member.call, command);
-    expect(ran.status).toBe(403);
-    expect(await ran.json()).toMatchObject({
-      data: { code: "PLUGIN_UI_OWNER_ONLY" },
-    });
-    const posted = await postPane(shared.member.call, "com.acme.mine");
-    expect(posted.status).toBe(403);
-    expect(await posted.json()).toMatchObject({
-      data: { code: "PLUGIN_UI_OWNER_ONLY" },
-    });
-
-    // Only the owner's three calls reached the plugin.
+    // ctx.caller is the member who clicked, not the owner.
+    expect(await notices(shared.member.call)).toEqual([
+      `caller ${shared.member.userId}`,
+    ]);
     const rows = (await notes(shared.threadId, "com.acme.mine")).results;
     expect(rows).toHaveLength(3);
     for (const row of rows)
-      expect(JSON.parse(row.detail_json ?? "{}")).not.toHaveProperty(
-        "actorUserId",
-      );
+      expect(JSON.parse(row.detail_json)).toMatchObject({
+        actorUserId: shared.member.userId,
+      });
+
+    // Someone who can only view the Thread sees no command and runs none:
+    // the Thread refuses the write before any plugin is asked.
+    await env.DB.prepare(
+      "UPDATE threads SET workspace_access = 'view' WHERE id = ?",
+    )
+      .bind(shared.threadId)
+      .run();
+    expect((await ui(shared.member.call)).commands).toEqual([]);
+    const refused = await runCommand(shared.member.call, command);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({
+      data: { code: "THREAD_READ_ONLY" },
+    });
+    expect(
+      (await notes(shared.threadId, "com.acme.mine")).results,
+    ).toHaveLength(3);
   });
 
   it("runs a workspace install for a member, as the member, and audits them as the actor", async () => {
@@ -356,26 +358,25 @@ describe("the owner's plugins in a shared Thread", () => {
       "com.acme.team",
     );
     const command = `${id}:restart`;
+    const inspect = `${id}:inspect`;
     await addQuickAction(shared.threadId, id, "com.acme.team");
     const theirs = await ui(shared.member.call);
-    expect(theirs.commands.map(({ id: entry }) => entry)).toContain(command);
+    expect(theirs.commands.map(({ id: entry }) => entry)).toEqual([
+      command,
+      inspect,
+    ]);
     expect(quickCommands(theirs)).toEqual([command]);
-    expect(
-      theirs.panes.find(({ plugin }) => plugin === "com.acme.team"),
-    ).not.toHaveProperty("ownerOnly");
 
     expect((await runCommand(shared.member.call, command)).status).toBe(200);
     expect(
       (await runCommand(shared.member.call, quickCommands(theirs)[0] ?? ""))
         .status,
     ).toBe(200);
-    const answered = await postPane(shared.member.call, "com.acme.team");
-    expect(answered.status).toBe(200);
+    expect((await runCommand(shared.member.call, inspect)).status).toBe(200);
     // ctx.caller is the member who clicked, not the owner.
-    expect(
-      ((await answered.json()) as { data: { result: { caller: string } } }).data
-        .result.caller,
-    ).toBe(shared.member.userId);
+    expect(await notices(shared.member.call)).toEqual([
+      `caller ${shared.member.userId}`,
+    ]);
 
     const rows = (await notes(shared.threadId, "com.acme.team")).results;
     expect(rows).toHaveLength(3);
@@ -385,7 +386,7 @@ describe("the owner's plugins in a shared Thread", () => {
       });
   });
 
-  it("refuses a member's call through a workspace plugin to the owner's personal plugin", async () => {
+  it("lets a member's call through a workspace plugin reach the owner's personal plugin, as the member", async () => {
     const shared = await sharedThread();
     // The owner's personal plugin, exporting what runs with their secrets.
     await install(
@@ -401,8 +402,9 @@ describe("the owner's plugins in a shared Thread", () => {
 }`,
       },
     );
-    // A workspace plugin whose pane asks the owner's plugin.
-    await install(
+    // A workspace plugin whose command asks the owner's plugin and says
+    // what it answered.
+    const relay = await install(
       { scope: "workspace", id: shared.workspaceId } as PluginTarget,
       shared.owner.userId,
       "com.acme.relay",
@@ -410,41 +412,39 @@ describe("the owner's plugins in a shared Thread", () => {
         dxcode: {
           permissions: {
             events: [],
-            ui: ["pane"],
+            ui: ["notify"],
             plugins: ["com.acme.vault"],
           },
         },
         code: `export default function (dx) {
-  dx.registerPane({
-    id: "board",
-    title: "Board",
-    html: "<p>relay</p>",
-    onMessage: (_message, ctx) =>
-      ctx.plugins.call("com.acme.vault", "read", {}).then(
-        (value) => ({ ok: value }),
-        (error) => ({ name: error.name, code: error.code }),
-      ),
+  dx.registerCommand({
+    id: "open-vault",
+    title: "Open the vault",
+    run: async (ctx) => {
+      const answer = await ctx.plugins.call("com.acme.vault", "read", {}).then(
+        (value) => "ok " + value.vault + " for " + value.caller,
+        (error) => "refused " + error.name + " " + error.code,
+      );
+      await ctx.ui.notify(answer);
+    },
   });
 }`,
       },
     );
-    const result = async (response: Response) => {
+    const open = async (
+      call: (path: string, init?: RequestInit) => Promise<Response>,
+    ) => {
+      const response = await runCommand(call, `${relay}:open-vault`);
       expect(response.status, await response.clone().text()).toBe(200);
-      return (
-        (await response.json()) as {
-          data: { result: { ok?: unknown; name?: string; code?: string } };
-        }
-      ).data.result;
     };
 
-    // The owner's own click reaches their plugin.
-    expect(
-      await result(await postPane(shared.owner.call, "com.acme.relay")),
-    ).toEqual({ ok: { vault: "opened", caller: shared.owner.userId } });
-    // The member's click is refused before the owner's plugin runs.
-    expect(
-      await result(await postPane(shared.member.call, "com.acme.relay")),
-    ).toEqual({ name: "PluginCallRefused", code: "owner-only" });
+    // Both clicks reach the owner's plugin, each as the person who clicked.
+    await open(shared.owner.call);
+    await open(shared.member.call);
+    expect(await notices(shared.owner.call)).toEqual([
+      `ok opened for ${shared.owner.userId}`,
+      `ok opened for ${shared.member.userId}`,
+    ]);
 
     const rows = (
       await env.DB.prepare(
@@ -463,7 +463,7 @@ describe("the owner's plugins in a shared Thread", () => {
     });
     expect(rows).toEqual([
       ["success", null, null],
-      ["rejected", "owner-only", shared.member.userId],
+      ["success", null, shared.member.userId],
     ]);
   });
 });

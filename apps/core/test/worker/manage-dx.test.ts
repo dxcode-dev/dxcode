@@ -469,8 +469,9 @@ describe("manage_dx", () => {
       .all();
     expect(JSON.stringify(rows.results)).not.toContain(value);
 
-    // The agent writes a plugin from a description; the card lists its
-    // permissions and code, and Apply installs it.
+    // The agent writes a plugin from a description; the card says what it
+    // can do, in the Plugins page's words, lists its code, and Apply
+    // installs it.
     const installed = await withCard(
       who,
       tool({
@@ -486,9 +487,9 @@ describe("manage_dx", () => {
           title: "Install the plugin Quick Model",
         });
         expect(prompt.items).toContainEqual({
-          label: "Permissions its code asks for",
+          label: "What it can do",
           format: "text",
-          content: "network: api.cloudflare.com\nsecrets: MODEL_API_KEY",
+          content: "Calls api.cloudflare.com\nUses your secret MODEL_API_KEY",
         });
         expect(prompt.items?.map(({ label }) => label)).toContain(
           "dev.dxcode/index.js",
@@ -574,8 +575,8 @@ describe("manage_dx", () => {
       false,
       (prompt) =>
         expect(prompt.items?.[0]).toMatchObject({
-          label: "Permissions it adds",
-          content: "network: + example.com",
+          label: "What it newly does",
+          content: "New: Calls example.com",
         }),
     );
     expect(widened.result).toContain("cancelled");
@@ -585,6 +586,79 @@ describe("manage_dx", () => {
       await who.newThread(),
     );
     expect(JSON.stringify(kept)).not.toContain("example.com");
+  });
+
+  it("names who pays for a program's Orb on the install card, and the Orb once one is chosen", async () => {
+    const who = await owner();
+    const tool = toolFor(who.threadId, who.userId);
+    const files = [
+      {
+        path: "plugin.json",
+        content: `${JSON.stringify(
+          {
+            $schema:
+              "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json",
+            name: "log-watch",
+            displayName: "Log Watch",
+            version: "1.0.0",
+            description: "Watches logs with a program of its own.",
+            extensions: {
+              "dev.dxcode": {
+                apiVersion: 1,
+                service: { run: "node service.js" },
+                permissions: { network: ["logging.googleapis.com"] },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      },
+      { path: "service.js", content: "console.log('ready');\n" },
+    ];
+    const whoPays = (prompt: Prompt) =>
+      prompt.items?.find(({ label }) => label === "Who pays");
+
+    // Nobody chose an Orb for plugins' programs: the card says it won't run.
+    await withCard(
+      who,
+      tool({
+        topic: "plugins",
+        operation: "create",
+        name: "log-watch",
+        files,
+      }),
+      false,
+      (prompt) =>
+        expect(whoPays(prompt)).toMatchObject({
+          format: "text",
+          content: expect.stringContaining(
+            "none is chosen yet, so it won't run",
+          ),
+        }),
+    );
+
+    // With an Orb chosen, the card names it and says the owner pays for it.
+    const chose = await who.request("/v1/settings/personal/plugin-orb", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ runnerProfileId: "a1.medium" }),
+    });
+    expect(chose.status).toBe(200);
+    await withCard(
+      who,
+      tool({
+        topic: "plugins",
+        operation: "create",
+        name: "log-watch",
+        files,
+      }),
+      false,
+      (prompt) =>
+        expect(whoPays(prompt)?.content).toMatch(
+          /^It runs a program on .+, which sleeps after 5 idle minutes\. You pay for its Orb time while it's awake/,
+        ),
+    );
   });
 
   it("replaces an existing secret, changes and deletes a variable, and deletes a secret", async () => {
@@ -699,12 +773,12 @@ describe("manage_dx", () => {
     const narrowed = await tool({
       topic: "plugins",
       operation: "docs",
-      query: "registerPane",
+      query: "registerCommand",
     });
     expect(narrowed.length).toBeLessThan(whole.length / 2);
-    expect(narrowed).toContain("registerPane");
+    expect(narrowed).toContain("registerCommand");
     for (const part of narrowed.split("\n\n---\n\n").slice(1))
-      expect(part.toLowerCase()).toContain("registerpane");
+      expect(part.toLowerCase()).toContain("registercommand");
     expect(
       await tool({ topic: "plugins", operation: "docs", query: "zzqx-none" }),
     ).toContain("Nothing in the reference mentions zzqx-none");

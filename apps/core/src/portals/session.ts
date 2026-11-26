@@ -38,6 +38,11 @@ export interface PortalSession {
   readonly sessionId: string;
   readonly email?: string;
   readonly name?: string;
+  /**
+   * A plugin's page on a plugin Orb: the only path prefix this session may
+   * reach on its program's port (`service.app.path`).
+   */
+  readonly appPath?: string;
   /** Unix seconds. */
   readonly issuedAt: number;
   readonly expiresAt: number;
@@ -51,6 +56,7 @@ interface Payload {
   readonly s: string;
   readonly e?: string;
   readonly n?: string;
+  readonly a?: string;
   readonly iat: number;
   readonly exp: number;
   readonly chk: number;
@@ -67,6 +73,7 @@ export const encodePortalSession = async (
     s: session.sessionId,
     ...(session.email === undefined ? {} : { e: session.email }),
     ...(session.name === undefined ? {} : { n: session.name }),
+    ...(session.appPath === undefined ? {} : { a: session.appPath }),
     iat: session.issuedAt,
     exp: session.expiresAt,
     chk: session.checkedAt,
@@ -127,6 +134,7 @@ export const decodePortalSession = async (
     !isString(payload.s) ||
     (payload.e !== undefined && !isString(payload.e)) ||
     (payload.n !== undefined && !isString(payload.n)) ||
+    (payload.a !== undefined && !isString(payload.a)) ||
     !isSeconds(payload.iat) ||
     !isSeconds(payload.exp) ||
     !isSeconds(payload.chk) ||
@@ -141,6 +149,7 @@ export const decodePortalSession = async (
     sessionId: payload.s,
     ...(payload.e === undefined ? {} : { email: payload.e }),
     ...(payload.n === undefined ? {} : { name: payload.n }),
+    ...(payload.a === undefined ? {} : { appPath: payload.a }),
     issuedAt: payload.iat,
     expiresAt: payload.exp,
     checkedAt: payload.chk,

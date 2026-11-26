@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import {
+  MAX_PLUGIN_ARCHIVE_BYTES,
   McpServerRepository,
   type ProjectId,
   SkillRepository,
@@ -359,7 +360,7 @@ describe("plugin bundle routes with D1", () => {
           cookie,
           origin,
           "content-type": "application/zip",
-          "content-length": String(17 * 1024 * 1024),
+          "content-length": String(MAX_PLUGIN_ARCHIVE_BYTES + 1),
         },
         body: new Uint8Array(16),
       },

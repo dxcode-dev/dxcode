@@ -1,9 +1,8 @@
 import { getLogger } from "@logtape/logtape";
 import { insertPluginAudit } from "../audit/audit.js";
-import {
-  callTier,
-  type PluginHostDependencies,
-  type PluginInstallRecord,
+import type {
+  PluginHostDependencies,
+  PluginInstallRecord,
 } from "../worker-host/host.js";
 import {
   listOwnerCodePluginInstalls,
@@ -11,7 +10,6 @@ import {
 } from "../worker-host/resolve.js";
 import { TOOL_TIMEOUT_MS } from "../worker-host/runtime.js";
 import { callPluginExport } from "../worker-host/worker.js";
-import { installTier, type PluginTier, tierAtLeast } from "./tier.js";
 
 /**
  * Plugin-to-plugin calls (`ctx.plugins.call(plugin, fn, args)`). Every call
@@ -23,10 +21,9 @@ import { installTier, type PluginTier, tierAtLeast } from "./tier.js";
  *    shorter than {@link MAX_PLUGIN_CALL_DEPTH}.
  * 3. `not-installed`: the callee is installed and on for the call's owner.
  * 4. `not-exported`: the callee's manifest `exports` lists `fn`.
- * 5. `owner-only`: a member's click on a workspace plugin's command,
- *    quick action, or pane (`actorUserId`) never reaches the owner's
- *    personal plugin, which runs with the owner's own secrets and hosts.
- * 6. `lower-tier`: the caller's tier is at least the callee's.
+ *
+ * A member who can write in the Thread reaches the owner's personal
+ * plugins through a call as the owner does; `ctx.caller` names them.
  *
  * The callee runs in its own isolate with its own permissions, settings,
  * and secrets, as the same owner, in the same Thread. Its time is what is
@@ -40,8 +37,6 @@ export type PluginCallRefusedCode =
   | "not-permitted"
   | "not-installed"
   | "not-exported"
-  | "lower-tier"
-  | "owner-only"
   | "cycle";
 
 export class PluginCallRefused extends Error {
@@ -78,9 +73,7 @@ export const callPlugin = async (
 ): Promise<unknown> => {
   const started = Date.now();
   const caller = dependencies.install;
-  const tier = callTier(dependencies);
   const chain = [...(dependencies.callChain ?? []), caller.name];
-  let calleeTier: PluginTier | undefined;
   const record = async (
     outcome: "success" | "rejected" | "failed",
     detail: Record<string, unknown>,
@@ -94,8 +87,6 @@ export const callPlugin = async (
       callee: plugin,
       fn,
       host: "worker",
-      tier,
-      calleeTier,
       threadId: dependencies.threadId,
       depth: chain.length,
       outcome,
@@ -127,7 +118,7 @@ export const callPlugin = async (
       action: "plugin.call",
       target: `${plugin}.${fn}`.slice(0, 256),
       outcome,
-      detail: { tier, calleeTier, depth: chain.length, ms, ...detail },
+      detail: { depth: chain.length, ms, ...detail },
     });
   };
   const refuse = async (
@@ -164,28 +155,10 @@ export const callPlugin = async (
       "not-installed",
       `${plugin} is not installed, or is off, for this Thread's owner.`,
     );
-  calleeTier = installTier(callee);
-  // As for a personal install's own panes and commands: only its owner
-  // drives it. A member's message to a workspace plugin is the member's
-  // input, so it never reaches the owner's personal plugin through a call.
-  if (
-    callee.scope === "personal" &&
-    dependencies.actorUserId !== undefined &&
-    dependencies.actorUserId !== callee.targetId
-  )
-    return refuse(
-      "owner-only",
-      `${plugin} is ${callee.targetId === dependencies.ownerUserId ? "the owner's" : "another person's"} personal plugin; only its owner's own actions reach it.`,
-    );
   if (!(callee.code.exports ?? []).some(({ name }) => name === fn))
     return refuse(
       "not-exported",
       `${plugin} does not export ${fn}; its manifest's exports lists ${(callee.code.exports ?? []).map(({ name }) => name).join(", ") || "nothing"}.`,
-    );
-  if (!tierAtLeast(tier, calleeTier))
-    return refuse(
-      "lower-tier",
-      `${caller.name} runs at the ${tier} tier, lower than ${plugin}'s ${calleeTier}; a plugin may call only plugins at or below its own tier.`,
     );
   // The callee spends the caller's time: the lower of the host call's limit
   // and the calling handler's own, as its isolate measured it.

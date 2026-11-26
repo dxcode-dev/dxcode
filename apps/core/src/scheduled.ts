@@ -18,6 +18,9 @@ import {
 } from "./logging.js";
 import { THREAD_SWEEP_CRON } from "./notifications/snooze-cron.js";
 import { sweepSnoozeWakes } from "./notifications/snooze-wake.js";
+import { sweepPluginServices } from "./plugins/services/lifecycle.js";
+import { pluginServiceLogger } from "./plugins/services/log.js";
+import { sweepServiceSchedules } from "./plugins/services/schedules.js";
 import { refreshModelsDev } from "./settings/model-routing/live-catalog.js";
 import {
   scheduleUsageRetention,
@@ -132,14 +135,19 @@ export const scheduled = (
       }),
     ),
   );
-  // Plugins' Durable Objects whose install was removed or whose Thread was
-  // deleted, when the purge at that moment did not finish.
+  // Plugins' URL listeners: open what runs, empty what no longer does.
   context.waitUntil(
-    import("./plugins/hosts/durable/objects.js")
-      .then(({ sweepDurablePurges }) => sweepDurablePurges(bindings))
+    import("./plugins/hosts/durable/listeners.js")
+      .then(({ sweepPluginListeners }) =>
+        sweepPluginListeners(
+          bindings,
+          new Date(controller.scheduledTime),
+          (promise) => context.waitUntil(promise),
+        ),
+      )
       .catch((cause) =>
-        threadDeletionLogger.error("Plugin Durable Object sweep failed.", {
-          event: "plugin_durable_purge_sweep_failed",
+        pluginServiceLogger.error("Plugin listener sweep failed.", {
+          event: "plugin_listener_sweep_failed",
           cause,
         }),
       ),
@@ -216,6 +224,27 @@ export const scheduled = (
   context.waitUntil(
     sweepAutomations(bindings, new Date(controller.scheduledTime), (promise) =>
       context.waitUntil(promise),
+    ),
+  );
+  // Plugin services: their schedules, and keeping services and plugin Orbs
+  // in step with installs (plugins/services/lifecycle.ts).
+  context.waitUntil(
+    Promise.all([
+      sweepServiceSchedules(
+        bindings,
+        new Date(controller.scheduledTime),
+        (promise) => context.waitUntil(promise),
+      ),
+      sweepPluginServices(
+        bindings,
+        new Date(controller.scheduledTime),
+        (promise) => context.waitUntil(promise),
+      ),
+    ]).catch((cause: unknown) =>
+      pluginServiceLogger.error("Plugin service sweep failed.", {
+        event: "plugin_service_sweep_failed",
+        cause,
+      }),
     ),
   );
   // A bug report the central deployment did not take yet is retried while

@@ -28,7 +28,6 @@ import {
 export { PortalFeedback } from "./feedback-widget/portal-feedback-entrypoint.js";
 export { OrbProviderPreparationObject } from "./plugins/execution/preparation-object.js";
 export { PluginDurableHostObject } from "./plugins/hosts/durable/object.js";
-export { PluginStreamRelay } from "./plugins/streams/relay.js";
 export { RealtimeHub } from "./realtime/realtime-hub.js";
 export { RunnerSessionObject } from "./runners/session-object.js";
 export { ByokCredentialCoordinatorObject } from "./settings/model-byok/invocation.js";

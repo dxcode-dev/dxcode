@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { AppEnv, Bindings } from "../http/types.js";
 import daemonIngressWorker, {
-  MAX_PLUGIN_DEV_BODY_BYTES,
+  MAX_PLUGIN_DRAFT_BODY_BYTES,
 } from "./daemon-ingress.js";
 import { threadDaemonRoutes } from "./daemon-route.js";
 
@@ -108,12 +108,12 @@ describe("dxd ingress", () => {
   });
 
   // #2399. Any key of the right shape and any well-formed Thread ID reach
-  // the plugin-dev forwarder, so it must not read the body: only the
+  // the plugin draft forwarder, so it must not read the body: only the
   // Thread execution object knows whether the key is this Thread's. Ways
   // this could fail: the ingress buffers the body before the key is
   // checked; a body that declares more than the cap still wakes the object;
   // the forwarded body arrives altered for a key that checks out.
-  describe("plugin dev", () => {
+  describe("plugin draft", () => {
     const key = "Bearer dxd_not-this-threads-key-0123456789";
     const post = (
       namespace: DurableObjectNamespace,
@@ -121,7 +121,7 @@ describe("dxd ingress", () => {
       headers: Record<string, string> = {},
     ) =>
       new Hono<AppEnv>().route("/v1", threadDaemonRoutes).request(
-        `https://dx.test/v1/dxd/${threadId}/plugin-dev`,
+        `https://dx.test/v1/dxd/${threadId}/plugin-draft`,
         {
           method: "POST",
           headers: { authorization: key, ...headers },
@@ -156,7 +156,7 @@ describe("dxd ingress", () => {
         idFromName: vi.fn(() => ({})),
         get: vi.fn(() => ({ fetch })),
       } as unknown as DurableObjectNamespace;
-      const body = counted(MAX_PLUGIN_DEV_BODY_BYTES);
+      const body = counted(MAX_PLUGIN_DRAFT_BODY_BYTES);
       const response = await post(namespace, body.stream);
       expect(response.status).toBe(401);
       expect(fetch).toHaveBeenCalledOnce();
@@ -169,7 +169,7 @@ describe("dxd ingress", () => {
       const response = await post(
         { idFromName: fixture.idFromName, get: fixture.get } as never,
         body.stream,
-        { "content-length": String(MAX_PLUGIN_DEV_BODY_BYTES + 1) },
+        { "content-length": String(MAX_PLUGIN_DRAFT_BODY_BYTES + 1) },
       );
       expect(response.status).toBe(413);
       expect(fixture.idFromName).not.toHaveBeenCalled();
@@ -189,7 +189,9 @@ describe("dxd ingress", () => {
       const response = await post(namespace, body.stream);
       expect(await response.text()).toBe(String(512 * 1024));
       const forwarded = fetch.mock.calls[0]?.[0];
-      expect(new URL(forwarded?.url ?? "").pathname).toBe("/daemon/plugin-dev");
+      expect(new URL(forwarded?.url ?? "").pathname).toBe(
+        "/daemon/plugin-draft",
+      );
       expect(forwarded?.headers.get("x-dx-daemon-ingress")).toBe("1");
       expect(forwarded?.headers.get("x-dx-thread-id")).toBe(threadId);
     });

@@ -427,13 +427,3 @@ export const pluginLinkRemarkQueryOptions = (threadId: ThreadId) =>
 /** `plugin-ui.invalidated`: a plugin's prompt, notice, or action changed. */
 export const invalidatePluginUi = (client: QueryClient, threadId: ThreadId) =>
   client.invalidateQueries({ queryKey: ["plugin-ui", threadId] });
-
-/** The query key of a Thread's plugin panes' posts. */
-export const pluginPaneMessagesKey = (threadId: ThreadId) =>
-  ["plugin-pane", threadId] as const;
-
-/** `plugin-pane.invalidated`: a plugin posted to one of its panes. */
-export const invalidatePluginPaneMessages = (
-  client: QueryClient,
-  threadId: ThreadId,
-) => client.invalidateQueries({ queryKey: pluginPaneMessagesKey(threadId) });

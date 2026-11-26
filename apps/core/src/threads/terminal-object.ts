@@ -55,6 +55,7 @@ import {
   DXD_MAX_PLUGIN_CAPABILITY_FRAME_BYTES,
   DXD_MAX_REQUEST_FRAME_BYTES,
   DXD_MAX_RESPONSE_FRAME_BYTES,
+  DXD_MAX_SERVICE_FRAME_BYTES,
   DXD_MAX_WORKLOAD_IDENTITY_FRAME_BYTES,
   DXD_MCP_START_TIMEOUT_MS,
   DXD_PLUGIN_START_TIMEOUT_MS,
@@ -92,6 +93,7 @@ import {
   DxdProxyPortsResult,
   DxdResponseEnvelope,
   DxdSandboxOperation,
+  DxdServiceRequestMessage,
   DxdServicesEnsureResult,
   DxdStorageOperation,
   type DxdTerminalHeartbeat,
@@ -142,6 +144,12 @@ import {
 } from "../orb-usage/runs.js";
 import { decodeD1Binding } from "../persistence/d1-binding.js";
 import {
+  DraftStore,
+  type DraftViewState,
+  type SetDraftViewStateResult,
+  type StoredDraft,
+} from "../plugins/drafts/store.js";
+import {
   OrbCapabilityRelay,
   type OrbCapabilityTarget,
 } from "../plugins/hosts/orb/capability-relay.js";
@@ -149,6 +157,9 @@ import {
   OrbUsageBatch,
   type OrbUsageBilling,
 } from "../plugins/hosts/orb/usage-batch.js";
+import { pluginOrbEnvironmentReads } from "../plugins/services/orb-environment.js";
+import { handleServiceRequest } from "../plugins/services/requests.js";
+import { DESKTOP_GATEWAY_PORT, INTERNAL_GUEST_PORTS } from "../portals/host.js";
 import {
   publishChangesInvalidation,
   publishRealtimeInvalidation,
@@ -185,7 +196,6 @@ import {
 } from "../thread-changes/repository-d1.js";
 import { publishThreadChangesResidentCandidate } from "../thread-changes/resident-publisher.js";
 import { serveDesktopWindows } from "../thread-desktop/execution-object.js";
-import { DESKTOP_GATEWAY_PORT, INTERNAL_GUEST_PORTS } from "../portals/host.js";
 import {
   parseServicesManifest,
   SERVICES_MANIFEST_PATH,
@@ -205,7 +215,7 @@ import {
   residentThreadDaemonEndpoint,
   SANDBOX_OPERATION_HEADER,
 } from "./daemon-client.js";
-import { MAX_PLUGIN_DEV_BODY_BYTES } from "./daemon-ingress.js";
+import { MAX_PLUGIN_DRAFT_BODY_BYTES } from "./daemon-ingress.js";
 import { WARM_PATH, warmResponse } from "./initial-objects.js";
 import {
   HOP_BY_HOP_HEADERS,
@@ -330,6 +340,8 @@ export const nativeGitCommitIdentities = (text: string) => {
 const MAX_PENDING_WORKLOAD_IDENTITY_REQUESTS = 32;
 const HEARTBEAT_PERSIST_INTERVAL_MS = 10_000;
 const AUTHORITY_STORAGE_KEY = "daemon-authority";
+/** Set once this object serves a plugin Orb (plugins/services/orb-owner.ts). */
+const PLUGIN_ORB_STORAGE_KEY = "plugin-orb";
 const ACTIVATION_ATTEMPT_STORAGE_KEY = "daemon-activation-attempt";
 const ENVIRONMENT_GENERATION_STORAGE_KEY = "environment-next-generation";
 const APPLIED_ENVIRONMENT_STORAGE_KEY = "environment-applied";
@@ -453,6 +465,10 @@ interface DaemonAuthority {
   readonly desktop?: boolean;
   /** The connected daemon runs plugins’ Orb processes (`plugin.*`). */
   readonly pluginHost?: boolean;
+  /** The daemon runs draft plugins from a folder (`plugin.invoke` `folder`). */
+  readonly pluginDrafts?: boolean;
+  /** The connected daemon supervises plugin services (`service.*`). */
+  readonly serviceHost?: boolean;
   /** The connected daemon serves the agent's workspace route (`sandbox.*`). */
   readonly sandbox?: boolean;
 }
@@ -624,6 +640,11 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   #activation?: DaemonActivation;
   #activationId?: string;
   #drainEpoch = 0;
+  /**
+   * This object serves a plugin Orb, not a Thread's: its activation creates
+   * the workspace with no source, and its environment is empty.
+   */
+  #pluginOrb = false;
   /** The next activation delivers a new daemon key instead of a nudge. */
   #rekey = false;
   #readinessProbe?: {
@@ -799,6 +820,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       this.#authority = await ctx.storage.get<DaemonAuthority>(
         AUTHORITY_STORAGE_KEY,
       );
+      this.#pluginOrb =
+        (await ctx.storage.get<boolean>(PLUGIN_ORB_STORAGE_KEY)) === true;
       this.#orbRuns =
         (await ctx.storage.get<OrbRuns>(ORB_RUNS_STORAGE_KEY)) ?? NO_ORB_RUNS;
       this.#lastPersistedHeartbeatAt = this.#authority?.lastSeen;
@@ -978,6 +1001,109 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
    * process’s capability calls to `capabilities` (the calling Worker’s
    * PluginHost) until it answers. Status and stop never wake the Orb.
    */
+  /**
+   * A plugin Orb's service supervisor (plugins/services/host.ts): one
+   * `service.*` operation. `service.ensure` and `service.call` wake the Orb
+   * (creating it the first time) and wait for a daemon that supervises
+   * services; `service.status`, `service.logs`, and `service.stop` never
+   * wake it. The first call marks this object as a plugin Orb's.
+   */
+  async pluginService(
+    orbId: string,
+    operation: { readonly operation: string } & Record<string, unknown>,
+    timeoutMs: number,
+  ): Promise<
+    | { readonly kind: "result"; readonly value: unknown }
+    | {
+        readonly kind: "daemon";
+        readonly outcome: "known" | "unknown" | "outdated" | "asleep";
+      }
+  > {
+    const id = Schema.decodeUnknownOption(ThreadId)(orbId);
+    if (Option.isNone(id)) return { kind: "daemon", outcome: "known" };
+    if (!this.#pluginOrb) {
+      this.#pluginOrb = true;
+      await this.ctx.storage.put(PLUGIN_ORB_STORAGE_KEY, true);
+    }
+    const wakes =
+      operation.operation === "service.ensure" ||
+      operation.operation === "service.call";
+    if (wakes) {
+      if (!(await this.#activateWithRetry(id.value)).ok)
+        return { kind: "daemon", outcome: "known" };
+      const updateDeadline = Date.now() + STORAGE_DAEMON_UPDATE_WAIT_MS;
+      while (
+        this.#authority?.threadId === id.value &&
+        this.#authority.serviceHost !== true &&
+        Date.now() < updateDeadline
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+        if (
+          this.#currentDaemonSocket() === undefined &&
+          !(await this.#activateWithRetry(id.value)).ok
+        )
+          return { kind: "daemon", outcome: "known" };
+      }
+    } else if (
+      this.#authority?.threadId !== id.value ||
+      this.#currentDaemonSocket() === undefined
+    )
+      return { kind: "daemon", outcome: "asleep" };
+    const current = this.#authority;
+    if (current?.threadId !== id.value)
+      return { kind: "daemon", outcome: "known" };
+    if (current.serviceHost !== true)
+      return { kind: "daemon", outcome: "outdated" };
+    // A call keeps the Orb awake while it runs, as an MCP request does.
+    const recordActivity = () =>
+      ExecutionWorkspaces.recordResidentTerminalInput(id.value).catch(
+        () => undefined,
+      );
+    let activity: ReturnType<typeof setInterval> | undefined;
+    if (wakes) {
+      await recordActivity();
+      activity = setInterval(
+        () => void recordActivity(),
+        STORAGE_TRANSFER_ACTIVITY_MS,
+      );
+    }
+    try {
+      const response = await this.#dispatchDaemonOperation(
+        current,
+        operation as unknown as DxdOperation,
+        DXD_MAX_REQUEST_FRAME_BYTES,
+        timeoutMs,
+      );
+      if (!response.ok) {
+        const failure = (await response.json().catch(() => undefined)) as
+          | { outcome?: "known" | "unknown" }
+          | undefined;
+        return {
+          kind: "daemon",
+          outcome: failure?.outcome === "unknown" ? "unknown" : "known",
+        };
+      }
+      return { kind: "result", value: await response.json() };
+    } finally {
+      if (activity !== undefined) clearInterval(activity);
+    }
+  }
+
+  /** Keeps a plugin Orb awake for `keepRunning` services (the minute sweep). */
+  async keepPluginOrbAwake(orbId: string): Promise<boolean> {
+    const id = Schema.decodeUnknownOption(ThreadId)(orbId);
+    if (Option.isNone(id) || !this.#pluginOrb) return false;
+    if (
+      this.#authority?.threadId !== id.value ||
+      this.#currentDaemonSocket() === undefined
+    )
+      return false;
+    await ExecutionWorkspaces.recordResidentTerminalInput(id.value).catch(
+      () => undefined,
+    );
+    return true;
+  }
+
   async orbPlugin(
     threadId: string,
     raw: unknown,
@@ -1041,7 +1167,12 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     const current = this.#authority;
     if (current?.threadId !== id.value)
       return { kind: "daemon", outcome: "known" };
-    if (current.pluginHost !== true)
+    if (
+      current.pluginHost !== true ||
+      (Option.isSome(invoke) &&
+        invoke.value.process.folder !== undefined &&
+        current.pluginDrafts !== true)
+    )
       return { kind: "daemon", outcome: "outdated" };
     const socket = this.#currentDaemonSocket();
     if (socket === undefined) return { kind: "daemon", outcome: "known" };
@@ -1121,8 +1252,8 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
     if (path === "/daemon/attachment")
       return this.#serveDaemonAttachment(request);
     if (path === "/daemon/storage") return this.#serveDaemonStorage(request);
-    if (path === "/daemon/plugin-dev")
-      return this.#serveDaemonPluginDev(request);
+    if (path === "/daemon/plugin-draft")
+      return this.#serveDaemonPluginDraft(request);
     if (path === "/environment/refresh")
       return this.#refreshEnvironment(request);
     if (path === "/changes/refresh") return this.#queueChangesRefresh(request);
@@ -2877,6 +3008,7 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       const installStartedAt = Date.now();
       const installation = await ExecutionWorkspaces.ensureDaemon({
         threadId,
+        ...(this.#pluginOrb ? { pluginOrb: true as const } : {}),
         endpoint,
         signal,
         credential,
@@ -3736,6 +3868,17 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   #readEnvironment(threadId: ThreadId): Promise<EnvironmentReads> {
+    // A plugin Orb has no Thread, Project, or person's variables: each
+    // service gets its own environment from its install.
+    if (this.#pluginOrb)
+      return pluginOrbEnvironmentReads(this.env, threadId).then(
+        (reads): EnvironmentReads => ({
+          snapshot: reads.snapshot as EnvironmentReads["snapshot"],
+          signing: reads.signing as EnvironmentReads["signing"],
+          bitbucketConnection: null,
+          times: { environmentMs: 0, signingMs: 0, bitbucketMs: 0 },
+        }),
+      );
     const startedAt = Date.now();
     const times = { environmentMs: 0, signingMs: 0, bitbucketMs: 0 };
     const timed = <A>(name: keyof typeof times, read: Promise<A>) =>
@@ -4527,18 +4670,93 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
   }
 
   /**
-   * `dxd plugin dev`: a personal plugin's new files from a folder in this
-   * Thread's Orb. Only this Thread's own key reaches it.
+   * Draft plugins for this Thread (`dxd plugin load`, `unload`, `list`):
+   * kept in this object's storage, never in D1, so the agent learns about a
+   * change between tool calls with one call here and reads nothing when
+   * there is none. `plugins/drafts/daemon.ts` decides the rest.
    */
-  async #serveDaemonPluginDev(request: Request) {
+  async #serveDaemonPluginDraft(request: Request) {
     const threadId = await this.#authenticateDaemonRequest(request);
     if (threadId instanceof Response) return threadId;
-    // Read only now, after the key checks out (#2399).
-    const body = await readBoundedText(request, MAX_PLUGIN_DEV_BODY_BYTES);
+    const body = await readBoundedText(request, MAX_PLUGIN_DRAFT_BODY_BYTES);
     if (body === undefined) return new Response(null, { status: 413 });
-    // Loaded on use: plugin bundle code stays out of the Worker's startup.
-    const { reloadDevPlugin } = await import("../plugins/trust/dev-reload.js");
-    return reloadDevPlugin(this.env, { threadId, body });
+    const { handlePluginDraftRequest } = await import(
+      "../plugins/drafts/daemon.js"
+    );
+    return handlePluginDraftRequest(this.env, {
+      threadId,
+      body,
+      store: this.#draftStore(),
+      waitUntil: (promise) => this.ctx.waitUntil(promise),
+    });
+  }
+
+  #drafts: DraftStore | undefined;
+  #draftStore() {
+    this.#drafts ??= new DraftStore(this.ctx.storage);
+    return this.#drafts;
+  }
+
+  /**
+   * This Thread's draft plugins for its agent: nothing but the revision
+   * when `known` is current, so asking between tool calls costs one call
+   * to this object and no D1 read.
+   */
+  async pluginDrafts(
+    threadId: string,
+    known?: number,
+  ): Promise<{
+    readonly revision: number;
+    readonly drafts?: ReadonlyArray<StoredDraft>;
+  }> {
+    if (Option.isNone(Schema.decodeUnknownOption(ThreadId)(threadId)))
+      return { revision: 0, drafts: [] };
+    const state = await this.#draftStore().read();
+    return state.revision === known
+      ? { revision: state.revision }
+      : { revision: state.revision, drafts: state.drafts };
+  }
+
+  /** A draft view's file, by the draft's name and the file's sha256. */
+  async draftViewFile(
+    threadId: string,
+    name: string,
+    integrity: string,
+  ): Promise<string | undefined> {
+    if (Option.isNone(Schema.decodeUnknownOption(ThreadId)(threadId)))
+      return undefined;
+    return this.#draftStore().viewFile(name, integrity);
+  }
+
+  /** A draft view's state; undefined before its code first sets it. */
+  async draftViewState(
+    threadId: string,
+    name: string,
+    viewId: string,
+  ): Promise<DraftViewState | undefined> {
+    if (Option.isNone(Schema.decodeUnknownOption(ThreadId)(threadId)))
+      return undefined;
+    return this.#draftStore().viewState(name, viewId);
+  }
+
+  /** `ctx.views.set` from a draft: one write, one call at a time. */
+  async setDraftViewState(
+    threadId: string,
+    name: string,
+    viewId: string,
+    path: string,
+    value: unknown,
+  ): Promise<SetDraftViewStateResult> {
+    if (Option.isNone(Schema.decodeUnknownOption(ThreadId)(threadId)))
+      return { ok: false, code: "unknown-view", message: "No such Thread." };
+    return this.#draftStore().setViewState(name, viewId, path, value);
+  }
+
+  /** Unloads a draft, as when the plugin it drafted is kept. */
+  async unloadPluginDraft(threadId: string, name: string): Promise<boolean> {
+    if (Option.isNone(Schema.decodeUnknownOption(ThreadId)(threadId)))
+      return false;
+    return this.#draftStore().remove(name);
   }
 
   /**
@@ -5052,6 +5270,53 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
       void this.#orbCapabilities.receive(socket, capability.value);
       return;
     }
+    // ─── A plugin service's request to dx (plugins/services/requests.ts) ───
+    if (messageType === "service.request") {
+      const request =
+        frameBytes > DXD_MAX_SERVICE_FRAME_BYTES
+          ? Option.none()
+          : Schema.decodeUnknownOption(DxdServiceRequestMessage)(decoded);
+      if (Option.isNone(request)) {
+        socket.close(1008, "Invalid daemon message.");
+        return;
+      }
+      if (!current || !this.#pluginOrb) return;
+      const authority = this.#authority;
+      if (authority === undefined) return;
+      const answer = (status: number, body: unknown) => {
+        try {
+          socket.send(
+            JSON.stringify({
+              type: "service.response",
+              generation: request.value.generation,
+              requestId: request.value.requestId,
+              status,
+              body,
+            }),
+          );
+        } catch {
+          // The daemon is gone.
+        }
+      };
+      // Answered as it settles; a request keeps the Orb awake meanwhile.
+      void ExecutionWorkspaces.recordResidentTerminalInput(
+        authority.threadId as ThreadId,
+      ).catch(() => undefined);
+      void handleServiceRequest(this.env, {
+        orbId: authority.threadId,
+        installId: request.value.installId,
+        method: request.value.method,
+        path: request.value.path,
+        body: request.value.body,
+      })
+        .then(({ status, body }) => answer(status, body))
+        .catch(() =>
+          answer(500, {
+            error: { code: "failed", message: "dx could not answer." },
+          }),
+        );
+      return;
+    }
     if (
       ((messageType === "register" ||
         messageType === "heartbeat" ||
@@ -5142,6 +5407,10 @@ export class ThreadExecutionObject extends DurableObject<Bindings> {
           control.value.capabilities.terminalSessions !== undefined,
         desktop: control.value.capabilities.desktop !== undefined,
         pluginHost: control.value.capabilities.pluginHost !== undefined,
+        pluginDrafts: control.value.capabilities.pluginDrafts !== undefined,
+        serviceHost:
+          (control.value.capabilities as { serviceHost?: unknown })
+            .serviceHost !== undefined,
         sandbox: control.value.capabilities.sandbox !== undefined,
       };
       this.#orbMemory.reset();

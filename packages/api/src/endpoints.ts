@@ -244,7 +244,35 @@ import {
   ExportPersonalUsageEndpoint,
   GetPersonalUsageEndpoint,
 } from "./settings/personal-usage.js";
+import {
+  ListPersonalPluginFilesEndpoint,
+  ListWorkspacePluginFilesEndpoint,
+  PreviewPersonalPluginFilesEndpoint,
+  PreviewWorkspacePluginFilesEndpoint,
+  ReadPersonalPluginFileEndpoint,
+  ReadWorkspacePluginFileEndpoint,
+  SavePersonalPluginFilesEndpoint,
+  SaveWorkspacePluginFilesEndpoint,
+} from "./settings/plugin-bundle-file-endpoints.js";
+import {
+  CallPluginDataViewEndpoint,
+  CallThreadPluginDataViewEndpoint,
+  GetPluginAppUrlEndpoint,
+  GetPluginDataViewDefinitionEndpoint,
+  GetPluginDataViewStateEndpoint,
+  GetThreadPluginDataViewDefinitionEndpoint,
+  GetThreadPluginDataViewStateEndpoint,
+  ListPluginAppsEndpoint,
+} from "./settings/plugin-data-view-endpoints.js";
 import { GetPluginIconEndpoint } from "./settings/plugin-icons-endpoints.js";
+import {
+  GetPersonalPluginOrbEndpoint,
+  GetPluginPluginOrbEndpoint,
+  GetWorkspacePluginOrbEndpoint,
+  UpdatePersonalPluginOrbEndpoint,
+  UpdatePluginPluginOrbEndpoint,
+  UpdateWorkspacePluginOrbEndpoint,
+} from "./settings/plugin-orb-endpoints.js";
 import {
   CreatePluginTriggerEndpoint,
   ListPluginTriggersEndpoint,
@@ -264,6 +292,7 @@ import {
   ListRunnersEndpoint,
   RemoveRunnerEndpoint,
 } from "./settings/runners-endpoints.js";
+
 import {
   AddVerificationKeyEndpoint,
   CreateManagedSigningKeyEndpoint,
@@ -419,12 +448,7 @@ import { PinThreadEndpoint } from "./threads/pin-thread.js";
 import { ListPluginAgentModesEndpoint } from "./threads/plugin-agent-modes-endpoints.js";
 import {
   AnswerPluginPromptEndpoint,
-  GetPluginPaneIceServersEndpoint,
-  GetPluginPaneViewEndpoint,
   GetPluginThreadUiEndpoint,
-  ListPluginPaneMessagesEndpoint,
-  PluginPaneStreamEndpoint,
-  PostPluginPaneMessageEndpoint,
   RunPluginCommandEndpoint,
 } from "./threads/plugin-ui-endpoints.js";
 import {
@@ -505,6 +529,28 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   UpdatePersonalDictationVocabularyEndpoint,
   GetWorkspaceDictationVocabularyEndpoint,
   UpdateWorkspaceDictationVocabularyEndpoint,
+  ListPersonalPluginFilesEndpoint,
+  ListWorkspacePluginFilesEndpoint,
+  PreviewPersonalPluginFilesEndpoint,
+  PreviewWorkspacePluginFilesEndpoint,
+  ReadPersonalPluginFileEndpoint,
+  ReadWorkspacePluginFileEndpoint,
+  SavePersonalPluginFilesEndpoint,
+  SaveWorkspacePluginFilesEndpoint,
+  GetPluginDataViewDefinitionEndpoint,
+  GetPluginDataViewStateEndpoint,
+  CallPluginDataViewEndpoint,
+  GetThreadPluginDataViewDefinitionEndpoint,
+  GetThreadPluginDataViewStateEndpoint,
+  CallThreadPluginDataViewEndpoint,
+  ListPluginAppsEndpoint,
+  GetPluginAppUrlEndpoint,
+  GetPersonalPluginOrbEndpoint,
+  UpdatePersonalPluginOrbEndpoint,
+  GetWorkspacePluginOrbEndpoint,
+  UpdateWorkspacePluginOrbEndpoint,
+  GetPluginPluginOrbEndpoint,
+  UpdatePluginPluginOrbEndpoint,
   GetThreadDraftEndpoint,
   GetWorkspaceDraftEndpoint,
   UpdateThreadDraftEndpoint,
@@ -812,11 +858,6 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   PinThreadEndpoint,
   AnswerPluginPromptEndpoint,
   GetPluginThreadUiEndpoint,
-  GetPluginPaneIceServersEndpoint,
-  ListPluginPaneMessagesEndpoint,
-  PostPluginPaneMessageEndpoint,
-  PluginPaneStreamEndpoint,
-  GetPluginPaneViewEndpoint,
   RunPluginCommandEndpoint,
   ListThreadPortalsEndpoint,
   PublishThreadPortalEndpoint,

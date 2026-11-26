@@ -315,8 +315,13 @@ describe("D1 migration", () => {
     expect(sqlByName.get("thread_changes_capture_lease")).toContain(
       "REFERENCES thread_changes_state(thread_id) ON DELETE CASCADE",
     );
-    expect(sqlByName.get("execution_workspace")).toContain(
-      "REFERENCES threads(id) ON DELETE CASCADE",
+    // A plugin Orb's row has no Thread, so the cascade is a trigger
+    // (`*_execution_workspace_without_thread.sql`).
+    expect(sqlByName.get("execution_workspace")).not.toContain(
+      "REFERENCES threads",
+    );
+    expect(sqlByName.get("execution_workspace_after_thread_delete")).toContain(
+      "DELETE FROM execution_workspace WHERE thread_id = OLD.id",
     );
     expect(sqlByName.get("execution_workspace")).toContain(
       "provider_sandbox_id TEXT",

@@ -18,7 +18,6 @@ import {
 export type NodeViews = NonNullable<EditorProps["nodeViews"]>;
 
 import { buttonVariants } from "../../../shared/ui/button-variants.js";
-import { showDiagram } from "./artifact-diagram.js";
 import { PROJECTS_ICON_PATH } from "../../../shared/ui/projects-icon.js";
 import {
   type Chip,
@@ -26,6 +25,7 @@ import {
   hiddenChipTags,
   parseChip,
 } from "../markdown/chips.js";
+import { showDiagram } from "./artifact-diagram.js";
 
 /** An editor tool built outside React: a ghost Button. */
 const TOOL_CLASS = `${buttonVariants({ variant: "subtle", size: "xs" })} artifact-tool`;

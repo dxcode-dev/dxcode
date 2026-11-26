@@ -177,6 +177,22 @@ pub struct PluginHostCapability {
     pub version: u8,
 }
 
+/// Version 1: `plugin.invoke` may name a `folder` in place of a `package`:
+/// a draft plugin (`dxd plugin load`) runs from that folder in the Orb.
+#[derive(Serialize)]
+pub struct PluginDraftsCapability {
+    pub version: u8,
+}
+
+/// Version 1: Core may send `service.ensure`, `service.call`,
+/// `service.stop`, `service.status`, and `service.logs`, and answers the
+/// `service.request` frames a service's `DX_API` calls become; see
+/// [`crate::plugin_host::service`].
+#[derive(Serialize)]
+pub struct ServiceHostCapability {
+    pub version: u8,
+}
+
 /// Version 1: Core may name Terminals besides `default` (up to eight run at
 /// once) and send `terminal.close`; heartbeats list them as `terminals`. See
 /// [`crate::terminals`].
@@ -209,6 +225,8 @@ pub struct Capabilities {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub desktop: Option<DesktopCapability>,
     pub plugin_host: PluginHostCapability,
+    pub plugin_drafts: PluginDraftsCapability,
+    pub service_host: ServiceHostCapability,
     pub sandbox: SandboxCapability,
 }
 
@@ -228,6 +246,8 @@ impl Capabilities {
             mcp: McpCapability { version: 1 },
             desktop: Some(DesktopCapability { version: 1 }),
             plugin_host: PluginHostCapability { version: 1 },
+            plugin_drafts: PluginDraftsCapability { version: 1 },
+            service_host: ServiceHostCapability { version: 1 },
             sandbox: SandboxCapability { version: 1 },
         }
     }
@@ -477,6 +497,18 @@ pub enum ClientMessage<'a> {
         method: &'a str,
         args: &'a serde_json::Value,
     },
+    /// A service's `DX_API` request, for Core to act on for its install.
+    #[serde(rename = "service.request")]
+    ServiceRequest {
+        generation: &'a str,
+        #[serde(rename = "requestId")]
+        request_id: &'a str,
+        #[serde(rename = "installId")]
+        install_id: &'a str,
+        method: &'a str,
+        path: &'a str,
+        body: &'a serde_json::Value,
+    },
     #[serde(rename = "workload-identity.request")]
     WorkloadIdentityRequest {
         generation: &'a str,
@@ -510,6 +542,7 @@ pub enum OperationResult {
     Storage(crate::storage::TransferResult),
     Mcp(crate::mcp::McpResult),
     Plugin(crate::plugin_host::PluginResult),
+    Service(crate::plugin_host::service::ServiceResult),
     Sandbox(crate::sandbox::SandboxResult),
 }
 
@@ -632,6 +665,42 @@ pub enum PluginOperation {
     },
 }
 
+/// One request to the plugin service supervisor; see
+/// [`crate::plugin_host::service`].
+#[derive(Deserialize)]
+#[serde(tag = "operation", deny_unknown_fields)]
+pub enum ServiceOperation {
+    #[serde(rename = "service.ensure")]
+    Ensure {
+        spec: Box<crate::plugin_host::service::ServiceSpec>,
+    },
+    #[serde(rename = "service.call")]
+    Call {
+        #[serde(rename = "installId")]
+        install_id: String,
+        method: String,
+        path: String,
+        #[serde(default)]
+        body: Option<serde_json::Value>,
+        #[serde(rename = "timeoutMs")]
+        timeout_ms: u64,
+    },
+    #[serde(rename = "service.stop")]
+    Stop {
+        #[serde(rename = "installId", default)]
+        install_id: Option<String>,
+        reason: String,
+    },
+    #[serde(rename = "service.status")]
+    Status {},
+    #[serde(rename = "service.logs")]
+    Logs {
+        #[serde(rename = "installId")]
+        install_id: String,
+        tail: usize,
+    },
+}
+
 #[derive(Deserialize)]
 #[serde(untagged)]
 pub enum RequestOperation {
@@ -643,6 +712,7 @@ pub enum RequestOperation {
     Storage(StorageOperation),
     Mcp(McpOperation),
     Plugin(PluginOperation),
+    Service(ServiceOperation),
     Sandbox(crate::sandbox::SandboxOperation),
 }
 
@@ -666,6 +736,7 @@ impl RequestOperation {
             | Self::Storage(_)
             | Self::Mcp(_)
             | Self::Plugin(_)
+            | Self::Service(_)
             | Self::Sandbox(_) => None,
         }
     }
@@ -734,6 +805,16 @@ pub enum ServerMessage {
         value: serde_json::Value,
         #[serde(default)]
         error: Option<String>,
+    },
+    /// Core's answer to one `service.request`.
+    #[serde(rename = "service.response")]
+    ServiceResponse {
+        generation: String,
+        #[serde(rename = "requestId")]
+        request_id: String,
+        status: u16,
+        #[serde(default)]
+        body: serde_json::Value,
     },
     #[serde(rename = "proxy.open")]
     ProxyOpen(crate::proxy::ProxyOpen),

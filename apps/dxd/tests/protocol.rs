@@ -5662,3 +5662,778 @@ async fn real_daemon_on_a_runner_offers_no_desktop_and_ignores_core_updates() {
     let heartbeat = wait_for(&mut socket, |value| value["type"] == "heartbeat").await;
     assert_eq!(heartbeat["generation"], generation);
 }
+
+/// A plugin service in Node: it reports what dx gave it, echoes, keeps
+/// the lines its listener's endpoint receives, and answers in plain text.
+const FAKE_SERVICE: &str = r#"import http from "node:http";
+import fs from "node:fs";
+const events = [];
+const server = http.createServer((req, res) => {
+  let body = "";
+  req.on("data", (chunk) => (body += chunk));
+  req.on("end", () => {
+    const send = (status, value, type = "application/json") => {
+      res.writeHead(status, { "content-type": type });
+      res.end(type === "application/json" ? JSON.stringify(value) : value);
+    };
+    const env = process.env;
+    if (req.url === "/env")
+      return send(200, { port: env.PORT, install: env.DX_INSTALL_ID, name: env.DX_PLUGIN_NAME,
+        api: env.DX_API, token: env.DX_TOKEN, secret: env.SECRET, pid: process.pid,
+        cwd: process.cwd(), setup: fs.existsSync("setup-done") });
+    if (req.url === "/echo") return send(201, { method: req.method, got: JSON.parse(body || "null") });
+    if (req.url === "/text") return send(200, "plain words", "text/plain");
+    if (req.url.startsWith("/events/")) {
+      events.push({ listener: req.url.slice(8), ...JSON.parse(body) });
+      return send(200, {});
+    }
+    if (req.url === "/events") return send(200, events);
+    send(404, { error: { code: "missing" } });
+  });
+});
+server.listen(Number(process.env.PORT), "127.0.0.1", () => console.log(`listening on ${process.env.PORT}`));
+"#;
+
+async fn service_request(socket: &mut Socket, generation: &str, operation: Value) -> Value {
+    let id = format!("service-{:016x}", rand::random::<u64>());
+    memory_request(socket, generation, &id, operation).await
+}
+
+async fn service_entry(socket: &mut Socket, generation: &str, install: &str) -> Option<Value> {
+    let listed = service_request(socket, generation, json!({"operation": "service.status"})).await;
+    assert_eq!(listed["kind"], "services", "{listed}");
+    listed["services"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["installId"] == install)
+        .cloned()
+}
+
+async fn wait_service(
+    socket: &mut Socket,
+    generation: &str,
+    install: &str,
+    accept: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let entry = service_entry(socket, generation, install).await;
+        if let Some(entry) = entry.as_ref().filter(|entry| accept(entry)) {
+            return entry.clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "service never reached the state: {entry:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+async fn call_service(
+    socket: &mut Socket,
+    generation: &str,
+    install: &str,
+    method: &str,
+    path: &str,
+    body: Option<Value>,
+) -> Value {
+    let mut operation = json!({"operation": "service.call", "installId": install, "method": method, "path": path, "timeoutMs": 20000});
+    if let Some(body) = body {
+        operation["body"] = body;
+    }
+    service_request(socket, generation, operation).await
+}
+
+/// One HTTP/1.1 request to a loopback URL, as a service sends it; the
+/// status and the body.
+fn loopback_http(url: &str, method: &str, token: Option<&str>, body: &str) -> (u16, Value) {
+    use std::io::{Read, Write};
+    let rest = url.strip_prefix("http://").unwrap();
+    let (authority, path) = rest.split_at(rest.find('/').unwrap());
+    let mut stream = std::net::TcpStream::connect(authority).unwrap();
+    let authorization = token
+        .map(|token| format!("Authorization: Bearer {token}\r\n"))
+        .unwrap_or_default();
+    write!(
+        stream,
+        "{method} {path} HTTP/1.1\r\nHost: {authority}\r\n{authorization}Content-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let (head, body) = response.split_once("\r\n\r\n").unwrap();
+    let status = head.split(' ').nth(1).unwrap().parse().unwrap();
+    (status, serde_json::from_str(body).unwrap_or(Value::Null))
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_supervises_a_plugins_service() {
+    // Ways it could fail, each checked below: the service never sees PORT,
+    // DX_API, DX_TOKEN, or its secret; setup runs again (or not at all) or
+    // in the wrong folder; "running" is reported before the port accepts;
+    // a killed service stays down, restarts without backoff, or the
+    // backoff never grows; ensuring the same key twice starts a second
+    // copy; a new key leaves the old process group alive beside the new
+    // one; a listener's lines arrive out of order or never; the relay lets
+    // a request without the current token through, names the wrong
+    // install, or never answers; `dxd id-token` in a service ignores
+    // DX_API; logs lose the setup or listener prefix; stop leaves
+    // processes behind; a failed setup is reported running.
+    use sha2::Digest;
+    let Ok(node) = Command::new("sh").arg("-c").arg("command -v node").output() else {
+        panic!("node is required");
+    };
+    let node = String::from_utf8(node.stdout).unwrap().trim().to_owned();
+    assert!(!node.is_empty(), "node is required for the service test");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let register = next_text(&mut socket).await;
+    assert_eq!(
+        register["capabilities"]["serviceHost"]["version"], 1,
+        "{register}"
+    );
+    let generation = format!("gen-{}", rand::random::<u32>());
+    send(
+        &mut socket,
+        json!({"type": "registered", "generation": generation, "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000}),
+    )
+    .await;
+    let mock = serve_storage(listener, port);
+    let package = plugin_package(&[("server.mjs", FAKE_SERVICE, false)]);
+    let digest = format!("{:x}", sha2::Sha256::digest(&package));
+    mock.lock()
+        .unwrap()
+        .objects
+        .insert("svc".into(), package.clone());
+    let install = "plg_service-one";
+    // A login profile may set its own HOME; the count goes where the test says.
+    let setup_runs = fixture.home.join("setup-runs");
+    let spec_with = |key: &str, fail_setup: bool| {
+        json!({
+            "installId": install,
+            "key": key,
+            "name": "pager",
+            "source": {"package": {"url": format!("http://localhost:{port}/r2/svc"), "sha256": digest, "size": package.len()}},
+            "setup": "echo setup output; echo done > setup-done; echo ran >> \"$SETUP_RUNS\"; [ \"$FAIL_SETUP\" != 1 ] || exit 9",
+            "run": "exec \"$NODE_BIN\" server.mjs",
+            "env": {"NODE_BIN": node, "SECRET": "s3cret-value", "FAIL_SETUP": if fail_setup { "1" } else { "0" }, "SETUP_RUNS": setup_runs},
+            "listeners": [{"name": "tail", "run": "printf 'line 1\\nline 2\\nline 3\\nline 4\\nline 5\\n'; echo 'to the log' >&2; exec sleep 1000"}],
+        })
+    };
+    let spec = |key: &str| spec_with(key, false);
+    let key = "service-key-0001";
+
+    // Unknown installs are not running.
+    let missing = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+    assert_eq!(missing["kind"], "unavailable", "{missing}");
+    assert_eq!(missing["reason"], "not-running", "{missing}");
+
+    let ensured = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.ensure", "spec": spec(key)}),
+    )
+    .await;
+    assert_eq!(ensured["kind"], "status", "{ensured}");
+    assert_eq!(ensured["installId"], install);
+    assert_eq!(ensured["key"], key);
+
+    // A call waits for the service to accept connections.
+    let env = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+    assert_eq!(env["kind"], "response", "{env}");
+    assert_eq!(env["status"], 200, "{env}");
+    let env = env["body"].clone();
+    let folder = fixture
+        .home
+        .join(".local/share/dx/services")
+        .join(install)
+        .join(key);
+    assert_eq!(env["cwd"], folder.to_str().unwrap(), "{env}");
+    assert_eq!(env["setup"], true, "setup ran in the copied folder: {env}");
+    assert_eq!(env["install"], install);
+    assert_eq!(env["name"], "pager");
+    assert_eq!(env["secret"], "s3cret-value");
+    let token = env["token"].as_str().unwrap().to_owned();
+    assert_eq!(token.len(), 64, "{env}");
+    let api = env["api"].as_str().unwrap().to_owned();
+    assert!(api.starts_with("http://127.0.0.1:"), "{api}");
+    let first_pid = env["pid"].as_u64().unwrap() as u32;
+    let entry = service_entry(&mut socket, &generation, install)
+        .await
+        .unwrap();
+    assert_eq!(entry["state"], "running", "{entry}");
+    assert_eq!(
+        entry["port"].to_string(),
+        env["port"].as_str().unwrap(),
+        "{entry}"
+    );
+    assert_eq!(entry["restarts"], 0, "{entry}");
+
+    let echoed = call_service(
+        &mut socket,
+        &generation,
+        install,
+        "POST",
+        "/echo",
+        Some(json!({"a": [1, 2]})),
+    )
+    .await;
+    assert_eq!(echoed["status"], 201, "{echoed}");
+    assert_eq!(
+        echoed["body"],
+        json!({"method": "POST", "got": {"a": [1, 2]}})
+    );
+    let text = call_service(&mut socket, &generation, install, "GET", "/text", None).await;
+    assert_eq!(text["body"], "plain words", "{text}");
+
+    // The listener's lines reach the service, in order, with a timestamp.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let events = loop {
+        let events = call_service(&mut socket, &generation, install, "GET", "/events", None).await;
+        if events["body"]
+            .as_array()
+            .is_some_and(|lines| lines.len() >= 5)
+        {
+            break events["body"].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "listener lines never arrived: {events}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let lines: Vec<&str> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["line"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        lines,
+        ["line 1", "line 2", "line 3", "line 4", "line 5"],
+        "{events}"
+    );
+    assert_eq!(events[0]["listener"], "tail");
+    let at = events[0]["at"].as_str().unwrap();
+    assert!(
+        at.len() == 24 && at.ends_with('Z') && at.as_bytes()[10] == b'T',
+        "{at}"
+    );
+
+    // The same key again changes nothing.
+    let again = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.ensure", "spec": spec(key)}),
+    )
+    .await;
+    assert_eq!(again["state"], "running", "{again}");
+    let env = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+    assert_eq!(env["body"]["pid"].as_u64().unwrap() as u32, first_pid);
+
+    // The relay: no or a stale token is refused before Core sees it; the
+    // current one reaches Core with the install it names.
+    for token in [None, Some("0".repeat(64))] {
+        let api = api.clone();
+        let (status, body) = tokio::task::spawn_blocking(move || {
+            loopback_http(&format!("{api}/state/x"), "GET", token.as_deref(), "")
+        })
+        .await
+        .unwrap();
+        assert_eq!(status, 401, "{body}");
+        assert_eq!(body["error"]["code"], "unauthorized", "{body}");
+    }
+    let client = {
+        let api = api.clone();
+        let token = token.clone();
+        tokio::task::spawn_blocking(move || {
+            loopback_http(
+                &format!("{api}/state/counter?x=1"),
+                "PUT",
+                Some(&token),
+                r#"{"value": 41}"#,
+            )
+        })
+    };
+    let relayed = wait_for(&mut socket, |value| value["type"] == "service.request").await;
+    assert_eq!(relayed["installId"], install, "{relayed}");
+    assert_eq!(relayed["method"], "PUT");
+    assert_eq!(relayed["path"], "/state/counter?x=1");
+    assert_eq!(relayed["body"], json!({"value": 41}));
+    assert_eq!(relayed["generation"], generation);
+    send(
+        &mut socket,
+        json!({"type": "service.response", "generation": generation, "requestId": relayed["requestId"], "status": 201, "body": {"stored": true}}),
+    )
+    .await;
+    let (status, body) = client.await.unwrap();
+    assert_eq!((status, body), (201, json!({"stored": true})));
+
+    // `dxd id-token` inside a service asks DX_API, never the Thread socket.
+    let helper = {
+        let api = api.clone();
+        let token = token.clone();
+        tokio::task::spawn_blocking(move || {
+            Command::new(DXD)
+                .args(["id-token", "--audience", "sts.example.com"])
+                .env_clear()
+                .env("DX_API", api)
+                .env("DX_TOKEN", token)
+                .env("DX_WORKLOAD_IDENTITY_SOCKET", "/nonexistent/socket")
+                .output()
+                .unwrap()
+        })
+    };
+    let minted = wait_for(&mut socket, |value| value["type"] == "service.request").await;
+    assert_eq!(minted["path"], "/id-token", "{minted}");
+    assert_eq!(minted["method"], "POST");
+    assert_eq!(minted["installId"], install);
+    assert_eq!(minted["body"], json!({"audience": "sts.example.com"}));
+    send(
+        &mut socket,
+        json!({"type": "service.response", "generation": generation, "requestId": minted["requestId"], "status": 200, "body": {"token": "aaa.bbb.ccc", "expiresAt": 1999999999}}),
+    )
+    .await;
+    let output = helper.await.unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "aaa.bbb.ccc\n");
+
+    // Killed, it comes back after 1 s; killed again right away, after 2 s.
+    let mut pid = first_pid;
+    for (restarts, backoff) in [(1, 1), (2, 2)] {
+        let killed = Instant::now();
+        assert!(
+            Command::new("kill")
+                .args(["-9", &pid.to_string()])
+                .status()
+                .unwrap()
+                .success()
+        );
+        let entry = wait_service(&mut socket, &generation, install, |entry| {
+            entry["restarts"] == restarts && entry["state"] == "running"
+        })
+        .await;
+        let waited = killed.elapsed();
+        assert!(
+            waited >= Duration::from_millis(backoff * 1000 - 100),
+            "restarted after {waited:?}, before its {backoff} s backoff"
+        );
+        assert_eq!(entry["lastExit"]["signal"], 9, "{entry}");
+        let env = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+        let next = env["body"]["pid"].as_u64().unwrap() as u32;
+        assert_ne!(next, pid);
+        assert!(!process_alive(pid));
+        pid = next;
+    }
+
+    // A new key replaces the whole group; setup runs for the new key.
+    let replaced = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.ensure", "spec": spec_with("service-key-0002", true)}),
+    )
+    .await;
+    assert_eq!(replaced["kind"], "status", "{replaced}");
+    assert!(exits_soon(pid).await, "the old key's process outlived it");
+    let failed = wait_service(&mut socket, &generation, install, |entry| {
+        entry["state"] == "failed"
+    })
+    .await;
+    // Its output and exit code are the message.
+    let message = failed["message"].as_str().unwrap();
+    assert!(
+        message.contains("code 9") && message.contains("setup output"),
+        "{message}"
+    );
+    let refused = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+    assert_eq!(refused["reason"], "failed", "{refused}");
+    // Retried on the next ensure: this time it succeeds.
+    service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.ensure", "spec": spec("service-key-0002")}),
+    )
+    .await;
+    let env = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+    assert_eq!(env["status"], 200, "{env}");
+    assert!(
+        env["body"]["cwd"]
+            .as_str()
+            .unwrap()
+            .ends_with("service-key-0002")
+    );
+    assert!(!folder.exists(), "the old key's copy is gone");
+    // Once for the first key across its restarts and a second ensure, then
+    // the second key's failure and its retry.
+    let runs = std::fs::read_to_string(&setup_runs).unwrap();
+    assert_eq!(runs.lines().count(), 3, "{runs}");
+    let newest = env["body"]["pid"].as_u64().unwrap() as u32;
+    // The old token no longer reaches Core.
+    let stale = {
+        let api = api.clone();
+        tokio::task::spawn_blocking(move || {
+            loopback_http(&format!("{api}/state/x"), "GET", Some(&token), "")
+        })
+    };
+    assert_eq!(stale.await.unwrap().0, 401);
+
+    let logs = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.logs", "installId": install, "tail": 1000}),
+    )
+    .await;
+    assert_eq!(logs["kind"], "logs", "{logs}");
+    let text = logs["text"].as_str().unwrap();
+    for expected in [
+        "[setup] setup output",
+        "[listener tail] to the log",
+        "[run] listening on",
+        "[dxd] [run] was killed by signal 9; restarting in 1 s",
+        "[dxd] [run] was killed by signal 9; restarting in 2 s",
+    ] {
+        assert!(
+            text.contains(expected),
+            "{expected:?} missing from:\n{text}"
+        );
+    }
+    assert!(!text.contains("s3cret-value"), "a secret reached the log");
+    let tail = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.logs", "installId": install, "tail": 2}),
+    )
+    .await;
+    assert_eq!(tail["text"].as_str().unwrap().lines().count(), 2, "{tail}");
+
+    // A draft's folder runs in place.
+    let draft = fixture.home.join("drafts/echo");
+    std::fs::create_dir_all(&draft).unwrap();
+    std::fs::write(draft.join("server.mjs"), FAKE_SERVICE).unwrap();
+    let ensured = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.ensure", "spec": {
+            "installId": "plg_draft", "key": "draft-key-0001", "name": "echo",
+            "source": {"folder": draft.to_str().unwrap()},
+            "run": "exec \"$NODE_BIN\" server.mjs", "env": {"NODE_BIN": node},
+            // A line past 64 KiB is cut and marked; the next one is whole.
+            "listeners": [{"name": "long", "run": "head -c 70000 /dev/zero | tr '\\0' x; echo; echo after; exec sleep 1000"}],
+        }}),
+    )
+    .await;
+    assert_eq!(ensured["kind"], "status", "{ensured}");
+    let env = call_service(&mut socket, &generation, "plg_draft", "GET", "/env", None).await;
+    assert_eq!(env["body"]["cwd"], draft.to_str().unwrap(), "{env}");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    let events = loop {
+        let events = call_service(
+            &mut socket,
+            &generation,
+            "plg_draft",
+            "GET",
+            "/events",
+            None,
+        )
+        .await;
+        if events["body"]
+            .as_array()
+            .is_some_and(|lines| lines.len() >= 2)
+        {
+            break events["body"].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "long lines never arrived: {events}"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    let long = events[0]["line"].as_str().unwrap();
+    assert_eq!(long, format!("{}…[truncated]", "x".repeat(64 * 1024)));
+    assert_eq!(events[1]["line"], "after");
+    let draft_pid = env["body"]["pid"].as_u64().unwrap() as u32;
+    let outside = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.ensure", "spec": {
+            "installId": "plg_outside", "key": "draft-key-0001", "name": "echo",
+            "source": {"folder": "/tmp"}, "run": "true", "env": {}, "listeners": [],
+        }}),
+    )
+    .await;
+    assert_eq!(outside["reason"], "invalid", "{outside}");
+
+    let stopped = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.stop", "installId": install, "reason": "uninstalled"}),
+    )
+    .await;
+    assert_eq!(stopped, json!({"kind": "stopped", "count": 1}));
+    assert!(!process_alive(newest), "stop left the service running");
+    assert!(
+        !fixture
+            .home
+            .join(".local/share/dx/services")
+            .join(install)
+            .exists()
+    );
+    let gone = call_service(&mut socket, &generation, install, "GET", "/env", None).await;
+    assert_eq!(gone["reason"], "not-running", "{gone}");
+    let stopped = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.stop", "reason": "idle"}),
+    )
+    .await;
+    assert_eq!(stopped, json!({"kind": "stopped", "count": 1}));
+    assert!(!process_alive(draft_pid));
+    let listed = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.status"}),
+    )
+    .await;
+    assert_eq!(listed, json!({"kind": "services", "services": []}));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_stops_the_services_a_crashed_daemon_left() {
+    // Ways it could fail: a daemon killed with SIGKILL leaves its services
+    // running with a stale DX_TOKEN beside the ones Core ensures again; or
+    // the next daemon kills a process that is not a service it started.
+    let node = String::from_utf8(
+        Command::new("sh")
+            .arg("-c")
+            .arg("command -v node")
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_owned();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let draft = fixture.home.join("drafts/echo");
+    std::fs::create_dir_all(&draft).unwrap();
+    std::fs::write(draft.join("server.mjs"), FAKE_SERVICE).unwrap();
+    // An unrelated process of the same user stays.
+    let bystander = ProcessGuard(Command::new("sleep").arg("1000").spawn().unwrap());
+    let pid = {
+        let _daemon = DaemonGuard(spawn_daemon(&fixture));
+        let mut socket = accept(&listener).await;
+        let generation = register(&mut socket).await;
+        let ensured = service_request(
+            &mut socket,
+            &generation,
+            json!({"operation": "service.ensure", "spec": {
+                "installId": "plg_draft", "key": "draft-key-0001", "name": "echo",
+                "source": {"folder": draft.to_str().unwrap()},
+                "run": "exec \"$NODE_BIN\" server.mjs", "env": {"NODE_BIN": node},
+                "listeners": [{"name": "idle", "run": "exec sleep 1000"}],
+            }}),
+        )
+        .await;
+        assert_eq!(ensured["kind"], "status", "{ensured}");
+        let env = call_service(&mut socket, &generation, "plg_draft", "GET", "/env", None).await;
+        env["body"]["pid"].as_u64().unwrap() as u32
+    };
+    // The guard killed the daemon with SIGKILL; the service lives on.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(process_alive(pid), "the service died with the daemon");
+    let _daemon = DaemonGuard(spawn_daemon(&fixture));
+    let mut socket = accept(&listener).await;
+    let generation = register(&mut socket).await;
+    assert!(
+        exits_soon(pid).await,
+        "the next daemon left the old service running"
+    );
+    assert!(
+        process_alive(bystander.0.id()),
+        "the sweep stopped an unrelated process"
+    );
+    let listed = service_request(
+        &mut socket,
+        &generation,
+        json!({"operation": "service.status"}),
+    )
+    .await;
+    assert_eq!(listed, json!({"kind": "services", "services": []}));
+}
+
+/// A runtime that answers every call with where it runs.
+const DRAFT_PLUGIN_RUNTIME: &str = r#"
+import net from "node:net";
+const channel = new net.Socket({ fd: 3, readable: true, writable: true });
+let buffer = "";
+channel.on("data", (chunk) => {
+  buffer += chunk;
+  for (let index; (index = buffer.indexOf("\n")) >= 0; ) {
+    const message = JSON.parse(buffer.slice(0, index));
+    buffer = buffer.slice(index + 1);
+    if (message.t !== "call") continue;
+    channel.write(JSON.stringify({ t: "result", id: message.id, ok: true, value: {
+      pid: process.pid,
+      root: process.env.PLUGIN_ROOT,
+      entry: process.env.DX_PLUGIN_ENTRY,
+    } }) + "\n");
+  }
+});
+console.log("draft started");
+channel.write(JSON.stringify({ t: "ready" }) + "\n");
+"#;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn real_daemon_runs_a_draft_plugin_from_its_folder() {
+    // Ways it could fail: dxd downloads or copies the folder instead of
+    // running it in place; a reload (a new key, the same install) leaves the
+    // old process running beside the new one; a folder outside the Orb
+    // user's home, a missing folder, a draft asking for binaries, or a
+    // process naming both a package and a folder starts anyway; the daemon
+    // stops saying it runs drafts, so Core sends them to a daemon that
+    // cannot.
+    use sha2::Digest;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let fixture = fixture(port);
+    let _daemon = DaemonGuard(spawn_daemon_env(&fixture, &[]));
+    let mut socket = accept(&listener).await;
+    let register = next_text(&mut socket).await;
+    assert_eq!(
+        register["capabilities"]["pluginDrafts"]["version"], 1,
+        "{register}"
+    );
+    let generation = format!("gen-{}", rand::random::<u32>());
+    send(
+        &mut socket,
+        json!({"type": "registered", "generation": generation, "heartbeatIntervalMs": 2000, "heartbeatLeaseMs": 15000}),
+    )
+    .await;
+    let folder = fixture.home.join("workspace/repo/my-plugin");
+    std::fs::create_dir_all(folder.join("dev.dxcode")).unwrap();
+    std::fs::write(
+        folder.join("dev.dxcode/index.ts"),
+        "export default () => {};\n",
+    )
+    .unwrap();
+    let runtime_sha = format!(
+        "{:x}",
+        sha2::Sha256::digest(format!("main.mjs\0{DRAFT_PLUGIN_RUNTIME}\0").as_bytes())
+    );
+    let install = "plg_draft-0123456789ab";
+    let invoke = |key: &str, source: Value, binaries: Value| {
+        let mut process = json!({
+            "key": key,
+            "installId": install,
+            "name": "com.example.grafana",
+            "integrity": "sha256-draft",
+            "entry": "dev.dxcode/index.ts",
+            "runtime": {"sha256": runtime_sha, "files": [{"path": "main.mjs", "content": DRAFT_PLUGIN_RUNTIME}]},
+            "binaries": binaries,
+            "ports": [],
+        });
+        for (field, value) in source.as_object().unwrap() {
+            process[field] = value.clone();
+        }
+        json!({
+            "operation": "plugin.invoke",
+            "process": process,
+            "call": {"method": "describe", "args": [], "info": {"threadId": THREAD_ID}},
+            "timeoutMs": 20000,
+        })
+    };
+    let in_place = json!({"folder": folder.to_str().unwrap()});
+    let first = memory_request(
+        &mut socket,
+        &generation,
+        "draft-1",
+        invoke("draftkey-0001", in_place.clone(), json!([])),
+    )
+    .await;
+    assert_eq!(first["kind"], "result", "{first}");
+    let canonical = std::fs::canonicalize(&folder).unwrap();
+    assert_eq!(
+        first["value"]["root"],
+        canonical.to_str().unwrap(),
+        "runs in place"
+    );
+    assert_eq!(
+        first["value"]["entry"],
+        canonical.join("dev.dxcode/index.ts").to_str().unwrap()
+    );
+    let old = first["value"]["pid"].as_u64().unwrap() as u32;
+    let log =
+        std::fs::read_to_string(fixture.state.join(format!("plugins/{install}.log"))).unwrap();
+    assert!(
+        log.contains("draft started"),
+        "the log is the install's: {log}"
+    );
+
+    // A reload: a new key for the same install replaces the process.
+    let reloaded = memory_request(
+        &mut socket,
+        &generation,
+        "draft-2",
+        invoke("draftkey-0002", in_place.clone(), json!([])),
+    )
+    .await;
+    assert_eq!(reloaded["kind"], "result", "{reloaded}");
+    let new = reloaded["value"]["pid"].as_u64().unwrap() as u32;
+    assert_ne!(new, old);
+    assert!(!process_alive(old), "the old load stopped");
+    assert!(process_alive(new));
+
+    // Refused before anything starts.
+    let outside = tempfile::tempdir().unwrap();
+    for (id, source, binaries, reason) in [
+        (
+            "draft-3",
+            json!({"folder": outside.path().to_str().unwrap()}),
+            json!([]),
+            "package",
+        ),
+        (
+            "draft-4",
+            json!({"folder": folder.join("missing").to_str().unwrap()}),
+            json!([]),
+            "package",
+        ),
+        (
+            "draft-5",
+            in_place.clone(),
+            json!([{"name": "jq", "apt": "jq"}]),
+            "invalid",
+        ),
+        (
+            "draft-6",
+            json!({"folder": folder.to_str().unwrap(), "package": {"url": "https://example.com/p", "sha256": "0".repeat(64), "size": 1}}),
+            json!([]),
+            "invalid",
+        ),
+        ("draft-7", json!({}), json!([]), "invalid"),
+        (
+            "draft-8",
+            json!({"folder": "relative/path"}),
+            json!([]),
+            "invalid",
+        ),
+    ] {
+        let refused = memory_request(
+            &mut socket,
+            &generation,
+            id,
+            invoke(&format!("draftkey-{id}"), source, binaries),
+        )
+        .await;
+        assert_eq!(refused["kind"], "unavailable", "{id}: {refused}");
+        assert_eq!(refused["reason"], reason, "{id}: {refused}");
+    }
+    assert!(process_alive(new), "a refused call stops nothing");
+}

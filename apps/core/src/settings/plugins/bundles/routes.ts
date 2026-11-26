@@ -6,6 +6,8 @@ import {
   ListPluginBundlesResponseSchema,
   ListPluginBundleUpdatesResponseSchema,
   type PluginBundleData,
+  PluginBundleFileResponseSchema,
+  PluginBundleFilesResponseSchema,
   PluginBundleIntegrityConflictResponseSchema,
   PluginBundleNotFoundResponseSchema,
   PluginBundleParamsSchema,
@@ -15,17 +17,15 @@ import {
   PluginBundlesForbiddenResponseSchema,
   PluginBundlesUnavailableResponseSchema,
   PluginHostUsageResponseSchema,
-  PluginJobActionRequestSchema,
-  PluginJobParamsSchema,
-  PluginJobsResponseSchema,
   PluginProposalDecidedResponseSchema,
   PluginProposalParamsSchema,
+  PreviewPluginBundleFilesRequestSchema,
   PreviewPluginBundleResponseSchema,
   PreviewPluginBundleUpdateResponseSchema,
   RemovePluginBundleResponseSchema,
   RevokePluginShareLinksResponseSchema,
+  SavePluginBundleFilesRequestSchema,
   SetPluginBundlePolicyRequestSchema,
-  SetPluginDevRequestSchema,
   UpdatePluginBundleRequestSchema,
   UpdatePluginBundleResponseSchema,
   UpdatePluginBundleSettingsRequestSchema,
@@ -57,7 +57,6 @@ import {
   WorkspaceSlug,
   workspaceRoleHasPermission,
 } from "@dx/domain";
-import { getLogger } from "@logtape/logtape";
 import { Effect, Option, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
 import {
@@ -68,21 +67,8 @@ import type { AppEnv } from "../../../http/types.js";
 import { authorizationLogger } from "../../../logging.js";
 import { decodeD1Binding } from "../../../persistence/d1-binding.js";
 import { coalescingD1 } from "../../../persistence/d1-coalesce.js";
-import {
-  pluginJobAction,
-  pluginJobsView,
-} from "../../../plugins/hosts/durable/jobs-route.js";
-import {
-  purgeDurableInstall,
-  resumeDurableInstall,
-} from "../../../plugins/hosts/durable/objects.js";
 import { listPluginHostCostLines } from "../../../plugins/hosts/usage.js";
 import { readPluginIcon as readStoredIcon } from "../../../plugins/icons/store.js";
-import {
-  type PluginDevLink,
-  PluginTrustPolicies,
-} from "../../../plugins/trust/policy.js";
-import { pluginTrustData } from "../../../plugins/trust/view.js";
 
 import { settleOwnerAsk } from "../../../thread-artifacts/owner-ask.js";
 import { SettingsAudit } from "../../audit.js";
@@ -102,6 +88,7 @@ import {
   type ExportIconFile,
   exportIconHashes,
   exportPluginBundle,
+  pluginExportFiles,
   withSkillFiles,
 } from "./export.js";
 import { gitHubFolderChanged } from "./github.js";
@@ -127,8 +114,7 @@ import {
   PluginSignatures,
   previewSignature,
 } from "./signature.js";
-
-const pluginTrustLogger = getLogger(["dx", "plugins", "trust"]);
+import { writeZip, type ZipFile } from "./zip-writer.js";
 
 export type RouteScope =
   | { readonly mode: "personal" }
@@ -177,27 +163,20 @@ const bundleContext = Effect.fn("pluginBundleContext")(function* (
   // all go out together (one round trip on the coalescing binding).
   const repository = yield* PluginBundleRepository;
   const signatures = yield* PluginSignatures;
-  const trustPolicies = yield* PluginTrustPolicies;
-  const [copies, shared, signed, own, skills, servers, trust, dev] =
-    yield* Effect.all(
-      [
-        target.scope === "personal"
-          ? repository.workspaceCopies(target.id)
-          : Effect.succeed(undefined),
-        (yield* PluginShareLinks).sharedForTarget(target),
-        signatures.forTarget(target),
-        signatures.ownFingerprints(viewerUserId),
-        (yield* SkillRepository).list(target),
-        (yield* McpServerRepository).list(target as McpServerTarget),
-        // The governing workspace's cap and trusted signers.
-        trustPolicies.forTarget(target),
-        target.scope === "personal"
-          ? trustPolicies.devLinksForTarget(target)
-          : Effect.succeed(new Map<string, PluginDevLink>()),
-      ],
-      { concurrency: "unbounded" },
-    );
-  return { copies, shared, signed, own, skills, servers, trust, dev };
+  const [copies, shared, signed, own, skills, servers] = yield* Effect.all(
+    [
+      target.scope === "personal"
+        ? repository.workspaceCopies(target.id)
+        : Effect.succeed(undefined),
+      (yield* PluginShareLinks).sharedForTarget(target),
+      signatures.forTarget(target),
+      signatures.ownFingerprints(viewerUserId),
+      (yield* SkillRepository).list(target),
+      (yield* McpServerRepository).list(target as McpServerTarget),
+    ],
+    { concurrency: "unbounded" },
+  );
+  return { copies, shared, signed, own, skills, servers };
 });
 
 type BundleContext = Effect.Success<ReturnType<typeof bundleContext>>;
@@ -304,19 +283,6 @@ const bundleData = (bundle: StoredPluginBundle, known: BundleContext) => {
     ...(signature === undefined
       ? {}
       : { signature: describeSignature(signature, known.own) }),
-    ...(bundle.manifest.code === undefined
-      ? {}
-      : {
-          trust: pluginTrustData(
-            bundle.target.scope,
-            bundle.manifest.code,
-            known.trust,
-            signature?.fingerprint,
-          ),
-        }),
-    ...(known.dev.get(bundle.id) === undefined
-      ? {}
-      : { dev: known.dev.get(bundle.id) }),
     installedAt: bundle.installedAt,
     updatedAt: bundle.updatedAt,
   } satisfies PluginBundleData;
@@ -333,6 +299,20 @@ const bundlesData = Effect.fn("pluginBundlesData")(function* (
 });
 
 const rejected = (reason: string) => new PluginBundleRejected({ reason });
+
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+const utf8Bytes = (text: string) => new TextEncoder().encode(text).byteLength;
+
+/** A file's text, or undefined for one that is not UTF-8 text. */
+const fileText = (file: ZipFile) => {
+  if (typeof file.content === "string") return file.content;
+  try {
+    const text = utf8Decoder.decode(file.content);
+    return text.includes("\u0000") ? undefined : text;
+  } catch {
+    return undefined;
+  }
+};
 
 const readZipBody = (request: Request) =>
   Effect.tryPromise({
@@ -747,15 +727,6 @@ const registerRoutes = (
                         policy.allowPersonalPluginInstallOverrides,
                       repositoryPluginsAllowed: policy.allowRepositoryPlugins,
                     }),
-                ...(policy === undefined || !access.canMutate
-                  ? {}
-                  : {
-                      pluginTrust: {
-                        tierCap: policy.pluginTierCap ?? "verified",
-                        trustedProjectIds: policy.trustedPluginProjectIds ?? [],
-                        trustedSigners: policy.trustedPluginSigners ?? [],
-                      },
-                    }),
               },
             });
           }),
@@ -798,35 +769,13 @@ const registerRoutes = (
               ...(body.allowRepositoryPlugins === undefined
                 ? {}
                 : { allowRepositoryPlugins: body.allowRepositoryPlugins }),
-              ...(body.pluginTierCap === undefined
-                ? {}
-                : { pluginTierCap: body.pluginTierCap }),
-              ...(body.trustedPluginProjectIds === undefined
-                ? {}
-                : {
-                    trustedPluginProjectIds: [
-                      ...new Set(body.trustedPluginProjectIds),
-                    ],
-                  }),
-              ...(body.trustedPluginSigners === undefined
-                ? {}
-                : {
-                    trustedPluginSigners: [
-                      ...new Set(body.trustedPluginSigners),
-                    ],
-                  }),
             };
             const before = current.policy.restrictions;
             if (
               restrictions.allowPersonalPluginInstallOverrides !==
                 before.allowPersonalPluginInstallOverrides ||
               restrictions.allowRepositoryPlugins !==
-                before.allowRepositoryPlugins ||
-              restrictions.pluginTierCap !== before.pluginTierCap ||
-              JSON.stringify(restrictions.trustedPluginProjectIds) !==
-                JSON.stringify(before.trustedPluginProjectIds) ||
-              JSON.stringify(restrictions.trustedPluginSigners) !==
-                JSON.stringify(before.trustedPluginSigners)
+                before.allowRepositoryPlugins
             ) {
               yield* policies.update(
                 context.get("principal"),
@@ -855,11 +804,6 @@ const registerRoutes = (
                 personalOverridesAllowed:
                   restrictions.allowPersonalPluginInstallOverrides,
                 repositoryPluginsAllowed: restrictions.allowRepositoryPlugins,
-                pluginTrust: {
-                  tierCap: restrictions.pluginTierCap ?? "verified",
-                  trustedProjectIds: restrictions.trustedPluginProjectIds ?? [],
-                  trustedSigners: restrictions.trustedPluginSigners ?? [],
-                },
               },
             });
           }),
@@ -1127,6 +1071,61 @@ const registerRoutes = (
     ),
   );
 
+  /**
+   * An installed plugin's files as its export holds them: plugin.json, its
+   * skills, mcp.json, icons, its code, and its own package files. Read only
+   * for the export and the file browser, never for the list.
+   */
+  const installedFiles = (context: Context<AppEnv>, access: BundleAccess) =>
+    Effect.gen(function* () {
+      const id = yield* parseId(context);
+      const repository = yield* PluginBundleRepository;
+      const bundle = yield* repository.find(access.target, id);
+      const skillRepository = yield* SkillRepository;
+      const skills = yield* withSkillFiles(
+        skillRepository,
+        (yield* skillRepository.list(bundle.target)).filter(
+          ({ skill }) => skill.pluginId === bundle.id,
+        ),
+      );
+      const servers = (yield* (yield* McpServerRepository).list(
+        bundle.target as McpServerTarget,
+      ))
+        .filter(({ server }) => server.pluginId === bundle.id)
+        .map(({ server }) => server);
+      const codeModules =
+        bundle.manifest.code === undefined
+          ? []
+          : yield* repository.codeModules(bundle.id, bundle.version);
+      const pkg = bundle.manifest.package;
+      const storage = context.env.DX_STORAGE;
+      const packageFiles =
+        pkg === undefined || storage === undefined
+          ? []
+          : yield* Effect.tryPromise({
+              try: async () => {
+                const object = await storage.get(pluginPackageKey(pkg.sha256));
+                if (object === null) return [];
+                return readPluginPackage(
+                  new Uint8Array(await object.arrayBuffer()),
+                );
+              },
+              catch: () => rejected("dx could not read the plugin's files."),
+            });
+      const iconFiles = yield* Effect.promise(() =>
+        exportIconFiles(context.env.DB, bundle.manifest),
+      );
+      const input = {
+        bundle,
+        skills,
+        mcpServers: servers,
+        codeModules,
+        packageFiles,
+        iconFiles,
+      };
+      return { bundle, input, files: pluginExportFiles(input) };
+    });
+
   // Anyone who can list the plugin can export it, as with a skill.
   router.get("/:pluginId/export", async (context) => {
     const result = await Effect.runPromise(
@@ -1135,43 +1134,7 @@ const registerRoutes = (
           context,
           (access) =>
             Effect.gen(function* () {
-              const id = yield* parseId(context);
-              const repository = yield* PluginBundleRepository;
-              const bundle = yield* repository.find(access.target, id);
-              const skillRepository = yield* SkillRepository;
-              const skills = yield* withSkillFiles(
-                skillRepository,
-                (yield* skillRepository.list(bundle.target)).filter(
-                  ({ skill }) => skill.pluginId === bundle.id,
-                ),
-              );
-              const servers = (yield* (yield* McpServerRepository).list(
-                bundle.target as McpServerTarget,
-              ))
-                .filter(({ server }) => server.pluginId === bundle.id)
-                .map(({ server }) => server);
-              const codeModules =
-                bundle.manifest.code === undefined
-                  ? []
-                  : yield* repository.codeModules(bundle.id, bundle.version);
-              const pkg = bundle.manifest.package;
-              const storage = context.env.DX_STORAGE;
-              const packageFiles =
-                pkg === undefined || storage === undefined
-                  ? []
-                  : yield* Effect.tryPromise({
-                      try: async () => {
-                        const object = await storage.get(
-                          pluginPackageKey(pkg.sha256),
-                        );
-                        if (object === null) return [];
-                        return readPluginPackage(
-                          new Uint8Array(await object.arrayBuffer()),
-                        );
-                      },
-                      catch: () =>
-                        rejected("dx could not read the plugin's files."),
-                    });
+              const { input } = yield* installedFiles(context, access);
               // `?sign=1` adds plugin.sig, signed with the person's managed key.
               const signer =
                 context.req.query("sign") === "1"
@@ -1181,19 +1144,9 @@ const registerRoutes = (
                       context.get("principal").userId,
                     )
                   : undefined;
-              const iconFiles = yield* Effect.promise(() =>
-                exportIconFiles(context.env.DB, bundle.manifest),
-              );
               return yield* Effect.promise(() =>
                 exportPluginBundle(
-                  {
-                    bundle,
-                    skills,
-                    mcpServers: servers,
-                    codeModules,
-                    packageFiles,
-                    iconFiles,
-                  },
+                  input,
                   signer === undefined
                     ? undefined
                     : (files) => Effect.runPromise(signer(files)),
@@ -1218,6 +1171,202 @@ const registerRoutes = (
       },
     });
   });
+
+  // The file browser's tree: every file's path and size, without content.
+  router.get("/:pluginId/files", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const { bundle, files } = yield* installedFiles(context, access);
+            return yield* Schema.encodeUnknownEffect(
+              PluginBundleFilesResponseSchema,
+            )({
+              status: "success",
+              data: {
+                integrity: bundle.integrity,
+                files: files
+                  .map((file) => {
+                    const text = fileText(file);
+                    return {
+                      path: file.path,
+                      bytes:
+                        typeof file.content === "string"
+                          ? utf8Bytes(file.content)
+                          : file.content.byteLength,
+                      text: text !== undefined,
+                    };
+                  })
+                  .toSorted((left, right) =>
+                    left.path.localeCompare(right.path),
+                  ),
+              },
+            });
+          }),
+        { mutate: false },
+      ),
+    ),
+  );
+
+  // One text file's content, read when a person opens it.
+  router.get("/:pluginId/files/content", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const path = context.req.query("path") ?? "";
+            const { files } = yield* installedFiles(context, access);
+            const file = files.find((candidate) => candidate.path === path);
+            if (file === undefined) return yield* new PluginNotFound();
+            const content = fileText(file);
+            if (content === undefined)
+              return yield* rejected(`${path} is not a text file.`);
+            return yield* Schema.encodeUnknownEffect(
+              PluginBundleFileResponseSchema,
+            )({ status: "success", data: { path, content } });
+          }),
+        { mutate: false },
+      ),
+    ),
+  );
+
+  /**
+   * The plugin's next version with the edited files in place of its own,
+   * as the ZIP upload an update reads. Only a plugin uploaded as a ZIP
+   * takes edits; one from GitHub or a share link follows its source.
+   */
+  const editedVersion = (
+    context: Context<AppEnv>,
+    access: BundleAccess,
+    edits: ReadonlyArray<{ readonly path: string; readonly content: string }>,
+  ) =>
+    Effect.gen(function* () {
+      const { bundle, files } = yield* installedFiles(context, access);
+      if (bundle.source.type !== "zip")
+        return yield* rejected(
+          bundle.source.type === "github"
+            ? "This plugin comes from GitHub. Change it there, then check for updates."
+            : "This plugin is a copy of a shared plugin. It changes when the person who shared it updates it.",
+        );
+      const edited = new Map(edits.map(({ path, content }) => [path, content]));
+      for (const path of edited.keys()) {
+        const file = files.find((candidate) => candidate.path === path);
+        if (file === undefined)
+          return yield* rejected(`${path} is not one of the plugin's files.`);
+        if (fileText(file) === undefined)
+          return yield* rejected(`${path} is not a text file.`);
+      }
+      const bytes = yield* Effect.promise(() =>
+        writeZip(
+          files.map((file) => {
+            const content = edited.get(file.path);
+            return content === undefined ? file : { ...file, content };
+          }),
+        ),
+      );
+      return {
+        id: bundle.id,
+        input: {
+          type: "zip",
+          label: bundle.source.label,
+          bytes,
+        } satisfies PluginBundleInput,
+      };
+    });
+
+  router.post("/:pluginId/files/preview", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const body = yield* decodeJsonBody(
+              context.req,
+              PreviewPluginBundleFilesRequestSchema,
+              () => rejected("Send the edited files."),
+            );
+            const { id, input } = yield* editedVersion(
+              context,
+              access,
+              body.files,
+            );
+            const preview = yield* (yield* PluginBundleService).previewUpdate(
+              access.target,
+              id,
+              input,
+            );
+            return yield* Schema.encodeUnknownEffect(
+              PreviewPluginBundleUpdateResponseSchema,
+            )({
+              status: "success",
+              data: {
+                manifest: preview.bundle.manifest,
+                ...previewIconFiles(preview.bundle),
+                source: preview.source,
+                integrity: preview.bundle.integrity,
+                conflicts: preview.conflicts,
+                ...(yield* previewSignature(
+                  preview.signature,
+                  context.get("principal").userId,
+                )),
+                upToDate: preview.upToDate,
+                permissions: preview.permissions,
+                skills: preview.skills,
+                mcpServers: preview.mcpServers,
+              },
+            });
+          }),
+        { mutate: true },
+      ),
+    ),
+  );
+
+  // Saves the edited files as the version the person previewed.
+  router.post("/:pluginId/files", (context) =>
+    run(
+      context,
+      operation(
+        context,
+        (access) =>
+          Effect.gen(function* () {
+            const body = yield* decodeJsonBody(
+              context.req,
+              SavePluginBundleFilesRequestSchema,
+              () => rejected("Preview the edited files before saving them."),
+            );
+            const { id, input } = yield* editedVersion(
+              context,
+              access,
+              body.files,
+            );
+            const updated = yield* (yield* PluginBundleService).update(
+              access.target,
+              id,
+              input,
+              body.reviewedIntegrity,
+              audit(context),
+              body.acceptPermissions === true,
+            );
+            return yield* Schema.encodeUnknownEffect(
+              UpdatePluginBundleSourceResponseSchema,
+            )({
+              status: "success",
+              data: (yield* bundlesData(
+                access.target,
+                [updated],
+                context.get("principal").userId,
+              ))[0],
+            });
+          }),
+        { mutate: true, deferWrites: true },
+      ),
+    ),
+  );
 
   router.post("/preview", (context) =>
     run(
@@ -1383,17 +1532,6 @@ const registerRoutes = (
               body.enabled,
               audit(context),
             );
-            // Rich plugins (P3): jobs held while it was off resume now.
-            if (body.enabled)
-              try {
-                context.executionCtx.waitUntil(
-                  resumeDurableInstall(
-                    context.env,
-                    id,
-                    context.get("requestId"),
-                  ),
-                );
-              } catch {}
             const repository = yield* PluginBundleRepository;
             const updated = yield* repository.find(access.target, id);
             return yield* Schema.encodeUnknownEffect(
@@ -1411,186 +1549,6 @@ const registerRoutes = (
       ),
     ),
   );
-
-  // Personal-dev hot reload, on or off, for the owner's own personal plugin
-  // installed from a ZIP, bound to one of the person's own Threads: only that
-  // Thread's Orb may reload it. Only this browser request turns it on;
-  // `dxd plugin dev` can only use it.
-  router.put("/:pluginId/dev", (context) =>
-    run(
-      context,
-      operation(
-        context,
-        (access) =>
-          Effect.gen(function* () {
-            if (access.target.scope !== "personal")
-              return yield* rejected(
-                "Hot reload is for your own personal plugins.",
-              );
-            const id = yield* parseId(context);
-            const body = yield* decodeJsonBody(
-              context.req,
-              SetPluginDevRequestSchema,
-              () => rejected("Send enabled: true or false."),
-            );
-            if (body.enabled && body.threadId === undefined)
-              return yield* rejected(
-                "Turn hot reload on for one Thread: run dxd plugin dev in it, and open the link it prints.",
-              );
-            const repository = yield* PluginBundleRepository;
-            const bundle = yield* repository.find(access.target, id);
-            if (body.enabled && bundle.source.type !== "zip")
-              return yield* rejected(
-                "Hot reload works for plugins installed from a ZIP.",
-              );
-            if (body.enabled && bundle.manifest.code === undefined)
-              return yield* rejected("This plugin has no code to reload.");
-            const threadId = body.enabled ? body.threadId : undefined;
-            if (threadId !== undefined) {
-              // The person's own Thread, not archived: a Thread someone
-              // shared with them is driven by its owner's Orb.
-              const db = yield* decodeD1Binding(context.env.DB);
-              const owned = yield* Effect.tryPromise({
-                try: () =>
-                  db
-                    .prepare(
-                      `SELECT 1 AS ok FROM threads
-                        WHERE id = ?1 AND owner_user_id = ?2
-                          AND lifecycle_state = 'active'`,
-                    )
-                    .bind(threadId, context.get("principal").userId)
-                    .first(),
-                catch: (cause) =>
-                  PersistenceUnavailable.new(
-                    { operation: "pluginDev.thread" },
-                    cause,
-                  ),
-              });
-              if (owned === null)
-                return yield* rejected(
-                  "Hot reload turns on only for an active Thread of your own.",
-                );
-            }
-            yield* (yield* PluginTrustPolicies).setDev(id, threadId);
-            pluginTrustLogger.info(
-              `Plugin ${bundle.name} hot reload ${body.enabled ? "on" : "off"}.`,
-              {
-                event: "plugin_dev_toggle",
-                requestId: context.get("requestId"),
-                installId: id,
-                enabled: body.enabled,
-                threadId,
-              },
-            );
-            return yield* Schema.encodeUnknownEffect(
-              UpdatePluginBundleResponseSchema,
-            )({
-              status: "success",
-              data: (yield* bundlesData(
-                access.target,
-                [bundle],
-                context.get("principal").userId,
-              ))[0],
-            });
-          }),
-        { mutate: true },
-      ),
-    ),
-  );
-
-  // ─── Durable host ───
-  // A plugin's background jobs: anyone who can list the plugin sees them;
-  // stopping or starting one takes the right to change the plugin.
-  router.get("/:pluginId/jobs", (context) =>
-    run(
-      context,
-      operation(
-        context,
-        (access) =>
-          Effect.gen(function* () {
-            const id = yield* parseId(context);
-            const bundle = yield* (yield* PluginBundleRepository).find(
-              access.target,
-              id,
-            );
-            const data = yield* Effect.tryPromise(() =>
-              pluginJobsView({
-                bindings: context.env,
-                bundle,
-                viewerUserId: context.get("principal").userId,
-                canMutate: access.canMutate,
-                requestId: context.get("requestId"),
-              }),
-            );
-            return yield* Schema.encodeUnknownEffect(PluginJobsResponseSchema)({
-              status: "success",
-              data,
-            });
-          }),
-        { mutate: false },
-      ),
-    ),
-  );
-
-  for (const action of ["stop", "start"] as const)
-    router.post(`/:pluginId/jobs/:jobId/${action}`, (context) =>
-      run(
-        context,
-        operation(
-          context,
-          (access) =>
-            Effect.gen(function* () {
-              const id = yield* parseId(context);
-              const { jobId } = yield* decodeRequestInput(
-                PluginJobParamsSchema,
-                { jobId: context.req.param("jobId") },
-                () => rejected("That is not a job id."),
-              );
-              const body = yield* decodeJsonBody(
-                context.req,
-                PluginJobActionRequestSchema,
-                () => rejected("Send {} or { threadId }."),
-              );
-              const bundle = yield* (yield* PluginBundleRepository).find(
-                access.target,
-                id,
-              );
-              const done = yield* Effect.tryPromise(() =>
-                pluginJobAction({
-                  bindings: context.env,
-                  bundle,
-                  viewerUserId: context.get("principal").userId,
-                  requestId: context.get("requestId"),
-                  action,
-                  jobId,
-                  ...(body.threadId === undefined
-                    ? {}
-                    : { threadId: body.threadId }),
-                }),
-              );
-              if (!done)
-                return yield* rejected(
-                  "This plugin's jobs do not run here: its tier does not allow the durable host.",
-                );
-              return yield* Schema.encodeUnknownEffect(
-                PluginJobsResponseSchema,
-              )({
-                status: "success",
-                data: yield* Effect.tryPromise(() =>
-                  pluginJobsView({
-                    bindings: context.env,
-                    bundle,
-                    viewerUserId: context.get("principal").userId,
-                    canMutate: access.canMutate,
-                    requestId: context.get("requestId"),
-                  }),
-                ),
-              });
-            }),
-          { mutate: true },
-        ),
-      ),
-    );
 
   // Install-time settings of the plugin's code. Anyone who can list the
   // plugin reads them; changing them takes the right to change the plugin.
@@ -1726,12 +1684,6 @@ const registerRoutes = (
             const id = yield* parseId(context);
             const service = yield* PluginBundleService;
             yield* service.remove(access.target, id, audit(context));
-            // Rich plugins (P3): its Durable Objects and blobs go too.
-            try {
-              context.executionCtx.waitUntil(
-                purgeDurableInstall(context.env, id, context.get("requestId")),
-              );
-            } catch {}
             return yield* Schema.encodeUnknownEffect(
               RemovePluginBundleResponseSchema,
             )({ status: "success", data: { removedPluginId: id } });

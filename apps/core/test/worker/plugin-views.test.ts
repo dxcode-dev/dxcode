@@ -35,32 +35,25 @@ import { project, thread } from "./fixtures.js";
 import { runRepositories } from "./runtime.js";
 
 /**
- * Plugin views and calls, end to end through real Dynamic Workers and dx's HTTP routes: plugin
- * tabs, pages, Thread types, and plugin-to-plugin calls. What can go wrong,
- * and where each case is checked:
+ * Plugin calls and Thread types, end to end through real Dynamic Workers
+ * and dx's HTTP routes. What can go wrong, and where each case is checked:
  *
  * Calls (`ctx.plugins.call`):
  * - a call succeeds without `permissions.plugins` naming the callee.
  * - a call reaches a plugin that is not installed, or is off.
  * - a call reaches a function the callee's manifest does not export.
- * - a lower-tier caller reaches a higher-tier callee.
+ * - a personal plugin's call to a workspace plugin is refused for a tier.
  * - a call loops back into the chain (A → B → A), or chains forever.
  * - the callee runs with the caller's permissions, not its own.
  * - a call, allowed or refused, leaves no audit row.
  * - the refusal reaches the caller's code without its code.
  *
- * Tabs: a tab shows below the trusted tier; a tab its code did not
- * register shows; a tab shows in an archived Thread set to hide; a tab's
- * view or message route serves another plugin's view; a tab's code cannot
- * post to it live.
- *
- * Thread types: a Thread starts as a type its owner's plugins do not offer;
- * the type changes after creation; a Thread whose type's plugin is turned
- * off shows a blank or failing view instead of "unavailable".
- *
- * Pages: the catalog lists a page below the trusted tier, or another
- * person's; a page's view or message route serves a page nobody declared;
- * a page's `onMessage` gets a Thread it has none of.
+ * Thread types (a view described as data with `show: ["app"]`): a Thread
+ * starts as a type its owner's plugins do not offer; the type changes after
+ * creation; a Thread whose type's plugin is turned off, or that is archived,
+ * shows a failing view instead of "unavailable"; a plugin's
+ * `ctx.threads.create({ type })` starts a type that is not one of its own
+ * app views.
  */
 
 const origin = "http://dx.test";
@@ -78,34 +71,22 @@ const bindings = {
   DX_RUNNER_PROFILE_CATALOG: TEST_RUNNER_PROFILE_CATALOG,
 } as unknown as Bindings;
 
-const ROOM_HTML = "<!doctype html><title>Room</title><main id=room></main>";
-const BOARD_HTML = "<!doctype html><title>Board</title><main id=board></main>";
+/** A view described as data: the incident room and the board. */
+const VIEW = JSON.stringify({
+  title: "Incident",
+  state: { severity: "none" },
+  parts: [{ type: "stat", label: "Severity", bind: "severity" }],
+});
 
-/** An incident plugin: a room tab, a Thread type it draws, a page, and exports. */
+/**
+ * An incident plugin: a room view that is a Thread type, a board view that
+ * is only a page, exports, and a webhook that starts Threads.
+ */
 const incidentCode = `
 export default function (dx) {
-  dx.registerView({
-    id: "room",
-    html: ${JSON.stringify(ROOM_HTML)},
-    async onMessage(message, ctx) {
-      if (message?.snapshot !== undefined) {
-        // The tab's state for an archived Thread; incident has no pane grant.
-        await ctx.panes.get("room").snapshot(message.snapshot);
-        return { saved: true };
-      }
-      await ctx.panes.get("room").post({ ack: message });
-      return { thread: ctx.thread?.id ?? null };
-    },
-  });
-  dx.registerView({
-    id: "board",
-    html: ${JSON.stringify(BOARD_HTML)},
-    async onMessage(message, ctx) {
-      return { page: true, thread: ctx.thread === undefined ? null : ctx.thread.id, message };
-    },
-  });
-  // Declared nowhere in the manifest: dx never serves it.
-  dx.registerView({ id: "hidden", html: "<p>hidden</p>" });
+  dx.on("trigger.received", async (event, ctx) =>
+    ctx.threads.create({ prompt: "Incident " + event.deliveryId, title: event.data.title ?? "Incident", ...(event.data.type === undefined ? {} : { type: event.data.type }) }),
+  );
   dx.expose({
     async status(args, ctx) {
       return {
@@ -148,7 +129,7 @@ export default function (dx) {
         notExported: await attempt(ctx, "incident", "secret", {}),
         notPermitted: await attempt(ctx, "secrets", "get", {}),
         notInstalled: await attempt(ctx, "ghost", "run", {}),
-        lowerTier: await attempt(ctx, "cloud", "provision", {}),
+        workspacePlugin: await attempt(ctx, "cloud", "provision", {}),
         hasFetch: typeof ctx.fetch,
       };
     },
@@ -188,28 +169,32 @@ const manifest = (
 const incidentFiles = (extra: Record<string, unknown> = {}) => [
   ...manifest("incident", {
     permissions: {
-      events: [],
+      events: ["trigger.received"],
       network: ["status.example.com"],
       plugins: ["deploy"],
+      threads: ["create"],
     },
     settings: [{ key: "region", label: "Region", default: "eu" }],
-    views: {
-      tabs: [{ id: "room", title: "Incident room", icon: "lucide:siren" }],
-      pages: [{ id: "board", title: "Incidents", path: "/open" }],
-      threadTypes: [
-        {
-          id: "room",
-          title: "Incident room",
-          icon: "lucide:siren",
-          view: "room",
-          chat: "side",
-        },
-      ],
-    },
+    views: [
+      {
+        id: "room",
+        title: "Incident room",
+        icon: "lucide:siren",
+        file: "views/incident.json",
+        show: ["app"],
+      },
+      {
+        id: "board",
+        title: "Incidents",
+        file: "views/incident.json",
+        show: ["page"],
+      },
+    ],
     exports: [{ name: "status", description: "The incident's status." }],
     ...extra,
   }),
   { name: "dev.dxcode/index.js", content: incidentCode },
+  { name: "views/incident.json", content: VIEW },
 ];
 
 const deployFiles = (extra: Record<string, unknown> = {}) => [
@@ -386,7 +371,7 @@ describe("plugin-to-plugin calls", () => {
     const owner = await person();
     await install(owner.personal, owner.userId, incidentFiles());
     await install(owner.personal, owner.userId, deployFiles());
-    // A workspace install runs at a higher tier than a personal one.
+    // A workspace install a personal one may call.
     await install(owner.workspace, owner.userId, cloudFiles());
 
     const result = (await callPluginTool(
@@ -421,11 +406,8 @@ describe("plugin-to-plugin calls", () => {
       name: "PluginCallRefused",
       code: "not-installed",
     });
-    expect(result.lowerTier).toMatchObject({
-      name: "PluginCallRefused",
-      code: "lower-tier",
-    });
-    expect(result.lowerTier?.message).toContain("workspace-trusted");
+    // No tiers: a personal plugin reaches a workspace plugin it lists.
+    expect(result.workspacePlugin).toEqual({ ok: { provisioned: true } });
 
     const rows = (await callAudit("deploy")).results.map((row) => [
       row.target,
@@ -438,7 +420,7 @@ describe("plugin-to-plugin calls", () => {
         ["incident.secret", "rejected", "not-exported"],
         ["secrets.get", "rejected", "not-permitted"],
         ["ghost.run", "rejected", "not-installed"],
-        ["cloud.provision", "rejected", "lower-tier"],
+        ["cloud.provision", "success", null],
       ]),
     );
   });
@@ -468,111 +450,31 @@ describe("plugin-to-plugin calls", () => {
       ),
     ).toBe(true);
   });
-
-  it("refuses a caller whose requested tier is lower than the callee's", async () => {
-    const owner = await person();
-    await install(owner.personal, owner.userId, incidentFiles());
-    await install(
-      owner.personal,
-      owner.userId,
-      deployFiles({ tier: "sandboxed" }),
-    );
-    const result = (await callPluginTool(
-      await dependenciesOf(owner.threadId, owner.userId, "deploy"),
-      "deploy",
-      {},
-    )) as Record<string, { code?: string }>;
-    expect(result.allowed).toMatchObject({ code: "lower-tier" });
-  });
 });
 
-describe("plugin tabs and Thread types", () => {
-  it("lists a trusted plugin's tab, serves its view, and answers and posts to it", async () => {
-    const owner = await person();
-    await install(owner.personal, owner.userId, incidentFiles());
-    const ui = await json<{
-      tabs: ReadonlyArray<Record<string, unknown>>;
-      panes: ReadonlyArray<unknown>;
-    }>(await owner.call(`/v1/threads/${owner.threadId}/plugin-ui`));
-    expect(ui.tabs).toEqual([
-      {
-        plugin: "incident",
-        tab: "room",
-        title: "Incident room",
-        pluginTitle: "Incident",
-        version: expect.any(String),
-        icon: "lucide:siren",
-      },
-    ]);
-    expect(ui.panes).toEqual([]);
-    const base = `/v1/threads/${owner.threadId}/plugin-ui/panes/incident`;
-    expect(
-      (await json<{ html: string }>(await owner.call(`${base}/room`))).html,
-    ).toBe(ROOM_HTML);
-    // A view no tab declares, and a page's view, are not tabs.
-    expect((await owner.call(`${base}/hidden`)).status).toBe(404);
-    expect((await owner.call(`${base}/board`)).status).toBe(404);
-    const answered = await json<{ result: unknown }>(
-      await owner.call(`${base}/room/messages`, {
-        method: "POST",
-        body: JSON.stringify({ message: { ack: 1 } }),
-      }),
-    );
-    expect(answered.result).toEqual({ thread: owner.threadId });
-    const { messages } = await json<{
-      messages: ReadonlyArray<{ message: unknown }>;
-    }>(await owner.call(`${base}/room/messages`));
-    expect(messages.map(({ message }) => message)).toEqual([
-      { ack: { ack: 1 } },
-    ]);
-  });
-
-  it("lets a Thread tab save the snapshot an archived Thread shows, with no pane grant", async () => {
-    const owner = await person();
-    await install(
-      owner.personal,
-      owner.userId,
-      incidentFiles({ archivedThreads: "show" }),
-    );
-    const base = `/v1/threads/${owner.threadId}/plugin-ui/panes/incident/room`;
-    const saved = await owner.call(`${base}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ message: { snapshot: { open: 2 } } }),
-    });
-    expect(saved.status).toBe(200);
-    expect((await json<{ result: unknown }>(saved)).result).toEqual({
-      saved: true,
-    });
-    await env.DB.prepare(
-      "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
-    )
-      .bind(owner.threadId)
-      .run();
-    const { messages } = await json<{
-      messages: ReadonlyArray<{ message: unknown }>;
-    }>(await owner.call(`${base}/messages`));
-    expect(messages.map(({ message }) => message)).toEqual([{ open: 2 }]);
-  });
-
-  it("starts a Thread as a plugin type, keeps it, and falls back to a chat when the plugin is off", async () => {
+describe("Thread types from views described as data", () => {
+  it("starts a Thread as a plugin type, keeps it, and falls back to a chat when archived or off", async () => {
     const owner = await person();
     const pluginId = await install(
       owner.personal,
       owner.userId,
       incidentFiles(),
     );
-    const refused = await owner.call("/v1/threads", {
-      method: "POST",
-      body: JSON.stringify({
-        projectId: owner.projectId,
-        title: "Nope",
-        pluginThreadType: "incident/war-room",
-      }),
-    });
-    expect(refused.status).toBe(422);
-    expect(await refused.json()).toMatchObject({
-      data: { code: "PLUGIN_THREAD_TYPE_UNAVAILABLE" },
-    });
+    // A page-only view is not a Thread type, and neither is a missing one.
+    for (const ref of ["incident/board", "incident/war-room"]) {
+      const refused = await owner.call("/v1/threads", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId: owner.projectId,
+          title: "Nope",
+          pluginThreadType: ref,
+        }),
+      });
+      expect(refused.status).toBe(422);
+      expect(await refused.json()).toMatchObject({
+        data: { code: "PLUGIN_THREAD_TYPE_UNAVAILABLE" },
+      });
+    }
     const created = await owner.call("/v1/threads", {
       method: "POST",
       body: JSON.stringify({
@@ -601,17 +503,15 @@ describe("plugin tabs and Thread types", () => {
       chat: "side",
       available: true,
     });
-    // Archived and hidden: the tab and the type's view go away.
+    // Archived: the type's view goes away.
     await env.DB.prepare(
       "UPDATE threads SET lifecycle_state = 'archived' WHERE id = ?",
     )
       .bind(id)
       .run();
-    const archived = await json<{
-      tabs: ReadonlyArray<unknown>;
-      threadType?: { available: boolean };
-    }>(await owner.call(`/v1/threads/${id}/plugin-ui`));
-    expect(archived.tabs).toEqual([]);
+    const archived = await json<{ threadType?: { available: boolean } }>(
+      await owner.call(`/v1/threads/${id}/plugin-ui`),
+    );
     expect(archived.threadType?.available).toBe(false);
     await env.DB.prepare(
       "UPDATE threads SET lifecycle_state = 'active' WHERE id = ?",
@@ -622,11 +522,9 @@ describe("plugin tabs and Thread types", () => {
     await env.DB.prepare("UPDATE trusted_plugin SET enabled = 0 WHERE id = ?")
       .bind(pluginId)
       .run();
-    const off = await json<{
-      tabs: ReadonlyArray<unknown>;
-      threadType?: Record<string, unknown>;
-    }>(await owner.call(`/v1/threads/${id}/plugin-ui`));
-    expect(off.tabs).toEqual([]);
+    const off = await json<{ threadType?: Record<string, unknown> }>(
+      await owner.call(`/v1/threads/${id}/plugin-ui`),
+    );
     expect(off.threadType).toEqual({
       ref: "incident/room",
       plugin: "incident",
@@ -643,176 +541,44 @@ describe("plugin tabs and Thread types", () => {
     ).toBe("incident/room");
   });
 
-  it("shows a personal install's tab and Thread type only to its owner; a workspace member gets a chat", async () => {
+  it("lets a plugin's ctx.threads.create start only its own app views as Thread types", async () => {
     const owner = await person();
-    const member = await person(false);
     await install(owner.personal, owner.userId, incidentFiles());
-    const created = await owner.call("/v1/threads", {
-      method: "POST",
-      body: JSON.stringify({
-        projectId: owner.projectId,
-        title: "Shared room",
-        pluginThreadType: "incident/room",
-      }),
-    });
-    expect(created.status).toBe(201);
-    const { id } = ((await created.json()) as { data: { id: string } }).data;
-    // The member joins the owner's workspace, and the owner shares the
-    // Project and the Thread with it.
-    await env.DB.batch([
-      env.DB.prepare(
-        "INSERT INTO member (id, organizationId, userId, role, createdAt) VALUES (?, ?, ?, 'member', 1)",
-      ).bind(`${owner.workspaceId}-2`, owner.workspaceId, member.userId),
-      env.DB.prepare("UPDATE projects SET workspace_id = ? WHERE id = ?").bind(
-        owner.workspaceId,
-        owner.projectId,
-      ),
-      env.DB.prepare(
-        "UPDATE threads SET workspace_access = 'view', shared_workspace_id = ? WHERE id = ?",
-      ).bind(owner.workspaceId, id),
-    ]);
-    const mine = await json<{
-      tabs: ReadonlyArray<unknown>;
-      threadType?: { available: boolean };
-    }>(await owner.call(`/v1/threads/${id}/plugin-ui`));
-    expect(mine.tabs).toHaveLength(1);
-    expect(mine.threadType?.available).toBe(true);
-    const theirs = await json<{
-      tabs: ReadonlyArray<unknown>;
-      threadType?: { available: boolean };
-    }>(await member.call(`/v1/threads/${id}/plugin-ui`));
-    expect(theirs.tabs).toEqual([]);
-    expect(theirs.threadType?.available).toBe(false);
-    expect(
-      (await member.call(`/v1/threads/${id}/plugin-ui/panes/incident/room`))
-        .status,
-    ).toBe(404);
-  });
-
-  it("drops tabs, pages, and Thread types below the trusted tier", async () => {
-    const owner = await person();
-    await install(
-      owner.personal,
-      owner.userId,
-      incidentFiles({ tier: "sandboxed" }),
-    );
-    const ui = await json<{ tabs: ReadonlyArray<unknown> }>(
-      await owner.call(`/v1/threads/${owner.threadId}/plugin-ui`),
-    );
-    expect(ui.tabs).toEqual([]);
-    expect(
-      (
-        await owner.call(
-          `/v1/threads/${owner.threadId}/plugin-ui/panes/incident/room`,
-        )
-      ).status,
-    ).toBe(404);
-    const catalog = await json<{
-      pages: ReadonlyArray<unknown>;
-      threadTypes: ReadonlyArray<unknown>;
-    }>(await owner.call("/v1/plugins/views"));
-    expect(catalog).toEqual({ pages: [], threadTypes: [] });
-    expect(
-      (await owner.call("/v1/plugins/views/incident/pages/board")).status,
-    ).toBe(404);
-    const refused = await owner.call("/v1/threads", {
-      method: "POST",
-      body: JSON.stringify({
-        projectId: owner.projectId,
-        title: "Room",
-        pluginThreadType: "incident/room",
-      }),
-    });
-    expect(refused.status).toBe(422);
-  });
-});
-
-describe("plugin pages", () => {
-  it("lists the person's pages and Thread types, serves a page, and answers it with no Thread", async () => {
-    const owner = await person();
-    const other = await person();
-    await install(owner.personal, owner.userId, incidentFiles());
-    const catalogResponse = await owner.call("/v1/plugins/views");
-    expect(catalogResponse.headers.get("cache-control")).toBe(
-      "private, max-age=60",
-    );
-    const etag = catalogResponse.headers.get("etag");
-    expect(await json(catalogResponse)).toEqual({
-      pages: [
-        {
-          plugin: "incident",
-          page: "board",
-          title: "Incidents",
-          pluginTitle: "Incident",
-          path: "/open",
-        },
-      ],
-      threadTypes: [
-        {
-          ref: "incident/room",
-          plugin: "incident",
-          type: "room",
-          title: "Incident room",
-          pluginTitle: "Incident",
-          chat: "side",
-          icon: "lucide:siren",
-        },
-      ],
-    });
-    // Unchanged: 304, with no body.
-    expect(etag).not.toBeNull();
-    const again = await owner.call("/v1/plugins/views", {
-      headers: { "if-none-match": etag ?? "" },
-    });
-    expect(again.status).toBe(304);
-    // Another person sees none of it.
-    expect(await json(await other.call("/v1/plugins/views"))).toEqual({
-      pages: [],
-      threadTypes: [],
-    });
-    expect(
-      (await other.call("/v1/plugins/views/incident/pages/board")).status,
-    ).toBe(404);
-
-    const view = await json<{
-      html: string;
-      title: string;
-      handlesMessages: boolean;
-    }>(await owner.call("/v1/plugins/views/incident/pages/board"));
-    expect(view).toMatchObject({
-      html: BOARD_HTML,
-      title: "Incidents",
-      handlesMessages: true,
-    });
-    // A tab's view is not a page.
-    expect(
-      (await owner.call("/v1/plugins/views/incident/pages/room")).status,
-    ).toBe(404);
-    const answered = await json<{ result: unknown }>(
-      await owner.call("/v1/plugins/views/incident/pages/board/messages", {
-        method: "POST",
-        body: JSON.stringify({ message: { refresh: true } }),
-      }),
-    );
-    expect(answered.result).toEqual({
-      page: true,
-      thread: null,
-      message: { refresh: true },
-    });
-    const audit = await env.DB.prepare(
-      "SELECT count(*) AS n FROM plugin_audit WHERE plugin_name = 'incident' AND action = 'page.message' AND owner_user_id = ?",
+    const incident = (
+      await listOwnerCodePluginInstalls(env.DB, owner.userId)
+    ).find(({ name }) => name === "incident");
+    if (incident === undefined) throw new Error("incident did not resolve.");
+    const deliver = (deliveryId: string, data: Record<string, unknown>) =>
+      deliverCodePluginTrigger(bindings, env.DB, {
+        install: incident,
+        ownerUserId: owner.userId,
+        triggerId: "trg_incident",
+        deliveryId,
+        eventId: `evt_${deliveryId}`,
+        idempotencyKey: `key_${deliveryId}`,
+        attempt: 1,
+        payload: data,
+      });
+    await deliver("dlv_typed", { title: "Typed room", type: "room" });
+    const typed = await env.DB.prepare(
+      "SELECT plugin_thread_type FROM threads WHERE owner_user_id = ? AND title = 'Typed room'",
+    )
+      .bind(owner.userId)
+      .first<string | null>("plugin_thread_type");
+    expect(typed).toBe("incident/room");
+    // The board shows only as a page, so it is no Thread type.
+    await expect(
+      deliver("dlv_board", { title: "Board room", type: "board" }),
+    ).rejects.toThrow(/no view board that shows as an app/);
+    const board = await env.DB.prepare(
+      "SELECT count(*) AS n FROM threads WHERE owner_user_id = ? AND title = 'Board room'",
     )
       .bind(owner.userId)
       .first<number>("n");
-    expect(audit).toBe(1);
+    expect(board).toBe(0);
   });
 });
 
-/**
- * A Thread title is at most 80 characters. Ways a long one could still fail
- * creation, each checked: a plugin's `ctx.threads.create({ title })` passes
- * it through as given; the agent's `create_thread` tool does the same.
- */
 describe("long Thread titles", () => {
   const LONG_TITLE =
     `Incident ${"checkout latency spike in eu-west ".repeat(6)}`.slice(0, 200);
@@ -821,32 +587,30 @@ describe("long Thread titles", () => {
       .bind(threadId)
       .first<string>("title");
 
-  it("shortens a plugin page's ctx.threads.create title instead of failing", async () => {
+  it("shortens a plugin's ctx.threads.create title instead of failing", async () => {
     const owner = await person();
-    await install(owner.personal, owner.userId, [
-      ...manifest("titles", {
-        permissions: { events: [], threads: ["create"] },
-        views: { pages: [{ id: "start", title: "Start", path: "/" }] },
-      }),
-      {
-        name: "dev.dxcode/index.js",
-        content: `export default function (dx) {
-  dx.registerView({
-    id: "start",
-    html: "<p>start</p>",
-    onMessage: (message, ctx) => ctx.threads.create({ prompt: "Long title check.", title: message.title }),
-  });
-}`,
-      },
-    ]);
+    await install(owner.personal, owner.userId, incidentFiles());
+    const incident = (
+      await listOwnerCodePluginInstalls(env.DB, owner.userId)
+    ).find(({ name }) => name === "incident");
+    if (incident === undefined) throw new Error("incident did not resolve.");
     expect(LONG_TITLE.length).toBe(200);
-    const answered = await json<{ result: { threadId: string } }>(
-      await owner.call("/v1/plugins/views/titles/pages/start/messages", {
-        method: "POST",
-        body: JSON.stringify({ message: { title: LONG_TITLE } }),
-      }),
-    );
-    const title = await titleOf(answered.result.threadId);
+    await deliverCodePluginTrigger(bindings, env.DB, {
+      install: incident,
+      ownerUserId: owner.userId,
+      triggerId: "trg_titles",
+      deliveryId: "dlv_titles",
+      eventId: "evt_titles",
+      idempotencyKey: "key_titles",
+      attempt: 1,
+      payload: { title: LONG_TITLE },
+    });
+    const started = await env.DB.prepare(
+      "SELECT id FROM threads WHERE owner_user_id = ? AND title LIKE 'Incident checkout%'",
+    )
+      .bind(owner.userId)
+      .first<string>("id");
+    const title = await titleOf(started ?? "");
     expect(title?.length).toBeLessThanOrEqual(80);
     expect(title?.endsWith("…")).toBe(true);
     expect(LONG_TITLE.startsWith(title?.slice(0, -1).trimEnd() ?? "x")).toBe(
@@ -955,61 +719,5 @@ describe("host review items", () => {
     const other = (await started("dlv_other")).results;
     expect(other).toHaveLength(2);
     expect(other.map(({ id }) => id)).not.toContain(once[0]?.id);
-  });
-
-  it("refunds a wake whose message is not posted, so it spends none of the hour's wakes", async () => {
-    const owner = await person();
-    await install(owner.personal, owner.userId, [
-      ...manifest("waker", {
-        permissions: { events: [], wake: true },
-      }),
-      {
-        name: "dev.dxcode/index.js",
-        content: `export default function (dx) {
-  dx.registerTool({
-    name: "wake",
-    description: "Wakes the Thread.",
-    execute: async (input, ctx) => ctx.wake(input.threadId, "Wake up.").then(
-      () => "woke",
-      (error) => error.message,
-    ),
-  });
-}`,
-      },
-    ]);
-    const dependencies = await dependenciesOf(
-      owner.threadId,
-      owner.userId,
-      "waker",
-    );
-    // Seven tries, more than the hour's six: none reaches the Thread.
-    const answers: unknown[] = [];
-    for (let tries = 0; tries < 7; tries += 1)
-      answers.push(
-        await callPluginTool(dependencies, "wake", {
-          threadId: owner.threadId,
-        }),
-      );
-    expect(answers.filter((answer) => answer === "woke")).toEqual([]);
-    expect(
-      answers.filter((answer) => String(answer).includes("times an hour")),
-    ).toEqual([]);
-    const rows = (
-      await env.DB.prepare(
-        `SELECT id, outcome, detail_json FROM plugin_audit
-          WHERE plugin_name = 'waker' AND action = 'thread.wake'`,
-      ).all<{ id: string; outcome: string; detail_json: string }>()
-    ).results;
-    // Each try: the wake's row, and a failed row that refunds it.
-    const woke = rows.filter(({ outcome }) => outcome === "success");
-    const refunded = rows
-      .filter(({ outcome }) => outcome === "failed")
-      .map(
-        ({ detail_json }) =>
-          (JSON.parse(detail_json) as { refunds?: string }).refunds,
-      );
-    expect(woke).toHaveLength(7);
-    expect(refunded.sort()).toEqual(woke.map(({ id }) => id).sort());
-    expect(rows).toHaveLength(14);
   });
 });

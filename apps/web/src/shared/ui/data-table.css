@@ -103,6 +103,32 @@
   .dx-data-table-sort svg[data-idle] {
     opacity: 0.45;
   }
+  /* maxHeight: the rows scroll under the header; only those in view exist,
+     with a spacer row above and below for the rest. */
+  .dx-data-table[data-virtual] .dx-data-table-scroll {
+    overflow: auto;
+    overscroll-behavior: contain;
+  }
+  .dx-data-table[data-virtual] .dx-data-table-scroll:focus-visible {
+    outline: none;
+    box-shadow: inset var(--focus-ring);
+  }
+  .dx-data-table[data-virtual] thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--dx-data-table-header-background, var(--card));
+    box-shadow: inset 0 -1px 0 var(--divider);
+  }
+  .dx-data-table[data-virtual] thead tr {
+    border-bottom: 0;
+  }
+  .dx-data-table tr.dx-data-table-spacer {
+    border-bottom: 0;
+  }
+  .dx-data-table .dx-data-table-spacer td {
+    padding: 0;
+  }
   .dx-data-table-state td {
     padding: 0;
   }
