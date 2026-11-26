@@ -1,8 +1,11 @@
 import {
   MAX_MCP_SERVERS_PER_THREAD,
+  MAX_MCP_TIMEOUT_MS,
+  MAX_MCP_TOOLS_PER_SERVER,
   MAX_PERSONAL_AGENT_INSTRUCTIONS_LENGTH,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_RESOURCE_FILES,
+  MIN_MCP_TIMEOUT_MS,
 } from "@dx/domain";
 import * as v from "valibot";
 
@@ -58,20 +61,20 @@ export const DxAgentInitialDataSchema = v.object({
                   ),
                 }),
               ),
-              v.maxLength(64),
+              v.maxLength(MAX_MCP_TOOLS_PER_SERVER),
             ),
           ),
           endpoint: v.pipe(v.string(), v.url(), v.maxLength(2_048)),
           timeoutMs: v.pipe(
             v.number(),
             v.integer(),
-            v.minValue(1_000),
-            v.maxValue(30_000),
+            v.minValue(MIN_MCP_TIMEOUT_MS),
+            v.maxValue(MAX_MCP_TIMEOUT_MS),
           ),
           authenticated: v.boolean(),
           tools: v.pipe(
             v.array(v.pipe(v.string(), v.minLength(1), v.maxLength(128))),
-            v.maxLength(64),
+            v.maxLength(MAX_MCP_TOOLS_PER_SERVER),
           ),
         }),
       ),

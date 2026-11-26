@@ -48,6 +48,7 @@ most of it Chromium and its libraries.
   with pip and venv, `build-essential` and common `-dev` headers, git,
   git-lfs, the GitHub CLI 2.103.3 from its own release (Core's source runtime
   needs gh 2.40 or later), ripgrep, jq, curl, wget, zip, and procps.
+- Claude Code 2.1.326 for `user`, pinned by SHA-256 ([below](#claude-code)).
 - The dx toolbelt in `/opt/dx`: tmux 3.7c for the Terminal (below), also
   `tmux` on `PATH`; the Desktop (below); `dx-orb-check`.
 - This covers what E2B's `base` image and the earlier dx template added
@@ -83,6 +84,55 @@ move to another tmux release, change the URL and checksum here, in the
 toolbelt's [`flake.nix`](toolbelt/flake.nix), and in the dxd CI workflow
 (`.github/workflows/dxd.yml`), whose Terminal tests run against the same
 binary.
+
+## Claude Code
+
+Claude Code mode runs `~/.local/bin/claude` as `user`. `install.sh` pins one
+release, `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_SHA256`: it downloads
+Anthropic's `linux-x64` binary of that release from `downloads.claude.ai`,
+fails the build unless its SHA-256 matches, puts it where the native
+installer keeps each version (`~/.local/share/claude/versions/<version>`),
+and runs that binary's own `claude install <version>`, which finds it there
+and links `~/.local/bin/claude` to it. The build fails again unless the link
+resolves to the pinned bytes and reports the pinned version. The executor
+image ([`deploy/executor/claude-code/Dockerfile`](../executor/claude-code/Dockerfile))
+pins the same release. claude.ai's `install.sh` is never run at build time:
+it downloads the `latest` build before anything is pinned.
+
+The pin must be at least `CLAUDE_CODE_MIN_VERSION` in
+[`workspace-run.ts`](../../apps/core/src/claude-code/workspace-run.ts);
+an older one makes every Orb install the unpinned `latest` release at its
+first Claude Code turn.
+[`downloads.test.mjs`](downloads.test.mjs) checks that, that both images pin
+the same release, and that every downloaded file is checked before use.
+
+To move to another release:
+
+1. Pick a version published at least 3 days ago, so a bad or compromised
+   release has time to be found and pulled. npm records each one's
+   publish time:
+
+   ```sh
+   curl -fsSL https://registry.npmjs.org/@anthropic-ai/claude-code | jq -r '.time | to_entries[] | "\(.key) \(.value)"' | tail
+   ```
+
+   Prefer the `stable` channel's version
+   (`curl -fsSL https://downloads.claude.ai/claude-code-releases/stable`)
+   when it is that old.
+2. Read the binary's SHA-256 from the release manifest, then download the
+   binary and check it gives the same sum:
+
+   ```sh
+   V=2.1.326
+   curl -fsSL https://downloads.claude.ai/claude-code-releases/$V/manifest.json | jq -r '.platforms["linux-x64"].checksum'
+   curl -fsSL https://downloads.claude.ai/claude-code-releases/$V/linux-x64/claude | sha256sum
+   ```
+
+3. Set `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_SHA256` in `install.sh`, and
+   the version (in the URL and the two `install` arguments) and both
+   SHA-256 sums in the executor Dockerfile.
+4. Run `pnpm exec vitest run deploy/orb/downloads.test.mjs`. The pull
+   request's preview builds both images with the new release.
 
 ## dxd from the entrypoint
 

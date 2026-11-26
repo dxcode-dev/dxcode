@@ -31,6 +31,7 @@ import {
 import {
   DEFAULT_MCP_CLIENT_NAME,
   EnvironmentVariableRepository,
+  MAX_MCP_TIMEOUT_MS,
   type McpClientName,
   type McpServerAuthType,
   McpServerEndpoint,
@@ -43,6 +44,7 @@ import {
   type McpServerTarget,
   McpServerTimeoutMs,
   type McpServerWithTools,
+  MIN_MCP_TIMEOUT_MS,
   normalizeMcpServerName,
   PersistenceUnavailable,
   type Principal,
@@ -322,7 +324,12 @@ const validateEndpoint = (value: string) => {
 const validateTimeout = (value: number) =>
   Schema.decodeEffect(McpServerTimeoutMs)(value).pipe(
     Effect.mapError(() =>
-      invalid(fieldError("timeoutMs", "Choose 1,000–30,000 milliseconds.")),
+      invalid(
+        fieldError(
+          "timeoutMs",
+          `Choose ${MIN_MCP_TIMEOUT_MS.toLocaleString("en-US")}–${MAX_MCP_TIMEOUT_MS.toLocaleString("en-US")} milliseconds.`,
+        ),
+      ),
     ),
   );
 

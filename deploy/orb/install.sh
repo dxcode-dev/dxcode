@@ -50,6 +50,13 @@ umask 022
 TOOLBELT_VERSION=c8f8171315bb15be
 TOOLBELT_SHA256=36feed804bc95445dad36149cc9c22073c9b784f1781c802b4b184b3b1ccbd23
 
+# The Claude Code release this installer pins: Anthropic's linux-x64 binary
+# and its SHA-256 from that release's manifest.json. To move to another
+# release, see "Claude Code" in deploy/orb/README.md; the executor image
+# (deploy/executor/claude-code/Dockerfile) pins the same one.
+CLAUDE_CODE_VERSION=2.1.326
+CLAUDE_CODE_SHA256=b6b3647d981130dc44fc670846ae97b6cde531ffb667cf9c4d17cfcafb38cb37
+
 parts=" ${*:4} "
 [ "$parts" = "  " ] && parts=" packages runtimes toolbelt finish "
 want() { [[ $parts == *" $1 "* ]]; }
@@ -223,11 +230,24 @@ ln -sfn /home/user/.local/state/dxd/bin/dxd /usr/local/bin/dxd
 # Every binary Core's daemon installer and source runtime invoke.
 for bin in sudo curl sha256sum install cmp git git-lfs gh bash setpriv setsid readlink tini rg jq node java python3 awk tmux; do command -v "$bin" >/dev/null || { echo "missing required binary: $bin"; exit 1; }; done
 
-# 6. Claude Code for Claude Code mode, pinned and self-update disabled at run
-# time (DISABLE_AUTOUPDATER), in ~/.local/bin of the workspace account. The
-# installer is saved before it runs: a retried download piped into bash
-# could feed it the failed attempt's bytes twice.
-sudo -u user -H bash -c 'cd /home/user && curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o /tmp/claude-install.sh https://claude.ai/install.sh && bash /tmp/claude-install.sh 2.1.296 && rm /tmp/claude-install.sh && /home/user/.local/bin/claude --version'
+# 6. Claude Code for Claude Code mode, in ~/.local/bin of the workspace
+# account, self-update disabled at run time (DISABLE_AUTOUPDATER). The
+# pinned binary is downloaded and checked here, never through claude.ai's
+# installer script, which fetches the `latest` build before anything is
+# pinned. Placed where the native installer keeps each version, its own
+# `claude install` finds it and only links ~/.local/bin/claude to it; the
+# link must still resolve to the pinned bytes.
+claude_versions=/home/user/.local/share/claude/versions
+curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 20 -o "$work/claude" "https://downloads.claude.ai/claude-code-releases/$CLAUDE_CODE_VERSION/linux-x64/claude"
+test "$(sha256sum "$work/claude" | cut -d " " -f 1)" = "$CLAUDE_CODE_SHA256" || { echo "install.sh: Claude Code $CLAUDE_CODE_VERSION does not match its pinned SHA-256" >&2; false; }
+sudo -u user -H mkdir -p "$claude_versions"
+install -o user -g user -m 0755 "$work/claude" "$claude_versions/$CLAUDE_CODE_VERSION"
+rm -f "$work/claude"
+sudo -u user -H bash -c 'cd /home/user && DISABLE_AUTOUPDATER=1 "$1" install "$2"' bash "$claude_versions/$CLAUDE_CODE_VERSION" "$CLAUDE_CODE_VERSION"
+test "$(sha256sum /home/user/.local/bin/claude | cut -d " " -f 1)" = "$CLAUDE_CODE_SHA256" || { echo "install.sh: ~/.local/bin/claude is not the pinned Claude Code $CLAUDE_CODE_VERSION" >&2; false; }
+claude_reports=$(sudo -u user -H /home/user/.local/bin/claude --version)
+echo "Claude Code: $claude_reports"
+[[ $claude_reports == "$CLAUDE_CODE_VERSION "* ]]
 
 apt-get clean
 rm -rf /var/lib/apt/lists/*

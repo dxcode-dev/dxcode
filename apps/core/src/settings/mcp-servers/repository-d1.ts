@@ -51,9 +51,16 @@ const McpToolRow = Schema.Struct({
   reviewed_at: Schema.NullOr(Schema.String),
 });
 
+/**
+ * `timeout_ms` keeps its 1 to 30 second CHECK (migration 0011); the full
+ * timeout, up to 5 minutes, is `request_timeout_ms` (migration 0247).
+ */
+const legacyTimeoutMs = (timeoutMs: number) => Math.min(timeoutMs, 30_000);
+
 const columns = `
   id, scope, target_id, name, endpoint, transport,
-  auth_environment_variable_id, timeout_ms, enabled,
+  auth_environment_variable_id,
+  COALESCE(request_timeout_ms, timeout_ms) AS timeout_ms, enabled,
   project_ids_json, roles_json, health_status, health_checked_at,
   health_error_code, created_at, updated_at,
   EXISTS (
@@ -416,8 +423,8 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                      project_ids_json, roles_json, health_status,
                      health_checked_at, health_error_code, created_at, updated_at,
                      auth_type, client_name, oauth_client_id, headers_json,
-                     module_id, plugin_id
-                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                     module_id, plugin_id, request_timeout_ms
+                   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 )
                 .bind(
                   value.id,
@@ -427,7 +434,7 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   value.endpoint,
                   value.transport,
                   value.authReference?.id ?? null,
-                  value.timeoutMs,
+                  legacyTimeoutMs(value.timeoutMs),
                   value.enabled ? 1 : 0,
                   JSON.stringify(value.projectIds),
                   JSON.stringify(value.roles),
@@ -440,6 +447,7 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   encodedTimestamp(value.updatedAt),
                   ...newColumns(value),
                   value.pluginId ?? null,
+                  value.timeoutMs,
                 )
                 .run(),
             catch: unavailable("settings.mcpServers.insert"),
@@ -461,14 +469,14 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                           roles_json = ?, health_status = ?, health_checked_at = ?,
                           health_error_code = ?, updated_at = ?, auth_type = ?,
                           client_name = ?, oauth_client_id = ?, headers_json = ?,
-                          module_id = ?
+                          module_id = ?, request_timeout_ms = ?
                     WHERE scope = ? AND target_id = ? AND id = ?`,
                 )
                 .bind(
                   value.name,
                   value.endpoint,
                   value.authReference?.id ?? null,
-                  value.timeoutMs,
+                  legacyTimeoutMs(value.timeoutMs),
                   value.enabled ? 1 : 0,
                   JSON.stringify(value.projectIds),
                   JSON.stringify(value.roles),
@@ -479,6 +487,7 @@ export const McpServerRepositoryD1 = (db: D1Database) =>
                   value.healthErrorCode ?? null,
                   encodedTimestamp(value.updatedAt),
                   ...newColumns(value),
+                  value.timeoutMs,
                   value.target.scope,
                   value.target.id,
                   value.id,

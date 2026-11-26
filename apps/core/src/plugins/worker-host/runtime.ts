@@ -38,6 +38,21 @@ export const linkApiImports = (path: string, source: string) => {
 
 /** Each event handler has this long; a hung handler is a failed one. */
 export const HANDLER_TIMEOUT_MS = 10_000;
+/** A webhook delivery's `trigger.received` handler has this long. */
+export const TRIGGER_HANDLER_TIMEOUT_MS = 25_000;
+/**
+ * A schedule's run and a listener's message are the whole call, so their
+ * handlers get the call's limit (`callMs`, `pluginCallLimitMs`).
+ */
+const CALL_LIMIT_EVENTS: ReadonlyArray<string> = ["job.run", "listener.event"];
+
+/** How long one handler of `event` has, in a call that gets `callMs`. */
+export const handlerTimeoutMs = (event: string, callMs: number | undefined) =>
+  CALL_LIMIT_EVENTS.includes(event)
+    ? (callMs ?? HANDLER_TIMEOUT_MS)
+    : event === "trigger.received"
+      ? TRIGGER_HANDLER_TIMEOUT_MS
+      : HANDLER_TIMEOUT_MS;
 /** Each registered tool call has this long. */
 export const TOOL_TIMEOUT_MS = 60_000;
 /** Each palette command has this long. */
@@ -65,6 +80,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import * as pluginModule from ${JSON.stringify(`./${entry}`)};
 
 const EVENTS = new Set(["session.start", "agent.start", "agent.end", "tool.call", "tool.result", "trigger.received", "changes.prompt", "thread.archived", "thread.unarchived", "job.run", "listener.event"]);
+// handlerTimeoutMs, in the worker.
+const handlerMs = (event, callMs) =>
+  ${JSON.stringify(CALL_LIMIT_EVENTS)}.includes(event) ? (callMs ?? ${HANDLER_TIMEOUT_MS})
+  : event === "trigger.received" ? ${TRIGGER_HANDLER_TIMEOUT_MS}
+  : ${HANDLER_TIMEOUT_MS};
 const TOOL_NAME = /^[a-z][a-z0-9_]{0,47}$/;
 const COMMAND_ID = /^[a-z][a-z0-9-]{0,47}$/;
 const AGENT_NAME = /^[a-z][a-z0-9-]{0,23}$/;
@@ -482,8 +502,9 @@ export default class extends WorkerEntrypoint {
 
   async #dispatchIn(time, event, payload, call, host) {
     const ctx = context(call, host, time);
+    const ms = handlerMs(event, call.callMs);
     const run = (handler, data) =>
-      time.within(${HANDLER_TIMEOUT_MS}, "The " + event + " handler", Promise.resolve().then(() => handler(data, ctx))).then(plain);
+      time.within(ms, "The " + event + " handler", Promise.resolve().then(() => handler(data, ctx))).then(plain);
     const list = handlers.get(event) ?? [];
     if (event === "tool.call") {
       // A modify hands its input to the next handler; the first other

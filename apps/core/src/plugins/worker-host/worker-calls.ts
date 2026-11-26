@@ -30,6 +30,7 @@ import {
   COMMAND_TIMEOUT_MS,
   HANDLER_TIMEOUT_MS,
   HOST_CALL_TIMEOUT_MS,
+  handlerTimeoutMs,
   linkApiImports,
   RUNTIME_MODULE,
   runtimeModuleSource,
@@ -185,7 +186,11 @@ const quickJSEntrypoint = (
         operation: { kind: "dispatch", event, payload },
         call,
         host,
-        wallMs: HANDLER_TIMEOUT_MS * 2,
+        // The worker times each handler; this stops the run a little after.
+        wallMs: Math.max(
+          HANDLER_TIMEOUT_MS * 2,
+          handlerTimeoutMs(event, call.callMs) + 5_000,
+        ),
       }),
     callTool: async (name, input, call, host) =>
       runPluginInQuickJS({
@@ -587,7 +592,10 @@ export const dispatchPluginEvent = (
   event: PluginCodeEvent,
   payload: unknown,
   /** The worker times each handler; this bounds a worker that never answers. */
-  timeoutMs = HANDLER_TIMEOUT_MS * 4,
+  timeoutMs = Math.max(
+    HANDLER_TIMEOUT_MS * 4,
+    handlerTimeoutMs(event, pluginCallMs(dependencies)) + 5_000,
+  ),
 ): Promise<unknown> =>
   withHost(
     dependencies,

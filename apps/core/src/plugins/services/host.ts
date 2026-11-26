@@ -113,6 +113,18 @@ const setStatus = (
     .run()
     .catch(() => undefined);
 
+/**
+ * The internet address of an install's `service.http`, which its program
+ * receives as `DX_HTTP_URL`; undefined on a deployment with no public URL.
+ */
+export const pluginServiceHttpUrl = (
+  bindings: Pick<Bindings, "DX_AUTH_URL">,
+  pluginId: string,
+) =>
+  bindings.DX_AUTH_URL !== undefined && URL.canParse(bindings.DX_AUTH_URL)
+    ? `${new URL(bindings.DX_AUTH_URL).origin}/api/plugin-services/${encodeURIComponent(pluginId)}/http`
+    : undefined;
+
 /** The dxd spec of an install's service; its key changes with anything in it. */
 const serviceSpec = async (
   bindings: Bindings,
@@ -123,7 +135,14 @@ const serviceSpec = async (
   if (service === undefined || install.package === undefined) return undefined;
   const transfer = attachmentTransfer(bindings);
   if (transfer === undefined) return undefined;
-  const env = await serviceSecrets(bindings, db, install);
+  const httpUrl =
+    service.http === true
+      ? pluginServiceHttpUrl(bindings, install.pluginId)
+      : undefined;
+  const env = {
+    ...(await serviceSecrets(bindings, db, install)),
+    ...(httpUrl === undefined ? {} : { DX_HTTP_URL: httpUrl }),
+  };
   // A URL listener is watched inside dx (hosts/durable), not on the Orb.
   const listeners = (install.code.listeners ?? []).flatMap((listener) =>
     isCommandListener(listener)

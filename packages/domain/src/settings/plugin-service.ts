@@ -21,6 +21,14 @@ export const MAX_PLUGIN_SERVICE_COMMAND = 1_024;
 /** A service page's path: absolute, URL-safe, at most 201 characters. */
 export const PLUGIN_SERVICE_APP_PATH = /^\/[A-Za-z0-9._~\-/]{0,200}$/;
 
+/**
+ * A token the program issued for its `service.http` address is a state key
+ * of this prefix followed by the SHA-256 (lowercase hex) of the token; its
+ * value may name the one path it opens (`{ "path": "/mcp/grafana" }`).
+ * Deleting the key revokes the token at the next request.
+ */
+export const PLUGIN_SERVICE_HTTP_TOKEN_PREFIX = "http-token:";
+
 /** A shell command line dxd runs with `bash -lc` in the plugin's folder. */
 export const PluginServiceCommand = Schema.String.check(
   Schema.isMinLength(1),
@@ -62,6 +70,14 @@ export const PluginService = Schema.Struct({
    * (`PLUGIN_SERVICE_APP_PATH`), so the web bundle carries no pattern.
    */
   app: Schema.optional(Schema.Struct({ path: Schema.String })),
+  /**
+   * An address on the internet for the program: Core answers
+   * `/api/plugin-services/<install id>/http/*` and relays each request whose
+   * bearer token the program issued (`PLUGIN_SERVICE_HTTP_TOKEN_PREFIX` keys
+   * in its state) to `POST /http` on the program. Anything else is refused
+   * before any Orb wakes.
+   */
+  http: Schema.optional(Schema.Boolean),
 });
 
 export type PluginService = typeof PluginService.Type;
@@ -152,5 +168,10 @@ export const pluginServiceGrants = (
     ...(service?.app === undefined
       ? []
       : [`serves its own page at ${service.app.path}`]),
+    ...(service?.http === true
+      ? [
+          "has a URL reachable from the internet; requests need a token this plugin issues",
+        ]
+      : []),
   ];
 };

@@ -1,5 +1,6 @@
 import type { DxChangeItem } from "@dx/api";
 import {
+  DEFAULT_MCP_TIMEOUT_MS,
   MAX_PROJECT_ORB_SCRIPT_BYTES,
   MAX_SKILL_RESOURCE_FILES,
   orbAccountForProfile,
@@ -1757,7 +1758,7 @@ const mcpServers = async (run: RunContext, input: InputData) => {
               endpoint: url,
               authType,
               ...(authReference === undefined ? {} : { authReference }),
-              timeoutMs: 10_000,
+              timeoutMs: DEFAULT_MCP_TIMEOUT_MS,
             },
           },
         ],

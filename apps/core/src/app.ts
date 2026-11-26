@@ -57,6 +57,7 @@ import { confirmMissesAtPrimary, d1Session } from "./persistence/d1-session.js";
 import { pluginAgentRoutes } from "./plugins/agents/routes.js";
 import { mcpAppViewRoutes } from "./plugins/code/mcp-apps-route.js";
 import { pluginIconRoutes } from "./plugins/icons/routes.js";
+import { pluginServiceHttpRoutes } from "./plugins/services/http.js";
 import { pluginThreadUiRoutes } from "./plugins/thread-ui/routes.js";
 import { pluginAppRoutes } from "./plugins/views/app-routes.js";
 import {
@@ -155,6 +156,8 @@ app.route("/api/auth", authRoutes);
 app.route("/api/csp-reports", cspReportRoutes);
 app.route("/api/workload-identity", workloadIdentityRoutes);
 app.route("/api/triggers", pluginTriggerIngressRoutes);
+// A plugin program's internet address (`service.http`): its own tokens, no session.
+app.route("/api/plugin-services", pluginServiceHttpRoutes);
 app.route("/api/invites", publicInviteRoutes);
 // Other deployments forward bug reports here with an intake key, not a session.
 app.route("/api/bug-reports", bugReportIntakeRoutes);

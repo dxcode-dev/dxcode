@@ -389,6 +389,7 @@ export {
 } from "./settings/integration-repository.js";
 export {
   DEFAULT_MCP_CLIENT_NAME,
+  DEFAULT_MCP_TIMEOUT_MS,
   flueMcpServerName,
   MAX_MCP_HEADERS,
   MAX_MCP_SERVERS_PER_SCOPE,
@@ -753,6 +754,7 @@ export {
   MAX_PLUGIN_SERVICE_TOOLS,
   PLUGIN_JOB_ID,
   PLUGIN_SERVICE_APP_PATH,
+  PLUGIN_SERVICE_HTTP_TOKEN_PREFIX,
   PLUGIN_SERVICE_ORBS,
   PluginJobId,
   PluginService,

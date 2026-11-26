@@ -156,6 +156,7 @@ Pick the lowest place that works. Function code (`entry`, JavaScript inside dx) 
 - The program calls dx at `$DX_API` with `Authorization: Bearer $DX_TOKEN`: `GET`/`PUT`/`DELETE /state/<key>` (`{ value }`, at most 64 KiB and 1,000 keys), `GET /settings`, `POST /views/<id>/state` `{ path, value }`, `POST /threads` `{ key, title, prompt, projectId? }` → `{ threadId, url, created }` (the same `key` while that Thread is open returns it: one Thread per incident), `POST /threads/<id>/messages` `{ text, wake }`, and `POST /id-token` `{ audience }` (or `dxd id-token --audience X`). In Node, `import { serviceClient } from "@dxcode/plugin/service"` wraps these.
 - Granted secrets arrive as environment variables of the same name. The program's output is the plugin's log.
 - Where it runs: Settings → Orb Providers → Plugins, or the plugin's "Runs on". With none chosen, the plugin says so. The person who installed it pays for its Orb time on a dx-billed account; on their own provider key dx charges nothing.
+- An address on the internet: `"http": true` in `service` gives the program `$DX_HTTP_URL` (`https://<dx>/api/plugin-services/<install id>/http`). dx answers it and refuses, before the Orb wakes, any request without a bearer token the program issued: store each token as the state key `http-token:<SHA-256 hex of the token>`, value `{ "path": "/mcp/grafana" }` to limit it to one path or `{}` for any; delete the key to revoke it. An accepted request reaches the program as `POST /http` `{ method, path, headers, body }` (no `Authorization`), and the program answers `{ status, headers, body }`. Replies are buffered, never streamed (at most 5 minutes and 8 MiB each), so an MCP server behind it answers each POST with one JSON reply and its GET stream with 405. The install review says the plugin has a URL reachable from the internet.
 - A draft does not run its service yet: keep the plugin to try one. `examples/plugins/log-watch` shows a whole plugin.
 
 ## Screens: views described as data
@@ -205,7 +206,7 @@ Give every plugin an icon in `extensions["dev.dxcode"]`; dx shows it on the Plug
 
 ## Events
 
-`dx.on(event, handler)` runs `handler(event, ctx)` for each event the manifest lists in `permissions.events`. Each handler has 10 seconds (`trigger.received` 25, `changes.prompt` 8 shared by all plugins); several run in order (workspace installs, then personal, then repository plugins, then by name).
+`dx.on(event, handler)` runs `handler(event, ctx)` for each event the manifest lists in `permissions.events`. Each handler has 10 seconds (`trigger.received` 25, `job.run` and `listener.event` 5 minutes, `changes.prompt` 8 shared by all plugins); several run in order (workspace installs, then personal, then repository plugins, then by name).
 
 | Event | When | Payload (`event`) | Handler may return |
 | --- | --- | --- | --- |
@@ -216,7 +217,7 @@ Give every plugin an icon in `extensions["dev.dxcode"]`; dx shows it on the Plug
 | `tool.result` | A tool call finished | `{ threadId, tool, callId, input, status: "done" \| "error", output?, error? }` | `{ action: "modify", output }` replaces the result |
 | `trigger.received` | A webhook delivery to one of the plugin's triggers | `{ trigger: { id }, data, eventId, deliveryId, idempotencyKey, attempt }` | nothing; throwing fails the delivery |
 | `job.run` | A manifest schedule is due, for a plugin with no `service`. No Thread, 5 minutes | `{ name, scheduledAt }` | nothing |
-| `listener.event` | A message arrived on a manifest listener's `url`. No Thread, one at a time | `{ name, data }` | nothing |
+| `listener.event` | A message arrived on a manifest listener's `url`. No Thread, one at a time, 5 minutes | `{ name, data }` | nothing |
 | `changes.prompt` | The Changes pane builds its ship prompt | `{ threadId, action, baseBranch?, prompt }` | `{ prompt }` replaces it (at most 10,000 characters, 8 s for all plugins) |
 | `thread.archived` | The Thread was archived: the agent stopped and waiting prompts were cancelled. Once, no Orb | `{ threadId }` | nothing; clean up, such as stopping a device |
 | `thread.unarchived` | The Thread was restored. Once, no Orb | `{ threadId }` | nothing |

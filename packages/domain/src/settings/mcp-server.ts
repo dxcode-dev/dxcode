@@ -9,10 +9,22 @@ import { WorkspaceId, WorkspaceRole } from "./workspace.js";
 export const MAX_MCP_SERVERS_PER_SCOPE = 20;
 /** A Thread runs with its owner's personal and workspace servers. */
 export const MAX_MCP_SERVERS_PER_THREAD = 2 * MAX_MCP_SERVERS_PER_SCOPE;
-export const MAX_MCP_TOOLS_PER_SERVER = 64;
+/**
+ * Tools one server may list. Large servers exceed 64: Grafana's mcp-grafana
+ * lists 80 (November 2026). Code mode imports tools by name, so a long list
+ * costs the agent nothing until it searches.
+ */
+export const MAX_MCP_TOOLS_PER_SERVER = 256;
 export const MAX_MCP_TOOL_SCHEMA_BYTES = 32_768;
 export const MIN_MCP_TIMEOUT_MS = 1_000;
-export const MAX_MCP_TIMEOUT_MS = 30_000;
+/**
+ * How long dx waits for one MCP request. Five minutes, the longest a
+ * plugin service call or a Code call runs, so a slow query (a large
+ * Grafana range, a long build) finishes as it would on a laptop.
+ */
+export const MAX_MCP_TIMEOUT_MS = 300_000;
+/** The timeout a new server gets when its creator does not choose one. */
+export const DEFAULT_MCP_TIMEOUT_MS = MAX_MCP_TIMEOUT_MS;
 
 export const McpServerId = Schema.String.check(
   Schema.isPattern(

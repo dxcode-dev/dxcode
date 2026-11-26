@@ -83,13 +83,18 @@ const findOrb = async (
   own: boolean,
   payerUserId: string,
 ) => {
-  const row = await db
-    .prepare(
-      `SELECT ${pluginOrbColumns("orb")} FROM plugin_orb AS orb
-        WHERE ${own ? "orb.plugin_id = ?1" : "orb.scope = ?2 AND orb.target_id = ?3 AND orb.payer_user_id = ?4 AND orb.plugin_id IS NULL"}`,
-    )
-    .bind(install.pluginId, install.scope, install.targetId, payerUserId)
-    .first<PluginOrbRow>();
+  // D1 refuses bindings the statement does not use, so each form binds
+  // exactly its own parameters.
+  const columns = `SELECT ${pluginOrbColumns("orb")} FROM plugin_orb AS orb`;
+  const row = await (own
+    ? db.prepare(`${columns} WHERE orb.plugin_id = ?1`).bind(install.pluginId)
+    : db
+        .prepare(
+          `${columns} WHERE orb.scope = ?1 AND orb.target_id = ?2
+               AND orb.payer_user_id = ?3 AND orb.plugin_id IS NULL`,
+        )
+        .bind(install.scope, install.targetId, payerUserId)
+  ).first<PluginOrbRow>();
   return row === null ? undefined : pluginOrbFromRow(row);
 };
 

@@ -751,7 +751,15 @@ export const readDxExtension = Effect.fn("readDxExtension")(function* (
   } satisfies ReadPluginCode;
 });
 
-const serviceFields = ["run", "setup", "orb", "keepRunning", "tools", "app"];
+const serviceFields = [
+  "run",
+  "setup",
+  "orb",
+  "keepRunning",
+  "tools",
+  "app",
+  "http",
+];
 const serviceToolFields = ["name", "description", "input"];
 const scheduleFields = ["name", "every", "cron"];
 const listenerFields = ["name", "run", "url"];
@@ -906,7 +914,7 @@ const readServiceProgram = (
   });
   if (Option.isNone(service))
     return failed(
-      'service needs run, a command of at most 1,024 characters such as "node service.js"; setup is an optional command; orb is shared or own; keepRunning is true or false; each tool has a name (lowercase letters, digits, and _), a description, and an optional input JSON Schema.',
+      'service needs run, a command of at most 1,024 characters such as "node service.js"; setup is an optional command; orb is shared or own; keepRunning and http are true or false; each tool has a name (lowercase letters, digits, and _), a description, and an optional input JSON Schema.',
     );
   const appPath = service.value.app?.path;
   if (appPath !== undefined && !PLUGIN_SERVICE_APP_PATH.test(appPath))

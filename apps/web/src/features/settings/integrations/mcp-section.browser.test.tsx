@@ -1,3 +1,4 @@
+import { DEFAULT_MCP_TIMEOUT_MS } from "@dx/domain";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -174,7 +175,7 @@ describe("Integrations & MCP", () => {
     expect(mcpCreateInput(fields)).toEqual({
       name: "Docs",
       endpoint: "https://x.dev/mcp",
-      timeoutMs: 10_000,
+      timeoutMs: DEFAULT_MCP_TIMEOUT_MS,
       authType: "none",
       moduleId: "docs",
     });
@@ -341,7 +342,7 @@ describe("Integrations & MCP", () => {
       input: {
         name: "GitHub",
         endpoint: "https://api.githubcopilot.com/mcp/",
-        timeoutMs: 10_000,
+        timeoutMs: DEFAULT_MCP_TIMEOUT_MS,
         authType: "bearer",
         authToken: "secret-token",
         moduleId: "github",

@@ -1,4 +1,4 @@
-import { StoredMcpServer } from "@dx/domain";
+import { MAX_MCP_TOOLS_PER_SERVER, StoredMcpServer } from "@dx/domain";
 import { Effect, Schema } from "effect";
 import { describe, expect, it, vi } from "vitest";
 import { readBounded } from "../../http/egress.js";
@@ -291,8 +291,24 @@ describe("MCP Streamable HTTP transport", () => {
       ),
     ).rejects.toMatchObject({ code: "DUPLICATE_TOOL_NAME" });
 
+    // Grafana's mcp-grafana lists 80 tools; that fits.
+    const grafanaSized = fakeMcpServer(
+      Array.from({ length: 80 }, (_, index) => ({
+        name: `tool_${index}`,
+        inputSchema: { type: "object" },
+      })),
+    );
+    await expect(
+      Effect.runPromise(
+        discoverMcpTools(server, undefined, {
+          resolveDns: publicDns,
+          fetch: grafanaSized,
+        }),
+      ),
+    ).resolves.toHaveLength(80);
+
     const tooMany = fakeMcpServer(
-      Array.from({ length: 65 }, (_, index) => ({
+      Array.from({ length: MAX_MCP_TOOLS_PER_SERVER + 1 }, (_, index) => ({
         name: `tool_${index}`,
         inputSchema: { type: "object" },
       })),

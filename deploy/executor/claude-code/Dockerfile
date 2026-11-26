@@ -9,6 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends bash ca-certifi
 
 USER user
 WORKDIR /home/user
-RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/claude-install.sh https://claude.ai/install.sh && bash /tmp/claude-install.sh 2.1.319 && rm /tmp/claude-install.sh && /home/user/.local/bin/claude --version
+# Claude Code, pinned by version and SHA-256 like the Orb image
+# (CLAUDE_CODE_VERSION and CLAUDE_CODE_SHA256 in deploy/orb/install.sh, which
+# deploy/orb/downloads.test.mjs keeps equal to these; see "Claude Code" in
+# deploy/orb/README.md to move to another release). The checked binary goes
+# where the native installer keeps each version, so its own `claude install`
+# only links ~/.local/bin/claude to it.
+RUN curl -fsSL --retry 5 --retry-all-errors --retry-delay 3 -o /tmp/claude https://downloads.claude.ai/claude-code-releases/2.1.326/linux-x64/claude && test "$(sha256sum /tmp/claude | cut -d " " -f 1)" = b6b3647d981130dc44fc670846ae97b6cde531ffb667cf9c4d17cfcafb38cb37 && mkdir -p /home/user/.local/share/claude/versions && install -m 0755 /tmp/claude /home/user/.local/share/claude/versions/2.1.326 && rm /tmp/claude && DISABLE_AUTOUPDATER=1 /home/user/.local/share/claude/versions/2.1.326 install 2.1.326 && test "$(sha256sum /home/user/.local/bin/claude | cut -d " " -f 1)" = b6b3647d981130dc44fc670846ae97b6cde531ffb667cf9c4d17cfcafb38cb37 && /home/user/.local/bin/claude --version
 
 ENTRYPOINT ["sleep", "infinity"]

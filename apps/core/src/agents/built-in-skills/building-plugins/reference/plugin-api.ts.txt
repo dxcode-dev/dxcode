@@ -293,6 +293,7 @@ export interface PluginEvents {
    * One message on a manifest listener's `url` (a `wss://` WebSocket or an
    * `https://` event stream), which dx keeps open. Messages of one listener
    * arrive one at a time, in order; at most 100 wait, the oldest go first.
+   * Each has 5 minutes, as the install's person; no Thread, no Orb.
    */
   readonly "listener.event": {
     readonly event: ListenerEvent;
@@ -334,7 +335,8 @@ export type PluginEventName = keyof PluginEvents;
 /**
  * A handler for one event. It must also be listed in the manifest's
  * `permissions.events`; dx sends no other event. Each handler has 10
- * seconds.
+ * seconds; a `trigger.received` handler 25, and a `job.run` or
+ * `listener.event` handler the install's call time (5 minutes).
  */
 export type PluginEventHandler<E extends PluginEventName> = (
   event: PluginEvents[E]["event"],

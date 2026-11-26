@@ -158,6 +158,11 @@ export const pluginCapabilities = (
         code.service.orb === "own" ? ", on an Orb of its own" : ""
       }${code.service.keepRunning ? ", kept running" : ", asleep when idle"}`,
     );
+    if (code.service.http === true)
+      add(
+        "service-http",
+        "Has a URL reachable from the internet; requests need a token this plugin issues",
+      );
     for (const tool of code.service.tools ?? [])
       add(`service-tool:${tool.name}`, `Gives the agent the ${tool.name} tool`);
   }

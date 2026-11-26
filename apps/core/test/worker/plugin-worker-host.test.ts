@@ -11,6 +11,11 @@ import { Effect, Schema } from "effect";
 import { HttpResponse, http } from "msw";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { Bindings } from "../../src/http/types.js";
+import { loadRunningInstall } from "../../src/plugins/services/installs.js";
+import {
+  sweepServiceSchedules,
+  syncServiceSchedules,
+} from "../../src/plugins/services/schedules.js";
 import {
   type CodePluginRuntime,
   createPluginTools,
@@ -429,6 +434,91 @@ const toolsCase = async () => {
   expect(echo.runs).toEqual([{ text: "from plugin" }]);
 };
 
+/**
+ * A schedule's run gets the install's call time, not the 10 seconds a
+ * Thread event's handler gets. How it could fail: the worker still times
+ * every handler at 10 seconds; the QuickJS wall limit or the dispatch's
+ * outer bound stops the run first; or the long limit leaks to other
+ * events, so a hung agent.start handler holds the turn for minutes.
+ */
+const slowHandlersCase = async () => {
+  const { userId, threadId } = await person();
+  const { id: pluginId } = await install(
+    { scope: "personal", id: userId } as PluginTarget,
+    userId,
+    [
+      {
+        name: "plugin.json",
+        content: manifest("com.acme.slow", {
+          apiVersion: 1,
+          entry: "dev.dxcode/index.js",
+          schedules: [{ name: "check", every: "15m" }],
+          permissions: { events: ["agent.start"] },
+        }),
+      },
+      {
+        name: "dev.dxcode/index.js",
+        content: `const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export default (dx) => {
+  dx.on("job.run", async (event, ctx) => {
+    await sleep(11_000);
+    await ctx.storage.set("job", event.name);
+  });
+  dx.on("agent.start", async (_event, ctx) => {
+    await sleep(11_000);
+    await ctx.storage.set("start", "finished");
+  });
+};`,
+      },
+    ],
+  );
+  const running = await loadRunningInstall(env.DB, pluginId);
+  if (running === undefined) throw new Error("Expected the install.");
+  const now = Date.parse("2026-11-25T12:00:00.000Z");
+  await syncServiceSchedules(env.DB, running, now);
+  const runtime = await runtimeFor(threadId, userId);
+  const plugin = runtime.plugins[0];
+  if (plugin === undefined) throw new Error("Expected the plugin.");
+
+  const runs: Array<Promise<unknown>> = [];
+  const started = Date.now();
+  const [, agentStart] = await Promise.all([
+    sweepServiceSchedules(bindings, new Date(now + 15 * 60_000), (promise) => {
+      runs.push(promise);
+    }).then(() => Promise.all(runs)),
+    dispatchPluginEvent(
+      { db: env.DB, bindings, install: plugin, threadId, ownerUserId: userId },
+      "agent.start",
+      { threadId, message: "hi" },
+    ).then(
+      () => "finished",
+      (error: Error) => error.message,
+    ),
+  ]);
+  expect(runs).toHaveLength(1);
+  expect(agentStart).toMatch(
+    /The agent.start handler took longer than 10 seconds/,
+  );
+  const stored = async (key: string) =>
+    (
+      await env.DB.prepare(
+        "SELECT value_json FROM plugin_install_storage WHERE plugin_id = ? AND key = ?",
+      )
+        .bind(pluginId, key)
+        .first<{ value_json: string }>()
+    )?.value_json;
+  expect(await stored("job")).toBe(JSON.stringify("check"));
+  expect(
+    await env.DB.prepare(
+      "SELECT last_status, last_message FROM plugin_service_schedule WHERE plugin_id = ?",
+    )
+      .bind(pluginId)
+      .first(),
+  ).toEqual({ last_status: "ok", last_message: null });
+  expect(await stored("start")).toBeUndefined();
+  expect(Date.now() - started).toBeGreaterThanOrEqual(11_000);
+};
+
 describe("plugin code on Dynamic Workers", () => {
   it("reads dev.dxcode, stores the modules, and keeps the portable layer when the block is bad", async () => {
     const good = await read(guardFiles());
@@ -512,6 +602,12 @@ describe("plugin code on Dynamic Workers", () => {
   });
 
   it("gates tool calls: reject, modify, synthesize, and fail closed", gateCase);
+
+  it(
+    "gives a scheduled job.run the call's time and agent.start 10 seconds",
+    { timeout: 60_000 },
+    slowHandlersCase,
+  );
 
   it("fails closed when a gating plugin's code does not start", async () => {
     const { userId, threadId } = await person();
@@ -872,6 +968,11 @@ describe("plugin code on the QuickJS fallback (no Dynamic Worker loader)", () =>
   it(
     "runs registered tools with install storage, settings, granted network, and no other way out",
     toolsCase,
+  );
+  it(
+    "gives a scheduled job.run the call's time and agent.start 10 seconds",
+    { timeout: 60_000 },
+    slowHandlersCase,
   );
   it("stops loops, and gives plugins a console and timers that wait", {
     timeout: 120_000,

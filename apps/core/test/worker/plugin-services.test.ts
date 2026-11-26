@@ -342,6 +342,39 @@ describe("plugin services", () => {
     }
   });
 
+  it("gives a plugin that asks for an Orb of its own one Orb, apart from the shared one", async () => {
+    const person = await signup("svc-own@example.com", 14);
+    await env.DB.prepare(
+      `INSERT INTO plugin_orb_choice (scope, target_id, runner_profile_id, updated_by, updated_at)
+       VALUES ('personal', ?, 'a1.medium', ?, ?)`,
+    )
+      .bind(person.userId, person.userId, now)
+      .run();
+    const own = await installService({
+      scope: "personal",
+      targetId: person.userId,
+      installer: person.userId,
+      orb: "own",
+    });
+    const shared = await installService({
+      scope: "personal",
+      targetId: person.userId,
+      installer: person.userId,
+    });
+
+    const first = await ensureInstallPluginOrb(deployed, own);
+    if (!first.ok) throw new Error(first.message);
+    expect(first.created).toBe(true);
+    expect(first.orb.pluginId).toBe(own.pluginId);
+    const again = await ensureInstallPluginOrb(deployed, own);
+    expect(again).toMatchObject({ ok: true, created: false });
+    if (again.ok) expect(again.orb.id).toBe(first.orb.id);
+    const other = await ensureInstallPluginOrb(deployed, shared);
+    if (!other.ok) throw new Error(other.message);
+    expect(other.orb.id).not.toBe(first.orb.id);
+    expect(other.orb.pluginId).toBeUndefined();
+  });
+
   it("gives each workspace installer their own Orb, paid by them", async () => {
     const admin = await signup("svc-admin@example.com", 2);
     const member = await signup("svc-member@example.com", 3);

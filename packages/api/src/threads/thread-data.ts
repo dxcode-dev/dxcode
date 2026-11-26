@@ -1,5 +1,6 @@
 import {
   MAX_MCP_SERVERS_PER_THREAD,
+  MAX_MCP_TOOLS_PER_SERVER,
   MAX_SKILL_FILE_BYTES,
   MAX_SKILL_RESOURCE_FILES,
   McpServerEndpoint,
@@ -138,7 +139,9 @@ export const ThreadMcpConnectionDataSchema = Schema.Struct({
   endpoint: McpServerEndpoint,
   timeoutMs: McpServerTimeoutMs,
   authenticated: Schema.Boolean,
-  tools: Schema.Array(McpToolName).check(Schema.isMaxLength(64)),
+  tools: Schema.Array(McpToolName).check(
+    Schema.isMaxLength(MAX_MCP_TOOLS_PER_SERVER),
+  ),
 });
 
 export type ThreadMcpConnectionData = typeof ThreadMcpConnectionDataSchema.Type;

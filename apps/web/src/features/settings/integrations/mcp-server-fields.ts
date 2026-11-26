@@ -1,10 +1,8 @@
 import { MCP_OAUTH_CALLBACK_PATH } from "@dx/api";
+import { DEFAULT_MCP_TIMEOUT_MS } from "@dx/domain";
 import { ApiError, type McpServerInput } from "../../../shared/api/client.js";
 import { MCP_TEMPLATES, type McpTemplate } from "./mcp-catalog.js";
 import type { McpServerData } from "./mcp-queries.js";
-
-/** The timeout new servers get; the API accepts 1–30 s. */
-const DEFAULT_TIMEOUT_MS = 10_000;
 
 /**
  * `auto` lets dx probe the server when it is added. `secret` is only shown
@@ -218,7 +216,7 @@ export const mcpFieldsComplete = (
 export const mcpCreateInput = (fields: McpServerFields): McpServerInput => ({
   name: fields.name.trim(),
   endpoint: normalizeMcpEndpoint(fields.endpoint),
-  timeoutMs: DEFAULT_TIMEOUT_MS,
+  timeoutMs: DEFAULT_MCP_TIMEOUT_MS,
   authType:
     fields.auth === "token" || fields.auth === "secret"
       ? "bearer"

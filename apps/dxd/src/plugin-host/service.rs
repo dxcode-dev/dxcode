@@ -43,6 +43,11 @@ const MAX_ENV: usize = 64;
 const MAX_ENV_VALUE_BYTES: usize = 32 * 1024;
 const MAX_ENV_BYTES: usize = 256 * 1024;
 const MAX_CALL_TIMEOUT_MS: u64 = 300_000;
+/// Calls into services in flight at once on one Orb; more wait for a turn.
+/// Each holds a blocking thread while its service answers, so this keeps a
+/// flood from exhausting them, while a workspace's people calling a plugin
+/// (its tools, views, or its internet address) never queue behind each other.
+const MAX_CONCURRENT_CALLS: usize = 64;
 /// The largest reply body dxd reads from a service.
 const MAX_CALL_REPLY_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_PATH_BYTES: usize = 2048;
@@ -284,7 +289,7 @@ impl PluginServices {
                 logs: Mutex::default(),
                 groups,
                 relay: Arc::new(relay::Relay::default()),
-                calls: tokio::sync::Semaphore::new(8),
+                calls: tokio::sync::Semaphore::new(MAX_CONCURRENT_CALLS),
             }),
         }
     }

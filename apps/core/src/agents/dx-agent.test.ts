@@ -1,8 +1,11 @@
-import { threadAgentName } from "@dx/api";
+import { ThreadMcpConnectionDataSchema, threadAgentName } from "@dx/api";
 import {
   CLAUDE_CODE_PROVIDER_ID,
   MAX_MCP_SERVERS_PER_THREAD,
+  MAX_MCP_TIMEOUT_MS,
+  MAX_MCP_TOOLS_PER_SERVER,
 } from "@dx/domain";
+import { Option, Schema } from "effect";
 import * as v from "valibot";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -887,6 +890,51 @@ describe("DxAgent", () => {
           }),
         ),
       }).success,
+    ).toBe(false);
+    // A large server, such as mcp-grafana's 80 tools with a 5 minute
+    // timeout, fits; one tool past the bound does not.
+    const largeServer = (count: number) => ({
+      personalInstructions: "",
+      settingsRevision: 0,
+      settingsVersion: 1,
+      mcpConnections: [
+        {
+          id: "mcp_grafana",
+          name: "grafana",
+          endpoint: "https://mcp.example.com/mcp",
+          timeoutMs: MAX_MCP_TIMEOUT_MS,
+          authenticated: true,
+          tools: Array.from({ length: count }, (_, index) => `tool_${index}`),
+          toolDefinitions: Array.from({ length: count }, (_, index) => ({
+            name: `tool_${index}`,
+            description: "A Grafana tool.",
+            inputSchemaJson: '{"type":"object"}',
+          })),
+        },
+      ],
+    });
+    expect(v.safeParse(DxAgentInitialDataSchema, largeServer(80)).success).toBe(
+      true,
+    );
+    // The Thread data the web reads carries the same list.
+    const [grafana] = largeServer(80).mcpConnections;
+    expect(
+      Option.isSome(
+        Schema.decodeUnknownOption(ThreadMcpConnectionDataSchema)({
+          id: "mcp_0f6fd8e3-3818-4292-9ea5-3d394b2dfaec",
+          name: grafana?.name,
+          endpoint: grafana?.endpoint,
+          timeoutMs: grafana?.timeoutMs,
+          authenticated: true,
+          tools: grafana?.tools,
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      v.safeParse(
+        DxAgentInitialDataSchema,
+        largeServer(MAX_MCP_TOOLS_PER_SERVER + 1),
+      ).success,
     ).toBe(false);
     expect(
       v.safeParse(DxAgentInitialDataSchema, {
