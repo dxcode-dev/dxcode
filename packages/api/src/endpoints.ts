@@ -30,6 +30,16 @@ import {
   GetAttachmentFileEndpoint,
   GetNamedAttachmentFileEndpoint,
 } from "./attachments/attachments-endpoints.js";
+import { GetBugReportAccessEndpoint } from "./bug-reports/bug-report-access-endpoints.js";
+import {
+  GetBugReportEndpoint,
+  GetBugReportFileEndpoint,
+  ListAllBugReportsEndpoint,
+  ListBugReportsEndpoint,
+  SendAppBugReportEndpoint,
+  SendThreadBugReportEndpoint,
+  StartBugReportInvestigationEndpoint,
+} from "./bug-reports/bug-reports-endpoints.js";
 import { GetDeploymentAdminStatusEndpoint } from "./deployment-admin/status-endpoints.js";
 import {
   LookupDeploymentAdminUserEndpoint,
@@ -252,6 +262,34 @@ import {
   GetPersonalUsageEndpoint,
 } from "./settings/personal-usage.js";
 import {
+  ApprovePersonalPluginProposalEndpoint,
+  ApproveWorkspacePluginProposalEndpoint,
+  CreatePersonalPluginShareLinkEndpoint,
+  CreateWorkspacePluginShareLinkEndpoint,
+  ExportPersonalPluginBundleEndpoint,
+  ExportWorkspacePluginBundleEndpoint,
+  GetPersonalPluginBundleSettingsEndpoint,
+  GetPersonalPluginHostUsageEndpoint,
+  GetWorkspacePluginBundleSettingsEndpoint,
+  GetWorkspacePluginHostUsageEndpoint,
+  ListPersonalPluginBundlesEndpoint,
+  ListPersonalPluginBundleUpdatesEndpoint,
+  ListWorkspacePluginBundlesEndpoint,
+  ListWorkspacePluginBundleUpdatesEndpoint,
+  RejectPersonalPluginProposalEndpoint,
+  RejectWorkspacePluginProposalEndpoint,
+  RemovePersonalPluginBundleEndpoint,
+  RemoveWorkspacePluginBundleEndpoint,
+  RevokePersonalPluginShareLinksEndpoint,
+  RevokeWorkspacePluginShareLinksEndpoint,
+  SetPersonalPluginBundleEnabledEndpoint,
+  SetPersonalPluginBundlePolicyEndpoint,
+  SetPersonalPluginBundleSettingsEndpoint,
+  SetWorkspacePluginBundleEnabledEndpoint,
+  SetWorkspacePluginBundlePolicyEndpoint,
+  SetWorkspacePluginBundleSettingsEndpoint,
+} from "./settings/plugin-bundle-endpoints.js";
+import {
   ListPersonalPluginFilesEndpoint,
   ListWorkspacePluginFilesEndpoint,
   PreviewPersonalPluginFilesEndpoint,
@@ -451,6 +489,13 @@ import {
   StartMailThreadEndpoint,
 } from "./threads/create-thread.js";
 import { DeleteThreadEndpoint } from "./threads/delete-thread.js";
+import {
+  ActOnThreadDesktopWindowsEndpoint,
+  GetThreadDesktopEndpoint,
+  ListThreadDesktopWindowsEndpoint,
+  OpenThreadDesktopSettingsEndpoint,
+  ThreadDesktopSocketEndpoint,
+} from "./threads/desktop-endpoints.js";
 import { EditThreadMessageEndpoint } from "./threads/edit-message-endpoints.js";
 import {
   GetThreadFileEndpoint,
@@ -463,6 +508,12 @@ import { GetThreadSandboxFileEndpoint } from "./threads/files-sandbox-endpoints.
 import { GetThreadEndpoint } from "./threads/get-thread.js";
 import { GetThreadListItemEndpoint } from "./threads/get-thread-list-item.js";
 import { GetThreadReadinessEndpoint } from "./threads/get-thread-readiness.js";
+import {
+  CreateHuddleLinkEndpoint,
+  GetHuddleLinkTargetEndpoint,
+  GetHuddleSummaryEndpoint,
+  JoinHuddleEndpoint,
+} from "./threads/huddle-endpoints.js";
 import {
   ListSharedThreadsEndpoint,
   ListThreadsEndpoint,
@@ -508,6 +559,11 @@ import {
 import { GetThreadQuickActionsEndpoint } from "./threads/quick-actions-endpoints.js";
 import { SearchThreadsEndpoint } from "./threads/search-threads.js";
 import { SnoozeThreadEndpoint } from "./threads/snooze-thread.js";
+import {
+  AttachThreadTerminalEndpoint,
+  WarmThreadTerminalEndpoint,
+} from "./threads/terminal-endpoints.js";
+import { CloseThreadTerminalEndpoint } from "./threads/terminal-session-endpoints.js";
 import {
   CreateThreadArtifactCommentEndpoint,
   CreateThreadArtifactEndpoint,
@@ -565,6 +621,14 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   DeleteAttachmentEndpoint,
   GetAttachmentFileEndpoint,
   GetNamedAttachmentFileEndpoint,
+  GetBugReportAccessEndpoint,
+  GetBugReportFileEndpoint,
+  GetBugReportEndpoint,
+  ListBugReportsEndpoint,
+  ListAllBugReportsEndpoint,
+  SendAppBugReportEndpoint,
+  SendThreadBugReportEndpoint,
+  StartBugReportInvestigationEndpoint,
   GetDeploymentAdminStatusEndpoint,
   LookupDeploymentAdminUserEndpoint,
   ResetUsernameChangeEndpoint,
@@ -606,6 +670,10 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   SetWorkspaceFirstPartyPluginConfigurationEndpoint,
   SetWorkspaceFirstPartyPluginEnablementEndpoint,
   SetWorkspaceFirstPartyPluginPolicyEndpoint,
+  JoinHuddleEndpoint,
+  CreateHuddleLinkEndpoint,
+  GetHuddleLinkTargetEndpoint,
+  GetHuddleSummaryEndpoint,
   BeginBitbucketAuthorizationEndpoint,
   GetBitbucketConnectionEndpoint,
   DisconnectBitbucketEndpoint,
@@ -702,6 +770,32 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   ListPluginAgentModesEndpoint,
   ListPluginAppsEndpoint,
   GetPluginAppUrlEndpoint,
+  ApprovePersonalPluginProposalEndpoint,
+  CreatePersonalPluginShareLinkEndpoint,
+  ExportPersonalPluginBundleEndpoint,
+  GetPersonalPluginBundleSettingsEndpoint,
+  GetPersonalPluginHostUsageEndpoint,
+  ListPersonalPluginBundlesEndpoint,
+  ListPersonalPluginBundleUpdatesEndpoint,
+  RejectPersonalPluginProposalEndpoint,
+  RemovePersonalPluginBundleEndpoint,
+  RevokePersonalPluginShareLinksEndpoint,
+  SetPersonalPluginBundleEnabledEndpoint,
+  SetPersonalPluginBundlePolicyEndpoint,
+  SetPersonalPluginBundleSettingsEndpoint,
+  ApproveWorkspacePluginProposalEndpoint,
+  CreateWorkspacePluginShareLinkEndpoint,
+  ExportWorkspacePluginBundleEndpoint,
+  GetWorkspacePluginBundleSettingsEndpoint,
+  GetWorkspacePluginHostUsageEndpoint,
+  ListWorkspacePluginBundlesEndpoint,
+  ListWorkspacePluginBundleUpdatesEndpoint,
+  RejectWorkspacePluginProposalEndpoint,
+  RemoveWorkspacePluginBundleEndpoint,
+  RevokeWorkspacePluginShareLinksEndpoint,
+  SetWorkspacePluginBundleEnabledEndpoint,
+  SetWorkspacePluginBundlePolicyEndpoint,
+  SetWorkspacePluginBundleSettingsEndpoint,
   AddPersonalPluginCatalogEndpoint,
   ListPersonalPluginCatalogsEndpoint,
   PreviewPersonalPluginCatalogEntryEndpoint,
@@ -915,6 +1009,11 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   GetThreadShipPlanEndpoint,
   CreateThreadEndpoint,
   DeleteThreadEndpoint,
+  GetThreadDesktopEndpoint,
+  OpenThreadDesktopSettingsEndpoint,
+  ThreadDesktopSocketEndpoint,
+  ListThreadDesktopWindowsEndpoint,
+  ActOnThreadDesktopWindowsEndpoint,
   GetThreadFileTreeEndpoint,
   GetThreadFileEndpoint,
   GetThreadSandboxFileEndpoint,
@@ -958,6 +1057,9 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   RetryInitialDispatchEndpoint,
   SearchThreadsEndpoint,
   SnoozeThreadEndpoint,
+  AttachThreadTerminalEndpoint,
+  CloseThreadTerminalEndpoint,
+  WarmThreadTerminalEndpoint,
   UnfollowThreadEndpoint,
   UpdateThreadEndpoint,
   UpdateThreadPaneLayoutEndpoint,

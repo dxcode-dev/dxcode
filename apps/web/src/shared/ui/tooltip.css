@@ -1,0 +1,52 @@
+@layer theme, base, components, utilities;
+@import "./tokens.css";
+
+/* dx's tooltip: see tooltip.tsx. It sits on the popover layer, over panes,
+   dialogs, and sheets, and never takes the pointer. */
+@layer components {
+  .dx-tooltip-positioner {
+    z-index: var(--z-popover);
+    max-width: calc(100vw - 16px);
+    pointer-events: none;
+  }
+  .dx-tooltip {
+    max-width: min(280px, calc(100vw - 16px));
+    padding: var(--space-1-5) var(--space-2-5);
+    color: var(--popover-foreground);
+    font-size: var(--text-xs);
+    line-height: var(--leading-4);
+    overflow-wrap: break-word;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--popover);
+    box-shadow: var(--shadow-md);
+    transition: opacity var(--duration-fast) ease;
+  }
+  .dx-tooltip[data-starting-style],
+  .dx-tooltip[data-ending-style] {
+    opacity: 0;
+  }
+  /* A trigger that explains itself on hover: a dotted underline says so. */
+  .dx-tooltip-hint {
+    padding: 0;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    border: 0;
+    background: none;
+    text-decoration: underline dotted;
+    text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+    text-underline-offset: 3px;
+    cursor: help;
+  }
+  .dx-tooltip-hint:focus-visible {
+    border-radius: var(--radius-xs);
+    outline: none;
+    box-shadow: var(--focus-ring);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .dx-tooltip {
+      transition: none;
+    }
+  }
+}

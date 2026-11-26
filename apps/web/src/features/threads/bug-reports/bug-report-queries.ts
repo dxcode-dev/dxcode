@@ -1,21 +1,20 @@
 import {
-  BugReportAccessResponseSchema,
   type BugReportData,
-  BugReportDetailResponseSchema,
-  BugReportErrorResponseSchema,
   type BugReportInvestigation,
-  BugReportInvestigationFailedResponseSchema,
-  BugReportInvestigationResponseSchema,
   type ChoicesData,
   type CreateAppBugReportRequest,
   type CreateBugReportRequest,
-  CreateBugReportResponseSchema,
-  ListAllBugReportsResponseSchema,
-  ListBugReportsResponseSchema,
+  GetBugReportEndpoint,
+  GetBugReportFileEndpoint,
+  ListAllBugReportsEndpoint,
+  ListBugReportsEndpoint,
   type PersonalComposerDefaultsData,
+  SendAppBugReportEndpoint,
+  SendThreadBugReportEndpoint,
+  StartBugReportInvestigationEndpoint,
   type StartBugReportInvestigationRequest,
 } from "@dx/api";
-import { reasoningModeId } from "@dx/client";
+import { endpointPath, reasoningModeId } from "@dx/client";
 import {
   CLAUDE_CODE_DEFAULT_EFFORT,
   isClaudeCodeModel,
@@ -30,47 +29,15 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { Option, Schema } from "effect";
+import { ApiError, dxClient } from "../../../shared/api/client.js";
 import { startingMode, startingModel } from "../../../shared/composer-start.js";
-import { sameOriginFetch } from "../../../shared/same-origin-fetch.js";
 import { composerDefaultsQueryOptions } from "../../settings/composer/composer-defaults-queries.js";
 import { modelRoutingChoicesQueryOptions } from "../../settings/model-routing/model-routing-queries.js";
 import { claudePlanPick } from "../claude-code-mode-options.js";
 
-const readJson = async <A>(
-  response: Response,
-  schema: Schema.Codec<A, unknown>,
-): Promise<A> => {
-  const body: unknown = await response.json().catch(() => undefined);
-  if (!response.ok) {
-    const failure = Schema.decodeUnknownOption(
-      Schema.Union([
-        BugReportErrorResponseSchema,
-        BugReportInvestigationFailedResponseSchema,
-      ]),
-    )(body);
-    throw new Error(
-      Option.isSome(failure)
-        ? failure.value.data.message
-        : "The bug report could not be sent.",
-    );
-  }
-  return Schema.decodeUnknownPromise(schema)(body).catch(() => {
-    throw new Error("The bug report service answered unexpectedly.");
-  });
-};
-
 /** Your Reports: the signed-in person's bug reports, newest first. */
 export const listBugReports = async (signal?: AbortSignal) =>
-  (
-    await readJson(
-      await sameOriginFetch("/v1/bug-reports", {
-        headers: { accept: "application/json" },
-        signal,
-      }),
-      ListBugReportsResponseSchema,
-    )
-  ).data.items;
+  (await dxClient.call(ListBugReportsEndpoint, {}, { signal })).data.items;
 
 /**
  * A report about a Thread, or, from Settings, about no Thread and with App
@@ -111,23 +78,23 @@ export const sendBugReport = async ({
       new Blob([audio], { type: "audio/wav" }),
       "dictation.wav",
     );
+  const options =
+    sendKey === undefined ? {} : { headers: { "idempotency-key": sendKey } };
+  const sent =
+    threadId === undefined
+      ? dxClient.call(SendAppBugReportEndpoint, { body: form }, options)
+      : dxClient.call(
+          SendThreadBugReportEndpoint,
+          { params: { threadId }, body: form },
+          options,
+        );
   return (
-    await readJson(
-      await sameOriginFetch(
-        threadId === undefined
-          ? "/v1/bug-reports"
-          : `/v1/threads/${encodeURIComponent(threadId)}/bug-reports`,
-        {
-          method: "POST",
-          body: form,
-          headers: {
-            accept: "application/json",
-            ...(sendKey === undefined ? {} : { "idempotency-key": sendKey }),
-          },
-        },
-      ),
-      CreateBugReportResponseSchema,
-    )
+    await sent.catch((error: unknown) => {
+      // An answer that is none of the route's refusals says no more.
+      throw error instanceof ApiError && !error.hasValidatedPayload
+        ? new Error("The bug report could not be sent.")
+        : error;
+    })
   ).data;
 };
 
@@ -168,12 +135,10 @@ export const bugReportQueryOptions = (userId: UserId, reportId: string) =>
     queryKey: [...bugReportKeys.mine(userId), "report", reportId] as const,
     queryFn: async ({ signal }) =>
       (
-        await readJson(
-          await sameOriginFetch(
-            `/v1/bug-reports/${encodeURIComponent(reportId)}`,
-            { headers: { accept: "application/json" }, signal },
-          ),
-          BugReportDetailResponseSchema,
+        await dxClient.call(
+          GetBugReportEndpoint,
+          { params: { id: reportId } },
+          { signal },
         )
       ).data,
     staleTime: 30_000,
@@ -182,7 +147,7 @@ export const bugReportQueryOptions = (userId: UserId, reportId: string) =>
 
 /** Where a report's file opens; the request carries the dx session. */
 export const bugReportFileUrl = (reportId: string, name: string) =>
-  `/v1/bug-reports/${encodeURIComponent(reportId)}/files/${encodeURIComponent(name)}`;
+  endpointPath(GetBugReportFileEndpoint, { params: { id: reportId, name } });
 
 /**
  * What an investigating Thread runs on: what the New Thread composer would
@@ -242,20 +207,10 @@ export const startBugReportInvestigationMutationOptions = (
           .catch(() => undefined),
       ]);
       return (
-        await readJson(
-          await sameOriginFetch(
-            `/v1/bug-reports/${encodeURIComponent(reportId)}/investigation`,
-            {
-              method: "POST",
-              headers: {
-                accept: "application/json",
-                "content-type": "application/json",
-              },
-              body: JSON.stringify(investigationRequest(remembered, choices)),
-            },
-          ),
-          BugReportInvestigationResponseSchema,
-        )
+        await dxClient.call(StartBugReportInvestigationEndpoint, {
+          params: { id: reportId },
+          body: investigationRequest(remembered, choices),
+        })
       ).data;
     },
     onSettled: (_data, _error, reportId) =>
@@ -264,40 +219,16 @@ export const startBugReportInvestigationMutationOptions = (
       }),
   });
 
-/**
- * Whether this person is one of the deployment's report readers, and the
- * central deployment this one shares each report with, if any.
- */
-export const bugReportAccessQueryOptions = (userId: string) =>
-  queryOptions({
-    queryKey: ["bug-report-access", userId] as const,
-    queryFn: async ({ signal }) =>
-      (
-        await readJson(
-          await sameOriginFetch("/v1/bug-reports/access", {
-            headers: { accept: "application/json" },
-            signal,
-          }),
-          BugReportAccessResponseSchema,
-        )
-      ).data,
-    staleTime: 5 * 60_000,
-  });
-
 /** All Bug Reports: every report, newest first, for report readers. */
 export const allBugReportsQueryOptions = (userId: UserId) =>
   infiniteQueryOptions({
     queryKey: ["bug-reports-all", userId] as const,
     queryFn: async ({ pageParam, signal }) =>
       (
-        await readJson(
-          await sameOriginFetch(
-            pageParam === undefined
-              ? "/v1/bug-reports/all"
-              : `/v1/bug-reports/all?before=${encodeURIComponent(pageParam)}`,
-            { headers: { accept: "application/json" }, signal },
-          ),
-          ListAllBugReportsResponseSchema,
+        await dxClient.call(
+          ListAllBugReportsEndpoint,
+          { query: pageParam === undefined ? {} : { before: pageParam } },
+          { signal },
         )
       ).data,
     initialPageParam: undefined as string | undefined,

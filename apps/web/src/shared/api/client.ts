@@ -124,33 +124,6 @@ type RefusalSchema = Schema.ConstraintDecoder<{
   readonly data: { readonly code: string; readonly message: string };
 }>;
 
-/**
- * A dx route that answers with a file, such as a plugin export: its bytes,
- * or an ApiError carrying the route's refusal message.
- */
-export const requestBlob = async (
-  path: string,
-  init?: RequestInit,
-): Promise<Blob> => {
-  const response = await observeRequest(path, init?.method, () =>
-    fetch(path, { ...init, credentials: "same-origin" }),
-  );
-  noticeUnauthenticated(response);
-  if (!response.ok) {
-    const body = (await response.json().catch(() => undefined)) as
-      | { data?: { message?: unknown; code?: unknown } }
-      | undefined;
-    throw new ApiError(
-      response.status,
-      typeof body?.data?.message === "string"
-        ? body.data.message
-        : "Request failed.",
-      typeof body?.data?.code === "string" ? body.data.code : undefined,
-    );
-  }
-  return response.blob();
-};
-
 export const request = async <
   SchemaType extends Schema.ConstraintDecoder<unknown>,
 >(

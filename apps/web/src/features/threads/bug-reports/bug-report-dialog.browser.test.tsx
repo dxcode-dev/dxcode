@@ -39,8 +39,8 @@ vi.mock("../../../shared/auth/auth-context.js", async (importOriginal) => ({
 import { deriveTranscriptViewModel } from "@dx/client";
 import { changesKeys } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
+import { bugReportAccessQueryOptions } from "./bug-report-access-queries.js";
 import { BugReportDialog } from "./bug-report-dialog.js";
-import { bugReportAccessQueryOptions } from "./bug-report-queries.js";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 

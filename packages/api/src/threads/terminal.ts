@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+import { errorResponse } from "../http/response.js";
 
 export const THREAD_TERMINAL_SUBPROTOCOL = "dx-terminal.v1";
 export const THREAD_TERMINAL_CONTROL_MAX_BYTES = 4_096;
@@ -198,3 +199,9 @@ export const ThreadTerminalServerControlSchema = Schema.Union([
 ]);
 export type ThreadTerminalServerControl =
   typeof ThreadTerminalServerControlSchema.Type;
+
+/** A runner Thread's Terminal is a shell on its owner's own machine. */
+export const ThreadTerminalRunnerOwnerOnlyResponseSchema = errorResponse(
+  "RUNNER_THREAD_OWNER_ONLY",
+  "Only the Thread's owner opens the Terminal of a Thread on their own machine.",
+);

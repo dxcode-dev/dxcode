@@ -2,7 +2,7 @@ import { type ErrorComponentProps, Link } from "@tanstack/react-router";
 import { Headphones } from "lucide-react";
 import { PageShell } from "../../shared/layout/page-shell.js";
 import { EmptyState } from "../../shared/ui/empty-state.js";
-import { huddleLinkFailure } from "./huddle-link-queries.js";
+import { huddleLinkFailure } from "./huddle-link-failure.js";
 
 const home = <Link to="/">Go to dx</Link>;
 

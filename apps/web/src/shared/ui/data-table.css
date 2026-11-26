@@ -37,6 +37,14 @@
   .dx-data-table tbody tr[data-selected] {
     background: color-mix(in srgb, var(--primary) 6%, transparent);
   }
+  /* onRowClick: the whole row opens its record. */
+  .dx-data-table tbody tr[data-clickable] {
+    cursor: pointer;
+    transition: background var(--duration-fast) ease;
+  }
+  .dx-data-table tbody tr[data-clickable]:hover {
+    background: color-mix(in srgb, var(--foreground) 4%, transparent);
+  }
   .dx-data-table :is(th, td):first-child {
     padding-left: var(--space-3);
   }

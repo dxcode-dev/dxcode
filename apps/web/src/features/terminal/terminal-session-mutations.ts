@@ -1,6 +1,6 @@
-import type { ThreadTerminalId } from "@dx/api";
+import { CloseThreadTerminalEndpoint, type ThreadTerminalId } from "@dx/api";
 import type { ThreadId } from "@dx/domain";
-import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
+import { dxClient } from "../../shared/api/client.js";
 
 /**
  * A Terminal's tab closed: end its shell session in the Orb. Core ends it
@@ -12,16 +12,12 @@ export const closeTerminalSession = (
   terminal: ThreadTerminalId,
 ) => {
   if (terminal === "default") return;
-  void sameOriginFetch(
-    `/v1/threads/${encodeURIComponent(threadId)}/terminal/close`,
-    {
-      method: "POST",
-      credentials: "same-origin",
-      keepalive: true,
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ terminal }),
-    },
-  )
-    .then((response) => response.body?.cancel())
+  // keepalive: the request outlives the tab or page that closes it.
+  void dxClient
+    .call(
+      CloseThreadTerminalEndpoint,
+      { params: { threadId: threadId as ThreadId }, body: { terminal } },
+      { keepalive: true },
+    )
     .catch(() => undefined);
 };

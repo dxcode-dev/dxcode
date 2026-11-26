@@ -1,6 +1,7 @@
 import { ArrowDownRight, ArrowUpRight } from "lucide-react";
 import type * as React from "react";
 import { cn } from "../utils.js";
+import { TooltipHint } from "./tooltip.js";
 import "./stat-tile.css";
 
 /** How a tile's number moved over its comparison period. */
@@ -16,11 +17,14 @@ export interface StatTileChange {
 
 /**
  * One headline number with its label, such as "Active people · 128". An
- * optional change says how it moved; `detail` adds one muted line. Without
- * `value` it shows a placeholder while loading.
+ * optional change says how it moved; `detail` adds one muted line; `hint`
+ * explains the number in a tooltip on the label. A long value, such as a
+ * date, wraps onto a second line. Without `value` it shows a placeholder
+ * while loading.
  */
 export function StatTile({
   label,
+  hint,
   value,
   detail,
   change,
@@ -28,6 +32,8 @@ export function StatTile({
   className,
 }: {
   readonly label: React.ReactNode;
+  /** Explains the number: "Issues that woke a Thread in the last 24 hours". */
+  readonly hint?: string;
   readonly value: React.ReactNode | undefined;
   readonly detail?: React.ReactNode;
   readonly change?: StatTileChange;
@@ -37,7 +43,16 @@ export function StatTile({
 }) {
   const body = (
     <>
-      <dt className="dx-stat-label">{label}</dt>
+      <dt className="dx-stat-label">
+        {hint === undefined ? (
+          label
+        ) : (
+          // In a link tile the link takes focus; the hint is its description.
+          <TooltipHint hint={hint} focusable={href === undefined}>
+            {label}
+          </TooltipHint>
+        )}
+      </dt>
       <dd
         className="dx-stat-value"
         aria-busy={value === undefined || undefined}

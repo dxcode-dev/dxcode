@@ -1,7 +1,7 @@
 import type { PersonalAccountData, SettingsContextData } from "@dx/api";
 import type { UserId } from "@dx/domain";
 import { useQuery } from "@tanstack/react-query";
-import { bugReportAccessQueryOptions } from "../threads/bug-reports/bug-report-queries.js";
+import { bugReportAccessQueryOptions } from "../threads/bug-reports/bug-report-access-queries.js";
 import {
   type AccountMenuItems,
   SidebarAccountMenu,

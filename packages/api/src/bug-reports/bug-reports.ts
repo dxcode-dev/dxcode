@@ -310,16 +310,38 @@ export const BugReportInvestigationFailedResponseSchema = Schema.Struct({
   }),
 });
 
+export const BugReportInvalidResponseSchema = errorResponse(
+  "INVALID_REQUEST",
+  "The bug report is invalid.",
+);
+export const BugReportTooLargeResponseSchema = errorResponse(
+  "TOO_LARGE",
+  "The bug report is too large.",
+);
+export const BugReportNotFoundResponseSchema = errorResponse(
+  "NOT_FOUND",
+  "Bug report not found.",
+);
+export const BugReportRateLimitedResponseSchema = errorResponse(
+  "RATE_LIMITED",
+  "You sent too many bug reports this hour. Try again later.",
+);
+export const BugReportPersistenceUnavailableResponseSchema = errorResponse(
+  "PERSISTENCE_UNAVAILABLE",
+  "Persistence is temporarily unavailable.",
+);
+
 export const BugReportErrorResponseSchema = Schema.Union([
-  errorResponse("INVALID_REQUEST", "The bug report is invalid."),
-  errorResponse("TOO_LARGE", "The bug report is too large."),
-  errorResponse("NOT_FOUND", "Bug report not found."),
-  errorResponse(
-    "RATE_LIMITED",
-    "You sent too many bug reports this hour. Try again later.",
-  ),
-  errorResponse(
-    "PERSISTENCE_UNAVAILABLE",
-    "Persistence is temporarily unavailable.",
-  ),
+  BugReportInvalidResponseSchema,
+  BugReportTooLargeResponseSchema,
+  BugReportNotFoundResponseSchema,
+  BugReportRateLimitedResponseSchema,
+  BugReportPersistenceUnavailableResponseSchema,
 ]);
+
+/** The files a report may hold, by name. */
+export const BUG_REPORT_FILE_NAME =
+  /^(?:diagnostics\.json|dictation\.wav|image-[1-5]\.(?:png|jpg|gif|webp))$/;
+export const BugReportFileNameSchema = Schema.String.check(
+  Schema.isPattern(BUG_REPORT_FILE_NAME),
+);

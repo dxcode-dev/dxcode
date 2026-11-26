@@ -168,3 +168,22 @@ export const ThreadDesktopWindowsActionSchema = Schema.Union([
 ]);
 export type ThreadDesktopWindowsAction =
   typeof ThreadDesktopWindowsActionSchema.Type;
+
+/** A runner Thread's Desktop shows its owner's whole machine. */
+export const ThreadDesktopRunnerOwnerOnlyResponseSchema = errorResponse(
+  "RUNNER_THREAD_OWNER_ONLY",
+  "Only the Thread's owner opens the Desktop of a Thread on their own machine.",
+);
+/** The signed-in person does not own the runner's machine. */
+export const ThreadDesktopMachineOwnerOnlyResponseSchema = errorResponse(
+  "RUNNER_THREAD_OWNER_ONLY",
+  "Only the machine's owner opens its Desktop.",
+);
+export const ThreadDesktopSettingsInvalidResponseSchema = errorResponse(
+  "INVALID_REQUEST",
+  "Name a pane: screen-recording or accessibility.",
+);
+export const ThreadDesktopWindowsActionInvalidResponseSchema = errorResponse(
+  "INVALID_REQUEST",
+  "Name an app (terminal or browser) or a window ID.",
+);

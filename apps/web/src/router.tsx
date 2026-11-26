@@ -25,10 +25,7 @@ import {
   validateSignInSearch,
 } from "./features/authentication/sign-in-paths.js";
 import { HUDDLE_MOCK } from "./features/huddle/huddle-availability.js";
-import {
-  HuddlesOffError,
-  huddleLinkTargetQueryOptions,
-} from "./features/huddle/huddle-link-queries.js";
+import { HuddlesOffError } from "./features/huddle/huddle-link-failure.js";
 import {
   HuddleLinkError,
   HuddleLinkPending,
@@ -652,6 +649,10 @@ const huddleLinkRoute = createRoute({
   getParentRoute: () => productRoute,
   path: "/huddle/$workspace/$code",
   loader: async ({ context, params }) => {
+    // Loaded here, so the app's first load carries no huddle endpoints.
+    const { huddleLinkTargetQueryOptions } = await import(
+      "./features/huddle/huddle-link-queries.js"
+    );
     const [settings, target] = await Promise.all([
       HUDDLE_MOCK
         ? undefined

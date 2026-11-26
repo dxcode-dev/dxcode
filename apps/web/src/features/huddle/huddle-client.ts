@@ -4,13 +4,18 @@
  * client lands, and the real client replaces the mock without UI changes.
  */
 
+import type { ThreadId } from "@dx/domain";
+
 export type HuddleScope =
   | { readonly kind: "space"; readonly spaceId: string }
   | { readonly kind: "thread"; readonly threadId: string };
 
-/** The Thread a huddle belongs to; a Space's is its own Thread. */
+/**
+ * The Thread a huddle belongs to; a Space's is its own Thread, whose ID is
+ * the Space's.
+ */
 export const huddleThreadId = (scope: HuddleScope) =>
-  scope.kind === "space" ? scope.spaceId : scope.threadId;
+  (scope.kind === "space" ? scope.spaceId : scope.threadId) as ThreadId;
 
 export const huddleScopeKey = (scope: HuddleScope) =>
   scope.kind === "space"

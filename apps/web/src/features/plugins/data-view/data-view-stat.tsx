@@ -23,6 +23,7 @@ export function StatPart({
   return (
     <StatTile
       label={part.label}
+      {...(part.hint === undefined ? {} : { hint: part.hint })}
       value={
         value === undefined
           ? undefined

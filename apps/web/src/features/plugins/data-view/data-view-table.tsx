@@ -1,5 +1,4 @@
 import {
-  type DataViewAction,
   type DataViewFormat,
   type DataViewPart,
   readStatePath,
@@ -12,6 +11,7 @@ import { DataTable } from "../../../shared/ui/data-table.js";
 import { formatViewValue } from "./data-view-format.js";
 
 import {
+  actionLabel,
   keyOf,
   listOf,
   type PartContext,
@@ -20,7 +20,11 @@ import {
   toneOf,
 } from "./data-view-values.js";
 
-/** A view's table, sortable by any column, with an action per row. */
+/**
+ * A view's table, sortable by any column, with an action per row: a
+ * click anywhere in the row runs it, and its button (named by the action's
+ * `label`) does the same for the keyboard and screen readers.
+ */
 
 const VIRTUAL_ROWS = 50;
 
@@ -51,6 +55,14 @@ export function TablePart({
           return sort.direction === "asc" ? order : -order;
         });
   const action = part.rowAction;
+  const runRow = (row: unknown) => {
+    if (action === undefined) return;
+    void context.run(
+      `${id}.${keyOf(row, part.rowKey, rows.indexOf(row))}`,
+      action,
+      { state: context.state, row },
+    );
+  };
   return (
     <Card padding="none" className="data-view-card">
       <DataTable
@@ -61,6 +73,7 @@ export function TablePart({
           ...part.columns.map((column) => ({
             id: column.key,
             header: column.label,
+            ...(column.hint === undefined ? {} : { hint: column.hint }),
             sortable: true,
             numeric:
               column.format !== undefined &&
@@ -94,12 +107,7 @@ export function TablePart({
                           context.disabledReason !== undefined || undefined
                         }
                         title={context.disabledReason}
-                        onClick={() =>
-                          void context.run(rowId, action, {
-                            state: context.state,
-                            row,
-                          })
-                        }
+                        onClick={() => runRow(row)}
                       >
                         {actionLabel(action)}
                       </Button>
@@ -110,6 +118,7 @@ export function TablePart({
         ]}
         {...(sort === undefined ? {} : { sort })}
         onSortChange={setSort}
+        {...(action === undefined ? {} : { onRowClick: runRow })}
         {...(rows.length > VIRTUAL_ROWS ? { maxHeight: 480 } : {})}
         empty={part.empty ?? "No rows yet."}
       />
@@ -132,14 +141,3 @@ const rowName = (
       return value === "" ? [] : [value];
     })
     .join(", ");
-
-const actionLabel = (action: DataViewAction) =>
-  action.type === "open_thread"
-    ? "Open"
-    : action.type === "start_thread"
-      ? "Investigate"
-      : action.type === "open_link"
-        ? "Open Link"
-        : action.type === "copy"
-          ? "Copy"
-          : "Run";

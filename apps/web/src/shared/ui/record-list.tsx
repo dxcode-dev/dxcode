@@ -2,6 +2,7 @@ import type * as React from "react";
 import { cn } from "../utils.js";
 import { Badge, type BadgeTone } from "./badge.js";
 import { EmptyState } from "./empty-state.js";
+import { Tooltip } from "./tooltip.js";
 import "./record-list.css";
 
 /** One row. Every field is drawn as plain text, never as HTML. */
@@ -17,16 +18,42 @@ export interface RecordListItem {
   readonly meta?: string;
 }
 
+/** A row that opens its record, with what that does as its tooltip. */
+function SelectRow({
+  label,
+  onClick,
+  children,
+}: {
+  readonly label: string | undefined;
+  readonly onClick: () => void;
+  readonly children: React.ReactNode;
+}) {
+  const row = (
+    <button type="button" className="dx-record-list-row" onClick={onClick}>
+      {children}
+    </button>
+  );
+  return label === undefined ? (
+    row
+  ) : (
+    <Tooltip content={label} side="top" align="end">
+      {row}
+    </Tooltip>
+  );
+}
+
 /**
  * A compact list of records, one row each, as settings lists show skills or
  * keys: a name, an optional badge and second line, and a fact on the right.
- * With `onSelect` each row is a button that opens its record. It draws no
+ * With `onSelect` each row is a button that opens its record, and
+ * `selectLabel` says what that does in a tooltip on the row. It draws no
  * frame, so put it in a `SettingsCard` or `Card`.
  */
 export function RecordList({
   label,
   items,
   onSelect,
+  selectLabel,
   empty,
   className,
 }: {
@@ -35,6 +62,8 @@ export function RecordList({
   readonly items: ReadonlyArray<RecordListItem>;
   /** Makes each row a button; called with the row's `key`. */
   readonly onSelect?: (key: string) => void;
+  /** What selecting a row does, such as "Open issue": a tooltip on each row. */
+  readonly selectLabel?: string;
   /** What an empty list says: "No skills yet." */
   readonly empty?: React.ReactNode;
   readonly className?: string;
@@ -74,13 +103,9 @@ export function RecordList({
             {onSelect === undefined ? (
               <div className="dx-record-list-row">{content}</div>
             ) : (
-              <button
-                type="button"
-                className="dx-record-list-row"
-                onClick={() => onSelect(item.key)}
-              >
+              <SelectRow label={selectLabel} onClick={() => onSelect(item.key)}>
                 {content}
-              </button>
+              </SelectRow>
             )}
           </li>
         );

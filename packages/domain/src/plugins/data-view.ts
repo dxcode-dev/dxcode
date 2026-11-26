@@ -76,36 +76,52 @@ export const DATA_VIEW_ACTION_TYPES = [
 ] as const;
 export type DataViewActionType = (typeof DATA_VIEW_ACTION_TYPES)[number];
 
+/** A table column's or stat's `hint` is at most this many characters. */
+export const MAX_DATA_VIEW_HINT = 200;
+/** An action's `label` is at most this many characters. */
+export const MAX_DATA_VIEW_ACTION_LABEL = 40;
+
+interface ActionBase {
+  /**
+   * Names what the action does where dx draws its button: a table's row
+   * button ("Filter", "Open issue") and a list item's action. Without it
+   * the button says Open, Investigate, Open Link, Copy, or Run by type.
+   */
+  readonly label?: string;
+}
+
 /**
  * A dx action. Text fields are templates: `{{path}}` is replaced with the
  * value at that path of the view's state, or of the row (`row.<key>`) or
  * form (`form.<name>`) the action belongs to.
  */
-export type DataViewAction =
-  | {
-      readonly type: "open_thread";
-      /** The Thread's id, a template such as `{{row.threadId}}`. */
-      readonly thread: string;
-    }
-  | {
-      readonly type: "start_thread";
-      /** The first message of the new Thread. */
-      readonly prompt: string;
-      readonly title?: string;
-    }
-  | {
-      readonly type: "call";
-      /** A function the plugin exposes (`dx.expose`, manifest `exports`). */
-      readonly fn: string;
-      /** Arguments; each string in it is a template. */
-      readonly args?: Readonly<Record<string, unknown>>;
-      /** Where the function's reply goes in the view's state. */
-      readonly result?: string;
-      /** Asks this question before calling. */
-      readonly confirm?: string;
-    }
-  | { readonly type: "open_link"; readonly url: string }
-  | { readonly type: "copy"; readonly text: string };
+export type DataViewAction = ActionBase &
+  (
+    | {
+        readonly type: "open_thread";
+        /** The Thread's id, a template such as `{{row.threadId}}`. */
+        readonly thread: string;
+      }
+    | {
+        readonly type: "start_thread";
+        /** The first message of the new Thread. */
+        readonly prompt: string;
+        readonly title?: string;
+      }
+    | {
+        readonly type: "call";
+        /** A function the plugin exposes (`dx.expose`, manifest `exports`). */
+        readonly fn: string;
+        /** Arguments; each string in it is a template. */
+        readonly args?: Readonly<Record<string, unknown>>;
+        /** Where the function's reply goes in the view's state. */
+        readonly result?: string;
+        /** Asks this question before calling. */
+        readonly confirm?: string;
+      }
+    | { readonly type: "open_link"; readonly url: string }
+    | { readonly type: "copy"; readonly text: string }
+  );
 
 interface PartBase {
   /** Names the part in error messages; a form's id names its values. */
@@ -119,6 +135,8 @@ interface PartBase {
 export interface DataViewColumn {
   readonly key: string;
   readonly label: string;
+  /** Explains the column in a tooltip on its header. */
+  readonly hint?: string;
   readonly format?: DataViewFormat;
   /** Draws the value as a badge, colored by value. */
   readonly tones?: Readonly<Record<string, DataViewTone>>;
@@ -163,6 +181,8 @@ export type DataViewPart =
   | (PartBase & {
       readonly type: "stat";
       readonly label: string;
+      /** Explains the number in a tooltip on its label. */
+      readonly hint?: string;
       readonly bind: string;
       readonly format?: DataViewFormat;
       readonly detail?: string;

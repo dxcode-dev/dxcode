@@ -4,7 +4,7 @@ import type {
   BugReportFile,
   BugReportId,
 } from "@dx/api";
-import { BugReportDataSchema } from "@dx/api";
+import { BUG_REPORT_FILE_NAME, BugReportDataSchema } from "@dx/api";
 import { Option, Schema } from "effect";
 
 interface BugReportRow {
@@ -309,8 +309,7 @@ export const listBugReports = async (
 };
 
 /** The files a report may hold in `DX_STORAGE`, by name. */
-export const BUG_REPORT_FILE_NAME =
-  /^(?:diagnostics\.json|dictation\.wav|image-[1-5]\.(?:png|jpg|gif|webp))$/;
+export { BUG_REPORT_FILE_NAME };
 
 export const bugReportFileKey = (id: BugReportId, name: string) =>
   `bug-reports/${id}/${name}`;

@@ -6,6 +6,8 @@ import {
   type DataViewActionType,
   type DataViewDefinition,
   type DataViewPartType,
+  MAX_DATA_VIEW_ACTION_LABEL,
+  MAX_DATA_VIEW_HINT,
   MAX_DATA_VIEW_PARTS,
   MAX_DATA_VIEW_STATE_BYTES,
 } from "./data-view.js";
@@ -167,12 +169,17 @@ const action: Rule = (value, at, errors, context) => {
   }
   const rules: Record<DataViewActionType, Rule> = {
     open_thread: object(
-      { type: req(oneOf(["open_thread"])), thread: req(string()) },
+      {
+        type: req(oneOf(["open_thread"])),
+        label: opt(string(MAX_DATA_VIEW_ACTION_LABEL)),
+        thread: req(string()),
+      },
       "open_thread",
     ),
     start_thread: object(
       {
         type: req(oneOf(["start_thread"])),
+        label: opt(string(MAX_DATA_VIEW_ACTION_LABEL)),
         prompt: req(string(MAX_TEMPLATE)),
         title: opt(string()),
       },
@@ -181,6 +188,7 @@ const action: Rule = (value, at, errors, context) => {
     call: object(
       {
         type: req(oneOf(["call"])),
+        label: opt(string(MAX_DATA_VIEW_ACTION_LABEL)),
         fn: req((fn, fnAt, fnErrors) => {
           if (typeof fn !== "string" || !/^[a-z][A-Za-z0-9_]{0,47}$/.test(fn))
             fnErrors.push(
@@ -197,11 +205,19 @@ const action: Rule = (value, at, errors, context) => {
       "call",
     ),
     open_link: object(
-      { type: req(oneOf(["open_link"])), url: req(string(2_000)) },
+      {
+        type: req(oneOf(["open_link"])),
+        label: opt(string(MAX_DATA_VIEW_ACTION_LABEL)),
+        url: req(string(2_000)),
+      },
       "open_link",
     ),
     copy: object(
-      { type: req(oneOf(["copy"])), text: req(string(MAX_TEMPLATE)) },
+      {
+        type: req(oneOf(["copy"])),
+        label: opt(string(MAX_DATA_VIEW_ACTION_LABEL)),
+        text: req(string(MAX_TEMPLATE)),
+      },
       "copy",
     ),
   };
@@ -233,6 +249,7 @@ const column = object(
   {
     key: req(key),
     label: req(string(80)),
+    hint: opt(string(MAX_DATA_VIEW_HINT)),
     format: opt(oneOf(DATA_VIEW_FORMATS)),
     tones: opt(tones),
     secondary: opt(boolean),
@@ -299,6 +316,7 @@ const partRules = (depth: number): Record<DataViewPartType, Rule> => ({
       type: req(oneOf(["stat"])),
       ...base,
       label: req(string(80)),
+      hint: opt(string(MAX_DATA_VIEW_HINT)),
       bind: req(path),
       format: opt(oneOf(DATA_VIEW_FORMATS)),
       detail: opt(string(200)),

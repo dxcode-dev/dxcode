@@ -1,10 +1,12 @@
 import {
+  AttachThreadTerminalEndpoint,
   THREAD_TERMINAL_SUBPROTOCOL,
   type ThreadTerminalErrorCode,
   type ThreadTerminalId,
   type ThreadTerminalServerControl,
   ThreadTerminalServerControlSchema,
 } from "@dx/api";
+import { endpointPath } from "@dx/client";
 import type { ThreadId } from "@dx/domain";
 import { Option, Schema } from "effect";
 import { RefreshCw, SquareTerminal } from "lucide-react";
@@ -26,9 +28,14 @@ import { TerminalKeys } from "./terminal-keys.js";
 import { terminalThemeFor } from "./terminal-themes.js";
 
 const terminalUrl = (threadId: ThreadId, session: ThreadTerminalId) => {
-  const url = new URL(`/v1/threads/${threadId}/terminal`, window.location.href);
+  const url = new URL(
+    endpointPath(AttachThreadTerminalEndpoint, {
+      params: { threadId },
+      query: session === "default" ? {} : { terminal: session },
+    }),
+    window.location.href,
+  );
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  if (session !== "default") url.searchParams.set("terminal", session);
   return url.href;
 };
 

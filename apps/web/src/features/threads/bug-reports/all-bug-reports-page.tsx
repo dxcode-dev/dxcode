@@ -5,12 +5,10 @@ import { DxLoading } from "../../../shared/brand/dx-loading.js";
 import { PageShell } from "../../../shared/layout/page-shell.js";
 import { Button } from "../../../shared/ui/button.js";
 import { EmptyState } from "../../../shared/ui/empty-state.js";
+import { bugReportAccessQueryOptions } from "./bug-report-access-queries.js";
 import { BugReportDialog } from "./bug-report-detail.js";
 import { firstLine, reportSource, sentAt } from "./bug-report-format.js";
-import {
-  allBugReportsQueryOptions,
-  bugReportAccessQueryOptions,
-} from "./bug-report-queries.js";
+import { allBugReportsQueryOptions } from "./bug-report-queries.js";
 import "./bug-reports.css";
 
 /**

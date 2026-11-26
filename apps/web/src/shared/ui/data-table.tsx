@@ -6,6 +6,7 @@ import { cn } from "../utils.js";
 import { Button } from "./button.js";
 import { Checkbox } from "./checkbox.js";
 import { EmptyState } from "./empty-state.js";
+import { Tooltip, TooltipHint } from "./tooltip.js";
 import "./data-table.css";
 
 export type DataTableSortDirection = "asc" | "desc";
@@ -19,6 +20,8 @@ export interface DataTableSort {
 export interface DataTableColumn<Row> {
   readonly id: string;
   readonly header: React.ReactNode;
+  /** Explains the column in a tooltip on its header: "Errors in the last 24 hours". */
+  readonly hint?: string;
   readonly cell: (row: Row) => React.ReactNode;
   /** Right-aligned with tabular figures, for amounts, counts, and dates. */
   readonly numeric?: boolean;
@@ -104,9 +107,62 @@ function SortIcon({
   );
 }
 
+/** A sortable header's button; its column's hint shows as its tooltip. */
+function SortButton({
+  hint,
+  active,
+  onClick,
+  children,
+}: {
+  readonly hint: string | undefined;
+  readonly active: boolean;
+  readonly onClick: () => void;
+  readonly children: React.ReactNode;
+}) {
+  const button = (
+    <button
+      type="button"
+      className="dx-data-table-sort"
+      data-active={active || undefined}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+  return hint === undefined ? (
+    button
+  ) : (
+    <Tooltip content={hint}>{button}</Tooltip>
+  );
+}
+
+/** Clicks on these inside a row act on their own, not on the row. */
+const OWN_CLICK = "a, button, input, select, textarea, label, summary";
+
+/** A header's text, with its column's hint as a tooltip when it has one. */
+function HeaderLabel({
+  header,
+  hint,
+  sortable,
+}: {
+  readonly header: React.ReactNode;
+  readonly hint: string | undefined;
+  readonly sortable: boolean;
+}) {
+  if (hint === undefined) return header;
+  // A sort button is the tooltip's trigger already.
+  return sortable ? (
+    <span className="dx-tooltip-hint">{header}</span>
+  ) : (
+    <TooltipHint hint={hint}>{header}</TooltipHint>
+  );
+}
+
 /**
  * Rows of records with column headers, for admin lists such as people,
- * coupons, or Orbs. Sorting is controlled: a sortable header asks for a
+ * coupons, or Orbs. A column's `hint` explains it in a tooltip on its
+ * header. `onRowClick` makes the whole row open its record with a click;
+ * keep a button in the row for the keyboard and screen readers. Sorting is controlled: a sortable header asks for a
  * sort through `onSortChange`, and the caller sorts or refetches. The
  * footer loads the next keyset page. `rows` undefined shows loading;
  * `error` replaces the rows with a retry. `maxHeight` scrolls the rows
@@ -119,6 +175,7 @@ export function DataTable<Row>({
   rowKey,
   sort,
   onSortChange,
+  onRowClick,
   selection,
   pagination,
   empty,
@@ -134,6 +191,11 @@ export function DataTable<Row>({
   readonly rowKey: (row: Row) => string;
   readonly sort?: DataTableSort;
   readonly onSortChange?: (sort: DataTableSort) => void;
+  /**
+   * A click anywhere in a row, except on a control in it, calls this. The
+   * row's own button must do the same, since a row takes no focus.
+   */
+  readonly onRowClick?: (row: Row) => void;
   readonly selection?: DataTableSelection;
   readonly pagination?: DataTablePagination;
   /** What an empty table says: "No one is waiting." */
@@ -185,9 +247,29 @@ export function DataTable<Row>({
     const key = rowKey(row);
     const selected = selection?.selected.has(key) ?? false;
     return (
+      // A row click is a pointer shortcut: the row's own button runs the
+      // same action for the keyboard (see `onRowClick`), and a row takes
+      // no focus, so a key handler here would never fire.
+      // react-doctor-disable-next-line react-doctor/click-events-have-key-events
       <tr
         key={key}
         data-selected={selected || undefined}
+        data-clickable={onRowClick === undefined ? undefined : ""}
+        onClick={
+          onRowClick === undefined
+            ? undefined
+            : (event) => {
+                // A control in the row acts on its own, and a drag that
+                // selects text is for copying.
+                if (
+                  event.target instanceof Element &&
+                  event.target.closest(OWN_CLICK) !== null
+                )
+                  return;
+                if (window.getSelection()?.isCollapsed === false) return;
+                onRowClick(row);
+              }
+        }
         data-index={index}
         aria-rowindex={index === undefined ? undefined : index + 2}
         ref={index === undefined ? undefined : windowed.measure}
@@ -272,17 +354,20 @@ export function DataTable<Row>({
                   data-secondary={column.secondary || undefined}
                 >
                   {column.sortable && onSortChange !== undefined ? (
-                    <button
-                      type="button"
-                      className="dx-data-table-sort"
-                      data-active={sort?.columnId === column.id || undefined}
+                    <SortButton
+                      hint={column.hint}
+                      active={sort?.columnId === column.id}
                       onClick={() =>
                         onSortChange(
                           nextSort(sort, column as DataTableColumn<never>),
                         )
                       }
                     >
-                      {column.header}
+                      <HeaderLabel
+                        header={column.header}
+                        hint={column.hint}
+                        sortable
+                      />
                       <SortIcon
                         direction={
                           sort?.columnId === column.id
@@ -290,9 +375,13 @@ export function DataTable<Row>({
                             : undefined
                         }
                       />
-                    </button>
+                    </SortButton>
                   ) : (
-                    column.header
+                    <HeaderLabel
+                      header={column.header}
+                      hint={column.hint}
+                      sortable={false}
+                    />
                   )}
                 </th>
               ))}

@@ -23,8 +23,8 @@ import {
   type SettingsRequest,
 } from "./desktop-permissions.js";
 import {
-  desktopPath,
   desktopSettingsMutation,
+  desktopSocketPath,
   desktopWindowInputHandlers,
   desktopWindowsQueryOptions,
   refreshDesktopWindowsAfterStart,
@@ -48,7 +48,7 @@ import type { VoxlConnection, VoxlSession } from "./voxl/session.js";
 const loadVoxl = () => import("./voxl/session.js");
 
 const desktopSocketUrl = (threadId: ThreadId) =>
-  `${window.location.origin.replace(/^http/, "ws")}${desktopPath(threadId)}/ws`;
+  `${window.location.origin.replace(/^http/, "ws")}${desktopSocketPath(threadId)}`;
 
 /**
  * Without input on the desktop for this long, the viewer disconnects. The

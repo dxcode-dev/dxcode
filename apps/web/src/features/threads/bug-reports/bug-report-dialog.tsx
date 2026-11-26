@@ -33,11 +33,9 @@ import { Textarea } from "../../../shared/ui/textarea.js";
 import { loadedChanges } from "../changes/changes-queries.js";
 import type { DictationRecord } from "../dictation/dictation-session.js";
 import { serializeThreadJson } from "../thread-export.js";
+import { bugReportAccessQueryOptions } from "./bug-report-access-queries.js";
 import { reportDestination } from "./bug-report-format.js";
-import {
-  bugReportAccessQueryOptions,
-  sendBugReportMutationOptions,
-} from "./bug-report-queries.js";
+import { sendBugReportMutationOptions } from "./bug-report-queries.js";
 import "./bug-reports.css";
 
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];

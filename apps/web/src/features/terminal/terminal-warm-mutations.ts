@@ -1,5 +1,4 @@
 import type { ThreadId } from "@dx/domain";
-import { sameOriginFetch } from "../../shared/same-origin-fetch.js";
 
 /** Pointing must rest this long on Terminal before it wakes the Orb. */
 export const TERMINAL_WARM_DWELL_MS = 150;
@@ -16,11 +15,10 @@ export const warmTerminal = (threadId: ThreadId | string) => {
   const now = Date.now();
   if (now - (lastWarmedAt.get(threadId) ?? 0) < WARM_INTERVAL_MS) return;
   lastWarmedAt.set(threadId, now);
-  void sameOriginFetch(
-    `/v1/threads/${encodeURIComponent(threadId)}/terminal/warm`,
-    { method: "POST", credentials: "same-origin", keepalive: true },
-  )
-    .then((response) => response.body?.cancel())
+  void import("./terminal-warm-request-mutations.js")
+    .then(({ requestTerminalWarm }) =>
+      requestTerminalWarm(threadId as ThreadId),
+    )
     .catch(() => undefined);
 };
 

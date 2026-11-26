@@ -1,6 +1,7 @@
 import * as React from "react";
 import { cn } from "../utils.js";
 import { EmptyState } from "./empty-state.js";
+import { AnchoredTooltip } from "./tooltip.js";
 import "./time-series-chart.css";
 
 export type TimeSeriesTone =
@@ -108,8 +109,9 @@ const geometry = (
 /**
  * Values over time, such as daily spend or active people: a line, an
  * area, or stacked bars, one color per series. Each bucket is a focusable
- * column that shows its values on hover or focus; arrow keys move between
- * them. `points` undefined shows loading.
+ * column that shows its values on hover or focus, in a tooltip over every
+ * pane, so a card's clipping never hides it; arrow keys move between them.
+ * `points` undefined shows loading.
  */
 export function TimeSeriesChart({
   label,
@@ -137,7 +139,11 @@ export function TimeSeriesChart({
   readonly onPointSelect?: (key: string) => void;
   readonly className?: string;
 }) {
-  const [active, setActive] = React.useState<number | undefined>();
+  // The hovered or focused column, and its button for the tooltip's anchor.
+  const [hovered, setHovered] = React.useState<
+    { readonly index: number; readonly anchor: HTMLElement } | undefined
+  >();
+  const active = hovered?.index;
   const toned = series.map((each, index) => ({
     ...each,
     tone: each.tone ?? TONES[index % TONES.length] ?? "blue",
@@ -260,33 +266,13 @@ export function TimeSeriesChart({
                     }}
                   />
                 ))}
-            <div
-              className="dx-chart-tooltip"
-              role="tooltip"
-              data-side={
-                active < points.length / 3
-                  ? "start"
-                  : active > (points.length * 2) / 3
-                    ? "end"
-                    : "center"
-              }
-              style={{ left: `${(plot.x(active) / plot.width) * 100}%` }}
-            >
-              <strong>{activePoint.label}</strong>
-              {toned.map((each) => (
-                <span key={each.id} data-tone={each.tone}>
-                  <span>{each.label}</span>
-                  <span>{formatValue(seriesValue(activePoint, each.id))}</span>
-                </span>
-              ))}
-            </div>
           </>
         )}
         <fieldset
           className="dx-chart-columns"
           aria-label="Values over time"
           style={{ gridTemplateColumns: `repeat(${points.length}, 1fr)` }}
-          onMouseLeave={() => setActive(undefined)}
+          onMouseLeave={() => setHovered(undefined)}
         >
           {points.map((point, index) => (
             <button
@@ -296,15 +282,36 @@ export function TimeSeriesChart({
               tabIndex={index === (active ?? points.length - 1) ? 0 : -1}
               data-active={active === index || undefined}
               data-selectable={onPointSelect === undefined ? undefined : ""}
-              onMouseEnter={() => setActive(index)}
-              onFocus={() => setActive(index)}
-              onBlur={() => setActive(undefined)}
+              onMouseEnter={(event) =>
+                setHovered({ index, anchor: event.currentTarget })
+              }
+              onFocus={(event) =>
+                setHovered({ index, anchor: event.currentTarget })
+              }
+              onBlur={() => setHovered(undefined)}
               onKeyDown={(event) => moveFocus(event, index)}
               onClick={() => onPointSelect?.(point.key)}
             />
           ))}
         </fieldset>
       </div>
+      <AnchoredTooltip
+        open={activePoint !== undefined}
+        anchor={hovered?.anchor ?? null}
+        className="dx-chart-tooltip"
+      >
+        {activePoint === undefined ? null : (
+          <>
+            <strong>{activePoint.label}</strong>
+            {toned.map((each) => (
+              <span key={each.id} data-tone={each.tone}>
+                <span>{each.label}</span>
+                <span>{formatValue(seriesValue(activePoint, each.id))}</span>
+              </span>
+            ))}
+          </>
+        )}
+      </AnchoredTooltip>
       <div className="dx-chart-axis-x" aria-hidden="true">
         <span>{points[0]?.label}</span>
         {points.length > 2 ? <span>{points[middle]?.label}</span> : null}

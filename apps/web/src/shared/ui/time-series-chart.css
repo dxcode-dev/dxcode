@@ -14,22 +14,22 @@
     color: var(--muted-foreground);
     font-size: var(--text-xs);
   }
-  .dx-chart [data-tone="blue"] {
+  :is(.dx-chart, .dx-chart-tooltip) [data-tone="blue"] {
     --dx-chart-color: var(--thread-color-blue);
   }
-  .dx-chart [data-tone="green"] {
+  :is(.dx-chart, .dx-chart-tooltip) [data-tone="green"] {
     --dx-chart-color: var(--thread-color-green);
   }
-  .dx-chart [data-tone="orange"] {
+  :is(.dx-chart, .dx-chart-tooltip) [data-tone="orange"] {
     --dx-chart-color: var(--thread-color-orange);
   }
-  .dx-chart [data-tone="purple"] {
+  :is(.dx-chart, .dx-chart-tooltip) [data-tone="purple"] {
     --dx-chart-color: var(--thread-color-purple);
   }
-  .dx-chart [data-tone="cyan"] {
+  :is(.dx-chart, .dx-chart-tooltip) [data-tone="cyan"] {
     --dx-chart-color: var(--thread-color-cyan);
   }
-  .dx-chart [data-tone="gray"] {
+  :is(.dx-chart, .dx-chart-tooltip) [data-tone="gray"] {
     --dx-chart-color: var(--thread-color-gray);
   }
   .dx-chart-legend {
@@ -165,29 +165,13 @@
     outline: none;
     box-shadow: var(--focus-ring);
   }
-  .dx-chart-tooltip {
-    position: absolute;
-    bottom: calc(100% + var(--space-1-5));
-    z-index: 1;
+  /* The tooltip draws in a portal (tooltip.tsx); this lays out its rows. */
+  .dx-tooltip.dx-chart-tooltip {
     display: grid;
     gap: var(--space-1);
     min-width: 140px;
+    max-width: none;
     padding: var(--space-2) var(--space-2-5);
-    color: var(--popover-foreground);
-    font-size: var(--text-xs);
-    line-height: var(--leading-4);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--popover);
-    box-shadow: var(--shadow-md);
-    transform: translateX(-50%);
-    pointer-events: none;
-  }
-  .dx-chart-tooltip[data-side="start"] {
-    transform: translateX(calc(-1 * var(--space-3)));
-  }
-  .dx-chart-tooltip[data-side="end"] {
-    transform: translateX(calc(-100% + var(--space-3)));
   }
   .dx-chart-tooltip strong {
     font-weight: var(--weight-medium);

@@ -1,23 +1,32 @@
 import {
+  GetPersonalPluginBundleSettingsEndpoint,
+  GetPersonalPluginHostUsageEndpoint,
+  GetWorkspacePluginBundleSettingsEndpoint,
+  GetWorkspacePluginHostUsageEndpoint,
   InstallPluginBundleResponseSchema,
-  ListPluginBundlesResponseSchema,
-  ListPluginBundleUpdatesResponseSchema,
+  ListPersonalPluginBundlesEndpoint,
+  ListPersonalPluginBundleUpdatesEndpoint,
+  ListWorkspacePluginBundlesEndpoint,
+  ListWorkspacePluginBundleUpdatesEndpoint,
   type PluginBundleData,
   type PluginBundleListData,
   type PluginBundlePreviewData,
-  PluginBundleSettingsResponseSchema,
   type PluginBundleUpdatePreviewData,
-  PluginHostUsageResponseSchema,
   PreviewPluginBundleResponseSchema,
   PreviewPluginBundleUpdateResponseSchema,
-  RemovePluginBundleResponseSchema,
-  UpdatePluginBundleResponseSchema,
+  RemovePersonalPluginBundleEndpoint,
+  RemoveWorkspacePluginBundleEndpoint,
+  SetPersonalPluginBundleEnabledEndpoint,
+  SetPersonalPluginBundleSettingsEndpoint,
+  SetWorkspacePluginBundleEnabledEndpoint,
+  SetWorkspacePluginBundleSettingsEndpoint,
   UpdatePluginBundleSourceResponseSchema,
 } from "@dx/api";
 import type { PluginCatalogId, PluginId, UserId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
 import {
   ApiError,
+  dxClient,
   type PluginsTarget,
   request,
 } from "../../../shared/api/client.js";
@@ -27,7 +36,7 @@ export type { PluginBundleData, PluginBundleListData };
 // The plugin bundle API lives with the Plugins settings, not in the shared
 // client, so the Thread page's first load doesn't carry its schemas.
 /** Plugin bundles in the Agent Plugins or Claude Code format: skills and MCP servers. */
-export const pluginBundlesBase = (target: PluginsTarget) =>
+const pluginBundlesBase = (target: PluginsTarget) =>
   target.scope === "personal"
     ? "/v1/settings/personal/plugin-bundles"
     : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugin-bundles`;
@@ -44,14 +53,21 @@ export type PluginBundleUpload =
       readonly name: string;
     };
 
+const workspace = (target: Extract<PluginsTarget, { scope: "workspace" }>) => ({
+  workspaceSlug: target.workspaceSlug,
+});
+
 export const listPluginBundles = async (
   target: PluginsTarget,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(pluginBundlesBase(target), ListPluginBundlesResponseSchema, {
-      signal,
-    })
+  (target.scope === "personal"
+    ? await dxClient.call(ListPersonalPluginBundlesEndpoint, {}, { signal })
+    : await dxClient.call(
+        ListWorkspacePluginBundlesEndpoint,
+        { params: workspace(target) },
+        { signal },
+      )
   ).data;
 
 const zipInit = (file: File): RequestInit => ({
@@ -117,12 +133,17 @@ export const getPluginBundleSettings = async (
   pluginId: PluginId,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/settings`,
-      PluginBundleSettingsResponseSchema,
-      { signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(
+        GetPersonalPluginBundleSettingsEndpoint,
+        { params: { pluginId } },
+        { signal },
+      )
+    : await dxClient.call(
+        GetWorkspacePluginBundleSettingsEndpoint,
+        { params: { ...workspace(target), pluginId } },
+        { signal },
+      )
   ).data.settings;
 
 /** Saves settings by key; null puts one back to its default. */
@@ -131,12 +152,15 @@ export const setPluginBundleSettings = async (
   pluginId: PluginId,
   values: Readonly<Record<string, string | number | boolean | null>>,
 ) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/settings`,
-      PluginBundleSettingsResponseSchema,
-      { method: "PUT", body: JSON.stringify({ values }) },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(SetPersonalPluginBundleSettingsEndpoint, {
+        params: { pluginId },
+        body: { values },
+      })
+    : await dxClient.call(SetWorkspacePluginBundleSettingsEndpoint, {
+        params: { ...workspace(target), pluginId },
+        body: { values },
+      })
   ).data.settings;
 
 /**
@@ -193,24 +217,28 @@ export const setPluginBundleEnabled = async (
   pluginId: PluginId,
   enabled: boolean,
 ) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}`,
-      UpdatePluginBundleResponseSchema,
-      { method: "PATCH", body: JSON.stringify({ enabled }) },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(SetPersonalPluginBundleEnabledEndpoint, {
+        params: { pluginId },
+        body: { enabled },
+      })
+    : await dxClient.call(SetWorkspacePluginBundleEnabledEndpoint, {
+        params: { ...workspace(target), pluginId },
+        body: { enabled },
+      })
   ).data;
 
 export const removePluginBundle = async (
   target: PluginsTarget,
   pluginId: PluginId,
 ) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}`,
-      RemovePluginBundleResponseSchema,
-      { method: "DELETE" },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(RemovePersonalPluginBundleEndpoint, {
+        params: { pluginId },
+      })
+    : await dxClient.call(RemoveWorkspacePluginBundleEndpoint, {
+        params: { ...workspace(target), pluginId },
+      })
   ).data;
 
 export const pluginBundleKeys = {
@@ -236,12 +264,17 @@ const listPluginBundleUpdates = async (
   target: PluginsTarget,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      `${pluginBundlesBase(target)}/updates`,
-      ListPluginBundleUpdatesResponseSchema,
-      { signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(
+        ListPersonalPluginBundleUpdatesEndpoint,
+        {},
+        { signal },
+      )
+    : await dxClient.call(
+        ListWorkspacePluginBundleUpdatesEndpoint,
+        { params: workspace(target) },
+        { signal },
+      )
   ).data;
 
 /** Kept apart from the list, so a toggle doesn't ask GitHub again. */
@@ -307,12 +340,17 @@ export const pluginHostUsageQueryOptions = (
   queryOptions({
     queryKey: ["plugin-host-usage", target, pluginId] as const,
     queryFn: async ({ signal }) =>
-      (
-        await request(
-          `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/host-usage`,
-          PluginHostUsageResponseSchema,
-          { signal },
-        )
+      (target.scope === "personal"
+        ? await dxClient.call(
+            GetPersonalPluginHostUsageEndpoint,
+            { params: { pluginId } },
+            { signal },
+          )
+        : await dxClient.call(
+            GetWorkspacePluginHostUsageEndpoint,
+            { params: { ...workspace(target), pluginId } },
+            { signal },
+          )
       ).data,
     staleTime: 60_000,
   });

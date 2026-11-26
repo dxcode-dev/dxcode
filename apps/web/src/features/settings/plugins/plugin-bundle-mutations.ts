@@ -1,20 +1,28 @@
 import {
-  CreatePluginShareLinkResponseSchema,
-  DecidePluginProposalResponseSchema,
-  ListPluginBundlesResponseSchema,
+  ApprovePersonalPluginProposalEndpoint,
+  ApproveWorkspacePluginProposalEndpoint,
+  CreatePersonalPluginShareLinkEndpoint,
+  CreateWorkspacePluginShareLinkEndpoint,
+  ExportPersonalPluginBundleEndpoint,
+  ExportWorkspacePluginBundleEndpoint,
   type PluginBundlePreviewData,
   type PluginBundleUpdatePreviewData,
   type PluginProposalData,
-  RevokePluginShareLinksResponseSchema,
+  RejectPersonalPluginProposalEndpoint,
+  RejectWorkspacePluginProposalEndpoint,
+  RevokePersonalPluginShareLinksEndpoint,
+  RevokeWorkspacePluginShareLinksEndpoint,
+  SetPersonalPluginBundlePolicyEndpoint,
   type SetPluginBundlePolicyRequest,
+  SetWorkspacePluginBundlePolicyEndpoint,
 } from "@dx/api";
 import type { PluginId, UserId } from "@dx/domain";
 import { mutationOptions, type QueryClient } from "@tanstack/react-query";
 import {
   ApiError,
+  dxClient,
+  endpointPath,
   type PluginsTarget,
-  request,
-  requestBlob,
 } from "../../../shared/api/client.js";
 import { mcpServerKeys } from "../integrations/mcp-queries.js";
 import { skillKeys } from "../skills/skills-queries.js";
@@ -23,7 +31,6 @@ import {
   type PluginBundleUpload,
   pluginBundleKeys,
   pluginBundleSettingsKey,
-  pluginBundlesBase,
   pluginBundleUpdatesKey,
   previewPluginBundle,
   previewPluginBundleUpdate,
@@ -64,11 +71,12 @@ const setPluginBundlePolicy = (
   target: PluginsTarget,
   policy: SetPluginBundlePolicyRequest,
 ) =>
-  request(
-    `${pluginBundlesBase(target)}/policy`,
-    ListPluginBundlesResponseSchema,
-    { method: "PUT", body: JSON.stringify(policy) },
-  );
+  target.scope === "personal"
+    ? dxClient.call(SetPersonalPluginBundlePolicyEndpoint, { body: policy })
+    : dxClient.call(SetWorkspacePluginBundlePolicyEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug },
+        body: policy,
+      });
 
 const mutate = async (
   target: PluginsTarget,
@@ -185,17 +193,26 @@ export const pluginBundleShareMutationOptions = (
   mutationOptions({
     gcTime: 0,
     mutationFn: async (action: "share" | "stop") => {
-      const path = `${pluginBundlesBase(target)}/${encodeURIComponent(pluginId)}/share`;
       if (action === "share")
         return (
-          await request(path, CreatePluginShareLinkResponseSchema, {
-            method: "POST",
-            body: "{}",
-          })
+          target.scope === "personal"
+            ? await dxClient.call(CreatePersonalPluginShareLinkEndpoint, {
+                params: { pluginId },
+                body: {},
+              })
+            : await dxClient.call(CreateWorkspacePluginShareLinkEndpoint, {
+                params: { workspaceSlug: target.workspaceSlug, pluginId },
+                body: {},
+              })
         ).data.url;
-      await request(path, RevokePluginShareLinksResponseSchema, {
-        method: "DELETE",
-      });
+      if (target.scope === "personal")
+        await dxClient.call(RevokePersonalPluginShareLinksEndpoint, {
+          params: { pluginId },
+        });
+      else
+        await dxClient.call(RevokeWorkspacePluginShareLinksEndpoint, {
+          params: { workspaceSlug: target.workspaceSlug, pluginId },
+        });
       return undefined;
     },
     onSuccess: () =>
@@ -210,17 +227,30 @@ const decide = (
   target: PluginsTarget,
   proposal: PluginProposalData,
   decision: Decision,
-) =>
-  request(
-    `${pluginBundlesBase(target)}/proposals/${encodeURIComponent(proposal.id)}/${decision}`,
-    DecidePluginProposalResponseSchema,
-    {
-      method: "POST",
-      body: JSON.stringify(
-        decision === "approve" ? { reviewedIntegrity: proposal.integrity } : {},
-      ),
-    },
-  );
+) => {
+  const proposalId = proposal.id;
+  if (decision === "approve") {
+    const body = { reviewedIntegrity: proposal.integrity };
+    return target.scope === "personal"
+      ? dxClient.call(ApprovePersonalPluginProposalEndpoint, {
+          params: { proposalId },
+          body,
+        })
+      : dxClient.call(ApproveWorkspacePluginProposalEndpoint, {
+          params: { workspaceSlug: target.workspaceSlug, proposalId },
+          body,
+        });
+  }
+  return target.scope === "personal"
+    ? dxClient.call(RejectPersonalPluginProposalEndpoint, {
+        params: { proposalId },
+        body: {},
+      })
+    : dxClient.call(RejectWorkspacePluginProposalEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, proposalId },
+        body: {},
+      });
+};
 
 /** Approves or rejects a plugin dx proposed; approval installs it. */
 export const pluginProposalDecisionMutationOptions = (
@@ -250,19 +280,44 @@ export const pluginProposalDecisionMutationOptions = (
       ]),
   });
 
+/** Where the plain ZIP download points. */
+export const pluginBundleExportHref = (
+  target: PluginsTarget,
+  pluginId: PluginId,
+) =>
+  target.scope === "personal"
+    ? endpointPath(ExportPersonalPluginBundleEndpoint, {
+        params: { pluginId },
+        query: {},
+      })
+    : endpointPath(ExportWorkspacePluginBundleEndpoint, {
+        params: { workspaceSlug: target.workspaceSlug, pluginId },
+        query: {},
+      });
+
 /**
  * The plugin's export with plugin.sig, signed with the person's managed dx
- * key, saved as `filename`. `exportPath` is the export route the plain
- * download uses. The download starts even if the dialog closed meanwhile.
+ * key, saved as `filename`. The download starts even if the dialog closed
+ * meanwhile.
  */
 export const pluginBundleSignedExportMutationOptions = (
-  exportPath: string,
+  target: PluginsTarget,
+  pluginId: PluginId,
   filename: string,
 ) =>
   mutationOptions({
     gcTime: 0,
     mutationFn: () =>
-      requestBlob(`${exportPath}?sign=1`).catch((error: unknown) => {
+      (target.scope === "personal"
+        ? dxClient.call(ExportPersonalPluginBundleEndpoint, {
+            params: { pluginId },
+            query: { sign: "1" },
+          })
+        : dxClient.call(ExportWorkspacePluginBundleEndpoint, {
+            params: { workspaceSlug: target.workspaceSlug, pluginId },
+            query: { sign: "1" },
+          })
+      ).catch((error: unknown) => {
         throw error instanceof ApiError && error.message !== "Request failed."
           ? error
           : new Error("dx could not sign the export.");

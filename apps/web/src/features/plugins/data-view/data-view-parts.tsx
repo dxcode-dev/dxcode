@@ -12,6 +12,7 @@ import { formatViewValue, numberOf } from "./data-view-format.js";
 import { ButtonPart, StatPart } from "./data-view-stat.js";
 import { TablePart } from "./data-view-table.js";
 import {
+  actionLabel,
   keyOf,
   listOf,
   type PartContext,
@@ -217,6 +218,7 @@ function OnePart({
             {...(part.itemAction === undefined
               ? {}
               : {
+                  selectLabel: actionLabel(part.itemAction),
                   onSelect: (key: string) => {
                     const index = items.findIndex(
                       (item, at) => keyOf(item, part.itemKey, at) === key,

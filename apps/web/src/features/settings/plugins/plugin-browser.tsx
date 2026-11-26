@@ -18,9 +18,11 @@ import {
 } from "../../../shared/ui/menu.js";
 import { PackageBrowser } from "../../../shared/ui/package-browser.js";
 import { PluginIcon } from "../../../shared/ui/plugin-icon.js";
-import { pluginBundleSignedExportMutationOptions } from "./plugin-bundle-mutations.js";
+import {
+  pluginBundleExportHref,
+  pluginBundleSignedExportMutationOptions,
+} from "./plugin-bundle-mutations.js";
 import { type BundleRun, errorMessage } from "./plugin-bundle-presentation.js";
-import { pluginBundlesBase } from "./plugin-bundle-queries.js";
 import { removalSummary } from "./plugin-bundle-removal.js";
 import {
   pluginFileQueryOptions,
@@ -130,10 +132,10 @@ const download = (href: string, filename: string) => {
 
 /** The plugin's menu: updates, sharing, export, and Remove. */
 function PluginMenu({
+  target,
   bundle,
   canMutate,
   busy,
-  exportHref,
   checking,
   onCheckUpdate,
   onUploadZip,
@@ -141,10 +143,10 @@ function PluginMenu({
   onRemove,
   onError,
 }: {
+  readonly target: PluginsTarget;
   readonly bundle: PluginBundleData;
   readonly canMutate: boolean;
   readonly busy: boolean;
-  readonly exportHref: string;
   readonly checking: boolean;
   readonly onCheckUpdate: () => void;
   readonly onUploadZip: () => void;
@@ -152,8 +154,13 @@ function PluginMenu({
   readonly onRemove: () => void;
   readonly onError: (message: string) => void;
 }) {
+  const exportHref = pluginBundleExportHref(target, bundle.id);
   const signedExport = useMutation(
-    pluginBundleSignedExportMutationOptions(exportHref, `${bundle.name}.zip`),
+    pluginBundleSignedExportMutationOptions(
+      target,
+      bundle.id,
+      `${bundle.name}.zip`,
+    ),
   );
   return (
     <MenuRoot>
@@ -279,7 +286,6 @@ export function PluginBrowser({
   const openFile = files.data?.files.find(({ path }) => path === openPath);
   const readOnly =
     bundle === undefined ? undefined : readOnlyReason(bundle, canMutate);
-  const exportHref = `${pluginBundlesBase(target)}/${encodeURIComponent(bundle?.id ?? "")}/export`;
   const reviewed =
     review === undefined
       ? undefined
@@ -351,10 +357,10 @@ export function PluginBrowser({
               onUpdate={() => onUpdate(bundle)}
               menu={
                 <PluginMenu
+                  target={target}
                   bundle={bundle}
                   canMutate={canMutate}
                   busy={busy}
-                  exportHref={exportHref}
                   checking={checking}
                   onCheckUpdate={() => void checkUpdate(bundle)}
                   onUploadZip={() => zipInput.current?.click()}

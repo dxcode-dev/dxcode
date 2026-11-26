@@ -44,14 +44,14 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* A long value, such as "Nov 26 at 10:06 PM", wraps rather than cut. */
   .dx-stat-value {
-    overflow: hidden;
     font-size: var(--text-2xl);
     font-weight: var(--weight-semibold);
     line-height: var(--leading-6);
     font-variant-numeric: tabular-nums;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: break-word;
+    text-wrap: balance;
   }
   .dx-stat-placeholder {
     display: inline-block;

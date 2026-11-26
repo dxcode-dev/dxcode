@@ -1,21 +1,15 @@
-import {
-  HuddleErrorResponseSchema,
-  HuddleLinkResponseSchema,
-  HuddleLinkTargetResponseSchema,
-} from "@dx/api";
+import { CreateHuddleLinkEndpoint, GetHuddleLinkTargetEndpoint } from "@dx/api";
+import type { ThreadId } from "@dx/domain";
 import { queryOptions } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ApiError, request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 
 /** `POST /v1/threads/:id/huddle/link`: the huddle's short link. */
 export const postHuddleLink = async (threadId: string) =>
   (
-    await request(
-      `/v1/threads/${encodeURIComponent(threadId)}/huddle/link`,
-      HuddleLinkResponseSchema,
-      { method: "POST" },
-      HuddleErrorResponseSchema,
-    )
+    await dxClient.call(CreateHuddleLinkEndpoint, {
+      params: { threadId: threadId as ThreadId },
+    })
   ).data;
 
 /** `GET /v1/huddle-links/:workspace/:code`: the thread or Space it opens. */
@@ -24,11 +18,10 @@ export const huddleLinkTargetQueryOptions = (workspace: string, code: string) =>
     queryKey: ["huddle", "link", workspace.toLowerCase(), code] as const,
     queryFn: async ({ signal }) =>
       (
-        await request(
-          `/v1/huddle-links/${encodeURIComponent(workspace)}/${encodeURIComponent(code)}`,
-          HuddleLinkTargetResponseSchema,
+        await dxClient.call(
+          GetHuddleLinkTargetEndpoint,
+          { params: { workspace, code } },
           { signal },
-          HuddleErrorResponseSchema,
         )
       ).data,
     // Read fresh each time: sharing can change between visits.
@@ -36,32 +29,6 @@ export const huddleLinkTargetQueryOptions = (workspace: string, code: string) =>
     gcTime: 0,
     retry: false,
   });
-
-/** The deployment has no RealtimeKit app, so a link cannot open a huddle. */
-export class HuddlesOffError extends Error {
-  constructor() {
-    super("Huddles are not available on this dx.");
-    this.name = "HuddlesOffError";
-  }
-}
-
-/** Why a huddle link did not open, for its page. */
-export const huddleLinkFailure = (
-  error: unknown,
-):
-  | "off"
-  | "HUDDLE_LINK_NOT_FOUND"
-  | "HUDDLE_LINK_FORBIDDEN"
-  | "HUDDLE_PRIVATE"
-  | undefined => {
-  if (error instanceof HuddlesOffError) return "off";
-  const code = error instanceof ApiError ? error.code : undefined;
-  return code === "HUDDLE_LINK_NOT_FOUND" ||
-    code === "HUDDLE_LINK_FORBIDDEN" ||
-    code === "HUDDLE_PRIVATE"
-    ? code
-    : undefined;
-};
 
 /** Copies the huddle's link, the same for everyone, and says so. */
 export const copyHuddleLink = async (threadId: string) => {

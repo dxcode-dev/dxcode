@@ -53,3 +53,16 @@ export const keyOf = (
   const value = field === undefined ? undefined : recordOf(row)[field];
   return value === undefined || value === null ? String(index) : text(value);
 };
+
+/** The action's own `label`, or a word for its type. */
+export const actionLabel = (action: DataViewAction) =>
+  action.label ??
+  (action.type === "open_thread"
+    ? "Open"
+    : action.type === "start_thread"
+      ? "Investigate"
+      : action.type === "open_link"
+        ? "Open Link"
+        : action.type === "copy"
+          ? "Copy"
+          : "Run");

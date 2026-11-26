@@ -1,10 +1,12 @@
 import {
-  GetThreadDesktopResponseSchema,
-  GetThreadDesktopWindowsResponseSchema,
+  ActOnThreadDesktopWindowsEndpoint,
+  GetThreadDesktopEndpoint,
+  ListThreadDesktopWindowsEndpoint,
   type MacDesktopPermissions,
   type MacSettingsPane,
+  OpenThreadDesktopSettingsEndpoint,
   type ThreadDesktopSettingsData,
-  ThreadDesktopSettingsResponseSchema,
+  ThreadDesktopSocketEndpoint,
   type ThreadDesktopWindowsAction,
   type ThreadDesktopWindowsData,
 } from "@dx/api";
@@ -14,10 +16,13 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { ApiError, request } from "../../shared/api/client.js";
+import { ApiError, dxClient, endpointPath } from "../../shared/api/client.js";
 
-export const desktopPath = (threadId: ThreadId) =>
-  `/v1/threads/${encodeURIComponent(threadId)}/desktop`;
+/** The Desktop's WebSocket path, `/v1/threads/:threadId/desktop/ws`. */
+export const desktopSocketPath = (threadId: ThreadId) =>
+  endpointPath(ThreadDesktopSocketEndpoint, {
+    params: { threadId, channel: "ws" },
+  });
 
 export type DesktopAvailability =
   /** `notice`: a Mac runner's Desktop streams but says what is off (input). */
@@ -54,9 +59,11 @@ export const checkDesktop = async (
 ): Promise<DesktopAvailability> => {
   try {
     const check = () =>
-      request(desktopPath(threadId), GetThreadDesktopResponseSchema, {
-        signal,
-      });
+      dxClient.call(
+        GetThreadDesktopEndpoint,
+        { params: { threadId } },
+        { signal },
+      );
     let { data } = await check();
     // A runner's answer is already its final one: asking again would only
     // repeat it (and a missing voxl would be looked for twice).
@@ -105,15 +112,10 @@ export const openDesktopSettings = async (
   pane: MacSettingsPane,
 ): Promise<ThreadDesktopSettingsData> =>
   (
-    await request(
-      `${desktopPath(threadId)}/settings`,
-      ThreadDesktopSettingsResponseSchema,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ pane }),
-      },
-    )
+    await dxClient.call(OpenThreadDesktopSettingsEndpoint, {
+      params: { threadId },
+      body: { pane },
+    })
   ).data;
 
 export const desktopSettingsMutation = (threadId: ThreadId) =>
@@ -133,10 +135,10 @@ export const listDesktopWindows = async (
   signal?: AbortSignal,
 ): Promise<ThreadDesktopWindowsData> =>
   (
-    await request(
-      `${desktopPath(threadId)}/windows`,
-      GetThreadDesktopWindowsResponseSchema,
-      { signal: signal ?? null },
+    await dxClient.call(
+      ListThreadDesktopWindowsEndpoint,
+      { params: { threadId } },
+      { ...(signal === undefined ? {} : { signal }) },
     )
   ).data;
 
@@ -145,15 +147,10 @@ export const actOnDesktopWindows = async (
   action: ThreadDesktopWindowsAction,
 ): Promise<ThreadDesktopWindowsData> =>
   (
-    await request(
-      `${desktopPath(threadId)}/windows`,
-      GetThreadDesktopWindowsResponseSchema,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(action),
-      },
-    )
+    await dxClient.call(ActOnThreadDesktopWindowsEndpoint, {
+      params: { threadId },
+      body: action,
+    })
   ).data;
 
 /** Windows opened or closed inside the desktop show within this long. */

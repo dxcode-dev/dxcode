@@ -73,17 +73,29 @@ const dashboard = {
   title: "Log watch",
   state: { stats: { errors: 0 }, rows: [], note: "Waiting for events." },
   parts: [
-    { type: "stat", label: "Errors", bind: "stats.errors", format: "number" },
+    {
+      type: "stat",
+      label: "Errors",
+      bind: "stats.errors",
+      format: "number",
+      hint: "Error lines in the last minute.",
+    },
     {
       type: "table",
       id: "recent",
       bind: "rows",
       columns: [
         { key: "message", label: "Message" },
-        { key: "level", label: "Level", tones: { error: "danger" } },
+        {
+          key: "level",
+          label: "Level",
+          hint: "The level the service logged.",
+          tones: { error: "danger" },
+        },
       ],
       rowAction: {
         type: "start_thread",
+        label: "Investigate line",
         prompt: "Investigate {{row.message}}",
       },
     },
@@ -115,6 +127,14 @@ const broken = {
       columns: [{ label: "Message" }],
     },
     { type: "sparkle" },
+    {
+      type: "table",
+      id: "long",
+      bind: "rows",
+      columns: [{ key: "message", label: "Message", hint: "x".repeat(201) }],
+      rowAction: { type: "call", fn: "filter", label: "y".repeat(41) },
+    },
+    { type: "stat", label: "Lines", bind: "lines", hint: "" },
   ],
 };
 
@@ -388,6 +408,9 @@ describe("views described as data", () => {
       "This view is left out. views/broken.json does not describe a view; its problems follow.",
       'parts[0] (table "recent"): columns[0].key is missing.',
       'parts[1] (sparkle): type is "sparkle"; it must be one of heading, text, stat, table, list, chart, log, form, button, tabs, code, badge, empty.',
+      'parts[2] (table "long"): columns[0].hint is 201 characters; at most 200.',
+      'parts[2] (table "long"): rowAction.label is 41 characters; at most 40.',
+      'parts[3] (stat "Lines"): hint is ""; it must be text.',
     ]);
     // The file is stored beside the modules, at the address the manifest names.
     expect(bundle.codeModules.map(({ path }) => path)).toContain(

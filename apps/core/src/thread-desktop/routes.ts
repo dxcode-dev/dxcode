@@ -4,11 +4,14 @@ import {
   type MacDesktopPermissions,
   MacDesktopPermissionsSchema,
   MacDesktopWindowSchema,
+  ThreadDesktopMachineOwnerOnlyResponseSchema,
   ThreadDesktopReadOnlyResponseSchema,
   type ThreadDesktopSettingsData,
+  ThreadDesktopSettingsInvalidResponseSchema,
   ThreadDesktopSettingsRequestSchema,
   ThreadDesktopSettingsResponseSchema,
   type ThreadDesktopState,
+  ThreadDesktopWindowsActionInvalidResponseSchema,
   ThreadDesktopWindowsActionSchema,
   type ThreadDesktopWindowsData,
 } from "@dx/api";
@@ -95,14 +98,14 @@ const runnerOf = async (context: Context<AppEnv>, threadId: ThreadId) => {
 const notMachineOwner = (context: Context<AppEnv>) => {
   context.header("cache-control", "no-store");
   return context.json(
-    {
+    Schema.encodeUnknownSync(ThreadDesktopMachineOwnerOnlyResponseSchema)({
       status: "error",
       data: {
         code: "RUNNER_THREAD_OWNER_ONLY",
         message: "Only the machine's owner opens its Desktop.",
         requestId: context.get("requestId"),
       },
-    },
+    }),
     403,
   );
 };
@@ -383,14 +386,14 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
     });
     if (Option.isNone(request))
       return context.json(
-        {
+        Schema.encodeUnknownSync(ThreadDesktopSettingsInvalidResponseSchema)({
           status: "error",
           data: {
             code: "INVALID_REQUEST",
             message: "Name a pane: screen-recording or accessibility.",
             requestId: context.get("requestId"),
           },
-        },
+        }),
         400,
       );
     const runner = await runnerOf(context, threadId.value);
@@ -418,14 +421,16 @@ export const threadDesktopRoutes = new Hono<AppEnv>()
     );
     if (Option.isNone(action))
       return context.json(
-        {
+        Schema.encodeUnknownSync(
+          ThreadDesktopWindowsActionInvalidResponseSchema,
+        )({
           status: "error",
           data: {
             code: "INVALID_REQUEST",
             message: "Name an app (terminal or browser) or a window ID.",
             requestId: context.get("requestId"),
           },
-        },
+        }),
         400,
       );
     return desktopWindows(context, JSON.stringify(action.value));
