@@ -1,10 +1,15 @@
 import type { PluginCatalogData, PluginCatalogListData } from "@dx/api";
 import {
-  AddPluginCatalogResponseSchema,
-  ListPluginCatalogsResponseSchema,
-  PreviewPluginBundleResponseSchema,
-  RefreshPluginCatalogResponseSchema,
-  RemovePluginCatalogResponseSchema,
+  AddPersonalPluginCatalogEndpoint,
+  AddWorkspacePluginCatalogEndpoint,
+  ListPersonalPluginCatalogsEndpoint,
+  ListWorkspacePluginCatalogsEndpoint,
+  PreviewPersonalPluginCatalogEntryEndpoint,
+  PreviewWorkspacePluginCatalogEntryEndpoint,
+  RefreshPersonalPluginCatalogEndpoint,
+  RefreshWorkspacePluginCatalogEndpoint,
+  RemovePersonalPluginCatalogEndpoint,
+  RemoveWorkspacePluginCatalogEndpoint,
 } from "@dx/api";
 import type { PluginCatalogId, UserId } from "@dx/domain";
 import {
@@ -12,13 +17,12 @@ import {
   type QueryClient,
   queryOptions,
 } from "@tanstack/react-query";
-import { type PluginsTarget, request } from "../../../shared/api/client.js";
+import { dxClient, type PluginsTarget } from "../../../shared/api/client.js";
 
 /** Plugin catalogs (`marketplace.json` files) a scope added from GitHub. */
-const pluginCatalogsBase = (target: PluginsTarget) =>
-  target.scope === "personal"
-    ? "/v1/settings/personal/plugin-catalogs"
-    : `/v1/settings/workspaces/${encodeURIComponent(target.workspaceSlug)}/plugin-catalogs`;
+const workspace = (target: Extract<PluginsTarget, { scope: "workspace" }>) => ({
+  workspaceSlug: target.workspaceSlug,
+});
 
 /** Reads one catalog entry through the plugin import; installs nothing. */
 export const previewPluginCatalogEntry = async (
@@ -26,12 +30,15 @@ export const previewPluginCatalogEntry = async (
   catalogId: PluginCatalogId,
   name: string,
 ) =>
-  (
-    await request(
-      `${pluginCatalogsBase(target)}/${encodeURIComponent(catalogId)}/entries/preview`,
-      PreviewPluginBundleResponseSchema,
-      { method: "POST", body: JSON.stringify({ name }) },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(PreviewPersonalPluginCatalogEntryEndpoint, {
+        params: { catalogId },
+        body: { name },
+      })
+    : await dxClient.call(PreviewWorkspacePluginCatalogEntryEndpoint, {
+        params: { ...workspace(target), catalogId },
+        body: { name },
+      })
   ).data;
 
 export type { PluginCatalogData, PluginCatalogListData };
@@ -40,44 +47,50 @@ const listPluginCatalogs = async (
   target: PluginsTarget,
   signal?: AbortSignal,
 ) =>
-  (
-    await request(
-      pluginCatalogsBase(target),
-      ListPluginCatalogsResponseSchema,
-      { signal },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(ListPersonalPluginCatalogsEndpoint, {}, { signal })
+    : await dxClient.call(
+        ListWorkspacePluginCatalogsEndpoint,
+        { params: workspace(target) },
+        { signal },
+      )
   ).data;
 
 const addPluginCatalog = async (target: PluginsTarget, url: string) =>
-  (
-    await request(pluginCatalogsBase(target), AddPluginCatalogResponseSchema, {
-      method: "POST",
-      body: JSON.stringify({ url }),
-    })
+  (target.scope === "personal"
+    ? await dxClient.call(AddPersonalPluginCatalogEndpoint, { body: { url } })
+    : await dxClient.call(AddWorkspacePluginCatalogEndpoint, {
+        params: workspace(target),
+        body: { url },
+      })
   ).data;
 
 const refreshPluginCatalog = async (
   target: PluginsTarget,
   catalogId: PluginCatalogId,
 ) =>
-  (
-    await request(
-      `${pluginCatalogsBase(target)}/${encodeURIComponent(catalogId)}/refresh`,
-      RefreshPluginCatalogResponseSchema,
-      { method: "POST", body: JSON.stringify({}) },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(RefreshPersonalPluginCatalogEndpoint, {
+        params: { catalogId },
+        body: {},
+      })
+    : await dxClient.call(RefreshWorkspacePluginCatalogEndpoint, {
+        params: { ...workspace(target), catalogId },
+        body: {},
+      })
   ).data;
 
 const removePluginCatalog = async (
   target: PluginsTarget,
   catalogId: PluginCatalogId,
 ) =>
-  (
-    await request(
-      `${pluginCatalogsBase(target)}/${encodeURIComponent(catalogId)}`,
-      RemovePluginCatalogResponseSchema,
-      { method: "DELETE" },
-    )
+  (target.scope === "personal"
+    ? await dxClient.call(RemovePersonalPluginCatalogEndpoint, {
+        params: { catalogId },
+      })
+    : await dxClient.call(RemoveWorkspacePluginCatalogEndpoint, {
+        params: { ...workspace(target), catalogId },
+      })
   ).data;
 
 export const pluginCatalogKeys = {

@@ -1,18 +1,15 @@
 import {
   GetPluginAppUrlEndpoint,
+  GetPluginViewsCatalogEndpoint,
   ListPluginAppsEndpoint,
-  PluginViewsCatalogResponseSchema,
-  PluginViewsErrorResponseSchema,
 } from "@dx/api";
 import { queryOptions } from "@tanstack/react-query";
-import { dxClient, request } from "../../shared/api/client.js";
+import { dxClient } from "../../shared/api/client.js";
 
 /**
- * The person's plugin views and Thread types (`GET /v1/plugins/views`).
+ * The person's plugin views and Thread types (`pluginViews.catalog`).
  * Loaded only by a page, the new Thread type menu, or the command palette.
  */
-
-const VIEWS_PATH = "/v1/plugins/views";
 
 export const pluginViewsKeys = {
   all: ["plugin-views"] as const,
@@ -24,12 +21,9 @@ export const pluginViewsCatalogQueryOptions = () =>
     queryKey: pluginViewsKeys.catalog(),
     queryFn: async ({ signal }) =>
       (
-        await request(
-          VIEWS_PATH,
-          PluginViewsCatalogResponseSchema,
-          { signal },
-          PluginViewsErrorResponseSchema,
-        )
+        await dxClient.call(GetPluginViewsCatalogEndpoint, undefined, {
+          signal,
+        })
       ).data,
     staleTime: 60_000,
     retry: 1,

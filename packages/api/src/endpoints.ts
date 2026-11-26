@@ -262,6 +262,18 @@ import {
   SaveWorkspacePluginFilesEndpoint,
 } from "./settings/plugin-bundle-file-endpoints.js";
 import {
+  AddPersonalPluginCatalogEndpoint,
+  AddWorkspacePluginCatalogEndpoint,
+  ListPersonalPluginCatalogsEndpoint,
+  ListWorkspacePluginCatalogsEndpoint,
+  PreviewPersonalPluginCatalogEntryEndpoint,
+  PreviewWorkspacePluginCatalogEntryEndpoint,
+  RefreshPersonalPluginCatalogEndpoint,
+  RefreshWorkspacePluginCatalogEndpoint,
+  RemovePersonalPluginCatalogEndpoint,
+  RemoveWorkspacePluginCatalogEndpoint,
+} from "./settings/plugin-catalogs-endpoints.js";
+import {
   CallPluginDataViewEndpoint,
   CallThreadPluginDataViewEndpoint,
   GetPluginAppUrlEndpoint,
@@ -288,6 +300,7 @@ import {
   RotatePluginTriggerEndpoint,
   UpdatePluginTriggerStateEndpoint,
 } from "./settings/plugin-triggers-endpoints.js";
+import { GetPluginViewsCatalogEndpoint } from "./settings/plugin-view-endpoints.js";
 import {
   GetPersonalProjectDefaultsEndpoint,
   GetWorkspaceProjectDefaultsEndpoint,
@@ -689,6 +702,16 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   ListPluginAgentModesEndpoint,
   ListPluginAppsEndpoint,
   GetPluginAppUrlEndpoint,
+  AddPersonalPluginCatalogEndpoint,
+  ListPersonalPluginCatalogsEndpoint,
+  PreviewPersonalPluginCatalogEntryEndpoint,
+  RefreshPersonalPluginCatalogEndpoint,
+  RemovePersonalPluginCatalogEndpoint,
+  AddWorkspacePluginCatalogEndpoint,
+  ListWorkspacePluginCatalogsEndpoint,
+  PreviewWorkspacePluginCatalogEntryEndpoint,
+  RefreshWorkspacePluginCatalogEndpoint,
+  RemoveWorkspacePluginCatalogEndpoint,
   ListPersonalPluginFilesEndpoint,
   PreviewPersonalPluginFilesEndpoint,
   ReadPersonalPluginFileEndpoint,
@@ -710,6 +733,7 @@ export const dxEndpoints: ReadonlyArray<Endpoint> = [
   RotatePluginTriggerEndpoint,
   UpdatePluginTriggerStateEndpoint,
   CallPluginDataViewEndpoint,
+  GetPluginViewsCatalogEndpoint,
   GetPluginDataViewDefinitionEndpoint,
   GetPluginDataViewStateEndpoint,
   GetPluginIconEndpoint,

@@ -3,10 +3,8 @@
 # Never add a line: a new route gets an endpoint, or goes in non-client-routes.txt.
 DELETE /v1/settings/personal/plugin-bundles/:pluginId
 DELETE /v1/settings/personal/plugin-bundles/:pluginId/share
-DELETE /v1/settings/personal/plugin-catalogs/:catalogId
 DELETE /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId
 DELETE /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/share
-DELETE /v1/settings/workspaces/:workspaceSlug/plugin-catalogs/:catalogId
 DELETE /v1/threads/:threadId/orb/fault
 GET /v1/avatars/users/:userId/:file
 GET /v1/avatars/workspaces/:workspaceId/:file
@@ -17,20 +15,17 @@ GET /v1/bug-reports/access
 GET /v1/bug-reports/all
 GET /v1/huddle-links/:workspace/:code
 GET /v1/plugins/icons/lucide/:name
-GET /v1/plugins/views
 GET /v1/realtime
 GET /v1/settings/personal/plugin-bundles
 GET /v1/settings/personal/plugin-bundles/:pluginId/export
 GET /v1/settings/personal/plugin-bundles/:pluginId/host-usage
 GET /v1/settings/personal/plugin-bundles/:pluginId/settings
 GET /v1/settings/personal/plugin-bundles/updates
-GET /v1/settings/personal/plugin-catalogs
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/export
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/host-usage
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/settings
 GET /v1/settings/workspaces/:workspaceSlug/plugin-bundles/updates
-GET /v1/settings/workspaces/:workspaceSlug/plugin-catalogs
 GET /v1/shell
 GET /v1/threads/:threadId/desktop
 GET /v1/threads/:threadId/desktop/:channel
@@ -54,9 +49,6 @@ POST /v1/settings/personal/plugin-bundles/:pluginId/update/preview
 POST /v1/settings/personal/plugin-bundles/preview
 POST /v1/settings/personal/plugin-bundles/proposals/:proposalId/approve
 POST /v1/settings/personal/plugin-bundles/proposals/:proposalId/reject
-POST /v1/settings/personal/plugin-catalogs
-POST /v1/settings/personal/plugin-catalogs/:catalogId/entries/preview
-POST /v1/settings/personal/plugin-catalogs/:catalogId/refresh
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/share
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/update
@@ -64,9 +56,6 @@ POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/:pluginId/update/prev
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/preview
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/proposals/:proposalId/approve
 POST /v1/settings/workspaces/:workspaceSlug/plugin-bundles/proposals/:proposalId/reject
-POST /v1/settings/workspaces/:workspaceSlug/plugin-catalogs
-POST /v1/settings/workspaces/:workspaceSlug/plugin-catalogs/:catalogId/entries/preview
-POST /v1/settings/workspaces/:workspaceSlug/plugin-catalogs/:catalogId/refresh
 POST /v1/threads/:threadId/bug-reports
 POST /v1/threads/:threadId/desktop/settings
 POST /v1/threads/:threadId/desktop/windows
