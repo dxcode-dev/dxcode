@@ -8,6 +8,7 @@ import {
   WorkspacePrivateInspectionForbiddenResponseSchema,
   WorkspacePrivateInspectionUnavailableResponseSchema,
   WorkspaceUsageAuditQuerySchema,
+  WorkspaceUsageBrowserSessionRequiredResponseSchema,
   WorkspaceUsageInvalidRequestResponseSchema,
   WorkspaceUsageParamsSchema,
   WorkspaceUsagePermissionForbiddenResponseSchema,
@@ -29,6 +30,12 @@ import {
 import { D1Client } from "@effect/sql-d1";
 import { Effect, Layer, Result, Schema } from "effect";
 import { type Context, Hono } from "hono";
+import {
+  BrowserSessionRequired,
+  requireBrowserSession,
+} from "../../auth/browser-session.js";
+import { requestAuth } from "../../auth/request-auth.js";
+import { loadAuthenticationRequirements } from "../../auth/requirements.js";
 import {
   decodeJsonBody,
   decodeRequestInput,
@@ -155,6 +162,15 @@ const failureResponse = (context: Context<AppEnv>, failure: unknown) => {
       "The requested private Thread is unavailable for inspection.",
     );
   }
+  if (failure instanceof BrowserSessionRequired) {
+    return error(
+      context,
+      WorkspaceUsageBrowserSessionRequiredResponseSchema,
+      403,
+      "BROWSER_SESSION_REQUIRED",
+      "A browser session is required for private Thread inspection.",
+    );
+  }
   if (failure instanceof PersistenceUnavailable) {
     return error(
       context,
@@ -253,10 +269,15 @@ const inspectOperation = (context: Context<AppEnv>) =>
       () => new InvalidWorkspaceUsageRequest(),
     );
     const db = yield* decodeD1Binding(context.env.DB);
+    const requirements = yield* loadAuthenticationRequirements(context.env);
+    const browser = yield* Effect.result(
+      requireBrowserSession(context, requestAuth(context, requirements)),
+    );
     return yield* Effect.gen(function* () {
       const service = yield* WorkspaceUsageService;
       const data = yield* service.inspectPrivateThread(
         context.get("principal"),
+        Result.isSuccess(browser),
         params.workspaceSlug,
         input,
       );

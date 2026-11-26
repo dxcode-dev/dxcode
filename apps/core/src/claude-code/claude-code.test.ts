@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import {
   mkdir,
@@ -48,6 +49,24 @@ import { claudeCodeAnswer } from "./workspace-run.js";
  * fake that records how it was started and prints a scripted stream-json
  * run; `#wait <file>` lines hold it until the test creates that file.
  */
+
+// The Claude Code release a launch installs, which the fake download below
+// matches; set once FAKE_BUILD exists.
+const fakeRelease = vi.hoisted(() => ({
+  version: "",
+  sha256: {
+    "darwin-arm64": "",
+    "darwin-x64": "",
+    "linux-arm64": "",
+    "linux-arm64-musl": "",
+    "linux-x64": "",
+    "linux-x64-musl": "",
+  } as Record<string, string>,
+}));
+vi.mock("./release.js", async (original) => ({
+  ...(await original<typeof import("./release.js")>()),
+  CLAUDE_CODE_RELEASE: fakeRelease,
+}));
 
 const GUEST_HOME = "/home/user";
 const STATE = `${GUEST_HOME}/.local/state/dx-claude-code`;
@@ -129,6 +148,25 @@ for line in "\${script[@]}"; do
   esac
 done
 `;
+
+/**
+ * The pinned Claude Code build as the fake download serves it: the fake
+ * CLI, whose \`install\` links ~/.local/bin/claude to itself, as the real
+ * one does from ~/.local/share/claude/versions.
+ */
+const FAKE_BUILD = FAKE_CLAUDE.replace(
+  "#!/bin/bash\n",
+  `#!/bin/bash
+if [ "$1" = install ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$0" "$HOME/.local/bin/claude"; exit 0; fi
+`,
+);
+// The release dx pins, standing in for deploy/orb/claude-code.json: the
+// fake build is the only bytes that match it, on every platform.
+fakeRelease.version = "2.1.310";
+for (const platform of Object.keys(fakeRelease.sha256))
+  fakeRelease.sha256[platform] = createHash("sha256")
+    .update(FAKE_BUILD)
+    .digest("hex");
 
 /**
  * A Claude Code that speaks the stream-json control protocol, for runs that
@@ -271,16 +309,21 @@ fi
 exec /usr/bin/awk "$@"
 `,
   );
-  // The installer it downloads fails, or installs the current Claude Code
-  // at ~/.local/bin/claude.
-  await writeFile(join(root, "claude-latest"), FAKE_CLAUDE, { mode: 0o755 });
+  // The download is claude.ai's region page, the pinned build, or other
+  // bytes, which the pin refuses.
+  await writeFile(join(root, "claude-build"), FAKE_BUILD, { mode: 0o755 });
+  await writeFile(
+    join(root, "claude-page"),
+    `${options.installerPage ?? ""}\n`,
+  );
+  await writeFile(join(root, "claude-tampered"), "#!/bin/sh\necho tampered\n");
   await tool(
     "curl",
-    options.installerPage !== undefined
-      ? `#!/bin/sh\ncat <<'PAGE'\n${options.installerPage}\nPAGE\n`
-      : options.installerWorks === true
-        ? `#!/bin/sh\necho 'mkdir -p "$HOME/.local/bin" && cp ${join(root, "claude-latest")} "$HOME/.local/bin/claude"'\n`
-        : "#!/bin/sh\necho 'echo \"Installation failed: checksum mismatch\" >&2; exit 1'\n",
+    `#!/bin/sh
+out=/dev/stdout
+while [ $# -gt 0 ]; do [ "$1" = -o ] && { out=$2; shift; }; shift; done
+cat ${join(root, options.installerPage !== undefined ? "claude-page" : options.installerWorks === true ? "claude-build" : "claude-tampered")} > "$out"
+`,
   );
   // dx runs Claude Code from where its installer puts it, never from PATH.
   const claudeAt = (body: string) =>
@@ -1046,7 +1089,7 @@ exec /bin/mkdir "$@"
       type: "error",
       error: {
         errorMessage: expect.stringMatching(
-          /Claude Code could not be installed\.[\s\S]*checksum mismatch/,
+          /Claude Code could not be installed\.[\s\S]*did not match its pinned SHA-256/,
         ),
       },
     });
@@ -1124,11 +1167,15 @@ exec /bin/mkdir "$@"
       type: "error",
       error: {
         errorMessage: expect.stringMatching(
-          /Claude Code 1\.0\.108 is older than 2\.1\.310[\s\S]*claude update[\s\S]*checksum mismatch/,
+          /Claude Code 1\.0\.108 is older than 2\.1\.310[\s\S]*claude update[\s\S]*did not match its pinned SHA-256, so dx did not install it/,
         ),
       },
     });
     expect(guest.file(`${GUEST_HOME}/old-claude-ran`)).toBeUndefined();
+    // The download that missed its pin was never installed or run.
+    expect(
+      guest.file(`${GUEST_HOME}/.local/share/claude/versions/2.1.310`),
+    ).toBeUndefined();
   });
 
   // thr_05ddbf21: in an Orb Cloudflare ran in Hong Kong, claude.ai answered

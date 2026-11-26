@@ -20,6 +20,7 @@ import {
   workspaceRoleHasPermission,
 } from "@dx/domain";
 import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
+import { BrowserSessionRequired } from "../../auth/browser-session.js";
 import { SettingsService } from "../service.js";
 import { csvCell } from "./service.js";
 
@@ -200,6 +201,7 @@ const makeInspectPrivateThread = (
 ) =>
   Effect.fn("WorkspaceUsageService.inspectPrivateThread")(function* (
     principal: Principal,
+    browserSession: boolean,
     workspaceSlug: WorkspaceSlug,
     input: { readonly threadId: ThreadId; readonly reason: string },
   ) {
@@ -229,6 +231,13 @@ const makeInspectPrivateThread = (
     ) {
       yield* append("permission_denied");
       return yield* new WorkspacePrivateThreadInspectionForbidden();
+    }
+
+    // Only the auditor's own browser inspects, never a request made for
+    // them by an API credential or an agent (#2422).
+    if (!browserSession) {
+      yield* append("browser_session_required");
+      return yield* new BrowserSessionRequired();
     }
 
     const target = yield* audit.findInspectionTarget(

@@ -15,10 +15,11 @@
 //!   deleted. `tools/bin/<command>` links through `current`.
 //! - Commands see `tools/bin` last on PATH, after the person's own PATH, so
 //!   their tools always win and dx's fill the gaps.
-//! - Claude Code (no pinned archive: Anthropic's installer fetches the
-//!   build) installs once per machine with HOME at `tools/claude`, when a
-//!   Claude Code launch needs it (`# dx-runner-needs: claude>=<version>` in
-//!   the command) and the person has no `claude` of their own.
+//! - Claude Code installs once per machine with HOME at `tools/claude`, when
+//!   a Claude Code launch needs it (`# dx-runner-needs: claude>=<version>` in
+//!   the command) and the person has no `claude` of their own: Anthropic's
+//!   binary of the release dx pins (`CLAUDE_VERSION`, `CLAUDE_BUILDS`),
+//!   refused unless its SHA-256 matches, then its own `claude install`.
 //! - Git and python3 come only with Apple's Command Line Tools on a Mac (or
 //!   the distribution's packages on Linux): never downloaded, reported as
 //!   missing prerequisites instead (`missing_prerequisites`).
@@ -36,7 +37,38 @@ const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
 /// How long a fetched manifest is trusted before the next activation reads
 /// it again.
 const MANIFEST_FRESH: Duration = Duration::from_secs(10 * 60);
-const CLAUDE_INSTALLER: &str = "https://claude.ai/install.sh";
+/// The Claude Code release a runner installs and the SHA-256 of Anthropic's
+/// binary per platform: deploy/orb/claude-code.json, which
+/// deploy/orb/downloads.test.mjs keeps equal to these. See "Claude Code" in
+/// deploy/orb/README.md to move to another release.
+const CLAUDE_VERSION: &str = "2.1.326";
+const CLAUDE_BUILDS: &[(&str, &str)] = &[
+    (
+        "darwin-arm64",
+        "e214ad76dcc0e846b03be28ed1c2734aacd4e27acb527cb7f8a9e2bed644e837",
+    ),
+    (
+        "darwin-x64",
+        "bd8e26290f93353590b831600a7ced02d625018fbaa2a82d8817368d3e2d2f82",
+    ),
+    (
+        "linux-arm64",
+        "98d56f6ffe53469767a74864a38eaf359d62ef557a8de1b1ad524d61a66ec119",
+    ),
+    (
+        "linux-arm64-musl",
+        "827b08bda7ed682685ee770e0e61f8c128d3c951486e96348663893dca5bae41",
+    ),
+    (
+        "linux-x64",
+        "b6b3647d981130dc44fc670846ae97b6cde531ffb667cf9c4d17cfcafb38cb37",
+    ),
+    (
+        "linux-x64-musl",
+        "595f563b879d54965e5c4bafa3b6b1829ef34865a434b97408ebcb797eb85d5c",
+    ),
+];
+const CLAUDE_DOWNLOADS: &str = "https://downloads.claude.ai/claude-code-releases";
 const CLAUDE_INSTALL_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 /// Serializes every install on this machine: two Threads activating at once
@@ -617,39 +649,97 @@ pub fn ensure_claude(
     })
 }
 
-/// Runs Anthropic's installer with HOME, TMPDIR, and Claude Code's
-/// credential store all in `tools/claude`, inside the runner's sandbox
-/// (Seatbelt, Landlock) with writes limited to that folder, so it reads
-/// neither the person's `~/.claude` nor their Keychain login, and writes
-/// nothing outside `~/.dx/runner`. A machine whose kernel has no Landlock
-/// runs it unconfined, still with that HOME.
+/// Anthropic's name for this machine's build (`linux-x64-musl`, ...): the
+/// machine's C library decides, not dxd's own (static musl) build.
+fn claude_platform() -> Option<String> {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        "linux" => "linux",
+        _ => return None,
+    };
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "x64",
+        "aarch64" => "arm64",
+        _ => return None,
+    };
+    let musl = os == "linux"
+        && ["/lib/libc.musl-x86_64.so.1", "/lib/libc.musl-aarch64.so.1"]
+            .iter()
+            .any(|p| Path::new(p).exists());
+    Some(format!("{os}-{arch}{}", if musl { "-musl" } else { "" }))
+}
+
+/// The pinned build for this machine: its URL, SHA-256, and version.
+/// `DX_RUNNER_CLAUDE_BUILD` ("<url> <sha256> <version>") stands in for it in
+/// tests; it still has to match its own SHA-256.
+fn claude_build() -> Result<(String, String, String), String> {
+    if let Ok(build) = std::env::var("DX_RUNNER_CLAUDE_BUILD") {
+        let parts: Vec<&str> = build.split_whitespace().collect();
+        if let [url, sha, version] = parts[..]
+            && valid_url(url)
+            && sha.len() == 64
+            && sha.bytes().all(|b| b.is_ascii_hexdigit())
+            && !version.is_empty()
+            && version.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        {
+            return Ok((url.into(), sha.to_ascii_lowercase(), version.into()));
+        }
+        return Err("DX_RUNNER_CLAUDE_BUILD must be \"<url> <sha256> <version>\"".into());
+    }
+    let platform = claude_platform()
+        .ok_or_else(|| "dx pins no Claude Code build for this machine".to_string())?;
+    let (_, sha) = CLAUDE_BUILDS
+        .iter()
+        .find(|(p, _)| *p == platform)
+        .ok_or_else(|| format!("dx pins no Claude Code build for {platform}"))?;
+    Ok((
+        format!("{CLAUDE_DOWNLOADS}/{CLAUDE_VERSION}/{platform}/claude"),
+        (*sha).to_string(),
+        CLAUDE_VERSION.to_string(),
+    ))
+}
+
+fn file_sha256(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).ok()?;
+    Some(sha256_hex(&hasher.finalize()))
+}
+
+/// Installs the pinned Claude Code build with HOME, TMPDIR, and Claude
+/// Code's credential store all in `tools/claude`: downloads it (refusing a
+/// SHA-256 mismatch) to where the native installer keeps each version, then
+/// runs its own `claude install`, which finds it there and links
+/// `tools/claude/.local/bin/claude` to it. That runs inside the runner's
+/// sandbox (Seatbelt, Landlock) with writes limited to that folder, so it
+/// reads neither the person's `~/.claude` nor their Keychain login, and
+/// writes nothing outside `~/.dx/runner`. A machine whose kernel has no
+/// Landlock runs it unconfined, still with that HOME.
 fn run_claude_installer(paths: &Paths, path: &str) -> Result<(), String> {
     let home = dir(paths).join("claude");
     let tmp = home.join("tmp");
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
-    let installer = std::env::var("DX_RUNNER_CLAUDE_INSTALLER")
-        .ok()
-        .filter(|u| valid_url(u))
-        .unwrap_or_else(|| CLAUDE_INSTALLER.into());
-    log(&format!("tools: installing Claude Code from {installer}"));
-    let script = home.join("install.sh");
+    let (url, sha, version) = claude_build()?;
+    log(&format!(
+        "tools: installing Claude Code {version} from {url}"
+    ));
     let log_file = home.join("install.log");
-    // https only, redirects included (a loopback test server is plain http).
-    let proto = if installer.starts_with("https://") {
-        "--proto '=https' --proto-redir '=https' "
-    } else {
-        ""
-    };
-    let (url, file) = (
-        shell_quote(&installer),
-        shell_quote(&script.to_string_lossy()),
-    );
-    // Where Anthropic does not serve the machine's network, claude.ai answers
-    // with a web page instead of the installer; bash never runs that page.
+    let versions = home.join(".local/share/claude/versions");
+    fs::create_dir_all(&versions).map_err(|e| e.to_string())?;
+    let partial = tmp.join("claude.download");
+    if let Err(e) = download(&url, &sha, &partial) {
+        let _ = fs::remove_dir_all(&tmp);
+        let e = format!("Claude Code {version} could not be downloaded: {e}");
+        let _ = fs::write(&log_file, format!("{e}\n"));
+        return Err(e);
+    }
+    set_mode(&partial, 0o755);
+    let build = versions.join(&version);
+    fs::rename(&partial, &build).map_err(|e| format!("{}: {e}", build.display()))?;
     let run = format!(
-        "curl {proto}-fsSL {url} > {file} || exit 3\n\
-         case \"$(tr -d ' \\t\\r\\n' < {file} | head -c 1)\" in '<') echo 'claude.ai answered with a web page instead of the Claude Code installer, as it does where Anthropic does not serve Claude.'; exit 4 ;; esac\n\
-         bash {file} latest"
+        "exec {} install {}",
+        shell_quote(&build.to_string_lossy()),
+        shell_quote(&version)
     );
     let attempt = |confined: bool| -> Result<std::process::ExitStatus, String> {
         let argv = vec!["/bin/bash".to_string(), "-c".to_string(), run.clone()];
@@ -660,6 +750,7 @@ fn run_claude_installer(paths: &Paths, path: &str) -> Result<(), String> {
             .env_clear()
             .env("HOME", &home)
             .env("PATH", path)
+            .env("DISABLE_AUTOUPDATER", "1")
             .env("LANG", crate::runner::exec::lang())
             .env("TMPDIR", &tmp)
             .env(
@@ -703,7 +794,6 @@ fn run_claude_installer(paths: &Paths, path: &str) -> Result<(), String> {
         );
         status = attempt(false);
     }
-    let _ = fs::remove_file(&script);
     let _ = fs::remove_dir_all(&tmp);
     let tail: String = fs::read_to_string(&log_file)
         .unwrap_or_default()
@@ -716,10 +806,17 @@ fn run_claude_installer(paths: &Paths, path: &str) -> Result<(), String> {
         .collect::<Vec<_>>()
         .join(" ");
     match status {
-        Ok(s) if s.success() => {
-            log("tools: Claude Code installer finished");
-            Ok(())
-        }
+        // The link must still lead to the bytes the pin matched.
+        Ok(s) if s.success() => match file_sha256(&claude(paths)) {
+            Some(got) if got == sha => {
+                log(&format!("tools: Claude Code {version} installed"));
+                Ok(())
+            }
+            _ => Err(format!(
+                "Claude Code on this machine is not the pinned {version} build after its install (log: {})",
+                log_file.display()
+            )),
+        },
         Ok(_) => Err(format!(
             "Claude Code could not be installed on this machine (log: {}): {tail}",
             log_file.display()

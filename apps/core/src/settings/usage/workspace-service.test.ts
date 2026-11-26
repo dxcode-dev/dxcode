@@ -131,10 +131,15 @@ const inspect = (
   Effect.runPromise(
     Effect.gen(function* () {
       const service = yield* WorkspaceUsageService;
-      return yield* service.inspectPrivateThread(principal, workspaceSlug, {
-        threadId,
-        reason,
-      });
+      return yield* service.inspectPrivateThread(
+        principal,
+        true,
+        workspaceSlug,
+        {
+          threadId,
+          reason,
+        },
+      );
     }).pipe(Effect.provide(layer)),
   );
 

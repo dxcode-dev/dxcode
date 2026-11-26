@@ -199,9 +199,27 @@ const toolDownloads = new Map();
 const toolFiles = {};
 let toolsManifest;
 let claudeInstalls = 0;
-// How long the fake installer takes (a slow first install).
+// How long the fake download takes (a slow first install).
 let claudeInstallSeconds = 0;
+// The fake download serves other bytes than the pinned build.
+let claudeTampered = false;
 const CLAUDE_VERSION = "2.1.400";
+// A fake of Anthropic's Claude Code binary, as the runner pins it
+// (DX_RUNNER_CLAUDE_BUILD): its `install` links $HOME/.local/bin/claude to
+// itself, as the real one does from ~/.local/share/claude/versions.
+const CLAUDE_BUILD = `#!/bin/sh
+if [ "$1" = install ]; then
+  printf '%s\n' "HOME=$HOME" "TMPDIR=$TMPDIR" "SECURE=$CLAUDE_SECURESTORAGE_CONFIG_DIR" "AUTOUPDATE=$DISABLE_AUTOUPDATER" > "$HOME/installer-env"
+  mkdir -p "$HOME/.local/bin"
+  ln -sfn "$0" "$HOME/.local/bin/claude"
+  echo "installed $2"
+  exit 0
+fi
+echo "${CLAUDE_VERSION} (Claude Code)"
+`;
+const CLAUDE_BUILD_SHA256 = createHash("sha256")
+  .update(CLAUDE_BUILD)
+  .digest("hex");
 
 const assets = {
   [`dxd-${platform}`]: DXD,
@@ -252,21 +270,15 @@ const server = createServer(async (req, res) => {
     res.writeHead(200, { "content-type": "application/octet-stream" });
     return res.end(readFileSync(toolFiles[name]));
   }
-  // A fake of Anthropic's installer: installs a `claude` that reports
-  // CLAUDE_VERSION under $HOME, as the real one does.
-  if (req.method === "GET" && url.pathname === "/claude-install.sh") {
+  if (req.method === "GET" && url.pathname === "/claude-build") {
     claudeInstalls += 1;
-    res.writeHead(200, { "content-type": "text/plain" });
-    return res.end(`set -e
-printf '%s\n' "HOME=$HOME" "TMPDIR=$TMPDIR" "SECURE=$CLAUDE_SECURESTORAGE_CONFIG_DIR" > "$HOME/installer-env"
-sleep ${claudeInstallSeconds}
-v=${CLAUDE_VERSION}
-mkdir -p "$HOME/.local/share/claude/versions" "$HOME/.local/bin"
-printf '#!/bin/sh\necho "%s (Claude Code)"\n' "$v" > "$HOME/.local/share/claude/versions/$v"
-chmod 755 "$HOME/.local/share/claude/versions/$v"
-ln -sfn "$HOME/.local/share/claude/versions/$v" "$HOME/.local/bin/claude"
-echo "installed $1"
-`);
+    await new Promise((done) => setTimeout(done, claudeInstallSeconds * 1000));
+    res.writeHead(200, { "content-type": "application/octet-stream" });
+    return res.end(
+      claudeTampered
+        ? CLAUDE_BUILD.replace("installed", "tampered")
+        : CLAUDE_BUILD,
+    );
   }
   if (req.method === "POST" && url.pathname.startsWith("/fake-voxl/")) {
     voxlReports.push({
@@ -487,7 +499,7 @@ toolsManifest = {
 const env = {
   ...process.env,
   PATH: pairedPath,
-  DX_RUNNER_CLAUDE_INSTALLER: `${ORIGIN}/claude-install.sh`,
+  DX_RUNNER_CLAUDE_BUILD: `${ORIGIN}/claude-build ${CLAUDE_BUILD_SHA256} ${CLAUDE_VERSION}`,
   HOME: ownHome,
   DX_RUNNER_SELF_CONTAINED_BYTES: "0",
   // Linux runners have no Desktop; this turns on the test one.
@@ -775,10 +787,11 @@ try {
       const env = readFileSync(join(toolsRoot, "claude/installer-env"), "utf8");
       const claudeHome = join(toolsRoot, "claude");
       check(
-        "claude: the installer's HOME, TMPDIR, and credential store are all in tools/claude",
+        "claude: the install's HOME, TMPDIR, and credential store are all in tools/claude, self-update off",
         env.includes(`HOME=${claudeHome}\n`) &&
           env.includes(`TMPDIR=${claudeHome}/tmp\n`) &&
-          env.includes(`SECURE=${claudeHome}/.claude/dx-plan-only\n`),
+          env.includes(`SECURE=${claudeHome}/.claude/dx-plan-only\n`) &&
+          env.includes("AUTOUPDATE=1\n"),
         env,
       );
     }
@@ -808,6 +821,31 @@ try {
       JSON.stringify({ result: x.result, claudeInstalls, installsBefore }),
     );
     claudeInstallSeconds = 0;
+    // A build that does not match its pinned SHA-256 is never installed.
+    // The slow install above may still be checking what it linked; it ends
+    // before its folder goes.
+    const finishedInstalls = () =>
+      readFileSync(join(dxRoot, "runner/runner.log"), "utf8").split(
+        `tools: Claude Code ${CLAUDE_VERSION} installed\n`,
+      ).length - 1;
+    await waitFor(() => finishedInstalls() === claudeInstalls, 20000);
+    rmSync(join(toolsRoot, "claude"), { recursive: true, force: true });
+    claudeTampered = true;
+    x = await request("exec", TA, { command: needs }, 60000);
+    check(
+      "claude: a download that misses its pinned SHA-256 is refused and never installed",
+      x.ok &&
+        /does not match the pinned/.test(x.result.stdout) &&
+        !existsSync(runnerClaude) &&
+        !existsSync(
+          join(
+            toolsRoot,
+            `claude/.local/share/claude/versions/${CLAUDE_VERSION}`,
+          ),
+        ),
+      x.result?.stdout,
+    );
+    claudeTampered = false;
     // A failed pin is not fetched again on every activation for a while.
     await request("ensure", TA, {
       existingOnly: false,

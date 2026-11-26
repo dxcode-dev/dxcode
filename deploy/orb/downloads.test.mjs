@@ -13,7 +13,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 // with its own options, against a local server whose first answer for each
 // file is a failure. Every file they download must also be checked against
 // its pinned SHA-256 before anything uses it (#2608: the Claude Code
-// installer once ran unchecked).
+// installer once ran unchecked), and every place dx installs Claude Code
+// pins the release in deploy/orb/claude-code.json.
 
 const root = resolve(import.meta.dirname, "../..");
 const recipes = [
@@ -237,17 +238,56 @@ describe("Orb image downloads", () => {
       else expect(result.status, result.download).not.toBe(0);
   }, 60_000);
 
-  it("pins one Claude Code release, one Core can run, in both images", () => {
-    const { CLAUDE_CODE_VERSION: version, CLAUDE_CODE_SHA256: sha256 } = pins;
+  it("pins one Claude Code release, one Core can run, everywhere dx installs it", () => {
+    // deploy/orb/claude-code.json: what Core's launch script installs.
+    const release = JSON.parse(recipe("deploy/orb/claude-code.json"));
+    const { version, sha256 } = release;
     expect(version).toMatch(/^\d+\.\d+\.\d+$/);
-    expect(sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(Object.keys(sha256).sort()).toEqual([
+      "darwin-arm64",
+      "darwin-x64",
+      "linux-arm64",
+      "linux-arm64-musl",
+      "linux-x64",
+      "linux-x64-musl",
+    ]);
+    for (const sum of Object.values(sha256))
+      expect(sum).toMatch(/^[a-f0-9]{64}$/);
+    // At least 3 days old when pinned (deploy/orb/README.md, "Claude Code").
+    expect(
+      Date.now() - Date.parse(`${release.published}T00:00:00Z`),
+      `Claude Code ${version} was published ${release.published}`,
+    ).toBeGreaterThanOrEqual(3 * 24 * 60 * 60 * 1000);
+    // The Orb image.
+    expect(pins.CLAUDE_CODE_VERSION).toBe(version);
+    expect(pins.CLAUDE_CODE_SHA256).toBe(sha256["linux-x64"]);
+    // The executor image.
     const executor = recipe("deploy/executor/claude-code/Dockerfile");
     expect(executor).toContain(
       `/claude-code-releases/${version}/linux-x64/claude`,
     );
-    expect(executor.match(new RegExp(sha256, "g"))?.length).toBe(2);
-    // An older image release makes every Orb install `latest` at first use,
-    // which no pin covers (apps/core/src/claude-code/workspace-run.ts).
+    expect(executor.match(new RegExp(sha256["linux-x64"], "g"))?.length).toBe(
+      2,
+    );
+    // The runner (dxd), for every platform.
+    const runner = recipe("apps/dxd/src/runner/tools.rs");
+    expect(/const CLAUDE_VERSION: &str = "([\d.]+)";/.exec(runner)?.[1]).toBe(
+      version,
+    );
+    const builds =
+      /const CLAUDE_BUILDS: &\[\(&str, &str\)\] = &\[([\s\S]*?)\];/.exec(
+        runner,
+      )?.[1];
+    expect(
+      Object.fromEntries(
+        [
+          ...(builds ?? "").matchAll(
+            /\(\s*"([a-z0-9-]+)",\s*"([a-f0-9]{64})",?\s*\)/g,
+          ),
+        ].map(([, platform, sum]) => [platform, sum]),
+      ),
+    ).toEqual(sha256);
+    // An older release makes every launch install another one.
     const minimum = /CLAUDE_CODE_MIN_VERSION = "([\d.]+)"/.exec(
       recipe("apps/core/src/claude-code/workspace-run.ts"),
     )?.[1];

@@ -15,6 +15,7 @@ import {
 import { classifyRunFailure, markRunFailure } from "../runtime/run-failure.js";
 import { environmentMaskerOf } from "../settings/environment-variables/sandbox.js";
 import type { ClaudeCodeDxCallServer } from "./dx-calls.js";
+import { CLAUDE_CODE_DOWNLOADS, CLAUDE_CODE_RELEASE } from "./release.js";
 import { CHUNK_END_LINE, ClaudeCodeStream } from "./stream.js";
 import { CLAUDE_CODE_TOOL_BRIDGE } from "./tool-bridge.js";
 import type {
@@ -184,6 +185,12 @@ const CLI_ENVIRONMENT = {
  * file there (2.1.277), and ~/.claude/CLAUDE.md for the person's own.
  */
 const CLAUDE_CODE_MIN_VERSION = "2.1.310";
+
+/** The pinned build's SHA-256 for each platform, as `case` arms. */
+const claudeCodeSums = () =>
+  Object.entries(CLAUDE_CODE_RELEASE.sha256)
+    .map(([platform, sum]) => `    ${platform}) SUM=${sum} ;;`)
+    .join("\n");
 
 const isWorkspaceReset = (error: unknown) =>
   classifyRunFailure({
@@ -491,8 +498,8 @@ ls -1t "$S/runs" 2>/dev/null | tail -n +${KEPT_RUNS + 1} | while read -r n; do
   [ -f "$S/runs/$n/exit" ] && rm -rf "$S/runs/$n"
 done
 # A workspace image or a repository's setup can carry an older Claude Code;
-# one older than ${CLAUDE_CODE_MIN_VERSION} is replaced as a missing one is installed, from
-# the latest channel, since the stable one can lag behind that minimum.
+# one older than ${CLAUDE_CODE_MIN_VERSION} is replaced as a missing one is installed, with
+# the build dx pins (${CLAUDE_CODE_RELEASE.version}, at least that minimum).
 version() { "$1" --version 2>/dev/null < /dev/null | sed -n '1s/^\\([0-9][0-9.]*\\).*/\\1/p'; }
 current() {
   v="$(version "$1")"
@@ -511,10 +518,10 @@ if ! current "$CLAUDE"; then
     OUTDATED="Claude Code \${OUTDATED:-of an unknown version} is older than ${CLAUDE_CODE_MIN_VERSION}, the oldest dx can run, and could not be updated."
     UPDATE="Run \\\`claude update\\\` in the workspace's terminal, then retry."
   fi
-  # Where Anthropic does not serve the Orb's network, claude.ai answers the
-  # installer's address with its "unavailable in region" page (thr_05ddbf21,
-  # an Orb in Hong Kong). bash must never run that page, and \`claude update\`
-  # fetches from the same place, so the person is told where it ran instead.
+  # Where Anthropic does not serve the Orb's network, claude.ai answers
+  # with its "unavailable in region" page (thr_05ddbf21, an Orb in Hong
+  # Kong). That page is never run, and \`claude update\` fetches from the
+  # same place, so the person is told where it ran instead.
   # A runner (DX_RUNNER_TOOLS) installed or updated the machine's copy
   # before this ran; it never installs one into the Thread's folder.
   if [ -n "\${DX_RUNNER_TOOLS:-}" ]; then
@@ -522,13 +529,43 @@ if ! current "$CLAUDE"; then
     exit 3
   fi
   REFUSED=""
-  if curl -fsSL https://claude.ai/install.sh > "$D/install.sh" 2> "$D/install.log"; then
-    if [ "$(tr -d ' \\t\\r\\n' < "$D/install.sh" | head -c 1)" = "<" ]; then
-      REFUSED="claude.ai answered with a web page instead of the Claude Code installer, as it does where Anthropic does not serve Claude\${CLOUDFLARE_COUNTRY_A2:+ (this Orb runs in $CLOUDFLARE_COUNTRY_A2)}. Start a new Thread for an Orb in another place."
+  # The pinned build for this machine, never claude.ai's installer, which
+  # fetches the latest build before anything is checked. Bytes that do not
+  # match the pinned SHA-256 never run.
+  P=""
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) P=linux-x64 ;;
+    Linux-aarch64 | Linux-arm64) P=linux-arm64 ;;
+    Darwin-arm64) P=darwin-arm64 ;;
+    Darwin-x86_64) P=darwin-x64 ;;
+  esac
+  case "$P" in linux-*) if [ -f /lib/libc.musl-x86_64.so.1 ] || [ -f /lib/libc.musl-aarch64.so.1 ]; then P="$P-musl"; fi ;; esac
+  case "$P" in
+${claudeCodeSums()}
+    *) SUM="" ;;
+  esac
+  sha() { if command -v sha256sum > /dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d ' ' -f 1; }
+  BUILD="$D/claude-${CLAUDE_CODE_RELEASE.version}"
+  if [ -z "$SUM" ]; then
+    echo "dx pins no Claude Code build for $(uname -sm)." > "$D/install.log"
+  elif curl -fsSL --retry 3 --connect-timeout 20 -o "$BUILD" "${CLAUDE_CODE_DOWNLOADS}/${CLAUDE_CODE_RELEASE.version}/$P/claude" 2> "$D/install.log"; then
+    if [ "$(head -c 64 "$BUILD" | tr -d ' \\t\\r\\n' | head -c 1)" = "<" ]; then
+      REFUSED="claude.ai answered with a web page instead of Claude Code, as it does where Anthropic does not serve Claude\${CLOUDFLARE_COUNTRY_A2:+ (this Orb runs in $CLOUDFLARE_COUNTRY_A2)}. Start a new Thread for an Orb in another place."
+    elif [ "$(sha "$BUILD")" != "$SUM" ]; then
+      echo "The Claude Code ${CLAUDE_CODE_RELEASE.version} download for $P did not match its pinned SHA-256, so dx did not install it." >> "$D/install.log"
     else
-      bash "$D/install.sh" latest >> "$D/install.log" 2>&1 || true
+      # Where the native installer keeps each version: its own install
+      # finds it there and only links ~/.local/bin/claude to it.
+      mkdir -p "$HOME/.local/share/claude/versions"
+      chmod 755 "$BUILD"
+      mv -f "$BUILD" "$HOME/.local/share/claude/versions/${CLAUDE_CODE_RELEASE.version}"
+      (cd "$HOME" && DISABLE_AUTOUPDATER=1 "$HOME/.local/share/claude/versions/${CLAUDE_CODE_RELEASE.version}" install ${CLAUDE_CODE_RELEASE.version}) >> "$D/install.log" 2>&1 || true
+      if [ "$(sha "$CLAUDE" 2> /dev/null)" != "$SUM" ]; then
+        REFUSED="Claude Code at ~/.local/bin/claude is not the pinned ${CLAUDE_CODE_RELEASE.version} build dx installed."
+      fi
     fi
   fi
+  rm -f "$BUILD"
   if [ -n "$REFUSED" ]; then
     echo "\${OUTDATED:-Claude Code could not be installed.} $REFUSED" | tee "$D/stderr.log" >&2
     exit 3

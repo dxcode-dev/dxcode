@@ -94,17 +94,28 @@ fails the build unless its SHA-256 matches, puts it where the native
 installer keeps each version (`~/.local/share/claude/versions/<version>`),
 and runs that binary's own `claude install <version>`, which finds it there
 and links `~/.local/bin/claude` to it. The build fails again unless the link
-resolves to the pinned bytes and reports the pinned version. The executor
-image ([`deploy/executor/claude-code/Dockerfile`](../executor/claude-code/Dockerfile))
-pins the same release. claude.ai's `install.sh` is never run at build time:
-it downloads the `latest` build before anything is pinned.
+resolves to the pinned bytes and reports the pinned version.
+
+Every other place dx installs Claude Code pins the same release, whose
+per-platform SHA-256 sums live in [`claude-code.json`](claude-code.json):
+the executor image
+([`deploy/executor/claude-code/Dockerfile`](../executor/claude-code/Dockerfile)),
+Core's launch script when an Orb lacks a current Claude Code
+([`workspace-run.ts`](../../apps/core/src/claude-code/workspace-run.ts),
+which reads the JSON), and `dxd runner` on a person's own machine
+([`tools.rs`](../../apps/dxd/src/runner/tools.rs), `CLAUDE_VERSION` and
+`CLAUDE_BUILDS`). Each refuses a download whose SHA-256 differs. dx never
+runs claude.ai's `install.sh`: it downloads the `latest` build before
+anything is pinned. A person can still run `claude update` themselves.
 
 The pin must be at least `CLAUDE_CODE_MIN_VERSION` in
 [`workspace-run.ts`](../../apps/core/src/claude-code/workspace-run.ts);
 an older one makes every Orb install the unpinned `latest` release at its
 first Claude Code turn.
-[`downloads.test.mjs`](downloads.test.mjs) checks that, that both images pin
-the same release, and that every downloaded file is checked before use.
+[`downloads.test.mjs`](downloads.test.mjs) checks that, that every place
+pins the release and sums in `claude-code.json`, that its `published` date
+is at least 3 days old, and that every file the images download is checked
+before use.
 
 To move to another release:
 
@@ -119,20 +130,24 @@ To move to another release:
    Prefer the `stable` channel's version
    (`curl -fsSL https://downloads.claude.ai/claude-code-releases/stable`)
    when it is that old.
-2. Read the binary's SHA-256 from the release manifest, then download the
-   binary and check it gives the same sum:
+2. Read each platform's SHA-256 from the release manifest, then download
+   each binary and check it gives the same sum:
 
    ```sh
    V=2.1.326
-   curl -fsSL https://downloads.claude.ai/claude-code-releases/$V/manifest.json | jq -r '.platforms["linux-x64"].checksum'
-   curl -fsSL https://downloads.claude.ai/claude-code-releases/$V/linux-x64/claude | sha256sum
+   curl -fsSL https://downloads.claude.ai/claude-code-releases/$V/manifest.json | jq '.platforms | map_values(.checksum)'
+   for p in linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl darwin-arm64 darwin-x64; do echo "$p $(curl -fsSL https://downloads.claude.ai/claude-code-releases/$V/$p/claude | sha256sum)"; done
    ```
 
-3. Set `CLAUDE_CODE_VERSION` and `CLAUDE_CODE_SHA256` in `install.sh`, and
-   the version (in the URL and the two `install` arguments) and both
-   SHA-256 sums in the executor Dockerfile.
-4. Run `pnpm exec vitest run deploy/orb/downloads.test.mjs`. The pull
-   request's preview builds both images with the new release.
+3. Write the version, its publish date, and the six sums (not the `win32`
+   ones) to `claude-code.json`; the same version and sums to `CLAUDE_VERSION`
+   and `CLAUDE_BUILDS` in `apps/dxd/src/runner/tools.rs`;
+   `CLAUDE_CODE_VERSION` and the `linux-x64` sum as `CLAUDE_CODE_SHA256` in
+   `install.sh`; and the version (in the URL and the two `install`
+   arguments) and the `linux-x64` sum (twice) in the executor Dockerfile.
+4. Run `pnpm exec vitest run --project node-unit-contract deploy/orb/downloads.test.mjs`. The pull
+   request's preview builds both images with the new release; runners get
+   it with the next dxd release.
 
 ## dxd from the entrypoint
 

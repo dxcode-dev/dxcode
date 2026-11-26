@@ -1,0 +1,12 @@
+{
+  "version": "2.1.326",
+  "published": "2026-11-16",
+  "sha256": {
+    "darwin-arm64": "e214ad76dcc0e846b03be28ed1c2734aacd4e27acb527cb7f8a9e2bed644e837",
+    "darwin-x64": "bd8e26290f93353590b831600a7ced02d625018fbaa2a82d8817368d3e2d2f82",
+    "linux-arm64": "98d56f6ffe53469767a74864a38eaf359d62ef557a8de1b1ad524d61a66ec119",
+    "linux-arm64-musl": "827b08bda7ed682685ee770e0e61f8c128d3c951486e96348663893dca5bae41",
+    "linux-x64": "b6b3647d981130dc44fc670846ae97b6cde531ffb667cf9c4d17cfcafb38cb37",
+    "linux-x64-musl": "595f563b879d54965e5c4bafa3b6b1829ef34865a434b97408ebcb797eb85d5c"
+  }
+}
